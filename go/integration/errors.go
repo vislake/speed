@@ -46,13 +46,14 @@ var (
 	ErrCreatedByRequired = apperr.Invalid("integration.created_by_required")
 
 	// ErrExpiryExceedsMaximum reports a Create call whose requested
-	// ExpiresAt is further out than MaxAPIKeyLifetime from now. The design
-	// doc (docs/internal/07-platform-services.md) requires a forced expiry
-	// ceiling, defaulting to one year, specifically because a key that
-	// never expires is the most common credential-leak surface, so this is
-	// refused rather than silently clamped: a caller that asked for ten
-	// years should learn its request was rejected, not discover a
-	// year-long key it never agreed to.
+	// ExpiresAt is further out than the Service's configured lifetime
+	// (WithMaxAPIKeyLifetime, or MaxAPIKeyLifetime when none was configured)
+	// from now. The design doc (docs/internal/07-platform-services.md)
+	// requires a forced expiry ceiling, defaulting to one year, specifically
+	// because a key that never expires is the most common credential-leak
+	// surface, so this is refused rather than silently clamped: a caller
+	// that asked for ten years should learn its request was rejected, not
+	// discover a year-long key it never agreed to.
 	ErrExpiryExceedsMaximum = apperr.Invalid("integration.expiry_exceeds_maximum")
 
 	// ErrExpiryInPast reports a Create call whose requested ExpiresAt is
@@ -211,4 +212,39 @@ var (
 	// existed, was revoked, or expired. See authenticate.go's Service.
 	// Authenticate for the full contract.
 	ErrAuthenticationFailed = apperr.Unauthorized("integration.authentication_failed")
+
+	// The manual-redelivery error index: Service.RedeliverWebhookDelivery's
+	// (webhook_delivery.go) refusal vocabulary for re-enqueueing a
+	// dead-lettered delivery. The three conditions are distinct and each
+	// gets its own code rather than a shared catch-all, following this
+	// file's own "each refusal reason is its own code" convention.
+
+	// ErrWebhookDeliveryNotFound reports a delivery id that does not exist
+	// in the caller's tenant. Like ErrKeyNotFound, it never distinguishes
+	// "no such delivery" from "that delivery belongs to another tenant":
+	// telling the two apart would let a caller enumerate another tenant's
+	// delivery ids.
+	ErrWebhookDeliveryNotFound = apperr.NotFound("integration.webhook_delivery_not_found")
+
+	// ErrWebhookDeliveryNotDeadLetter reports a RedeliverWebhookDelivery
+	// call against a delivery whose Status is not DeliveryStatusDeadLetter.
+	// Only a dead-lettered delivery may be manually redelivered: a pending,
+	// failed or delivered one either still has a live delivery job of its
+	// own (a second, concurrent job would double-send) or already reached
+	// the receiver, so redelivery would be meaningless -- and a caller that
+	// believes a non-dead delivery needs re-sending has a stale view of the
+	// delivery log, which telling it so surfaces better than a quiet
+	// no-op.
+	ErrWebhookDeliveryNotDeadLetter = apperr.Conflict("integration.webhook_delivery_not_dead_letter")
+
+	// ErrWebhookSubscriptionInactive reports a RedeliverWebhookDelivery
+	// call whose delivery's subscription is currently paused (Active =
+	// false). Delivering to a paused subscription would settle the row
+	// terminal again without a single HTTP attempt -- handleDeliveryJob
+	// refuses inactive subscriptions before anything is sent -- so the
+	// redelivery is refused up front instead of scheduling a job that can
+	// only re-fail; the caller reactivates the subscription first (an
+	// UpdateWebhookSubscription call setting Active to true) and then
+	// redelivers.
+	ErrWebhookSubscriptionInactive = apperr.Conflict("integration.webhook_subscription_inactive")
 )

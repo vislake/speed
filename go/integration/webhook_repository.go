@@ -291,6 +291,45 @@ func (r *WebhookDeliveryRepository) ListRecentBySubscription(ctx context.Context
 	return rows, err
 }
 
+// markPending is the single guarded status flip Service.
+// RedeliverWebhookDelivery performs after its enqueue succeeds: it moves a
+// delivery from DeliveryStatusDeadLetter to DeliveryStatusPending in ONE
+// column-scoped UPDATE whose WHERE requires the row to still be
+// dead-lettered, and reports whether any row matched.
+//
+// The guard is what keeps the flip from racing the redelivered job it just
+// scheduled: a full-row Update of the row the redelivery call read earlier
+// could otherwise overwrite a state the job already settled between the
+// read and the flip -- the worker can pick the job up the moment Enqueue
+// returns, deliver it, and record DeliveryStatusDelivered, and a stale
+// full-row save of the dead-lettered read would then write its pending
+// Status back over that delivered outcome (the identical full-row-save race
+// repository.go's touchLastUsed doc comment dissects for its own
+// single-column write). A flip that matches nothing means some other writer
+// -- the redelivered job itself, another redelivery call that won the race
+// -- already moved the row past dead-letter, in which case there is nothing
+// to restore and nothing to do. The statement follows updateFields'
+// construction: inside dbkit.WithTenantSession (the tenant-scope plugin
+// injects WHERE tenant_id = ? from the TenantScoped model), the changed
+// columns named in Select (load-bearing here too: Pending is not a zero
+// value, but naming the column keeps the SET clause exact either way, with
+// UpdatedAt riding along through gorm's auto-update-time machinery, whose
+// always-changed bookkeeping is what makes RowsAffected a reliable "did a
+// live row match" answer).
+func (r *WebhookDeliveryRepository) markPending(ctx context.Context, deliveryID string) (bool, error) {
+	var matched bool
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", deliveryID).
+			Where("status = ?", DeliveryStatusDeadLetter).
+			Select("Status", "UpdatedAt").
+			Updates(&WebhookDelivery{Status: DeliveryStatusPending})
+		matched = res.RowsAffected > 0
+		return res.Error
+	})
+	return matched, err
+}
+
 // defaultRecentDeliveriesLimit bounds ListRecentBySubscription when the
 // caller asks for no explicit limit.
 const defaultRecentDeliveriesLimit = 50

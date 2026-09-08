@@ -538,3 +538,150 @@ func (s *Service) onWebhookDeliveryDeadLetter(ctx context.Context, job *jobs.Job
 			"delivery_id", delivery.ID, "error", err)
 	}
 }
+
+// RedeliverWebhookDelivery re-enqueues one dead-lettered delivery of the
+// caller's tenant for a fresh attempt cycle: the delivery's stored Payload
+// is sent again through the ordinary handleDeliveryJob path, against the
+// subscription it was originally fanned out from, with the delivery row
+// updated in place -- the row's identity is the (subscription, occurrence)
+// pair (see WebhookDelivery's own doc comment), so a redelivery is more
+// attempts on the SAME row, never a second row for one occurrence.
+//
+// # Who may be redelivered, and when the call refuses
+//
+// Exactly the terminal-failure state may be redelivered, and every other
+// state is refused with a code naming the reason:
+//
+//   - An id that does not exist in the caller's tenant answers
+//     ErrWebhookDeliveryNotFound (collapsed across tenants like every
+//     other not-found in this module).
+//   - A delivery whose Status is not DeliveryStatusDeadLetter answers
+//     ErrWebhookDeliveryNotDeadLetter: a pending or failed delivery already
+//     has a live job of its own under the queue (a second job would
+//     double-send), and a delivered one already reached the receiver.
+//     Dead-letter is the one state with no live job left -- its retry
+//     horizon is exhausted -- which is exactly the state this method
+//     exists to pull back from.
+//   - A dead-lettered delivery whose subscription has since been
+//     mark-deleted answers ErrWebhookSubscriptionNotFound, and one whose
+//     subscription is paused (Active = false) answers
+//     ErrWebhookSubscriptionInactive: handleDeliveryJob would refuse either
+//     before a single HTTP attempt (settling the row terminal again with
+//     "webhook subscription was deleted"/"is inactive"), so scheduling a
+//     job that can only re-fail is refused up front instead -- the
+//     subscription must exist and be active for a redelivery to mean
+//     anything, exactly as it must for the original fan-out
+//     (matchingSubscriptions only ever matches active subscriptions).
+//
+// # A fresh attempt cycle on a fresh job
+//
+// The re-enqueued job is a new jobs.Job under a NEW idempotency key
+// (redeliveryIdempotencyKey), never the original delivery job's key: jobs'
+// idempotency is unconditional on StandaloneQueue -- a resolved key is held
+// forever, dead-lettered outcome included -- so re-enqueueing under the
+// original key would keep returning the original dead job's id and never
+// run. The new key names one attempt cycle of the row (delivery id plus the
+// row's current Attempts count), so a duplicate enqueue within one cycle --
+// a double-click, a caller retry after a timeout -- dedupes onto the one
+// job, while a later cycle, whose count has moved on, gets its own job and
+// runs again: each manual redelivery is a deliberate operator action, and
+// each must be able to happen, forever, however many times a delivery
+// dead-letters. With no queue wired (nil -- the Module was built without
+// WithWebhookQueue), this method fails with a plain error: unlike the
+// event-driven fan-out's record-and-warn posture (enqueueDelivery), a
+// caller that EXPLICITLY asked for a delivery must learn that none can
+// run, never silently no-op.
+//
+// On a successful enqueue the row is flipped back to DeliveryStatusPending
+// -- the state a delivery awaiting its next attempt holds -- with Attempts,
+// LastError and the rest left as the failed cycle left them, to be
+// overwritten by the new cycle's own attempts. The flip is a guarded,
+// single-column write (WebhookDeliveryRepository.markPending) ordered
+// AFTER the enqueue, for two reasons. Ordered after: an enqueue failure
+// leaves the row exactly as it was (dead-lettered, still honestly
+// describing its last outcome) and a caller retries. Guarded: the worker
+// can pick the job up the moment Enqueue returns, and a flip that matched
+// nothing means that job (or a concurrent redelivery) already moved the
+// row past dead-letter -- the delivered outcome must never be overwritten
+// by a stale pending, and there is nothing to restore anyway; the call
+// still answers nil, since the job it enqueued is what settles the row
+// from here on. If the flip's own WRITE fails, the enqueued job still
+// settles the row on its first attempt, and a caller retrying this method
+// converges on the existing job (same cycle, same idempotency key) rather
+// than double-enqueueing.
+func (s *Service) RedeliverWebhookDelivery(ctx context.Context, deliveryID string) error {
+	delivery, err := s.deliveryRepo.FindByID(ctx, deliveryID)
+	if err != nil {
+		return translateDeliveryRepoErr(err)
+	}
+	if delivery.Status != DeliveryStatusDeadLetter {
+		return ErrWebhookDeliveryNotDeadLetter
+	}
+
+	sub, err := s.webhookRepo.FindByID(ctx, delivery.SubscriptionID)
+	if err != nil {
+		// The subscription is mark-deleted (or belongs to another tenant,
+		// which the delivery's own tenant scope already rules out -- this
+		// lookup is for the row's own subscription id inside the same
+		// tenant). Nothing to deliver to and nothing that will reappear:
+		// the collapsed not-found is the honest answer, matching
+		// handleDeliveryJob's own terminal settlement for this case.
+		return translateWebhookRepoErr(err)
+	}
+	if !sub.Active {
+		return ErrWebhookSubscriptionInactive
+	}
+
+	if s.queue == nil {
+		return errors.New("integration: no queue wired (WithWebhookQueue)")
+	}
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return ErrInternal.WithCause(err)
+	}
+
+	payload, err := json.Marshal(webhookDeliveryJobPayload{SubscriptionID: delivery.SubscriptionID, DeliveryID: delivery.ID})
+	if err != nil {
+		return fmt.Errorf("integration: encode webhook delivery job payload: %w", err)
+	}
+	if _, err := s.queue.Enqueue(ctx, jobs.Task{
+		Type:           jobTypeWebhookDeliver,
+		TenantID:       tenant,
+		Payload:        payload,
+		IdempotencyKey: redeliveryIdempotencyKey(delivery.ID, delivery.Attempts),
+	}, jobs.WithMaxRetries(webhookMaxRetries)); err != nil {
+		return err
+	}
+
+	if _, err := s.deliveryRepo.markPending(ctx, delivery.ID); err != nil {
+		return ErrInternal.WithCause(err)
+	}
+	return nil
+}
+
+// redeliveryIdempotencyKey derives the jobs idempotency key one manual
+// redelivery of a delivery row is enqueued under: the delivery id (the
+// opaque business identity of the operation) plus the row's Attempts count
+// at enqueue time, which is what makes the key name ONE attempt cycle
+// rather than "some redelivery or other" -- see RedeliverWebhookDelivery's
+// own doc comment for why a cycle-scoped key is the right shape here (a
+// same-cycle duplicate enqueue merges; a later cycle, whose count has
+// moved on, gets its own job forever). Attempts is read from the row the
+// redelivery call already loaded, so the deterministic-replay property an
+// idempotency key exists for holds within a cycle: a caller retrying the
+// same enqueue reproduces the same key.
+func redeliveryIdempotencyKey(deliveryID string, attempts int) string {
+	return "integration.redeliver:" + deliveryID + ":" + strconv.Itoa(attempts)
+}
+
+// translateDeliveryRepoErr maps a dbkit.Repository[WebhookDelivery]
+// not-found error onto this module's own ErrWebhookDeliveryNotFound,
+// mirroring translateRepoErr's and translateWebhookRepoErr's identical
+// shape -- matching by Code, never by identity (see translateRepoErr's own
+// doc comment for why).
+func translateDeliveryRepoErr(err error) error {
+	if isWebhookRecordNotFound(err) {
+		return ErrWebhookDeliveryNotFound
+	}
+	return ErrInternal.WithCause(err)
+}

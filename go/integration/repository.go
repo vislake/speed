@@ -70,6 +70,51 @@ func (r *APIKeyRepository) createWithHashIndex(ctx context.Context, key *APIKey)
 	})
 }
 
+// ListExpired returns every API key of the tenant in ctx whose ExpiresAt is
+// at or before now -- the read the expiry-sweep task
+// (Service.SweepExpiredAPIKeys, apikey_sweep.go) exists to serve, answered
+// by the idx_integration_api_keys_tenant_expires_at index the schema has
+// carried for exactly this query (see migrations/{sqlite,postgres}/
+// 0001_create_integration_api_keys.sql's comment on that index). Revoked
+// and live keys alike are returned once their expiry has passed: a revoked
+// key is as dead as an expired one, and neither will ever be used again,
+// which is precisely why both are swept (see SweepExpiredAPIKeys' own doc
+// comment for the row-lifecycle reasoning).
+func (r *APIKeyRepository) ListExpired(ctx context.Context, now time.Time) ([]APIKey, error) {
+	var keys []APIKey
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where("expires_at <= ?", now).Find(&keys).Error
+	})
+	return keys, err
+}
+
+// deleteWithHashIndex removes key and its apiKeyHashIndex row in one
+// database transaction -- the exact inverse of createWithHashIndex, and the
+// one delete path this table has (a key's ordinary end of life is the
+// RevokedAt mark; only the expiry sweep physically removes rows, and it
+// removes them complete: an APIKey row whose hash-index row survived would
+// keep its tenant resolvable by Authenticate forever while returning
+// nothing to authenticate -- a permanently dead end that is harmless today
+// but accumulates rows the sweep exists to reclaim). Service.
+// SweepExpiredAPIKeys calls this per row after ListExpired.
+//
+// The write targets both rows by their own keys inside the same
+// WithTenantSession transaction: the APIKey delete runs under the
+// tenant-scope plugin like every other write against that TenantScoped
+// model, and the apiKeyHashIndex delete (that model implements no
+// dbkit.TenantScoped -- see its own doc comment) is matched by hash alone,
+// which is globally unique. A failure rolls back both, so a sweep that
+// fails midway leaves the remaining rows for its next run exactly as it
+// found them -- never half a pair.
+func (r *APIKeyRepository) deleteWithHashIndex(ctx context.Context, key *APIKey) error {
+	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", key.ID).Delete(&APIKey{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("hash = ?", key.Hash).Delete(&apiKeyHashIndex{}).Error
+	})
+}
+
 // tenantForHash resolves the tenant a raw key's hash belongs to, with NO
 // tenant predicate anywhere in the query -- the one deliberately narrow
 // exception to this module's "every query is tenant-scoped" rule, mirroring

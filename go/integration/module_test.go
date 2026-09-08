@@ -77,11 +77,15 @@ func TestModule_AuditActionVocabulary_HasNoDeadEntries(t *testing.T) {
 	}
 }
 
-// TestModule_Register_RegistersWebhookDeliveryJobHandler proves round 2's
-// job-handler wiring: exactly one handler is registered, under
-// jobTypeWebhookDeliver, matching storage's and notification's identical
-// "job handlers" Register assertion shape.
-func TestModule_Register_RegistersWebhookDeliveryJobHandler(t *testing.T) {
+// TestModule_Register_RegistersJobHandlers proves the module's job-handler
+// wiring: exactly the two handlers this module enqueues tasks under are
+// registered, under jobTypeWebhookDeliver (round 2's delivery pipeline) and
+// jobTypeAPIKeyExpirySweep (the expiry-sweep task, apikey_sweep.go),
+// matching storage's and notification's identical "job handlers" Register
+// assertion shape. A third registered type would mean a task nothing ever
+// enqueues, and an enqueued task with no registered handler could never
+// run.
+func TestModule_Register_RegistersJobHandlers(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)
 	if err := m.Register(reg); err != nil {
@@ -89,11 +93,13 @@ func TestModule_Register_RegistersWebhookDeliveryJobHandler(t *testing.T) {
 	}
 
 	handlers := reg.Jobs.Handlers()
-	if len(handlers) != 1 {
-		t.Fatalf("len(handlers) = %d, want 1", len(handlers))
+	if len(handlers) != 2 {
+		t.Fatalf("len(handlers) = %d, want 2", len(handlers))
 	}
-	if _, ok := handlers[jobTypeWebhookDeliver]; !ok {
-		t.Errorf("handlers = %v, want %q present", handlers, jobTypeWebhookDeliver)
+	for _, want := range []string{jobTypeWebhookDeliver, jobTypeAPIKeyExpirySweep} {
+		if _, ok := handlers[want]; !ok {
+			t.Errorf("handlers = %v, want %q present", handlers, want)
+		}
 	}
 }
 
@@ -209,6 +215,44 @@ func TestModule_Attach_UsesInjectedClock(t *testing.T) {
 	want := fixedNow.Add(MaxAPIKeyLifetime)
 	if !created.ExpiresAt.Equal(want) {
 		t.Errorf("ExpiresAt = %v, want %v (computed from the injected clock, not the wall clock)", created.ExpiresAt, want)
+	}
+}
+
+// TestModule_WithMaxAPIKeyLifetime_OptionStoresOnlyPositiveValues pins the
+// option's guard: a positive duration is stored as the Module's configured
+// lifetime, while a zero or negative one is ignored and leaves the zero
+// value standing -- which the Service resolves as the MaxAPIKeyLifetime
+// package default (see maxAPIKeyLifetime). A value nobody can configure
+// away by accident is a value an enforcing round can trust.
+func TestModule_WithMaxAPIKeyLifetime_OptionStoresOnlyPositiveValues(t *testing.T) {
+	m := NewModule(nil, WithMaxAPIKeyLifetime(30*24*time.Hour))
+	if m.maxLifetime != 30*24*time.Hour {
+		t.Errorf("maxLifetime = %v, want 720h0m0s", m.maxLifetime)
+	}
+
+	for _, nonsense := range []time.Duration{0, -time.Hour} {
+		m := NewModule(nil, WithMaxAPIKeyLifetime(nonsense))
+		if m.maxLifetime != 0 {
+			t.Errorf("WithMaxAPIKeyLifetime(%v): maxLifetime = %v, want 0 (ignored, default stands)", nonsense, m.maxLifetime)
+		}
+	}
+}
+
+// TestModule_WithMaxAPIKeyLifetime_ConfiguredValue_FlowsToAttachedService
+// proves the option's value actually reaches the Service a real
+// Register+Attach builds, through the same wiring a host composes -- the
+// field Service.Create reads (via maxAPIKeyLifetime) is the Module's
+// configured one, and a Module that configured nothing hands over the zero
+// value the Service resolves as the package default.
+func TestModule_WithMaxAPIKeyLifetime_ConfiguredValue_FlowsToAttachedService(t *testing.T) {
+	svc := attachedService(t, WithMaxAPIKeyLifetime(7*24*time.Hour))
+	if svc.maxLifetime != 7*24*time.Hour {
+		t.Errorf("attached svc.maxLifetime = %v, want 168h0m0s", svc.maxLifetime)
+	}
+
+	defaultSvc := attachedService(t)
+	if defaultSvc.maxLifetime != 0 {
+		t.Errorf("attached svc.maxLifetime = %v, want 0 (unconfigured)", defaultSvc.maxLifetime)
 	}
 }
 

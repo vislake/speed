@@ -28,6 +28,12 @@ type Service struct {
 	auditActions pkgcore.AuditActionRegistrar
 	now          func() time.Time
 
+	// maxLifetime is the expiry ceiling and default lifetime Create applies
+	// to every issued key, copied from the Module's WithMaxAPIKeyLifetime
+	// option at Attach. Zero means the host configured nothing and the
+	// MaxAPIKeyLifetime package default stands (see maxAPIKeyLifetime).
+	maxLifetime time.Duration
+
 	// The round-2 fields below back webhook_service.go and
 	// webhook_delivery.go; see those files for how each is used.
 	webhookRepo  *WebhookSubscriptionRepository
@@ -58,10 +64,22 @@ type CreateInput struct {
 	Scopes []string
 
 	// ExpiresAt is when the key should stop working. Nil means "use the
-	// default", MaxAPIKeyLifetime from now; a non-nil value further out than
-	// MaxAPIKeyLifetime is refused (ErrExpiryExceedsMaximum), and one at or
-	// before now is refused (ErrExpiryInPast).
+	// default" -- the Service's configured lifetime (WithMaxAPIKeyLifetime,
+	// or MaxAPIKeyLifetime when none was configured) from now; a non-nil
+	// value further out than that same lifetime is refused
+	// (ErrExpiryExceedsMaximum), and one at or before now is refused
+	// (ErrExpiryInPast).
 	ExpiresAt *time.Time
+
+	// predecessorID is the rotation-internal linkage field, set by
+	// Service.Rotate and never by a host: it names the key this issuance is
+	// replacing, and it is what makes the create audit event this call
+	// emits carry the rotation's predecessor link (see Rotate's own doc
+	// comment). The zero value emits an ordinary, unlinked create event.
+	// Being unexported, it is invisible to every caller outside this
+	// package -- a direct Service.Create can never present itself as a
+	// rotation by setting it.
+	predecessorID string
 }
 
 // CreatedAPIKey is Service.Create's result: the one and only place the raw
@@ -123,10 +141,12 @@ type APIKeySummary struct {
 //
 // # Expiry
 //
-// A nil in.ExpiresAt defaults to now plus MaxAPIKeyLifetime. A non-nil one
-// must be strictly after now (ErrExpiryInPast) and no further out than
-// MaxAPIKeyLifetime from now (ErrExpiryExceedsMaximum) -- see that error's
-// own doc comment for why this is refused rather than clamped.
+// A nil in.ExpiresAt defaults to now plus the Service's configured
+// lifetime -- WithMaxAPIKeyLifetime's value when the host set one,
+// MaxAPIKeyLifetime otherwise (see maxAPIKeyLifetime). A non-nil one must
+// be strictly after now (ErrExpiryInPast) and no further out than that
+// same lifetime from now (ErrExpiryExceedsMaximum) -- see that error's own
+// doc comment for why this is refused rather than clamped.
 func (s *Service) Create(ctx context.Context, in CreateInput) (*CreatedAPIKey, error) {
 	if in.CreatedBy == "" {
 		return nil, ErrCreatedByRequired
@@ -187,7 +207,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreatedAPIKey, e
 	// decides whether to retry the audit or proceed, but never has to lose
 	// the material. See handler.go's integration_createAPIKey for the HTTP
 	// translation of this shape.
-	if err := s.emit(ctx, AuditActionAPIKeyCreate, row, audit.Result{Success: true}); err != nil {
+	//
+	// The event carries the rotation linkage when this issuance IS a
+	// rotation's create leg (in.predecessorID set by Rotate): see that
+	// method's own doc comment for why the two events of a rotation name
+	// each other.
+	if err := s.emit(ctx, AuditActionAPIKeyCreate, row, audit.Result{Success: true}, rotationLinkage("predecessor_id", in.predecessorID)); err != nil {
 		return result, err
 	}
 
@@ -265,15 +290,22 @@ func (s *Service) List(ctx context.Context) ([]APIKeySummary, error) {
 // own audit trail readable without inventing a "rotate" AuditEvent shape
 // distinct from create/revoke: two ordinary AuditActionAPIKeyCreate/
 // AuditActionAPIKeyRevoke events, rather than a bespoke event type every
-// audit consumer would need special-cased handling for. Round 1 does NOT
-// link the two events to each other: Rotate returns *CreatedAPIKey, the
-// same type Create returns, with no PredecessorID field or equivalent, and
-// the AuditActionAPIKeyCreate event the Create call below emits carries no
-// reference to old.ID either. A reader correlating a rotation's create/
-// revoke pair today has only their timestamps and shared CreatedBy to go
-// on; a real linkage is a future round's work, needing a predecessor-id
-// field on both the audit event and, if it should be caller-visible, a
-// result type of its own.
+// audit consumer would need special-cased handling for.
+//
+// # The two events link to each other
+//
+// The create event this rotation's create leg emits carries the
+// predecessor's id, and the revoke event its revoke leg emits carries the
+// replacement's id -- each leg's audit event names its counterpart, so a
+// reader of the audit trail can go from either row of a rotation to the
+// other instead of matching on timestamps and shared CreatedBy alone (see
+// CreateInput.predecessorID and rotationLinkage). The caller-visible
+// result, by contrast, is deliberately unchanged: Rotate returns
+// *CreatedAPIKey, the same type Create returns -- a dedicated rotation
+// result type would be a breaking signature change, and the create/revoke
+// audit pair is where this module's rotation record already lives, so
+// nothing on the result type would add information the trail does not
+// carry.
 //
 // The two writes are NOT wrapped in one database transaction: dbkit.
 // Repository[T] exposes no cross-call transaction seam a business module can
@@ -303,8 +335,9 @@ func (s *Service) Rotate(ctx context.Context, id string) (*CreatedAPIKey, error)
 	// the predecessor's own clock, and copying an absolute timestamp that
 	// may already be close to (or, for a caller rotating a stale-but-still-
 	// live key, even past) expiry would defeat the point of rotating at
-	// all. Create's own default -- now plus MaxAPIKeyLifetime -- applies
-	// exactly as it would for a fresh, unrelated key.
+	// all. Create's own default -- now plus the Service's configured
+	// lifetime (WithMaxAPIKeyLifetime, or MaxAPIKeyLifetime when none was
+	// configured) -- applies exactly as it would for a fresh, unrelated key.
 	//
 	// Scopes ARE carried forward from the predecessor, but that is not a
 	// bypass of Create's own validation: routing them back through Create
@@ -316,8 +349,9 @@ func (s *Service) Rotate(ctx context.Context, id string) (*CreatedAPIKey, error)
 	// of "scope validation happens at issuance" applying to every issuance,
 	// including this one, rather than a special carve-out for rotation.
 	created, err := s.Create(ctx, CreateInput{
-		CreatedBy: old.CreatedBy,
-		Scopes:    oldScopes,
+		CreatedBy:     old.CreatedBy,
+		Scopes:        oldScopes,
+		predecessorID: old.ID,
 	})
 	if err != nil {
 		// Create can itself fail PARTIALLY -- its post-commit audit leg
@@ -328,7 +362,7 @@ func (s *Service) Rotate(ctx context.Context, id string) (*CreatedAPIKey, error)
 		return created, err
 	}
 
-	if err := s.Revoke(ctx, old.ID); err != nil {
+	if err := s.revoke(ctx, old.ID, created.ID); err != nil {
 		// The new key already exists and was already returned to the
 		// caller's view of "what Create would answer" -- see the doc comment
 		// above for why this surplus is reported, not rolled back.
@@ -345,6 +379,17 @@ func (s *Service) Rotate(ctx context.Context, id string) (*CreatedAPIKey, error)
 // already revoked; Revoke never treats a repeat call as a silent success
 // (see that error's own doc comment).
 func (s *Service) Revoke(ctx context.Context, id string) error {
+	return s.revoke(ctx, id, "")
+}
+
+// revoke is Revoke's own body plus the rotation linkage only Rotate
+// supplies: successorID names the replacement key when this revocation is
+// the revoke leg of a rotation, and is empty for an ordinary operator
+// revocation (whose audit event then carries no linkage, exactly as
+// always). Rotate reaches this method rather than Revoke itself so the
+// linkage can travel onto the revoke audit event -- see Rotate's own doc
+// comment.
+func (s *Service) revoke(ctx context.Context, id, successorID string) error {
 	row, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return translateRepoErr(err)
@@ -359,7 +404,22 @@ func (s *Service) Revoke(ctx context.Context, id string) error {
 		return ErrInternal.WithCause(err)
 	}
 
-	return s.emit(ctx, AuditActionAPIKeyRevoke, row, audit.Result{Success: true})
+	return s.emit(ctx, AuditActionAPIKeyRevoke, row, audit.Result{Success: true}, rotationLinkage("successor_id", successorID))
+}
+
+// rotationLinkage builds the Changes element an audit event of one half of
+// a rotation carries so the pair's two events name each other: the create
+// leg's event carries the predecessor's id, the revoke leg's event carries
+// the replacement's (successor) id -- see Rotate's own doc comment for why
+// the pair is linked that way, and CreateInput.predecessorID for how the
+// create leg's id reaches the event at all. An empty id means the event
+// belongs to no rotation and carries nil -- no diff at all, exactly the
+// shape an ordinary, unlinked create or revoke event always had.
+func rotationLinkage(field, id string) *audit.Diff {
+	if id == "" {
+		return nil
+	}
+	return &audit.Diff{After: map[string]any{field: id}}
 }
 
 // clock returns the service's time source, falling back to time.Now for a
@@ -373,16 +433,29 @@ func (s *Service) clock() time.Time {
 	return s.now()
 }
 
+// maxAPIKeyLifetime returns the expiry ceiling and default lifetime this
+// Service was built with: the WithMaxAPIKeyLifetime value a host configured
+// on its Module, or the MaxAPIKeyLifetime package default when it
+// configured none. The two roles are deliberately one number -- see
+// MaxAPIKeyLifetime's own doc comment.
+func (s *Service) maxAPIKeyLifetime() time.Duration {
+	if s.maxLifetime > 0 {
+		return s.maxLifetime
+	}
+	return MaxAPIKeyLifetime
+}
+
 // resolveExpiry applies Create's ExpiresAt default/ceiling rule. See
 // Create's own doc comment ("Expiry") for the exact contract.
 func (s *Service) resolveExpiry(now time.Time, requested *time.Time) (time.Time, error) {
+	lifetime := s.maxAPIKeyLifetime()
 	if requested == nil {
-		return now.Add(MaxAPIKeyLifetime), nil
+		return now.Add(lifetime), nil
 	}
 	if !requested.After(now) {
 		return time.Time{}, ErrExpiryInPast
 	}
-	if requested.After(now.Add(MaxAPIKeyLifetime)) {
+	if requested.After(now.Add(lifetime)) {
 		return time.Time{}, ErrExpiryExceedsMaximum
 	}
 	return *requested, nil
@@ -433,12 +506,14 @@ func (s *Service) creatorLeft(ctx context.Context, tenantID, createdBy string, c
 // emit records one audit event for row through dbkit/audit's declarative
 // Emit, wrapping a publish failure as ErrInternal per the module's own
 // errors.go convention (an *apperr.Error's cause never reaches an HTTP
-// response body).
-func (s *Service) emit(ctx context.Context, action string, row *APIKey, result audit.Result) error {
+// response body). changes is the optional rotation-linkage diff a rotation
+// leg carries (rotationLinkage); every other call site passes nil.
+func (s *Service) emit(ctx context.Context, action string, row *APIKey, result audit.Result, changes *audit.Diff) error {
 	if err := audit.Emit(ctx, s.bus, s.auditActions, audit.Input{
 		Action:   action,
 		Resource: audit.Resource{Type: "integration.apikey", ID: row.ID, DisplayName: row.Prefix},
 		Result:   result,
+		Changes:  changes,
 	}); err != nil {
 		return ErrInternal.WithCause(err)
 	}

@@ -40,6 +40,9 @@ func TestErrors_EveryVarIsAnAppErrorWithTheModulePrefix(t *testing.T) {
 		ErrWebhookEventTypeUnknown,
 		ErrInvalidEventMapping,
 		ErrDuplicateEventMapping,
+		ErrWebhookDeliveryNotFound,
+		ErrWebhookDeliveryNotDeadLetter,
+		ErrWebhookSubscriptionInactive,
 	} {
 		if err.Code == "" {
 			t.Errorf("error has an empty Code: %+v", err)

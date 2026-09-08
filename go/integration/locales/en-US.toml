@@ -52,3 +52,9 @@
 "integration.subject_unresolved" = "Your identity could not be resolved."
 
 "integration.authentication_failed" = "That API key could not be authenticated."
+
+"integration.webhook_delivery_not_found" = "That webhook delivery does not exist."
+
+"integration.webhook_delivery_not_dead_letter" = "Only a dead-lettered webhook delivery can be redelivered."
+
+"integration.webhook_subscription_inactive" = "That webhook subscription is paused; reactivate it before redelivering."

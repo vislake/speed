@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -22,6 +23,69 @@ func (errBus) Publish(context.Context, pkgcore.Event) error {
 func (errBus) Subscribe(string, pkgcore.EventHandler) {}
 
 var _ pkgcore.EventBus = errBus{}
+
+// recordingBus is a pkgcore.EventBus test double that records every event
+// published through it, so a test can assert on what a Service's audit
+// emissions actually carried -- the event capture the rotation-linkage
+// tests below read (see TestService_Rotate_AuditEvents_LinkThePair).
+// Publish delivers synchronously to nothing in particular; recording the
+// event is the whole point of the double.
+type recordingBus struct {
+	mu     sync.Mutex
+	events []pkgcore.Event
+}
+
+func (b *recordingBus) Publish(_ context.Context, evt pkgcore.Event) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events = append(b.events, evt)
+	return nil
+}
+
+func (b *recordingBus) Subscribe(string, pkgcore.EventHandler) {}
+
+// recordedAuditEvents returns every audit.event.recorded event the bus saw,
+// newest last, with its payload decoded as the audit.RecordedEvent Emit
+// publishes.
+func (b *recordingBus) recordedAuditEvents() []audit.RecordedEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]audit.RecordedEvent, 0)
+	for _, evt := range b.events {
+		if evt.Type != audit.EventRecorded {
+			continue
+		}
+		recorded, ok := evt.Payload.(audit.RecordedEvent)
+		if !ok {
+			continue
+		}
+		out = append(out, recorded)
+	}
+	return out
+}
+
+var _ pkgcore.EventBus = (*recordingBus)(nil)
+
+// attachedService builds a Service the way a real host does -- a Module
+// built over a fresh migrated SQLite database with opts, its Register run
+// against a real registry, its Attach producing the Service -- and returns
+// that Service. Tests that exercise an Option's path into the runtime
+// Service (WithMaxAPIKeyLifetime, WithWebhookQueue, withClock) use this
+// rather than testService's direct struct literal, so the wiring under
+// test is the same wiring a host composes.
+func attachedService(t *testing.T, opts ...Option) *Service {
+	t.Helper()
+	m := NewModule(newTestDB(t), opts...)
+	reg := newTestRegistry(t)
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	svc, err := m.Attach(reg)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	return svc
+}
 
 // testService builds a *Service directly (bypassing Module.Attach, which
 // needs a full *pkgcore.Registry from a real Bootstrap) over a fresh
@@ -554,5 +618,154 @@ func TestService_Rotate_AuditFailureAfterCommit_ReturnsReplacementWithError(t *t
 	}
 	if rotated == nil || rotated.Key == "" {
 		t.Fatal("Rotate lost the replacement key material on its partial failure")
+	}
+}
+
+// TestService_Rotate_AuditEvents_LinkThePair pins the rotation linkage a
+// rotation's two audit events carry: the create event of the replacement
+// names the predecessor it replaced, and the revoke event of the
+// predecessor names the replacement that succeeded it -- so a reader of the
+// audit trail can go from either row of a rotation to the other (see
+// Rotate's own doc comment and rotationLinkage). Before the linkage
+// existed both events carried no Changes at all and the pair could only be
+// correlated by timestamps and shared CreatedBy; the test fails against
+// that code (no predecessor_id/successor_id anywhere in the events).
+func TestService_Rotate_AuditEvents_LinkThePair(t *testing.T) {
+	bus := &recordingBus{}
+	svc := testService(t, nil, nil, fixedNow)
+	svc.bus = bus
+
+	original, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	rotated, err := svc.Rotate(ctxFor(testTenant), original.ID)
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+
+	events := bus.recordedAuditEvents()
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want 3 (the setup create, the rotation's create and revoke)", len(events))
+	}
+
+	var createEvt, revokeEvt *audit.RecordedEvent
+	for i := range events {
+		evt := events[i]
+		switch {
+		case evt.Action == AuditActionAPIKeyCreate && evt.Resource.ID == rotated.ID:
+			createEvt = &evt
+		case evt.Action == AuditActionAPIKeyRevoke && evt.Resource.ID == original.ID:
+			revokeEvt = &evt
+		}
+	}
+	if createEvt == nil {
+		t.Fatal("no create audit event for the replacement key was emitted")
+	}
+	if revokeEvt == nil {
+		t.Fatal("no revoke audit event for the predecessor key was emitted")
+	}
+
+	if createEvt.Changes == nil {
+		t.Fatal("the rotation's create event carries no Changes: the predecessor link is missing")
+	}
+	if got, want := createEvt.Changes.After["predecessor_id"], original.ID; got != want {
+		t.Errorf("create event predecessor_id = %v, want %q", got, want)
+	}
+	if revokeEvt.Changes == nil {
+		t.Fatal("the rotation's revoke event carries no Changes: the successor link is missing")
+	}
+	if got, want := revokeEvt.Changes.After["successor_id"], rotated.ID; got != want {
+		t.Errorf("revoke event successor_id = %v, want %q", got, want)
+	}
+}
+
+// TestService_CreateAndRevoke_AuditEvents_CarryNoLinkage guards the other
+// side of rotationLinkage: an ordinary Create and an ordinary Revoke, with
+// no rotation involved, must emit their audit events exactly as they always
+// did -- no Changes at all -- so a reader can tell an unlinked event from a
+// rotation's linked one by the diff's presence alone, and no direct create
+// can present itself as a rotation by accident (the linkage field is
+// unexported; see CreateInput.predecessorID).
+func TestService_CreateAndRevoke_AuditEvents_CarryNoLinkage(t *testing.T) {
+	bus := &recordingBus{}
+	svc := testService(t, nil, nil, fixedNow)
+	svc.bus = bus
+
+	created, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := svc.Revoke(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	for _, evt := range bus.recordedAuditEvents() {
+		if evt.Changes != nil {
+			t.Errorf("%s event for resource %s carries unexpected Changes: %+v",
+				evt.Action, evt.Resource.ID, evt.Changes)
+		}
+	}
+}
+
+// TestService_Create_ConfiguredLifetime_MovesDefaultAndCeilingTogether
+// pins the WithMaxAPIKeyLifetime contract on the Service it builds: the
+// configured lifetime is BOTH the default an unspecified ExpiresAt request
+// receives AND the ceiling a requested ExpiresAt is refused past -- one
+// number serving both roles, exactly as MaxAPIKeyLifetime did before the
+// option existed (see maxAPIKeyLifetime). A request inside the package
+// default's one-year horizon but beyond the configured 30-day one is the
+// discriminating case: it must be refused, proving the ceiling really moved
+// and is not still the constant.
+func TestService_Create_ConfiguredLifetime_MovesDefaultAndCeilingTogether(t *testing.T) {
+	configured := 30 * 24 * time.Hour
+	svc := attachedService(t, WithMaxAPIKeyLifetime(configured), withClock(func() time.Time { return fixedNow }))
+
+	// Default: an unspecified ExpiresAt now means now plus the configured
+	// lifetime, not the one-year package default.
+	created, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if want := fixedNow.Add(configured); !created.ExpiresAt.Equal(want) {
+		t.Errorf("default ExpiresAt = %v, want %v (now plus the configured lifetime)", created.ExpiresAt, want)
+	}
+
+	// Ceiling: a requested expiry inside the package default's one-year
+	// horizon but past the configured lifetime is refused.
+	beyond := fixedNow.Add(60 * 24 * time.Hour)
+	if _, ceErr := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &beyond}); !apperrIs(ceErr, ErrExpiryExceedsMaximum) {
+		t.Errorf("Create with an expiry beyond the configured lifetime = %v, want ErrExpiryExceedsMaximum", ceErr)
+	}
+
+	// The ceiling itself is still allowed -- an explicit request for exactly
+	// the configured lifetime is not "past" anything.
+	atCeiling := fixedNow.Add(configured)
+	explicit, createErr := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &atCeiling})
+	if createErr != nil {
+		t.Fatalf("Create with an expiry exactly at the configured lifetime: %v", createErr)
+	}
+	if !explicit.ExpiresAt.Equal(atCeiling) {
+		t.Errorf("explicit ExpiresAt = %v, want %v", explicit.ExpiresAt, atCeiling)
+	}
+}
+
+// TestService_Create_ZeroLifetimeField_UsesPackageDefault guards the zero
+// value of the Service's lifetime field directly (the state every Service
+// not built from a WithMaxAPIKeyLifetime-configured Module holds): a zero
+// lifetime must resolve to MaxAPIKeyLifetime, never to a never-expiring or
+// instantly-expiring key. The Module-path half of the contract (the option
+// cannot even store a non-positive value) is pinned in module_test.go.
+func TestService_Create_ZeroLifetimeField_UsesPackageDefault(t *testing.T) {
+	svc := testService(t, nil, nil, fixedNow)
+	if got := svc.maxAPIKeyLifetime(); got != MaxAPIKeyLifetime {
+		t.Fatalf("maxAPIKeyLifetime() = %v, want the package default %v", got, MaxAPIKeyLifetime)
+	}
+	created, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if want := fixedNow.Add(MaxAPIKeyLifetime); !created.ExpiresAt.Equal(want) {
+		t.Errorf("default ExpiresAt = %v, want %v (now plus MaxAPIKeyLifetime)", created.ExpiresAt, want)
 	}
 }

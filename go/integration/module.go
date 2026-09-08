@@ -44,13 +44,13 @@ const moduleName = "integration"
 // ceiling and the unspecified-request default are declared as the same one
 // year, not two numbers that happen to agree.
 //
-// It is a package-level named constant, not a dynamic configuration item,
-// for the identical reason go/rbac's DefaultCacheTTL gives: reading one
-// from go/config would add a dependency edge this module's position in
-// docs/internal/01-architecture.md's graph does not have, paid for by every
-// consumer that boots this module without config. A host that genuinely
-// needs a different ceiling is a later round's WithMaxAPIKeyLifetime
-// option, not a reason to wire config in now.
+// It is the lifetime every Service uses unless its host configured a
+// different one through WithMaxAPIKeyLifetime: keeping the value a plain
+// package constant (rather than a go/config item) avoids a dependency edge
+// this module's position in docs/internal/01-architecture.md's graph does
+// not have, paid for by every consumer that boots this module without
+// config -- and the host-configurable override is an ordinary NewModule
+// option, exactly like every other seam in this file.
 const MaxAPIKeyLifetime = 365 * 24 * time.Hour
 
 // Permission strings this module declares for its API key (round 1) and
@@ -176,6 +176,14 @@ type Module struct {
 	// withClock; production always uses the zero value's time.Now.
 	clock func() time.Time
 
+	// maxLifetime is the expiry ceiling and default lifetime the Service
+	// Attach builds applies to every API key it issues -- the
+	// WithMaxAPIKeyLifetime option's value. Zero means the host configured
+	// nothing and the MaxAPIKeyLifetime package default stands (see that
+	// constant's own doc comment for why the ceiling and the default are
+	// one number).
+	maxLifetime time.Duration
+
 	// The round-2 fields below back the outbound-webhook surface. See
 	// WithEventMapping, WithWebhookQueue and their doc comments for what
 	// each is, and eventmapping.go's EventMapping doc comment for why
@@ -267,6 +275,30 @@ func withClock(now func() time.Time) Option {
 	return func(m *Module) { m.clock = now }
 }
 
+// WithMaxAPIKeyLifetime sets the lifetime that governs every API key this
+// module issues: the forced expiry CEILING Service.Create enforces on a
+// request that asks for a lifetime (ErrExpiryExceedsMaximum past it) and,
+// at the same time, the DEFAULT lifetime a request that names no ExpiresAt
+// at all receives -- deliberately one number serving both roles, the same
+// invariant MaxAPIKeyLifetime's own doc comment states for the package
+// default it replaces. A host that needs, say, a 30-day ceiling instead of
+// the one-year default configures it here, at construction, where a
+// reviewer sees it; a host that configures nothing gets the
+// MaxAPIKeyLifetime default unchanged.
+//
+// Non-positive values are ignored and the default stands, mirroring the
+// guard every scalar With* option in this codebase carries (storage's
+// WithMaxObjectLifetime, WithUploadTTL): a ceiling of zero or less is
+// nonsense, and a value nobody can configure away by accident is a value
+// an enforcing round can trust.
+func WithMaxAPIKeyLifetime(lifetime time.Duration) Option {
+	return func(m *Module) {
+		if lifetime > 0 {
+			m.maxLifetime = lifetime
+		}
+	}
+}
+
 // WithEventMapping declares one or more business modules' internal-to-
 // public event schema mappings. See eventmapping.go's EventMapping doc
 // comment for the full design rationale (why this is a Module Option
@@ -316,17 +348,24 @@ func WithAuthenticationGuard(guard *HTTPGuard) Option {
 	return func(m *Module) { m.authGuard = guard }
 }
 
-// WithWebhookQueue injects the jobs.Queue webhook deliveries are enqueued
-// on (handleDomainEvent, webhook_delivery.go) and executed by (the handler
-// Register registers on reg.Jobs). Unlike round 1's WithPermissionLister,
-// an unwired queue does NOT fail Register or Attach: a host that has not
-// wired jobs yet can still boot this module and manage subscriptions
-// through Service's Create/List/Update/Delete surface -- only
-// handleDomainEvent's own enqueue step is affected, and it already treats a
-// nil queue as "record the delivery, warn, and stop" rather than a hard
-// failure (see enqueueDelivery's own doc comment), the identical
-// resilience posture handleDomainEvent itself follows for every other
-// failure a domain-event subscriber can hit.
+// WithWebhookQueue injects the jobs.Queue this module's jobs tasks are
+// enqueued on and executed by: webhook deliveries (handleDomainEvent,
+// webhook_delivery.go) and the API-key expiry-sweep task
+// (Service.EnqueueAPIKeyExpirySweep, apikey_sweep.go), both handlers
+// registered on reg.Jobs during Register. Unlike round 1's
+// WithPermissionLister, an unwired queue does NOT fail Register or Attach:
+// a host that has not wired jobs yet can still boot this module and manage
+// subscriptions through Service's Create/List/Update/Delete surface --
+// only the enqueue steps are affected, and they treat a nil queue
+// explicitly: handleDomainEvent's own enqueue treats it as "record the
+// delivery, warn, and stop" rather than a hard failure (see
+// enqueueDelivery's own doc comment), the identical resilience posture
+// handleDomainEvent itself follows for every other failure a domain-event
+// subscriber can hit -- while the two host-invoked schedule points,
+// Service.RedeliverWebhookDelivery and Service.EnqueueAPIKeyExpirySweep,
+// answer with a plain error naming the missing wiring, since a caller that
+// explicitly asked for a delivery or a sweep must learn that nothing can
+// run, never silently no-op.
 func WithWebhookQueue(queue jobs.Queue) Option {
 	return func(m *Module) { m.queue = queue }
 }
@@ -438,9 +477,11 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // index round 2's WithEventMapping declarations feed, subscribes to every
 // distinct InternalType that index names (reg.Events.Subscribe performs no
 // I/O of its own -- it only registers a callback for later), registers this
-// module's webhook-delivery job handler on reg.Jobs, and mounts round 5's
-// API-key HTTP surface, since grown by round 7 to cover webhook-subscription
-// CRUD. It touches neither the database nor the network.
+// module's two job handlers on reg.Jobs (the webhook-delivery handler and
+// the API-key expiry-sweep handler, see webhook_delivery.go and
+// apikey_sweep.go), and mounts round 5's API-key HTTP surface, since grown
+// by round 7 to cover webhook-subscription CRUD. It touches neither the
+// database nor the network.
 //
 // # Handler is built here, not in Attach
 //
@@ -474,6 +515,9 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	}
 
 	if err := reg.Jobs.Handle(jobTypeWebhookDeliver, webhookDeliveryHandler{module: m}); err != nil {
+		return err
+	}
+	if err := reg.Jobs.Handle(jobTypeAPIKeyExpirySweep, apiKeyExpirySweepHandler{module: m}); err != nil {
 		return err
 	}
 
@@ -575,6 +619,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		bus:          reg.Events.Bus(),
 		auditActions: reg.AuditActions,
 		now:          clock,
+		maxLifetime:  m.maxLifetime,
 
 		webhookRepo:  NewWebhookSubscriptionRepository(m.db),
 		deliveryRepo: NewWebhookDeliveryRepository(m.db),

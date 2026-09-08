@@ -396,10 +396,9 @@ func (s *Service) RestoreWebhookSubscription(ctx context.Context, id string) err
 // WebhookDeliverySummary is what Service.ListRecentWebhookDeliveries exposes
 // for one delivery -- every field of WebhookDelivery except the raw Payload
 // bytes, which are an implementation detail of the send pipeline rather
-// than something a subscription-management caller needs to see; a later
-// round's manual-redelivery feature reads Payload directly off the
-// repository row instead (see AGENTS.md's "Deliberately not in scope"
-// table).
+// than something a subscription-management caller needs to see;
+// RedeliverWebhookDelivery (webhook_delivery.go) reads Payload directly off
+// the repository row when an operator asks for one.
 type WebhookDeliverySummary struct {
 	ID             string
 	SubscriptionID string

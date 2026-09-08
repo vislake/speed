@@ -49,3 +49,9 @@
 "integration.subject_unresolved" = "无法解析您的身份。"
 
 "integration.authentication_failed" = "该 API 密钥认证失败。"
+
+"integration.webhook_delivery_not_found" = "该 Webhook 投递记录不存在。"
+
+"integration.webhook_delivery_not_dead_letter" = "只有已进入死信的 Webhook 投递记录才能重新投递。"
+
+"integration.webhook_subscription_inactive" = "该 Webhook 订阅已暂停，请先重新启用再重试投递。"

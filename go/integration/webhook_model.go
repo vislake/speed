@@ -216,11 +216,12 @@ func parseEventTypes(stored datatypes.JSON) ([]string, error) {
 // actually distinguishes "never tried" from "tried once and about to retry"
 // (failed is set for the interval the row is not currently pending-for-retry
 // -- see webhook_delivery.go's Handle for exactly when each transition
-// happens). Manual redelivery (docs/internal/07's own name for it) is
-// explicitly this round's boundary; see AGENTS.md's "Deliberately not in
-// scope" table --
-// the state machine above is what a later round's redelivery feature will
-// act on, nothing more.
+// happens). Manual redelivery (docs/internal/07's own name for it) acts on
+// this machine at exactly the dead_letter state: Service.
+// RedeliverWebhookDelivery (webhook_delivery.go) re-enqueues a
+// dead-lettered row for a fresh attempt cycle and flips it back to pending,
+// after which the transitions above apply to the new cycle's own attempts
+// exactly as they did to the old one's.
 const (
 	DeliveryStatusPending    = "pending"
 	DeliveryStatusFailed     = "failed"
@@ -304,9 +305,10 @@ type WebhookDelivery struct {
 	// mid-flight, and storing the payload up front is what makes every
 	// attempt of one delivery byte-for-byte identical, which HMAC signing
 	// requires in the first place (a signature covers exactly these bytes).
-	// It is also what a later round's manual redelivery needs: the
-	// original body, on hand, with no dependency on the source event still
-	// being reconstructable.
+	// It is also what manual redelivery needs -- Service.
+	// RedeliverWebhookDelivery (webhook_delivery.go) re-enqueues exactly
+	// these bytes -- the original body, on hand, with no dependency on the
+	// source event still being reconstructable.
 	Payload datatypes.JSON `gorm:"column:payload;not null"`
 
 	// Status is one of the DeliveryStatus* values (see that block's own

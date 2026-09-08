@@ -101,10 +101,9 @@ type APIKey struct {
 	CreatedBy string `gorm:"column:created_by;size:64;not null"`
 
 	// ExpiresAt is when this key stops authenticating anything, enforced by
-	// Service.Create (capped at MaxAPIKeyLifetime) and by whatever
-	// authenticates a request with it -- this round issues and revokes keys
-	// but does not itself authenticate requests; see AGENTS.md's Deferred
-	// list.
+	// Service.Create (capped at the Service's configured lifetime --
+	// WithMaxAPIKeyLifetime's value when the host set one, MaxAPIKeyLifetime
+	// otherwise) and by whatever authenticates a request with it.
 	ExpiresAt time.Time `gorm:"column:expires_at;not null"`
 
 	// LastUsedAt is when this key last authenticated a request. Nil until
@@ -238,6 +237,13 @@ const tableAPIKeyHashIndex = "integration_api_key_hash_index"
 // -- exactly how Authenticate is meant to answer that case (a refusal that
 // is outward-identical to "no such key", never a dead end before the
 // ordinary read is ever reached; see errors.go's ErrAuthenticationFailed).
+// The one deliberate exception is the API-key expiry sweep
+// (apikey_sweep.go): it removes this row together with its APIKey row, in
+// one transaction (APIKeyRepository.deleteWithHashIndex), once the key's
+// ExpiresAt has passed -- outward-safe, since Authenticate answers a swept
+// key the identical ErrAuthenticationFailed it always did, now at this
+// lookup instead of the ordinary read (see SweepExpiredAPIKeys' own doc
+// comment).
 type apiKeyHashIndex struct {
 	// Hash is the exact same value APIKey.Hash stores -- hashAPIKeyToken's
 	// hex-encoded SHA-256 of the raw key -- and the primary key here: two
