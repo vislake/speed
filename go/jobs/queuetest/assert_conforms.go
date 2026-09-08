@@ -9,7 +9,16 @@
 // Queue -- must pass, so drift between the two is caught here once instead
 // of via two independently hand-maintained test files (docs/internal/
 // 16-verification.md §2's own claim that Queue deserves the identical
-// shared-conformance-suite treatment, which this package makes real).
+// shared-conformance-suite treatment, which this package makes real). The
+// healthy-path suite is only half of that agreement: AssertConforms never
+// makes an underlying state read fail, so failure-direction divergence
+// between implementations — the class commit c26b058b proved real, asynq's
+// Get swallowing a cancellation-marker read failure and reporting the
+// Job's natural state while StandaloneQueue failed closed — is invisible
+// to it. The package's second entry,
+// AssertFailsClosedOnUnreadableCancellationState (assert_fails_closed.go),
+// is the injectable-fault tier that makes that direction measurable, in
+// the eventbustest teeth shape.
 //
 // Unlike the four pkgcore seam packages above, AssertConforms needs more
 // than the bare jobs.Queue interface to exercise retry and dead-letter
