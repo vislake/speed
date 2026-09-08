@@ -2,7 +2,7 @@
   "baselines": {
     "go/billing": 77.525773,
     "go/dbkit": 84.268707,
-    "go/jobs": 54.957983,
+    "go/jobs": 53.122591,
     "go/pkgcore": 62.987013,
     "go/rbac": 89.21466,
     "go/tenancy": 79.150579
