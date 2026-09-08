@@ -23,7 +23,11 @@ import (
 const gatewayEndpoint = "https://sms.tencentcloudapi.com/"
 
 // gatewayHost is the canonical host header value the TC3 signature signs
-// over; it must match the request's actual Host exactly.
+// over; it must match the request's actual Host exactly. It is the host of
+// gatewayEndpoint and must stay in step with it: an endpoint variant added
+// later (a per-region host, say) that changed one without the other would
+// sign a Host header the request does not carry, and every signature
+// would silently fail Tencent's verification.
 const gatewayHost = "sms.tencentcloudapi.com"
 
 // apiAction and apiVersion are the X-TC-Action / X-TC-Version header values
