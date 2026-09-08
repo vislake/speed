@@ -619,7 +619,11 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, d
 // one, with no restart, no cache to invalidate and no code path of its
 // own beyond tenancy.Middleware consulting the resolver it was wired
 // with; resuming the tenant makes the exact same route succeed again
-// immediately.
+// immediately. The boundary the fixture also pins is suspension's
+// scope: while the org route refuses, authn's self-service subtree --
+// mounted outside tenancy.Middleware -- keeps answering the suspended
+// tenant's own authenticated member, so the two halves of the split
+// cannot drift apart unnoticed.
 //
 // The other admin surfaces (role management, usage, notifications
 // send-records, audit export) are proven at go/admin's own module level;
@@ -696,6 +700,21 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	}
 	if body.Code != "tenancy.tenant_suspended" {
 		t.Fatalf("GET %s after suspension: error code = %q, want %q", nodePath, body.Code, "tenancy.tenant_suspended")
+	}
+
+	// Suspension freezes the tenant's business data plane, not its
+	// members' account plane: authn's self-service subtree (login,
+	// /me, session and credential management) is mounted outside
+	// tenancy.Middleware -- the chain shape server.go's authnAPIPath
+	// doc comment records -- so this suspended tenant's
+	// already-authenticated member still reaches it. /me with the
+	// pre-suspension ownerToken is the self-service read that must keep
+	// answering 200 while the org route above refuses: nothing on
+	// authn's subtree consults the tenant-status resolver, and routing
+	// that subtree through tenancy.Middleware would fail this assertion
+	// with tenancy.tenant_suspended.
+	if status, meBody := rawStatusRequest(t, srv, http.MethodGet, "/api/v1/authn/me", ownerToken, ""); status != http.StatusOK {
+		t.Fatalf("GET /api/v1/authn/me after suspension: status = %d, want %d (a suspended tenant's member keeps authn self-service; code = %q)", status, http.StatusOK, meBody.Code)
 	}
 
 	// Resume: PATCH status back to active.
