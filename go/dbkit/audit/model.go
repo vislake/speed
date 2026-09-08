@@ -231,13 +231,55 @@ type AuditEvent struct {
 	// Changes carries a before/after diff as raw JSON text, or is empty
 	// when the audited action recorded has no diff to show
 	// (docs/internal/10-compliance-and-audit.md's before/after-comparison
-	// field).
+	// field). What lands in it is decided upstream, by whichever of the two
+	// collection mechanisms produced the row, and the author obligation
+	// that keeps sensitive content out of it differs between the two:
+	//
+	//   - On a row the automatic write-capture plugin produced (go/dbkit/
+	//     audit_capture.go), the Before/After maps are whole-column
+	//     snapshots of the written model, and the protection is declared on
+	//     the MODEL, field by field: a GORM serializer field is captured as
+	//     "[redacted]" automatically, and every other sensitive column must
+	//     carry the package's audit:"redact" capture opt-out tag
+	//     (fieldValuesMap's own doc comment). A plaintext-sensitive column
+	//     with neither protection is captured verbatim, which is why the
+	//     two real users of the tag -- org's Invitation.EmailIndex (a
+	//     stable, linkable blind index) and the reference app's Note.Text
+	//     (plaintext PII) -- declare their class on the field itself rather
+	//     than anywhere downstream.
+	//
+	//   - On a row the declarative audit.Emit path produced, Changes is the
+	//     caller-supplied audit.Diff, marshaled verbatim by this package's
+	//     persister with no field-level mechanism of any kind available to
+	//     the caller -- emit.go's Diff doc comment states the limit in full:
+	//     the Emit caller is the only redaction layer that content will
+	//     ever pass, so a Diff may record that a sensitive field changed,
+	//     never what it now says.
+	//
+	// Every exit this column reaches beyond this table is a whole-value
+	// read -- which is exactly why those upstream author obligations are
+	// the content's only protection, because nothing downstream filters or
+	// redacts. compliance's RenderAuditReport renders the events it is
+	// given into an export manifest with the diff's raw JSON verbatim (in
+	// both its JSON and CSV encodings); and go/admin serves the trail over
+	// HTTP, unmarshaling Changes and returning it in the generated
+	// AdminAuditEvent (admin/handler.go's toAdminAuditEvent) -- where an
+	// operator holding the admin:audit_read permission who queries with no
+	// tenant filter reads EVERY tenant's rows plus the platform-level ones
+	// under one system context (go/admin/audit.go's Query), so a value that
+	// reached this column is readable by any audit_read holder across all
+	// tenants, not just stored in an append-only platform table. A model
+	// author (capture rows) or an Emit caller (declarative rows) who lets a
+	// sensitive value into Changes has therefore placed it somewhere wider
+	// than the trail itself, and the sentences above are where the decision
+	// each of them must make is recorded.
+	//
 	// gorm.io/datatypes.JSON is used for its Value/Scan convenience only --
 	// the underlying migration column is a plain, portable TEXT (see the
 	// migration files' own doc comments), never a native PostgreSQL JSONB
-	// column with operator filtering, because this package only ever reads
-	// Changes back whole and the backend coding standard forbids
-	// PostgreSQL-only JSONB operator filtering regardless.
+	// column with operator filtering, because this package and every reader
+	// named above only ever read Changes back whole and the backend coding
+	// standard forbids PostgreSQL-only JSONB operator filtering regardless.
 	Changes datatypes.JSON `gorm:"column:changes"`
 
 	// TenantID is the owning tenant, or the empty-string sentinel for a
