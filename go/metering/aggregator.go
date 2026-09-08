@@ -2,7 +2,6 @@ package metering
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -198,7 +197,7 @@ type Aggregator struct {
 	thresholds OverageThresholds
 	bus        pkgcore.EventBus
 
-	counters sync.Map // string -> *counterEntry
+	counters sync.Map // counterKey -> *counterEntry
 	mu       sync.Mutex
 	// sweptThrough is the newest period start a sweep has run for, guarded
 	// by mu: a sweep runs only when an event's period start is newer, so
@@ -233,12 +232,52 @@ func NewAggregator(summaries *SummaryRepository) *Aggregator {
 	}
 }
 
-// realtimeKey identifies one counterEntry. It embeds periodStart (not just
-// tenant and feature) so a new calendar period gets a fresh zero-valued
-// counter automatically, with no explicit reset logic needed anywhere --
-// LoadOrStore below simply finds nothing for the new key and creates one.
-func realtimeKey(tenantID, feature string, periodStart time.Time) string {
-	return tenantID + "|" + feature + "|" + periodStart.UTC().Format(time.RFC3339)
+// counterKey is one counterEntry's map key: the (tenantID, feature,
+// periodStart) identity triple itself, used directly as the key of
+// a.counters rather than through a serialized encoding. It embeds
+// periodStart (not just tenant and feature) so a new calendar period gets
+// a fresh zero-valued counter automatically, with no explicit reset logic
+// needed anywhere -- LoadOrStore below simply finds nothing for the new
+// key and creates one.
+//
+// The key must not be a concatenation of its segments around a separator
+// (reviewer finding P3-metering-D). The durable summary id can rely on
+// such an encoding, because there the tenant rides in its own
+// primary-key column and only the feature and period segments travel
+// in-band (see summaryID's doc comment); the counter map is flat, so its
+// key carries the tenant in-band too, and tenantID and feature are both
+// variable-length values neither this module nor the layers beneath it
+// restrict against "|" (UsageEvent.validate bounds length only;
+// pkgcore.TenantID is an unrestricted string). Concatenating two
+// variable-length segments around an unescaped "|" is ambiguous whenever
+// a segment contains the separator: ("a", "b|c") and ("a|b", "c") both
+// encode to "a|b|c|" + the period, which would merge two distinct
+// (tenant, feature) buckets into one counter entry and one overage latch
+// -- a silent misattribution across (tenant, feature) boundaries in the
+// billing-grade counter. A comparable struct key has no encoding to be
+// ambiguous: map equality is field-wise, so two distinct triples can
+// never collide, whatever the segments contain. The key lives only in
+// this process's map (counters die with the process; restart
+// reconstruction reads the durable UsageSummary rows), so its shape is
+// package-internal and carries no format-compatibility obligation.
+type counterKey struct {
+	tenantID    string
+	feature     string
+	periodStart time.Time
+}
+
+// realtimeKey returns the counterKey identifying one counterEntry for
+// (tenantID, feature) within the period starting at periodStart.
+func realtimeKey(tenantID, feature string, periodStart time.Time) counterKey {
+	// periodStart is canonicalized to UTC exactly as the encoding this key
+	// replaced canonicalized before formatting: period bounds already are
+	// UTC (periodBounds), and the normalization keeps key identity
+	// indifferent to the location a caller's clock happens to carry.
+	return counterKey{
+		tenantID:    tenantID,
+		feature:     feature,
+		periodStart: periodStart.UTC(),
+	}
 }
 
 // Ingest is the one place both reliability tiers deliver a validated
@@ -551,32 +590,12 @@ func (a *Aggregator) sweepExpiredCountersLocked(start time.Time) {
 	}
 	a.sweptThrough = start
 	a.counters.Range(func(key, _ any) bool {
-		if periodFromRealtimeKey(key).Before(start) {
+		k, ok := key.(counterKey)
+		if ok && k.periodStart.Before(start) {
 			a.counters.Delete(key)
 		}
 		return true
 	})
-}
-
-// periodFromRealtimeKey extracts the period start realtimeKey embedded in
-// key (the RFC 3339 rendering after the last "|"). The last segment is
-// always the period start, whatever the tenant or feature segments hold;
-// an unparseable key (impossible for keys this Aggregator wrote) simply
-// never matches the eviction predicate and stays resident.
-func periodFromRealtimeKey(key any) time.Time {
-	s, ok := key.(string)
-	if !ok {
-		return time.Time{}
-	}
-	idx := strings.LastIndex(s, "|")
-	if idx < 0 {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, s[idx+1:])
-	if err != nil {
-		return time.Time{}
-	}
-	return t
 }
 
 // foldThreshold returns the overage threshold in force for feature as the

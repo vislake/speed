@@ -101,6 +101,53 @@ func TestAggregator_Ingest_DifferentPeriodsDoNotShareACounter(t *testing.T) {
 	}
 }
 
+// TestAggregator_Ingest_SeparatorInTenantOrFeature_KeepsBucketsDistinct is
+// the P3-metering-D regression: realtimeKey used to concatenate its three
+// segments around an unescaped "|". That encoding is safe for the durable
+// summary id -- there the tenant rides in its own primary-key column (see
+// summaryID's doc comment) -- but the real-time counter map is flat, so
+// its key carries the tenant in-band, and tenantID and feature are both
+// variable-length values neither this module nor the layers beneath it
+// restrict against "|" (UsageEvent.validate bounds length only;
+// pkgcore.TenantID is an unrestricted string). Whenever either segment
+// contains the separator, the boundary shifts: the two distinct buckets
+// ("a", "b|c") and ("a|b", "c") both concatenated to "a|b|c|" + the
+// period, so they shared one counter entry -- each bucket's RealtimeCount
+// answered with the other bucket's quantity folded in too, a silent
+// misattribution across (tenant, feature) boundaries in the billing-grade
+// counter. Each bucket must keep its own running total.
+func TestAggregator_Ingest_SeparatorInTenantOrFeature_KeepsBucketsDistinct(t *testing.T) {
+	agg := newTestAggregator(t)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	if err := agg.Ingest(ctx, UsageEvent{TenantID: "a", Feature: "b|c", Quantity: 1, IdempotencyKey: "idem-bucket-1", OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest((a, b|c)): %v", err)
+	}
+	if err := agg.Ingest(ctx, UsageEvent{TenantID: "a|b", Feature: "c", Quantity: 2, IdempotencyKey: "idem-bucket-2", OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest((a|b, c)): %v", err)
+	}
+
+	if n := lenCounters(t, agg); n != 2 {
+		t.Errorf("resident counter entries = %d, want 2 -- pre-fix the two distinct (tenant, feature) buckets shared one entry", n)
+	}
+
+	got, err := agg.RealtimeCount("a", "b|c", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount(a, b|c): %v", err)
+	}
+	if got != 1 {
+		t.Errorf("RealtimeCount(a, b|c) = %v, want 1 -- the (a, b|c) bucket must not absorb the (a|b, c) bucket's quantity", got)
+	}
+	got, err = agg.RealtimeCount("a|b", "c", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount(a|b, c): %v", err)
+	}
+	if got != 2 {
+		t.Errorf("RealtimeCount(a|b, c) = %v, want 2 -- the (a|b, c) bucket must not absorb the (a, b|c) bucket's quantity", got)
+	}
+}
+
 func TestAggregator_Ingest_UpsertsSummaryRow(t *testing.T) {
 	summaries := NewSummaryRepository(newTestDB(t))
 	agg := NewAggregator(summaries)
