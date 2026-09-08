@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,18 +13,26 @@ import (
 
 // eventRecorder collects the events a Service publishes, so a test can
 // assert on the announcement as well as on the row. The in-memory bus
-// delivers synchronously inside the publishing call, so no synchronization
-// is needed here.
+// delivers synchronously inside the publishing call, and in the
+// synchronous tests that is the only caller -- but the queue-backed reap
+// tests in reap_jobs_test.go publish from the queue's worker goroutine
+// while the test goroutine polls the recorder, so the slice is guarded
+// rather than trusting the caller count.
 type eventRecorder struct {
+	mu     sync.Mutex
 	events []pkgcore.Event
 }
 
 func (r *eventRecorder) record(_ context.Context, evt pkgcore.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, evt)
 	return nil
 }
 
 func (r *eventRecorder) ofType(eventType string) []pkgcore.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []pkgcore.Event
 	for _, evt := range r.events {
 		if evt.Type == eventType {

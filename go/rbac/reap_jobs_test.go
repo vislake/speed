@@ -32,6 +32,49 @@ import (
 // loop over the observable end state (the binding rows), never by a fixed
 // sleep.
 //
+// Determinism, in three layers, is what keeps these tests from flaking
+// under CI scheduling load. Three CI recurrences failed the same three
+// tests, and the two timing dependencies share one enabling condition --
+// several goroutines (the queue's dispatcher, heartbeat and worker,
+// ticking or executing around the test's own reads) on one SQLite file
+// through a multi-connection pool. CI's recorded signature was SQLITE_BUSY
+// "database is locked" errors at the test's own database calls (grants)
+// and in the queue's dispatcher polls; a local reproduction under load
+// caught the family's other member, the worker reaping one binding
+// between the publish and the enqueued-state observation ("bindings
+// changed before the queue ran: 1 live rows, want 2").
+//
+//   - The test database is pinned to ONE pool connection
+//     (newQueueTestService). SQLite's lock protocol can refuse a
+//     read-then-write upgrade with an immediate SQLITE_BUSY that no
+//     busy_timeout cures (dbkit's own dialect doc says so), and the
+//     queue's dispatcher and heartbeat tick every millisecond, so a
+//     multi-connection pool hands the test goroutine and the queue's
+//     goroutines conflicting locks with real probability under load. One
+//     connection serializes every statement inside database/sql's pool,
+//     where waiting is an ordinary queue: no two connections can ever
+//     hold conflicting locks, and the pass/fail decision no longer
+//     depends on lock timing. The mechanism under test -- enqueue,
+//     worker execution, retry convergence -- is connection-count
+//     agnostic.
+//
+//   - The "the subscriber only enqueued" observation in the two worker
+//     tests happens while NO worker exists: the queue's Start is deferred
+//     until after the task row and the untouched binding rows are
+//     asserted (the schema is materialized first by a throwaway
+//     Start/Close, since Enqueue needs the jobs table to exist). An
+//     observation of a transient state races whatever could change it; a
+//     worker that cannot exist yet makes the observation unconditional.
+//
+//   - Post-convergence announcements (the revoked-binding events, the
+//     cache flip that makes Can answer false) are observed by waiting
+//     for the durable end state, never read once at an instant: each
+//     revoke's event fires after its row's mark-delete commits, so the
+//     test waits for the event count before asserting anything the
+//     announcement ordering guarantees (the event recorder carries a
+//     mutex for the same reason -- the worker goroutine appends to it
+//     while the test polls it).
+//
 // One more property is pinned here: the enqueue itself has no retry home
 // -- a reap task that never lands is a task no retry can converge (the
 // bus never redelivers and the subscribers must still return nil), so an
@@ -74,6 +117,86 @@ func startQueue(t *testing.T, q *jobs.StandaloneQueue) {
 	})
 }
 
+// createJobsSchema materializes the queue's own schema (the jobs table)
+// without leaving any worker behind: a throwaway queue is started and
+// closed, which is the only path that creates the schema, and once closed
+// its goroutines are gone for good. The tests that must observe the
+// enqueued-but-not-yet-executed state use it before publishing: Enqueue
+// needs the table to exist, and the observation needs no worker to exist,
+// and a queue's Start is one-shot -- so the schema comes from a queue the
+// test never enqueues through, and the queue that will execute the task
+// is started only after the observation.
+func createJobsSchema(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	q := jobs.NewStandaloneQueue(db)
+	if err := q.Start(context.Background()); err != nil {
+		t.Fatalf("starting the schema queue: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := q.Close(ctx); err != nil {
+		t.Fatalf("closing the schema queue: %v", err)
+	}
+}
+
+// newQueueTestService attaches a Service with a queue wired over db, in
+// the host's real order: build the queue first, construct the module with
+// WithQueue, let Attach install the reap-task handlers on the registry,
+// then drain them onto the queue.
+//
+// The queue's Start is deliberately NOT called here -- each test decides
+// when a worker may exist. The worker tests that observe the transient
+// enqueued state start it after the observation (see their comments);
+// the tests that need the worker live from publish time on call
+// startQueue themselves.
+//
+// Two construction details serve determinism rather than speed:
+//
+//   - db's pool is pinned to a single connection. The queue's dispatcher
+//     and heartbeat tick every millisecond and the worker runs the reap
+//     concurrently with the test's own assertions, all through the one
+//     pool dbkit.Open handed out -- and on one SQLite file, a
+//     multi-connection pool makes SQLITE_BUSY reachable under scheduling
+//     load: SQLite answers a read-then-write upgrade with an immediate
+//     "database is locked" that no busy_timeout cures (dbkit's own
+//     dialect doc names the class), and the busy timeouts themselves
+//     expire when the machine is saturated. Three CI recurrences of these
+//     tests failed exactly that way, at the test's own grants and at the
+//     dispatcher's polls. One connection serializes every statement
+//     inside the pool -- waiting moves into database/sql, where it is an
+//     ordinary queue and can never surface as a lock error -- and the
+//     mechanism under test does not care how many connections carried it.
+//
+//   - The retry backoff is pinned to jobs' own defaults. The
+//     TransientFailureNearTheEnqueue test's convergence budget is a
+//     function of the pacing of the queue's retries (a failed attempt is
+//     retried after the backoff base), so the pacing these tests rely on
+//     is stated here rather than inherited from a default that could
+//     drift.
+func newQueueTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.Registry, *jobs.StandaloneQueue) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("reaching the database's pool: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	q := jobs.NewStandaloneQueue(db,
+		jobs.WithWorkerCount(1),
+		jobs.WithPollInterval(time.Millisecond),
+		jobs.WithBackoff(jobs.DefaultBackoffBase, jobs.DefaultBackoffMax))
+	svc, reg := attachTestService(t, db, append(opts, WithQueue(q))...)
+	for jobType, handler := range reg.Jobs.Handlers() {
+		jobsHandler, ok := handler.(jobs.Handler)
+		if !ok {
+			t.Fatalf("registry job handler %q is not a jobs.Handler", jobType)
+		}
+		if err := q.RegisterHandler(jobsHandler); err != nil {
+			t.Fatalf("registering %s on the queue: %v", jobType, err)
+		}
+	}
+	return svc, reg, q
+}
+
 // liveBindings returns the user's still-live bindings in tenant.
 func liveBindings(t *testing.T, svc *Service, tenant pkgcore.TenantID, userID string) []RoleBinding {
 	t.Helper()
@@ -96,32 +219,10 @@ func jobRows(t *testing.T, db *gorm.DB, jobType string) []map[string]any {
 	return rows
 }
 
-// newQueueTestService attaches a Service with a queue wired over db, in
-// the host's real order: build the queue first, construct the module with
-// WithQueue, let Attach install the reap-task handlers on the registry,
-// then drain them onto the queue.
-func newQueueTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.Registry, *jobs.StandaloneQueue) {
-	t.Helper()
-	q := jobs.NewStandaloneQueue(db,
-		jobs.WithWorkerCount(1),
-		jobs.WithPollInterval(time.Millisecond))
-	svc, reg := attachTestService(t, db, append(opts, WithQueue(q))...)
-	for jobType, handler := range reg.Jobs.Handlers() {
-		jobsHandler, ok := handler.(jobs.Handler)
-		if !ok {
-			t.Fatalf("registry job handler %q is not a jobs.Handler", jobType)
-		}
-		if err := q.RegisterHandler(jobsHandler); err != nil {
-			t.Fatalf("registering %s on the queue: %v", jobType, err)
-		}
-	}
-	return svc, reg, q
-}
-
 func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *testing.T) {
 	db := newRBACTestDB(t)
+	createJobsSchema(t, db) // the jobs table must exist before Enqueue; see that helper
 	svc, reg, q := newQueueTestService(t, db)
-	startQueue(t, q)
 
 	removed := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 	grant(t, svc, removed, "reader", Scope{}, "notes:read")
@@ -138,9 +239,12 @@ func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *tes
 	})
 
 	// The subscriber must only have enqueued: at the moment Publish
-	// returns, the synchronous half of the delivery is over and the
-	// binding rows are untouched -- the reaping happens when the worker
-	// picks the task up.
+	// returns, the binding rows are untouched and the task row sits
+	// Pending -- the reaping happens when the worker picks the task up.
+	// The queue's Start is deferred until after this observation, so no
+	// worker exists to race it: a worker polling the same table could
+	// otherwise reap between these two reads and make the transient
+	// state unobservable, a scheduling race rather than an assertion.
 	if rows := liveBindings(t, svc, removed.TenantID, removed.UserID); len(rows) != 2 {
 		t.Fatalf("bindings changed before the queue ran: %d live rows, want 2", len(rows))
 	}
@@ -148,11 +252,26 @@ func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *tes
 	if len(enqueued) != 1 {
 		t.Fatalf("got %d enqueued %s tasks, want 1", len(enqueued), taskTypeReapMember)
 	}
+	if status := enqueued[0]["status"]; status != string(jobs.StatusPending) {
+		t.Fatalf("the enqueued %s task's status = %v, want %s -- the subscriber must leave the reaping to the worker, not run it",
+			taskTypeReapMember, status, jobs.StatusPending)
+	}
+
+	startQueue(t, q)
 
 	// The worker converges the reap: both bindings withdrawn, each
 	// announcing EventRoleBindingRevoked, the cache flipped.
 	waitFor(t, "the reap task to revoke the removed member's bindings", func() bool {
 		return len(liveBindings(t, svc, removed.TenantID, removed.UserID)) == 0
+	})
+	// Each revoked-binding event fires strictly after its row's
+	// mark-delete commit (and after the cache flip the same announce
+	// performs), so waiting for both announcements -- rather than reading
+	// the recorder once, an instant that could race the worker's last
+	// announce -- is what makes the Can and row assertions below
+	// unconditional.
+	waitFor(t, "both reaped bindings to announce their revocation", func() bool {
+		return len(rec.ofType(EventRoleBindingRevoked)) == 2
 	})
 	if ok, err := svc.Can(context.Background(), removed, "read", "notes"); err != nil || ok {
 		t.Fatalf("Can after the queued reap = %v, %v; want false", ok, err)
@@ -178,8 +297,8 @@ func TestService_NodeDeletionReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *test
 	// one node-reap task, and the worker revokes every binding scoped to
 	// either deleted node.
 	db := newRBACTestDB(t)
+	createJobsSchema(t, db) // the jobs table must exist before Enqueue; see that helper
 	svc, reg, q := newQueueTestService(t, db)
-	startQueue(t, q)
 
 	holder := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, holder, "reader", Scope{NodeID: "node-1"}, "notes:read")
@@ -197,13 +316,28 @@ func TestService_NodeDeletionReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *test
 		t.Fatalf("publishing %s: %v", eventNodeDeleted, err)
 	}
 
+	// The subscriber must only have enqueued -- the queue's Start is
+	// deferred until after this observation (test 1's own comment gives
+	// the determinism reasoning), so the single task row sits Pending
+	// with the bindings it will reap still live.
 	enqueued := jobRows(t, db, taskTypeReapNode)
 	if len(enqueued) != 1 {
 		t.Fatalf("got %d enqueued %s tasks, want 1 (one task for the whole cascade)", len(enqueued), taskTypeReapNode)
 	}
+	if status := enqueued[0]["status"]; status != string(jobs.StatusPending) {
+		t.Fatalf("the enqueued %s task's status = %v, want %s -- the subscriber must leave the reaping to the worker, not run it",
+			taskTypeReapNode, status, jobs.StatusPending)
+	}
+
+	startQueue(t, q)
 
 	waitFor(t, "the node reap to revoke the bindings at the deleted nodes", func() bool {
 		return len(liveBindings(t, svc, "tenant-a", "user-1")) == 0
+	})
+	// Same announcement-ordering wait as test 1: each revoked-binding
+	// event fires after its row's mark-delete commit.
+	waitFor(t, "both reaped bindings to announce their revocation", func() bool {
+		return len(rec.ofType(EventRoleBindingRevoked)) == 2
 	})
 	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per reaped binding)", got, EventRoleBindingRevoked)
@@ -265,14 +399,17 @@ func TestService_MemberRemovalReap_TransientFailureNearTheEnqueue_Converges(t *t
 	// The P1-rbac-reap harm shape end to end: a transient database failure
 	// at the moment of the removal -- the binding table momentarily
 	// unavailable -- and the reaping still completes. The removal event
-	// arrives while the bindings table is hidden, so every attempt the
-	// reaping makes while the failure holds fails; the queue retries the
-	// task until one attempt lands after the table is back, and the revoke
-	// the removal demands converges. Pre-this-round, the same sequence --
-	// synchronous best-effort reaping inside the delivery, no queue to
-	// retry -- left the binding live forever, and a member who re-joined
-	// through a fresh membership silently kept the role (the recorded
-	// pre-fix run of this scenario is in the round's notes).
+	// arrives while the bindings table is hidden; the table is restored
+	// only once the task row reports a FAILED attempt (status retrying),
+	// so the failure the queue must converge is genuinely exercised on
+	// every run rather than whenever a worker poll happened to land in
+	// the hidden window; the queue retries the task until one attempt
+	// lands after the table is back, and the revoke the removal demands
+	// converges. Pre-this-round, the same sequence -- synchronous
+	// best-effort reaping inside the delivery, no queue to retry -- left
+	// the binding live forever, and a member who re-joined through a
+	// fresh membership silently kept the role (the recorded pre-fix run
+	// of this scenario is in the round's notes).
 	db := newRBACTestDB(t)
 	svc, reg, q := newQueueTestService(t, db)
 	startQueue(t, q)
@@ -286,6 +423,19 @@ func TestService_MemberRemovalReap_TransientFailureNearTheEnqueue_Converges(t *t
 	publishMemberRemoved(t, reg, removed.TenantID, removedMember{
 		MembershipID: "membership-1",
 		UserID:       removed.UserID,
+	})
+
+	// The table is healed only after an attempt has genuinely failed
+	// against it: the row's transition to retrying is completeRetrying's
+	// persisted record that the worker ran the reap while the bindings
+	// table was hidden and the reap failed there -- the exact shape the
+	// queue's retries exist to converge. Waiting for that record (instead
+	// of restoring after a fixed pause, or restoring immediately and
+	// hoping a poll landed in the window) makes the retried-convergence
+	// property this test exists to prove unconditional.
+	waitFor(t, "a reap attempt to fail against the hidden bindings table", func() bool {
+		rows := jobRows(t, db, taskTypeReapMember)
+		return len(rows) == 1 && rows[0]["status"] == string(jobs.StatusRetrying)
 	})
 	if err := db.Exec("ALTER TABLE rbac_role_bindings_hidden RENAME TO rbac_role_bindings").Error; err != nil {
 		t.Fatalf("restoring the bindings table: %v", err)
