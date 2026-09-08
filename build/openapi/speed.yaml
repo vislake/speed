@@ -63,6 +63,95 @@ paths:
                 $ref: '#/components/schemas/NotesListNotesResponse'
       tags:
         - openapi_other
+  /api/v1/notes/{noteId}:
+    servers: []
+    delete:
+      operationId: notes_deleteNote
+      summary: Mark a note as deleted for the caller's tenant.
+      description: >-
+        The tenant is always the one tenancy.Middleware already resolved from
+        the request, and the note id names a note belonging to that tenant alone
+        -- never a tenant_id request field, by design (root CLAUDE.md's
+        multi-tenant isolation rule). The delete is a mark-delete
+        (dbkit.SoftDeletable): the row stays in place with deleted_at/deleted_by
+        set, hidden from the list operation, and restorable through
+        notes_restoreNote until a retention sweep physically reaps it. Deleting
+        an already-deleted note answers 404 exactly like an unknown or another
+        tenant's id -- the refusal is uniform, so a caller cannot learn which
+        case it hit.
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The note's application-generated UUID.
+      responses:
+        '204':
+          description: The note was marked deleted.
+        '401':
+          description: >-
+            The request could not be attributed to a user
+            (notes.subject_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesError'
+        '404':
+          description: >-
+            No live note of the caller's tenant carries that id -- the note does
+            not exist, belongs to another tenant, or is already deleted
+            (notes.note_not_found). The answer is uniform across the three
+            cases, exactly like the 404 the repository's other operations answer
+            for a cross-tenant id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesError'
+      tags:
+        - openapi_other
+  /api/v1/notes/{noteId}/restore:
+    servers: []
+    post:
+      operationId: notes_restoreNote
+      summary: Restore a previously deleted note for the caller's tenant.
+      description: >-
+        The inverse of notes_deleteNote: clears the mark-delete's
+        deleted_at/deleted_by so the note is visible to the list operation
+        again, with its text and creator untouched. Restoring a note that is not
+        currently deleted -- because it was never deleted, is unknown to this
+        tenant, or belongs to another tenant -- answers 404 uniformly
+        (notes.note_not_found), so a caller cannot learn which case it hit.
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The note's application-generated UUID.
+      responses:
+        '204':
+          description: The note was restored.
+        '401':
+          description: >-
+            The request could not be attributed to a user
+            (notes.subject_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesError'
+        '404':
+          description: >-
+            No currently-deleted note of the caller's tenant carries that id --
+            the note is live, does not exist, or belongs to another tenant
+            (notes.note_not_found). The answer is uniform across the three
+            cases.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesError'
+      tags:
+        - openapi_other
   /api/v1/cases:
     servers: []
     post:

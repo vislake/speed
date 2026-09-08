@@ -978,6 +978,132 @@ export function useNotesListNotes<TData = Awaited<ReturnType<typeof notesListNot
 
 
 /**
+ * The tenant is always the one tenancy.Middleware already resolved from the request, and the note id names a note belonging to that tenant alone -- never a tenant_id request field, by design (root CLAUDE.md's multi-tenant isolation rule). The delete is a mark-delete (dbkit.SoftDeletable): the row stays in place with deleted_at/deleted_by set, hidden from the list operation, and restorable through notes_restoreNote until a retention sweep physically reaps it. Deleting an already-deleted note answers 404 exactly like an unknown or another tenant's id -- the refusal is uniform, so a caller cannot learn which case it hit.
+ * @summary Mark a note as deleted for the caller's tenant.
+ */
+export const notesDeleteNote = (
+    noteId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/notes/${noteId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getNotesDeleteNoteMutationOptions = <TError = NotesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notesDeleteNote>>, TError,{noteId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notesDeleteNote>>, TError,{noteId: string}, TContext> => {
+
+const mutationKey = ['notesDeleteNote'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notesDeleteNote>>, {noteId: string}> = (props) => {
+          const {noteId} = props ?? {};
+
+          return  notesDeleteNote(noteId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotesDeleteNoteMutationResult = NonNullable<Awaited<ReturnType<typeof notesDeleteNote>>>
+
+    export type NotesDeleteNoteMutationError = NotesError
+
+    /**
+ * @summary Mark a note as deleted for the caller's tenant.
+ */
+export const useNotesDeleteNote = <TError = NotesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notesDeleteNote>>, TError,{noteId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notesDeleteNote>>,
+        TError,
+        {noteId: string},
+        TContext
+      > => {
+      return useMutation(getNotesDeleteNoteMutationOptions(options));
+    }
+
+/**
+ * The inverse of notes_deleteNote: clears the mark-delete's deleted_at/deleted_by so the note is visible to the list operation again, with its text and creator untouched. Restoring a note that is not currently deleted -- because it was never deleted, is unknown to this tenant, or belongs to another tenant -- answers 404 uniformly (notes.note_not_found), so a caller cannot learn which case it hit.
+ * @summary Restore a previously deleted note for the caller's tenant.
+ */
+export const notesRestoreNote = (
+    noteId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/notes/${noteId}/restore`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getNotesRestoreNoteMutationOptions = <TError = NotesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notesRestoreNote>>, TError,{noteId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notesRestoreNote>>, TError,{noteId: string}, TContext> => {
+
+const mutationKey = ['notesRestoreNote'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notesRestoreNote>>, {noteId: string}> = (props) => {
+          const {noteId} = props ?? {};
+
+          return  notesRestoreNote(noteId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotesRestoreNoteMutationResult = NonNullable<Awaited<ReturnType<typeof notesRestoreNote>>>
+
+    export type NotesRestoreNoteMutationError = NotesError
+
+    /**
+ * @summary Restore a previously deleted note for the caller's tenant.
+ */
+export const useNotesRestoreNote = <TError = NotesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notesRestoreNote>>, TError,{noteId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notesRestoreNote>>,
+        TError,
+        {noteId: string},
+        TContext
+      > => {
+      return useMutation(getNotesRestoreNoteMutationOptions(options));
+    }
+
+/**
  * The case groups one patient (the clinic-given name required, the optional clinic-given reference) with the photos of the case as already-uploaded go/storage object ids, in attachment order. Both the photo list and the reference may be absent or empty -- a case can be created for an intake whose photos arrive later. There is deliberately no tenant_id field and no creator field anywhere on the request: the tenant is the one tenancy.Middleware already resolved into the request context, and the creator comes from the host's SubjectResolver seam, never from the request (a request no resolver can attribute is refused with cases.subject_unresolved before the body is even read).
  * @summary Create a case under the caller's tenant.
  */
