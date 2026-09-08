@@ -749,3 +749,25 @@ func (r *AccessLogRepository) listByShare(ctx context.Context, shareID string) (
 	}
 	return out, nil
 }
+
+// listOlderThan returns every access log row of the caller tenant whose
+// recorded access time is at or before cutoff -- the retention sweep's
+// candidate listing (retention_participant.go): an entry older than the
+// tenant's retention window is expired data the sweep reaps, exactly as a
+// soft-deleted row's deletion time past the cutoff is what a row-based
+// participant reaps. Oldest first, ties broken by id so the reap order is
+// deterministic; the caller (sweepAccessLog) hard-deletes each returned
+// row under the same tenant-and-system context this listing ran under.
+func (r *AccessLogRepository) listOlderThan(ctx context.Context, cutoff time.Time) ([]AccessLogEntry, error) {
+	var out []AccessLogEntry
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.
+			Where("occurred_at <= ?", cutoff).
+			Order("occurred_at, id").
+			Find(&out).Error
+	})
+	if err != nil {
+		return nil, ErrInternal.WithCause(err)
+	}
+	return out, nil
+}

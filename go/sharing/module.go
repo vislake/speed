@@ -307,7 +307,10 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // It declares sharing's permissions, its one audit action, its event
 // catalog and its one configuration item; registers the expiry-sweep
 // task's jobs.Handler so a host that drains reg.Jobs.Handlers() onto its
-// own jobs.Queue gets a worker that reaps expired shares; and attaches the
+// own jobs.Queue gets a worker that reaps expired shares; registers the
+// module's access-log retention participant on reg.Retention so a host's
+// compliance retention sweep reaps access-log entries past the tenant's
+// retention window (retention_participant.go); and attaches the
 // registry to Service so Create's event publish and sensitive-resource
 // audit emission, and Access's own event publish, read the host's actual
 // bus, audit-action registrar and KVStore at call time (the latter is what
@@ -364,6 +367,18 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	m.svc.attach(reg)
+
+	// Register the module's own access-log retention participant so every
+	// retention sweep a host's compliance layer orchestrates also reaps
+	// this tenant's access-log entries whose recorded access time has
+	// fallen past the tenant's retention window (retention_participant.go's
+	// file comment has the mechanism in full). Register runs before any
+	// host-populated post-Bootstrap Add, so the reserved
+	// sharing.access_log name can never collide with a host's participant,
+	// exactly as compliance's own export-manifests reservation works.
+	if err := reg.Retention.Add(NewAccessLogRetentionParticipant(m.svc.AccessLogs())); err != nil {
+		return err
+	}
 
 	// Built here, not in NewModule, deliberately: every Option a caller
 	// passed to NewModule (WithResourceResolver included) has already run

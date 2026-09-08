@@ -138,6 +138,20 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		}
 		assertContainsAll(t, paths, []string{PathAccess, PathShares})
 	})
+
+	t.Run("access-log retention participant registered", func(t *testing.T) {
+		var names []string
+		for _, p := range reg.Retention.Participants() {
+			names = append(names, p.Name)
+			if p.Sweep == nil {
+				t.Errorf("participant %q carries a nil Sweep callback, want the access-log reap", p.Name)
+			}
+			if p.Erase == nil {
+				t.Errorf("participant %q carries a nil Erase callback, want the explicit nothing-to-erase answer", p.Name)
+			}
+		}
+		assertContainsAll(t, names, []string{AccessLogRetentionParticipantName})
+	})
 }
 
 // TestModule_Register_MountsHandlerBuiltAfterOptions proves Register builds
