@@ -152,13 +152,16 @@ func normalizeNotify(params map[string]string, rawBody []byte) (billing.Normaliz
 			// hand the payment_events insert-first-dedup ledger a byte-
 			// identical duplicate of the payment, silently swallowing the
 			// refund signal. This package's own posture therefore mirrors
-			// go/billing/gateway/wechat's REFUND.* handling exactly: refused
-			// loudly as ErrWebhookPayloadUnrecognized, never guessed at --
-			// the trade-notify vocabulary carries no per-refund-occurrence
+			// the refusal go/billing/gateway/wechat applies to the refund
+			// signals ITS vocabulary cannot represent (REFUND.ABNORMAL/
+			// REFUND.CLOSED -- see that leg's decode and the gateway
+			// AGENTS.md's refund-decode record): refused loudly as
+			// ErrWebhookPayloadUnrecognized, never guessed at -- the
+			// trade-notify vocabulary carries no per-refund-occurrence
 			// identifier to build a dedup-safe NormalizedEventRefunded
-			// EventID from (go/billing/gateway/AGENTS.md's "refund
-			// notifications are not decoded" Known limitation, which now
-			// covers this leg too).
+			// EventID from, the occurrence identity (out_refund_no) that
+			// makes wechat's own REFUND.* notifications decodable being
+			// exactly what Alipay's trade notifications lack.
 			return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.
 				WithParam("reason", "TRADE_SUCCESS notification carries refund fields (refund_fee/gmt_refund): a partial-refund notification, which this round does not decode").
 				WithParam("trade_status", tradeStatus)

@@ -39,9 +39,8 @@ type notifyEnvelope struct {
 
 // transactionResource is the decrypted plaintext of a "TRANSACTION.*"
 // event's resource -- https://pay.weixin.qq.com/doc/v3/merchant/4012791863's
-// documented transaction shape, the only resource shape this round decodes
-// (see this file's own doc comment on eventTypeTransactionSuccess for what
-// is deliberately NOT handled yet).
+// documented transaction shape, decoded by decodeTransactionResource for
+// the one transaction event type this package recognizes.
 type transactionResource struct {
 	OutTradeNo  string `json:"out_trade_no"`
 	TradeState  string `json:"trade_state"`
@@ -53,15 +52,61 @@ type transactionResource struct {
 	} `json:"amount"`
 }
 
-// eventTypeTransactionSuccess is the only WeChat Pay webhook event_type
-// this package recognizes this round: a Native-order payment success.
-// WeChat Pay also delivers "REFUND.SUCCESS"/"REFUND.ABNORMAL"/
-// "REFUND.CLOSED" notifications for a refunded order (a distinct resource
-// shape from transactionResource above, requiring its own decode path this
-// round does not implement -- see
-// go/billing/gateway/AGENTS.md's Known limitations) -- every other
-// event_type is refused as ErrWebhookPayloadUnrecognized, never guessed at.
+// eventTypeTransactionSuccess is the WeChat Pay webhook event_type for a
+// Native-order payment success -- the one transaction event type this
+// package recognizes, decoded through decodeTransactionResource.
 const eventTypeTransactionSuccess = "TRANSACTION.SUCCESS"
+
+// refundResource is the decrypted plaintext of a "REFUND.*" event's
+// resource -- https://pay.weixin.qq.com/doc/v3/merchant/4012791865's
+// documented refund-result-notification shape, a distinct resource from
+// transactionResource: the refund object carries the refund's own
+// identifiers (out_refund_no, refund_id), the refunded order's
+// out_trade_no, the refund's status and the money fields of the refund.
+// Note what it deliberately does NOT carry: no attach field and no
+// merchant-metadata equivalent of any kind (WeChat Pay's refund object
+// defines none -- the merchant's refund-creation API has no attach
+// parameter either), which is why a decoded refund event's TenantID/
+// SubscriptionID/InvoiceID are empty BY NATURE of the payload -- see
+// billing.NormalizedEvent's own doc comment (go/billing/gateway.go) for
+// the recorded exception this decode path relies on.
+type refundResource struct {
+	OutTradeNo   string `json:"out_trade_no"`
+	OutRefundNo  string `json:"out_refund_no"`
+	RefundStatus string `json:"refund_status"`
+	SuccessTime  string `json:"success_time"`
+	Amount       struct {
+		Total       int64 `json:"total"`
+		Refund      int64 `json:"refund"`
+		PayerTotal  int64 `json:"payer_total"`
+		PayerRefund int64 `json:"payer_refund"`
+	} `json:"amount"`
+}
+
+// The three WeChat Pay refund-result notification event types
+// (https://pay.weixin.qq.com/doc/v3/merchant/4012791865): WeChat Pay
+// delivers one of them for a refunded order, each carrying the same
+// refundResource shape above with its own refund_status inside. Only
+// REFUND.SUCCESS decodes into a billing.NormalizedEvent -- a refund that
+// actually happened maps onto NormalizedEventRefunded; the other two
+// report a refund that did NOT complete (see decodeRefundResource for the
+// full argument) and are refused loudly rather than guessed at, exactly
+// like every other payload this package cannot normalize truthfully.
+const (
+	eventTypeRefundSuccess  = "REFUND.SUCCESS"
+	eventTypeRefundAbnormal = "REFUND.ABNORMAL"
+	eventTypeRefundClosed   = "REFUND.CLOSED"
+)
+
+// refundStatusSuffix maps each recognized REFUND.* event type to the
+// refund_status its decrypted resource must carry: WeChat Pay names a
+// refund-result notification after the very status inside it, so a
+// mismatch between the envelope's event_type and the resource's
+// refund_status is a payload the channel never sends -- refused rather
+// than decoded (decodeRefundResource's agreement check).
+func refundStatusSuffix(eventType string) string {
+	return eventType[len("REFUND."):]
+}
 
 // VerifyWebhook implements billing.PaymentGateway. It performs no network
 // call: VerifySignature recomputes WeChat Pay's own documented
@@ -109,7 +154,19 @@ func (g *Gateway) VerifyWebhook(_ context.Context, headers map[string][]string, 
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
 	}
-	if envelope.EventType != eventTypeTransactionSuccess {
+
+	// The event_type names the resource shape to decode: a TRANSACTION.*
+	// notification's resource is a transaction object, a REFUND.*
+	// notification's is a refund object (refundResource). Anything else is
+	// refused on the event_type alone, before any decryption is attempted
+	// -- the same "refused as ErrWebhookPayloadUnrecognized, never guessed
+	// at" posture this package always applied to unrecognized types.
+	var isRefund bool
+	switch envelope.EventType {
+	case eventTypeTransactionSuccess:
+	case eventTypeRefundSuccess, eventTypeRefundAbnormal, eventTypeRefundClosed:
+		isRefund = true
+	default:
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithParam("event_type", envelope.EventType)
 	}
 
@@ -121,6 +178,20 @@ func (g *Gateway) VerifyWebhook(_ context.Context, headers map[string][]string, 
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
 	}
 
+	if isRefund {
+		return decodeRefundResource(envelope.EventType, plaintext, body)
+	}
+	return decodeTransactionResource(plaintext, body)
+}
+
+// decodeTransactionResource maps a decrypted TRANSACTION.SUCCESS resource
+// onto a billing.NormalizedEvent -- the payment-success decode this package
+// always shipped. The resource carries the merchant's own attach field
+// (attachPayload), which is what identifies the event's tenant,
+// subscription and invoice; a transaction-shaped payload missing those
+// identifiers is refused rather than normalized with blanks (see
+// billing.NormalizedEvent's own doc comment).
+func decodeTransactionResource(plaintext, body []byte) (billing.NormalizedEvent, error) {
 	var txn transactionResource
 	if err := json.Unmarshal(plaintext, &txn); err != nil {
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
@@ -175,6 +246,98 @@ func (g *Gateway) VerifyWebhook(_ context.Context, headers map[string][]string, 
 		Amount:           billing.Money{Cents: txn.Amount.Total, Currency: txn.Amount.Currency},
 		OccurredAt:       occurredAt,
 		RawPayload:       body,
+	}, nil
+}
+
+// decodeRefundResource maps a decrypted REFUND.* resource onto a
+// billing.NormalizedEvent. Only REFUND.SUCCESS decodes: a refund that
+// actually happened is the vocabulary's NormalizedEventRefunded/
+// ChannelStatusRefunded -- collapsed over partial and full refunds exactly
+// as those types' own doc comments prescribe, with NormalizedEvent.Amount
+// carrying the refunded amount (amount.refund, the field WeChat Pay's own
+// refund notification defines for it). The envelope's event_type and the
+// resource's refund_status must agree (WeChat Pay names each refund
+// notification after the status inside it), and the two merchant-side
+// identifiers the decode builds its key and reference from must be
+// present; anything else is refused as ErrWebhookPayloadUnrecognized,
+// never guessed at. The event's TenantID/SubscriptionID/InvoiceID are
+// empty by nature: WeChat Pay's refund object carries no attach or
+// merchant-metadata field of any kind (see refundResource's own doc
+// comment and billing.NormalizedEvent's in go/billing/gateway.go), so the
+// identifiers the transaction decode reads off its attach have no source
+// here -- a caller that needs attribution resolves the event's
+// ChannelReference (the refunded trade's out_trade_no) against its own
+// records.
+func decodeRefundResource(eventType string, plaintext, body []byte) (billing.NormalizedEvent, error) {
+	var refund refundResource
+	if err := json.Unmarshal(plaintext, &refund); err != nil {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
+	}
+
+	if refund.RefundStatus != refundStatusSuffix(eventType) {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.
+			WithParam("reason", "refund_status does not match the notification's event_type").
+			WithParam("event_type", eventType).
+			WithParam("refund_status", refund.RefundStatus)
+	}
+	if refund.OutTradeNo == "" || refund.OutRefundNo == "" {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.
+			WithParam("reason", "refund notification missing out_trade_no/out_refund_no")
+	}
+
+	// REFUND.ABNORMAL and REFUND.CLOSED report a refund that did NOT
+	// complete: the money was not returned to the payer, the original
+	// charge stands, and the merchant must act through WeChat Pay's own
+	// refund query/re-issue machinery (a refund marked abnormal has, for
+	// example, failed at the payer's bank). The normalized vocabulary has
+	// exactly one refund event -- NormalizedEventRefunded, "reports that a
+	// previously succeeded charge was refunded" -- and mapping either of
+	// these onto it would report a refund that never happened. They are
+	// refused loudly, with the state named, exactly like the payloads this
+	// package cannot normalize truthfully (compare alipay's refusal of a
+	// partial-refund TRADE_SUCCESS notification); the refusal is the
+	// merchant's signal to look the refund up.
+	if refund.RefundStatus != "SUCCESS" {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.
+			WithParam("reason", "a REFUND.* notification whose refund_status reports a refund that did not complete has no truthful normalized shape; the charge stands and the refund must be handled through WeChat Pay's refund query/re-issue machinery").
+			WithParam("event_type", eventType).
+			WithParam("refund_status", refund.RefundStatus)
+	}
+
+	occurredAt := time.Now().UTC()
+	if refund.SuccessTime != "" {
+		if t, err := time.Parse(time.RFC3339, refund.SuccessTime); err == nil {
+			occurredAt = t.UTC()
+		}
+	}
+
+	return billing.NormalizedEvent{
+		// The dedup-safe per-refund key: (out_refund_no, refund_status) is
+		// stable across WeChat Pay's redeliveries of this same refund
+		// notification, distinct from the payment's own
+		// (out_trade_no, trade_state) EventID -- so the insert-first-dedup
+		// ledger records both the payment and its refund -- and distinct
+		// per refund occurrence, since each refund of an order carries its
+		// own out_refund_no (the per-refund-occurrence identity alipay's
+		// partial-refund refusal notes its own trade-notify vocabulary
+		// lacks).
+		EventID:          refund.OutRefundNo + ":" + refund.RefundStatus,
+		Channel:          "wechat",
+		ChannelReference: billing.ChannelReference(refund.OutTradeNo),
+		Type:             billing.NormalizedEventRefunded,
+		Status:           billing.ChannelStatusRefunded,
+		// The refunded amount, not the order's total: WeChat Pay's refund
+		// notification defines amount.refund as the refund's own money.
+		// The resource carries no currency field -- the notification's
+		// amount object defines only the four integer fields above, and a
+		// WeChat Pay Native refund settles in CNY by definition (the
+		// requireCNY gate on the creation side is this same order's
+		// currency claim) -- so CNY is the one honest answer, mirroring
+		// how the transaction decode reads its own currency field when the
+		// channel echoes one.
+		Amount:     billing.Money{Cents: refund.Amount.Refund, Currency: "CNY"},
+		OccurredAt: occurredAt,
+		RawPayload: body,
 	}, nil
 }
 

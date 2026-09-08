@@ -131,10 +131,19 @@ const (
 // the channel-side object (Stripe's own Metadata map; WeChat Pay's attach
 // field; Alipay's passback_params) -- never guessed or looked up by this
 // package, which holds no table of its own mapping a ChannelReference back
-// to a tenant. A webhook delivery whose payload cannot be decoded into a
-// known event shape -- including one missing this identifying information
-// entirely -- is ErrWebhookPayloadUnrecognized, never a NormalizedEvent with
-// blank identifiers silently passed upstream.
+// to a tenant. The one deliberate exception is a WeChat Pay refund
+// notification (REFUND.*): WeChat Pay's refund object -- and its
+// refund-creation API -- define no attach or merchant-metadata field of
+// any kind, so a decoded refund event's identifiers are empty BY NATURE of
+// the payload, decoded as such by go/billing/gateway/wechat rather than
+// refused, and a caller that needs attribution resolves the event's own
+// ChannelReference (the refunded trade's out_trade_no, which CreateCharge
+// derived from the caller's own idempotency key or invoice id) against its
+// own records. Every other shape -- including a WeChat transaction
+// notification whose attach is missing -- carries this identifying
+// information in the payload, and a delivery missing it is
+// ErrWebhookPayloadUnrecognized, never a NormalizedEvent with blank
+// identifiers silently passed upstream.
 type NormalizedEvent struct {
 	// EventID is the channel's own event id -- together with Channel, the
 	// natural key docs/internal/06-billing-and-metering.md's
