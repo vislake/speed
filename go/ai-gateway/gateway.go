@@ -242,10 +242,14 @@ func (g *Gateway) recordUsage(ctx context.Context, logicalModel string, usage Us
 // is not derived from any caller-supplied business operation id.
 func newIdempotencyKey() string {
 	var buf [16]byte
-	// A crypto/rand failure here is exceptionally rare (an exhausted
-	// entropy source) and never worth failing an already-successful chat
-	// call over; the zero-value buffer still yields a syntactically valid,
-	// merely non-random key in that vanishingly unlikely case.
+	// crypto/rand.Read never returns an error on this toolchain: it always
+	// fills b entirely, and a genuine underlying failure crashes the process
+	// irrecoverably rather than surfacing as an error value. Discarding its
+	// result is therefore the correct way to write against this API -- there
+	// is no surviving path on which this buffer stays zero-filled -- not the
+	// swallowing of a real error. Do not copy this shape onto a reader that
+	// does return errors; there, the same discard would silently produce a
+	// constant, non-random key.
 	_, _ = rand.Read(buf[:])
 	return hex.EncodeToString(buf[:])
 }
