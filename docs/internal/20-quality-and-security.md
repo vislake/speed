@@ -107,8 +107,17 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 - 会话校验（尤其"立即失效"模式下每请求一次 KV 查询的开销 —— 这个数据决定该模式是否值得默认开启）
 - 计量事件采集的吞吐与延迟
 
+> **实施状态注记（benchmark-suite 轮次）：** 上面清单里的四组热点已随归属模块落地为可跑的 benchmark（本轮的 `feat/benchmark-suite` 分支），全部满足"`go test -bench` 直接运行、无 Docker 无网络"的约束（SQLite 走进程内临时文件，基础设施 seam 走进程内实现）：
+>
+> - `go/jobs` 的 `standalone_queue_bench_test.go`：单次持久化 enqueue 的写路径成本（校验、id 生成、带幂等键唯一索引检查的事务插入、日志行），以及单个任务走完 dispatcher claim → worker 执行 → 终态落库的全链路延迟——分 15ms 与默认 200ms 两种轮询周期跑，两条结果的差就是轮询粒度对端到端延迟的贡献；
+> - `go/notification` 的 `delivery_bench_test.go` 与 `preference_service_bench_test.go`：投递键派生（每次投递尝试的每个 channel 都重算，canonical JSON + SHA-256），以及 `ResolveForDelivery` 的按 (收件人, 类型) 发送时偏好重查，覆盖无存储行（走类型默认值）、有存储行、轮转收件人三种真实状态；
+> - `go/authn` 的 `password_bench_test.go` 与 `token_bench_test.go`：`DefaultPasswordParams`（argon2id 成本下限，OWASP 首推配置）下的哈希与校验——每次派生约 19 MiB 内存，这一条就是"提高成本前先看当前硬件的实测"的依据——以及访问令牌的签发与每请求校验（含 KeySource seam 的逐次取钥）；
+> - `go/rbac` 的 `service_bench_test.go`：单次权限判定，三个子基准分别报告缓存命中的允许/拒绝（稳态的每请求代价，实测零分配）与失效后重载（一次 revoke 之后那次判定要付的完整数据库重载，正是"立即失效"形态的代价）。
+>
+> benchmark 随归属模块入库本身不再欠账；nightly 的回归腿（基线采集、阈值、对比告警）仍未落地，与 flaky 腿一起等实现轮次（见下节注记——当前唯一的外部前置是 `issues: write` token）。
+
 ## Flaky 测试治理
 
 不稳定测试会侵蚀团队对 CI 的信任，最终导致"红了就重跑"的坏习惯。措施：nightly 重复运行标记不稳定用例，自动开 issue 跟踪；连续不稳定的用例先隔离（标记 skip 并挂跟踪项）再修复，不允许长期挂着一个时红时绿的 CI。
 
-> **实施状态注记（本轮核实）：** 上面两节都是纯设计意图，尚未落地——`.github/workflows/nightly.yml` 整个是 gated stub（触发即在 guard step 失败，不接受任何调度），其自己的文件头如实记录了阻塞原因：性能基准回归这一半，仓库里当前一个 `func Benchmark` 都没有（`grep "func Benchmark"` 遍历 `go/` 与 `examples/` 零命中），benchmark 随各热点归属的模块在 roadmap M1-M3 落地；flaky 检测这一半需要一个有 `issues: write` 权限的 token 来自动开 issue，等实现轮次落地时一并接入并过一次安全审查。全量矩阵这一半本身已经不再是阻塞点——`full-check` 已经真实存在——但只要没有 benchmark 套件，`nightly` 就整体停在 gated stub。
+> **实施状态注记（本轮核实；benchmark-suite 轮次更新）：** `.github/workflows/nightly.yml` 仍是 gated stub（触发即在 guard step 失败，不接受任何调度），但阻塞清单已缩短到一项外部前置——性能基准回归这一半的"仓库里没有 benchmark 套件"已解除：四组模块归属的 benchmark 随 benchmark-suite 轮次落地（`go/jobs`、`go/notification`、`go/authn`、`go/rbac`，各测什么见上节实施状态注记；`grep "func Benchmark"` 遍历 `go/` 与 `examples/` 已非零命中），nightly 的文件头随之改记剩余阻塞项；flaky 检测这一半仍需要一个有 `issues: write` 权限的 token 来自动开 issue，等实现轮次落地时一并接入并过一次安全审查——这是当前唯一剩下的门。全量矩阵这一半早已不是阻塞点（`full-check` 真实存在）；benchmark 回归腿的基线/阈值机制与 flaky 腿一起随实现轮次落地，在那之前 `nightly` 整体停在 gated stub。
