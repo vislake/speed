@@ -86,8 +86,13 @@ const (
 	// bytes to hold a socket open indefinitely.
 	readHeaderTimeout = 5 * time.Second
 
-	// healthzPath is the one route exempted from tenant resolution -- see
-	// buildServer's use of tenancy.WithAllowlist.
+	// healthzPath is one of the routes exempted from tenant resolution, not
+	// the only one -- see buildServer's use of tenancy.WithAllowlist. It
+	// shares that list with metricsPath, config's two pre-auth display
+	// endpoints, sharing's and integration's self-resolving routes, org's
+	// accept-invitation route and authn's pre-auth operations, each
+	// exempted for its own reason; buildServer's allowlist comment and
+	// authnPreAuthAllowlist's own doc comment enumerate them all.
 	healthzPath = "/healthz"
 
 	// metricsPath is the standalone deployment mode's Prometheus scrape
@@ -2065,15 +2070,22 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// notificationIndexKeyEnv's own doc comment for why reusing
 	// cfg.ConfigKey for both would be exactly the AES-key-doubling-as-an-
 	// HMAC-key weakness dbkit warns against. One key serves the email and
-	// the phone indexers alike (authn's single blind-index key precedent),
-	// each named so an error message tells which column it failed on.
+	// the phone indexers alike (authn's single blind-index key precedent);
+	// both index the SAME column (verified_contacts.address_index), and the
+	// column argument below is notification's exported AddressIndexColumn
+	// rather than a hand-typed string because dbkit.NewBlindIndexer refuses
+	// an EMPTY column name but has no guard for a non-empty wrong one -- the
+	// failure shape this app's original wiring (hand-typed
+	// "contact_email_index"/"contact_phone_index" literals) fell into, with
+	// nothing failing until someone called Equal on the indexers. The
+	// per-indexer error text below still names which of the two failed.
 	dbkit.RegisterEncryptedSerializer(notification.ContactAddressSerializerName, cipher)
-	contactEmailIndexer, err := dbkit.NewBlindIndexer("contact_email_index", cfg.NotificationIndexKey, dbkit.NormalizeEmail)
+	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
 	}
-	contactPhoneIndexer, err := dbkit.NewBlindIndexer("contact_phone_index", cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
@@ -3445,13 +3457,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (tenant unresolved, because there is no Principal to read a tenant
 	// from) exactly the way an unrecognized Host used to. The routes
 	// listed in the allowlist below are the ONLY ones that work with no
-	// Principal at all -- healthz, metrics, config's two pre-auth display
-	// endpoints (still gated by their own internal DomainResolver, see
-	// configModule's wiring above -- entirely independent of this outer
-	// middleware), and authn's own pre-auth operations (register, sign-in,
-	// token refresh, social authorize/callback), which Handler itself
-	// (go/authn/handler.go) additionally decides whether to require a
-	// Principal for, operation by operation.
+	// Principal at all: healthz and metrics (their constants' doc comments
+	// above), config's two pre-auth display endpoints (still gated by their
+	// own internal DomainResolver, see configModule's wiring above --
+	// entirely independent of this outer middleware), authn's own pre-auth
+	// operations (register, sign-in, token refresh, social
+	// authorize/callback), which Handler itself (go/authn/handler.go)
+	// additionally decides whether to require a Principal for, operation by
+	// operation -- and the three routes that resolve their own tenant
+	// server-side once this middleware lets them through,
+	// sharing.PathAccess, integrationWhoamiPath and orgAcceptPath, each
+	// with its own entry comment right below.
 	//
 	// Both GET and HEAD are allowlisted for healthz/metrics, not GET
 	// alone: net/http's ServeMux automatically serves HEAD from a

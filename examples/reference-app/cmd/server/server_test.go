@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
@@ -1518,11 +1519,15 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 //
 // ConfigKey, OrgIndexKey and NotificationIndexKey are proven with a real
 // encrypt/decrypt or Index/Equal round trip through the exact dbkit
-// primitive (and, for the two blind-index keys, the exact column name and
-// normalizer) buildServer itself wires them into -- see server.go's own
-// dbkit.NewBlindIndexer("email_index", ...) and
-// dbkit.NewBlindIndexer("contact_email_index"/"contact_phone_index", ...)
-// call sites. PKILocalKeyCipherKey, AuthnBlindIndexKey and
+// primitive (and, for the two blind-index keys, the same normalizer and
+// column-name argument buildServer itself wires them with -- org's over
+// its "email_index" literal, notification's over the
+// notification.AddressIndexColumn constant this file's replicas and
+// server.go's call sites both reference, so the two cannot drift apart;
+// Equal's returned column is never executed against a database here, which
+// is exactly why notification's own suite pins the constant to the real
+// migrated column (go/notification/address_index_column_test.go)).
+// PKILocalKeyCipherKey, AuthnBlindIndexKey and
 // AuthnPIICipherKey are proven together by a real register-then-login
 // round trip through the actual composed HTTP stack: registration
 // encrypts the new user's email under AuthnPIICipherKey and blind-indexes
@@ -1581,15 +1586,15 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	}
 	assertBlindIndexRoundTrip(t, orgIndexer, "invitee@example.com")
 
-	contactEmailIndexer, err := dbkit.NewBlindIndexer("contact_email_index", cfg.NotificationIndexKey, dbkit.NormalizeEmail)
+	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
-		t.Fatalf("dbkit.NewBlindIndexer(notification contact_email_index): %v", err)
+		t.Fatalf("dbkit.NewBlindIndexer(notification.AddressIndexColumn): %v", err)
 	}
 	assertBlindIndexRoundTrip(t, contactEmailIndexer, "contact@example.com")
 
-	contactPhoneIndexer, err := dbkit.NewBlindIndexer("contact_phone_index", cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
 	if err != nil {
-		t.Fatalf("dbkit.NewBlindIndexer(notification contact_phone_index): %v", err)
+		t.Fatalf("dbkit.NewBlindIndexer(notification.AddressIndexColumn): %v", err)
 	}
 	assertBlindIndexRoundTrip(t, contactPhoneIndexer, "+15550100")
 
