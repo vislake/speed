@@ -1680,7 +1680,7 @@
       "file": "go/dbkit/audit_capture.go",
       "ident": "",
       "kind": "inline",
-      "line": 168,
+      "line": 180,
       "module": "dbkit",
       "status": 400
     },
@@ -1770,7 +1770,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrAuthenticationFailed",
       "kind": "declared",
-      "line": 213,
+      "line": 214,
       "module": "integration",
       "status": 401
     },
@@ -1788,7 +1788,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrDuplicateEventMapping",
       "kind": "declared",
-      "line": 165,
+      "line": 166,
       "module": "integration",
       "status": 400
     },
@@ -1797,7 +1797,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrEventTypesRequired",
       "kind": "declared",
-      "line": 149,
+      "line": 150,
       "module": "integration",
       "status": 400
     },
@@ -1806,7 +1806,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrExpiryExceedsMaximum",
       "kind": "declared",
-      "line": 56,
+      "line": 57,
       "module": "integration",
       "status": 400
     },
@@ -1815,7 +1815,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrExpiryInPast",
       "kind": "declared",
-      "line": 61,
+      "line": 62,
       "module": "integration",
       "status": 400
     },
@@ -1833,7 +1833,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrInvalidEventMapping",
       "kind": "declared",
-      "line": 160,
+      "line": 161,
       "module": "integration",
       "status": 400
     },
@@ -1842,7 +1842,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrInvalidRequestBody",
       "kind": "declared",
-      "line": 188,
+      "line": 189,
       "module": "integration",
       "status": 400
     },
@@ -1869,7 +1869,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrPermissionListerUnavailable",
       "kind": "declared",
-      "line": 79,
+      "line": 80,
       "module": "integration",
       "status": 500
     },
@@ -1878,7 +1878,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrRateLimited",
       "kind": "declared",
-      "line": 88,
+      "line": 89,
       "module": "integration",
       "status": 429
     },
@@ -1887,7 +1887,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrScopeNotHeldByCreator",
       "kind": "declared",
-      "line": 68,
+      "line": 69,
       "module": "integration",
       "status": 403
     },
@@ -1896,25 +1896,52 @@
       "file": "go/integration/errors.go",
       "ident": "ErrSubjectUnresolved",
       "kind": "declared",
-      "line": 198,
+      "line": 199,
       "module": "integration",
       "status": 401
+    },
+    {
+      "code": "integration.webhook_delivery_not_dead_letter",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookDeliveryNotDeadLetter",
+      "kind": "declared",
+      "line": 238,
+      "module": "integration",
+      "status": 409
+    },
+    {
+      "code": "integration.webhook_delivery_not_found",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookDeliveryNotFound",
+      "kind": "declared",
+      "line": 227,
+      "module": "integration",
+      "status": 404
     },
     {
       "code": "integration.webhook_event_type_unknown",
       "file": "go/integration/errors.go",
       "ident": "ErrWebhookEventTypeUnknown",
       "kind": "declared",
-      "line": 155,
+      "line": 156,
       "module": "integration",
       "status": 400
+    },
+    {
+      "code": "integration.webhook_subscription_inactive",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookSubscriptionInactive",
+      "kind": "declared",
+      "line": 249,
+      "module": "integration",
+      "status": 409
     },
     {
       "code": "integration.webhook_subscription_not_found",
       "file": "go/integration/errors.go",
       "ident": "ErrWebhookSubscriptionNotFound",
       "kind": "declared",
-      "line": 105,
+      "line": 106,
       "module": "integration",
       "status": 404
     },
@@ -1923,7 +1950,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrWebhookURLBlocked",
       "kind": "declared",
-      "line": 144,
+      "line": 145,
       "module": "integration",
       "status": 400
     },
@@ -1932,7 +1959,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrWebhookURLInvalid",
       "kind": "declared",
-      "line": 113,
+      "line": 114,
       "module": "integration",
       "status": 400
     },
@@ -1941,7 +1968,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrWebhookURLRequired",
       "kind": "declared",
-      "line": 108,
+      "line": 109,
       "module": "integration",
       "status": 400
     },
@@ -1950,7 +1977,7 @@
       "file": "go/integration/errors.go",
       "ident": "ErrWebhookURLUnresolvable",
       "kind": "declared",
-      "line": 118,
+      "line": 119,
       "module": "integration",
       "status": 400
     },
@@ -2301,7 +2328,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrContactEmailIndexerRequired",
       "kind": "declared",
-      "line": 316,
+      "line": 340,
       "module": "notification",
       "status": 500
     },
@@ -2346,7 +2373,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrContactPhoneIndexerRequired",
       "kind": "declared",
-      "line": 321,
+      "line": 345,
       "module": "notification",
       "status": 500
     },
@@ -2355,9 +2382,27 @@
       "file": "go/notification/errors.go",
       "ident": "ErrContactRateLimited",
       "kind": "declared",
-      "line": 160,
+      "line": 184,
       "module": "notification",
       "status": 429
+    },
+    {
+      "code": "notification.contact_type_optout_not_allowed",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactTypeOptoutNotAllowed",
+      "kind": "declared",
+      "line": 166,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.contact_type_unsubscribed",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactTypeUnsubscribed",
+      "kind": "declared",
+      "line": 154,
+      "module": "notification",
+      "status": 409
     },
     {
       "code": "notification.contact_unsubscribed",
@@ -2373,7 +2418,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrDeliveryQueueRequired",
       "kind": "declared",
-      "line": 328,
+      "line": 352,
       "module": "notification",
       "status": 500
     },
@@ -2382,7 +2427,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrDispatchInvalid",
       "kind": "declared",
-      "line": 176,
+      "line": 200,
       "module": "notification",
       "status": 400
     },
@@ -2391,7 +2436,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrDispatchParamsNotAllowed",
       "kind": "declared",
-      "line": 193,
+      "line": 217,
       "module": "notification",
       "status": 400
     },
@@ -2400,7 +2445,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrDispatchParamsUnreferenced",
       "kind": "declared",
-      "line": 211,
+      "line": 235,
       "module": "notification",
       "status": 400
     },
@@ -2418,7 +2463,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrInvalidListParams",
       "kind": "declared",
-      "line": 287,
+      "line": 311,
       "module": "notification",
       "status": 400
     },
@@ -2427,7 +2472,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrInvalidRequestBody",
       "kind": "declared",
-      "line": 267,
+      "line": 291,
       "module": "notification",
       "status": 400
     },
@@ -2436,7 +2481,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrMailFromRequired",
       "kind": "declared",
-      "line": 309,
+      "line": 333,
       "module": "notification",
       "status": 500
     },
@@ -2445,7 +2490,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrMessageNotFound",
       "kind": "declared",
-      "line": 228,
+      "line": 252,
       "module": "notification",
       "status": 404
     },
@@ -2481,7 +2526,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrSendRecordFilterInvalid",
       "kind": "declared",
-      "line": 253,
+      "line": 277,
       "module": "notification",
       "status": 400
     },
@@ -2490,7 +2535,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrSendRecordTenantRequired",
       "kind": "declared",
-      "line": 242,
+      "line": 266,
       "module": "notification",
       "status": 400
     },
@@ -2499,7 +2544,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrSMSSenderRequired",
       "kind": "declared",
-      "line": 303,
+      "line": 327,
       "module": "notification",
       "status": 500
     },
@@ -2508,7 +2553,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrSubjectUnresolved",
       "kind": "declared",
-      "line": 275,
+      "line": 299,
       "module": "notification",
       "status": 401
     },
@@ -2526,7 +2571,7 @@
       "file": "go/notification/errors.go",
       "ident": "ErrUserAddressResolverRequired",
       "kind": "declared",
-      "line": 335,
+      "line": 359,
       "module": "notification",
       "status": 500
     },
@@ -3057,9 +3102,18 @@
       "file": "go/sharing/errors.go",
       "ident": "ErrInternal",
       "kind": "declared",
-      "line": 92,
+      "line": 102,
       "module": "sharing",
       "status": 500
+    },
+    {
+      "code": "sharing.invalid_limit",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrInvalidLimit",
+      "kind": "declared",
+      "line": 59,
+      "module": "sharing",
+      "status": 400
     },
     {
       "code": "sharing.invalid_max_views",
@@ -3075,7 +3129,7 @@
       "file": "go/sharing/errors.go",
       "ident": "ErrInvalidRequest",
       "kind": "declared",
-      "line": 86,
+      "line": 96,
       "module": "sharing",
       "status": 400
     },
@@ -3084,7 +3138,7 @@
       "file": "go/sharing/errors.go",
       "ident": "ErrNotAccessible",
       "kind": "declared",
-      "line": 60,
+      "line": 70,
       "module": "sharing",
       "status": 404
     },
@@ -3111,7 +3165,7 @@
       "file": "go/sharing/errors.go",
       "ident": "ErrResourceUnavailable",
       "kind": "declared",
-      "line": 111,
+      "line": 121,
       "module": "sharing",
       "status": 429
     },
@@ -3120,7 +3174,7 @@
       "file": "go/sharing/errors.go",
       "ident": "ErrShareNotFound",
       "kind": "declared",
-      "line": 68,
+      "line": 78,
       "module": "sharing",
       "status": 404
     },
