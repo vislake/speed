@@ -49,10 +49,13 @@ type SMS struct {
 // belongs in the dependency floor every module carries is "a capability
 // every module needs", and SMS delivery is specific to this module's phone
 // sign-in flow. Per the root CLAUDE.md's dual-deployment-mode rule, it
-// still ships two implementations -- NewConsoleSMSSender (standalone,
-// zero external dependency) and NewHTTPSMSSender (distributed, a real,
-// independently testable second implementation) -- selected by which
-// constructor the HOST calls, never by a mode branch inside this package.
+// still ships two implementations in this package -- NewConsoleSMSSender
+// (standalone, zero external dependency) and NewHTTPSMSSender (distributed,
+// a real, independently testable second implementation) -- plus, since the
+// SMS-provider-adapter round, three real carrier adapters under go/authn/sms/
+// (aliyun, tencent, twilio), each implementing its vendor's own signing and
+// request shape. Every implementation is selected by which constructor the
+// HOST calls, never by a mode branch inside this package.
 type SMSSender interface {
 	// Send delivers msg. An error means the message was not delivered;
 	// the caller (verification.go) surfaces that as a structured failure
@@ -121,11 +124,13 @@ func WithHTTPSMSSenderClient(client *http.Client) HTTPSMSSenderOption {
 
 // httpSMSSender is the distributed deployment mode's real SMS transport: a
 // generic JSON gateway POST. It is deliberately generic rather than a
-// specific carrier's SDK -- see this module's AGENTS.md for why the actual
-// Aliyun/Tencent Cloud/Twilio adapters are deferred to the M2 notification
-// round, and for why this is nonetheless a genuine, testable second
-// implementation and not a placeholder: it is offline-testable end to end
-// against httptest.NewTLSServer, and its endpoint is subject to the same
+// specific carrier's SDK -- it serves an operator-run gateway (this module's
+// own AGENTS.md has the reasoning), while the real Aliyun, Tencent Cloud and
+// Twilio carrier adapters live under go/authn/sms/ (each implementing the
+// vendor's own signing and request shape against its official API). It is
+// nonetheless a genuine, testable second implementation and not a
+// placeholder: it is offline-testable end to end against
+// httptest.NewTLSServer, and its endpoint is subject to the same
 // internal/safehttp policy the enterprise OIDC issuer URL is, because both
 // are a destination an operator, not this codebase, chose -- the endpoint's
 // scheme must be https (checked before every send, see Send) and every

@@ -36,7 +36,7 @@ file is the discipline that ships with the module to consuming projects.
 | Tenant switching within one session | Memberships, the organization tree (`org`) |
 | Social login (Google, GitHub, WeChat, DingTalk, Feishu) and enterprise OIDC single sign-on | SAML (deferred, optional subpackage), WebAuthn/passkeys (deferred, post-v1.0) |
 | Account-binding management (list, bind, unbind) | QQ / Weibo / Alipay and other phase-two providers |
-| Phone-plus-SMS-code sign-in on the existing blind index | Real SMS carrier adapters (Aliyun, Tencent Cloud, Twilio) — the shipped `SMSSender` transports are console (standalone) and a generic HTTP gateway (distributed) |
+| Phone-plus-SMS-code sign-in on the existing blind index; real SMS carrier adapters — Aliyun, Tencent Cloud and Twilio under `go/authn/sms/` | Proving the carrier adapters against each vendor's REAL gateway, which needs live account credentials: the env-gated integration legs self-skip without them (see "The three carrier adapters" below) |
 | TOTP enrollment, confirmation, recovery codes, step-up re-verification | WebAuthn/passkeys (the `SecondFactor` shape is reserved, not implemented — post-v1.0) |
 | Sliding-window plus progressive-lockout rate limiting on login/register/code-send/code-verify/step-up | Anomalous-login detection (new device/region), which needs GeoIP first (`notification`, M2) |
 
@@ -153,6 +153,7 @@ unenforced there until that one-line wiring lands with its config service.
 |---|---|
 | `SMS`, `SMSSender` | The message and the delivery seam. Authn's own — it is not a `pkgcore` primitive, since not every module needs it. |
 | `NewConsoleSMSSender(w)`, `NewHTTPSMSSender(endpoint, opts...)` | The standalone (writes to `w`) and distributed (SSRF-guarded JSON POST) transports — the dual-implementation rule applied to this module's own seam. |
+| `aliyun.NewSender(cfg, opts...)`, `tencent.NewSender(cfg, opts...)`, `twilio.NewSender(cfg, opts...)` (under `go/authn/sms/`) | The three real carrier adapters, each performing its vendor's official signing and request shape (Aliyun Dysmsapi RPC HMAC-SHA1, Tencent Cloud SendSms TC3-HMAC-SHA256, Twilio Messages REST with Basic auth), stdlib-only — see "The three carrier adapters" below. |
 | `Service.RequestSMSCode`, `Service.LoginWithSMSCode` | Issue-and-deliver, then verify-and-sign-in. Both never disclose whether a phone number is registered. |
 | `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired. |
 
@@ -532,6 +533,104 @@ inside a request, not a once-at-construction-time checked precondition.
 Omitting `WithDeploymentMode` (every call site that predates this option, and
 every standalone deployment) is equivalent to standalone and keeps working
 with the console default.
+
+### The three carrier adapters (aliyun, tencent, twilio)
+
+The SMS-provider-adapter round (2026-09-08) landed three real carrier
+adapters for this seam, each in its own subpackage of this module —
+`go/authn/sms/aliyun`, `go/authn/sms/tencent`, `go/authn/sms/twilio` — so a
+host wires whichever carrier it has an account with, exactly as it wires the
+console or HTTP-gateway transport: construct with the package's `NewSender`,
+hand the result to `WithSMSSender`. The subpackage split is the same
+packaging answer `go/billing/gateway` gives for payment channels: an authn
+consumer that never wires a carrier imports none of the three, and none of
+the three adds a single `require` to this module's `go.mod`.
+
+Each adapter implements its vendor's REAL signing and request shape, verified
+offline where the vendor's signing is deterministic:
+
+- `aliyun` POSTs Aliyun SMS's SendSms action (Dysmsapi, version 2017-05-25) to
+  the fixed `dysmsapi.aliyuncs.com` gateway with the full RPC parameter set
+  in the request line's query string and an empty body -- the wire placement
+  both official dysmsapi SDK generations use -- signed with the RPC
+  mechanism Aliyun's own documentation fixes: parameters sorted by key,
+  percent-encoded per RFC 3986 (space as `%20`, never `+`), then
+  `base64(HMAC-SHA1(AccessKeySecret + "&",
+  method + "&%2F&" + encode(canonicalQueryString)))`. Its unit tier pins the
+  mechanism against the worked example of Aliyun's own signature
+  documentation (signature `9NaGiOspFP5UPcwX8Iwt2YJXXuk=` for the doc's
+  fixed inputs) and a SendSms-shaped request against a signature an
+  independent implementation precomputed.
+- `tencent` POSTs Tencent Cloud SMS's SendSms action (version 2021-01-11) as
+  JSON to the fixed `sms.tencentcloudapi.com` gateway, signed with
+  TC3-HMAC-SHA256 per Tencent's API-3.0 signature documentation: a canonical
+  request over the content-type and host headers and the payload's SHA-256,
+  a string-to-sign binding the Unix timestamp and the
+  `date/sms/tc3_request` credential scope, and the `"TC3"+SecretKey`-seeded
+  key derivation chain. The signed-header set (`content-type;host`, no
+  x-tc-action) mirrors the current official tencentcloud-sdk-go signer byte
+  for byte -- the signing shape exercised against Tencent's real gateway by
+  every production SDK customer. Its unit tier pins the canonical request,
+  the string to sign and the final Authorization header against
+  independently precomputed values.
+- `twilio` POSTs the account's Messages resource
+  (`/2010-04-01/Accounts/{AccountSid}/Messages.json`, fixed base URL) with
+  Basic auth over AccountSID/AuthToken and an `application/x-www-form-urlencoded`
+  body of To/Body plus exactly one sender (From or MessagingServiceSid —
+  mutually exclusive, refused at construction). Twilio signs nothing, so its
+  unit tier pins the entire wire shape offline.
+
+**No vendor SDK is used — raw signed HTTP throughout, and the choice is
+measured, not assumed.** This module tracks dependency cost with the
+repository's own method (a bare consumer, `GOWORK=off go mod tidy`, count
+`// indirect` entries); measured for the three official Go SDKs in the
+round's own throwaway modules: the official Aliyun dysmsapi Tea SDK
+(`alibabacloud-go/dysmsapi-20170525/v2`) costs 16 indirect entries, the
+legacy `aliyun/alibaba-cloud-sdk-go` costs 6, Tencent's `tencentcloud-sdk-go`
+sms submodule costs 1 (its `common` pinned to the same version train as every
+other Tencent product submodule), and `twilio/twilio-go` costs 2. Each
+adapter's signing is a small, deterministic, officially documented algorithm
+(an RPC canonical form, the TC3 chain, or Basic auth) implementable in
+well-understood stdlib code — the SDKs' real surface (credential chains,
+retries, whole-product client trees) far exceeds the one action this seam
+needs, and even a subpackage-scoped SDK dependency would land in this
+module's `go.mod` and every workspace member's build. The adapters therefore
+add +0 dependencies and keep the seam light; the offline vectors pin the
+algorithms against values no Go code produced, so the usual SDK benefit —
+"the vendor maintains the signature" — is replaced by a maintained,
+test-pinned transcription of the vendor's published specification.
+
+Three boundaries bind every adapter, each documented in its package doc:
+
+- **Templates.** Aliyun and Tencent have no free-text send — every message
+  instantiates an approved account template. The seam delivers
+  already-rendered text, so those two adapters map the whole message onto the
+  template's single variable: Aliyun sends `TemplateParam` as
+  `{"<TemplateParamName>": "<text>"}` (the config names the account's
+  variable, defaulting to `content`), Tencent sends a single-element
+  positional `TemplateParamSet`. The registered template must declare exactly
+  one variable; Twilio alone carries the text free-form in `Body`.
+- **Phone forms.** The seam's contract — pass `SMS.To` through unchanged,
+  never normalize — holds for all three adapters; each package doc records
+  the form its vendor's API accepts (Aliyun: domestic numbers with `+`,
+  `+86`, `0086`, `86` or no prefix, international as country-code-plus-number;
+  Tencent and Twilio: E.164 with a leading `+`), and the vendor's own refusal
+  surfaces through `Send`'s error for anything else.
+- **Credentials.** `Config` is validated eagerly in `NewSender`, which
+  returns an error naming the missing field — never its value; no error or
+  log path in any adapter echoes a secret, and all three talk TLS to fixed
+  gateway constants through the module's `internal/safehttp` guarded client
+  by default (`WithClient` exists for tests pointing at a loopback server,
+  mirroring `NewHTTPSMSSender`'s own option).
+
+Every adapter's `integration_test/` carries an env-gated live leg (the alipay
+sandbox-leg precedent): it runs only when the operator's own credentials are
+present (`ALIYUN_SMS_*`, `TENCENT_SMS_*`, `TWILIO_SMS_*` — names recorded in
+each leg's package doc), otherwise it skips itself with a note saying exactly
+which variables are missing and where they come from. Each leg sends ONE
+real, billable message (roughly CNY 0.045 for the two Chinese carriers,
+USD 0.008 for Twilio) — the round deliberately does not run them; see Known
+limitations for the standing boundary.
 
 ### Verification codes and recovery codes are hashed, not argon2id'd
 
@@ -960,7 +1059,9 @@ rather than trying to synchronize on the exact step boundary.
 | A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
 | The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`: only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/cmd/server/demo_users.go`'s `seedDemoUsers`, through the real composed register route) and grants each its org membership and rbac role per configured tenant -- the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` -- while an unset variable leaves only the demo header actors (`demo_subject.go`), which carry grants but no database row and cannot sign in. `Taskfile.yml`'s `seed` task remains a stub with no loader. | This module's own wiring is complete (reference-app first-consumer status, CI matrix rows, integration tier -- see this file's "Testing" section); what this row's earlier text called "no seed-data path" was closed by the app's env-gated demo-user seed round, and the accounts' membership is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). What remains -- a Taskfile `seed` loader that generates demo data outside boot -- is a tooling item, not authn's. |
 | `redocly.yaml`'s `rule/speed-tag-format` runs at `warn`, not `error`, because `examples/reference-app/internal/notes/api/openapi.yaml` (an earlier round, not this module's fragment) declares no per-operation `tags:` and so fails the module-tag convention once merged with this module's fragment. | Fixing notes' fragment is real but out of scope here — it also regenerates `@speed/api-sdk` (orval groups hooks by tag), a change this round has no reason to make. See `redocly.yaml`'s own comment. |
-| Real SMS carrier adapters (Aliyun, Tencent Cloud, Twilio), QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or is explicitly deferred by `docs/internal/05-identity-and-access.md`. See this round's plan for the owning milestone of each. |
+| QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or is explicitly deferred by `docs/internal/05-identity-and-access.md`. See this round's plan for the owning milestone of each. |
+| The Aliyun/Tencent Cloud/Twilio adapters (`go/authn/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent; this round deliberately did not run them. Until an operator does, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
+| The Aliyun and Tencent adapters can only send through a template the operator's own account registers: Aliyun one whose single variable is named by `Config.TemplateParamName` (default `content`), Tencent one declaring exactly one positional variable; Twilio sends free text. | The seam delivers already-rendered text, and Aliyun/Tencent have no free-text send; the adapters map the whole message onto the account's template variable(s) exactly as each package doc records. The template itself is account data this codebase cannot provision or verify — a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
 | `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA) that this block did not make. |
 | MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow) this block's scope did not include; the round's plan scoped MFA to enrollment, recovery and step-up. |
 | Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not yet read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options already carry; the binding lands with whichever block wires this module to the live `config` module. |
