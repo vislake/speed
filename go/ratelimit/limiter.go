@@ -184,6 +184,30 @@ func New(store pkgcore.KVStore) Limiter {
 // window and the immediately preceding one (index - 1) are therefore two
 // distinct keys — Allow reads both.
 //
+// The instant t is the calling process's own local wall clock: Allow
+// reads time.Now at the moment of the call and derives windowIndex and
+// elapsedFraction from it, and New accepts no clock to substitute (the
+// package is dependency-free by design; see AGENTS.md) — windows advance
+// by the process's local wall clock, never by a time the store or a peer
+// supplies. This clock source is the limiter's own behaviour, not a
+// policy some other layer chose, and in a deployment where replicas
+// share one KVStore it makes the limiter's cross-replica behaviour
+// depend on the replicas' clocks agreeing: each replica buckets its hits
+// and weights them against boundaries of its own clock, so the shared
+// counters describe one coherent sliding window only while the replicas'
+// clocks agree, and a replica whose clock disagrees writes its hits into
+// keys its peers read as a different window and reads their counters
+// through shifted boundaries.
+//
+// The agreement is not hypothetical for this repository:
+// examples/reference-app/integration_test/distributed_mode_test.go is a
+// real two-process composition of this limiter — two replicas sharing
+// one Redis-backed KVStore — whose cross-replica lockout assertions
+// rely on it: they expect rate-limiting state one replica recorded
+// under its own process clock to hold when the other reads it under its
+// own, an expectation satisfied today because both CI processes share
+// one host clock.
+//
 // Recording a hit increments the current window's key with
 // KVStore.IncrByFloatWithTTL, which is unconditionally called first, before
 // limit is even consulted for the decision, passing windowTTLFactor*limit.Per
