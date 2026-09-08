@@ -1,7 +1,7 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, a fourth Go-toolchain-requiring markdown-example checker, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount all three under `tools/` — `scan_cjk.py` and `check_repo_isolation.py` in fast-check's repo-checks job, `check_i18n_keys.py` in the docs-check pipeline. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and fast-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. `tools/check_markdown_examples.py` closes root CLAUDE.md's own recorded gap ("Examples embedded in markdown prose... have no compile harness"): every fenced ```go block in AGENTS.md/README/ADR prose is either really `go build`+`go vet`'d (a block with its own `package` clause) or `gofmt -e` syntax-checked under several throwaway wrappings (a bare fragment, the corpus majority) — the one script here that genuinely needs a Go toolchain, not just `python3` (see its own section below for why, and for the design tradeoff that keeps a partial snippet legitimate rather than forcing every example into a padded full program). The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset (needs a semgrep binary) and `check_markdown_examples.py` (needs `go`/`gofmt` on PATH) — see their own sections for the pinned local versions and the CI shape — and the checkers print hit paths relative to their `--root`.
+for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, a fourth Go-toolchain-requiring markdown-example checker, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount all three under `tools/` — `scan_cjk.py` and `check_repo_isolation.py` in fast-check's repo-checks job, `check_i18n_keys.py` in the docs-check pipeline. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and fast-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. `tools/check_api_fragments.py` is the same shape for `.github/workflows/api-contract.yml`'s backend-fragment enumeration, whose legs -- the trigger path filters, the thirteen oapi-codegen regeneration steps, the redocly join input list -- were kept consistent only by comments in that file until the fragment set grew from six to thirteen with no gate going red; its manifest `tools/api_fragments.json` is now the single machine-readable source of truth, and the api-contract pipeline runs the gate (and its planted-drift suite `tools/test_check_api_fragments.py`) as its first steps on every trigger. `tools/check_markdown_examples.py` closes root CLAUDE.md's own recorded gap ("Examples embedded in markdown prose... have no compile harness"): every fenced ```go block in AGENTS.md/README/ADR prose is either really `go build`+`go vet`'d (a block with its own `package` clause) or `gofmt -e` syntax-checked under several throwaway wrappings (a bare fragment, the corpus majority) — the one script here that genuinely needs a Go toolchain, not just `python3` (see its own section below for why, and for the design tradeoff that keeps a partial snippet legitimate rather than forcing every example into a padded full program). The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset (needs a semgrep binary) and `check_markdown_examples.py` (needs `go`/`gofmt` on PATH) — see their own sections for the pinned local versions and the CI shape — and the checkers print hit paths relative to their `--root`.
 
 | Script | Kind | Enforces / does | Exit codes |
 |---|---|---|---|
@@ -10,6 +10,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests, or by the equivalent `Test<TypeName>_AssertIsolated` suite | 0 all covered / 1 uncovered repository / 2 error |
 | `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
+| `check_api_fragments.py` | Checker | `.github/workflows/api-contract.yml`'s backend-fragment enumeration self-consistent: `tools/api_fragments.json` is the single source of truth, and the tree, the pull_request/push trigger path filters, the oapi-codegen regeneration steps and the redocly join input list must all agree with it (a fragment added to one leg only, or to the tree without the manifest, goes red) | 0 clean / 1 drift / 2 error |
 | `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
 | `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in `docs/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
@@ -310,6 +311,78 @@ handled:
 docs-site: violation    index.html: required entry file is missing
 docs-site: violation    status.html: link 'aboutx.html' resolves to nothing
 ```
+
+## check_api_fragments.py — api-contract fragment-enumeration drift gate
+
+`.github/workflows/api-contract.yml` names the backend-fragment universe
+in several coherent places at once: the trigger path filters (the
+`pull_request` and `push` `paths` blocks carry one `<dir>/**` row per
+fragment), the oapi-codegen regeneration steps (one `cd <dir>` + pinned
+oapi-codegen run per fragment, each followed by its porcelain
+artifact-vs-spec gate), and the redocly `join` input list (the fragments
+merged into `build/openapi/speed.yaml`, whose input order is
+load-bearing: the merged document is committed and diff-gated, and the
+order is what join renders). The fragment set grew from six to thirteen
+over successive rounds with the sites' consistency held only by comments
+in that file ("keep the two in lockstep") -- an enumeration that can
+drift silently, and one that did. `tools/api_fragments.json` is the
+single machine-readable source of truth for the fragment list, and this
+gate fails (exit 1) when the live tree, the manifest and any leg of the
+workflow disagree about a fragment.
+
+Manifest schema: one `fragments` array; each entry is `{"name":
+"<fragment id>", "dir": "<repo-relative api directory, ending in
+/api>", "merge_rank": <int, present only for fragments that join the
+redocly merge>}`. `merge_rank` is the join order (rank order == join
+order); its absence marks a backend-only fragment (regenerated and
+compile-checked, but feeding neither the merge nor the frontend SDK).
+
+Checked invariants (each goes red with an actionable message):
+
+* a registered fragment whose `openapi.yaml` or `oapi-codegen.yaml` is
+  missing from the tree;
+* an `api/` directory on disk carrying `openapi.yaml` +
+  `oapi-codegen.yaml` that the manifest does not register (the tree-scan
+  signature of a backend fragment; the scan skips `.git/`, `.claude/`
+  (nested worktree checkouts), `node_modules/`, `vendor/` and
+  `__pycache__/`);
+* a registered fragment missing from the `pull_request` or the `push`
+  path filter, or a fragment-shaped path-filter row (`.../api/**`)
+  naming an unregistered directory;
+* a registered fragment with no oapi-codegen regeneration step, or a
+  regeneration step regenerating an unregistered directory;
+* the redocly join input list disagreeing with the manifest's merged
+  fragments in membership or order;
+* the manifest or the gate itself missing from either trigger path
+  filter (a change to either must re-run this job).
+
+Usage:
+
+```
+python3 tools/check_api_fragments.py --root /path/to/repo
+python3 tools/check_api_fragments.py      # --root defaults to the current directory
+python3 tools/test_check_api_fragments.py # the planted-drift suite
+```
+
+The companion suite (`tools/test_check_api_fragments.py`) reproduces
+every drift class on a small fixture repository -- a fragment added to
+the tree without the manifest, a manifest entry missing from a leg, an
+unregistered fragment in a leg, a join list dropped/swapped/extended --
+plus a final case running the real check against this repository. The
+api-contract pipeline runs the suite and then the gate as its first
+steps on every trigger (`.github/workflows/api-contract.yml`, the
+selftest-first order the security pipeline's license job uses), so a
+change to the workflow that forgets the manifest, or to the manifest
+that forgets a leg, fails there. Deliberately not read: Taskfile.yml's
+`api:gen`/`api:merge` task legs enumerate the same universe for the
+local regeneration command, and keeping them in step with the manifest
+stays a code-review concern (the workflow steps' "the same command as
+Taskfile's api:gen task" comments) -- this gate guards the workflow. A
+fragment added to the tree that touches no trigger path at all does not
+run this job (a path filter cannot name a directory it does not know);
+the moment its author touches any trigger path -- the Taskfile `api:gen`
+leg, the workflow itself, the manifest -- the gate runs and catches an
+omission.
 
 ## check_markdown_examples.py — markdown Go-example compiler/parser
 
@@ -752,7 +825,13 @@ on PRs touching documentation, i18n resources, or the two modules
 (`go/dbkit`, `go/ratelimit`) a markdown example currently claims to
 build against; and the license scanner (`python3 tools/license_scan.py`,
 selftest first, then the real check) runs in the security pipeline's
-license job (`.github/workflows/security.yml`).
+license job (`.github/workflows/security.yml`); and the
+fragment-enumeration gate (suite first, then the real check:
+`python3 tools/test_check_api_fragments.py` and
+`python3 tools/check_api_fragments.py`) runs as the first steps of the
+api-contract job (`.github/workflows/api-contract.yml`), whose path
+filter also names the manifest and the gate itself so a change to
+either re-runs the checks that consume it.
 `tools/gen_error_code_index.py --check` runs in the docs-check pipeline
 (`.github/workflows/docs-check.yml`) as a plain-python3 step alongside
 the i18n key-set parity checker -- no setup step -- failing the job when

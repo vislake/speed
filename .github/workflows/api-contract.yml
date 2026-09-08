@@ -65,8 +65,24 @@ name: api-contract
 # its api/ directory (and any generator config it needs) to all three.
 # The path set names this workflow itself, so the push that repairs a
 # forgotten path re-runs the repaired workflow on its own change.
+# Fragment-set consistency is now machine-checked rather than a review
+# convention: tools/api_fragments.json is the single source of truth for
+# the fragment list, and this job's first steps
+# (tools/check_api_fragments.py, see COVERAGE below) fail when the
+# manifest, the tree and any leg of this file disagree about a fragment.
 #
 # COVERAGE -- what genuinely runs today (in step order)
+#   * Fragment-enumeration consistency (the manifest drift gate): the
+#     first steps after checkout run tools/test_check_api_fragments.py
+#     (the planted-drift suite -- every drift class the next step
+#     detects, reproduced and pinned red-before-fix) and then
+#     tools/check_api_fragments.py. The fragment universe this file
+#     names in its path filters, its thirteen regeneration steps and its
+#     merge input list is single-sourced in tools/api_fragments.json;
+#     the gate goes red when a fragment is added to the tree but not to
+#     the manifest, registered in the manifest but not wired into a leg
+#     of this file, or wired into a leg without the manifest (see
+#     tools/check_api_fragments.py's docstring for the invariants).
 #   * Consistency gates: every regeneration below is followed by a gate
 #     that fails the job when the committed artifact is not what the spec
 #     generates -- docs/internal/21-api-contract.md's
@@ -421,6 +437,12 @@ name: api-contract
 #                                                  BYOK credentials" gap the
 #                                                  module's own AGENTS.md
 #                                                  recorded in round 1
+#   tools/api_fragments.json,                     the fragment manifest -- the single
+#   tools/check_api_fragments.py,                 machine-readable source of truth the
+#   tools/test_check_api_fragments.py             drift-check steps below compare
+#                                                   every leg of this file against (the
+#                                                   planted-drift suite runs first;
+#                                                   self-test on change)
 #   redocly.yaml                                   the merge/lint naming-
 #                                                  convention rules
 #   build/openapi/**                               the committed merged
@@ -450,6 +472,9 @@ on:
       - go/admin/api/**
       - go/integration/api/**
       - go/ai-gateway/api/**
+      - tools/api_fragments.json
+      - tools/check_api_fragments.py
+      - tools/test_check_api_fragments.py
       - redocly.yaml
       - build/openapi/**
       - Taskfile.yml
@@ -481,6 +506,9 @@ on:
       - go/admin/api/**
       - go/integration/api/**
       - go/ai-gateway/api/**
+      - tools/api_fragments.json
+      - tools/check_api_fragments.py
+      - tools/test_check_api_fragments.py
       - redocly.yaml
       - build/openapi/**
       - Taskfile.yml
@@ -501,6 +529,27 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # The fragment-enumeration gate -- the first thing this job runs,
+      # before any regeneration. This file names the backend-fragment
+      # universe in several places at once (the path filters below, the
+      # thirteen oapi-codegen regeneration steps, the redocly join input
+      # list), and until this round the consistency between those places
+      # was held only by the "keep the two in lockstep" comments above:
+      # an enumeration that grew from six to thirteen fragments with no
+      # gate going red. tools/api_fragments.json is now the single
+      # machine-readable source of truth, and tools/check_api_fragments.py
+      # fails when the manifest, the tree and any leg of this file
+      # disagree -- see that script's docstring for the checked
+      # invariants. Nothing here needs more than the runner's python3,
+      # which is why both steps run before the Go toolchain install.
+      - name: Fragment-enumeration checker's planted-drift suite (tools/test_check_api_fragments.py)
+        # The regression teeth: every drift class the step below detects
+        # is reproduced by this suite and must go red before the fix
+        # (root CLAUDE.md's bug-fix policy). Selftest first, then the
+        # real check -- the license job's order in security.yml.
+        run: python3 tools/test_check_api_fragments.py
+      - name: Fragment enumeration drift check (tools/check_api_fragments.py)
+        run: python3 tools/check_api_fragments.py
       # golangci-lint is deliberately not installed here (setup-go-env's
       # install-golangci input, default false): this job never lints, and an
       # unconditional install would mean a ~15 MB download on every run for
