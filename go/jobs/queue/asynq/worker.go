@@ -74,6 +74,97 @@ var errTenantAtCapacity = errors.New("jobs: tenant is at its concurrency limit")
 // class just as it does for errTenantAtCapacity.
 var errCancelMarkerUnreadable = errors.New("jobs: cancellation marker unreadable")
 
+// failedAttemptError is the error processTaskUncancelled returns when a
+// genuine attempt fails (a Handle error, an unregistered handler type, a
+// missing tenant header) -- a thin wrapper carrying the attempt's own
+// measured duration alongside the failure's real cause. It exists purely
+// to carry that duration from the attempt (where it is measured) to
+// handleErrorAttempt (where asynq's dispatch loop decides the attempt's
+// outcome and the jobs.job.* metrics are recorded, queue.go's
+// recordJobMetrics) -- asynq's ErrorHandler hook receives only
+// (ctx, task, err), with no timing metadata of its own, so the wrapper is
+// the one channel that survives asynq's own bookkeeping between the two
+// points. It is transparent to everything else: Error() delegates to the
+// wrapped cause (so asynq's LastErr and this package's own log lines
+// carry exactly the message they would have carried unwrapped), Unwrap()
+// delegates for errors.Is/errors.As (so isFailure, retryDelay and
+// apperr.As all keep recognizing the cause), and neither of the two
+// bounce-class sentinels is ever wrapped -- see attemptDuration and
+// recordFailedAttempt's own doc comments for why the wrapper's absence is
+// itself the bounce marker.
+type failedAttemptError struct {
+	cause    error
+	duration time.Duration
+}
+
+func (e *failedAttemptError) Error() string { return e.cause.Error() }
+func (e *failedAttemptError) Unwrap() error { return e.cause }
+
+// wrapFailedAttempt wraps cause with the attempt duration that measured
+// it, returning a *failedAttemptError. Never used for the bounce-class
+// sentinels (errTenantAtCapacity, errCancelMarkerUnreadable): a bounce is
+// not a failed attempt in the jobs.job.* metrics' sense, and the
+// wrapper's absence is what lets handleErrorAttempt tell the two apart
+// without an extra error-class check of its own.
+func wrapFailedAttempt(cause error, duration time.Duration) error {
+	return &failedAttemptError{cause: cause, duration: duration}
+}
+
+// attemptDuration reports the measured duration of a failed attempt whose
+// error was wrapped by wrapFailedAttempt, and whether the error carries
+// one at all. An error without a wrapper reached handleErrorAttempt by a
+// path that measured no attempt duration -- a bounce-class refusal, or a
+// Handle panic that asynq's own processor recovered (worker.go's
+// perform) -- and its outcome is recorded through
+// recordJobMetricsAttemptOnly (queue.go) without a duration data point.
+func attemptDuration(err error) (time.Duration, bool) {
+	var fa *failedAttemptError
+	if errors.As(err, &fa) {
+		return fa.duration, true
+	}
+	return 0, false
+}
+
+// recordFailedAttempt records one failed attempt's outcome on the
+// jobs.job.attempts Counter (and, when the attempt's duration was
+// measured, the jobs.job.duration Histogram) at the point asynq's own
+// dispatch loop has decided what the outcome is -- the mirror of
+// StandaloneQueue's recordJobMetrics calls at the three outcome points of
+// its own execute (jobs' worker.go), mapped onto handleErrorAttempt's
+// replicated archive-vs-retry boundary. status is StatusRetrying when
+// asynq will retry the attempt and StatusDeadLetter when its dispatch
+// loop will archive it (see handleErrorAttempt's own doc comment for the
+// boundary's exactness). A retryable tenant-concurrency bounce or
+// cancellation-marker refusal records nothing: those attempts are never
+// failures in the metrics' sense -- no Handle ran, no retry budget was
+// consumed -- exactly as they are not failures anywhere else in this
+// package (isFailure, the throttle delay, the missing logs). A cancelled
+// attempt records nothing either -- handleErrorAttempt's cancellation
+// check returns before this is ever called, so a cancelled Job shows up
+// in none of the outcome counters, mirroring StandaloneQueue's own
+// cancel-wins metric discipline. The record fires BEFORE asynq's own
+// settlement write (there is no post-settlement hook); see recordJobMetrics'
+// own doc comment for the ordering concession, which applies identically.
+func (q *Queue) recordFailedAttempt(jobType string, status jobs.Status, err error) {
+	if duration, ok := attemptDuration(err); ok {
+		q.recordJobMetrics(jobType, status, duration)
+	} else {
+		// A terminal outcome whose attempt duration was never measured --
+		// a Handle panic asynq's own processor recovered (its perform),
+		// which reaches the ErrorHandler with no timing metadata, or a
+		// terminal-attempt bounce. Count the outcome on the attempts
+		// Counter without a duration data point: the Histogram measures
+		// Handle-attempt durations, and none was measured (queue.go's
+		// recordJobMetricsAttemptOnly doc comment has the full argument).
+		q.recordJobMetricsAttemptOnly(jobType, status)
+	}
+	// The dead-letter Counter fires for a dead-letter outcome regardless
+	// of whether the attempt carried a measured duration.
+	if status == jobs.StatusDeadLetter {
+		q.recordDeadLetter(jobType)
+	}
+}
+
 // tryReserveTenantSlot and releaseTenantSlot are Queue's own admission gate
 // -- structurally the same map+mutex shape as StandaloneQueue's
 // tryReserveTenantSlot/releaseTenantSlot (jobs' own worker.go), but
@@ -220,11 +311,22 @@ func (q *Queue) handleError(ctx context.Context, t *asynqlib.Task, err error) {
 // this package's logic.
 func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetry int, taskID string, cancelledAt *time.Time, log *slog.Logger) {
 	if retried < maxRetry {
-		// More retries remain; asynq will retry, not archive. Nothing to do
-		// here for any error class: a genuine failure retries with the
-		// business backoff, a bounce-class error (errTenantAtCapacity,
-		// errCancelMarkerUnreadable) retries on the short throttle delay
-		// without consuming budget.
+		// More retries remain; asynq will retry, not archive. The one thing
+		// recorded here is the retrying outcome of a genuine failed
+		// attempt, on the jobs.job.attempts Counter (and, when the
+		// attempt's duration was measured, the jobs.job.duration
+		// Histogram) -- the mirror of StandaloneQueue's own
+		// "job attempt failed, scheduling retry" record point. A
+		// bounce-class error (errTenantAtCapacity, errCancelMarkerUnreadable)
+		// records nothing: it retries on the short throttle delay without
+		// consuming budget, and is never a failure in the metrics' sense
+		// (see recordFailedAttempt's own doc comment). A retryable panic
+		// asynq's own processor recovered records the retrying outcome
+		// without a duration point (recordFailedAttempt's attempt-only
+		// branch), since no attempt duration was measured for it.
+		if !errors.Is(err, errTenantAtCapacity) && !errors.Is(err, errCancelMarkerUnreadable) {
+			q.recordFailedAttempt(t.Type(), jobs.StatusRetrying, err)
+		}
 		return
 	}
 	if cancelledAt != nil {
@@ -268,6 +370,22 @@ func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetr
 		log.Error("job's final attempt was bounced and will be archived; firing failure hook",
 			"job_id", taskID, "job_type", t.Type(), "attempts", retried+1, "error", err)
 	}
+
+	// This is the archive decision: asynq's own dispatch loop will
+	// dead-letter the task (archive it) right after this hook returns
+	// (handleFailedMessage's retried >= maxRetry branch), so the
+	// dead-letter outcome is recorded here -- the jobs.job.dead_letter
+	// Counter plus the StatusDeadLetter row of the jobs.job.attempts
+	// Counter, with the jobs.job.duration point whenever the attempt's
+	// duration was measured (recordFailedAttempt picks the branch). A
+	// terminal-attempt bounce records too -- its archive is a dead letter
+	// in exactly the sense the module's own "dead-letter must never skip
+	// its compensation because its last attempt happened to bounce"
+	// language names it, and DeadLetterJobs lists it -- but without a
+	// duration point, since no Handle ran. The record fires before the
+	// archive write itself, exactly like the FailureHook call below; see
+	// recordJobMetrics' own doc comment for the ordering concession.
+	q.recordFailedAttempt(t.Type(), jobs.StatusDeadLetter, err)
 
 	h := q.handler(t.Type())
 	hook, ok := h.(jobs.FailureHook)
@@ -401,19 +519,34 @@ func (q *Queue) dispatchAfterMarkerRead(ctx context.Context, t *asynqlib.Task, t
 // processTaskUncancelled is processTask's core, everything after the
 // cancellation-marker check above.
 func (q *Queue) processTaskUncancelled(ctx context.Context, t *asynqlib.Task, taskID string, log *slog.Logger) error {
+	// attemptStart measures the whole attempt from dispatch, exactly like
+	// StandaloneQueue.execute's own attemptStart (jobs' worker.go), which
+	// is taken before its handler lookup -- so the duration recorded with
+	// a succeeded or failed attempt covers the same span on both
+	// deployment modes: the unregistered-handler and missing-tenant
+	// refusals below are attempts in the metrics' sense, exactly as they
+	// are in StandaloneQueue's execute, and their durations are measured
+	// from here. The success record (recordJobMetrics below) and every
+	// wrapped failure (wrapFailedAttempt) share this one measurement.
+	attemptStart := time.Now()
 	h := q.handler(t.Type())
 	if h == nil {
 		// Treated exactly like any other Handle failure -- retried, then
 		// dead-lettered -- mirroring jobs' own worker.go's identical
 		// handling of ErrHandlerNotRegistered for StandaloneQueue. Reusing
 		// the exact same sentinel (not a new asynq-specific one) keeps this
-		// one error identical across both deployment modes.
-		return jobs.ErrHandlerNotRegistered.WithParam("type", t.Type())
+		// one error identical across both deployment modes. Wrapped with
+		// this attempt's own measured duration so the outcome's metric
+		// record (handleErrorAttempt's recordFailedAttempt) can carry it.
+		return wrapFailedAttempt(jobs.ErrHandlerNotRegistered.WithParam("type", t.Type()), time.Since(attemptStart))
 	}
 
 	tenantID := pkgcore.TenantID(t.Headers()[headerTenantID])
 	if tenantID == "" {
-		return errTaskMissingTenant.WithParam("type", t.Type()).WithParam("job_id", taskID)
+		return wrapFailedAttempt(
+			errTaskMissingTenant.WithParam("type", t.Type()).WithParam("job_id", taskID),
+			time.Since(attemptStart),
+		)
 	}
 
 	if !q.tryReserveTenantSlot(tenantID) {
@@ -483,18 +616,29 @@ func (q *Queue) processTaskUncancelled(ctx context.Context, t *asynqlib.Task, ta
 	// able to interrupt an in-flight attempt at all.
 	handleCtx := pkgcore.WithTenant(ctx, tenantID)
 
-	attemptStart := time.Now()
 	result, err := h.Handle(handleCtx, job, progress)
-	durationMS := time.Since(attemptStart).Milliseconds()
+	duration := time.Since(attemptStart)
+	durationMS := duration.Milliseconds()
 	if err != nil {
 		log.Warn("job attempt failed", "job_id", taskID, "job_type", t.Type(),
 			"attempts", job.Attempts, "duration_ms", durationMS, "error", err)
-		return err // asynq's own retry/archive machinery decides what happens next.
+		// asynq's own retry/archive machinery decides what happens next;
+		// the error is wrapped with this attempt's measured duration so
+		// handleErrorAttempt's outcome record (recordFailedAttempt) can
+		// carry it onto the jobs.job.duration Histogram -- the same
+		// duration_ms this log line already reports.
+		return wrapFailedAttempt(err, duration)
 	}
 
 	writeEnvelope(resultEnvelope{ProgressPct: lastPct, ProgressMsg: lastMsg, Data: result.Data})
 	log.Info("job succeeded", "job_id", taskID, "job_type", t.Type(),
 		"attempts", job.Attempts, "duration_ms", durationMS)
+	// The attempt concluded successfully here -- the mirror of
+	// StandaloneQueue's own success record point (jobs' worker.go's
+	// execute, "job succeeded" + recordJobMetrics), recorded with the
+	// attempt's measured duration on the jobs.job.duration Histogram and
+	// the StatusSucceeded row of the jobs.job.attempts Counter.
+	q.recordJobMetrics(t.Type(), jobs.StatusSucceeded, duration)
 	return nil
 }
 

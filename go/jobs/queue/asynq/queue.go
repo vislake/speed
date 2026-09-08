@@ -102,6 +102,22 @@ type Queue struct {
 	// Redis client, so once Close returns no callback can still be
 	// querying a closed client.
 	depthGaugeMu sync.RWMutex
+
+	// jobDuration, jobAttempts and jobDeadLetter back the
+	// "jobs.job.duration"/"jobs.job.attempts"/"jobs.job.dead_letter"
+	// instruments registerJobMetrics wires from Start -- the distributed
+	// deployment mode's mirror of StandaloneQueue's identically-named
+	// fields (jobs' own standalone_queue.go), so both implementations of
+	// the jobs.Queue seam emit the same three metric names under the same
+	// jobs.InstrumentationName scope (see AGENTS.md's Observability
+	// section). Left at their zero value (nil) until then; worker.go's
+	// recordJobMetrics/recordDeadLetter guard against that, mirroring
+	// StandaloneQueue's identical fail-open contract -- a metrics wiring
+	// failure must not prevent the queue itself from running, nor panic a
+	// later job execution.
+	jobDuration   metric.Float64Histogram
+	jobAttempts   metric.Int64Counter
+	jobDeadLetter metric.Int64Counter
 }
 
 // Defaults for Queue's construction Options, applied when the corresponding
@@ -454,12 +470,13 @@ func (q *Queue) handler(jobType string) jobs.Handler {
 	return q.handlers[jobType]
 }
 
-// Start wires the jobs.queue.depth metric (best-effort, exactly like
-// StandaloneQueue.Start -- a registration failure is logged and does not
-// prevent the server from starting) and launches asynq's own background
-// processor goroutines via asynqlib.Server.Start. Like Server.Start (and
-// unlike Server.Run), this returns immediately once processing has
-// launched; it does not block waiting for shutdown.
+// Start wires the jobs.queue.depth gauge and the jobs.job.duration /
+// jobs.job.attempts / jobs.job.dead_letter instruments (best-effort,
+// exactly like StandaloneQueue.Start -- a registration failure is logged
+// and does not prevent the server from starting) and launches asynq's own
+// background processor goroutines via asynqlib.Server.Start. Like
+// Server.Start (and unlike Server.Run), this returns immediately once
+// processing has launched; it does not block waiting for shutdown.
 //
 // A Start that FAILED may be retried by calling Start again: started stays
 // false, so the whole sequence genuinely re-runs (asynqlib.Server.Start
@@ -475,6 +492,10 @@ func (q *Queue) Start(ctx context.Context) error {
 	}
 	if err := q.registerQueueDepthGauge(otel.Meter(jobs.InstrumentationName)); err != nil {
 		obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
+	}
+	if err := q.registerJobMetrics(); err != nil {
+		// Same fail-open contract as registerQueueDepthGauge above.
+		obs.FromContext(ctx).Warn("jobs: registering job metrics failed", "error", err)
 	}
 	if err := q.server.Start(asynqlib.HandlerFunc(q.processTask)); err != nil {
 		return err
@@ -1061,6 +1082,142 @@ func (q *Queue) registerQueueDepthGauge(meter metric.Meter) error {
 		}),
 	)
 	return err
+}
+
+// The three "jobs.job.*" instrument-name literals StandaloneQueue's own
+// registerJobMetrics uses (jobs' standalone_queue.go's
+// jobDurationMetricName/jobAttemptsMetricName/jobDeadLetterMetricName
+// constants, which are package-private there) -- spelled out here rather
+// than exported from the root package: this subpackage is the one other
+// place that must emit these exact names, and the root package's
+// observability section (AGENTS.md) is the authority that keeps the two
+// spellings in step, exactly like the shared "jobs.queue.depth" literal
+// both implementations already use.
+const (
+	jobDurationMetricName   = "jobs.job.duration"
+	jobAttemptsMetricName   = "jobs.job.attempts"
+	jobDeadLetterMetricName = "jobs.job.dead_letter"
+)
+
+// registerJobMetrics wires the "jobs.job.duration" Histogram and
+// "jobs.job.attempts"/"jobs.job.dead_letter" Counters
+// docs/internal/09-observability.md's must-instrument table requires for
+// the task-queue domain beyond queue backlog depth, mirroring
+// jobs.StandaloneQueue.registerJobMetrics (jobs' own standalone_queue.go)
+// instrument for instrument: the same three names, the same units, the
+// same (job_type, status) label sets and the same fail-open registration
+// shape. This is the recorded fix for the Known-limitations gap that only
+// "jobs.queue.depth" was wired here (docs/internal/17-risks.md's task-queue
+// row; go/jobs/AGENTS.md's asynq.Queue-specific Known limitations): the
+// execution-duration percentiles, failure rate, retry count and
+// dead-letter count rows of the must-instrument table now exist on both
+// deployment modes. Like StandaloneQueue's twin, these three are
+// synchronous instruments recorded imperatively at the point each attempt
+// concludes (worker.go's recordJobMetrics/recordDeadLetter), never an
+// ObservableGauge callback, since "how long did this attempt take" and
+// "did this attempt fail" are events, not a value that can be sampled on
+// demand from Redis. Labeled by job_type and status only -- deliberately
+// never tenant_id, for the identical cardinality reason the depth-gauge
+// callback's own doc comment gives.
+func (q *Queue) registerJobMetrics() error {
+	meter := otel.Meter(jobs.InstrumentationName)
+
+	duration, err := meter.Float64Histogram(
+		jobDurationMetricName,
+		metric.WithDescription("Duration of one job Handle attempt, in seconds, by job type and resulting status."),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return err
+	}
+
+	attempts, err := meter.Int64Counter(
+		jobAttemptsMetricName,
+		metric.WithDescription("Number of job Handle attempts completed, by job type and resulting status (succeeded, retrying or dead_letter). Failure rate and retry count are both derivable from this by status."),
+		metric.WithUnit("{attempt}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	deadLetter, err := meter.Int64Counter(
+		jobDeadLetterMetricName,
+		metric.WithDescription("Number of jobs moved to the dead letter status, by job type."),
+		metric.WithUnit("{job}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	q.jobDuration, q.jobAttempts, q.jobDeadLetter = duration, attempts, deadLetter
+	return nil
+}
+
+// recordJobMetrics records one completed Handle attempt on the
+// "jobs.job.duration" Histogram and "jobs.job.attempts" Counter
+// registerJobMetrics wires, labeled by jobType and status -- the exact
+// mirror of jobs.StandaloneQueue.recordJobMetrics (jobs' own worker.go):
+// the same two instruments, the same labels, the same nil-guard (a nil
+// q.jobDuration means registerJobMetrics never ran or failed, and
+// registration always sets the fields together, so checking one stands for
+// both). Unlike its StandaloneQueue twin, whose call sites all sit after
+// the outcome-persisting write, this Queue's call sites sit at the points
+// asynq's own dispatch loop decides an attempt's outcome -- asynq offers
+// no hook after it settles the task, so the record precedes the
+// settlement write exactly like this Queue's FailureHook.OnFailure calls
+// do (worker.go's handleErrorAttempt); see AGENTS.md's "Dead-letter
+// mapping" section for the ordering concession and its one documented edge
+// case, which apply identically to the metrics.
+func (q *Queue) recordJobMetrics(jobType string, status jobs.Status, duration time.Duration) {
+	if q.jobDuration == nil {
+		return
+	}
+	attrs := metric.WithAttributes(
+		attribute.String("job_type", jobType),
+		attribute.String("status", string(status)),
+	)
+	q.jobDuration.Record(context.Background(), duration.Seconds(), attrs)
+	q.jobAttempts.Add(context.Background(), 1, attrs)
+}
+
+// recordJobMetricsAttemptOnly records one completed attempt on the
+// "jobs.job.attempts" Counter alone, without a duration data point on the
+// "jobs.job.duration" Histogram. It exists for the one class of attempt
+// whose duration this Queue genuinely cannot measure: an attempt that
+// concluded without a measured Handle run -- a terminal-attempt
+// tenant-concurrency bounce or cancellation-marker refusal that asynq
+// archives, or a Handle that panicked (asynq's own processor recovers the
+// panic and hands the failure to the ErrorHandler with no timing
+// metadata, worker.go's perform). Counting the outcome while omitting the
+// duration keeps both instruments truthful to their own descriptions --
+// the histogram measures Handle-attempt durations, and no such duration
+// exists for these -- while the attempts row still reflects the outcome
+// DeadLetterJobs reports. Every other attempt records through
+// recordJobMetrics with a measured duration. Same nil-guard discipline,
+// guarding on q.jobAttempts alone since this call never touches
+// q.jobDuration.
+func (q *Queue) recordJobMetricsAttemptOnly(jobType string, status jobs.Status) {
+	if q.jobAttempts == nil {
+		return
+	}
+	q.jobAttempts.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("job_type", jobType),
+		attribute.String("status", string(status)),
+	))
+}
+
+// recordDeadLetter records one job moving to StatusDeadLetter on the
+// "jobs.job.dead_letter" Counter registerJobMetrics wires, labeled by
+// jobType only -- the exact mirror of
+// jobs.StandaloneQueue.recordDeadLetter (jobs' own worker.go), including
+// the identical nil-guard rationale.
+func (q *Queue) recordDeadLetter(jobType string) {
+	if q.jobDeadLetter == nil {
+		return
+	}
+	q.jobDeadLetter.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("job_type", jobType),
+	))
 }
 
 // compile-time check that *Queue satisfies jobs.Queue, mirroring
