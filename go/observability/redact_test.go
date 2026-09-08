@@ -100,9 +100,12 @@ func TestRedact_SensitiveKeyValues(t *testing.T) {
 // the "token" stem's over-redaction bug: a legitimate, non-secret
 // diagnostic key that merely contains "token" as a substring of a
 // different word ("tokens", the ordinary plural for an LLM/usage count --
-// ai-gateway's own prompt_tokens/completion_tokens fields, which its
-// gateway.go renamed to prompt_units/completion_units specifically to
-// dodge this redactor) must survive verbatim, both key and value.
+// ai-gateway's gateway.go records its own usage counts under the natural
+// prompt_tokens/completion_tokens names at three sites today; the module
+// once logged them as prompt_units/completion_units to dodge this
+// redactor's bare-substring "token" match, and reverted to the natural
+// names once the word-boundary fix this test pins made those safe) must
+// survive verbatim, both key and value.
 func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 	keys := []string{"prompt_tokens", "completion_tokens", "tokens", "tokenizer_version"}
 	for _, key := range keys {
