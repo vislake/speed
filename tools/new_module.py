@@ -52,13 +52,20 @@ Refusals and guardrails:
     every scaffolded module builds. "." and ".." are refused too. All of
     this is validated before any filesystem access.
   * Nothing is ever written outside --target-dir: the scaffold only ever
-    creates <target-dir>/go/<name>/{go.mod,doc.go,AGENTS.md}.
-  * --category npm is refused with an explanation: docs/internal/
-    19-dev-workflow.md names a future "task new:npm-package" alongside the
-    Go generator, but this tool scaffolds go/<name> module stubs only --
-    no npm package template ships with it (web/'s packages are authored
-    in the workspace without a scaffolder), so there is nothing canonical
-    to scaffold.
+    creates <target-dir>/go/<name>/{go.mod,doc.go,AGENTS.md} for
+    --category go and <target-dir>/web/packages/<name>/{package.json,
+    tsconfig.json, tsconfig.build.json, src/index.ts, src/index.test.ts,
+    README.md, AGENTS.md} for --category npm. The npm skeleton is the
+    common core the twelve shipped @speed packages share, distilled to
+    the files a package needs to pass the four npm-package-ci legs
+    (pnpm lint/typecheck/test/build from the package directory) before
+    its implementation round ships any API: the index.ts is a doc
+    comment only -- nothing is exported, so no placeholder symbol can
+    ever become a released package's frozen public API -- and
+    index.test.ts pins the skeleton's own identity and scripts, the
+    npm-side mirror of a Go stub's compiling doc.go. docs/internal/
+    19-dev-workflow.md's future "task new:npm-package" wraps this
+    category exactly as new:module wraps the Go one.
 
 After scaffolding, the script prints a registration checklist -- go.work
 use entry (which is also the lockstep release registration, see below),
@@ -140,25 +147,32 @@ GO_KEYWORDS = frozenset({
 })
 
 
-def validate_name(name: str) -> str | None:
-    """Return an error message for an invalid module name, or None."""
+def validate_name(name: str, go_stub: bool) -> str | None:
+    """Return an error message for an invalid module/package name, or
+    None. The shared naming convention (lowercase letters, digits and
+    single hyphens, no underscores) covers both categories -- every
+    @speed package name in web/packages follows the same shape as the
+    go/ module directories; the Go-keyword refusal applies to Go stubs
+    only, where doc.go's package clause must compile."""
     if not name:
-        return "module name is empty"
+        return "name is empty"
     if name in (".", ".."):
-        return f"module name {name!r} is not a directory name"
+        return f"name {name!r} is not a directory name"
     if not NAME_PATTERN.match(name):
         return (
-            f"module name {name!r} is not valid: use lowercase letters, "
+            f"name {name!r} is not valid: use lowercase letters, "
             f"digits and single hyphens, starting with a letter; no "
-            f"underscores (go module directory names are hyphen-convention)"
+            f"underscores (the repo's directory-name convention, shared "
+            f"by go/ modules and web/packages/@speed names alike)"
         )
-    pkg_name = name.replace("-", "")
-    if pkg_name in GO_KEYWORDS:
-        return (
-            f"module name {name!r} is a Go keyword: doc.go would carry "
-            f"'package {pkg_name}', which cannot compile; pick a name "
-            f"that is not a reserved word"
-        )
+    if go_stub:
+        pkg_name = name.replace("-", "")
+        if pkg_name in GO_KEYWORDS:
+            return (
+                f"module name {name!r} is a Go keyword: doc.go would carry "
+                f"'package {pkg_name}', which cannot compile; pick a name "
+                f"that is not a reserved word"
+            )
     return None
 
 
@@ -168,7 +182,7 @@ def package_name_for(module_name: str) -> str:
 
 
 def build_plan(module_name: str, description: str, design_doc: str) -> list[tuple[str, str]]:
-    """Return [(module-relative path, content)] for the stub's files."""
+    """Return [(module-relative path, content)] for the Go stub's files."""
     pkg = package_name_for(module_name)
     files: list[tuple[str, str]] = []
 
@@ -190,8 +204,138 @@ def build_plan(module_name: str, description: str, design_doc: str) -> list[tupl
     return files
 
 
+# The canonical web-package skeleton's shared file shapes, distilled
+# from the twelve shipped @speed packages' common core (package.json /
+# the tsconfig pair / src + a test named after its source file /
+# README + AGENTS.md per package). A stub ships no API -- its index.ts
+# is a doc comment only -- but its WIRING is real: the four
+# npm-package-ci legs (pnpm lint / typecheck / test / build from the
+# package directory, reusable-npm-package-ci.yml) all pass on the
+# skeleton, so the package's CI row can be registered before its
+# implementation round, exactly as a Go stub's go.mod/doc.go/AGENTS.md
+# make a not-yet-implemented module a real go.work member.
+NPM_SCRIPTS = ('lint', 'typecheck', 'test', 'build')
+
+
+def build_npm_plan(
+    module_name: str, description: str, design_doc: str
+) -> list[tuple[str, str]]:
+    """Return [(package-relative path, content)] for the npm stub's
+    files. Every string is ASCII: the root CLAUDE.md Language Rule
+    scans the tree (tools/scan_cjk.py) and these files are not under
+    docs/internal/. The description is JSON-escaped into package.json,
+    so a sentence containing quotes or a backslash stays well-formed."""
+    import json  # noqa: PLC0415 -- stdlib, local import for one call
+
+    package_json = (
+        "{\n"
+        f'  "name": "@speed/{module_name}",\n'
+        '  "version": "0.0.0",\n'
+        f'  "description": {json.dumps(description)},\n'
+        '  "type": "module",\n'
+        '  "sideEffects": false,\n'
+        '  "files": ["dist", "README.md", "AGENTS.md"],\n'
+        '  "exports": {\n'
+        '    ".": {\n'
+        '      "types": "./dist/index.d.ts",\n'
+        '      "import": "./dist/index.js"\n'
+        '    },\n'
+        '    "./package.json": "./package.json"\n'
+        '  },\n'
+        '  "scripts": {\n'
+        '    "lint": "eslint .",\n'
+        '    "typecheck": "tsc -p tsconfig.json",\n'
+        '    "test": "vitest run",\n'
+        '    "build": "tsc -p tsconfig.build.json"\n'
+        '  },\n'
+        '  "devDependencies": {\n'
+        '    "@types/node": "^26.4.1"\n'
+        '  }\n'
+        "}\n"
+    )
+    tsconfig = (
+        "{\n"
+        '  "extends": "../../tsconfig.base.json",\n'
+        '  "include": ["src"]\n'
+        "}\n"
+    )
+    tsconfig_build = (
+        "{\n"
+        '  "extends": "../../tsconfig.base.json",\n'
+        '  "compilerOptions": {\n'
+        "    // ESM authoring rules: NodeNext mode makes tsc emit relative\n"
+        "    // imports verbatim, so sources must write explicit .js\n"
+        "    // extensions (TS2835 otherwise) -- the emitted dist/ is then\n"
+        "    // loadable by Node ESM and typecheckable by NodeNext\n"
+        "    // consumers as-is.\n"
+        '    "module": "nodenext",\n'
+        '    "moduleResolution": "nodenext",\n'
+        '    "noEmit": false,\n'
+        '    "declaration": true,\n'
+        '    "outDir": "dist",\n'
+        '    "rootDir": "src"\n'
+        "  },\n"
+        '  "include": ["src"],\n'
+        '  "exclude": ["src/**/*.test.ts"]\n'
+        "}\n"
+    )
+    index_ts = (
+        f"// Package index of the @speed/{module_name} stub.\n"
+        "//\n"
+        "// The canonical package skeleton this scaffolder materializes\n"
+        "// carries a real build/lint/test wiring and no API yet: the\n"
+        "// package's public surface lands in its implementation round,\n"
+        "// in the same PR as its design doc. Nothing is exported until\n"
+        "// then, so no placeholder symbol ever becomes a released\n"
+        "// package's frozen public API.\n"
+    )
+    index_test = (
+        "// Stub-wiring test of the canonical @speed/package skeleton.\n"
+        "// Named after its source file (index.ts -> index.test.ts, the\n"
+        "// frontend naming rule). It pins the skeleton itself -- the\n"
+        "// package identity and the four npm-package-ci legs' scripts --\n"
+        "// so a scaffolded package is proven green before its\n"
+        "// implementation round fills the API in; delete the whole file\n"
+        "// with the implementation round's real tests.\n"
+        "import { readFileSync } from 'node:fs'\n"
+        "import { describe, expect, it } from 'vitest'\n"
+        "\n"
+        "describe('@speed/%s stub skeleton', () => {\n"
+        "  it('carries the package identity a consumer will resolve', () => {\n"
+        "    const pkg = JSON.parse(\n"
+        "      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),\n"
+        "    ) as { name: string; scripts: Record<string, string> }\n"
+        "    expect(pkg.name).toBe('@speed/%s')\n"
+        "    for (const script of ['lint', 'typecheck', 'test', 'build']) {\n"
+        "      expect(pkg.scripts[script], script).toBeDefined()\n"
+        "    }\n"
+        "  })\n"
+        "})\n"
+    ) % (module_name, module_name)
+    readme = (
+        f"# @speed/{module_name}\n"
+        "\n"
+        f"Not yet implemented. See {design_doc} for the design.\n"
+    )
+    agents = (
+        f"# AGENTS.md — @speed/{module_name}\n"
+        "\n"
+        f"Not yet implemented. See {design_doc} for the design.\n"
+    )
+    return [
+        ("package.json", package_json),
+        ("tsconfig.json", tsconfig),
+        ("tsconfig.build.json", tsconfig_build),
+        ("src/index.ts", index_ts),
+        ("src/index.test.ts", index_test),
+        ("README.md", readme),
+        ("AGENTS.md", agents),
+    ]
+
+
 def registration_checklist(module_name: str, design_doc: str) -> list[str]:
-    """Return the post-scaffold reminder lines (never written anywhere)."""
+    """Return the post-scaffold reminder lines for a Go module (never
+    written anywhere)."""
     lines = [
         "Next steps -- the shared repository files below are intentionally "
         "left untouched by this script:",
@@ -220,19 +364,58 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
     return lines
 
 
+def npm_registration_checklist(module_name: str, design_doc: str) -> list[str]:
+    """Return the post-scaffold reminder lines for an npm package
+    (never written anywhere) -- the npm-side mirror of the Go
+    checklist: each registration is a shared-file edit a scaffolder
+    must never perform silently."""
+    lines = [
+        "Next steps -- the shared repository files below are intentionally "
+        "left untouched by this script:",
+        "  1. Workspace install: run 'pnpm install' from web/ so the new "
+        "package is recorded as a workspace importer in web/pnpm-lock.yaml "
+        "-- CI installs with --frozen-lockfile, so the lockfile entry must "
+        "land in the same change as the package.",
+        "  2. Lockstep release: add \"@speed/" + module_name + "\" to the fixed "
+        "group of web/.changeset/config.json (the array whose members are "
+        "bumped together) -- the npm-side release registration, the mirror "
+        "of a Go module's go.work use entry: the release coordinator "
+        "(tools/release/lockstep-release.py) fails a release plan whose "
+        "fixed-group coverage does not match web/packages/*.",
+        "  3. CI matrix: register the package in the fast-check/full-check "
+        "npm matrix (reusable-npm-package-ci rows, one per web package and "
+        "for examples/reference-app/web) in .github/workflows/fast-check.yml "
+        "and full-check.yml -- or it is never linted, typechecked, tested "
+        "or built in CI.",
+        "  4. Roadmap and design doc: register the package in the milestone "
+        "that plans it (docs/internal/15-roadmap.md) and, once it ships a "
+        "surface, in the web-package enumeration of the root CLAUDE.md "
+        "Repository Status and web/README.md.",
+    ]
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="new_module.py",
         description=(
-            "Scaffold the canonical stub (go.mod + doc.go + AGENTS.md) of a "
-            "new Go module under go/<name>, reproducing the existing stub "
-            "modules' exact file shapes. This is the generator behind the "
-            "new:module task in the root Taskfile.yml (docs/internal/"
-            "19-dev-workflow.md's module-generator section)."
+            "Scaffold the canonical stub of a new speed Go module (go.mod "
+            "+ doc.go + AGENTS.md under go/<name>) or npm package (the "
+            "@speed/<name> skeleton under web/packages/<name>: package.json, "
+            "the tsconfig pair, a doc-comment index.ts plus its wiring "
+            "test, README and AGENTS.md). Both categories reproduce the "
+            "repo's real shapes -- the Go stub the not-yet-implemented "
+            "modules carry, the npm skeleton the twelve shipped @speed "
+            "packages' common core distills -- and both print a "
+            "registration checklist instead of touching shared files. "
+            "This is the generator behind the new:module task in the root "
+            "Taskfile.yml (docs/internal/19-dev-workflow.md's "
+            "module-generator section)."
         ),
         epilog=(
             "Taskfile wiring: the root Taskfile.yml's new:module task (named "
-            "in docs/internal/19-dev-workflow.md) implements this contract:\n"
+            "in docs/internal/19-dev-workflow.md) implements this contract "
+            "for --category go:\n"
             "\n"
             "  # Taskfile.yml\n"
             "  new:module:\n"
@@ -244,47 +427,50 @@ def main(argv: list[str] | None = None) -> int:
             "  # invoked as:\n"
             "  #   task new:module NAME=sharing DESCRIPTION='...' DESIGN_DOC=docs/internal/07-....md\n"
             "\n"
-            "A future task new:npm-package will call this script with "
-            "--category npm once this scaffold grows an npm package "
-            "template (refused today, see --category)."
+            "The npm template is the same script's --category npm (a future "
+            "task new:npm-package wraps it exactly like new:module wraps "
+            "the Go category)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("name", help="module directory name under go/ "
+    parser.add_argument("name", help="module or package directory name "
                         "(lowercase letters, digits, single hyphens; no "
-                        "underscores; not a Go keyword)")
+                        "underscores; for a Go module additionally not a Go "
+                        "keyword)")
     parser.add_argument("--description", required=True,
-                        help="one-line English package doc for doc.go (single "
-                        "sentence; ASCII only -- CJK would fail the repo's "
-                        "own scan_cjk.py language check)")
+                        help="one-line English description of the module or "
+                        "package (single sentence; ASCII only -- CJK would "
+                        "fail the repo's own scan_cjk.py language check)")
     parser.add_argument("--design-doc", required=True, metavar="FILE",
                         help="repo-relative design doc the AGENTS.md stub "
                         "points at, e.g. docs/internal/07-platform-services.md "
                         "(may not exist yet -- the script warns if missing)")
     parser.add_argument("--category", choices=("go", "npm"), default="go",
-                        help="what to scaffold: go (implemented) or npm "
-                        "(refused: no npm package template ships with this "
-                        "tool, docs/internal/19-dev-workflow.md only names "
-                        "the future task new:npm-package)")
+                        help="what to scaffold: go (default) creates the "
+                        "canonical Go module stub under go/<name>; npm "
+                        "creates the canonical @speed package skeleton "
+                        "under web/packages/<name>")
     parser.add_argument("--target-dir", metavar="DIR",
                         help="directory the scaffold is created under "
                         "(default: the repository root, auto-detected as "
                         "the nearest ancestor of the current directory that "
                         "contains go.work); the scaffold always lands at "
-                        "<DIR>/go/<name> and nothing is ever written "
-                        "outside <DIR>")
+                        "<DIR>/go/<name> (go) or <DIR>/web/packages/<name> "
+                        "(npm) and nothing is ever written outside <DIR>")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the files that would be created without "
                         "writing anything")
     args = parser.parse_args(argv)
 
-    name_error = validate_name(args.name)
+    go_stub = args.category == "go"
+    name_error = validate_name(args.name, go_stub)
     if name_error:
         print(f"error: {name_error}", file=sys.stderr)
         return 2
     if "\n" in args.description or "\r" in args.description:
         print("error: --description must be a single line (it becomes one "
-              "doc.go comment line)", file=sys.stderr)
+              "doc.go comment line or one package.json description)",
+              file=sys.stderr)
         return 2
     try:
         args.description.encode("ascii")
@@ -292,21 +478,12 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --description must be ASCII: the repo's Language Rule "
               "requires English (ASCII) outside docs/internal/, and "
               "tools/scan_cjk.py would flag any CJK or non-ASCII text in "
-              "the generated doc.go", file=sys.stderr)
+              "the generated files", file=sys.stderr)
         return 2
     if not DESIGN_DOC_PATTERN.match(args.design_doc):
         print(f"error: --design-doc {args.design_doc!r} is not a docs/internal/"
               "design doc path (expected docs/internal/NN-name.md)",
               file=sys.stderr)
-        return 2
-
-    if args.category == "npm":
-        print("error: --category npm is not implemented yet: "
-              "docs/internal/19-dev-workflow.md names a future 'task "
-              "new:npm-package' alongside the Go generator, but this tool "
-              "scaffolds go/<name> module stubs only and ships no npm "
-              "package template, so there is nothing to scaffold. Re-run "
-              "with --category go (default).", file=sys.stderr)
         return 2
 
     if args.target_dir:
@@ -330,9 +507,18 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    module_dir = os.path.join(target_dir, GO_DIR_NAME, args.name)
-    plan = build_plan(args.name, args.description, args.design_doc)
-    module_rel = os.path.join(GO_DIR_NAME, args.name)
+    if go_stub:
+        scaffold_rel = os.path.join(GO_DIR_NAME, args.name)
+        plan = build_plan(args.name, args.description, args.design_doc)
+        checklist = registration_checklist(args.name, args.design_doc)
+    else:
+        scaffold_rel = os.path.join(
+            "web", "packages", args.name
+        )
+        plan = build_npm_plan(args.name, args.description, args.design_doc)
+        checklist = npm_registration_checklist(args.name, args.design_doc)
+
+    module_dir = os.path.join(target_dir, scaffold_rel)
 
     # Overwrite refusal, checked before anything is created.
     if os.path.lexists(module_dir):
@@ -347,9 +533,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if args.dry_run:
-        print(f"dry run: would scaffold {module_rel} under {target_dir}")
+        print(f"dry run: would scaffold {scaffold_rel} under {target_dir}")
         for rel, _ in plan:
-            print(f"  create {os.path.join(module_rel, rel)}")
+            print(f"  create {os.path.join(scaffold_rel, rel)}")
         print("(nothing written -- --dry-run)")
         return 0
 
@@ -361,21 +547,25 @@ def main(argv: list[str] | None = None) -> int:
     for rel, content in plan:
         full = os.path.join(module_dir, rel)
         try:
-            with open(full, "x", encoding="ascii") as fh:
+            # Nested plan files (the npm skeleton's src/) need their
+            # parent directory; the Go stub's three files sit at the
+            # scaffold root.
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "x", encoding="utf-8") as fh:
                 fh.write(content)
         except OSError as exc:
             print(f"error: cannot write {full}: {exc}", file=sys.stderr)
             return 2
 
-    print(f"scaffolded {module_rel} under {target_dir}:")
+    print(f"scaffolded {scaffold_rel} under {target_dir}:")
     for rel, _ in plan:
-        print(f"  created {os.path.join(module_rel, rel)}")
+        print(f"  created {os.path.join(scaffold_rel, rel)}")
     if not os.path.isfile(os.path.join(target_dir, args.design_doc)):
         print(f"warning: {args.design_doc} does not exist yet -- the "
               "AGENTS.md stub already points at it; write the design doc "
-              "and commit it in the same PR as this module")
+              "and commit it in the same PR as this module/package")
     print()
-    for line in registration_checklist(args.name, args.design_doc):
+    for line in checklist:
         print(line)
     return 0
 
