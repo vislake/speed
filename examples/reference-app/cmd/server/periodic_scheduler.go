@@ -105,9 +105,15 @@ import (
 // What is deliberately NOT scheduled here, and why:
 //
 //   - pki's CRL-regeneration task (CAService.EnqueueCRLRegenerate) is
-//     never enqueued: nothing in this app consumes pki's X.509/CRL layer
-//     (no CA issuance, no certificate verification), so regenerating a
-//     CRL nobody reads would be work for its own sake. pki.Module.Register
+//     never enqueued, even though this app now consumes pki's X.509/CRL
+//     layer for real (the AI-output attestation layer, internal/
+//     attestation: CA issuance, per-tenant certificate signing and chain-
+//     verified sharing gates): the app's verifier paths read ROW STATE
+//     plus the certificate chain (VerifyCertificate refuses a revoked row
+//     directly), its CRL documents are generated on demand through the Go
+//     API and fetched over pki's HTTP read operation, and a periodic
+//     refresh still has no reader waiting on it -- so regenerating a CRL
+//     on a schedule would be work for its own sake. pki.Module.Register
 //     still declares the CRL handler on the registry whenever the module
 //     is wired with a queue -- this host wires pki.WithQueue below, so the
 //     handler IS registered and drained onto the shared queue; it simply

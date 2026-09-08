@@ -60,6 +60,7 @@ import (
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
+	"github.com/vislake/speed/examples/reference-app/internal/attestation"
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
@@ -2255,9 +2256,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// task (pki.expiry_scan), which this host's periodic-task scheduler
 	// enqueues on its tick, and the CRL-regenerate task, declared and
 	// drained like every other registered handler but never scheduled:
-	// this app consumes no X.509/CRL surface, so regenerating a CRL
-	// nobody reads would be work for its own sake (periodic_scheduler.go's
-	// doc comment and go/pki/AGENTS.md record that honestly). The three
+	// the app's X.509 consumer (internal/attestation) verifies against
+	// row state and chains and generates CRLs on demand, so a scheduled
+	// refresh still has no reader (periodic_scheduler.go's doc comment
+	// and go/pki/AGENTS.md record that honestly). The three
 	// knobs below are applied only when a test injects them: a zero
 	// PKIPropagationWindow, PKIRenewalLeadTime or PKIExpiryScanWindow
 	// (what configFromEnv always leaves them at) keeps pki's own
@@ -2469,6 +2471,30 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// registry-declared handler.
 	storageModule := storage.NewModule(db, storage.WithQueue(standaloneQueue))
 
+	// attestationService is the reference app's AI-output attestation layer
+	// -- the real consumer of go/pki's X.509 layer that closes the "no real
+	// consumer yet" exception docs/internal/22-pki.md recorded (see
+	// internal/attestation's package doc comment and go/pki/AGENTS.md's
+	// "Real consumer" section for the full account). It issues each
+	// tenant's "simulation.attestation" certificate through pkiModule.CA(),
+	// signs attested outputs with it, and gates their public shares on
+	// chain verification. Constructed here -- after pkiModule and
+	// storageModule, before sharingModule needs its gate -- with the pki CA
+	// service, a pki certificate repository for the issue-vs-reuse decision,
+	// the same ObjectService the resolver below serves bytes through (as
+	// the package's ContentOpener seam, adapted in sharing_resolver.go) and
+	// its own app table store over this app's db connection. Its two boot
+	// steps (EnsureSchema, EnsureAuthorityChain) run later, after
+	// Kernel.Bootstrap applied pki's migrations -- see that block's own
+	// comment.
+	attestationService := attestation.NewService(
+		pkiModule.CA(),
+		pki.NewCertificateRepository(db),
+		storageContentOpener{svc: storageModule.ObjectService()},
+		attestation.NewAttestationStore(db),
+		db,
+	)
+
 	// sharingModule is the reference app's first real consumer of
 	// go/sharing end to end (sharing_flow_test.go), the round-2 mandatory
 	// first-consumer proof AGENTS.md's "No real consumer yet" section named
@@ -2486,7 +2512,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// resolved expiry instead of always falling back to
 	// defaultShareExpiry.
 	sharingModule := sharing.NewModule(db,
-		sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService()}),
+		sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService(), attest: attestationService}),
 		sharing.WithTenantConfigReader(sharingConfigReader{service: &configService}),
 	)
 
@@ -3445,6 +3471,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim simulation index schema: %w", err)
 	}
+	// The attestation layer's two boot steps run here, after Bootstrap (the
+	// pki migrations the CA chain's pki_authorities rows live in were
+	// applied there) and before any request can reach the surfaces that
+	// attest or gate: EnsureSchema creates the app table, and
+	// EnsureAuthorityChain creates -- once per database, idempotently, by
+	// the chain's fixed subject names -- the app's root and issuing
+	// intermediate authorities and records the intermediate as the issuing
+	// authority every tenant's simulation-attestation certificate is
+	// signed under. A failure stops the boot: an app whose AI outputs
+	// cannot be attested must not start serving shares of them.
+	if err := attestationService.EnsureSchema(ctx); err != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: ensure attestation schema: %w", err)
+	}
+	if err := attestationService.EnsureAuthorityChain(ctx); err != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: ensure the attestation CA chain: %w", err)
+	}
 	// The last argument is gatewayEntitlements -- the same adapter instance
 	// aiGatewayModule's WithEntitlements gate runs -- so Simulate can
 	// pre-flight the model-access gate before its credit reservation opens
@@ -3464,7 +3508,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the simulation-content route reads a generated image's stored bytes
 	// through the same instance the cases photo routes drive (see
 	// wireSmileSim's own doc comment).
-	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService())
+	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService(), attestationService)
 
 	// wireClinicName mounts this host's own tenant-identity answer
 	// (cmd/server/clinic_name.go): the org root name of the tenant the

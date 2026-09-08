@@ -45,6 +45,7 @@ import (
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/storage"
 
+	"github.com/vislake/speed/examples/reference-app/internal/attestation"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 	smilesimapi "github.com/vislake/speed/examples/reference-app/internal/smilesim/api"
 )
@@ -141,6 +142,15 @@ type smilesimHandler struct {
 	// (cases_photos.go) drive, so both surfaces agree on what an object
 	// is and which tenant's rows each read resolves.
 	objects *storage.ObjectService
+
+	// attest is the AI-output attestation service (internal/attestation):
+	// every surface below that observes a succeeded simulation output --
+	// the job-status poll, the per-photo enumeration and the
+	// simulation-content read -- registers and attests that output through
+	// it (ensureAttestedOutput's own doc comment), making the output
+	// shareable through the chain-verified sharing gate. Nil skips the
+	// hook (the handler's pre-consumer shape).
+	attest *attestation.Service
 }
 
 // compile-time check that smilesimHandler implements every operation the
@@ -153,9 +163,12 @@ var _ smilesimapi.ServerInterface = (*smilesimHandler)(nil)
 // api.HandlerFromMux helper: the mount patterns come from
 // internal/smilesim/api/openapi.yaml itself, never a second hand-written
 // copy. memberships is the store SmilesimSimulate's recipient gate asks
-// (see the handler type's own doc comment).
-func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, memberships *signInMemberships, objects *storage.ObjectService) {
-	smilesimapi.HandlerFromMux(&smilesimHandler{svc: svc, queue: queue, memberships: memberships, objects: objects}, mux)
+// (see the handler type's own doc comment). attest is the AI-output
+// attestation service every succeeded-output read below hooks (see the
+// handler type's own field comment); always non-nil in this app's wiring
+// (server.go constructs the service before wireSmileSim runs).
+func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, memberships *signInMemberships, objects *storage.ObjectService, attest *attestation.Service) {
+	smilesimapi.HandlerFromMux(&smilesimHandler{svc: svc, queue: queue, memberships: memberships, objects: objects, attest: attest}, mux)
 }
 
 // SmilesimSimulate implements smilesimapi.ServerInterface: it handles
@@ -287,6 +300,14 @@ func (h *smilesimHandler) SmilesimGetJob(w http.ResponseWriter, r *http.Request,
 			Steps:          result.Usage.Steps,
 			ResolutionTier: result.Usage.ResolutionTier,
 		}
+		// This poll is an observation of a succeeded output: register and
+		// attest it (internal/attestation), so the output can be shared
+		// through the chain-verified gate. The hook is a side channel --
+		// a failure is logged and the status read still answers, exactly
+		// like NotifyOnCompletion's own swallow rule above; an unattested
+		// output is then refused by the sharing gate until a later
+		// observation retries.
+		h.ensureAttestedOutput(r.Context(), result.OutputObjectID, nil)
 	case jobs.StatusDeadLetter, jobs.StatusCancelled, jobs.StatusRetrying:
 		resp.Error = &job.Error
 	}
@@ -329,6 +350,14 @@ func (h *smilesimHandler) SmilesimListPhotoSimulations(w http.ResponseWriter, r 
 		}
 		if outcome.Error != "" {
 			entry.Error = &outcome.Error
+		}
+		// A succeeded enumeration entry is an observation of the output it
+		// names: attest it (internal/attestation) so the output is
+		// shareable -- and, once a revoked certificate made it
+		// unshareable, re-attestable the next time the gallery re-opens
+		// this photo. The same swallow rule as the poll route's own hook.
+		if outcome.Status == jobs.StatusSucceeded && outcome.OutputObjectID != "" {
+			h.ensureAttestedOutput(r.Context(), outcome.OutputObjectID, nil)
 		}
 		simulations = append(simulations, entry)
 	}
@@ -407,6 +436,12 @@ func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r 
 		writeSmileSimError(w, smileSimErrInternal.WithParam("reason", "simulation content exceeds the serve bound"))
 		return
 	}
+	// Serving a succeeded output is an observation of it: attest it
+	// (internal/attestation), reusing the bytes already read so the
+	// digest needs no second storage open. The same swallow rule as the
+	// poll and enumeration hooks -- an unattested output is refused by
+	// the sharing gate until a later observation retries.
+	h.ensureAttestedOutput(r.Context(), match.OutputObjectID, raw)
 
 	mediaType := "application/octet-stream"
 	if obj.MIME != nil && *obj.MIME != "" {
@@ -475,6 +510,43 @@ func validateSimulateRecipient(ctx context.Context, memberships *signInMembershi
 		return smilesimErrRecipientNotInTenant
 	}
 	return nil
+}
+
+// ensureAttestedOutput registers and attests one succeeded simulation
+// output through the app's attestation service (internal/attestation) --
+// the observation hook every surface that makes an output visible to its
+// own tenant runs (see the three call sites). content, when non-nil, is
+// the output's bytes the caller already read (the content route passes
+// them so the digest needs no second storage open); nil makes the
+// service open the object itself.
+//
+// The hook is durable bookkeeping on a job that is already terminal, so
+// it runs on a cancel-free derivation of ctx -- the same
+// context.WithoutCancel boundary NotifyOnCompletion draws -- and its
+// failure is logged and swallowed: the status/content/enumeration read
+// that drove the observation must never turn into an error response over
+// this side channel. A failed attestation leaves the output refused by
+// the sharing gate (an unattested output is not shareable), and the very
+// next observation of the output retries it -- the same retry-by-later-
+// observation shape NotifyOnCompletion's rollback latch provides for
+// completion notifications.
+func (h *smilesimHandler) ensureAttestedOutput(ctx context.Context, outputObjectID string, content []byte) {
+	if h.attest == nil || outputObjectID == "" {
+		return
+	}
+	persistCtx := context.WithoutCancel(ctx)
+	var err error
+	if content != nil {
+		err = h.attest.EnsureAttestedContent(persistCtx, outputObjectID, content)
+	} else {
+		err = h.attest.EnsureAttested(persistCtx, outputObjectID)
+	}
+	if err != nil {
+		observability.FromContext(ctx).Error("smilesim: attesting a succeeded simulation output failed -- the output is not shareable until a later observation attests it",
+			"output_object_id", outputObjectID,
+			"error", err,
+		)
+	}
 }
 
 // writeSmileSimError writes err to w as a JSON {code, params} body, the
