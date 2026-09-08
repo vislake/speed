@@ -4,8 +4,10 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,6 +188,182 @@ func TestModule_AuditableModels_IsExactlyTheMarkedModels(t *testing.T) {
 			t.Errorf("AuditableModels() lists %s, which is not one of the models carrying the dbkit.Auditable marker", name)
 		}
 	}
+}
+
+// TestModule_AuditableModels_CaptureClasses_CoverEveryField is the
+// field-granularity counterpart of the model-level gate above. That gate
+// pins WHICH models carry the dbkit.Auditable marker and land in
+// AuditableModels(); this one pins what the write-capture mechanism will
+// do with every COLUMN of those models. Each column field must fall into
+// one of three classes: it is auto-redacted by the mechanism (a GORM
+// serializer, or the audit:"redact" capture opt-out tag --
+// captureColumnAutoRedacts), or it is listed in judgedCaptured below with
+// the model author's written judgment that recording the column's
+// plaintext value in the audit trail is right. There is no default class:
+// a plaintext-sensitive column added to an Auditable model with no tag and
+// no judgment entry fails here, in org's own suite, instead of having its
+// values land verbatim in the changes column of every audit row its writes
+// produce. That column is not a quiet store: go/admin serves the trail
+// over HTTP to any admin:audit_read holder across every tenant, and
+// compliance's RenderAuditReport exports the diff verbatim (go/dbkit/audit/
+// model.go's Changes doc comment names both exits). Requiring the judgment
+// to be written down, reason included, is what makes the third class an
+// action rather than a silent default.
+//
+// The auto-redaction criteria below are read off the same struct tags
+// dbkit's fieldValuesMap reads (audit_capture.go), so a field this helper
+// classifies as auto-redacted is exactly a field the mechanism captures as
+// "[redacted]" -- the serializer half is tag-declared by construction,
+// since dbkit's RegisterEncryptedSerializer mechanism is the only way a
+// serializer exists in this ecosystem. If the mechanism's criteria ever
+// change, this test and go/dbkit's own audit_capture_test.go change
+// together.
+func TestModule_AuditableModels_CaptureClasses_CoverEveryField(t *testing.T) {
+	// The third class, written down: every non-auto-redacted column of an
+	// Auditable model, keyed "<model>.<GoField>" as fmt %T prints the
+	// model, with the judgment that its plaintext belongs in the trail.
+	// The model names ARE the inventory AuditableModels() already pins; a
+	// new Auditable model or a new column without a line here fails below.
+	judgedCaptured := map[string]string{
+		"org.OrgNode.ID":        "application-generated UUID naming the node -- identifiers are the trail's own reference vocabulary, never content",
+		"org.OrgNode.TenantID":  "owning-tenant attribution, the row's own first-class dimension and an admin read's filter key -- never personal data",
+		"org.OrgNode.ParentID":  "opaque id of the parent node -- the structural edge of the org tree, which is exactly what an org.node.write diff exists to record",
+		"org.OrgNode.Path":      "derived materialized-path index of the node's tree position -- structural metadata, tree-internal by construction",
+		"org.OrgNode.Depth":     "depth integer derived from the path -- structural metadata, tree-internal by construction",
+		"org.OrgNode.Name":      "tenant-authored display label of a business node (a group/region/store name) -- the tenant's own organizational vocabulary, not person-attributable content",
+		"org.OrgNode.Kind":      "the tenant's own business classification of the node -- vocabulary, not content",
+		"org.OrgNode.CreatedAt": "auto-maintained timestamp (gorm autoCreateTime) -- never application content",
+		"org.OrgNode.UpdatedAt": "auto-maintained timestamp (gorm autoUpdateTime) -- never application content",
+		"org.OrgNode.DeletedAt": "soft-delete marker timestamp, written through dbkit's own reflection-based soft-delete path -- lifecycle metadata, never content",
+		"org.OrgNode.DeletedBy": "opaque user id of the deleting principal -- attribution, the trail's purpose; never a display name",
+
+		"org.Membership.ID":        "application-generated UUID naming the membership row -- identifier vocabulary",
+		"org.Membership.TenantID":  "owning-tenant attribution -- see OrgNode.TenantID's judgment",
+		"org.Membership.UserID":    "opaque cross-module user id of the member -- attribution reference the trail exists to record, never a display name or personal attribute",
+		"org.Membership.NodeID":    "opaque id of the OrgNode the membership binds to -- structural reference",
+		"org.Membership.Status":    "membership-status vocabulary (active/inactive/...) -- the state transition an org.member.update diff exists to record",
+		"org.Membership.CreatedAt": "auto-maintained timestamp -- never application content",
+		"org.Membership.UpdatedAt": "auto-maintained timestamp -- never application content",
+		"org.Membership.DeletedAt": "soft-delete marker timestamp -- lifecycle metadata, never content",
+		"org.Membership.DeletedBy": "opaque user id of the removing principal -- attribution, the trail's purpose; never a display name",
+
+		"org.Invitation.ID":            "application-generated UUID naming the invitation -- identifier vocabulary",
+		"org.Invitation.TenantID":      "owning-tenant attribution -- see OrgNode.TenantID's judgment",
+		"org.Invitation.NodeID":        "opaque id of the OrgNode the invitee will bind to on acceptance -- structural reference",
+		"org.Invitation.InviterUserID": "opaque user id of the inviting member -- attribution, the trail's purpose; never a display name",
+		"org.Invitation.Locale":        "language tag the invitation message was rendered in (e.g. zh-CN) -- delivery metadata, never content",
+		"org.Invitation.TokenHash":     "SHA-256 of the single-use 32-random-byte token, recorded deliberately -- no candidate space to reverse, unique per invitation, person-attributable meaning none (see Invitation.AuditResourceType's own doc comment for the full credential-context judgment)",
+		"org.Invitation.Status":        "invitation-status vocabulary (pending/accepted/revoked) -- the state machine an org.invitation.update diff exists to record",
+		"org.Invitation.ExpiresAt":     "invitation expiry timestamp -- lifecycle metadata, never content",
+		"org.Invitation.AcceptedAt":    "acceptance timestamp, nil until accepted -- lifecycle metadata, never content",
+		"org.Invitation.CreatedAt":     "auto-maintained timestamp -- never application content",
+		"org.Invitation.UpdatedAt":     "auto-maintained timestamp -- never application content",
+	}
+
+	seen := map[string]bool{}
+	for _, m := range AuditableModels() {
+		model := fmt.Sprintf("%T", m)
+		for _, field := range captureColumnFields(m) {
+			key := model + "." + field.goName
+			seen[key] = true
+			if captureColumnAutoRedacts(field.sf) {
+				if reason, ok := judgedCaptured[key]; ok {
+					t.Errorf("%s is auto-redacted by the capture mechanism (serializer or audit:\"redact\" tag) but still listed in judgedCaptured (%q) -- a stale judgment entry, not a class", key, reason)
+				}
+				continue
+			}
+			reason, ok := judgedCaptured[key]
+			if !ok {
+				t.Errorf("%s (column %q) has no capture class: it is not auto-redacted (no gorm serializer, no audit:\"redact\" tag) and is not listed in judgedCaptured -- its plaintext would land in every audit row's changes column, an exit readable by any admin:audit_read holder across all tenants", key, field.column)
+				continue
+			}
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("%s is listed in judgedCaptured without a written judgment -- the reason IS the judgment, and an empty one records nothing", key)
+			}
+		}
+	}
+	for key := range judgedCaptured {
+		if !seen[key] {
+			t.Errorf("judgedCaptured entry %q names no captured column field of any Auditable model -- a stale or misspelled judgment", key)
+		}
+	}
+}
+
+// captureColumnField is one schema-column leaf of an Auditable model as
+// the write-capture plugin sees it: the model type flattened through its
+// anonymous embedded structs (dbkit.TenantModel first among them), exactly
+// the shape go/dbkit/audit_capture.go's fieldValuesMap walks.
+type captureColumnField struct {
+	goName string // the leaf's own Go name ("TenantID", never the embedder chain)
+	column string // the gorm column: option when the field declares one, else ""
+	sf     reflect.StructField
+}
+
+// captureColumnFields enumerates every schema-column leaf of v's type:
+// fields gorm would give a DBName, flattened through anonymous embedded
+// structs and skipping unexported fields and gorm:"-" fields -- the
+// mechanism's own empty-DBName skip, mirrored here so a gorm:"-" field
+// (a value deliberately kept off the schema) is never demanded to carry a
+// capture judgment it can never need.
+func captureColumnFields(v any) []captureColumnField {
+	var out []captureColumnField
+	var walk func(t reflect.Type)
+	walk = func(t reflect.Type) {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.PkgPath != "" {
+				continue
+			}
+			if f.Anonymous && f.Type.Kind() == reflect.Struct {
+				// GORM flattens an anonymous embedded struct into its own
+				// fields (TenantModel's TenantID), so the gate must too:
+				// the plugin captures the promoted column, not the embedder.
+				walk(f.Type)
+				continue
+			}
+			if f.Tag.Get("gorm") == "-" {
+				continue
+			}
+			out = append(out, captureColumnField{
+				goName: f.Name,
+				column: gormColumnName(f),
+				sf:     f,
+			})
+		}
+	}
+	walk(reflect.TypeOf(v))
+	return out
+}
+
+// gormColumnName returns the column: option of f's gorm tag, or "" when
+// the field declares none (gorm would then derive a name from the field's
+// Go name -- the column still exists and the field still needs a class).
+func gormColumnName(f reflect.StructField) string {
+	for _, opt := range strings.Split(f.Tag.Get("gorm"), ";") {
+		if rest, ok := strings.CutPrefix(opt, "column:"); ok {
+			return rest
+		}
+	}
+	return ""
+}
+
+// captureColumnAutoRedacts reports whether dbkit's write-capture plugin
+// captures f's column as "[redacted]" on its own, by either of the two
+// automatic criteria go/dbkit/audit_capture.go's fieldValuesMap applies:
+// the audit:"redact" capture opt-out tag, or a GORM serializer declared
+// through the gorm tag. The two are read off the same struct tags the
+// mechanism itself reads (see the gate's doc comment above for why that
+// mirror is exact in this ecosystem).
+func captureColumnAutoRedacts(f reflect.StructField) bool {
+	if v, ok := f.Tag.Lookup("audit"); ok && v == "redact" {
+		return true
+	}
+	for _, opt := range strings.Split(f.Tag.Get("gorm"), ";") {
+		if strings.HasPrefix(opt, "serializer:") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestModule_Register_DoesNotDeclareAuthnsEvent is the guard for the trap
