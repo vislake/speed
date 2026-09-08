@@ -1,64 +1,89 @@
 package pki_test
 
 // Runnable documentation for pki's public API, mirroring
-// go/dbkit/example_test.go's convention: this example is compiled AND
+// go/dbkit/example_test.go's convention: these examples are compiled AND
 // executed by `go test`, so a change to pki's public API that breaks the
 // documented usage fails the build rather than only rotting in prose.
 //
-// This example is one of the three compensating obligations
+// The examples together are the first of the three compensating obligations
 // docs/internal/22-pki.md places on the X.509 layer for having no real
-// consumer yet: it covers the layer's full main path -- issue a root CA, an
-// intermediate signed by the root, and an end-entity certificate signed by
-// the intermediate -- so at least this shape is known to compile and run
-// under an external caller's own import, even without a real business
-// module driving it.
+// consumer yet, kept in step with the layer's growth (go/pki/AGENTS.md's
+// "X.509 layer: still no real consumer" section records the obligation and
+// what it covers):
+//
+//   - Example covers the layer's full main path -- issue a root CA, an
+//     intermediate signed by the root, and an end-entity certificate
+//     signed by the intermediate, then verify the resulting chain with the
+//     standard library's own crypto/x509.Verify -- so at least this shape
+//     is known to compile and run under an external caller's own import,
+//     even without a real business module driving it.
+//   - ExampleCAService_GenerateCRL drives the round-3 revocation path and
+//     CRL generation: revoke an issued certificate, regenerate the issuing
+//     authority's CRL, and read the document back with the standard
+//     library's own parser.
+//   - ExampleCAService_ExportAuthorityChainJWKS exercises the X.509
+//     layer's JWKS export.
+//   - ExampleService_ExportJWKS and ExampleService_RevokeSigningKey cover
+//     the key-lifecycle layer's JWKS export and revocation halves.
+//   - ExampleSignerRegistry resolves a Signer by registered name through
+//     round 4's pki.SignerRegistry and signs with the resolved signer.
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/pki"
 )
 
-// Example builds a three-level internal CA chain -- root, intermediate,
-// end-entity -- entirely through pki's exported API, and verifies the
-// resulting certificate chains correctly with the standard library's own
-// crypto/x509.Verify.
-func Example() {
-	ctx := context.Background()
-
-	// A real host opens PostgreSQL in the distributed deployment mode
-	// (dbkit.DialectPostgres). SQLite keeps this example self-contained
-	// under `go test`, with no external service required -- which is
-	// exactly what the standalone deployment mode does in production too.
-	db, err := dbkit.Open(ctx, dbkit.Options{
-		Dialect: dbkit.DialectSQLite,
-		DSN:     "file:pki_example?mode=memory&cache=shared",
-	})
-	if err != nil {
-		fmt.Println("open:", err)
-		return
-	}
-
+// newExampleModule opens a private, in-memory SQLite database named name
+// (each example uses its own name, so examples never share state), applies
+// pki's migrations to it and returns a ready *pki.Module plus a keepAlive
+// handle to the underlying database. A real host opens PostgreSQL in the
+// distributed deployment mode (dbkit.DialectPostgres); SQLite keeps these
+// examples self-contained under `go test`, with no external service
+// required -- which is exactly what the standalone deployment mode does in
+// production too.
+//
+// The keepAlive handle is returned because a shared-cache in-memory SQLite
+// database disappears once its last connection closes, and one example
+// below (ExampleSignerRegistry) opens a SECOND connection to the same
+// database through SignerRegistry.Build. Callers defer keepAlive.Close();
+// an example whose database only ever has one connection is unaffected by
+// holding it.
+func newExampleModule(name string) (*pki.Module, *sql.DB, error) {
 	// LocalSigner's private key column is encrypted at rest; a host
 	// registers the cipher once at bootstrap, before opening this
 	// database in a real application (the ordering matters here too --
-	// GORM parses a model's serializer tag at first use).
+	// GORM parses a model's serializer tag at first use). The registration
+	// is process-global and every example uses the same 32-byte key, so
+	// each example re-registering it is behaviourally a no-op.
 	cipher, err := dbkit.NewCipher([]byte("01234567890123456789012345678901"))
 	if err != nil {
-		fmt.Println("new cipher:", err)
-		return
+		return nil, nil, err
 	}
 	if regErr := pki.RegisterLocalKeySerializer(cipher); regErr != nil {
-		fmt.Println("register local key serializer:", regErr)
-		return
+		return nil, nil, regErr
+	}
+
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:" + name + "?mode=memory&cache=shared",
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Migrations are versioned SQL, applied through dbkit's registry. There
@@ -66,46 +91,73 @@ func Example() {
 	module := pki.NewModule(db)
 	registry := dbkit.NewMigrationRegistry()
 	if regErr := registry.Register(module); regErr != nil {
-		fmt.Println("register migrations:", regErr)
-		return
+		return nil, nil, regErr
 	}
 	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
-		fmt.Println("apply migrations:", applyErr)
-		return
+		return nil, nil, applyErr
 	}
+	keepAlive, err := db.DB()
+	if err != nil {
+		return nil, nil, err
+	}
+	return module, keepAlive, nil
+}
 
-	ca := module.CA()
-
-	root, err := ca.CreateRootCA(ctx, pki.RootCAParams{
+// exampleChain issues the module's three-level chain -- a root CA, an
+// intermediate signed by the root, and one end-entity certificate signed by
+// the intermediate under the example tenant -- entirely through pki's
+// exported API, returning the three resulting rows.
+func exampleChain(ca *pki.CAService) (root, intermediate *pki.Authority, cert *pki.Certificate, err error) {
+	ctx := context.Background()
+	root, err = ca.CreateRootCA(ctx, pki.RootCAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(10 * 365 * 24 * time.Hour),
 	})
 	if err != nil {
-		fmt.Println("create root CA:", err)
-		return
+		return nil, nil, nil, err
 	}
 
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, pki.IntermediateCAParams{
+	intermediate, err = ca.CreateIntermediateCA(ctx, root.ID, pki.IntermediateCAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(5 * 365 * 24 * time.Hour),
 	})
 	if err != nil {
-		fmt.Println("create intermediate CA:", err)
-		return
+		return nil, nil, nil, err
 	}
 
 	// Certificate is tenant data, so issuing one requires a tenant in ctx --
 	// the same rule every tenant-scoped repository in this codebase
 	// enforces.
 	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID("acme-dental"))
-	cert, err := ca.IssueCertificate(tenantCtx, intermediate.ID, pki.CertificateParams{
+	cert, err = ca.IssueCertificate(tenantCtx, intermediate.ID, pki.CertificateParams{
 		Purpose:  "tenant.jwt_signing",
 		Subject:  pkix.Name{CommonName: "acme.speed.internal"},
 		DNSNames: []string{"acme.speed.internal"},
 		NotAfter: time.Now().Add(365 * 24 * time.Hour),
 	})
 	if err != nil {
-		fmt.Println("issue certificate:", err)
+		return nil, nil, nil, err
+	}
+	return root, intermediate, cert, nil
+}
+
+// Example builds a three-level internal CA chain -- root, intermediate,
+// end-entity -- entirely through pki's exported API, and verifies the
+// resulting certificate chains correctly with the standard library's own
+// crypto/x509.Verify.
+func Example() {
+	module, keepAlive, err := newExampleModule("pki_example")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	ca := module.CA()
+
+	root, intermediate, cert, err := exampleChain(ca)
+	if err != nil {
+		fmt.Println("issue chain:", err)
 		return
 	}
 
@@ -146,6 +198,367 @@ func Example() {
 	// verified chains: 1
 	// chain length: 3
 	// end-entity subject: acme.speed.internal
+}
+
+// ExampleCAService_GenerateCRL walks the round-3 revocation path an
+// external caller drives: revoke an end-entity certificate, regenerate the
+// issuing authority's CRL so the revocation is published, then read the
+// generated document back with the standard library's own parser -- the
+// way an independent verifier would -- and confirm the revoked
+// certificate's serial is listed and the document carries the authority's
+// signature. It ends by confirming the module's own chain verification
+// now refuses the revoked certificate with the coded ErrCertificateRevoked.
+func ExampleCAService_GenerateCRL() {
+	module, keepAlive, err := newExampleModule("pki_example_crl")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	ca := module.CA()
+	ctx := context.Background()
+
+	_, intermediate, cert, err := exampleChain(ca)
+	if err != nil {
+		fmt.Println("issue chain:", err)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID("acme-dental"))
+	revoked, err := ca.RevokeCertificate(tenantCtx, cert.ID, "compromised")
+	if err != nil {
+		fmt.Println("revoke certificate:", err)
+		return
+	}
+	fmt.Println("revoked:", revoked)
+
+	// A zero validity falls back to DefaultCRLValidity; the generated
+	// document is persisted on the authority row the method returns.
+	authority, err := ca.GenerateCRL(ctx, intermediate.ID, 0)
+	if err != nil {
+		fmt.Println("generate CRL:", err)
+		return
+	}
+	fmt.Println("crl number:", authority.CRLNumber)
+
+	entries, listsSerial, signatureOK, err := readCRL(authority.CRLPEM, cert, intermediate)
+	if err != nil {
+		fmt.Println("read CRL:", err)
+		return
+	}
+	fmt.Println("crl revoked entries:", entries)
+	fmt.Println("crl lists the revoked serial:", listsSerial)
+	fmt.Println("crl signature verifies:", signatureOK)
+
+	_, verifyErr := ca.VerifyCertificate(tenantCtx, cert.ID)
+	refused := false
+	if coded, ok := apperr.As(verifyErr); ok && coded.Code == pki.ErrCertificateRevoked.Code {
+		refused = true
+	}
+	fmt.Println("verify refuses the revoked certificate with ErrCertificateRevoked:", refused)
+
+	// Output:
+	// revoked: true
+	// crl number: 1
+	// crl revoked entries: 1
+	// crl lists the revoked serial: true
+	// crl signature verifies: true
+	// verify refuses the revoked certificate with ErrCertificateRevoked: true
+}
+
+// readCRL decodes and parses a PEM-encoded X.509 CRL with the standard
+// library, then checks it the way an independent verifier would against the
+// certificate whose revocation the CRL should publish (cert) and the
+// authority that issued both (issuer): how many revoked entries the
+// document lists, whether the revoked certificate's own serial number is
+// among them, and whether the document's signature checks out against the
+// issuing authority's certificate.
+func readCRL(crlPEM string, cert *pki.Certificate, issuer *pki.Authority) (entries int, listsSerial, signatureOK bool, err error) {
+	block, _ := pem.Decode([]byte(crlPEM))
+	if block == nil {
+		return 0, false, false, errors.New("no CRL PEM block found")
+	}
+	rl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		return 0, false, false, err
+	}
+	certParsed, err := parsePEM(cert.CertificatePEM)
+	if err != nil {
+		return 0, false, false, err
+	}
+	issuerParsed, err := parsePEM(issuer.CertificatePEM)
+	if err != nil {
+		return 0, false, false, err
+	}
+
+	listed := false
+	for _, entry := range rl.RevokedCertificateEntries {
+		if entry.SerialNumber.Cmp(certParsed.SerialNumber) == 0 {
+			listed = true
+		}
+	}
+	return len(rl.RevokedCertificateEntries), listed, rl.CheckSignatureFrom(issuerParsed) == nil, nil
+}
+
+// ExampleCAService_ExportAuthorityChainJWKS exports an intermediate
+// authority's certificate chain as an RFC 7517 JSON Web Key Set -- the
+// document a data-plane cluster kid-matches against -- and checks the
+// result with the standard library: two keys (the intermediate itself,
+// then its root issuer), ordered leaf-first, whose public-key material
+// matches the authorities' own certificates byte for byte.
+//
+// One corner of this method cannot be shown from an example: a chain
+// containing a revoked authority (the intermediate itself or any ancestor)
+// is refused wholesale with ErrCertificateRevoked, but no public method
+// writes AuthorityStatusRevoked -- AGENTS.md's Known limitations and
+// model.go's own AuthorityStatus doc comment record that -- so the refusal
+// is driven only by this module's own unit suite, which seeds the row
+// directly (revocation_test.go).
+func ExampleCAService_ExportAuthorityChainJWKS() {
+	module, keepAlive, err := newExampleModule("pki_example_chain_jwks")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	ca := module.CA()
+	ctx := context.Background()
+
+	root, intermediate, _, err := exampleChain(ca)
+	if err != nil {
+		fmt.Println("issue chain:", err)
+		return
+	}
+
+	// The authority chain is platform public-key material; no tenant is
+	// needed in ctx.
+	jwks, err := ca.ExportAuthorityChainJWKS(ctx, intermediate.ID)
+	if err != nil {
+		fmt.Println("export authority chain JWKS:", err)
+		return
+	}
+	fmt.Println("chain jwks keys:", len(jwks.Keys))
+
+	leafFirst := len(jwks.Keys) == 2 &&
+		jwks.Keys[0].KeyID == intermediate.ID &&
+		jwks.Keys[1].KeyID == root.ID
+	fmt.Println("chain jwks ordered leaf-first by authority id:", leafFirst)
+
+	rootCert, err := parsePEM(root.CertificatePEM)
+	if err != nil {
+		fmt.Println("parse root certificate:", err)
+		return
+	}
+	matches := false
+	if len(jwks.Keys) == 2 {
+		if jwkPub, ok := jwks.Keys[1].Key.(ed25519.PublicKey); ok {
+			if certPub, ok := rootCert.PublicKey.(ed25519.PublicKey); ok {
+				matches = bytes.Equal(jwkPub, certPub)
+			}
+		}
+	}
+	fmt.Println("chain jwks root key matches the root certificate:", matches)
+
+	// Output:
+	// chain jwks keys: 2
+	// chain jwks ordered leaf-first by authority id: true
+	// chain jwks root key matches the root certificate: true
+}
+
+// ExampleService_ExportJWKS exports the key-lifecycle layer's active and
+// retiring public keys as an RFC 7517 JSON Web Key Set -- the document an
+// EXTERNAL verifier of speed-issued tokens fetches (in-process verification
+// uses KeySource instead, never this export). It shows the one-key answer
+// for a provisioned purpose, proves the exported key genuinely verifies a
+// signature the active key produced -- the external verifier's whole job --
+// and shows the empty-set answer for a purpose that was never provisioned.
+func ExampleService_ExportJWKS() {
+	module, keepAlive, err := newExampleModule("pki_example_export_jwks")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	svc := module.Service()
+	ctx := context.Background()
+
+	const purpose = "authn.access_token"
+	err = svc.EnsurePurpose(ctx, purpose, pki.AlgorithmEd25519, 15*time.Minute)
+	if err != nil {
+		fmt.Println("ensure purpose:", err)
+		return
+	}
+	_, _, sign, err := svc.ActiveSigner(ctx, purpose)
+	if err != nil {
+		fmt.Println("active signer:", err)
+		return
+	}
+
+	jwks, err := svc.ExportJWKS(ctx, purpose)
+	if err != nil {
+		fmt.Println("export JWKS:", err)
+		return
+	}
+	fmt.Println("export for a provisioned purpose:", len(jwks.Keys), "key")
+
+	// The exported key is public-key material only; verify a live
+	// signature with it exactly as an external verifier would.
+	verified := false
+	if len(jwks.Keys) == 1 {
+		if pub, ok := jwks.Keys[0].Key.(ed25519.PublicKey); ok {
+			message := []byte("speed export example")
+			sig, signErr := sign(ctx, message)
+			if signErr == nil {
+				verified = ed25519.Verify(pub, message, sig)
+			}
+		}
+	}
+	fmt.Println("exported key verifies a live signature:", verified)
+
+	unprovisioned, err := svc.ExportJWKS(ctx, "tenant.jwt_signing")
+	if err != nil {
+		fmt.Println("export unprovisioned JWKS:", err)
+		return
+	}
+	fmt.Println("export for an unprovisioned purpose:", len(unprovisioned.Keys), "keys")
+
+	// Output:
+	// export for a provisioned purpose: 1 key
+	// exported key verifies a live signature: true
+	// export for an unprovisioned purpose: 0 keys
+}
+
+// ExampleService_RevokeSigningKey shows emergency revocation on the
+// key-lifecycle layer: revoke the purpose's active key and watch the very
+// next ExportJWKS answer drop from one key to an empty set -- the revoked
+// key leaves the published set immediately, because the revocation
+// invalidates the key-set cache through the same event mechanism a remote
+// replica's revocation would use.
+func ExampleService_RevokeSigningKey() {
+	module, keepAlive, err := newExampleModule("pki_example_revoke_signing_key")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	svc := module.Service()
+	ctx := context.Background()
+
+	const purpose = "authn.access_token"
+	err = svc.EnsurePurpose(ctx, purpose, pki.AlgorithmEd25519, 15*time.Minute)
+	if err != nil {
+		fmt.Println("ensure purpose:", err)
+		return
+	}
+
+	before, err := svc.ExportJWKS(ctx, purpose)
+	if err != nil {
+		fmt.Println("export before revoke:", err)
+		return
+	}
+	fmt.Println("keys before revoke:", len(before.Keys))
+
+	kid, _, _, err := svc.ActiveSigner(ctx, purpose)
+	if err != nil {
+		fmt.Println("active signer:", err)
+		return
+	}
+	revoked, err := svc.RevokeSigningKey(ctx, kid, "compromised")
+	if err != nil {
+		fmt.Println("revoke signing key:", err)
+		return
+	}
+	fmt.Println("revoked:", revoked)
+
+	after, err := svc.ExportJWKS(ctx, purpose)
+	if err != nil {
+		fmt.Println("export after revoke:", err)
+		return
+	}
+	fmt.Println("keys after revoke:", len(after.Keys))
+
+	// Output:
+	// keys before revoke: 1
+	// revoked: true
+	// keys after revoke: 0
+}
+
+// ExampleSignerRegistry shows resolving a Signer by registered name through
+// pki.SignerRegistry -- the database/sql-style driver pattern round 4
+// established -- with the module's own zero-external-dependency
+// "signer.local" registration, which builds an offline-runnable LocalSigner
+// from a flat pkgcore.Config naming a database. The resolved signer then
+// generates a key and signs with it for real; an unknown name is refused
+// with pkgcore.ErrUnknownImplementation.
+//
+// The vault and kmsaws provider names ("signer.vault",
+// "signer.vault-direct", "signer.aws-kms", "signer.aws-kms-direct")
+// execute the same Build path in their own packages' example tests
+// (go/pki/signer/vault and go/pki/signer/kmsaws), which run under the same
+// `go test`. Only client construction can run there: a real Vault server
+// or AWS account is not reachable from the unit-test tier, so no example
+// in either package performs a Sign against a live backend -- each
+// package's doc.go records that boundary.
+func ExampleSignerRegistry() {
+	module, keepAlive, err := newExampleModule("pki_example_registry")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	ctx := context.Background()
+
+	// Build opens its OWN connection to the same in-memory database the
+	// module above migrated; keepAlive (deferred above) is what keeps the
+	// database alive for it -- signer_registry.go's localSignerFromConfig
+	// doc comment explains why this registry entry cannot share the
+	// module's *gorm.DB.
+	signer, caps, err := pki.SignerRegistry.Build("signer.local", pkgcore.Config{
+		"dialect": string(dbkit.DialectSQLite),
+		"dsn":     "file:pki_example_registry?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("build signer.local:", err)
+		return
+	}
+	fmt.Println("signer.local:", err, signer != nil, caps)
+
+	if _, _, lookupErr := pki.SignerRegistry.Build("signer.no-such-provider", nil); lookupErr == nil {
+		fmt.Println("unknown registered name refused: false")
+		return
+	}
+	fmt.Println("unknown registered name refused: true")
+	_ = module
+
+	keyRef, pub, err := signer.GenerateKey(ctx, pki.AlgorithmEd25519)
+	if err != nil {
+		fmt.Println("generate key:", err)
+		return
+	}
+	message := []byte("speed registry example")
+	sig, err := signer.Sign(ctx, keyRef, message)
+	if err != nil {
+		fmt.Println("sign:", err)
+		return
+	}
+	gotPub, err := signer.Public(ctx, keyRef)
+	if err != nil {
+		fmt.Println("public:", err)
+		return
+	}
+	working := bytes.Equal(gotPub.(ed25519.PublicKey), pub.(ed25519.PublicKey)) &&
+		ed25519.Verify(pub.(ed25519.PublicKey), message, sig)
+	fmt.Println("registry-resolved signer signs and verifies:", working)
+
+	// Output:
+	// signer.local: <nil> true none
+	// unknown registered name refused: true
+	// registry-resolved signer signs and verifies: true
 }
 
 // parsePEM decodes a single PEM-encoded certificate, the form every
