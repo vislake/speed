@@ -8,10 +8,13 @@
 // whether it came from the environment, and if not, which default (or
 // which seam) it fell back to. Print refuses exactly when the generated
 // app's own bootstrap would refuse to boot, on the same incomplete S3
-// group or SMTP pair. The five key variables and the S3 secret key / SMTP
-// password are secrets and render as [redacted] whatever the environment
-// holds -- the redaction decision is redactedEnv's single declaration in
-// print.go, consulted by every rendered row.
+// group or SMTP pair. The five key variables, the S3 secret key, the SMTP
+// password and the SMS gateway URL are secrets and render as [redacted]
+// whatever the environment holds -- the gateway URL because authn's HTTP
+// SMS transport has no credential channel separate from its endpoint, so
+// an operator authenticating to the gateway puts the credentials inside
+// the URL -- the redaction decision is redactedEnv's single declaration
+// in print.go, consulted by every rendered row.
 //
 // The group shares the exit-code contract of the sibling commands and
 // groups: 0 for success and help, 2 for usage errors (an unknown

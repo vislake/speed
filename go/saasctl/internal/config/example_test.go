@@ -95,5 +95,5 @@ go 1.25.0
 	// smtp port                     unset or empty (mailer stays on the console default)
 	// smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)
 	// smtp password    [redacted]   unset or empty (optional SMTP refinement; used only when the group above is set)
-	// sms gateway url               unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)
+	// sms gateway url  [redacted]   unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)
 }

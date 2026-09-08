@@ -80,11 +80,12 @@ func fixture(t *testing.T, name string) string {
 // original key materials plus the three authn/pki ones), and every
 // infrastructure seam left on its Preset default -- one line per value,
 // each sourced line naming the default (or the seam) it fell back to. The
-// five key rows and the S3 secret key / SMTP password rows show only the
-// [redacted] marker in the value column. The sqlite path row's value
-// column shows the EFFECTIVE file -- the relative app.db default anchored
-// to the fixture go.mod's directory (testdata/, the directory the app is
-// documented to run from) -- while its source column keeps the raw
+// five key rows and the S3 secret key / SMTP password / SMS gateway URL
+// rows show only the [redacted] marker in the value column. The
+// sqlite path row's value column shows the EFFECTIVE file -- the
+// relative app.db default anchored to the fixture go.mod's directory
+// (testdata/, the directory the app is documented to run from) -- while
+// its source column keeps the raw
 // default literal; the fixture's go.mod argument is relative, so the
 // anchored file reads "testdata/app.db" (the absolute form of the same
 // file, for an absolute go.mod argument, is the regression test below's
@@ -121,7 +122,7 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 		"smtp port                     unset or empty (mailer stays on the console default)\n" +
 		"smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
 		"smtp password    [redacted]   unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
-		"sms gateway url               unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)\n"
+		"sms gateway url  [redacted]   unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -189,7 +190,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		"smtp port        587          from APP_SMTP_PORT\n" +
 		"smtp username    mailer       from APP_SMTP_USERNAME\n" +
 		"smtp password    [redacted]   from APP_SMTP_PASSWORD\n" +
-		"sms gateway url  http://sms.internal/send from APP_SMS_GATEWAY_URL\n"
+		"sms gateway url  [redacted]   from APP_SMS_GATEWAY_URL\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -246,10 +247,13 @@ func TestPrintRefusesIncompleteSMTPPair(t *testing.T) {
 // TestPrintNeverRendersTheKeyBytes: however the key variables are set,
 // their hex never appears anywhere in the output -- the [redacted] marker
 // is the whole story the value column tells, and the provenance column
-// names only the variable, never its contents. The S3 secret key and SMTP
-// password join the same check: they are secret-shaped rows too, and must
-// never start printing plaintext just because they arrived through the
-// twin's newly-covered infrastructure surface.
+// names only the variable, never its contents. The S3 secret key, the SMTP
+// password and the SMS gateway URL join the same check: they are
+// secret-shaped rows too, and must never start printing plaintext just
+// because they arrived through the twin's newly-covered infrastructure
+// surface -- the gateway URL because authn's HTTP SMS transport has no
+// credential channel separate from its endpoint, so an operator who must
+// authenticate to the gateway puts the credentials inside the URL.
 func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	configKeyHex := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	orgIndexKeyHex := "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee"
@@ -258,6 +262,7 @@ func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	pkiLocalKeyCipherKeyHex := "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
 	s3Secret := "correct-horse-battery-staple-s3"
 	smtpPassword := "correct-horse-battery-staple-smtp"
+	smsGatewayURL := "https://sms-user:sms-secret@sms.internal/send"
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
 		appconfig.ConfigKeyEnv:            configKeyHex,
 		appconfig.OrgIndexKeyEnv:          orgIndexKeyHex,
@@ -271,6 +276,7 @@ func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 		appconfig.SMTPHostEnv:             "smtp.internal",
 		appconfig.SMTPPortEnv:             "587",
 		appconfig.SMTPPasswordEnv:         smtpPassword,
+		appconfig.SMSGatewayURLEnv:        smsGatewayURL,
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
@@ -278,10 +284,41 @@ func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	for _, secret := range []string{configKeyHex, orgIndexKeyHex, authnBlindIndexKeyHex, authnPIICipherKeyHex, pkiLocalKeyCipherKeyHex, s3Secret, smtpPassword} {
+	for _, secret := range []string{configKeyHex, orgIndexKeyHex, authnBlindIndexKeyHex, authnPIICipherKeyHex, pkiLocalKeyCipherKeyHex, s3Secret, smtpPassword, smsGatewayURL} {
 		if strings.Contains(stdout, secret) {
 			t.Errorf("stdout leaks a secret variable's value; it must render only [redacted] markers")
 		}
+	}
+}
+
+// TestPrintRedactsTheSMSGatewayURL pins the P3-1 fix for the one
+// credential-shaped row whose value used to print verbatim: config print
+// under an environment carrying APP_SMS_GATEWAY_URL rendered the URL as
+// any other connection-topology row. The URL is not topology: authn's
+// HTTP SMS transport (go/authn's NewHTTPSMSSender) has no credential
+// channel separate from its endpoint, so an operator who must
+// authenticate to the gateway has nowhere to put the credentials except
+// inside the URL itself -- the URL is the credential, and an accidental
+// paste of a config print into a log or ticket would ship it. The sms
+// row must therefore render the [redacted] marker like the S3 secret
+// key and SMTP password rows, with the value's bytes nowhere in the
+// output.
+func TestPrintRedactsTheSMSGatewayURL(t *testing.T) {
+	url := "https://gateway-user:gateway-secret@sms.internal/send"
+	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
+		appconfig.SMSGatewayURLEnv: url,
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "sms gateway url  [redacted]   from APP_SMS_GATEWAY_URL\n") {
+		t.Errorf("stdout does not render the sms gateway url row's value column as [redacted]:\n%s", stdout)
+	}
+	if strings.Contains(stdout, url) {
+		t.Errorf("stdout leaks APP_SMS_GATEWAY_URL's value %q; it must render only the [redacted] marker", url)
 	}
 }
 

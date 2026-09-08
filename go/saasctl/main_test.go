@@ -179,7 +179,7 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 		"smtp port                     unset or empty (mailer stays on the console default)\n" +
 		"smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
 		"smtp password    [redacted]   unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
-		"sms gateway url               unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)\n"
+		"sms gateway url  [redacted]   unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}

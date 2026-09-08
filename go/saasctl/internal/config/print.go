@@ -30,21 +30,26 @@ const redactedMarker = "[redacted]"
 // variables' resolved values never print: the five key materials (the
 // config master key, the org blind-index HMAC key, authn's blind-index
 // HMAC key, authn's PII cipher key and pki's local-key cipher key) and
-// the two infrastructure credentials (the S3 secret key, the SMTP
-// password). Everything else on the bootstrap surface is connection
-// topology -- hosts, ports, paths, bucket names, URLs -- or a public
-// identifier (an S3 access key ID, an SMTP username), which this command
-// can carry: config print renders the operator's own environment back to
-// their own terminal and no CI or other pipeline runs it, so the output
-// has no wider audience, while the members of this list are the system's
-// durable secrets -- the bytes that unlock ciphertext, HMAC indexes and
-// remote credentials -- and an accidental paste of the output into a log
-// or ticket must not ship them. The decision lives here, once: the row
-// renderer consults this list for every line it prints, so a bootstrap
-// variable added to the surface in the future prints its plaintext by
-// default until someone declares it here -- this list is the checklist
-// that act is performed against, and the whole-output tests force every
-// added row past it either way.
+// the three infrastructure credentials (the S3 secret key, the SMTP
+// password and the SMS gateway URL). The gateway URL is a URL only by
+// shape: authn's HTTP SMS transport has no credential channel separate
+// from its endpoint, so an operator who must authenticate to the gateway
+// can only put the credentials IN the URL -- the URL is where the
+// credential lives, and it redacts on the same ground as the S3 secret
+// key and the SMTP password. Everything else on the bootstrap surface is
+// connection topology -- hosts, ports, paths, bucket names, URLs -- or a
+// public identifier (an S3 access key ID, an SMTP username), which this
+// command can carry: config print renders the operator's own environment
+// back to their own terminal and no CI or other pipeline runs it, so the
+// output has no wider audience, while the members of this list are the
+// system's durable secrets -- the bytes that unlock ciphertext, HMAC
+// indexes and remote credentials -- and an accidental paste of the
+// output into a log or ticket must not ship them. The decision lives
+// here, once: the row renderer consults this list for every line it
+// prints, so a bootstrap variable added to the surface in the future
+// prints its plaintext by default until someone declares it here -- this
+// list is the checklist that act is performed against, and the
+// whole-output tests force every added row past it either way.
 var redactedEnv = map[string]bool{
 	appconfig.ConfigKeyEnv:            true,
 	appconfig.OrgIndexKeyEnv:          true,
@@ -53,6 +58,7 @@ var redactedEnv = map[string]bool{
 	appconfig.PKILocalKeyCipherKeyEnv: true,
 	appconfig.S3SecretKeyEnv:          true,
 	appconfig.SMTPPasswordEnv:         true,
+	appconfig.SMSGatewayURLEnv:        true,
 }
 
 // The unset-provenance text for each row that is not a scalar default: the
@@ -104,12 +110,15 @@ The bootstrap variables:
 
 The five key variables (the config master key, the org index key, the
 authn blind-index HMAC key, the authn PII cipher key and the pki
-local-key cipher key) and the S3 secret key / SMTP password are secrets:
-their values never print, only a [redacted] marker in their place,
-whatever the environment holds -- the redaction decision is redactedEnv's
-single declaration in print.go, and every rendered row consults it. An
-S3 group or SMTP pair that is only partially set is refused, exactly as
-the generated app's own bootstrap refuses it.
+local-key cipher key) and the S3 secret key / SMTP password / SMS
+gateway URL are secrets: their values never print, only a [redacted]
+marker in their place, whatever the environment holds -- the redaction
+decision is redactedEnv's single declaration in print.go, and every
+rendered row consults it. The gateway URL is one of them by shape, not
+by name: authn's HTTP SMS transport has no credential channel separate
+from the URL, so the URL is where an operator's gateway credentials
+live. An S3 group or SMTP pair that is only partially set is refused,
+exactly as the generated app's own bootstrap refuses it.
 
 The sqlite path row is the one row that resolves one step further than
 the bootstrap itself: every value this command reports is the value the
@@ -184,9 +193,9 @@ func reportError(stderr io.Writer, err error) int {
 // renders one line per value: the label, the resolved value, and its
 // provenance. The value column of every row renders through valueColumn,
 // which consults the single redactedEnv declaration: the five key
-// variables, the S3 secret key and the SMTP password render as
-// [redacted] whatever the environment holds, every other variable prints
-// its resolved value.
+// variables, the S3 secret key, the SMTP password and the SMS gateway
+// URL render as [redacted] whatever the environment holds, every other
+// variable prints its resolved value.
 //
 // The sqlite path row is the one row whose value column shows the
 // EFFECTIVE file rather than the raw resolved value: a relative database
