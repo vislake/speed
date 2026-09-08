@@ -13,6 +13,21 @@ for the tenant-writable BYOK base URL (the reviewer-ringed P0 this module
 carried) plus the explicit tenantless-call handling at Gateway's three
 rate-limit call sites (the adjudicated P1). See "What round 4 adds".
 
+**Metrics instrumentation round (2026-09).** The 09-table "AI 网关" row
+is instrumented at the sites this module genuinely has (`metrics.go`,
+unit-tested through a ManualReader in `metrics_test.go`):
+`aigateway.provider.calls`/`.errors`/`.duration` labeled by the
+route-resolved provider and call kind (chat, chat_stream or image) --
+chat and chat-stream calls at their provider-invocation sites in
+`gateway.go`, image calls at `imageGenerateHandler.callProvider`, the one
+choke point every async image job's provider call passes through, never
+at `GenerateImage`'s enqueue site (enqueuing is not a provider
+invocation), and a chat stream failing after establishment counted in
+`relayStream` when its terminal chunk carries Err -- plus
+`aigateway.rate_limited` at `checkRateLimit`'s single refusal site
+(shared by every entry point, unlabeled by provider because the check
+runs before provider resolution by design).
+
 ## What round 1 shipped
 
 - `ChatProvider`: the vendor-agnostic `Chat`/`ChatStream` interface every

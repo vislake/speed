@@ -7,17 +7,22 @@ context-aware structured logger, and generic HTTP instrumentation. See
 the per-domain "must-instrument metrics" table (queue depth, metering
 outbox lag, notification delivery rate, payment callback success, ...),
 which belongs to the modules that own those domains (`jobs`, `metering`,
-`notification`, `ai-gateway`), not to this package. All four of those
+`notification`, `ai-gateway`), not to this package. All of those
 modules are real, tested implementations today (root `CLAUDE.md`'s
-Repository Status), so "belongs to those modules" is no longer a forward
-reference — but only `go/jobs` has actually instrumented its row so far:
-`standalone_queue.go` registers a queue-depth async gauge plus job-duration
-histogram, attempts and dead-letter counters via `otel.Meter`, all read from
-the real execution path in `worker.go`. `go/metering`, `go/notification`,
-`go/billing` and `go/ai-gateway` still have zero `otel.Meter` call sites as
-of this writing — a real, tracked instrumentation gap in those modules
-themselves, not evidence that this package should speculatively build their
-instrumentation for them.
+Repository Status), and each has since instrumented its own row via
+`otel.Meter` on its own package path, with this package supplying only
+the global MeterProvider wiring: `go/jobs` (`standalone_queue.go`'s
+queue-depth async gauge plus job-duration histogram, attempts and
+dead-letter counters on `worker.go`'s real execution path), the
+`queue/asynq` subpackage's queue-depth gauge, `go/notification`
+(`delivery.go`'s delivery counter and duration histogram),
+`go/metering`, `go/billing` (invoice transitions and open-dwell at the
+module root, webhook-verify outcomes in each gateway provider) and
+`go/ai-gateway` (per-provider calls/errors/duration plus rate-limit
+hits) -- see each module's own `metrics.go` for its row's mapping and
+its recorded, deliberate halves. The domain table is each owning
+module's obligation, never a reason for this package to speculatively
+build their instrumentation for them.
 
 | Concern | Where |
 |---|---|
