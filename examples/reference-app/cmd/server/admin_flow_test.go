@@ -843,16 +843,19 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	var sendRecords adminListSendRecordsResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/notifications/send-records", staffToken, nil, http.StatusOK, &sendRecords, nil)
 
-	// D9: the usage/billing dashboard. Deliberately NOT wired into this
-	// app (go/admin/AGENTS.md's Known limitations), so the platform-staff
-	// account -- which holds admin:usage_read via BuiltinRoleOwner --
-	// still answers 500 (ErrUsageModulesNotWired) rather than 200; the
-	// property this test actually needs is that it is no longer the
-	// fail-closed 403 an empty adminPermissionFor entry would have
-	// produced.
+	// D9: the usage/billing dashboard. Since the wiring round that closed
+	// go/admin/AGENTS.md's Known-limitations no-consumer record, this app
+	// passes admin.WithMetering and admin.WithBilling at its admin-module
+	// site (cmd/server/server.go), so the platform-staff account -- which
+	// holds admin:usage_read via BuiltinRoleOwner -- answers 200 with the
+	// real per-tenant dashboard rather than the 500 (ErrUsageModulesNotWired)
+	// or 403 an unwired or unmapped route would produce; the property this
+	// test needs is that the route genuinely reaches admin's Handler,
+	// and the 200 answer is that proof. usage_summary_flow_test.go asserts
+	// on the dashboard's real data; here the status alone suffices.
 	status, body := rawStatusRequest(t, srv, http.MethodGet, "/api/v1/admin/usage-summary", staffToken, "")
-	if status == http.StatusForbidden {
-		t.Fatalf("GET /api/v1/admin/usage-summary for platform-staff = 403 %+v, want it to reach admin's Handler (not be refused by an unmapped permission)", body)
+	if status != http.StatusOK || body.Code != "" {
+		t.Fatalf("GET /api/v1/admin/usage-summary for platform-staff = %d %+v, want 200 with no error code (reach admin's Handler, not a 403 from an unmapped permission or a 500 from unwired modules)", status, body)
 	}
 }
 

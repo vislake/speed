@@ -36,6 +36,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 
@@ -1970,7 +1971,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// configService and rbacService are filled by their Attach calls below
 	// (nil until then), standaloneQueue by the pki module's wiring above
-	// (nil until then), and smileSimReconcilerStop and
+	// (nil until then), meteringModule by its construction beside the
+	// billing/ai-gateway wiring below (nil until then), and
+	// smileSimReconcilerStop and
 	// periodicTaskSchedulerStop by their start calls below (both nil until
 	// then); redisBus and redisClient were filled above, where the
 	// audit-capture bus was constructed, when cfg.RedisAddr selects the
@@ -1988,6 +1991,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		configService             *config.Service
 		rbacService               *rbac.Service
 		standaloneQueue           *jobs.StandaloneQueue
+		meteringModule            *metering.Module
 		smileSimReconcilerStop    func()
 		periodicTaskSchedulerStop func()
 	)
@@ -2036,6 +2040,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			queueCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			keepErr(standaloneQueue.Close(queueCtx))
 			cancel()
+		}
+		if meteringModule != nil {
+			// meteringModule.Stop stops both of metering's background
+			// pipelines -- the analytics recorder's flush loop and the
+			// dispatcher's outbox poll -- and delivers whatever the
+			// recorder still had buffered into the aggregator before
+			// returning (go/metering/analytics.go's shutdown contract:
+			// "an event is dropped, or delivered; it is never silently
+			// lost"). Both loops write the shared database, so they stop
+			// before sqlDB.Close below, the same "nothing drains against a
+			// connection being torn down" ordering every other stop above
+			// follows. Safe to call before Start, or more than once.
+			meteringModule.Stop()
 		}
 		if redisBus != nil {
 			redisBus.Close()
@@ -2578,15 +2595,34 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	//
 	// The one deliberately absent wiring is a UsageReader (nil): quota-kind
 	// grants need go/billing's real-time usage counter through that reader,
-	// and this app has no metering composition behind it -- which is why
+	// and this app still wires no usage reader into billing -- which is why
 	// demo_entitlements.go's seed grants are Boolean, never Quota (see that
-	// file's own doc comment). No WithQueue either: this round wires no
-	// payment-channel gateway, so PollingService's active-polling fallback
-	// has nothing to poll -- see go/billing/AGENTS.md's own scope table for
-	// why an actual payment-gateway integration (a real Stripe/Alipay/
-	// WeChat sandbox charge) stays explicitly deferred, untouched by this
-	// round.
+	// file's own doc comment). The app does run a real go/metering module
+	// (meteringModule below), feeding admin's D9 dashboard and recording
+	// ai-gateway usage, but billing's UsageReader seam stays unwired: quota
+	// judging against live usage counts is a deliberate later step, not an
+	// accident this comment once implied metering's absence explained. No
+	// WithQueue either: this round wires no payment-channel gateway, so
+	// PollingService's active-polling fallback has nothing to poll -- see
+	// go/billing/AGENTS.md's own scope table for why an actual
+	// payment-gateway integration (a real Stripe/Alipay/WeChat sandbox
+	// charge) stays explicitly deferred, untouched by this round.
 	billingModule := billing.NewModule(db, nil)
+
+	// meteringModule is go/metering's seat in this app: admin's D9 usage
+	// dashboard reads its per-tenant summary rows (admin.WithMetering
+	// below), and the ai-gateway module's construction right below records
+	// every real consult/smilesim AI call's usage into it through the
+	// gateway's UsageRecorder seam. Constructed here, immediately after
+	// billingModule and before aiGatewayModule, because both later
+	// constructions consume it -- the identical reason billingModule is
+	// built before aiGatewayModule (Go evaluates statements in order, and
+	// the WithMetering/WithUsageRecorder options below need the built
+	// module in scope). NewModule performs no I/O (see go/metering/
+	// module.go's own doc comment), so its Register-time declarations --
+	// its two config items and its one published event -- and its
+	// migration set register and apply with every other module's below.
+	meteringModule = metering.NewModule(db)
 
 	// aiGatewayModule is the reference app's mandatory first consumer of
 	// go/ai-gateway (root CLAUDE.md's "Reference App" section): the
@@ -2654,11 +2690,46 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		},
 	)
 
+	// WithUsageRecorder is the metering half of this round's D9 wiring: it
+	// hands go/metering's analytics-grade Recorder to the SAME Gateway
+	// instance both halves above run on, so every successful Chat/ChatStream
+	// call records its token usage automatically -- docs/internal/
+	// 08-ai-gateway.md's rule that AI metering is a built-in behavior
+	// needing no manual reporting (image generation records the same way,
+	// through the job handler go/ai-gateway registers). The adapter is an
+	// aigateway.UsageRecorderFunc closure because the two modules' UsageEvent
+	// types are distinct named types (ai-gateway deliberately never imports
+	// go/metering -- see go/ai-gateway/seams.go's UsageEvent doc comment);
+	// the closure below is that file's own documented example, verbatim.
+	// meteringModule.Recorder() is the analytics-grade (fail-open) tier, the
+	// only tier this seam's Record(ctx, event) shape can carry: the
+	// billing-grade Enqueue path demands the caller's own transaction
+	// handle, which a recorder callback has no room for (go/metering/
+	// recorder.go's own Recorder doc comment). The events it buffers are
+	// folded into real metering_usage_summaries rows by the recorder's
+	// background flush loop once meteringModule.Start runs below, and
+	// admin's D9 dashboard (adminModule's WithMetering wiring, below) reads
+	// those rows back per tenant. The one feature this seam reports --
+	// "ai.chat_tokens" -- is recorded through this tier alone, never also
+	// through the billing-grade Enqueue path, per go/metering/recorder.go's
+	// one-feature-one-tier rule.
+	meteringUsageRecorder := meteringModule.Recorder()
 	aiGatewayModule := aigateway.NewModule(db,
 		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
 		aigateway.WithModelRoute(smilesim.LogicalModel, aigateway.ProviderOpenAICompatibleImage, "dall-e-3"),
 		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
 		aigateway.WithEntitlements(gatewayEntitlements),
+		aigateway.WithUsageRecorder(aigateway.UsageRecorderFunc(
+			func(ctx context.Context, event aigateway.UsageEvent) error {
+				return meteringUsageRecorder.Record(ctx, metering.UsageEvent{
+					TenantID:       event.TenantID,
+					Feature:        event.Feature,
+					Quantity:       event.Quantity,
+					IdempotencyKey: event.IdempotencyKey,
+					Metadata:       event.Metadata,
+				})
+			},
+		)),
 	)
 
 	// complianceModule is the reference app's first consumer of
@@ -2696,12 +2767,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// go/admin's round 1 AND round 2 (docs/internal/23-admin.md): D3's
 	// tenant ledger, D5's impersonation pipeline, D6's cross-tenant user
 	// search, D7's audit-query shell and export leg, D8's role management
-	// and D9's usage dashboard (D9's go/metering/go/billing wiring is
-	// deliberately not part of this, since neither module has a real
-	// reference-app consumer of its own yet -- go/admin/AGENTS.md's Known
-	// limitations records this the same way go/pki's X.509 layer and
-	// go/billing/go/metering themselves already do for their own unwired
-	// surfaces). WithAuthn takes the *authn.Module itself, not its
+	// and D9's usage dashboard. D9's go/metering/go/billing wiring is the
+	// one round-2 surface that landed without this app as its consumer --
+	// go/admin/AGENTS.md's Known limitations carried the same no-consumer
+	// record go/pki's X.509 layer and go/billing/go/metering themselves
+	// used for their own unwired surfaces -- until this round's wiring
+	// closed it: WithMetering hands it the meteringModule constructed
+	// above (whose metering_usage_summaries rows the ai-gateway
+	// UsageRecorder bridge, also above, feeds for real on every
+	// consult/smilesim AI call), and WithBilling hands it the same
+	// billingModule every other consumer in this file already uses (its
+	// credit balances seeded by seedDemoCredits and subscriptions by
+	// seedDemoEntitlements below). Both options are optional by
+	// go/admin's own contract (a host wiring neither gets
+	// ErrUsageModulesNotWired from UsageService.Summary, a host wiring
+	// one gets that dimension present and the other absent); this app
+	// wires both, so GET /api/v1/admin/usage-summary answers 200 with the
+	// real per-tenant dashboard -- see usage_summary_flow_test.go.
+	// WithAuthn takes the *authn.Module itself, not its
 	// Service() -- see go/admin/AGENTS.md's wiring-contract section for
 	// why, and admin.Module.DependsOn()'s own doc comment for the
 	// resulting "authn" dependency Kernel.Bootstrap's sort honors below.
@@ -2714,6 +2797,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		admin.WithOrg(orgModule),
 		admin.WithCompliance(complianceModule),
 		admin.WithNotification(notificationModule),
+		admin.WithMetering(meteringModule),
+		admin.WithBilling(billingModule),
 		admin.WithQueue(standaloneQueue),
 	)
 
@@ -2773,6 +2858,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	if regErr := migrationRegistry.Register(meteringModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	// complianceModule is deliberately absent from this registry too: it
 	// ships no migrations of its own (Migrations() is an empty FS) --
 	// every row it reads or writes lives in auditModule's own
@@ -2826,7 +2915,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// its permissions, its five credit-ledger audit actions and its two
 	// published events, none of which any other module's own Register
 	// depends on -- its DependsOn is nil, matching go/metering's and
-	// go/pki's own identical answer for the same reason. complianceModule
+	// go/pki's own identical answer for the same reason. meteringModule
+	// follows billingModule for the same not-load-bearing reason: its own
+	// Register only attaches the registry's already-wired bus onto its
+	// in-process Aggregator and declares its two config items and one
+	// published event, none of which any other module's Register consumes
+	// (the config items join the schema configModule.Attach freezes after
+	// Bootstrap regardless of where this Register runs). complianceModule
 	// follows for the same not-load-bearing
 	// reason (it ships no migrations and validates only its own queue seam);
 	// adminModule follows it and IS load-bearing in one respect --
@@ -2966,7 +3061,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, mailerCapabilities))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, integrationModule, demoModule, notificationModule, aiGatewayModule, billingModule, complianceModule, adminModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, integrationModule, demoModule, notificationModule, aiGatewayModule, billingModule, meteringModule, complianceModule, adminModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -3218,6 +3313,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			pkiModule.Service(),
 		)
 	}
+	// Start meteringModule's background pipelines now that Bootstrap has
+	// returned (Register attached the registry's bus onto its Aggregator,
+	// and Start itself must not run before that -- go/metering/module.go's
+	// own New/Start split). This is what makes the ai-gateway UsageRecorder
+	// wiring above real: without the recorder's flush loop running, a
+	// recorded Chat call's event would sit in the analytics buffer forever
+	// instead of folding into the metering_usage_summaries rows admin's D9
+	// dashboard reads. Unlike the job-queue block above this is not gated
+	// on cfg.DisableQueueWorker -- that flag governs the jobs.Queue worker
+	// only, and metering's own two loops are independent of it. Start is
+	// safe to call with ctx canceled or after a Stop (each loop no-ops a
+	// second Start; see analytics.go and dispatcher.go), and cleanup's
+	// meteringModule.Stop stops both loops and drains the recorder.
+	meteringModule.Start(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)

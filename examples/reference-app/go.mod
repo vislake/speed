@@ -124,6 +124,7 @@ require (
 
 require (
 	github.com/oapi-codegen/runtime v1.7.0
+	github.com/vislake/speed/go/metering v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
 )
 
@@ -204,7 +205,6 @@ require (
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/vislake/speed/go/metering v0.0.0-00010101000000-000000000000 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
