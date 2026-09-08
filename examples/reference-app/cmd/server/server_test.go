@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -1521,12 +1522,14 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 // encrypt/decrypt or Index/Equal round trip through the exact dbkit
 // primitive (and, for the two blind-index keys, the same normalizer and
 // column-name argument buildServer itself wires them with -- org's over
-// its "email_index" literal, notification's over the
-// notification.AddressIndexColumn constant this file's replicas and
-// server.go's call sites both reference, so the two cannot drift apart;
-// Equal's returned column is never executed against a database here, which
-// is exactly why notification's own suite pins the constant to the real
-// migrated column (go/notification/address_index_column_test.go)).
+// the org.EmailIndexColumn constant, notification's over the
+// notification.AddressIndexColumn constant, each referenced by this
+// file's replicas and server.go's call sites alike so neither can drift
+// apart from the wiring; Equal's returned column is never executed
+// against a database here, which is exactly why each module's own suite
+// pins its constant to the real migrated column
+// (go/org/email_index_column_test.go,
+// go/notification/address_index_column_test.go)).
 // PKILocalKeyCipherKey, AuthnBlindIndexKey and
 // AuthnPIICipherKey are proven together by a real register-then-login
 // round trip through the actual composed HTTP stack: registration
@@ -1580,9 +1583,9 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	// itself wires org.WithEmailIndexer and the notification contact
 	// indexers from -- a real Index/Equal round trip under each derived
 	// key.
-	orgIndexer, err := dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)
+	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
-		t.Fatalf("dbkit.NewBlindIndexer(org email_index): %v", err)
+		t.Fatalf("dbkit.NewBlindIndexer(org.EmailIndexColumn): %v", err)
 	}
 	assertBlindIndexRoundTrip(t, orgIndexer, "invitee@example.com")
 

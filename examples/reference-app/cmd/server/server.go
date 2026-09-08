@@ -2064,7 +2064,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// doc comment for why reusing cfg.ConfigKey for both would be exactly
 	// the AES-key-doubling-as-an-HMAC-key weakness dbkit warns against.
 	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
-	orgIndexer, err := dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)
+	// The column argument below is org's exported EmailIndexColumn rather
+	// than a hand-typed literal for the reason the notification block just
+	// below documents: dbkit.NewBlindIndexer refuses an EMPTY column name
+	// but has no guard for a non-empty wrong one. The literal happens to
+	// match the real column today, so nothing would fail until org's
+	// schema drifted or someone called Equal on the indexer -- the dormant
+	// shape this app's notification wiring originally fell into. The
+	// exported constant travels from the package that owns the schema,
+	// pinned by org's own suite (go/org/email_index_column_test.go).
+	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)

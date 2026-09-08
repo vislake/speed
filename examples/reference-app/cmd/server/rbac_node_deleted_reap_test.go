@@ -69,7 +69,7 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 		}
 	})
 
-	orgIndexer, err := dbkit.NewBlindIndexer("email_index", testOrgRBACIndexKey, dbkit.NormalizeEmail)
+	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, testOrgRBACIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		t.Fatalf("building org's email indexer: %v", err)
 	}
