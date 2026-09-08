@@ -381,13 +381,13 @@
 
 TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程碑代号、finding 代号、悬空 deferral 指针等)。2026-09-08 注释规范清理轮已整体合入 main(记录时点 tip 即其收尾提交),多数条目随之中闭或已由各轮改写达标。三档对账:
 
-- **A 已闭于 main(41 项)**:记录已准确(记录即现状),或文本已由清理轮/落地轮达标;不需动作,若再被普查点名按新发现处理。
+- **A 已闭于 main(42 项)**:记录已准确(记录即现状),或文本已由清理轮/落地轮达标;不需动作,若再被普查点名按新发现处理。
 - **L 台账缓办(11 项)**:族属协调侧台账 COMMENT-NORMS-REMAINING.md 的缓办组(该台账于 2026-09-08 收尾工作流建立,EXCLUDED/DEFERRED/FIXED 三档分类,DEFERRED 共 9 组,每组有主台账文件位:CLAUDE.md census、spec 散文、工具注释、测试 finding 代号簇、整文件清理等)。台账在协调侧、不入仓;处理时按族核销,核销后移出。
-- **R 真剩余(19 项)**:记录时点仍在 main@1c279637 的文本(直接核读条目括注"抽查已核"),即未来文本修复轮的候选清单。
+- **R 真剩余(18 项)**:记录时点仍在 main@1c279637 的文本(直接核读条目括注"抽查已核"),即未来文本修复轮的候选清单。
 
 档位判定以普查逐条记录为底;直接核读 31 条(A 11、L 8、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
-### 10.1 已闭于 main(A,41 项)
+### 10.1 已闭于 main(A,42 项)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -402,6 +402,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 20 | `go/pki/module.go` | CA/证书有效期 config 键未接入发放决策 | pki module.go 配置键注释已为 "declare-but-do-not-read discipline" 现状纪律表述;抽查已核 |
 | 22 | `go/sharing/AGENTS.md` | 35 行 if a policy-driven, host-configurable share password writer ever matters, that is this module's own future work(...) | sharing AGENTS 条件式句已按规范改写+就地指针;仅余润色空间 |
 | 23 | `go/ai-gateway/image_job_store.go` | 代码注释内 Accepted residual risk:pending 卡死需 operator 手删行、崩溃窗口 | image_job_store "Accepted residual risk" 小节=现状接受式风险陈述;如需收紧属润色 |
+| 25 | `go/tenancy/system_context.go` | Repository[T] 无跨租户逃生口(逃生口仍未实现的 deferral) | tenancy system_context.go 前瞻句("Until Repository[T] deliberately implements...")已由 72c619dc(norms pass)改写为现在时现状陈述(现文 ~:102-109 "Repository[T] implements no cross-tenant escape hatch");本档锚点处无该句,记录即现状(逃生口功能侧现状见第 7 章普查行 15) |
 | 33 | `go/billing/AGENTS.md` | Alipay/WeChat 原生周期扣款(代扣)不实现 | Alipay/WeChat 周期扣款不实现=设计性排除结论已记录 |
 | 34 | `go/rbac/module.go` | rbac 不挂 HTTP 路由;RestoreRole 无 HTTP 表面 | rbac 不挂路由=固定设计姿态;角色管理由 go/admin 控制面承接 |
 | 35 | `go/rbac/assign.go` | RestoreRole 不重新校验 AssignRole 前置条件 | RestoreRole 不重验前置条件=已文档化设计选择(需重验者走 Revoke+重新 Assign) |
@@ -439,17 +440,17 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 |---|---|---|---|
 | 8 | `go/billing/api/openapi.yaml` | description 文本含未来承诺型 deferral 语句 | spec 散文组:billing openapi 未来承诺句仍在(44-46/353 行,抽查已核);需改源文+api:gen 再生成 |
 | 10 | `web/packages/ui-kit/src/components/FileUploader.test.tsx` | 标题字符串含 (P2-7)/(P2-8)/(P1-1)x2 代号,未改未声明 | 测试 finding 代号簇:FileUploader.test.tsx 4 处 (P2-7/P2-8/P1-1) 仍在;抽查已核 |
-| 14 | `examples/reference-app/internal/notes/api/notes-server.gen.go:20` | 生成文件 doc 注释引 docs/internal/11-cross-cutting.md | spec 散文组:notes-server.gen.go:20 生成 doc 引 docs/internal/11(引用正确,是否合规属文字判断;需源文+再生成) |
+| 14 | `examples/reference-app/internal/notes/api/notes-server.gen.go:22` | 生成文件 doc 注释引 docs/internal/11-cross-cutting.md | spec 散文组:notes-server.gen.go:22 生成 doc 引 docs/internal/11(引用正确,是否合规属文字判断;需源文+再生成) |
 | 17 | `web/packages/ui-kit/src/theme/AppThemeProvider.test.tsx` | 标题字符串含 (P1-4)x2 代号(同文件注释内的 P1-4/PRE-FIX 叙述已清理),未改未声明 | 测试 finding 代号簇:AppThemeProvider.test.tsx (P1-4) 2 处仍在;抽查已核 |
 | 26 | `web/packages/product-shell/AGENTS.md` | 整文件未清理:Deferrals (recorded, do not re-open silently) 节保留 reviewer P1-1/P2-2/P2-3、a11y finding、own round/later round/M4 等违禁形态 | 整文件清理组:product-shell AGENTS 仍含 P1-1/P2-2/P2-3 编号引用 4 处;抽查已核 |
 | 32 | `examples/reference-app/internal/smilesim/api/smilesim-server.gen.go:118` | 生成 doc 注释引 docs/internal/11-cross-cutting.md(smilesim openapi.yaml description 源头) | spec 散文组:smilesim gen:118 引 "backend coding standard §6.2; docs/internal/11";需源文+再生成 |
 | 43 | `web/packages/ui-kit/src/components/ConfirmDialog.test.tsx` | it()/describe() 标题与注释仍含 (P1)/(P2-9) 流程代号 | 测试 finding 代号簇:ConfirmDialog.test.tsx (P1)/(P2-9) 2 处仍在;抽查已核 |
 | 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 47 | `CLAUDE.md` | 行 8/12 内 8 处 "the roadmap's M1/M2 … cell" 里程碑坐标标签未清理 | CLAUDE.md census 组:roadmap M1/M2 cell 坐标标签仍散布(抽查 2 处命中);随 census 措辞轮 |
-| 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)/(D5)/(P2-2)/(P2-3) 5 处仍在;抽查已核 |
+| 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)x1/(D5)x1/(P2-2)x3/(P2-3)x1 共 6 处仍在(P2-6@184、D5@223、P2-2@279/335/373、P2-3@946);抽查已核 |
 | 71 | `CLAUDE.md` | 流程自指词 census 共 4 处(行 8×2"The census closes with…"/"this census's go/dbkit entry"、行 12"the auth-ui census entry below"、行 14"the auth-ui census defers to this shell"),均位于其改动行内,未清理亦未 deferral;低信号,可改可留但应显式说明 | CLAUDE.md census 自指措辞(抽查 3 处命中);低信号,随 census 措辞轮 |
 
-### 10.3 真剩余(R,19 项;未来文本修复候选)
+### 10.3 真剩余(R,18 项;未来文本修复候选)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -462,7 +463,6 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 18 | `examples/reference-app/web/src/test-utils/real-client.ts` | 行 22 'extracting a shared rig package is recorded DEFERRED' — deferral 语句,文件未被代理改动/报备 | real-client.ts:22 "recorded DEFERRED" 悬空指针仍在;抽查已核 |
 | 21 | `docs/internal/01-architecture.md` | admin 对 billing/metering/cfg 的用量看板依赖尚未建设 | docs/01 长注仍称 admin 对 billing/metering/cfg 依赖"尚未建设",而 usage.go 已 import 二者;抽查已核 |
 | 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | storage openapi 22 行 "stays future work until the merge tooling lands" 过期句仍在(merge 工具已落地);抽查已核 |
-| 25 | `go/tenancy/system_context.go` | Repository[T] 无跨租户逃生口(逃生口仍未实现的 deferral) | tenancy system_context.go 前瞻句("Until Repository[T] deliberately implements...")核对;低信号 |
 | 27 | `go/admin/export_test.go` | 测试失败消息字符串保留过程措辞("on the unfixed code…" 等) | 测试失败消息字符串判为边界合法;残余=把字符串/注释边界判断写进规范文档(13 章) |
 | 28 | `web/packages/i18n/src/create.test.ts` | it() 标题含 "(M1 extension point)" 里程碑代号,未改未声明 | create.test.ts(非 .tsx)96 行 "(M1 extension point)" 标题仍在;抽查已核 |
 | 29 | `examples/reference-app/web/src/test-utils/matchMedia.ts` | 行 18 'recorded DEFERRED, as in real-client.ts' — 同族 deferral 语句 | matchMedia.ts:18 "recorded DEFERRED, as in real-client.ts" 仍在;抽查已核(需与 18 两处同步) |
