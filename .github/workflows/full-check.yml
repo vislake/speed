@@ -3,7 +3,7 @@ name: full-check
 # under the race detector, plus the Docker-backed integration tiers and
 # the reference-app suite. This is the layered-triggering layer 2:
 # integration runs live here, NOT in the fast per-PR check (fast-check).
-# Target duration under 25 minutes; every job carries a timeout and
+# Target duration under 30 minutes; every job carries a timeout and
 # stale runs are cancelled via concurrency.
 #
 # TRIGGERS: a PR labeled `full-ci`, every direct push to main, and
@@ -19,7 +19,7 @@ name: full-check
 # backed integration tiers would only ever run when a human remembers
 # to workflow_dispatch them by hand. This mirrors fast-check's own
 # push-to-main trigger one layer up, at real cost: every push now pays
-# this pipeline's ~25-minute Docker-backed budget.
+# this pipeline's ~30-minute Docker-backed budget.
 #
 # COVERAGE -- what runs:
 #   * go-modules job: the same module matrix as fast-check through the
@@ -148,7 +148,7 @@ on:
   # workflow_dispatch, i.e. a human remembering to run it by hand. This
   # mirrors fast-check's own push-to-main trigger and closes the same gap
   # one layer up, at real cost -- every push now pays this pipeline's
-  # ~25-minute Docker-backed budget, not just fast-check's few minutes.
+  # ~30-minute Docker-backed budget, not just fast-check's few minutes.
   push:
     branches: [main]
 
@@ -205,7 +205,7 @@ jobs:
     # Per-leg cap. Rows run in parallel with each other and with the unit
     # matrix and the reference-app job, so wall-clock stays the slowest leg
     # -- a cold testcontainers image pull plus a -race suite fits this cap
-    # with room to spare under the 25-minute pipeline budget.
+    # with room to spare under the 30-minute pipeline budget.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -242,11 +242,23 @@ jobs:
     name: reference-app lint + unit + integration (-race)
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
-    # Raised from 10 when the Docker-backed integration tier landed below: a
-    # cold testcontainers image pull plus the -race suites, the same budget
-    # as the integration-tiers rows (this job runs in parallel with them,
-    # so the wall clock stays inside the 25-minute pipeline target).
-    timeout-minutes: 20
+    # Raised from 20 when the -race suites outgrew it. Measured on the
+    # last fully passing run: lint ~1.2m, unit ~7.5m and the Docker-backed
+    # integration tier ~7.2m in CI. The unit suite has since grown to
+    # ~400s locally and clears 10m on the slow shared runner -- the
+    # d31a3b95 run was killed by `go test`'s default 10m per-package
+    # timeout, a legitimately slow package, not a hang -- which is why
+    # both test legs below pass an explicit -timeout: 15m for the unit
+    # suite (~2.25x the ~400s local run, above its 1.5-2x slower CI
+    # projection) and 20m for the integration tier (~2.8x its measured
+    # 7.2m, cold testcontainers pulls included). Those budgets bound a
+    # single package's test binary, never the whole leg -- packages run
+    # in parallel, so a leg's wall time is its slowest package -- and the
+    # job cap stays the outer bound. The legs sum to ~21-24m normally
+    # and ~25m on a slow runner, which no longer fits a 20m cap; this
+    # job is the pipeline's measured tail, so the raised cap keeps the
+    # run under the 30-minute pipeline target above.
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -263,11 +275,16 @@ jobs:
         run: golangci-lint run ./...
       - name: Unit tests under the race detector
         working-directory: examples/reference-app
-        run: go test -race ./...
+        # Explicit per-package -timeout; budget rationale in the
+        # timeout-minutes comment above (go test's default 10m killed the
+        # d31a3b95 run on a legitimately slow package).
+        run: go test -race -timeout 15m ./...
       # The app's own Docker-backed tier, mirroring Taskfile test:full's
       # APP_DIR integration leg. golangci-lint is not needed here, but
       # setup-go-env already installed it above for the lint step; the cost
       # is the one install this job pays for anyway.
       - name: Integration tier under the race detector (testcontainers)
         working-directory: examples/reference-app
-        run: go test -race -tags=integration ./...
+        # Explicit per-package -timeout; budget rationale in the
+        # timeout-minutes comment above.
+        run: go test -race -tags=integration -timeout 20m ./...
