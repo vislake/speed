@@ -56,6 +56,27 @@ func (e BillingCreditTransactionType) Valid() bool {
 	}
 }
 
+// Defines values for BillingInvoiceStatus.
+const (
+	Open BillingInvoiceStatus = "open"
+	Paid BillingInvoiceStatus = "paid"
+	Void BillingInvoiceStatus = "void"
+)
+
+// Valid indicates whether the value is a known member of the BillingInvoiceStatus enum.
+func (e BillingInvoiceStatus) Valid() bool {
+	switch e {
+	case Open:
+		return true
+	case Paid:
+		return true
+	case Void:
+		return true
+	default:
+		return false
+	}
+}
+
 // BillingCreditBalance The caller's tenant credit balance. The two buckets never overlap: a credit is in exactly one of available or reserved. The number a credit view renders is available -- what the tenant can spend right now.
 type BillingCreditBalance struct {
 	// Available The freely spendable credit count.
@@ -102,14 +123,59 @@ type BillingError struct {
 	Params *map[string]interface{} `json:"params,omitempty"`
 }
 
+// BillingInvoice One billing document of the caller's tenant, exactly as the module's channel-agnostic Invoice model (go/billing/invoice.go) carries it -- and therefore the detail shape of billing_getInvoice and the row shape of billing_listInvoices at once, since the model has no extra detail fields a separate get-shape would add: no line items, no payment-channel reference of any kind (an invoice records a Subscription's billing cycle and its amount; which channel, if any, collected it is a later round's gateway settlement, never a field this round invents). Money is flattened the same way the model stores it: amountCents plus its ISO 4217 currency, never a floating-point amount.
+type BillingInvoice struct {
+	// AmountCents The invoice amount in the currency's minor unit (cents for a two-decimal currency like USD or CNY).
+	AmountCents int64 `json:"amountCents"`
+
+	// CreatedAt When the invoice was issued.
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Currency The amount's ISO 4217 currency code (e.g. "USD", "CNY").
+	Currency string `json:"currency"`
+
+	// ID The invoice's application-generated UUID.
+	ID string `json:"id"`
+
+	// PeriodEnd When the billed billing cycle ends.
+	PeriodEnd time.Time `json:"periodEnd"`
+
+	// PeriodStart When the billed billing cycle starts.
+	PeriodStart time.Time `json:"periodStart"`
+
+	// Status The invoice's lifecycle state: "open" is awaiting payment, "paid" settled in full, "void" canceled before payment (e.g. a subscription canceled before its invoice was paid). Paid and void are terminal -- the invoice is the record of the settlement or the cancellation, and neither is ever rewritten.
+	Status BillingInvoiceStatus `json:"status"`
+
+	// SubscriptionID The id of the Subscription this invoice bills -- an ID reference only, never an embedded subscription (no cross-module foreign keys; this is an in-module reference under the same discipline).
+	SubscriptionID string `json:"subscriptionId"`
+
+	// UpdatedAt When the invoice row was last touched -- a status transition (open to paid or void) updates it, an unmodified invoice carries its issue time.
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// BillingInvoiceStatus The invoice's lifecycle state: "open" is awaiting payment, "paid" settled in full, "void" canceled before payment (e.g. a subscription canceled before its invoice was paid). Paid and void are terminal -- the invoice is the record of the settlement or the cancellation, and neither is ever rewritten.
+type BillingInvoiceStatus string
+
 // BillingListCreditTransactionsResponse One page of the tenant's recent credit transactions.
 type BillingListCreditTransactionsResponse struct {
 	// Transactions At most limit rows, newest first; empty when the tenant has no ledger rows yet.
 	Transactions []BillingCreditTransaction `json:"transactions"`
 }
 
+// BillingListInvoicesResponse One page of the tenant's invoices, newest first.
+type BillingListInvoicesResponse struct {
+	// Invoices At most limit rows, newest first; empty when the tenant has no invoices yet.
+	Invoices []BillingInvoice `json:"invoices"`
+}
+
 // BillingListCreditTransactionsParams defines parameters for BillingListCreditTransactions.
 type BillingListCreditTransactionsParams struct {
+	// Limit The page size, from 1 through 100. Defaults to 50.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// BillingListInvoicesParams defines parameters for BillingListInvoices.
+type BillingListInvoicesParams struct {
 	// Limit The page size, from 1 through 100. Defaults to 50.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -122,6 +188,12 @@ type ServerInterface interface {
 	// BillingListCreditTransactions List the caller's tenant's recent credit transactions, newest first.
 	// (GET /api/v1/billing/credits/transactions)
 	BillingListCreditTransactions(w http.ResponseWriter, r *http.Request, params BillingListCreditTransactionsParams)
+	// BillingListInvoices List the caller's tenant's invoices, newest first.
+	// (GET /api/v1/billing/invoices)
+	BillingListInvoices(w http.ResponseWriter, r *http.Request, params BillingListInvoicesParams)
+	// BillingGetInvoice Get one of the caller's tenant's invoices.
+	// (GET /api/v1/billing/invoices/{id})
+	BillingGetInvoice(w http.ResponseWriter, r *http.Request, id string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -171,6 +243,65 @@ func (siw *ServerInterfaceWrapper) BillingListCreditTransactions(w http.Response
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.BillingListCreditTransactions(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BillingListInvoices operation middleware
+func (siw *ServerInterfaceWrapper) BillingListInvoices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params BillingListInvoicesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BillingListInvoices(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BillingGetInvoice operation middleware
+func (siw *ServerInterfaceWrapper) BillingGetInvoice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BillingGetInvoice(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -302,6 +433,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/billing/credits/balance", wrapper.BillingGetCreditBalance)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/billing/credits/transactions", wrapper.BillingListCreditTransactions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/billing/invoices", wrapper.BillingListInvoices)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/billing/invoices/{id}", wrapper.BillingGetInvoice)
 
 	return m
 }

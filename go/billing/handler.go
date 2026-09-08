@@ -12,16 +12,19 @@ import (
 	"github.com/vislake/speed/go/billing/api"
 )
 
-// The bound and default of the transactions route's limit parameter.
-// They must agree with api/openapi.yaml's own description of the same
-// parameter (1-100, default 50) -- this module keeps no second copy of
-// that contract, and a spec edit that widens the bound without touching
-// these constants makes the handler refuse a value the spec advertises,
-// which is exactly the drift direction a compile cannot catch.
+// The bound and default shared by the fragment's two list routes
+// (credit transactions and invoices -- each route's handler narrows
+// its full listing to this window). They must agree with
+// api/openapi.yaml's own description of the same parameter (1-100,
+// default 50, spelled identically on both operations) -- this module
+// keeps no second copy of that contract, and a spec edit that widens
+// the bound without touching these constants makes the handler refuse
+// a value the spec advertises, which is exactly the drift direction a
+// compile cannot catch.
 const (
-	defaultCreditListPageSize = 50
-	minCreditListLimit        = 1
-	maxCreditListLimit        = 100
+	defaultListPageSize = 50
+	minListLimit        = 1
+	maxListLimit        = 100
 )
 
 // jsonContentType is the media type every response this file writes
@@ -29,34 +32,39 @@ const (
 const jsonContentType = "application/json; charset=utf-8"
 
 // Handler implements api.ServerInterface -- the app-side implementation of
-// the spec fragment's two read operations, GET /api/v1/billing/credits/
-// balance and GET /api/v1/billing/credits/transactions. It is the
-// module's whole HTTP surface this round, and it is read-only by design
-// (see api/openapi.yaml's own header for the decision and its
-// consequence): every operation below answers from the module's own
-// services and repositories -- never a credit mutation of any kind -- and
+// the spec fragment's four read operations: GET /api/v1/billing/credits/
+// balance and GET /api/v1/billing/credits/transactions over CreditService,
+// and GET /api/v1/billing/invoices and GET /api/v1/billing/invoices/{id}
+// over InvoiceRepository (the invoice list/detail pair added by the round
+// that shipped them for a tenant-facing invoice page). It is the module's
+// whole HTTP surface, and it is read-only by design (see
+// api/openapi.yaml's own header for the decision and its consequence):
+// every operation below answers from the module's own services and
+// repositories -- never a credit or invoice mutation of any kind -- and
 // the tenant is always the one tenancy.Middleware resolved into the
 // request context, never anything the caller supplies.
 //
 // Handler is deliberately thin in the same way every other module
 // handler in this codebase is thin: it extracts the request's inputs,
-// delegates the reads to CreditService in full, and maps the results --
-// with the coded error envelope of errors.go's own index, never localized
-// text and never a raw Go error -- because the tenant scoping that
-// actually matters lives one layer down, in the tenant-filtered reads
-// CreditService performs from ctx. A host that mounts this handler behind
-// its own authorization layer (as the reference app does, gating the
-// route on the module's declared billing:credit:read permission) gets
-// exactly the surface the fragment promises; see module.go's Register for
-// the mount.
+// delegates the reads to CreditService and InvoiceRepository in full,
+// and maps the results -- with the coded error envelope of errors.go's
+// own index, never localized text and never a raw Go error -- because
+// the tenant scoping that actually matters lives one layer down, in the
+// tenant-filtered reads both perform from ctx. A host that mounts this
+// handler behind its own authorization layer (as the reference app
+// does, gating the route on the module's declared billing:credit:read
+// permission) gets exactly the surface the fragment promises; see
+// module.go's Register for the mount.
 type Handler struct {
-	credits *CreditService
-	mux     *http.ServeMux
+	credits  *CreditService
+	invoices *InvoiceRepository
+	mux      *http.ServeMux
 }
 
 // NewHandler returns a Handler serving the fragment's read operations
-// through credits -- the *CreditService Module.Register mounts it behind,
-// in the same call that attaches it at apiPath.
+// through credits and invoices -- the *CreditService and
+// *InvoiceRepository Module.Register mounts it behind, in the same call
+// that attaches it at apiPath.
 //
 // Unlike a bare api.HandlerFromMux, this constructor wires the mux
 // through api.HandlerWithOptions with a custom ErrorHandlerFunc
@@ -67,8 +75,8 @@ type Handler struct {
 // description) promises a caller a mapped billing code instead, the same
 // "never a raw error" promise go/sharing's handler.go makes for its own
 // binder failures via the identical mechanism.
-func NewHandler(credits *CreditService) *Handler {
-	h := &Handler{credits: credits}
+func NewHandler(credits *CreditService, invoices *InvoiceRepository) *Handler {
+	h := &Handler{credits: credits, invoices: invoices}
 	h.mux = http.NewServeMux()
 	api.HandlerWithOptions(h, api.StdHTTPServerOptions{
 		BaseRouter:       h.mux,
@@ -170,14 +178,14 @@ func (h *Handler) BillingListCreditTransactions(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	limit := defaultCreditListPageSize
+	limit := defaultListPageSize
 	if params.Limit != nil {
 		limit = *params.Limit
-		if limit < minCreditListLimit || limit > maxCreditListLimit {
+		if limit < minListLimit || limit > maxListLimit {
 			writeError(w, ErrInvalidLimit.
 				WithParam("limit", limit).
-				WithParam("min", minCreditListLimit).
-				WithParam("max", maxCreditListLimit))
+				WithParam("min", minListLimit).
+				WithParam("max", maxListLimit))
 			return
 		}
 	}
@@ -216,6 +224,105 @@ func toTransactionResponse(tx *CreditTransaction) api.BillingCreditTransaction {
 		Amount:    tx.Amount,
 		Reason:    tx.Reason,
 		CreatedAt: tx.CreatedAt,
+	}
+}
+
+// BillingListInvoices implements api.ServerInterface: GET
+// /api/v1/billing/invoices. Answers the caller's tenant's billing
+// documents, newest first -- the rows InvoiceRepository.ListByTenant
+// returns (created_at DESC, the issue order that is total where cycle
+// dates are not), narrowed to at most limit (1-100, default 50). The
+// status vocabulary on the wire is the lifecycle's own: open awaiting
+// payment, paid settled in full, void canceled before payment.
+//
+// The narrowing happens after the repository's full listing rather than
+// as a SQL LIMIT, the identical trade-off the transactions route
+// documents for its own recent window (see
+// BillingListCreditTransactions): it is a memory trade-off, never a
+// correctness one, and it is recorded as such in AGENTS.md's Known
+// limitations alongside the credits one -- with the keyset-paginated
+// service read a real history-sized invoice set would need left as the
+// same named follow-up.
+func (h *Handler) BillingListInvoices(w http.ResponseWriter, r *http.Request, params api.BillingListInvoicesParams) {
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+
+	limit := defaultListPageSize
+	if params.Limit != nil {
+		limit = *params.Limit
+		if limit < minListLimit || limit > maxListLimit {
+			writeError(w, ErrInvalidLimit.
+				WithParam("limit", limit).
+				WithParam("min", minListLimit).
+				WithParam("max", maxListLimit))
+			return
+		}
+	}
+
+	rows, err := h.invoices.ListByTenant(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+
+	// An explicit make, so a never-invoiced tenant marshals as [] --
+	// never null -- and the response always carries the invoices array
+	// the schema promises.
+	items := make([]api.BillingInvoice, 0, len(rows))
+	for i := range rows {
+		items = append(items, toInvoiceResponse(&rows[i]))
+	}
+	writeJSON(w, http.StatusOK, api.BillingListInvoicesResponse{Invoices: items})
+}
+
+// BillingGetInvoice implements api.ServerInterface: GET
+// /api/v1/billing/invoices/{id}. Answers one of the caller's tenant's
+// billing documents in full -- the row InvoiceRepository.FindByID
+// returns under the isolation plugin's own tenant filter, so id must
+// name an invoice of the caller's own tenant. An id that names no such
+// invoice -- never created, or another tenant's -- answers the
+// identical billing.invoice_not_found 404, so the route discloses
+// nothing about whether the id exists at all (the same answer shape
+// go/sharing's own get route documents for its owner metadata).
+func (h *Handler) BillingGetInvoice(w http.ResponseWriter, r *http.Request, id string) {
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+
+	inv, err := h.invoices.FindByID(r.Context(), id)
+	if err != nil {
+		if isDBKitNotFound(err) {
+			writeError(w, ErrInvoiceNotFound.WithParam("id", id))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toInvoiceResponse(inv))
+}
+
+// toInvoiceResponse maps one Invoice row to its wire shape. Amount,
+// period, issue and touch times travel verbatim; Status is a cast of
+// the module's own closed vocabulary onto the spec's enum of the same
+// values (a row can only ever carry open/paid/void -- the lifecycle's
+// legal-transition table guarantees it), and Currency the code the
+// model stored. The response deliberately carries no tenant_id, the
+// same rule every other operation on this surface follows.
+func toInvoiceResponse(inv *Invoice) api.BillingInvoice {
+	return api.BillingInvoice{
+		ID:             inv.ID,
+		SubscriptionID: inv.SubscriptionID,
+		Status:         api.BillingInvoiceStatus(inv.Status),
+		AmountCents:    inv.AmountCents,
+		Currency:       inv.Currency,
+		PeriodStart:    inv.PeriodStart,
+		PeriodEnd:      inv.PeriodEnd,
+		CreatedAt:      inv.CreatedAt,
+		UpdatedAt:      inv.UpdatedAt,
 	}
 }
 

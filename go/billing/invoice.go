@@ -50,9 +50,10 @@ var invoiceTransitions = map[InvoiceStatus]map[InvoiceStatus]bool{
 // about which payment channel, if any, collected it -- no gateway
 // reference, no external transaction id. A later round's billing/gateway
 // package settles an Invoice from a real payment event; this round's
-// InvoiceRepository is a plain Create/FindByID/Update accessor, with the
-// status transition (Open -> Paid or Open -> Void) left to the caller,
-// exactly like Subscription's own round-1 simplification.
+// InvoiceRepository is a plain Create/FindByID/Update accessor plus the
+// newest-first ListByTenant read the module's HTTP surface serves, with
+// the status transition (Open -> Paid or Open -> Void) left to the
+// caller, exactly like Subscription's own round-1 simplification.
 type Invoice struct {
 	dbkit.TenantModel
 
@@ -116,6 +117,26 @@ type InvoiceRepository struct {
 // to come from dbkit.Open with this module's migrations applied.
 func NewInvoiceRepository(db *gorm.DB) *InvoiceRepository {
 	return &InvoiceRepository{Repository: dbkit.NewRepository[Invoice](db), db: db}
+}
+
+// ListByTenant returns every invoice for the tenant in ctx, newest
+// first -- the read surface the module's HTTP layer (handler.go's
+// BillingListInvoices) serves its recent window from, and the read
+// side a billing-history page would call directly in-process. The
+// ordering key is creation order (created_at DESC), never the billed
+// period: a voided document and its replacement need not share cycle
+// dates, while issue order is total. Like Get, the tenant filter is
+// the isolation plugin's own automatic injection from ctx, never
+// hand-written here.
+func (r *InvoiceRepository) ListByTenant(ctx context.Context) ([]Invoice, error) {
+	var out []Invoice
+	err := dbkit.WithTenantSession(ctx, r.db, func(session *gorm.DB) error {
+		return session.Order("created_at DESC").Find(&out).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("billing: list invoices: %w", err)
+	}
+	return out, nil
 }
 
 // CreateInvoiceInput names a new Invoice's starting shape. It is always

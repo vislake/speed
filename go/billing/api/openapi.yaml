@@ -2,16 +2,20 @@ openapi: 3.0.3
 info:
   title: billing
   description: >-
-    The credits ledger's read surface: a tenant's own credit balance and
-    the recent rows of its append-only credit-transaction ledger, so a
+    The read surface a tenant-facing billing page needs from both of
+    this module's billing modes: the invoice list and one-invoice
+    detail (billing_listInvoices / billing_getInvoice -- the billing
+    documents this module's plain-Go lifecycle wrote, newest first,
+    open/paid/void) and the credits ledger's balance and recent rows
+    (billing_getCreditBalance / billing_listCreditTransactions), so a
     credit view can render the number and a refund is observable as a
     ledger row carrying its reserve/confirm/refund classification --
-    never a silent balance change. This fragment follows the operationId
-    (billing_<verb><Resource>) and schema-name (Billing<Type>)
-    conventions from .claude/skills/backend-coding-standards/SKILL.md
-    §6.1. task api:gen regenerates billing-server.gen.go (in this
-    directory) from this file, with oapi-codegen pinned at v2.8.0 -- see
-    oapi-codegen.yaml.
+    never a silent balance change. This fragment follows the
+    operationId (billing_<verb><Resource>) and schema-name
+    (Billing<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates billing-server.gen.go (in this directory) from this
+    file, with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
@@ -30,21 +34,28 @@ info:
     this fragment ships: the balance number, and the ledger rows whose
     type/status vocabulary classifies every movement (a deduct row at
     pending IS the reservation, at confirmed the permanent spend, at
-    refunded the refund; grant and expire rows are single-phase). A later
-    round that builds a caller-driven write journey (an operator grant or
-    refund, gated on the module's declared billing:credit:manage
-    permission) will add that POST surface here; until such a journey
-    exists this fragment stays read-only rather than shipping an endpoint
-    nothing calls.
+    refunded the refund; grant and expire rows are single-phase). The
+    invoice half is read-only for the same reason, in the same shape:
+    Invoice rows are written only by the module's plain-Go lifecycle --
+    invoice.go's CreateInvoice/MarkPaid/Void, which as of this round
+    still has no caller at all, recorded in go/billing/AGENTS.md -- never
+    over HTTP, so there is no invoice write journey whose endpoint this
+    surface must carry, and what a tenant-facing invoice page genuinely
+    needs is the read side this round adds. A later round that builds a
+    caller-driven write journey (an operator grant or refund, gated on
+    the module's declared billing:credit:manage permission) will add
+    that POST surface here; until such a journey exists this fragment
+    stays read-only rather than shipping an endpoint nothing calls.
 
     This fragment is part of the application-wide build/openapi/speed.yaml
     merged document: the round that built the credit view joined it there
     (the tags this fragment's operations carry are the membership shape
     every merged fragment uses, the same treatment notification's
     recipient-facing fragment received when its surface shipped), so task
-    api:gen's frontend SDK leg generates these two operations into
-    @speed/api-sdk for the credit view that calls them -- the reverse of
-    the backend-leg-only deferral go/storage's and go/sharing's own
+    api:gen's frontend SDK leg generates this surface's operations into
+    @speed/api-sdk for the credit view that calls them and the invoice
+    page a later billing-ui round builds -- the reverse of the
+    backend-leg-only deferral go/storage's and go/sharing's own
     fragments still carry.
   version: 0.0.0
 paths:
@@ -118,6 +129,106 @@ paths:
           description: >-
             limit is outside the 1-100 bound (billing.invalid_limit), or
             is not an integer at all (billing.invalid_request).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+        '500':
+          description: An unexpected server failure (billing.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+  /api/v1/billing/invoices:
+    get:
+      tags: [billing]
+      operationId: billing_listInvoices
+      summary: List the caller's tenant's invoices, newest first.
+      description: >-
+        The tenant's billing documents, newest first -- every Invoice
+        row the module's plain-Go lifecycle wrote for the tenant
+        (invoice.go's CreateInvoice/MarkPaid/Void; nothing writes
+        invoices over HTTP, so this read and the lifecycle can never
+        disagree about what exists). At most limit rows (1-100, default
+        50). Newest first is creation order, the same ordering key the
+        credit-transactions listing uses -- never the period an invoice
+        bills, since a voided document and its replacement need not
+        share cycle dates. Status is the lifecycle's own closed
+        vocabulary: "open" awaiting payment, "paid" settled in full,
+        "void" canceled before payment. A tenant that has never been
+        issued an invoice answers an empty array, never an error, so
+        the invoice page renders an empty state rather than a
+        missing-resource refusal. The window is served from the
+        module's full newest-first listing; a keyset-paginated read
+        over a whole history is future work (see go/billing/AGENTS.md's
+        Known limitations) -- an invoice page needs the recent
+        documents, and the full history stays reconstructable
+        service-side today.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: The page size, from 1 through 100. Defaults to 50.
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: The matching invoices, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingListInvoicesResponse'
+        '400':
+          description: >-
+            limit is outside the 1-100 bound (billing.invalid_limit), or
+            is not an integer at all (billing.invalid_request).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+        '500':
+          description: An unexpected server failure (billing.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+  /api/v1/billing/invoices/{id}:
+    get:
+      tags: [billing]
+      operationId: billing_getInvoice
+      summary: Get one of the caller's tenant's invoices.
+      description: >-
+        The full shape of one billing document: the row the module's
+        plain-Go lifecycle wrote, exactly as the model carries it (see
+        BillingInvoice's own description and billing_listInvoices' for
+        the status vocabulary). The read is tenant-scoped like every
+        other operation on this surface: id must name an invoice of the
+        caller's own tenant.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: >-
+            An application-generated UUID naming an invoice of the
+            caller's tenant (Invoice.ID).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The invoice's full shape.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingInvoice'
+        '404':
+          description: >-
+            id names no invoice of the caller's tenant -- never created,
+            or another tenant's. code is always billing.invoice_not_found
+            for both reasons, so the answer discloses nothing about
+            whether the id exists at all: a caller can only ever learn
+            about its own tenant's invoices, and an id that is not one
+            of them is indistinguishable from one that never existed.
           content:
             application/json:
               schema:
@@ -228,6 +339,93 @@ components:
           description: At most limit rows, newest first; empty when the tenant has no ledger rows yet.
       required:
         - transactions
+    BillingInvoice:
+      type: object
+      description: >-
+        One billing document of the caller's tenant, exactly as the
+        module's channel-agnostic Invoice model (go/billing/invoice.go)
+        carries it -- and therefore the detail shape of
+        billing_getInvoice and the row shape of billing_listInvoices at
+        once, since the model has no extra detail fields a separate
+        get-shape would add: no line items, no payment-channel
+        reference of any kind (an invoice records a Subscription's
+        billing cycle and its amount; which channel, if any, collected
+        it is a later round's gateway settlement, never a field this
+        round invents). Money is flattened the same way the model
+        stores it: amountCents plus its ISO 4217 currency, never a
+        floating-point amount.
+      properties:
+        id:
+          type: string
+          description: The invoice's application-generated UUID.
+        subscriptionId:
+          type: string
+          description: >-
+            The id of the Subscription this invoice bills -- an ID
+            reference only, never an embedded subscription (no
+            cross-module foreign keys; this is an in-module reference
+            under the same discipline).
+        status:
+          type: string
+          enum: [open, paid, void]
+          description: >-
+            The invoice's lifecycle state: "open" is awaiting payment,
+            "paid" settled in full, "void" canceled before payment
+            (e.g. a subscription canceled before its invoice was paid).
+            Paid and void are terminal -- the invoice is the record of
+            the settlement or the cancellation, and neither is ever
+            rewritten.
+        amountCents:
+          type: integer
+          format: int64
+          description: >-
+            The invoice amount in the currency's minor unit (cents for
+            a two-decimal currency like USD or CNY).
+        currency:
+          type: string
+          description: The amount's ISO 4217 currency code (e.g. "USD", "CNY").
+        periodStart:
+          type: string
+          format: date-time
+          description: When the billed billing cycle starts.
+        periodEnd:
+          type: string
+          format: date-time
+          description: When the billed billing cycle ends.
+        createdAt:
+          type: string
+          format: date-time
+          description: When the invoice was issued.
+        updatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the invoice row was last touched -- a status
+            transition (open to paid or void) updates it, an
+            unmodified invoice carries its issue time.
+      required:
+        - id
+        - subscriptionId
+        - status
+        - amountCents
+        - currency
+        - periodStart
+        - periodEnd
+        - createdAt
+        - updatedAt
+    BillingListInvoicesResponse:
+      type: object
+      description: One page of the tenant's invoices, newest first.
+      properties:
+        invoices:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingInvoice'
+          description: >-
+            At most limit rows, newest first; empty when the tenant has
+            no invoices yet.
+      required:
+        - invoices
     BillingError:
       type: object
       description: >-
