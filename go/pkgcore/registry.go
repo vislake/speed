@@ -472,7 +472,26 @@ type RetentionParticipant struct {
 	// one callback registration leaves optional -- nil when the
 	// participant has not opted into export, a legal, common value, not a
 	// misconfiguration. Its absence costs a missing export, never a false
-	// success. The returned error's text follows the type's doc comment's
+	// success.
+	//
+	// What the returned data may carry is a contract of the same kind as
+	// its error text's, on the same channel: the manifest stores the data
+	// and hands it to the exporting tenant's recipient over an
+	// unauthenticated, single-view go/sharing link -- the type doc's link
+	// "whose holder is entitled to read the export's data" -- and the
+	// share rules admit such links leaking, which is exactly why password
+	// protection exists for a share. Every field of every row this
+	// callback returns is readable by whoever holds the link, with nothing
+	// further to authenticate, so the author must make a field-level
+	// judgment, in place, about what the export may carry: a capture-time
+	// guard such as an audit-trail redaction tag confines data inside its
+	// own capture mechanism and never follows the data out of the module.
+	// Shipping the tenant's own content in full can be exactly right for a
+	// portability export -- the obligation this paragraph states is that
+	// the judgment is the author's, recorded where the export is written,
+	// never the mechanism's to assume or a later reader's to guess.
+	//
+	// The returned error's text follows the type's doc comment's
 	// error-text contract, and the export path is its sharpest case: the
 	// manifest's Errors entry classifies the failure and is itself
 	// delivered to the exporting tenant over an unauthenticated share
