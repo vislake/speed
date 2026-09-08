@@ -552,6 +552,89 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 			secret:   "", // the word "basic" in prose is not a credential; the run after it is 15 chars, below secret strength
 			wantKeep: []string{"basic authentication is enabled on this endpoint"},
 		},
+		{
+			// The three compact spellings the pattern's alternation admits
+			// (api[_-]?key, client[_-]?secret, session[_-]?key) heading a
+			// bare query string. These rows exercise the leading-anchor
+			// branch of the gate, whose querySecretParamNames mirror must
+			// name each of them; a compact spelling forgotten there fails
+			// its own row here (both clientsecret and sessionkey once were,
+			// while the alternation kept matching them).
+			name:     "apikey heading a bare query string",
+			value:    "apikey=abCdefgh1234567890&scope=read",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"&scope=read"},
+			wantMask: []string{"apikey=" + obs.RedactedValue},
+		},
+		{
+			name:     "clientsecret heading a bare query string",
+			value:    "clientsecret=abCdefgh1234567890&grant_type=refresh_token",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"&grant_type=refresh_token"},
+			wantMask: []string{"clientsecret=" + obs.RedactedValue},
+		},
+		{
+			name:     "sessionkey heading a bare query string",
+			value:    "sessionkey=abCdefgh1234567890&scope=read",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"&scope=read"},
+			wantMask: []string{"sessionkey=" + obs.RedactedValue},
+		},
+		{
+			// The same three names mid-string, behind a benign first
+			// parameter: the gate reaches a non-leading parameter only
+			// through its any-anchor name probe, so these rows pin the
+			// gate/regexp equivalence for the non-leading anchor -- the
+			// shape this round's regression is about (bare form bodies
+			// carry neither '?' nor '://', and a secret parameter that is
+			// not first used to leave the gate false and skip the
+			// pattern entirely).
+			name:     "apikey mid-string in a bare form body",
+			value:    "scope=read&apikey=abCdefgh1234567890",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"scope=read&"},
+			wantMask: []string{"apikey=" + obs.RedactedValue},
+		},
+		{
+			name:     "clientsecret mid-string in a bare form body",
+			value:    "username=ops&clientsecret=abCdefgh1234567890&scope=read",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"username=ops&", "&scope=read"},
+			wantMask: []string{"clientsecret=" + obs.RedactedValue},
+		},
+		{
+			name:     "sessionkey mid-string in a bare form body",
+			value:    "username=ops&sessionkey=abCdefgh1234567890&scope=read",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"username=ops&", "&scope=read"},
+			wantMask: []string{"sessionkey=" + obs.RedactedValue},
+		},
+		{
+			// Two literal alternation names at the same anchors, so the
+			// backstop is not limited to the compact classes: token is
+			// the alternation's catch-all (and the value of grant_type in
+			// the regression body above, which must stay readable), and
+			// access_token is its most common member.
+			name:     "token heading a bare query string",
+			value:    "token=abCdefgh1234567890&scope=read",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"&scope=read"},
+			wantMask: []string{"token=" + obs.RedactedValue},
+		},
+		{
+			name:     "token mid-string in a bare form body",
+			value:    "scope=read&token=abCdefgh1234567890",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"scope=read&"},
+			wantMask: []string{"token=" + obs.RedactedValue},
+		},
+		{
+			name:     "access_token mid-string in a bare form body",
+			value:    "scope=read&access_token=abCdefgh1234567890",
+			secret:   "abCdefgh1234567890",
+			wantKeep: []string{"scope=read&"},
+			wantMask: []string{"access_token=" + obs.RedactedValue},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -572,6 +655,58 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 				if !strings.Contains(out, mask) {
 					t.Errorf("expected the masked form %q; got: %s", mask, out)
 				}
+			}
+		})
+	}
+}
+
+// TestRedact_OpaqueRefreshTokenNonFirstInBareFormBody is the regression
+// test for the gate/regexp inequivalence that let a mid-string secret
+// parameter reach the sink in plaintext: the URL-query pattern's regexp
+// anchors on (?:^|[?&]) and CAN hit a parameter that is not first, while
+// the pattern's gate only opened on '://', '?' or a leading secret
+// parameter name -- so a bare form body (no '?', no '://') whose secret
+// parameter is not first never ran the regexp at all. The input is
+// deliberately the shape that would prove nothing by accident:
+//
+//   - neither '?' nor '://' anywhere (an application/x-www-form-urlencoded
+//     body, or an upstream error echoing one);
+//   - the secret parameter is NOT first -- OAuth2 form bodies put
+//     grant_type first by convention, and an upstream error echoing the
+//     request that failed is exactly the "credentials and all" scenario
+//     the KindAny error path exists for;
+//   - an opaque refresh token (this module family's refresh tokens are
+//     random values, not JWTs): no eyJ header, no provider prefix, so no
+//     shape class other than the parameter name can identify it.
+//
+// A test case carrying a '?' or '://', or putting the secret parameter
+// first, would pass the old gate and prove nothing.
+func TestRedact_OpaqueRefreshTokenNonFirstInBareFormBody(t *testing.T) {
+	const body = "grant_type=refresh_token&refresh_token=a1b2c3d4e5f6g7h8i9j0"
+	const refreshToken = "a1b2c3d4e5f6g7h8i9j0"
+	const maskedForm = "refresh_token=" + obs.RedactedValue
+
+	for _, tc := range []struct {
+		name string
+		val  any
+	}{
+		{name: "string attribute value", val: body},
+		{name: "error text", val: errors.New(body)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
+
+			out := logThrough(ctx, &buf, "event", "details", tc.val)
+
+			if strings.Contains(out, refreshToken) {
+				t.Errorf("refresh token reached the sink in plaintext; got: %s", out)
+			}
+			if !strings.Contains(out, maskedForm) {
+				t.Errorf("expected the masked form %q; got: %s", maskedForm, out)
+			}
+			if !strings.Contains(out, "grant_type=refresh_token&") {
+				t.Errorf("the surrounding form body must survive masking; got: %s", out)
 			}
 		})
 	}

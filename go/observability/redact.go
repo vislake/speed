@@ -715,14 +715,25 @@ var secretShapePatterns = []secretShapePattern{
 		// log a query is the raw r.URL.RawQuery, which carries no leading
 		// '?', and captured form bodies and error echoes of them start
 		// with whatever the first parameter is -- so the anchor is
-		// (?:^|[?&]) and the gate's leading-anchor test is
-		// querySecretParamAtStart. (This pattern's shape is still only
+		// (?:^|[?&]). The gate must be no narrower than that anchor set,
+		// but it must also stay cheap: opening on any bare '&' would send
+		// every benign parameter list through the regexp, and a
+		// no-match regexp run costs microseconds and allocations per log
+		// value (measured -- the module's allocation-free no-hit promise
+		// lives or dies on gates like this one). So instead the gate
+		// keeps its broad '://' and '?' checks for URL-shaped text and
+		// answers every other anchor with querySecretParamAnywhere, the
+		// allocation-free mirrored-name probe: a string the regexp can
+		// match always contains '=' and carries one of the secret
+		// parameter names directly at the start of the string, after a
+		// '?', or after a '&' -- so no regexp match exists that the gate
+		// does not open for. (This pattern's shape is still only
 		// "a run of k=v pairs", never "a secret-looking word anywhere":
 		// a secret parameter in the middle of running prose still needs a
 		// '?' or '&' immediately before it.)
 		gate: func(s string) bool {
 			return strings.Contains(s, "=") &&
-				(strings.Contains(s, "://") || strings.Contains(s, "?") || querySecretParamAtStart(s))
+				(strings.Contains(s, "://") || strings.Contains(s, "?") || querySecretParamAnywhere(s))
 		},
 		re: regexp.MustCompile(
 			`(?i)((?:^|[?&])(?:access_token|access-token|api[_-]?key|apikey|authorization|` +
@@ -750,34 +761,79 @@ var secretShapePatterns = []secretShapePattern{
 }
 
 // querySecretParamNames mirrors the parameter-name alternation of the
-// URL-query pattern above -- the exact leading names a bare query string
-// can start with, compared byte-for-byte by querySecretParamAtStart (the
+// URL-query pattern above -- the exact names a query parameter can
+// carry, compared ASCII-case-insensitively by nameAtQueryAnchor (the
 // pattern's own alternation also admits the compact regex classes
 // api[_-]?key / client[_-]?secret / session[_-]?key, which this list
 // spells out in their concrete forms). It must be kept in step with that
-// alternation by hand; the provider-prefix pattern's gate already carries
-// the same established duplication, and the cost of drift is bounded and
-// one-directional -- a forgotten name here makes the gate skip a string
-// the regexp would have masked (under-redaction, which the value-shape
-// net's own test table is the backstop for), never the reverse.
+// alternation by hand; the provider-prefix pattern's gate already
+// carries the same established duplication. The cost of drift is bounded
+// and one-directional: a forgotten name here makes the gate skip a
+// string the regexp would have masked (never the reverse -- the gate
+// only decides whether the regexp runs, and the regexp is the sole
+// masking authority). What holds the pair in step is the value-shape
+// test table in redact_test.go, not this list's own prose: the table
+// logs the compact spellings the alternation's regex classes admit
+// (apikey, clientsecret, sessionkey) plus two literal alternation names
+// (token, access_token) at the two anchors that decide through this list
+// -- heading a bare query string, and mid-string after a '&' in a bare
+// form body -- so a name forgotten on either side of the pair fails the
+// row that spells it. The drift this round fixed (clientsecret and
+// sessionkey missing here while the alternation kept matching them)
+// failed exactly those head-anchor rows, which is how the backstop is
+// meant to work. Names not rowed at an anchor stay covered on URL-shaped
+// text through the gate's '://' and '?' branches, which open without
+// consulting this list.
 var querySecretParamNames = []string{
 	"access_token", "access-token", "api_key", "api-key", "apikey",
-	"authorization", "client_secret", "client-secret", "password", "passwd",
+	"authorization", "client_secret", "client-secret", "clientsecret",
+	"password", "passwd",
 	"refresh_token", "refresh-token", "secret", "session_key", "session-key",
-	"session_token", "session-token", "sig", "signature", "token",
+	"sessionkey", "session_token", "session-token", "sig", "signature",
+	"token",
 }
 
-// querySecretParamAtStart reports whether s begins with one of
-// querySecretParamNames immediately followed by '=' -- the leading shape
-// of a bare query string or captured form body (see the URL-query
-// pattern's own doc comment for why that shape matters). Allocation-free:
-// the name under test is a sub-slice of s ending at its first '='.
-func querySecretParamAtStart(s string) bool {
-	end := strings.IndexByte(s, '=')
-	if end <= 0 {
-		return false
+// querySecretParamAnywhere reports whether a querySecretParamNames entry
+// stands directly after an anchor the URL-query pattern's regexp can hit
+// -- the start of s, a '?', or a '&' -- with '=' immediately after the
+// name. It is the leading-anchor test generalized to every anchor of the
+// pattern's (?:^|[?&]) alternation, which is how a secret parameter that
+// is not first in a bare form body (no '?', no '://') opens the gate
+// without paying for a regexp run. Allocation-free: every candidate name
+// is a sub-slice of s.
+func querySecretParamAnywhere(s string) bool {
+	for start := 0; start < len(s); {
+		eq := strings.IndexByte(s[start:], '=')
+		if eq < 0 {
+			return false
+		}
+		// A '?' or '&' between the anchor and that '=' ends the current
+		// parameter before any value and starts the next candidate right
+		// after itself -- a name not directly after an anchor cannot be
+		// what the pattern matches.
+		if rel := strings.IndexAny(s[start:start+eq], "?&"); rel >= 0 {
+			start += rel + 1
+			continue
+		}
+		if nameAtQueryAnchor(s[start : start+eq]) {
+			return true
+		}
+		// Skip the parameter's value: the next candidate can only start
+		// at the next '?' or '&' (a '=' without an intervening anchor
+		// begins nothing the pattern could match).
+		rel := strings.IndexAny(s[start+eq+1:], "?&")
+		if rel < 0 {
+			return false
+		}
+		start += eq + 1 + rel + 1
 	}
-	name := s[:end]
+	return false
+}
+
+// nameAtQueryAnchor reports whether name is one of querySecretParamNames,
+// compared ASCII-case-insensitively -- the same fold under which the
+// pattern's own (?i) alternation matches it.
+func nameAtQueryAnchor(name string) bool {
 	for _, n := range querySecretParamNames {
 		if len(name) == len(n) && foldEqualASCII(name, n) {
 			return true
