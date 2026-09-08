@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -559,5 +560,25 @@ func TestSessionManager_Start_RequiresAUser(t *testing.T) {
 	f := newSessionFixture(t, RevocationModeNatural)
 	if _, _, err := f.manager.Start(t.Context(), StartSessionInput{TenantID: "tenant-a"}); err == nil {
 		t.Error("Start() error = nil for an input with no user id")
+	}
+}
+
+// TestSessionManager_Rotate_RefusesWhenTheSessionRowIsGone pins the
+// session-not-found half of resolveRotation's session lookup: a live token
+// whose session row no longer exists (a host's own housekeeping, a database
+// restore) must not mint a fresh pair -- the answer is the same
+// refresh-token-invalid refusal an unknown token earns, since from the
+// presenter's side the credential is dead either way.
+func TestSessionManager_Rotate_RefusesWhenTheSessionRowIsGone(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionFixture(t, RevocationModeNatural)
+	session, issued := f.start(t)
+
+	if err := f.db.Where("id = ?", session.ID).Delete(&Session{}).Error; err != nil {
+		t.Fatalf("delete session row: %v", err)
+	}
+	if _, _, err := f.manager.Rotate(t.Context(), issued.Secret); !errors.Is(err, ErrRefreshTokenInvalid) {
+		t.Fatalf("Rotate() error = %v, want ErrRefreshTokenInvalid", err)
 	}
 }

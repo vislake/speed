@@ -2,6 +2,7 @@ package authn
 
 import (
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"fmt"
 	"strings"
@@ -526,5 +527,129 @@ func TestSigner_EnsurePurposeRunsExactlyOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("EnsurePurpose was called %d times across two Issue calls, want exactly 1", calls)
+	}
+}
+
+// TestNewSignerAndVerifier_RejectANilKeySource pins the mandatory-injection
+// contract: there is no safe default for the signing keys, and construction
+// without one is refused outright rather than discovered at first use.
+func TestNewSignerAndVerifier_RejectANilKeySource(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewSigner(nil); err == nil {
+		t.Error("NewSigner(nil) succeeded, want an error")
+	}
+	if _, err := NewVerifier(nil); err == nil {
+		t.Error("NewVerifier(nil) succeeded, want an error")
+	}
+}
+
+// TestSigner_TTL_ReportsTheConfiguredLifetime pins the accessor a caller
+// sizes a revocation-list TTL from: it must answer the very lifetime the
+// signer was configured with, never a default the caller did not ask for.
+func TestSigner_TTL_ReportsTheConfiguredLifetime(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-ttl")
+	signer, err := NewSigner(keys, WithTokenTTL(20*time.Minute))
+	if err != nil {
+		t.Fatalf("NewSigner() error = %v", err)
+	}
+	if got := signer.TTL(); got != 20*time.Minute {
+		t.Errorf("TTL() = %v, want 20m", got)
+	}
+}
+
+// TestSigner_Issue_RefusesWhenTheActiveKeyVanished pins the ActiveSigner
+// failure Site: a KeySource whose EnsurePurpose succeeds but whose active
+// key is then gone (a pki layer whose only active key was retired between
+// the ensure and the issuance) must surface as a loud issuance failure, not
+// a token minted under no key.
+func TestSigner_Issue_RefusesWhenTheActiveKeyVanished(t *testing.T) {
+	t.Parallel()
+
+	// The zero-value KeySource has no active key: EnsurePurpose reports
+	// success (it is always already "provisioned" from its own point of
+	// view), and ActiveSigner is the first call that discovers the gap.
+	keys := &testutil.KeySource{}
+	signer, err := NewSigner(keys, WithTokenClock(testutil.NewClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)).Now))
+	if err != nil {
+		t.Fatalf("NewSigner() error = %v", err)
+	}
+	if _, _, err := signer.Issue(context.Background(), testPrincipal()); err == nil {
+		t.Fatal("Issue() succeeded against a KeySource with no active key, want an error")
+	} else if !strings.Contains(err.Error(), "no active signing key") {
+		t.Errorf("Issue() error = %v, want it to name the missing active key", err)
+	}
+}
+
+// TestSigner_Issue_RefusesAKeyWhoseDeclaredAlgorithmIsWrong pins the
+// algorithm gate on the issuance side: a key the KeySource declares as
+// anything other than the token algorithm must never sign a token, whatever
+// the key material underneath really is.
+func TestSigner_Issue_RefusesAKeyWhoseDeclaredAlgorithmIsWrong(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-alg")
+	signer, err := NewSigner(keys)
+	if err != nil {
+		t.Fatalf("NewSigner() error = %v", err)
+	}
+	if _, _, err := signer.Issue(context.Background(), testPrincipal()); err != nil {
+		t.Fatalf("Issue() before the algorithm change: %v", err)
+	}
+	keys.SetAlgorithm("kid-alg", "RS256")
+	if _, _, err := signer.Issue(context.Background(), testPrincipal()); err == nil {
+		t.Fatal("Issue() succeeded under a key declaring RS256, want an error")
+	} else if !strings.Contains(err.Error(), `declares algorithm "RS256"`) {
+		t.Errorf("Issue() error = %v, want it to name the declared algorithm", err)
+	}
+}
+
+// failingSignKeySource is a KeySource whose ActiveSigner hands back a
+// signing function that always fails -- the shape a KMS-backed
+// implementation presents when its remote signing call fails. Verify never
+// sees it; the issue must fail loudly rather than mint an unsigned token.
+type failingSignKeySource struct {
+	keys *testutil.KeySource
+}
+
+func (f *failingSignKeySource) EnsurePurpose(ctx context.Context, purpose, algorithm string, lifetime time.Duration) error {
+	return f.keys.EnsurePurpose(ctx, purpose, algorithm, lifetime)
+}
+
+func (f *failingSignKeySource) ActiveSigner(ctx context.Context, purpose string) (string, string, func(context.Context, []byte) ([]byte, error), error) {
+	kid, algorithm, _, err := f.keys.ActiveSigner(ctx, purpose)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return kid, algorithm, func(context.Context, []byte) ([]byte, error) {
+		return nil, fmt.Errorf("remote signing failed")
+	}, nil
+}
+
+func (f *failingSignKeySource) VerificationKeys(ctx context.Context, purpose string) ([]struct {
+	KID       string
+	Algorithm string
+	Public    crypto.PublicKey
+}, error) {
+	return f.keys.VerificationKeys(ctx, purpose)
+}
+
+// TestSigner_Issue_SurfacesASigningFailure pins the context-aware signing
+// call's own failure path: an ActiveSigner that resolved fine but whose sign
+// function then failed (a remote KMS hiccup) must refuse the issuance with
+// an error naming the signing step -- never a partial token.
+func TestSigner_Issue_SurfacesASigningFailure(t *testing.T) {
+	t.Parallel()
+
+	signer, err := NewSigner(&failingSignKeySource{keys: testutil.NewKeySource(t, "kid-sign")})
+	if err != nil {
+		t.Fatalf("NewSigner() error = %v", err)
+	}
+	if _, _, err := signer.Issue(context.Background(), testPrincipal()); err == nil {
+		t.Fatal("Issue() succeeded despite a failing sign function, want an error")
+	} else if !strings.Contains(err.Error(), "sign access token") {
+		t.Errorf("Issue() error = %v, want it to name the signing step", err)
 	}
 }

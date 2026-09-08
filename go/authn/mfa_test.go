@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1058,5 +1059,201 @@ func TestEnrollTOTP_ConcurrentEnrollsLeaveExactlyOnePendingRow(t *testing.T) {
 				t.Fatalf("ConfirmTOTP(surviving enrollment's secret) error = %v", err)
 			}
 		})
+	}
+}
+
+// TestMFA_EmptyOrUnknownIdentityRefusals pins the service-level guard every
+// MFA operation shares: an operation invoked without an identity -- or with
+// one no account row backs -- answers the coded refusal rather than
+// touching a factor, a recovery-code batch or a token.
+func TestMFA_EmptyOrUnknownIdentityRefusals(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+
+	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{}); !hasCode(err, ErrAuthenticationRequired.Code) {
+		t.Errorf("EnrollTOTP(empty principal) error = %v, want ErrAuthenticationRequired", err)
+	}
+	if _, err := f.svc.ConfirmTOTP(t.Context(), "", "000000"); !hasCode(err, ErrAuthenticationRequired.Code) {
+		t.Errorf("ConfirmTOTP(empty user id) error = %v, want ErrAuthenticationRequired", err)
+	}
+	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), ""); !hasCode(err, ErrAuthenticationRequired.Code) {
+		t.Errorf("RegenerateRecoveryCodes(empty user id) error = %v, want ErrAuthenticationRequired", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), Principal{}, "000000", "203.0.113.10"); !hasCode(err, ErrAuthenticationRequired.Code) {
+		t.Errorf("VerifyStepUp(empty principal) error = %v, want ErrAuthenticationRequired", err)
+	}
+
+	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: "no-such-user"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("EnrollTOTP(unknown user) error = %v, want ErrNotFound from the user lookup", err)
+	}
+}
+
+// TestVerifyStepUp_RefusesWhenTheSessionIsUnknown pins the not-found half
+// of step-up's session lookup: a principal whose session this deployment has
+// no row for must not complete a challenge -- the coded answer is the same
+// session-revoked refusal a revoked session earns, since the caller's
+// held token is dead either way.
+func TestVerifyStepUp_RefusesWhenTheSessionIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "stepup-unknown-session@example.com", testTenantA)
+
+	_, err := f.svc.VerifyStepUp(t.Context(), Principal{UserID: user.ID, SessionID: "no-such-session"}, "000000", "203.0.113.10")
+	if !hasCode(err, ErrSessionRevoked.Code) {
+		t.Fatalf("VerifyStepUp(unknown session) error = %v, want code %q", err, ErrSessionRevoked.Code)
+	}
+}
+
+// TestVerifyStepUp_RefusesWhenTheSessionBelongsToAnotherUser pins the
+// ownership half of step-up's session check: nothing legitimate produces a
+// principal whose user and session disagree, and the answer is the same
+// token-invalid refusal the token layer gives, never a challenge completed
+// against the session's real owner.
+func TestVerifyStepUp_RefusesWhenTheSessionBelongsToAnotherUser(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "stepup-owner@example.com", testTenantA)
+	other := f.registerUser(t, "stepup-other@example.com", testTenantA)
+	otherPrincipal := loginPrincipal(t, f, other, testTenantA)
+
+	_, err := f.svc.VerifyStepUp(t.Context(),
+		Principal{UserID: user.ID, SessionID: otherPrincipal.SessionID}, "000000", "203.0.113.10")
+	if !hasCode(err, ErrTokenInvalid.Code) {
+		t.Fatalf("VerifyStepUp(mismatched user and session) error = %v, want code %q", err, ErrTokenInvalid.Code)
+	}
+}
+
+// TestVerifyStepUp_RefusesASuspendedAccount pins the account-status half of
+// step-up's user lookup: a valid challenge from a suspended account's own
+// session must not mint a fresh access token -- the credential the
+// suspension was meant to stop.
+func TestVerifyStepUp_RefusesASuspendedAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "stepup-suspended@example.com", testTenantA)
+	secret, _ := enrollAndConfirmTOTP(t, f, user.ID)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	if err := f.db.Model(&User{}).Where("id = ?", user.ID).Update("status", UserStatusSuspended).Error; err != nil {
+		t.Fatalf("suspend user: %v", err)
+	}
+
+	code, err := totp.Code(secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.10"); !hasCode(err, ErrInvalidCredentials.Code) {
+		t.Fatalf("VerifyStepUp(suspended account) error = %v, want code %q", err, ErrInvalidCredentials.Code)
+	}
+}
+
+// TestVerifyStepUp_RefusesWhenTheAccountIsGone pins the user lookup
+// step-up performs AFTER the factor verified: a session whose account row
+// has been erased must not receive a freshly elevated token for it.
+func TestVerifyStepUp_RefusesWhenTheAccountIsGone(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "stepup-account-gone@example.com", testTenantA)
+	secret, _ := enrollAndConfirmTOTP(t, f, user.ID)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	if err := f.db.Where("id = ?", user.ID).Delete(&User{}).Error; err != nil {
+		t.Fatalf("delete user row: %v", err)
+	}
+
+	code, err := totp.Code(secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.10"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("VerifyStepUp() error = %v, want ErrNotFound from the user lookup", err)
+	}
+}
+
+// TestMFA_PhoneOnlyAccount_EnrollsUnderTheUserIdLabel pins the account-name
+// choice inside a TOTP provisioning URI: an email-less account has nothing
+// a person recognizes in an authenticator app's list, so the label falls
+// back to the user id -- which is at least stable and unique.
+func TestMFA_PhoneOnlyAccount_EnrollsUnderTheUserIdLabel(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user, err := f.svc.Register(t.Context(), RegisterInput{
+		Phone: "+14155550123", Password: testPassword, DisplayName: "Phone Only",
+	})
+	if err != nil {
+		t.Fatalf("Register(phone only) error = %v", err)
+	}
+	if user.Email != "" {
+		t.Fatalf("registered user has email %q, want none for the phone-only shape", user.Email)
+	}
+
+	result, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
+	if err != nil {
+		t.Fatalf("EnrollTOTP() error = %v", err)
+	}
+	if !strings.Contains(result.ProvisioningURI, user.ID) {
+		t.Errorf("ProvisioningURI = %q, want it to carry the user id %q as the account label", result.ProvisioningURI, user.ID)
+	}
+}
+
+// TestAppendAMR_ReturnsACopyAndNeverDuplicates pins the two promises
+// appendAMR's own doc comment makes: the result never contains method twice,
+// and it never mutates or aliases base, which may be a session's live AMR
+// backing data.
+func TestAppendAMR_ReturnsACopyAndNeverDuplicates(t *testing.T) {
+	t.Parallel()
+
+	base := []string{MethodPassword, MethodMFATOTP}
+	got := appendAMR(base, MethodMFATOTP)
+	if len(got) != 2 || got[0] != MethodPassword || got[1] != MethodMFATOTP {
+		t.Fatalf("appendAMR(%v, %q) = %v, want the same two entries, no duplicate", base, MethodMFATOTP, got)
+	}
+	base[0] = "mutated"
+	if got[0] == "mutated" {
+		t.Error("appendAMR's result aliases its base, want an independent copy")
+	}
+
+	base = []string{MethodPassword}
+	got = appendAMR(base, MethodMFARecoveryCode)
+	if len(got) != 2 || got[1] != MethodMFARecoveryCode {
+		t.Errorf("appendAMR(%v, %q) = %v, want the method appended", base, MethodMFARecoveryCode, got)
+	}
+	if len(base) != 1 {
+		t.Errorf("appendAMR mutated its base to %v, want it untouched", base)
+	}
+}
+
+// TestRecoveryCodeRepository_FindUnused_ExcludesConsumedCodes exercises the
+// unused-only recovery-code lookup directly, including the boundary its
+// where-clause draws: an issued code that has since been consumed is as
+// invisible to it as a code that was never issued.
+func TestRecoveryCodeRepository_FindUnused_ExcludesConsumedCodes(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-unused@example.com", testTenantA)
+	_, codes := enrollAndConfirmTOTP(t, f, user.ID)
+	repo := f.svc.recoveryCodes
+
+	if _, err := repo.FindUnusedByUserAndHash(t.Context(), user.ID, hashRecoveryCode("AAAA-AAAA")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("FindUnusedByUserAndHash(never-issued code) error = %v, want ErrNotFound", err)
+	}
+
+	row, err := repo.FindUnusedByUserAndHash(t.Context(), user.ID, hashRecoveryCode(codes[0]))
+	if err != nil {
+		t.Fatalf("FindUnusedByUserAndHash(fresh code) error = %v", err)
+	}
+	won, err := repo.MarkUsed(t.Context(), row.ID, f.clock.Now())
+	if err != nil || !won {
+		t.Fatalf("MarkUsed() = %v, %v, want won", won, err)
+	}
+	if _, err := repo.FindUnusedByUserAndHash(t.Context(), user.ID, hashRecoveryCode(codes[0])); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("FindUnusedByUserAndHash(consumed code) error = %v, want ErrNotFound", err)
 	}
 }

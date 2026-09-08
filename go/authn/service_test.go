@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1622,5 +1623,162 @@ func TestService_Register_CallerContextTenantNeverReachesEventUserCreated(t *tes
 	}
 	if baseline.TenantID != "" {
 		t.Errorf("EventUserCreated TenantID = %q, want empty on a plain no-tenant register", baseline.TenantID)
+	}
+}
+
+// TestService_Providers_ExposesTheWiredRegistry pins the Providers accessor,
+// the one place a host's login page reads the wired social-channel list from
+// after construction: a service assembled with no social channels must
+// expose an empty registry, and one assembled with a channel must expose
+// that channel's name.
+func TestService_Providers_ExposesTheWiredRegistry(t *testing.T) {
+	t.Parallel()
+
+	none := newServiceFixture(t)
+	if got := none.svc.Providers(); got == nil {
+		t.Fatal("Providers() = nil, want the wired registry")
+	} else if names := got.Names(); len(names) != 0 {
+		t.Errorf("Providers().Names() = %v with no social channel wired, want empty", names)
+	}
+
+	gitHub := newServiceFixture(t, WithSocialProviders(&stubProvider{name: ProviderGitHub}))
+	if names := gitHub.svc.Providers().Names(); !slices.Equal(names, []string{ProviderGitHub}) {
+		t.Errorf("Providers().Names() = %v, want [%s]", names, ProviderGitHub)
+	}
+}
+
+// TestService_SwitchTenant_RefusesWhenTheSessionIsUnknown pins the
+// not-found half of SwitchTenant's session lookup: a principal whose token
+// names a session this deployment has no row for must not mint a fresh pair
+// -- the answer is the same session-revoked refusal a revoked session earns,
+// because from the caller's side the two are indistinguishable and the token
+// is dead either way.
+func TestService_SwitchTenant_RefusesWhenTheSessionIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "switch-unknown-session@example.com", testTenantA)
+
+	_, err := f.svc.SwitchTenant(t.Context(), Principal{UserID: user.ID, SessionID: "no-such-session"}, testTenantB)
+	if !hasCode(err, ErrSessionRevoked.Code) {
+		t.Fatalf("SwitchTenant(unknown session) error = %v, want code %q", err, ErrSessionRevoked.Code)
+	}
+}
+
+// TestService_SwitchTenant_RefusesWhenTheAccountIsGone pins the account
+// lookup SwitchTenant performs after its membership re-check: a session
+// whose user row has been erased (a database restore, a compliance erasure
+// behind authn's back) must not receive a token pair for the target tenant.
+func TestService_SwitchTenant_RefusesWhenTheAccountIsGone(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "switch-account-gone@example.com", testTenantA)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	if err := f.db.Where("id = ?", user.ID).Delete(&User{}).Error; err != nil {
+		t.Fatalf("delete user row: %v", err)
+	}
+	_, err := f.svc.SwitchTenant(t.Context(), principal, testTenantA)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SwitchTenant() error = %v, want ErrNotFound from the user lookup", err)
+	}
+}
+
+// TestService_SwitchTenant_RefusesASuspendedAccount pins the account-status
+// half of SwitchTenant's user lookup: an operator suspension between a
+// sign-in and a tenant switch must stop the switch the same way it stops a
+// refresh -- the account's credentials no longer certify anything.
+func TestService_SwitchTenant_RefusesASuspendedAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "switch-suspended@example.com", testTenantA)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	if err := f.db.Model(&User{}).Where("id = ?", user.ID).Update("status", UserStatusSuspended).Error; err != nil {
+		t.Fatalf("suspend user: %v", err)
+	}
+	_, err := f.svc.SwitchTenant(t.Context(), principal, testTenantA)
+	if !hasCode(err, ErrInvalidCredentials.Code) {
+		t.Fatalf("SwitchTenant() error = %v, want code %q", err, ErrInvalidCredentials.Code)
+	}
+}
+
+// TestService_Refresh_RefusesWhenTheAccountIsGone pins refresh's own user
+// lookup: the membership re-check passes (the reader still lists the id),
+// but the account row itself has been erased -- a database restore or a
+// compliance erasure behind authn's back -- so no fresh pair may be minted
+// for it.
+func TestService_Refresh_RefusesWhenTheAccountIsGone(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "refresh-account-gone@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: user.Email, Password: testPassword, TenantID: testTenantA, IP: "203.0.113.9",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	if err := f.db.Where("id = ?", user.ID).Delete(&User{}).Error; err != nil {
+		t.Fatalf("delete user row: %v", err)
+	}
+	_, err = f.svc.Refresh(t.Context(), pair.RefreshToken)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Refresh() error = %v, want ErrNotFound from the user lookup", err)
+	}
+}
+
+// TestService_Register_ConcurrentDuplicatePhoneAnswersTheCodedConflict is
+// the phone twin of the email race test above: when two registrations of
+// the same phone number both pass the sequential pre-checks, the database's
+// unique phone index admits exactly one insert and the loser must receive
+// the same coded conflict the sequential duplicate answers -- never a bare
+// internal error.
+func TestService_Register_ConcurrentDuplicatePhoneAnswersTheCodedConflict(t *testing.T) {
+	const (
+		rounds = 8
+		racers = 3
+	)
+	for round := 1; round <= rounds; round++ {
+		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
+			f := newServiceFixture(t)
+			phone := fmt.Sprintf("+861390000%04d", round)
+
+			start := make(chan struct{})
+			results := make([]error, racers)
+			var wg sync.WaitGroup
+			wg.Add(racers)
+			for i := range racers {
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, err := f.svc.Register(t.Context(), RegisterInput{
+						Phone: phone, Password: testPassword, DisplayName: "Racer",
+					})
+					results[i] = err
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+
+			successes := 0
+			for i, err := range results {
+				switch {
+				case err == nil:
+					successes++
+				case hasCode(err, ErrPhoneAlreadyRegistered.Code):
+					// The expected answer for every loser: the sequential
+					// duplicate's coded conflict.
+				default:
+					t.Fatalf("racer %d answered %v, want the coded %q conflict: a lost insert race must never surface as a bare internal error", i, err, ErrPhoneAlreadyRegistered.Code)
+				}
+			}
+			if successes != 1 {
+				t.Fatalf("%d of %d racing registrations succeeded, want exactly 1", successes, racers)
+			}
+		})
 	}
 }
