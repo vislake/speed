@@ -88,6 +88,16 @@ name: fast-check
 #         instead; internal/testutil fakes (the repo-mandated shared
 #         test-helpers home, root CLAUDE.md's Testing rule) are not
 #         candidates.
+#       - tools/check_coverage_baseline.py --selfcheck -- the
+#         coverage-baseline file's own health gate for docs/internal/20's
+#         "coverage must not decline (against a baseline)" rule: every
+#         row in tools/coverage-baselines.json must name one of the six
+#         foundation modules (pkgcore, dbkit, tenancy, rbac, billing,
+#         jobs) with a real go.mod, and every foundation module must
+#         have a row -- so a stale or missing row cannot silently
+#         exempt a module from the comparison the go-module-ci coverage
+#         leg (reusable-go-module-ci.yml leg 3b) runs on every module
+#         job.
 #       - tools/semgrep_rules/ -- the architecture-discipline semgrep
 #         ruleset: six rules, each mapping to an 18-cicd discipline-table
 #         row (deployment-mode branching outside kernel wiring,
@@ -297,6 +307,14 @@ jobs:
       # step like the CJK scan above it.
       - name: Tenant-isolation coverage check (Repository isolation suites)
         run: python3 tools/check_repo_isolation.py
+      # Coverage-baseline file health: every row must name a foundation
+      # module (docs/internal/20's gated six) with a real go.mod, and
+      # every foundation module must have a row -- the gate the
+      # go-module-ci coverage leg compares against must itself be
+      # complete and current, or a missing row would silently exempt a
+      # module from the "coverage must not decline" rule.
+      - name: Coverage-baseline file self-check
+        run: python3 tools/check_coverage_baseline.py --selfcheck
       # Semgrep into a throwaway venv: the runner has no pinned semgrep
       # and this job's toolchain setup is the Go/Node actions only. The
       # pip install is the deliberately-unpinned piece -- see the COVERAGE

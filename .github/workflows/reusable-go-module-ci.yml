@@ -38,6 +38,21 @@ name: go-module-ci
 #                                layered-triggering rule puts them in the
 #                                pre-merge full matrix (full-check), not in
 #                                the fast per-PR check.
+#   3b. Coverage baseline         docs/internal/20-quality-and-security.md's
+#     (foundation modules)       "coverage must not decline (against a
+#                                baseline)" rule for the six foundation
+#                                modules (pkgcore, dbkit, tenancy, rbac,
+#                                billing, jobs): tools/check_coverage_baseline.py
+#                                measures the module's exact unit-suite
+#                                statement coverage and compares it with
+#                                the committed tools/coverage-baselines.json
+#                                row, failing on a decline. A module
+#                                outside the gated set prints a notice and
+#                                passes; the baseline file's own health is
+#                                gated by the same script's --selfcheck in
+#                                fast-check's repo-checks job, so a stale
+#                                or missing row cannot silently rot into a
+#                                row nobody compares against.
 #   4. go build ./...            module build in workspace context.
 #   5. GOWORK=off go build ./... standalone build proving the module's
 #                                go.mod/go.sum suffice outside the
@@ -88,6 +103,17 @@ jobs:
       - name: Unit tests under the race detector
         working-directory: ${{ inputs.module }}
         run: go test -race ./...
+      - name: Coverage baseline (foundation modules)
+        # The docs/internal/20 coverage rule for the six foundation
+        # modules: the measured unit-suite statement coverage may not
+        # drop below the committed tools/coverage-baselines.json row
+        # (tools/check_coverage_baseline.py's own header has the full
+        # mechanism and the decline-response contract). Runs in every
+        # module's job and passes with a notice for modules outside the
+        # gated set, so adding the leg here never needs a caller-side
+        # list to keep in step.
+        working-directory: ${{ inputs.module }}
+        run: python3 "${{ github.workspace }}/tools/check_coverage_baseline.py" --check --module "${{ inputs.module }}"
       - name: Build in workspace context
         working-directory: ${{ inputs.module }}
         run: go build ./...
