@@ -1,0 +1,54 @@
+{
+  "errors": {
+    "authn": {
+      "session_not_found": "会话不存在，请重新登录。",
+      "session_revoked": "会话已被撤销，请重新登录。",
+      "refresh_token_invalid": "登录状态已失效，请重新登录。",
+      "refresh_token_reused": "检测到异常活动，请重新登录。",
+      "token_expired": "登录已过期，请重新登录。"
+    },
+    "billing": {
+      "invoice_not_found": "该账单不可用。"
+    },
+    "client": {
+      "network": "网络连接不可用，请检查网络后重试。",
+      "timeout": "请求超时，请稍后重试。",
+      "protocol": "服务返回了异常响应，请稍后重试。"
+    },
+    "unknown": "出了点问题，请稍后重试。"
+  },
+  "invoices": {
+    "title": "账单",
+    "loading": "正在加载账单",
+    "status": {
+      "open": "待支付",
+      "paid": "已支付",
+      "void": "已作废"
+    },
+    "issuedWithDate": "出账于 {{date}}",
+    "row": {
+      "expandAriaWithPeriod": "展开 {{period}} 的账单详情",
+      "collapseAriaWithPeriod": "收起 {{period}} 的账单详情"
+    },
+    "detail": {
+      "regionAriaWithPeriod": "{{period}} 账单详情",
+      "loading": "正在加载账单详情",
+      "status": "状态",
+      "amount": "金额",
+      "period": "计费周期",
+      "issued": "出账日期",
+      "updated": "最近更新",
+      "subscriptionId": "订阅 ID",
+      "invoiceId": "账单 ID"
+    },
+    "empty": {
+      "title": "暂无账单",
+      "description": "此组织的账单将显示在这里。"
+    },
+    "error": {
+      "title": "无法加载账单",
+      "description": "加载账单时出了问题，请稍后重试。"
+    },
+    "retry": "重试"
+  }
+}

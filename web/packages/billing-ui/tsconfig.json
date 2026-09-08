@@ -1,0 +1,39 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "test-utils"],
+  "compilerOptions": {
+    // billing-ui is a DOM-rendering package: JSX compiles through the
+    // automatic runtime (react-jsx), same as ui-kit, auth-ui and
+    // account-ui.
+    //
+    // The package renders its surfaces through the generated billing
+    // read hooks of @speed/api-sdk over the shared-QueryClient
+    // contract, reads @speed/i18n translations and composes
+    // @speed/ui-kit components. src/ resolves the three through the
+    // sibling-source paths below. test-utils/ additionally binds a
+    // real client through the api-client/api-sdk seam (@speed/api-sdk's
+    // runtime subpath before its prefix) and renders under the ui-kit
+    // theme providers -- ui-kit's own sources import @speed/tokens and
+    // @speed/i18n/mui-locale, which this program pulls into its graph,
+    // so those two resolve to their sources as well. The siblings'
+    // published "types" point into their dist/, which is never
+    // committed and not yet built in a fresh checkout, so type
+    // resolution maps every workspace specifier straight onto the
+    // sibling's source -- same pattern ui-kit, auth-ui and account-ui
+    // use. Emitted dist/ keeps the bare specifiers, which consumers
+    // resolve against the real published packages. Keep this in
+    // lockstep with what src/ and test-utils/ import. List order
+    // matters: "@speed/api-sdk/runtime" must be tried before its
+    // "@speed/api-sdk" prefix (first match wins in paths).
+    "jsx": "react-jsx",
+    "paths": {
+      "@speed/i18n": ["../i18n/src/index.ts"],
+      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
+      "@speed/tokens": ["../tokens/src/index.ts"],
+      "@speed/ui-kit": ["../ui-kit/src/index.ts"],
+      "@speed/api-client": ["../api-client/src/index.ts"],
+      "@speed/api-sdk/runtime": ["../api-sdk/src/runtime.ts"],
+      "@speed/api-sdk": ["../api-sdk/src/index.ts"]
+    }
+  }
+}

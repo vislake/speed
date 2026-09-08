@@ -1,0 +1,54 @@
+{
+  "errors": {
+    "authn": {
+      "session_not_found": "The session does not exist. Please sign in again.",
+      "session_revoked": "The session was revoked. Please sign in again.",
+      "refresh_token_invalid": "Your sign-in is no longer valid. Please sign in again.",
+      "refresh_token_reused": "Suspicious activity was detected. Please sign in again.",
+      "token_expired": "Your sign-in has expired. Please sign in again."
+    },
+    "billing": {
+      "invoice_not_found": "This invoice is not available."
+    },
+    "client": {
+      "network": "No network connection. Check your connection and try again.",
+      "timeout": "The request timed out. Please try again later.",
+      "protocol": "The service returned an unexpected response. Please try again later."
+    },
+    "unknown": "Something went wrong. Please try again later."
+  },
+  "invoices": {
+    "title": "Invoices",
+    "loading": "Loading invoices",
+    "status": {
+      "open": "Open",
+      "paid": "Paid",
+      "void": "Void"
+    },
+    "issuedWithDate": "Issued {{date}}",
+    "row": {
+      "expandAriaWithPeriod": "Show the {{period}} invoice details",
+      "collapseAriaWithPeriod": "Hide the {{period}} invoice details"
+    },
+    "detail": {
+      "regionAriaWithPeriod": "Details of the {{period}} invoice",
+      "loading": "Loading invoice details",
+      "status": "Status",
+      "amount": "Amount",
+      "period": "Billing period",
+      "issued": "Issued",
+      "updated": "Last updated",
+      "subscriptionId": "Subscription ID",
+      "invoiceId": "Invoice ID"
+    },
+    "empty": {
+      "title": "No invoices yet",
+      "description": "Invoices for this organization will appear here."
+    },
+    "error": {
+      "title": "Could not load invoices",
+      "description": "Something went wrong while loading your invoices. Please try again."
+    },
+    "retry": "Retry"
+  }
+}
