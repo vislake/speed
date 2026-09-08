@@ -66,6 +66,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
@@ -641,6 +642,12 @@ func (h *imageGenerateHandler) callProvider(ctx context.Context, req ImageReques
 		mask = &b
 	}
 
+	// aigateway.provider.* (metrics.go): the image operations' provider
+	// invocations all pass through this one choke point (the async job
+	// path), so calls/errors/duration are recorded here under the job's
+	// resolved provider -- never at GenerateImage's enqueue site, which
+	// is not a provider invocation.
+	start := time.Now()
 	var result ImageResult
 	var err error
 	switch req.Operation {
@@ -656,6 +663,7 @@ func (h *imageGenerateHandler) callProvider(ctx context.Context, req ImageReques
 		// three ImageOperation constants.
 		return ImageResult{}, route.Provider, ErrInvalidImageOperation.WithParam("operation", string(req.Operation))
 	}
+	h.gateway.recordProviderCall(ctx, route.Provider, providerCallImage, start, err)
 	return result, route.Provider, err
 }
 

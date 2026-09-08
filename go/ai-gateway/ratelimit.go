@@ -144,6 +144,9 @@ func (g *Gateway) checkRateLimit(ctx context.Context, tenant string) error {
 		return ErrRateLimitCheckFailed.WithCause(err)
 	}
 	if !decision.Allowed {
+		// aigateway.rate_limited (metrics.go): the one refusal site
+		// every entry point's limiter check passes through.
+		g.recordRateLimitHit(ctx)
 		return ErrRateLimited.WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.ResetAfter))
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
@@ -12,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/storage"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // usageFeatureChatTokens is the Feature dimension Gateway reports for every
@@ -74,6 +76,15 @@ type Gateway struct {
 	// under test from a real KVStore -- see rateLimiter's own doc comment.
 	host    hostSeams
 	limiter ratelimit.Limiter
+
+	// Metric instruments (metrics.go): the 09-table AI-gateway row's
+	// per-provider calls/errors/duration plus the rate-limit-hit
+	// counter, registered by NewGateway; nil for a bare struct literal,
+	// which the record sites guard.
+	providerCalls      metric.Int64Counter
+	providerErrors     metric.Int64Counter
+	providerDuration   metric.Float64Histogram
+	rateLimitedCounter metric.Int64Counter
 }
 
 // GatewayOption configures a Gateway at construction time.
@@ -111,11 +122,16 @@ func WithChatProviderRegistry(registry *pkgcore.SeamRegistry[ChatProvider]) Gate
 // -- apply WithModelRoute at least once per logical model key a caller will
 // use, or every call for that key fails with ErrUnroutedModel.
 func NewGateway(credentials *CredentialService, opts ...GatewayOption) *Gateway {
+	calls, errors, duration, rateLimited := registerAIGatewayMetrics()
 	g := &Gateway{
-		credentials:   credentials,
-		registry:      ChatProviderRegistry,
-		routes:        make(map[string]ModelRoute),
-		imageRegistry: ImageProviderRegistry,
+		credentials:        credentials,
+		registry:           ChatProviderRegistry,
+		routes:             make(map[string]ModelRoute),
+		imageRegistry:      ImageProviderRegistry,
+		providerCalls:      calls,
+		providerErrors:     errors,
+		providerDuration:   duration,
+		rateLimitedCounter: rateLimited,
 	}
 	if credentials != nil {
 		g.imageJobs = newImageJobRepository(credentials.store.db)
@@ -289,7 +305,11 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	vendorReq := req
 	vendorReq.Model = route.VendorModel
 
+	// aigateway.provider.* (metrics.go): one invocation of the resolved
+	// provider, counted with its duration and, on failure, its error.
+	start := time.Now()
 	resp, err := provider.Chat(ctx, vendorReq)
+	g.recordProviderCall(ctx, route.Provider, providerCallChat, start, err)
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -339,7 +359,13 @@ func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatC
 	vendorReq := req
 	vendorReq.Model = route.VendorModel
 
+	// aigateway.provider.* (metrics.go): the stream's establishment is
+	// one provider invocation -- counted with its duration here; a
+	// stream that fails AFTER establishment is counted by relayStream
+	// (recordProviderStreamError) when its terminal chunk carries Err.
+	start := time.Now()
 	upstream, err := provider.ChatStream(ctx, vendorReq)
+	g.recordProviderCall(ctx, route.Provider, providerCallChatStream, start, err)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +414,10 @@ func (g *Gateway) relayStream(ctx context.Context, logicalModel, provider string
 			return
 		}
 		if chunk.Err != nil {
+			// aigateway.provider.errors (metrics.go): the stream failed
+			// after establishment -- the error that arrives on the
+			// terminal chunk, never through ChatStream's own return.
+			g.recordProviderStreamError(ctx, provider)
 			return
 		}
 	}
