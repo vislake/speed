@@ -86,15 +86,139 @@ Five tables spanning three of the four data domains. **One table never mixes two
 
 **`EnsurePurpose` is the BOOTSTRAP path, not rotation.** It declares that `purpose` needs a signing key of `algorithm`, with a retiring overlap period that must eventually cover `maxCredentialLifetime`. Idempotent in the sense a caller needs at bootstrap: if the purpose already has an active key WITHIN its validity window, `EnsurePurpose` returns nil without creating a second one. It does not verify that the existing key's `Algorithm` matches the `algorithm` argument: a repeated call with a different algorithm for the same purpose silently keeps the first key -- a known limitation of this call, safe today because no code path does it. When the purpose's active key is out of validity (the expiry scan never ran, or ran too late) AND no pending successor is in flight (the scan staged one but stopped before promoting it -- in which case the scan, or a host's `PromoteNow`, owns the rotation and bootstrap must not churn the purpose with a second candidate), `EnsurePurpose` self-heals: it revokes the expired key through the same guarded transition and event `Service.RevokeSigningKey` uses -- revoking is what frees the active slot for a replacement, since the partial unique index allows one active row per purpose, and what tells every replica's cache the key is gone -- and falls through to create an in-validity replacement in the same call. Revoking rather than silently overwriting keeps the expired key's fate on the record: its row carries the `RevocationReason` and the `EventSigningKeyRevoked` event reaches the same subscribers an operator-initiated revoke reaches. When the purpose has NO active key at all, `EnsurePurpose` creates a key and marks it `SigningKeyStatusActive` in the same call, synchronously, with no propagation window -- safe specifically because a purpose with no active key has never signed anything, so there is no multi-replica cache-propagation race to protect against on a kid nothing has verified yet. (The self-heal's revoke-then-create has the same bounded staleness profile as any revocation -- a replica whose cache still holds the revoked kid can keep using it for at most the cache TTL.) `defaultKeyValidity` (`service.go`) is the un-configurable default standing in for a host's real rotation policy where a host does not declare one.
 
-## X.509 layer: still no real consumer
+## X.509 layer: real consumer, precise residuals
 
-The reference app is a dental SaaS; it does not issue certificates. This is a deliberate, documented exception to the repository's mandatory-first-consumer rule, made because the requirements behind the X.509 layer were diagnosed from a real, already-shipped production system (a DBaaS platform's certificate subsystem), not invented. The exception carries three compensating obligations:
+The X.509 layer's mandatory-first-consumer exception is closed by a genuine
+consumer: `examples/reference-app/internal/attestation`, the reference app's
+AI-output authenticity attestation layer (its package doc carries the product
+narrative; docs/internal/22-pki.md's "X.509 layer has a real consumer"
+section records the closure). A dental AI SaaS shares AI-generated
+simulation outputs (patient media) through public share links; the platform
+is the only legitimate holder of the keys it issues (pki never delivers
+them), so the app vouches for its own outputs. The consumer drives every
+main path this layer exists for:
 
-1. **A godoc `Example` set that grows with the layer** -- `example_test.go` carries six examples in `package pki_test`, all compiled AND executed by the module's unit suite -- the strongest guarantee available without a real consumer: the API compiles and works from an external caller's own import. `Example` covers the full main path: it issues a root CA, an intermediate signed by the root, and an end-entity certificate signed by the intermediate, and verifies the resulting chain with the standard library's own `crypto/x509.Verify`. `ExampleCAService_GenerateCRL` walks the revocation path an external caller drives: it revokes an issued certificate (`CAService.RevokeCertificate`), regenerates the issuing authority's CRL (`CAService.GenerateCRL`), reads the document back with the standard library's own parser (`x509.ParseRevocationList`, `x509.RevocationList.CheckSignatureFrom`) and confirms the revoked certificate's serial is listed, then confirms `CAService.VerifyCertificate` refuses the revoked certificate with the coded `ErrCertificateRevoked`. `ExampleCAService_ExportAuthorityChainJWKS` exports an authority's chain JWKS (`CAService.ExportAuthorityChainJWKS`) and matches the exported public keys byte-for-byte against the authorities' own certificates. `ExampleService_ExportJWKS` and `ExampleService_RevokeSigningKey` cover the key-lifecycle layer's halves (`Service.ExportJWKS`, `Service.RevokeSigningKey`): a provisioned purpose exporting one key that verifies a live signature, the empty-set answer for an unprovisioned purpose, and the exported set dropping to empty the moment the active key is revoked. `ExampleSignerRegistry` resolves the module's own registered `"signer.local"` name through `pki.SignerRegistry` and signs with the resolved signer for real (the `vault`/`kmsaws` registered names execute the same `Build` path in their own packages' examples under the same `go test` run). The unit suite (`revocation_test.go`, `crl_test.go`, `jwks_test.go`, `signer_registry_test.go`) remains the place the refusal shapes, edge cases and round-trip guarantees live, and each example's own comment marks the corner it cannot drive through the public API (a revoked-authority chain refusal, which needs a row no public method writes; a live Vault/AWS-KMS `Sign`).
-2. **This section, stating plainly that the X.509 layer is unverified by any real consumer.** It is not "done" in the sense every other layer in this codebase is done -- no project has ever tried to integrate against it and found a parameter it could not actually supply. `CAService.RevokeCertificate`, `VerifyCertificate`, `GenerateCRL`, `ExportAuthorityChainJWKS` and the module's HTTP surface are all exercised only by this module's own tests, never by a real external caller.
-3. **This layer's public API is NOT frozen** the way the rest of this codebase's public API is (root `CLAUDE.md`: "treat public API as frozen unless intentionally shipping a breaking change"). The first real consumer's integration is explicitly permitted to break `CAService`'s signatures, `RootCAParams`/`IntermediateCAParams`/`CertificateParams`'s shapes, `RevokeCertificate`/`VerifyCertificate`/`GenerateCRL`/`ExportAuthorityChainJWKS`, or the HTTP surface's own operation shapes, without that being a design failure -- speed has not shipped v1.0 yet, so this concession costs nothing today, but it is written here so a future reader understands the break is expected, not a mistake.
+- **Boot-time CA creation.** At boot (`cmd/server/server.go`, after
+  `Kernel.Bootstrap`) the attestation service's `EnsureAuthorityChain`
+  calls `CAService.CreateRootCA` + `CreateIntermediateCA` once per
+  database; later boots find the chain again by fixed subject names, so a
+  restart never mints a second chain (proven by
+  `TestX509Attestation_ChainAndAttestationsSurviveARestart`, which boots,
+  shares, tears down and reboots over one database and object store and
+  finds exactly one root and one intermediate).
+- **Per-tenant issuance and signing.** Every surface that makes a
+  succeeded simulation output visible to its own tenant -- the job-status
+  poll, the per-photo enumeration and the simulation-content read, all in
+  `cmd/server/smilesim.go` -- calls `EnsureAttested`, which opens the
+  output's bytes under the ctx tenant, signs a canonical message (object
+  id, content SHA-256, tenant) with the tenant's `simulation.attestation`
+  certificate through `CAService.SignCertificate` -- reusing the tenant's
+  current certificate while active, issuing a fresh one through
+  `CAService.IssueCertificate` otherwise (365-day validity under the app's
+  intermediate authority) -- and upserts one attestation row per object
+  (`smilesim_attestations`, tenant-scoped).
+- **Chain-verified share gating.** The sharing resolver's gate
+  (`cmd/server/sharing_resolver.go`) runs `CheckContent` before serving
+  any share: an attested object is served only when
+  `CAService.VerifyCertificate` vouches for its certificate (revoked row,
+  revoked chain member or expiry all refuse), the Ed25519 signature over
+  the stored message verifies with the leaf's public key, the message
+  names this object and tenant, and the live content digest matches the
+  attested digest; un-attested objects (patient photos) pass untouched. A
+  refusal surfaces as the resolver error sharing answers with
+  `sharing.resource_unavailable` (502).
+- **Revocation and CRL publication over the wire.**
+  `TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate`
+  drives the full drill: revoke via the `pki_revokeCertificate` HTTP
+  operation, share refused, the output re-attested under a fresh
+  certificate on the next poll, share served again; CRL generation stays a
+  Go-API operation executed on demand (the flow generates through a CA
+  service over a second connection to the app's database), while the CRL
+  fetch leg is genuinely HTTP (`pki_getAuthorityCrl`), parsed and
+  signature-checked with the standard library the way an external verifier
+  would. The tamper leg corrupts the output's stored bytes on disk (the
+  object store's own file, reached through `cfg.ObjectStoreRoot` +
+  `storage.ObjectKey`'s layout) rather than touching any row: the gate's
+  live-digest comparison is what refuses, proving the check runs over the
+  bytes being served. A failed attestation is logged and swallowed at the
+  observation site; the output then refuses at the sharing gate until a
+  later observation retries, so nothing silently bypasses. The demo
+  journey needs no new permission or role: the pki HTTP operations sit
+  behind the existing `guardPkiRoute` gates (`pki:revoke_certificate` and
+  `pki:read` in the tenant domain, which the demo owner role holds).
 
-**The key-lifecycle layer (`Service`, `Signer`, `LocalSigner`) does NOT get this exception.** It has a real, if indirect, consumer: `authn` consumes it through `KeySource`, and the reference app assembles `authn`. Its public API is held to the ordinary frozen-API standard -- including `Service.RevokeSigningKey`, `PromoteNow` and `ExportJWKS`, even though none of them has a real caller yet either: they extend an already-frozen type (`Service`), not a still-exempt one (`CAService`), so the same discipline that already governs `EnsurePurpose`/`ActiveSigner`/`VerificationKeys` governs these too.
+**The one API addition the integration needed.** Nothing could sign with
+an issued certificate's key. `CAService.SignCertificate` (sign.go) fills
+that: tenant context required, a revoked row and a revoked chain member
+refused with the coded `ErrCertificateRevoked` through the SAME shared
+`walkAuthorityChain` verification uses (no second hand-copy of the refusal
+loop), a certificate outside its validity window refused at the service
+clock with an uncoded error (the module's expiry-not-encoded convention),
+and a non-coded `Signer.Sign` failure wrapped as `ErrSignerUnavailable`
+exactly as `GenerateCRL` wraps one. No other public API changed. The
+integration changed this layer by exactly that one additive method, so the
+no-consumer exemption's three compensating obligations resolve as follows:
+
+1. **The godoc `Example` obligation is retained with a narrowed
+   narrative** -- a compiled-and-run example set remains the module's
+   cheapest always-true consumer proof, and `example_test.go` carries
+   `ExampleCAService_SignCertificate` (issue -> sign -> verify against the
+   leaf's own public key -> signing refused with `ErrCertificateRevoked`
+   after revocation) alongside the examples that cover the layer's other
+   main paths (`Example`'s root -> intermediate -> end-entity chain,
+   `ExampleCAService_GenerateCRL`'s revocation path,
+   `ExampleCAService_ExportAuthorityChainJWKS`, and the key-lifecycle and
+   `SignerRegistry` examples).
+2. **The "unverified by any real consumer" obligation is closed.** The app
+   issues, signs with, verifies, revokes and CRL-publishes real
+   certificates over the composed stack; only the residual list below
+   remains exercised by the module's own tests alone. Module side,
+   `sign_test.go` pins `SignCertificate`'s contract (sign-and-verify
+   against the leaf key, tenant required, not found, revoked row, revoked
+   chain member, outside-window refusals at both ends with the clock seam,
+   message-exactness); app side, `internal/attestation`'s unit suite
+   (`store_test.go` tenant isolation and upsert arbitration,
+   `message_test.go` canonical message + gate-stage refusals) and the two
+   composed flow tests above run over the real composed stack.
+3. **The "API may be broken by the first consumer" exemption is narrowed
+   to the residual surface below.** What remains unconsumed is listed
+   precisely there; the API-stability sentence covers only that surface,
+   and the layer's public API is not yet held to the key-lifecycle
+   layer's frozen standard.
+
+**The precisely residual unconsumed surface** (each item is what a future
+integration may still change freely, and the reason it stays out):
+
+- **The two JWKS exports** (`CAService.ExportAuthorityChainJWKS` and the
+  HTTP `pki_getAuthorityJwks`/`pki_getKeyJwks` reads) have no caller: the
+  app's external verifier needs no JWKS because the AI-output gate and the
+  CRL verifier both use the raw certificates and documents directly.
+- **The CRLDP extension path**: the app's authorities carry no
+  `CRLDistributionPoint` (the app has no stable public origin URL to
+  declare), so `RootCAParams`/`IntermediateCAParams.CRLDistributionPoint`'s
+  embedding machinery stays unexercised by a real certificate.
+- **`EnqueueCRLRegenerate`/periodic CRL regeneration stays unscheduled**:
+  the app's verifier path is row-state + chain verification and the flow
+  generates CRLs on demand through the Go API and fetches them over the
+  HTTP read operation, so a periodic refresh has no reader waiting on it.
+- **Expiry-driven lifecycle for `pki_authorities`/`pki_certificates`
+  stays unbuilt**: the attestation certificates carry a real 365-day
+  validity and an expired certificate's outputs stop being shareable, so
+  a renewal or expiry-warning mechanism would serve a concrete waiting
+  object; it does not exist.
+- **Authority revocation** (`AuthorityStatusRevoked`) has no writing
+  method; the app's chain-verification refusals around it are exercised
+  through the module's own directly-seeded tests.
+
+**The key-lifecycle layer (`Service`, `Signer`, `LocalSigner`) never had
+this exception.** It has a real, if indirect, consumer: `authn` consumes
+it through `KeySource`, and the reference app assembles `authn`. Its public
+API is held to the ordinary frozen-API standard -- including
+`Service.RevokeSigningKey`, `PromoteNow`, `ReclaimRetired` and
+`ExportJWKS`, even though none of them has a real caller yet either: they
+extend an already-frozen type (`Service`), not a still-exempt one
+(`CAService`), so the same discipline that governs
+`EnsurePurpose`/`ActiveSigner`/`VerificationKeys` governs these too.
 
 ## HTTP surface
 
@@ -106,13 +230,13 @@ The reference app is a dental SaaS; it does not issue certificates. This is a de
 
 **Audit recording happens at the HTTP boundary, not inside the Go API.** `Handler.recordAudit` calls `audit.Emit` after `Service.RevokeSigningKey`/`CAService.RevokeCertificate` has already committed -- the identical placement and identical reasoning `examples/reference-app/internal/notes/handler.go`'s `recordNoteCreatedAudit` documents (a same-SQLite-connection deadlock hazard if the write-capture plugin instead shared the business write's own transaction). This keeps `revocation.go` itself free of an `audit.Emit`/`go/dbkit/audit` dependency it does not otherwise need: a caller of the Go API directly (bypassing HTTP) gets the state transition, the cache invalidation and the published event, but not an audit row, unless it records one itself.
 
-**No reference-app consumer.** Wiring `examples/reference-app` as a live consumer of this surface would need a certificate-issuing feature to hang a revoke/JWKS/CRL UI off of -- the app is a dental SaaS with none -- the same reasoning that keeps the whole X.509 layer unconsumed. The fragment IS in the API-contract pipeline's regeneration steps: `Taskfile.yml`'s `api:gen` task runs oapi-codegen over it, `.github/workflows/api-contract.yml` regenerates and porcelain-gates the committed `pki-server.gen.go` (`git status --porcelain --untracked-files=all`) exactly like every other fragment's, and the fragment universe is single-sourced in `tools/api_fragments.json` (drift-gated by `tools/check_api_fragments.py`), where pki is a registered member. CI builds and tests this module on every PR (`fast-check.yml`'s standard per-module matrix, which compiles `handler.go` against the committed `pki-server.gen.go` and would fail if they drifted structurally).
+**The reference app consumes this surface's tenant-domain operations; the three platform-domain reads have no caller.** The X.509 layer's real consumer (the section above) drives `pki_revokeCertificate` and `pki_getAuthorityCrl` over the wire in `attestation_flow_test.go` (the signing-key revoke operation is driven by `pki_revoke_gate_flow_test.go`); the two JWKS read operations remain the only HTTP operations no caller exercises. The fragment IS in the API-contract pipeline's regeneration steps: `Taskfile.yml`'s `api:gen` task runs oapi-codegen over it, `.github/workflows/api-contract.yml` regenerates and porcelain-gates the committed `pki-server.gen.go` (`git status --porcelain --untracked-files=all`) exactly like every other fragment's, and the fragment universe is single-sourced in `tools/api_fragments.json` (drift-gated by `tools/check_api_fragments.py`), where pki is a registered member. CI builds and tests this module on every PR (`fast-check.yml`'s standard per-module matrix, which compiles `handler.go` against the committed `pki-server.gen.go` and would fail if they drifted structurally).
 
 ## Known limitations
 
 - **`SignerRegistry` and `pkgcore.KeyNeverLeavesBoundary`.** `SignerRegistry` (`signer_registry.go`) is a package-level `pkgcore.SeamRegistry[Signer]` carrying `"signer.local"` (`LocalSigner`, `Capabilities: 0`) from this package's own `init()`, plus whatever names a host has blank-imported (`go/pki/signer/vault`'s `"signer.vault"`/`"signer.vault-direct"`, `go/pki/signer/kmsaws`'s `"signer.aws-kms"`/`"signer.aws-kms-direct"`). `Module.WithSigner(name string, signer Signer)` is kept alongside it as the escape hatch for a caller that already holds a concrete `Signer` value -- both exist simultaneously by design, the identical shape `pkgcore` itself keeps `WithEventBus`/`WithKVStore`/etc. alongside their own registries; see "Signer providers: `vault` and `kmsaws`" above for the full rationale, including why `"signer.local"`'s own registry entry opens an independent database connection from `pkgcore.Config` rather than sharing a `Module`'s `db` (`signer_registry.go`'s `localSignerFromConfig` doc comment). `KeyNeverLeavesBoundary` is declared in `go/pkgcore/capability.go`, following the exact pattern of `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`; `LocalSigner` does not have it, and `vault`/`kmsaws` have it only in `ModeDirectSign`.
 - **`KeyNeverLeavesBoundary` is enforced at the registry-resolution point (`BuildSignerRequiring`), and only there.** `pkgcore.Kernel.Bootstrap` resolves and validates capabilities only for the four fixed built-in seams (`EventBus`, `KVStore`, `Mailer`, `ObjectStore`) via `resolveKernelSeam`/`validateSeamCapability`; it has no knowledge of `pki.SignerRegistry` or `pki.Signer`. The `pki`-local check is `signer_registry.go`'s `BuildSignerRequiring(name, cfg, required)`: a host that intends to require a capability of the signer it wires resolves through it instead of `SignerRegistry.Build`, and a resolution whose registration lacks a required bit is refused with an error wrapping `pkgcore.ErrCapabilityUnsatisfied`, naming the signer and the missing capability -- the wiring mistake of resolving `vault`/`kmsaws` in envelope mode where direct-sign was meant, or `signer.local` where a boundary-keeping provider was meant, now fails at the resolution point when the host declares the requirement. Two residuals are recorded rather than hidden: `Module.WithSigner` takes no requirement parameter, because a directly injected `Signer` value carries no capability declaration for anything to compare -- a host that requires the boundary of an injected signer must have obtained it through `BuildSignerRequiring` -- and a host that never declares a requirement gets no check, exactly as with the four built-in seams' deployment-mode declarations.
-- **The X.509 layer is unverified by any real consumer**, and its public API is not frozen. See "X.509 layer: still no real consumer" above. Do not treat `CAService`'s current shape as a stable contract.
+- **The X.509 layer has a real consumer, and only the precisely residual surface above is not frozen.** See "X.509 layer: real consumer, precise residuals" above for what the reference app's attestation layer exercises and the exact list of what it does not (the JWKS exports, the CRLDP embedding path, CRL-regeneration scheduling, expiry-driven authority/certificate lifecycle). `CAService`'s current shape is a real consumer's shape; the residual items listed there are the ones a future integration may still change freely.
 - **The PostgreSQL integration tier covers the migration-dedupe regression, and everything else is proven against SQLite only.** The tier is `go/pki/integration_test/postgres_migration_dedupe_test.go` (run as `go test -tags=integration ./integration_test/...` from the module directory against a real PostgreSQL 16 server started with testcontainers -- `go/pki/internal/testutil.NewPostgres`), proving migration 0008's duplicate-ledger upgrade on the second dialect (see "Migration 0008's in-place duplicate-ledger dedupe" below); it runs in `full-check.yml`'s integration-tiers matrix. The tier covers that one regression; everything else -- migration 0006's five CRL columns on `pki_authorities`, the `pki_certificate_revocations` table (migration 0007), migration 0009's `VARCHAR(4096)` widening, and the CRL-signature round trip (`crl_test.go`'s `x509.RevocationList.CheckSignatureFrom` proof) among them -- is proven against SQLite only, and dual-dialect migrations-from-zero plus the isolation suites are not re-run against the real server.
 - **`ErrSignerUnavailable`'s triggers are CRL signing and the `kmsaws` direct-sign path.** `crl.go`'s `GenerateCRL` raises it by wrapping ANY non-`*apperr.Error` failure from `x509.CreateRevocationList` this way, including the library's own template-validation errors -- an imprecision accepted because this module's own callers never produce an invalid template. `kmsaws`'s `signDirect` also answers it for a KMS `Sign` response carrying no `Signature` field -- a signing backend that did not actually sign (the fail-closed semantics bullet in "Signer providers" above and the seam contract sentence in `go/pki/signer.go`). `vault`'s own missing-`signature`-field answer remains an unwrapped `fmt.Errorf`. See errors.go's own doc comment for the full accounting.
 - **`Service.PromoteNow` is not itself revocation.** It exists as a companion to `RevokeSigningKey` (an emergency revocation leaves a purpose with no active key until something is promoted) but performs no revocation of its own, and nothing in this module ever calls it automatically -- a host must call it explicitly. See `lifecycle.go`'s own doc comment for why it lives next to `PromoteDuePending` rather than in `revocation.go`, and for why it honors, rather than bypasses, the propagation window.
@@ -120,12 +244,23 @@ The reference app is a dental SaaS; it does not issue certificates. This is a de
 - **`Service.EnqueueExpiryScan` carries a window-scoped idempotency key, sized against the host scheduler's interval.** Each enqueue names the `DefaultExpiryScanWindow` window (one hour; `expiryScanWindowStart`) its clock read falls in, so a multi-replica scheduler's same-window enqueues collapse into one job and a later window's enqueue runs the scan again. The window is the module's answer to the two wrong extremes: no key at all (each tick its own independent job, so N replicas at a 1-minute cadence fire N redundant scans a minute) and a window-less constant key (exactly one scan per database file, since jobs' idempotency resolves one key forever on StandaloneQueue). A window of one hour against the reference host's one-minute tick is a 60:1 ratio; a host whose scheduler interval approaches the window must widen it through `WithExpiryScanWindow` (`DefaultExpiryScanWindow`'s doc comment and the module option say so), or every tick lands in a fresh window and the dedup is void. See `job.go`'s own doc comment for the full argument, and `enqueue_window_test.go` for the collapse/later-window/boundary proofs against a real `StandaloneQueue`.
 - **`platformScanTenantID` is a deliberate accommodation, not a design pki would have chosen.** `jobs.Task.Validate` requires a non-empty `TenantID` unconditionally, but `pki_signing_keys` is platform data with no tenant to put there -- every other module's periodic task (e.g. `go/storage`'s `storage.taskTypeExpirySweep`) has a real one because its scanned data is tenant data. A fixed sentinel value exists purely to satisfy `jobs`' own validation; `expiryScanHandler.Handle` never reads it, since `SigningKeyRepository` is a plain `*gorm.DB` with no tenant-filtering plugin engaged. See `job.go`'s own doc comment.
 - **The real host scheduling the expiry scan is `examples/reference-app`.** The app's host-side periodic-task scheduler (`examples/reference-app/cmd/server/periodic_scheduler.go`) enqueues one `Service.EnqueueExpiryScan` per tick on the cadence `cfg.PeriodicTaskInterval` (one minute by default, `defaultPeriodicTaskSchedulerInterval`), started and stopped with the queue worker in `cmd/server/server.go`'s `buildServer` (the same `cfg.DisableQueueWorker` gate). The enqueues are window-scoped (the bullet above), so on this app's StandaloneQueue the scan runs at most once per `DefaultExpiryScanWindow` window -- per-minute ticks collapse into the hour's one job -- which is all the day-scale rotation cadence needs (the 30-day `DefaultRenewalLeadTime` against a one-year default validity leaves an hour of scan latency invisible). The rotation flow test compresses the window below its own one-second tick cadence (`cfg.PKIExpiryScanWindow`) precisely so each test tick lands in a fresh window and the proof can observe a stage and a promotion on consecutive ticks; the window semantics themselves are proven in the module (`enqueue_window_test.go`), not re-proven here. The reference app is what makes the scan genuinely scheduled in a real host: without these enqueues, the boot key authn's `KeySource` consumption signs with would age out of its rotation policy with nobody ever staging its replacement. The end-to-end proof is `TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey` (`examples/reference-app/cmd/server/periodic_pki_scan_flow_test.go`): through real ticks, a real `StandaloneQueue` drain and the real `expiryScanHandler`, the purpose's boot key (created lazily by authn's first token issue through `KeySource`) is staged over by a pending successor and promoted away to `retiring`, observed through a second connection to the app's SQLite file, with the rotated purpose still signing and verifying real tokens over the wire afterward.
-- **The same host deliberately does NOT wire pki's CRL-regeneration task.** `CAService.EnqueueCRLRegenerate` / `crlRegenerateHandler` are never scheduled by `examples/reference-app`: the app is a dental SaaS with no X.509 consumer at all (the "X.509 layer: still no real consumer" exception above -- no CA issuance, no certificate verification), so regenerating a CRL nobody reads would be work for its own sake. The handler IS nevertheless registered and drained onto this host's shared queue -- `pki.Module.Register` claims both the expiry-scan and the CRL-regenerate handlers whenever the module is wired with a queue, and this host wires `pki.WithQueue` -- it simply never receives a task, because nothing in the host ever enqueues one. A host with a real certificate consumer (one that declared a `CRLDistributionPoint` on the certificates it issues) schedules `EnqueueCRLRegenerate` on the same cadence, next to the expiry-scan enqueue in `runPeriodicTasks`. go/compliance's `RetentionService` scheduling is likewise not wired by this host: only the mechanisms the app actually consumes are scheduled, and the wiring decision itself lives in `periodic_scheduler.go`'s own doc comment.
+- **The same host deliberately does NOT wire pki's CRL-regeneration task, even though it is now the X.509 layer's real consumer.** `CAService.EnqueueCRLRegenerate` / `crlRegenerateHandler` are never scheduled by `examples/reference-app`: the app's AI-output gate and its CRL verifier read ROW STATE plus the certificate chain (`VerifyCertificate` refuses a revoked row directly), and the attestation flow generates CRLs on demand through the Go API and fetches them over the HTTP read operation, so a periodic refresh still has no reader waiting on it. The handler IS nevertheless registered and drained onto this host's shared queue -- `pki.Module.Register` claims both the expiry-scan and the CRL-regenerate handlers whenever the module is wired with a queue, and this host wires `pki.WithQueue` -- it simply never receives a task, because nothing in the host ever enqueues one. A host with an external CRL reader (one that declared a `CRLDistributionPoint` on the certificates it issues, which the reference app also does not) would schedule `EnqueueCRLRegenerate` on the same cadence, next to the expiry-scan enqueue in `runPeriodicTasks`. go/compliance's `RetentionService` scheduling is likewise not wired by this host: only the mechanisms the app actually consumes are scheduled, and the wiring decision itself lives in `periodic_scheduler.go`'s own doc comment.
 - **No `Algorithm`-mismatch detection on rotation.** `Service.EnsurePurpose` does not verify that an already-active key's `Algorithm` matches the requested one on a repeated call -- a repeated call with a different algorithm for the same purpose silently keeps the first key (see "`Service`: the key-lifecycle layer's public shape" above). It is safe today only because no code path does it; the call's own doc comment records the open question of what a mismatch should mean. The module's own rotation cannot create the mismatch: `lifecycle.go`'s staging derives the successor's `Algorithm` from the row it replaces (`active.Algorithm`), so only a caller changing its argument between calls can reach the silent-keep path.
-- **`pki_local_keys.not_after` is unpopulated, and `pki_authorities`/`pki_certificates` get no EXPIRY-driven lifecycle transitions.** The expiry scan (`lifecycle.go`) drives only `pki_signing_keys` -- `pki_authorities`/`pki_certificates` use a two-value `active`/`revoked` status vocabulary with no `pending`/`retiring` states to transition through. They have a REVOCATION-shaped lifecycle instead (`CAService.RevokeCertificate`/`VerifyCertificate`, the `pki.certificate.revoked` event), which is a different axis from expiry: nothing in this module watches `pki_authorities`/`pki_certificates.not_after` and automatically revokes or renews an authority or certificate as it approaches expiry -- that remains unbuilt, and a host must track its own certificates' expiry and call `IssueCertificate` again itself. `pki_local_keys.NotAfter` stays unpopulated for the structural reason `model.go`'s `LocalKey.NotAfter` doc comment explains: populating it would require `Service` to acquire signer-implementation-specific knowledge of `LocalSigner`, which the `Signer` seam's abstraction is built to prevent.
+- **`pki_local_keys.not_after` is unpopulated, and `pki_authorities`/`pki_certificates` get no EXPIRY-driven lifecycle transitions.** The expiry scan (`lifecycle.go`) drives only `pki_signing_keys` -- `pki_authorities`/`pki_certificates` use a two-value `active`/`revoked` status vocabulary with no `pending`/`retiring` states to transition through. They have a REVOCATION-shaped lifecycle instead (`CAService.RevokeCertificate`/`VerifyCertificate`, the `pki.certificate.revoked` event), which is a different axis from expiry: nothing in this module watches `pki_authorities`/`pki_certificates.not_after` and automatically revokes or renews an authority or certificate as it approaches expiry -- that remains unbuilt, and a host must track its own certificates' expiry and call `IssueCertificate` again itself. The X.509 layer's real consumer gives the authority/certificate half of this limitation its first named waiting object: the reference app's per-tenant attestation certificates carry a real 365-day validity, and an expired certificate's outputs stop being shareable (the sharing gate's chain verification refuses it), so a renewal or expiry-warning mechanism would serve a concrete consumer. `pki_local_keys.NotAfter` stays unpopulated for the structural reason `model.go`'s `LocalKey.NotAfter` doc comment explains: populating it would require `Service` to acquire signer-implementation-specific knowledge of `LocalSigner`, which the `Signer` seam's abstraction is built to prevent.
 
-## Testing
-
+- **The X.509 consumer's acceptance proofs run against the reference app
+  over the real composed stack** (`examples/reference-app/cmd/server/
+  attestation_flow_test.go`): `TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate`
+  walks attest-on-poll, share serving, the tamper refusal, the photo
+  control group, revoke-over-HTTP refusal, re-observation recovery and
+  the CRL fetch/parse/signature leg in one journey;
+  `TestX509Attestation_ChainAndAttestationsSurviveARestart` boots, shares,
+  tears down and reboots over one database and object store and finds one
+  root, one intermediate and intact rows, with the gate still serving
+  after the restart. `internal/attestation`'s own unit suite
+  (`store_test.go`, `message_test.go`) pins the upsert arbitration, the
+  tenant isolation and the canonical-message shape; `sign_test.go` pins
+  `SignCertificate`'s refusals.
 - **Unit tests**: `LocalSigner` + SQLite, no Docker required. `go/pki/internal/testutil` provides `NewSQLite`/`NewPostgres`/`Migrate`, mirroring `go/org/internal/testutil`'s exact shape, so every test in this module applies the real, versioned migration files from zero rather than an `AutoMigrate` or a hand-written `CREATE TABLE` -- a broken migration file fails a test here, not in a later consumer.
 - `repository_test.go` covers every repository's CRUD paths plus the two isolation suites (`tenancytest.AssertIsolated` for `CertificateRepository`, `tenancytest.AssertNotTenantScoped` for the other four, `CertificateRevocationRepository` included), the database-enforced active-purpose uniqueness, `SigningKeyRepository.ListByPurposeAndStatuses`'s exact-status-set filter, `AuthorityRepository.Update`/`ListAll`, and `CertificateRevocationRepository.Create`/`ListByAuthority`. `TestCertificateRepository_RevokeIfActive_GuardedTransition` pins the guarded certificate-row transition: one move per row, idempotent no-op on the second call with a different reason, and no cross-tenant move.
 - `local_signer_test.go` covers `GenerateKey`'s algorithm rejection, the sign/verify round trip against `crypto/ed25519.Verify`, the unknown-`keyRef` failure, and `Destroy`.

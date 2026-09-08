@@ -7,8 +7,8 @@
 // go/storage object id, so storageSharingResolver is the only resolver
 // this app wires.
 //
-// Since the X.509-consumer round this resolver is also the app's
-// attestation GATE: simulation outputs (AI-generated images over patient
+// This resolver is also the app's attestation GATE: simulation outputs
+// (AI-generated images over patient
 // media) carry an attestation row (internal/attestation), and an attested
 // object's public share is served only when the attestation verifies --
 // the certificate's chain verifies, the signature over the attested

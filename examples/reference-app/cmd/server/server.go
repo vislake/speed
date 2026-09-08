@@ -2249,7 +2249,6 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// task (pki.expiry_scan), which this host's periodic-task scheduler
 	// enqueues on its tick, and the CRL-regenerate task, declared and
 	// drained like every other registered handler but never scheduled:
- HEAD
 	// the app's X.509 consumer (internal/attestation) verifies against
 	// row state and chains and generates CRLs on demand, so a scheduled
 	// refresh still has no reader (periodic_scheduler.go's doc comment

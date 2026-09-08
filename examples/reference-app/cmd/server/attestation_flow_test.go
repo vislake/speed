@@ -1,4 +1,4 @@
-// attestation_flow_test.go drives the X.509 consumer round's acceptance
+// attestation_flow_test.go drives the X.509 layer's consumer acceptance
 // journey at the wire level through the real composed HTTP stack -- the
 // same stack and canned provider smile_journey_flow_test.go uses, with the
 // object store pinned to a known directory so the test can reach the
@@ -22,8 +22,8 @@
 //  4. the output's stored bytes are tampered with out from under the
 //     platform: the same visitor is refused (digest mismatch);
 //  5. bytes restored, the tenant's attestation certificate is revoked over
-//     pki's real HTTP operation (pki_revokeCertificate, driven here for
-//     the first time): the same visitor is refused again (chain
+//     pki's real HTTP operation (pki_revokeCertificate, the one wire
+//     caller of it): the same visitor is refused again (chain
 //     verification), while the photo share still serves;
 //  6. the clinic re-opens the output (the poll of the same succeeded job):
 //     the attestation is re-issued under a fresh certificate and the
@@ -31,7 +31,7 @@
 //  7. the external-verifier leg: the platform regenerates the issuing
 //     authority's CRL through the CA service's Go API, the test fetches
 //     the document over pki's real HTTP CRL operation (pki_getAuthorityCrl,
-//     driven here for the first time) as an external verifier would, and
+//     its one wire caller) as an external verifier would, and
 //     confirms with the standard library that the revoked certificate's
 //     serial is listed, the replacement's is not, and the document carries
 //     the authority's signature.
@@ -62,14 +62,14 @@ import (
 )
 
 // TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate is
-// the round's journey in one pass -- the seven legs of this file's header.
+// the whole journey in one pass -- the seven legs of this file's header.
 func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildAttestationTestServer(t, imgServer)
 	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "x509-attestation")
 
 	// A patient photo and a completed simulation over it, exactly as the
-	// block-B journey makes them.
+	// smile-journey flow test makes them.
 	jpeg := jpegWithExif(t)
 	photo := uploadPhotoAs(t, srv, token, base64.StdEncoding.EncodeToString(jpeg))
 	createCaseAs(t, srv, token, "", caseCreateBody{
@@ -195,7 +195,7 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 
 	// Leg 5: restore the bytes, then revoke the tenant's attestation
 	// certificate over pki's real HTTP surface -- the pki_revokeCertificate
-	// operation this round drives for the first time. The revocation's
+	// operation, whose only wire caller this test is. The revocation's
 	// very next gate check refuses: chain verification now answers
 	// pki.certificate_revoked, so the old signature vouches for nothing.
 	writeStoredObject(t, cfg, "tenant-acme", outputObjectID, imgServer.generatedPNG)

@@ -1,25 +1,24 @@
 // Package attestation is the reference app's AI-output authenticity
 // attestation layer -- the real consumer of go/pki's X.509 layer that
 // closes the "no real consumer yet" exception docs/internal/22-pki.md and
-// go/pki/AGENTS.md recorded (the round record in go/pki/AGENTS.md's
-// "Real consumer: AI-output attestation" section has the full account).
+// go/pki/AGENTS.md record (go/pki/AGENTS.md's "X.509 layer: real
+// consumer, precise residuals" section has the full account).
 //
 // # The product problem
 //
 // A smile simulation's generated image is AI output over patient media
 // (PHI-adjacent), and the clinic shares such outputs with patients and
-// collaborating clinics through go/sharing's public access links. Before
-// this layer, a shared output carried no proof of where it came from or
-// whether the bytes were the bytes the platform generated: anyone who
-// obtained the link (or the bytes) could serve altered images under the
-// clinic's name. This package makes the platform vouch for the outputs it
-// generated, in the one shape that is genuinely expressible on go/pki's
-// API: the platform itself is the only legitimate holder of the private
+// collaborating clinics through go/sharing's public access links. A
+// shared output carries no proof of where it came from or whether the
+// bytes are the bytes the platform generated: anyone who obtains the link
+// (or the bytes) could serve altered images under the clinic's name. This
+// package makes the platform vouch for the outputs it generates, in the
+// one shape that is genuinely expressible on go/pki's API: the platform itself is the only legitimate holder of the private
 // keys it issues (pki never delivers them), so the platform attests an
 // output by signing a structured message -- object id, content SHA-256,
 // tenant -- with a certificate it issued to that tenant
-// (CAService.IssueCertificate + CAService.SignCertificate, the latter
-// added by this round), records the attestation, and gates the public
+// (CAService.IssueCertificate + CAService.SignCertificate), records the
+// attestation, and gates the public
 // share of an attested output on chain verification of the certificate
 // (CAService.VerifyCertificate), signature verification with the leaf's
 // public key, and a live digest comparison of the bytes being served
