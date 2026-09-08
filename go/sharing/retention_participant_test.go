@@ -13,10 +13,12 @@ package sharing
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
@@ -74,7 +76,10 @@ func TestAccessLogRepository_ListOlderThan(t *testing.T) {
 		t.Fatalf("Create(foreign): %v", err)
 	}
 
-	got, err := repo.listOlderThan(ctxA, cutoff)
+	// A limit far above the fixture's four rows: this test pins the
+	// listing's selection and order, not the sweep's batch cap (the
+	// bounded-batch sweep is the next test's job).
+	got, err := repo.listOlderThan(ctxA, cutoff, 1000)
 	if err != nil {
 		t.Fatalf("listOlderThan: %v", err)
 	}
@@ -150,6 +155,71 @@ func TestAccessLogRetentionParticipant_Sweep_ReapsOnlyPastCutoffEntries(t *testi
 	}
 	if again != 0 {
 		t.Errorf("Sweep re-run reaped %d, want 0 -- already-reaped rows must not be double-counted", again)
+	}
+}
+
+// TestAccessLogRetentionParticipant_Sweep_DeletesInBoundedBatches pins the
+// bounded-batch loop sweepAccessLog runs: a tenant with more expired
+// entries than one accessLogSweepBatchSize batch is reaped across several
+// candidate listings of at most one batch each, never by one listing of
+// the whole expired set. The listing calls are counted through a gorm
+// query callback registered on this test's own database -- the only
+// SELECTs the sweep issues are its candidate listings, HardDelete being a
+// DELETE -- so the pre-batching shape (a single unbounded listing) fails
+// this test by making one listing call where three are required. The
+// reaping count, the physical removal of every expired row and the re-run
+// answering 0 also pin that batching changed neither the sweep's result
+// nor its convergence contract.
+func TestAccessLogRetentionParticipant_Sweep_DeletesInBoundedBatches(t *testing.T) {
+	repo := NewAccessLogRepository(newTestDB(t))
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	cutoff := time.Now().UTC().Add(-time.Hour)
+
+	// More than two full batches' worth of expired entries for one tenant:
+	// a sweep must reap all of them in three bounded passes (two full
+	// batches plus a five-row remainder).
+	const expired = accessLogSweepBatchSize*2 + 5
+	for i := 0; i < expired; i++ {
+		entry := newAccessLogEntry(uuid.NewString(), "share-1", cutoff.Add(-time.Minute).Add(-time.Duration(i)*time.Microsecond))
+		if err := repo.Create(ctxA, entry); err != nil {
+			t.Fatalf("Create(expired entry %d): %v", i, err)
+		}
+	}
+
+	var listings atomic.Int64
+	hookName := "sharing:test:count_sweep_listings"
+	if err := repo.db.Callback().Query().After("gorm:query").Register(hookName, func(*gorm.DB) {
+		listings.Add(1)
+	}); err != nil {
+		t.Fatalf("register listing counter callback: %v", err)
+	}
+
+	participant := NewAccessLogRetentionParticipant(repo)
+	reaped, err := participant.Sweep(retentionSweepCtx("tenant-a"), "tenant-a", cutoff)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if reaped != expired {
+		t.Fatalf("Sweep reaped %d entries, want all %d past-cutoff entries", reaped, expired)
+	}
+	if got := listings.Load(); got != 3 {
+		t.Fatalf("Sweep issued %d candidate listings for %d expired entries, want 3 bounded ones (batch size %d) -- the sweep must delete in bounded batches, not list the whole expired set at once", got, expired, accessLogSweepBatchSize)
+	}
+
+	// Every expired row is physically gone...
+	if remaining, listErr := repo.listOlderThan(ctxA, cutoff, expired); listErr != nil {
+		t.Fatalf("listOlderThan after sweep: %v", listErr)
+	} else if len(remaining) != 0 {
+		t.Errorf("after the sweep %d expired entries still list, want 0", len(remaining))
+	}
+	// ... and a re-run converges to 0, the same answer it gave before
+	// batching.
+	again, err := participant.Sweep(retentionSweepCtx("tenant-a"), "tenant-a", cutoff)
+	if err != nil {
+		t.Fatalf("Sweep re-run: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("Sweep re-run reaped %d, want 0 -- the bounded-batch sweep must converge like the unbounded one did", again)
 	}
 }
 

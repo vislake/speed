@@ -69,6 +69,15 @@ import (
 // at Add time), exactly like compliance's reserved export-manifests name.
 const AccessLogRetentionParticipantName = "sharing.access_log"
 
+// accessLogSweepBatchSize caps how many expired entries one sweep's
+// candidate listing may return (sweepAccessLog). The access log is the one
+// table in this module nothing else ever reaps, so an unbounded listing
+// would hand the sweep a tenant's entire expired history at once; the cap
+// keeps both the sweep's memory and the length of any one pass bounded
+// however long that history has grown, the batch loop deleting each
+// listing before asking for the next.
+const accessLogSweepBatchSize = 100
+
 // NewAccessLogRetentionParticipant returns sharing's
 // pkgcore.RetentionParticipant over repo -- see this file's doc comment
 // for the mechanism in full. Module.Register registers it on the host
@@ -102,31 +111,49 @@ func NewAccessLogRetentionParticipant(repo *AccessLogRepository) pkgcore.Retenti
 // rows it actually removed. See the file doc comment for why the entries
 // are reaped by age rather than by a soft-delete marker.
 //
+// The reap runs in bounded batches (accessLogSweepBatchSize): each
+// candidate listing returns at most that many oldest-first rows and the
+// batch is hard-deleted before the next listing, so a tenant with an
+// arbitrarily long expired history costs one bounded listing-and-delete
+// pass per batch, never one listing of the whole set. The sweep ends when
+// a listing comes back empty or shorter than a full batch.
+//
 // Retry convergence follows every participant's documented contract: each
 // candidate is hard-deleted one row at a time, an entry a concurrent pass
 // already removed between the listing and its own delete (dbkit's
 // ErrRecordNotFound, whose `id` the row's own delete carries) is counted
 // as removed-elsewhere rather than as a failure, and a re-run over a
-// tenant whose past-cutoff entries are gone lists nothing and reports 0.
+// tenant whose past-cutoff entries are gone lists nothing and reports 0 --
+// an interruption between batches leaves the remaining batches for the
+// next run exactly as an interruption mid-batch always did.
 func sweepAccessLog(ctx context.Context, repo *AccessLogRepository, tenant pkgcore.TenantID, cutoff time.Time) (int, error) {
-	rows, err := repo.listOlderThan(ctx, cutoff)
-	if err != nil {
-		return 0, err
-	}
 	reaped := 0
-	for _, row := range rows {
-		err := repo.HardDelete(ctx, row.ID)
-		if hardDeleteSaysGone(err) {
-			// Already removed between the listing above and this delete --
-			// convergence, never a partial failure.
-			continue
-		}
+	for {
+		rows, err := repo.listOlderThan(ctx, cutoff, accessLogSweepBatchSize)
 		if err != nil {
 			return reaped, err
 		}
-		reaped++
+		if len(rows) == 0 {
+			return reaped, nil
+		}
+		for _, row := range rows {
+			err := repo.HardDelete(ctx, row.ID)
+			if hardDeleteSaysGone(err) {
+				// Already removed between the listing above and this delete --
+				// convergence, never a partial failure.
+				continue
+			}
+			if err != nil {
+				return reaped, err
+			}
+			reaped++
+		}
+		if len(rows) < accessLogSweepBatchSize {
+			// A short batch is the last one: everything older than cutoff
+			// has been reaped, so the loop is over.
+			return reaped, nil
+		}
 	}
-	return reaped, nil
 }
 
 // hardDeleteSaysGone reports whether err is the "the row is already gone"
