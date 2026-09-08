@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/storage"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // usageFeatureChatTokens is the Feature dimension Gateway reports for every

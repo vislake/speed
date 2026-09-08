@@ -187,14 +187,14 @@ func chargeDescription(req billing.ChargeRequest) string {
 // exactly with this dependency's release cadence, which is a fragility this
 // package does not accept -- the HMAC signature itself, never the
 // api_version field, is what actually proves the delivery is genuine.
-func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string, body []byte) (ev billing.NormalizedEvent, err error) {
+func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string, body []byte) (ev billing.NormalizedEvent, verifyErr error) {
 	// billing.webhook.verify for this channel (billing root's metrics.go):
 	// the outcome is derived from the returned error's nilness, so a
 	// refusal added in a future branch counts itself without a new
 	// record site. The previously unnamed _ context gains its name here
 	// for the recording call.
 	defer func() {
-		billing.RecordWebhookVerify(ctx, g.webhookVerify, "stripe", err)
+		billing.RecordWebhookVerify(ctx, g.webhookVerify, "stripe", verifyErr)
 	}()
 	sigHeader := firstHeader(headers, "Stripe-Signature")
 	if sigHeader == "" {

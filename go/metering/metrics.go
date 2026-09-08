@@ -15,7 +15,7 @@ import (
 const InstrumentationName = "github.com/vislake/speed/go/metering"
 
 // Metric instrument names registerMeteringMetrics wires under
-// InstrumentationName -- the "计量管道" (metering pipeline) row of
+// InstrumentationName -- the "metering pipeline" row of
 // docs/internal/09-observability.md's must-instrument table: event
 // ingest rate, outbox delivery health and aggregation latency. The row
 // is covered as follows, all low-cardinality labels, never tenant_id:
@@ -39,7 +39,7 @@ const InstrumentationName = "github.com/vislake/speed/go/metering"
 //     failed. A failed attempt leaves the row pending for the next
 //     cycle (the poller's retry schedule), so a sustained failure rate
 //     IS the stuck-outbox signal; the 09-table row's "outbox backlog"
-//     (待投递积压) is derived rather than gauged -- ingested-analytics
+//     (outbox backlog) is derived rather than gauged -- ingested-analytics
 //     and delivered-succeeded growth deltas -- because an honest depth
 //     gauge would need a COUNT over the whole outbox table every poll
 //     cycle, a scan the batch-bounded claim query deliberately never

@@ -8,10 +8,11 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // counterEntry is one real-time quota counter: the running Quantity within

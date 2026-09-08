@@ -16,7 +16,7 @@ import (
 const InstrumentationName = "github.com/vislake/speed/go/billing"
 
 // Metric instrument names registerBillingMetrics wires under
-// InstrumentationName -- the "支付" (payment) row of
+// InstrumentationName -- the "payment" row of
 // docs/internal/09-observability.md's must-instrument table: callback
 // handling success rate and intermediate-state order count and dwell.
 // The row is covered as follows, all low-cardinality labels, never
@@ -36,12 +36,12 @@ const InstrumentationName = "github.com/vislake/speed/go/billing"
 //   - billing.invoice.open_dwell -- how long an invoice stayed open
 //     before leaving the intermediate state, recorded at the
 //     transition out (open -> paid or open -> void) as the time since
-//     the invoice's own creation. The row's "滞留时长" (dwell) half:
+//     the invoice's own creation. The row's dwell half:
 //     an invoice stuck open is money movement stuck mid-flight.
 //   - billing.webhook.verify (in the gateway provider subpackages,
 //     same meter, channel-labeled) -- one count per inbound webhook
 //     verification, outcome-labeled succeeded or failed. The row's
-//     "回调处理成功率" half: a channel's failure-rate alert is
+//     callback-handling-success-rate half: a channel's failure-rate alert is
 //     verify{channel=X, outcome=failed} over the same channel's
 //     succeeded count. Providers register and record it themselves
 //     (gateway/stripe, gateway/alipay, gateway/wechat -- each
@@ -65,7 +65,7 @@ const (
 // WebhookVerifyMetricName is the metric name the gateway provider
 // subpackages (gateway/stripe, gateway/alipay, gateway/wechat) record
 // their inbound-webhook verification outcomes onto, each under its own
-// channel attribute value -- the "回调处理成功率" (callback handling
+// channel attribute value -- the (callback handling
 // success rate) half of the 09-table payment row.
 const WebhookVerifyMetricName = "billing.webhook.verify"
 

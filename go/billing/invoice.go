@@ -8,8 +8,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/vislake/speed/go/dbkit"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/vislake/speed/go/dbkit"
 )
 
 // billingInvoicesTable names the shared billing_invoices table.

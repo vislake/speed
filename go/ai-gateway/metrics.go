@@ -15,7 +15,7 @@ import (
 const InstrumentationName = "github.com/vislake/speed/go/ai-gateway"
 
 // Metric instrument names registerAIGatewayMetrics wires under
-// InstrumentationName -- the "AI 网关" row of
+// InstrumentationName -- the "AI gateway" row of
 // docs/internal/09-observability.md's must-instrument table: per-provider
 // call volume, latency and error rate, plus rate-limit hits. All
 // low-cardinality labels, never tenant_id. The row is covered as
@@ -38,7 +38,7 @@ const InstrumentationName = "github.com/vislake/speed/go/ai-gateway"
 //     per-tenant rate limiter refused (ratelimit.go's checkRateLimit,
 //     the single refusal site shared by every entry point). No
 //     provider label: the check runs before provider resolution by
-//     design. The row's "限流命中" half -- a hit means the gateway
+//     design. The row's rate-limit-hits half -- a hit means the gateway
 //     protected its tenant dimension, never that a provider throttled
 //     the gateway (that class surfaces as provider errors/duration).
 //

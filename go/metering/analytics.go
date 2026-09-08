@@ -5,8 +5,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	obs "github.com/vislake/speed/go/observability"
 	"go.opentelemetry.io/otel/metric"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // defaultAnalyticsBufferSize is AnalyticsRecorder's channel capacity when

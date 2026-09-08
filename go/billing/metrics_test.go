@@ -88,7 +88,7 @@ func TestInvoiceRepository_TransitionAndDwellMetricsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInvoice: %v", err)
 	}
-	if _, err := repo.MarkPaid(ctx, paid.ID); err != nil {
+	if _, markErr := repo.MarkPaid(ctx, paid.ID); markErr != nil {
 		t.Fatalf("MarkPaid: %v", err)
 	}
 	voided, err := repo.CreateInvoice(ctx, CreateInvoiceInput{
@@ -97,11 +97,11 @@ func TestInvoiceRepository_TransitionAndDwellMetricsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInvoice: %v", err)
 	}
-	if _, err := repo.Void(ctx, voided.ID); err != nil {
+	if _, voidErr := repo.Void(ctx, voided.ID); voidErr != nil {
 		t.Fatalf("Void: %v", err)
 	}
 	// A terminal status is never rewritten; the refusal must not count.
-	if _, err := repo.Void(ctx, paid.ID); err == nil {
+	if _, voidErr := repo.Void(ctx, paid.ID); voidErr == nil {
 		t.Fatalf("Void of a paid invoice succeeded, want the refusal")
 	}
 

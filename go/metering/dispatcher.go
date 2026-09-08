@@ -7,9 +7,10 @@ import (
 
 	"gorm.io/gorm"
 
-	obs "github.com/vislake/speed/go/observability"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // Defaults for Dispatcher's poll loop, overridden by Module's

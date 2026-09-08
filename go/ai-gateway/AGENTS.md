@@ -13,7 +13,7 @@ for the tenant-writable BYOK base URL (the reviewer-ringed P0 this module
 carried) plus the explicit tenantless-call handling at Gateway's three
 rate-limit call sites (the adjudicated P1). See "What round 4 adds".
 
-**Metrics instrumentation round (2026-09).** The 09-table "AI 网关" row
+**Metrics instrumentation round (2026-09).** The 09-table "AI gateway" row
 is instrumented at the sites this module genuinely has (`metrics.go`,
 unit-tested through a ManualReader in `metrics_test.go`):
 `aigateway.provider.calls`/`.errors`/`.duration` labeled by the

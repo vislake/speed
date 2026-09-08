@@ -46,14 +46,14 @@ const notifyTimeTolerance = 300 * time.Second
 // parameter is bounded to notifyTimeTolerance of now before the payload is
 // normalized -- the same delivery-freshness ceiling the stripe and wechat
 // legs enforce (see notifyTimeTolerance's own doc comment).
-func (g *Gateway) VerifyWebhook(ctx context.Context, _ map[string][]string, body []byte) (ev billing.NormalizedEvent, err error) {
+func (g *Gateway) VerifyWebhook(ctx context.Context, _ map[string][]string, body []byte) (ev billing.NormalizedEvent, verifyErr error) {
 	// billing.webhook.verify for this channel (billing root's
 	// metrics.go): the outcome is derived from the returned error's
 	// nilness, so a refusal added in a future branch counts itself
 	// without a new record site. The previously unnamed _ context
 	// gains its name here for the recording call.
 	defer func() {
-		billing.RecordWebhookVerify(ctx, g.webhookVerify, "alipay", err)
+		billing.RecordWebhookVerify(ctx, g.webhookVerify, "alipay", verifyErr)
 	}()
 	params, err := decodeFormValues(body)
 	if err != nil {
