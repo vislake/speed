@@ -648,28 +648,23 @@ defects it never looked for. The two lists below -- what the deployment
 cannot answer, and what is not gated at all -- are where that difference
 lives.
 
-**Open, with a gate waiting on it** (`pnpm test:e2e:pending`):
+**Nothing is open.** `pnpm test:e2e:pending` answers "No tests found":
+every gate this suite wrote against a defect has seen its fix land, and
+every unbuilt surface the brief named -- and the administration page the
+operator asked for -- is built. Default tier 20 passed / 4 skipped,
+`@budget` 31 passed.
 
-| Gate | Waiting on | Kind |
-|---|---|---|
-| platform-staff-can-administer | `go/admin` is wired and answers (tenants, audit-events, roles, impersonation all 200 against the live deployment with a staff token) but there is no page, so a platform operator needs curl | unbuilt surface |
-
-Its second half -- that a clinic owner must NOT be offered that
-entrance -- passes today and is asserted with the same weight, because a
-clinic that can read the platform's tenant ledger is a cross-tenant
-disclosure. Both carry `@deployment` alongside `@pending`, which this
-file's own rule requires of any gate that skips itself unless an
-environment variable is set: the presence half needs
-`E2E_PLATFORM_STAFF_PASSWORD`, the operator's own secret, deliberately
-not defaulted to a repository constant the way the demo-user password
-is. Proven to bite rather than trusted: run against a real server with
-that variable supplied, it fails naming the missing entrance.
-
-One trap is recorded in the gate in advance, because this suite has paid
-for it once: admin's ledger stores an EMPTY `displayName`, so a row
-rendered as stored would list `tenant-64307885-c306-...` -- the identical
-defect the Team roster shipped with and `42a14614` closed. The gate
-refuses a raw tenant id where a tenant's identity belongs.
+The last surface closed was the administration page (`3295f50b`): a
+"Administration" entry in the frame's navigation, shown only to the
+system-domain operator, whose ledger names tenants through the ladder
+its rows can support (stored display name, the demo roster, then a
+bilingual "unnamed tenant") and never shows a raw tenant id. Verified
+three ways, because a gate's green is the weakest of them: the gate
+itself against the live deployment with the operator's own account,
+both halves; a walk-through as the operator, where the page reads
+"Acme Dental / Globex Dental / Unnamed tenant"; and the ledger's own
+full row set matched against the page, confirming the page is complete
+and honest.
 
 **Every defect is closed.** `pnpm test:e2e:pending` selects nothing
 waiting on a defect:

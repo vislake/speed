@@ -108,9 +108,21 @@ const RAW_TENANT_ID = /\btenant-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 // session address-source check) and had never run anywhere. This one
 // nearly did too -- the first attempt to run it against a real server
 // answered "No tests found", which is exactly how that failure looks.
+// Closed by 3295f50b. The entry is a nav item after Account ("#/admin",
+// accessible name "Administration"), shown only when the tenant is the
+// system domain -- a clinic owner never sees it, and a direct visit
+// answers the route guard's 403 with the no-permission empty state.
+// The ledger names tenants through the ladder its rows can actually
+// support (a stored display name, the demo roster, then a bilingual
+// "unnamed tenant"), and a raw tenant id never reaches the page.
+//
+// Verified on three engines, and against the live deployment with the
+// platform operator's own account: both halves pass there.
+//
+// @deployment stays, @pending goes.
 test(
   'a platform operator can administer tenants by clicking',
-  { tag: ['@pending', '@deployment'] },
+  { tag: '@deployment' },
   async ({ page }) => {
     test.skip(
       PLATFORM_STAFF.password === undefined,
@@ -147,9 +159,17 @@ test(
   },
 )
 
+// @budget, not the default tier and not @deployment-only: it signs in
+// as demo-owner a second time, and the default tier already spends that
+// account's whole five-per-minute allowance -- putting it there made the
+// whole tier red on its own pacing. @budget's separate invocation gives
+// it a fresh server and a fresh allowance; it still runs locally AND
+// against a deployment, since it needs no password and no E2E_BASE_URL.
+// The presence half above stays @deployment because it needs the
+// operator's password variable to be meaningful at all.
 test(
   'a clinic owner cannot reach the platform administration surface',
-  { tag: ['@pending', '@deployment'] },
+  { tag: '@budget' },
   async ({ page }) => {
     // The other half, and the half that makes the first one safe. A
     // clinic that can read the platform's tenant ledger is a
