@@ -745,6 +745,50 @@ export interface BillingListCreditTransactionsResponse {
   transactions: BillingCreditTransaction[];
 }
 
+/**
+ * The invoice's lifecycle state: "open" is awaiting payment, "paid" settled in full, "void" canceled before payment (e.g. a subscription canceled before its invoice was paid). Paid and void are terminal -- the invoice is the record of the settlement or the cancellation, and neither is ever rewritten.
+ */
+export type BillingInvoiceStatus = typeof BillingInvoiceStatus[keyof typeof BillingInvoiceStatus];
+
+
+export const BillingInvoiceStatus = {
+  open: 'open',
+  paid: 'paid',
+  void: 'void',
+} as const;
+
+/**
+ * One billing document of the caller's tenant, exactly as the module's channel-agnostic Invoice model (go/billing/invoice.go) carries it -- and therefore the detail shape of billing_getInvoice and the row shape of billing_listInvoices at once, since the model has no extra detail fields a separate get-shape would add: no line items, no payment-channel reference of any kind (an invoice records a Subscription's billing cycle and its amount; which channel, if any, collected it is a later round's gateway settlement, never a field this round invents). Money is flattened the same way the model stores it: amountCents plus its ISO 4217 currency, never a floating-point amount.
+ */
+export interface BillingInvoice {
+  /** The invoice's application-generated UUID. */
+  id: string;
+  /** The id of the Subscription this invoice bills -- an ID reference only, never an embedded subscription (no cross-module foreign keys; this is an in-module reference under the same discipline). */
+  subscriptionId: string;
+  /** The invoice's lifecycle state: "open" is awaiting payment, "paid" settled in full, "void" canceled before payment (e.g. a subscription canceled before its invoice was paid). Paid and void are terminal -- the invoice is the record of the settlement or the cancellation, and neither is ever rewritten. */
+  status: BillingInvoiceStatus;
+  /** The invoice amount in the currency's minor unit (cents for a two-decimal currency like USD or CNY). */
+  amountCents: number;
+  /** The amount's ISO 4217 currency code (e.g. "USD", "CNY"). */
+  currency: string;
+  /** When the billed billing cycle starts. */
+  periodStart: string;
+  /** When the billed billing cycle ends. */
+  periodEnd: string;
+  /** When the invoice was issued. */
+  createdAt: string;
+  /** When the invoice row was last touched -- a status transition (open to paid or void) updates it, an unmodified invoice carries its issue time. */
+  updatedAt: string;
+}
+
+/**
+ * One page of the tenant's invoices, newest first.
+ */
+export interface BillingListInvoicesResponse {
+  /** At most limit rows, newest first; empty when the tenant has no invoices yet. */
+  invoices: BillingInvoice[];
+}
+
 export type BillingErrorParams = { [key: string]: unknown };
 
 /**
@@ -786,6 +830,13 @@ offset?: number;
 };
 
 export type BillingListCreditTransactionsParams = {
+/**
+ * The page size, from 1 through 100. Defaults to 50.
+ */
+limit?: number;
+};
+
+export type BillingListInvoicesParams = {
 /**
  * The page size, from 1 through 100. Defaults to 50.
  */
@@ -3724,6 +3775,147 @@ export function useBillingListCreditTransactions<TData = Awaited<ReturnType<type
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getBillingListCreditTransactionsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The tenant's billing documents, newest first -- every Invoice row the module's plain-Go lifecycle wrote for the tenant (invoice.go's CreateInvoice/MarkPaid/Void; nothing writes invoices over HTTP, so this read and the lifecycle can never disagree about what exists). At most limit rows (1-100, default 50). Newest first is creation order, the same ordering key the credit-transactions listing uses -- never the period an invoice bills, since a voided document and its replacement need not share cycle dates. Status is the lifecycle's own closed vocabulary: "open" awaiting payment, "paid" settled in full, "void" canceled before payment. A tenant that has never been issued an invoice answers an empty array, never an error, so the invoice page renders an empty state rather than a missing-resource refusal. The window is served from the module's full newest-first listing; a keyset-paginated read over a whole history is future work (see go/billing/AGENTS.md's Known limitations) -- an invoice page needs the recent documents, and the full history stays reconstructable service-side today.
+ * @summary List the caller's tenant's invoices, newest first.
+ */
+export const billingListInvoices = (
+    params?: BillingListInvoicesParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<BillingListInvoicesResponse>(
+      {url: `/api/v1/billing/invoices`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getBillingListInvoicesQueryKey = (params?: BillingListInvoicesParams,) => {
+    return [
+    `/api/v1/billing/invoices`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getBillingListInvoicesQueryOptions = <TData = Awaited<ReturnType<typeof billingListInvoices>>, TError = BillingError>(params?: BillingListInvoicesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingListInvoices>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getBillingListInvoicesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof billingListInvoices>>> = ({ signal }) => billingListInvoices(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof billingListInvoices>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type BillingListInvoicesQueryResult = NonNullable<Awaited<ReturnType<typeof billingListInvoices>>>
+export type BillingListInvoicesQueryError = BillingError
+
+
+/**
+ * @summary List the caller's tenant's invoices, newest first.
+ */
+
+export function useBillingListInvoices<TData = Awaited<ReturnType<typeof billingListInvoices>>, TError = BillingError>(
+ params?: BillingListInvoicesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingListInvoices>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getBillingListInvoicesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The full shape of one billing document: the row the module's plain-Go lifecycle wrote, exactly as the model carries it (see BillingInvoice's own description and billing_listInvoices' for the status vocabulary). The read is tenant-scoped like every other operation on this surface: id must name an invoice of the caller's own tenant.
+ * @summary Get one of the caller's tenant's invoices.
+ */
+export const billingGetInvoice = (
+    id: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<BillingInvoice>(
+      {url: `/api/v1/billing/invoices/${id}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getBillingGetInvoiceQueryKey = (id: string,) => {
+    return [
+    `/api/v1/billing/invoices/${id}`
+    ] as const;
+    }
+
+
+export const getBillingGetInvoiceQueryOptions = <TData = Awaited<ReturnType<typeof billingGetInvoice>>, TError = BillingError>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingGetInvoice>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getBillingGetInvoiceQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof billingGetInvoice>>> = ({ signal }) => billingGetInvoice(id, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof billingGetInvoice>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type BillingGetInvoiceQueryResult = NonNullable<Awaited<ReturnType<typeof billingGetInvoice>>>
+export type BillingGetInvoiceQueryError = BillingError
+
+
+/**
+ * @summary Get one of the caller's tenant's invoices.
+ */
+
+export function useBillingGetInvoice<TData = Awaited<ReturnType<typeof billingGetInvoice>>, TError = BillingError>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingGetInvoice>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getBillingGetInvoiceQueryOptions(id,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
