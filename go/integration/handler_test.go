@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/integration/api"
 )
@@ -217,6 +218,23 @@ func TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_AnswersCreate
 	}
 }
 
+// lifecycleSecondMapping is a second EventMapping the lifecycle test below
+// registers alongside testMapping (webhook_service_test.go) so its PATCH
+// leg can replace a subscription's eventTypes with a genuinely different
+// registered public type: testMapping alone declares one public type, so
+// any replacement list would have to equal the stored one and the HTTP
+// leg could never observe the replacement. The mapping's transform never
+// runs in that test -- no delivery is driven there -- and mirrors
+// testMapping's own shape.
+var lifecycleSecondMapping = EventMapping{
+	InternalType:  "test.second.happened",
+	PublicType:    "test.second.happened",
+	PublicVersion: "v1",
+	Transform: func(_ context.Context, evt pkgcore.Event) (json.RawMessage, error) {
+		return json.RawMessage(`{"seen":true}`), nil
+	},
+}
+
 // TestHandler_WebhookSubscriptionLifecycle_OverHTTP drives the webhook half
 // of this module's fragment through one subscription's full life over the
 // wire: create (the 201 whose body is the one and only place the raw signing
@@ -243,7 +261,7 @@ func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
 	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
 
 	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true},
-		WithEventMapping(testMapping), WithWebhookURLValidator(alwaysAllowURL))
+		WithEventMapping(testMapping, lifecycleSecondMapping), WithWebhookURLValidator(alwaysAllowURL))
 
 	// create: 201 with the raw secret in its normal field.
 	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks", map[string]any{
@@ -292,10 +310,15 @@ func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
 		t.Errorf("listed row = %v, want the created subscription's id, url and active state", row)
 	}
 
-	// Partial PATCH: URL and event types replaced, Active left alone by the
-	// request's absence (nil means no change) -- still true.
+	// Partial PATCH: URL and eventTypes replaced -- the subscription moves
+	// onto the second registered public type -- while Active, absent from
+	// the request (nil means no change), stays true. The replaced
+	// eventTypes list in the response is the HTTP leg's own proof that a
+	// present eventTypes in a partial PATCH replaces the stored selection
+	// rather than being ignored (the service-level pin lives in
+	// webhook_service_test.go).
 	rec = doRequest(h, ctxFor(testTenant), http.MethodPatch, "/api/v1/integration/webhooks/"+*created.ID, map[string]any{
-		"url": "https://example.com/hook-v2", "eventTypes": []string{"test.thing.happened"},
+		"url": "https://example.com/hook-v2", "eventTypes": []string{"test.second.happened"},
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body %q", rec.Code, rec.Body.String())
@@ -306,6 +329,10 @@ func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
 	}
 	if updated["url"] != "https://example.com/hook-v2" {
 		t.Errorf("updated url = %v, want %q", updated["url"], "https://example.com/hook-v2")
+	}
+	updatedTypes, _ := updated["eventTypes"].([]any)
+	if len(updatedTypes) != 1 || updatedTypes[0] != "test.second.happened" {
+		t.Errorf("updated eventTypes = %v, want the replaced [test.second.happened] -- a present eventTypes in a partial PATCH must replace the stored selection", updated["eventTypes"])
 	}
 	if updated["active"] != true {
 		t.Errorf("updated active = %v, want true -- a field absent from a partial PATCH must leave the stored value unchanged", updated["active"])
