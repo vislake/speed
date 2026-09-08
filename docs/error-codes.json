@@ -1698,7 +1698,7 @@
       "file": "go/dbkit/repository.go",
       "ident": "ErrMissingID",
       "kind": "declared",
-      "line": 89,
+      "line": 93,
       "module": "dbkit",
       "status": 400
     },
@@ -1716,7 +1716,7 @@
       "file": "go/dbkit/repository.go",
       "ident": "ErrRecordNotFound",
       "kind": "declared",
-      "line": 83,
+      "line": 87,
       "module": "dbkit",
       "status": 404
     },
