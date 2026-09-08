@@ -14,6 +14,30 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AuthnSessionRevokeReason.
+const (
+	Logout          AuthnSessionRevokeReason = "logout"
+	RevokeOthers    AuthnSessionRevokeReason = "revoke_others"
+	SecurityRevoked AuthnSessionRevokeReason = "security_revoked"
+	UserRevoked     AuthnSessionRevokeReason = "user_revoked"
+)
+
+// Valid indicates whether the value is a known member of the AuthnSessionRevokeReason enum.
+func (e AuthnSessionRevokeReason) Valid() bool {
+	switch e {
+	case Logout:
+		return true
+	case RevokeOthers:
+		return true
+	case SecurityRevoked:
+		return true
+	case UserRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
 // AuthnConfirmTOTPRequest defines model for AuthnConfirmTOTPRequest.
 type AuthnConfirmTOTPRequest struct {
 	Code string `json:"code"`
@@ -139,9 +163,15 @@ type AuthnSession struct {
 	IP         *string    `json:"ip,omitempty"`
 	IsCurrent  *bool      `json:"is_current,omitempty"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
-	Status     *string    `json:"status,omitempty"`
-	UserAgent  *string    `json:"user_agent,omitempty"`
+
+	// RevokeReason Why the session stopped, exported only on a revoked session. The value is a tiered projection, never the reason stored on the session row: a reason recording the owner's own action exports as itself -- "logout" (this device signed itself out), "user_revoked" (the owner revoked this one session from their device list), "revoke_others" (the owner signed out every other session) -- while a reason recording a security mechanism's action (today: a detected refresh-token replay) never exports as itself: every such reason folds into the single generic value "security_revoked", which tells the owner that a security mechanism, not the owner, closed the session without naming which mechanism. A security-aware caller renders "security_revoked" as a security event worth acting on, and never renders the mechanisms behind it. An active session carries no revoke_reason.
+	RevokeReason *AuthnSessionRevokeReason `json:"revoke_reason,omitempty"`
+	Status       *string                   `json:"status,omitempty"`
+	UserAgent    *string                   `json:"user_agent,omitempty"`
 }
+
+// AuthnSessionRevokeReason Why the session stopped, exported only on a revoked session. The value is a tiered projection, never the reason stored on the session row: a reason recording the owner's own action exports as itself -- "logout" (this device signed itself out), "user_revoked" (the owner revoked this one session from their device list), "revoke_others" (the owner signed out every other session) -- while a reason recording a security mechanism's action (today: a detected refresh-token replay) never exports as itself: every such reason folds into the single generic value "security_revoked", which tells the owner that a security mechanism, not the owner, closed the session without naming which mechanism. A security-aware caller renders "security_revoked" as a security event worth acting on, and never renders the mechanisms behind it. An active session carries no revoke_reason.
+type AuthnSessionRevokeReason string
 
 // AuthnSocialAuthorizeResponse defines model for AuthnSocialAuthorizeResponse.
 type AuthnSocialAuthorizeResponse struct {

@@ -1823,6 +1823,109 @@ func TestHandler_ListSessions_ExposesSessionExpiry(t *testing.T) {
 	}
 }
 
+// TestHandler_ListSessions_TieredRevokeReasonExport is the wire-level proof
+// of the tiered export ruling on revoke reasons. Three sessions of one
+// account end by the three routes a revoked row can take: one is killed by
+// a GENUINE replay (the refresh token is consumed by a normal refresh, then
+// the consumed token is presented again -- the detection path, not a direct
+// revoke call), one by the owner signing that device out (Service.Logout,
+// the same call the logout endpoint makes), and the viewer's own session
+// stays active. Listing sessions as the viewer must then show the tiered
+// projection: the logout reason exports verbatim ("logout"); the replay
+// reason NEVER exports as itself -- it folds into the schema's single
+// generic value ("security_revoked"), so the response bytes cannot even
+// contain "replay_detected"; and the active session carries no
+// revoke_reason at all. The same test re-proves the storage half of the
+// ruling (constraint three): the session rows themselves -- the in-process
+// read of the same data -- keep the real reasons verbatim, replay_detected
+// included, because the fold is an API-projection-only change and the
+// column remains the forensics record.
+func TestHandler_ListSessions_TieredRevokeReasonExport(t *testing.T) {
+	t.Parallel()
+	h, f := newTestHandler(t)
+	f.registerUser(t, "tiered@example.com", testTenantA)
+
+	viewer, err := f.svc.Login(t.Context(), LoginInput{Identifier: "tiered@example.com", Password: testPassword, Device: "laptop", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login(viewer) error = %v", err)
+	}
+	replayed, err := f.svc.Login(t.Context(), LoginInput{Identifier: "tiered@example.com", Password: testPassword, Device: "phone", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login(replayed) error = %v", err)
+	}
+	loggedOut, err := f.svc.Login(t.Context(), LoginInput{Identifier: "tiered@example.com", Password: testPassword, Device: "tablet", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login(loggedOut) error = %v", err)
+	}
+
+	// The phone session's thief replays its consumed refresh token: the
+	// first refresh rotates the family, the second presents the
+	// now-consumed token again -- the module's actual detection path.
+	_, err = f.svc.Refresh(t.Context(), replayed.RefreshToken)
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	_, err = f.svc.Refresh(t.Context(), replayed.RefreshToken)
+	if !hasCode(err, ErrRefreshTokenReused.Code) {
+		t.Fatalf("replayed Refresh() error = %v, want code %q", err, ErrRefreshTokenReused.Code)
+	}
+	// The tablet's owner signs it out from the device itself.
+	if err = f.svc.Logout(t.Context(), loggedOut.Principal.SessionID); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	// Storage is untouched by the fold: the rows this handler projects
+	// from still carry the real reasons, replay_detected verbatim.
+	stored, err := f.svc.ListSessions(t.Context(), viewer.Principal.UserID)
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	storedReason := make(map[string]string, len(stored))
+	for _, row := range stored {
+		storedReason[row.ID] = row.RevokeReason
+	}
+	if got := storedReason[replayed.Principal.SessionID]; got != RevokeReasonReplay {
+		t.Errorf("stored revoke reason of the replay-revoked session = %q, want %q verbatim", got, RevokeReasonReplay)
+	}
+	if got := storedReason[loggedOut.Principal.SessionID]; got != RevokeReasonLogout {
+		t.Errorf("stored revoke reason of the logged-out session = %q, want %q", got, RevokeReasonLogout)
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/sessions", nil, principalFor(viewer))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("replay_detected")) {
+		t.Error("the response carries the stored reason replay_detected; the security-class reason must fold on the wire")
+	}
+	resp := decodeBody[api.AuthnListSessionsResponse](t, rec)
+	if resp.Sessions == nil || len(*resp.Sessions) != 3 {
+		t.Fatalf("Sessions = %v, want 3 rows", resp.Sessions)
+	}
+	for _, s := range *resp.Sessions {
+		if s.ID == nil {
+			t.Error("a session row carries no id")
+			continue
+		}
+		switch *s.ID {
+		case replayed.Principal.SessionID:
+			if s.RevokeReason == nil || *s.RevokeReason != api.SecurityRevoked {
+				t.Errorf("replay-revoked session revoke_reason = %v, want the folded generic %q", s.RevokeReason, api.SecurityRevoked)
+			}
+		case loggedOut.Principal.SessionID:
+			if s.RevokeReason == nil || *s.RevokeReason != api.Logout {
+				t.Errorf("logged-out session revoke_reason = %v, want %q exported as itself", s.RevokeReason, api.Logout)
+			}
+		case viewer.Principal.SessionID:
+			if s.RevokeReason != nil {
+				t.Errorf("active session revoke_reason = %q, want it absent", *s.RevokeReason)
+			}
+		default:
+			t.Errorf("response carries a session (%s) this test never created", *s.ID)
+		}
+	}
+}
+
 func TestHandler_RevokeSession_AnotherUsers_Returns404(t *testing.T) {
 	t.Parallel()
 	h, f := newTestHandler(t)

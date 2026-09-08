@@ -1160,23 +1160,36 @@ func toSocialLoginResponse(result *SocialLoginResult) api.AuthnSocialLoginRespon
 // toSessionResponse converts session to its spec-generated JSON response
 // type. IsCurrent is true exactly when session is the one currentSessionID
 // (the calling Principal's own session id) names.
+//
+// RevokeReason is the projection exportRevokeReason produces from the
+// stored reason, and only a revoked row carries it: an active session (or
+// any row whose status is not revoked) has no reason to report, whatever
+// its column holds. The fold happens HERE, at the API boundary -- the
+// stored Session row keeps the real reason, which is what in-process
+// readers (and the audit trail) see.
 func toSessionResponse(session *Session, currentSessionID string) api.AuthnSession {
 	createdAt := session.CreatedAt
 	lastSeenAt := session.LastSeenAt
 	expiresAt := session.ExpiresAt
 	isCurrent := session.ID == currentSessionID
 	amr := session.AMRList()
+	var revokeReason *api.AuthnSessionRevokeReason
+	if session.Status == SessionStatusRevoked {
+		projected := api.AuthnSessionRevokeReason(exportRevokeReason(session.RevokeReason))
+		revokeReason = &projected
+	}
 	return api.AuthnSession{
-		ID:         &session.ID,
-		Status:     &session.Status,
-		Device:     str(session.Device),
-		UserAgent:  str(session.UserAgent),
-		IP:         str(session.IP),
-		Amr:        &amr,
-		CreatedAt:  &createdAt,
-		LastSeenAt: &lastSeenAt,
-		ExpiresAt:  &expiresAt,
-		IsCurrent:  &isCurrent,
+		ID:           &session.ID,
+		Status:       &session.Status,
+		Device:       str(session.Device),
+		UserAgent:    str(session.UserAgent),
+		IP:           str(session.IP),
+		Amr:          &amr,
+		CreatedAt:    &createdAt,
+		LastSeenAt:   &lastSeenAt,
+		ExpiresAt:    &expiresAt,
+		RevokeReason: revokeReason,
+		IsCurrent:    &isCurrent,
 	}
 }
 

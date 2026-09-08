@@ -427,6 +427,19 @@ export interface AuthnSwitchTenantRequest {
   tenant_id: string;
 }
 
+/**
+ * Why the session stopped, exported only on a revoked session. The value is a tiered projection, never the reason stored on the session row: a reason recording the owner's own action exports as itself -- "logout" (this device signed itself out), "user_revoked" (the owner revoked this one session from their device list), "revoke_others" (the owner signed out every other session) -- while a reason recording a security mechanism's action (today: a detected refresh-token replay) never exports as itself: every such reason folds into the single generic value "security_revoked", which tells the owner that a security mechanism, not the owner, closed the session without naming which mechanism. A security-aware caller renders "security_revoked" as a security event worth acting on, and never renders the mechanisms behind it. An active session carries no revoke_reason.
+ */
+export type AuthnSessionRevokeReason = typeof AuthnSessionRevokeReason[keyof typeof AuthnSessionRevokeReason];
+
+
+export const AuthnSessionRevokeReason = {
+  logout: 'logout',
+  user_revoked: 'user_revoked',
+  revoke_others: 'revoke_others',
+  security_revoked: 'security_revoked',
+} as const;
+
 export interface AuthnSession {
   id?: string;
   status?: string;
@@ -438,6 +451,8 @@ export interface AuthnSession {
   last_seen_at?: string;
   /** When the session stops working. Expiry is enforced at use time and never written back to the row, so a session whose status is still "active" can have an expires_at in the past: a caller renders such a row as expired, never as a live device. */
   expires_at?: string;
+  /** Why the session stopped, exported only on a revoked session. The value is a tiered projection, never the reason stored on the session row: a reason recording the owner's own action exports as itself -- "logout" (this device signed itself out), "user_revoked" (the owner revoked this one session from their device list), "revoke_others" (the owner signed out every other session) -- while a reason recording a security mechanism's action (today: a detected refresh-token replay) never exports as itself: every such reason folds into the single generic value "security_revoked", which tells the owner that a security mechanism, not the owner, closed the session without naming which mechanism. A security-aware caller renders "security_revoked" as a security event worth acting on, and never renders the mechanisms behind it. An active session carries no revoke_reason. */
+  revoke_reason?: AuthnSessionRevokeReason;
   is_current?: boolean;
 }
 

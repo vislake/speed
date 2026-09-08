@@ -787,6 +787,26 @@ components:
             status is still "active" can have an expires_at in the past:
             a caller renders such a row as expired, never as a live
             device.
+        revoke_reason:
+          type: string
+          enum: [logout, user_revoked, revoke_others, security_revoked]
+          description: >-
+            Why the session stopped, exported only on a revoked session.
+            The value is a tiered projection, never the reason stored on
+            the session row: a reason recording the owner's own action
+            exports as itself -- "logout" (this device signed itself
+            out), "user_revoked" (the owner revoked this one session
+            from their device list), "revoke_others" (the owner signed
+            out every other session) -- while a reason recording a
+            security mechanism's action (today: a detected refresh-token
+            replay) never exports as itself: every such reason folds
+            into the single generic value "security_revoked", which
+            tells the owner that a security mechanism, not the owner,
+            closed the session without naming which mechanism. A
+            security-aware caller renders "security_revoked" as a
+            security event worth acting on, and never renders the
+            mechanisms behind it. An active session carries no
+            revoke_reason.
         is_current:
           type: boolean
     AuthnListSessionsResponse:

@@ -9,15 +9,23 @@ import (
 // next to RevokeReasonLogout and RevokeReasonReplay in model.go -- declared
 // here instead because both only ever originate from the two methods below,
 // the same "constant lives beside its one call site" convention verification.go
-// already follows for MethodSMS.
+// already follows for MethodSMS. Both are owner-action reasons under the
+// export-classification rule stated next to revokeReasonExportSecurity in
+// model.go ([exportRevokeReason] implements it): the owner closed the
+// session themselves, from their own device list or in their own bulk
+// sign-out, so the sessions list exports each verbatim. A further reason
+// declared here must take its class position the same way, naming itself in
+// exportRevokeReason's switch.
 const (
 	// RevokeReasonUserRevoked is an owner explicitly signing out ONE OTHER
 	// device from their own device list (RevokeSession). It is distinct
 	// from RevokeReasonLogout, which is a device signing itself out.
+	// Owner-action class: the sessions list exports it verbatim.
 	RevokeReasonUserRevoked = "user_revoked"
 
 	// RevokeReasonRevokeOthers is an owner signing out every session
 	// except the one they are currently using (RevokeOtherSessions).
+	// Owner-action class: the sessions list exports it verbatim.
 	RevokeReasonRevokeOthers = "revoke_others"
 )
 

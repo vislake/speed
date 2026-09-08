@@ -227,3 +227,73 @@ func TestUser_EmailIsEncryptedAtRest(t *testing.T) {
 		t.Fatalf("decrypted email = %q, want %q", readBack.Email, address)
 	}
 }
+
+// TestExportRevokeReason_ClassifiesEveryDeclaredReason pins the tiered
+// export rule on the four reasons the vocabulary currently declares. The
+// rule itself is stated at the vocabulary's declaration sites (the
+// RevokeReason* groups in model.go and history.go, whose doc comments make
+// every new reason take its class position), and this test is what makes a
+// future reason's declaration incomplete until its position in
+// exportRevokeReason's switch exists: an owner-action reason (the owner
+// closed the session themselves) exports verbatim, a security-mechanism
+// reason (replay detection closed it) folds into revokeReasonExportSecurity
+// and never exports as itself.
+func TestExportRevokeReason_ClassifiesEveryDeclaredReason(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		stored string
+		want   string
+	}{
+		{name: "logout is an owner action and exports verbatim", stored: RevokeReasonLogout, want: "logout"},
+		{name: "user_revoked is an owner action and exports verbatim", stored: RevokeReasonUserRevoked, want: "user_revoked"},
+		{name: "revoke_others is an owner action and exports verbatim", stored: RevokeReasonRevokeOthers, want: "revoke_others"},
+		{name: "replay_detected is a security mechanism and folds", stored: RevokeReasonReplay, want: revokeReasonExportSecurity},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := exportRevokeReason(tc.stored); got != tc.want {
+				t.Errorf("exportRevokeReason(%q) = %q, want %q", tc.stored, got, tc.want)
+			}
+		})
+	}
+	if got := exportRevokeReason(RevokeReasonReplay); got == RevokeReasonReplay {
+		t.Error("a security-mechanism reason exported as itself; the fold is what keeps the mechanism off the sessions list")
+	}
+}
+
+// TestExportRevokeReason_UnknownReasonsFoldNeverPassThrough pins the
+// projection's default: a stored value no declared reason names -- an empty
+// or hand-edited column, or a reason a future round declared without taking
+// its class position in exportRevokeReason's switch -- folds into
+// revokeReasonExportSecurity rather than passing through. Of the answers an
+// undeclared value could take, the folded one is the only one that can
+// never leak an undeclared security mechanism.
+func TestExportRevokeReason_UnknownReasonsFoldNeverPassThrough(t *testing.T) {
+	t.Parallel()
+
+	for _, stored := range []string{"", "no-such-reason", "future_security_mechanism"} {
+		if got := exportRevokeReason(stored); got != revokeReasonExportSecurity {
+			t.Errorf("exportRevokeReason(%q) = %q, want the folded value %q", stored, got, revokeReasonExportSecurity)
+		}
+	}
+}
+
+// TestExportRevokeReason_FoldValueIsNotPartOfTheStoredVocabulary guards the
+// projection-only property structurally at the vocabulary level:
+// revokeReasonExportSecurity must never equal a declared stored reason, or
+// a revocation could record the folded value in Session.RevokeReason and
+// destroy the forensic evidence the ruling's constraint three preserves
+// (replay_detected stays in the column; the write path references no reason
+// but the RevokeReason* constants).
+func TestExportRevokeReason_FoldValueIsNotPartOfTheStoredVocabulary(t *testing.T) {
+	t.Parallel()
+
+	stored := []string{RevokeReasonLogout, RevokeReasonUserRevoked, RevokeReasonRevokeOthers, RevokeReasonReplay}
+	for _, reason := range stored {
+		if reason == revokeReasonExportSecurity {
+			t.Errorf("revokeReasonExportSecurity (%q) collides with a stored reason; the fold value must stay export-only", revokeReasonExportSecurity)
+		}
+	}
+}

@@ -783,6 +783,49 @@ below, per `docs/internal/11-cross-cutting.md`'s "the HTTP translation is the
 caller's job, not the business-logic layer's" rule. Do not duplicate this
 logic inside `handler.go`; call the shared `writeAppError`.
 
+### A revoked session's reason reaches the sessions list tiered, never verbatim for a security mechanism
+
+`AuthnSession.revoke_reason` (the spec fragment's schema, `api/openapi.yaml`)
+is the sessions list's answer to "why did this session stop", exported only
+on a revoked row. The answer is a TIERED PROJECTION, never the stored
+reason: a reason recording the owner's own action exports as itself
+(`logout`, `user_revoked`, `revoke_others` — the value space is the schema's
+enum), while a reason recording a security mechanism's action (today:
+`replay_detected`) never exports as itself and folds into the schema's one
+generic value `security_revoked`. The owner reads "closed by a security
+mechanism, not by me"; an observer of the response — an attacker who may
+well have caused the mechanism to act — never learns which mechanism fired,
+so a replay theft is not confirmed to the thief through the victim's own
+device list.
+
+The classification rule is written at the vocabulary's declaration sites:
+every `RevokeReason*` constant in `model.go` and `history.go` states its
+class (owner-action or security-mechanism) in its own doc comment, and
+`exportRevokeReason` (`model.go`) is the rule's single implementation,
+naming every member of both classes — declaring a reason without taking
+that position is incomplete, and the projection's default folds an
+undeclared value rather than passing it through, so no unclassified value
+can ever leak. The fold is an API-projection-only change: it happens in
+`toSessionResponse` (`handler.go`), the stored `Session.RevokeReason` (the
+`revoke_reason` column) keeps the REAL reason — `replay_detected` stays in
+the column, the forensics/audit record — and no write path was touched. The
+in-process `Service.ListSessions` rows still carry the stored values; only
+the wire projection folds. Do not "simplify" the projection into the write
+path or into `ListSessions` itself: both would destroy the stored evidence
+or hand in-process consumers a value that no longer matches the column.
+
+The projection's value space is closed and defined by the schema enum, and
+a rendering consumer follows the same known-token discipline as the
+login-history failure reasons (the account surface passes a reason token
+through `t()` only when it is on the surface's known list, anything else
+rendering the generic label): `security_revoked` is a security event worth
+acting on, never a mechanism name. The storage half is pinned by
+`TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession`
+(`session_test.go`), the wire half by
+`TestHandler_ListSessions_TieredRevokeReasonExport` (`handler_test.go`),
+which drives a genuine replay and a genuine logout and asserts the two rows
+export differently while the stored reasons stay verbatim.
+
 ---
 
 ## Testing

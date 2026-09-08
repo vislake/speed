@@ -140,14 +140,85 @@ const (
 	RefreshTokenStatusRevoked = "revoked"
 )
 
-// Reasons recorded in [Session.RevokeReason].
+// Reasons recorded in [Session.RevokeReason]. The set continues in
+// history.go, next to the two methods that originate its further members.
+//
+// Every declared reason also takes a position on the export-classification
+// rule stated at revokeReasonExportSecurity below, in its own doc comment:
+// an owner-action reason (the session's owner closed it) or a
+// security-mechanism reason (the module's security machinery closed it).
+// [exportRevokeReason] is the rule's single implementation and must name
+// every member of both classes; declaring a reason without taking that
+// position is incomplete.
 const (
-	// RevokeReasonLogout is an ordinary sign-out by the session's owner.
+	// RevokeReasonLogout is an ordinary sign-out by the session's owner,
+	// the device itself signing out. Owner-action class: the sessions
+	// list exports it verbatim.
 	RevokeReasonLogout = "logout"
 	// RevokeReasonReplay is an automatic revocation triggered by a
 	// consumed refresh token being presented a second time.
+	// Security-mechanism class: the sessions list folds it -- see
+	// [exportRevokeReason].
 	RevokeReasonReplay = "replay_detected"
 )
+
+// revokeReasonExportSecurity is the single value every security-class
+// revoke reason exports as on the sessions list ([exportRevokeReason]). The
+// API schema declares it -- "security_revoked", one of the enum members of
+// AuthnSession.revoke_reason in api/openapi.yaml -- so the wire value's
+// space is defined there, and it is deliberately NOT part of the
+// RevokeReason* set above: it is an export projection only, never a stored
+// reason. [Session.RevokeReason] keeps storing the real reason
+// (replay_detected stays in the revoke_reason column -- it is the
+// forensics/audit record), and no write path references this constant;
+// writing it into the column would irreversibly destroy that evidence.
+const revokeReasonExportSecurity = "security_revoked"
+
+// exportRevokeReason projects a stored revoke reason onto the sessions
+// list: the tiered export every declared reason is classified under at its
+// declaration site (the RevokeReason* groups in this file and in
+// history.go), and this function is the rule's one implementation. The
+// projection exists because the two sides of a revoked session want
+// different halves of the reason. The owner most needs to know the session
+// was NOT closed by them -- a security mechanism ended it -- while an
+// observer of the response, an attacker who may well have caused the
+// mechanism to act, most wants the mechanism's name, the confirmation that
+// their particular theft was detected. The two classes:
+//
+//   - Owner-action reasons -- today [RevokeReasonLogout] (the device signed
+//     itself out), [RevokeReasonUserRevoked] (the owner revoked this one
+//     session from their device list) and [RevokeReasonRevokeOthers] (the
+//     owner signed out every other session), both declared in history.go:
+//     the session's OWNER closed it, so the value discloses no mechanism;
+//     the export is the reason itself.
+//   - Security-mechanism reasons -- today [RevokeReasonReplay]: the value
+//     is evidence that a specific mechanism detected something; every such
+//     reason folds into [revokeReasonExportSecurity], which tells the owner
+//     "closed by a security mechanism, not by me" and tells no observer
+//     which mechanism.
+//
+// A value no declared reason names -- an empty or hand-edited column, or a
+// reason a future round declared without naming it in the switch below --
+// takes the folding default: of the answers an undeclared value could
+// take, the folded one is the only one that can never leak an undeclared
+// security mechanism. The fold is a read-side, API-projection-only change:
+// nothing here writes, and the stored reason is untouched (a replay
+// revocation persisting RevokeReasonReplay verbatim is pinned by
+// TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession).
+func exportRevokeReason(reason string) string {
+	switch reason {
+	case RevokeReasonLogout, RevokeReasonUserRevoked, RevokeReasonRevokeOthers:
+		// Owner-action class: the owner closed it themselves, so the
+		// value withholds nothing.
+		return reason
+	case RevokeReasonReplay:
+		// Security-mechanism class: fold, never name the mechanism.
+		return revokeReasonExportSecurity
+	default:
+		// Undeclared: fold, never pass through (see the doc comment).
+		return revokeReasonExportSecurity
+	}
+}
 
 // Results recorded in [LoginAttempt.Result].
 const (
@@ -347,7 +418,12 @@ type Session struct {
 	// RevokedAt is nil while Status is active.
 	RevokedAt *time.Time `gorm:"column:revoked_at"`
 
-	// RevokeReason is one of the RevokeReason* constants, or empty.
+	// RevokeReason is one of the RevokeReason* constants, or empty. This
+	// column is the forensics record and always stores the REAL reason;
+	// the value that reaches the sessions list is exportRevokeReason's
+	// projection of it (an owner-action reason verbatim, a
+	// security-mechanism reason folded), never this column's raw value
+	// when the reason is security-class.
 	RevokeReason string `gorm:"column:revoke_reason;size:64;not null"`
 }
 
