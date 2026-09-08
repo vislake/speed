@@ -2,12 +2,12 @@ package integration
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/ratelimit"
 )
 
 // errorContentType is the media type every structured error response this
@@ -120,23 +120,8 @@ func writeRateLimitDenied(w http.ResponseWriter, decision LayeredDecision) {
 func WithRateLimitParams(decision LayeredDecision) *apperr.Error {
 	return ErrRateLimited.
 		WithParam("layer", decision.Layer).
-		WithParam("retry_after_seconds", retryAfterSecondsFromDecision(decision)).
+		WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.Decision.ResetAfter)).
 		WithParam("remaining", decision.Decision.Remaining)
-}
-
-// retryAfterSecondsFromDecision converts a Decision's ResetAfter to a whole
-// number of seconds, rounded up: Retry-After (RFC 9110 §10.2.3) is defined
-// in whole seconds, and rounding down would tell a client it may retry
-// before the window has actually reset, defeating the header's purpose.
-func retryAfterSecondsFromDecision(decision LayeredDecision) int {
-	seconds := math.Ceil(decision.Decision.ResetAfter.Seconds())
-	if seconds < 0 {
-		return 0
-	}
-	if seconds > math.MaxInt {
-		return math.MaxInt
-	}
-	return int(seconds)
 }
 
 // errorBody is the {code, params} envelope every structured error this
