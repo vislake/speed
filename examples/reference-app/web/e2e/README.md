@@ -648,7 +648,31 @@ defects it never looked for. The two lists below -- what the deployment
 cannot answer, and what is not gated at all -- are where that difference
 lives.
 
-**Nothing is open.** `pnpm test:e2e:pending` answers "No tests found":
+**Open, with a gate waiting on it** (`pnpm test:e2e:pending`):
+
+| Gate | Waiting on | Kind |
+|---|---|---|
+| platform-staff-can-administer | `go/admin` is wired and answers (tenants, audit-events, roles, impersonation all 200 against the live deployment with a staff token) but there is no page, so a platform operator needs curl | unbuilt surface |
+
+Its second half -- that a clinic owner must NOT be offered that
+entrance -- passes today and is asserted with the same weight, because a
+clinic that can read the platform's tenant ledger is a cross-tenant
+disclosure. Both carry `@deployment` alongside `@pending`, which this
+file's own rule requires of any gate that skips itself unless an
+environment variable is set: the presence half needs
+`E2E_PLATFORM_STAFF_PASSWORD`, the operator's own secret, deliberately
+not defaulted to a repository constant the way the demo-user password
+is. Proven to bite rather than trusted: run against a real server with
+that variable supplied, it fails naming the missing entrance.
+
+One trap is recorded in the gate in advance, because this suite has paid
+for it once: admin's ledger stores an EMPTY `displayName`, so a row
+rendered as stored would list `tenant-64307885-c306-...` -- the identical
+defect the Team roster shipped with and `42a14614` closed. The gate
+refuses a raw tenant id where a tenant's identity belongs.
+
+**Every defect is closed.** `pnpm test:e2e:pending` selects nothing
+waiting on a defect:
 every gate this suite wrote against a defect has seen its fix land, and
 every unbuilt surface the brief named and this suite gated is built.
 Default tier 20 passed / 3 skipped, `@budget` 30 passed.
