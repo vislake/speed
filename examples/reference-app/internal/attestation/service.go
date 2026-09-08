@@ -185,15 +185,44 @@ func (s *Service) findAuthority(ctx context.Context, authorities *pki.AuthorityR
 
 // EnsureAttested makes sure objectID's output -- an AI output of the
 // tenant in ctx -- carries a valid attestation, attesting it when it does
-// not: the object's bytes are opened under the ctx tenant (an object
-// another tenant owns is refused before anything is written) and
-// digested, then EnsureAttestedContent applies the write-or-refresh
-// rules below. It is the observation hook every succeeded-output read
-// drives (cmd/server/smilesim.go); its callers log and swallow its
-// error, since a failed attestation leaves the output refused by the
-// sharing gate until a later observation retries, never breaks the read
-// that drove it.
+// not. An output whose attestation row is already on file under a usable
+// certificate (see certificateUsable) is left alone and its bytes are
+// never opened: repeated observations of one succeeded output -- every
+// poll, enumeration or content read that drives them
+// (cmd/server/smilesim.go) -- cost the row lookup alone. Otherwise the
+// object's bytes are opened under the ctx tenant (an object another
+// tenant owns is refused before anything is written), digested, and
+// handed to EnsureAttestedContent, which applies the write-or-refresh
+// rules below.
+//
+// It is the observation hook every succeeded-output read drives; its
+// callers log and swallow its error, since the read that drove the
+// observation must never break over this side channel. Attestation is
+// best-effort: an output whose attestation failed simply carries no row,
+// and the sharing gate then treats it exactly like any ordinary object
+// (an uploaded photo, a non-AI object) -- nothing in the object model
+// marks an AI output as such, so the gate cannot refuse a row-less
+// object. The protection an attestation confers applies from the moment
+// a row exists; a later observation of the same output retries the failed
+// attestation.
 func (s *Service) EnsureAttested(ctx context.Context, objectID string) error {
+	// The row-lookup fast path is the no-op check EnsureAttestedContent
+	// repeats below: an object already attested under a usable
+	// certificate needs no content read at all.
+	row, hasRow, err := s.store.getByObject(ctx, objectID)
+	if err != nil {
+		return fmt.Errorf("attestation: look up existing attestation for object %q: %w", objectID, err)
+	}
+	if hasRow {
+		usable, checkErr := s.certificateUsable(ctx, row.CertificateID)
+		if checkErr != nil {
+			return fmt.Errorf("attestation: check current certificate %q for object %q: %w", row.CertificateID, objectID, checkErr)
+		}
+		if usable {
+			return nil
+		}
+	}
+
 	rc, err := s.content.OpenContent(ctx, objectID)
 	if err != nil {
 		return fmt.Errorf("attestation: open output %q: %w", objectID, err)
@@ -219,9 +248,10 @@ func (s *Service) EnsureAttested(ctx context.Context, objectID string) error {
 //     certificate is issued otherwise, the canonical message (object id,
 //     digest, tenant) is signed with the certificate's key through
 //     CAService.SignCertificate, and the row is written;
-//   - a row exists under an active certificate: a no-op -- repeated
-//     observations (every poll, enumeration or content read of a
-//     succeeded job) cost one row lookup;
+//   - a row exists under an active certificate: a no-op -- the output is
+//     already attested under a usable certificate, the same check
+//     EnsureAttested's own fast path has already answered before opening
+//     the output's bytes;
 //   - a row exists under a certificate that is no longer usable (revoked,
 //     or past its NotAfter): a fresh certificate is issued, the message
 //     re-signed under it, and the row replaced -- the recovery path that
@@ -374,7 +404,7 @@ func (s *Service) CheckContent(ctx context.Context, objectID string, content []b
 
 	leaf, err := s.chain.VerifyCertificate(ctx, row.CertificateID)
 	if err != nil {
-		return fmt.Errorf("attestation: verify certificate %q of object %q: %w", row.CertificateID, objectID, err)
+		return fmt.Errorf("%w: verify certificate %q of object %q: %w", ErrAttestationFailed, row.CertificateID, objectID, err)
 	}
 	signature, err := hex.DecodeString(row.Signature)
 	if err != nil {
