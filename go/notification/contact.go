@@ -578,8 +578,19 @@ type VerifyCodeInput struct {
 // brute-force surface of a 6-digit code, so every attempt counts against a
 // per-address and per-tenant budget (see contactRateLimits) and a limit
 // failure fails closed with ErrContactRateLimited -- before the code is
-// checked: expiry first, then the hash, both answering identically. The
-// code is then consumed compare-and-swap style: an UPDATE that only moves a
+// checked: expiry first, then the hash, both answering identically.
+//
+// Charging every attempt, correct or not, is deliberate rather than an
+// oversight: the address's ten guesses per code lifetime then bound an
+// outsider's search however the guesses land, and the module never
+// classifies a failure to decide anything, budget included. go/sharing
+// judged this same charge-before-judgment ordering a P2 on its anonymous
+// access surface and fixed it there (6af7e6c6); this endpoint is not
+// anonymous, so the ruling here differs -- see go/notification/AGENTS.md's
+// "The verify budget charges before the code is judged" adjudication for
+// the full reasoning and for the surface change that would flip it back.
+//
+// The code is then consumed compare-and-swap style: an UPDATE that only moves a
 // pending row whose stored hash still equals the typed code's hash decides
 // the transition in the database. A row that fails the CAS is re-read to
 // tell the caller where it actually landed (verified: a concurrent consume

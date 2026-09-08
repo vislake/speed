@@ -506,6 +506,50 @@ the status gate, never the columns, is what makes a consumed code unusable.
 One row, one code, no join, and no table whose rows can outlive the contact
 they verify.
 
+### The verify budget charges before the code is judged
+
+`VerifyCode` (contact.go) pays the per-address and per-tenant verify
+budgets (`checkCodeVerifyLimit`) before the typed code is compared: status
+gate, then the budget charge, then code shape, expiry and hash. The order
+is deliberate, and it is pinned at the HTTP surface by the reference app's
+acceptance test `TestNotificationFlow_VerifyCodeRateLimit_FailsClosed`
+(`examples/reference-app/cmd/server/notification_flow_test.go`): ten wrong
+guesses are ten 400s that each spend one of the address's ten guesses per
+code lifetime (`contactCodeVerifyPerAddress`), and the eleventh attempt --
+carrying the correct code -- is refused 429 rather than honored. A resend
+that issues a fresh code changes nothing: the budget is the address's
+guess allowance, not the code instance's. Charging per ATTEMPT rather than
+per wrong attempt is the budget-side companion of the identical-failure
+rule -- the module never classifies an attempt's failure to decide
+anything, budget included -- and it keeps the brute-force bound of a
+6-digit code honest for the outsider the code protects against.
+
+The identical ordering was judged a P2 in go/sharing and fixed there
+(6af7e6c6 charges the per-token access budget only after a wrong
+credential is judged). This module deliberately does NOT follow, and the
+divergence is the surface, not the mechanism. Sharing's access endpoint is
+anonymous: anyone who holds or guesses a share token can burn that token's
+budget with no account at all, so the rate-limit shape is the whole
+defense against a denial that needs no identity. Notification's verify
+endpoint is not anonymous: every `/api/v1/notifications` operation reads
+the tenant from the request context, `VerifyCode`'s own tenant-scoped read
+fails closed without one, and in the compositions this module documents
+(the reference-app chain, whose tenancy allowlist names no notifications
+path) that context resolves only from a verified principal -- the caller
+who can reach and exhaust an address's budget is an authenticated member
+of the tenant that owns the address. Sustained denial by such a member is
+a harm inside the tenant's own trust boundary, borne by the tenant's
+governance of its members and by the module's audited consent
+transitions, not by the rate-limit shape. That is the ruling this module
+records, stated honestly: for an anonymous or pre-auth surface the shape
+would be indefensible, which is exactly why sharing's is fixed and this
+one is not.
+
+The ruling flips if the surface changes: a verify endpoint moved to an
+unauthenticated surface or placed on a pre-auth allowlist makes the
+mechanism identical to sharing's pre-fix shape, and it must then be fixed
+the way 6af7e6c6 fixed sharing -- not re-ruled here.
+
 ### SMS stays an in-package seam
 
 The module declares its own `SMSSender` interface rather than consuming a
