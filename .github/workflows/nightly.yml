@@ -17,19 +17,30 @@ name: nightly
 #   * benchmark regression: docs/internal/20-quality-and-security.md names
 #     the planned hotspots (tenant-filtered repository queries,
 #     authorization decisions, dynamic-config reads, session validation
-#     under immediate-invalidation, metering throughput) -- no benchmark
-#     suite exists in the repository yet; benches land with the modules
-#     that own the hotspots (roadmap M1-M3);
+#     under immediate-invalidation, metering throughput) -- the first
+#     module-owned suites now exist, landed with the modules that own the
+#     hotspots as the roadmap M1-M3 plan records: go/jobs (StandaloneQueue
+#     enqueue and round-trip latency), go/notification (delivery-key
+#     derivation and per-delivery preference resolution), go/authn
+#     (argon2id hash/verify at the cost floor, access-token issue/verify)
+#     and go/rbac (cached and post-invalidation decisions; grep "func
+#     Benchmark" over go/ and examples/ returns matches today). What the
+#     regression leg still needs is the baseline capture and threshold
+#     wiring, which lands with this pipeline's implementing round;
 #   * flaky detection: nightly reruns mark unstable tests and auto-open
 #     tracking issues (20-quality-and-security.md flaky-test governance);
 #     the auto-issue mechanism needs a token with issues: write, reviewed
 #     when the round lands.
 #
-# GATE: the first benchmark suites (roadmap M1 onward). full-check, the other
-# half of this pipeline's content, went live with the M0 CI round, so the
-# full-matrix half no longer blocks anything; no benchmark suite exists in
-# the tree yet (grep "func Benchmark" over go/ and examples/ returns
-# nothing), which is what still blocks the pipeline as a whole.
+# GATE: the flaky-detection token -- a token with issues: write, reviewed
+# when the implementing round lands. The benchmark half of this pipeline's
+# content is no longer missing: module-owned benchmark suites exist in the
+# tree now (go/jobs, go/notification, go/authn and go/rbac; see the
+# benchmark-regression bullet above and docs/internal/20-quality-and-
+# security.md's performance section for what each reports), and the
+# full-matrix half went live with full-check in the M0 CI round. What still
+# blocks the pipeline as a whole is the flaky-test auto-issue mechanism,
+# whose token requirement is external to this repository.
 
 on:
   workflow_dispatch:
@@ -47,6 +58,8 @@ jobs:
         run: |
           echo "error: the nightly pipeline is not implemented. This failing"
           echo "run is its stub guard, so the pipeline can never pass"
-          echo "silently. Wire the full matrix + benchmark + flaky-detection"
-          echo "legs once full-check is live and the first benchmarks exist."
+          echo "silently. Benchmark suites have landed with their owning"
+          echo "modules (go/jobs, go/notification, go/authn, go/rbac) and"
+          echo "full-check covers the full matrix; the remaining gate is the"
+          echo "flaky-detection auto-issue token with issues: write."
           exit 1
