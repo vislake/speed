@@ -215,9 +215,13 @@ const RedactedValue = "[REDACTED]"
 // "token" is the stem that cannot use a bare substring match: "token"
 // is also a substring of "tokens", the ordinary plural for an LLM/usage
 // count (ai-gateway's PromptTokens/CompletionTokens), which the naive
-// substring rule swallowed with no warning -- ai-gateway's own gateway.go
-// carries a "rename to _units to dodge this redactor" comment as the paper
-// trail. stemMatches therefore checks "token" with a word-boundary rule
+// substring rule swallowed with no warning. The paper trail for that
+// episode is go/ai-gateway/AGENTS.md's own round log, not a comment on
+// gateway.go: the counts were once logged as prompt_units/
+// completion_units to dodge this rule, and reverted to the natural
+// prompt_tokens/completion_tokens names once the word-boundary match
+// below made them safe. stemMatches therefore checks "token" with a
+// word-boundary rule
 // (foldContainsWordASCII) instead: a match counts only when a word
 // boundary flanks it on both sides -- the segment's own start/end, a
 // non-letter byte (an underscore or digit separator), or a
