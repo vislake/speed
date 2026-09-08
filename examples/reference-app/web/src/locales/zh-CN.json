@@ -235,6 +235,7 @@
       "statusColumn": "状态",
       "joinedColumn": "加入时间",
       "youRow": "您",
+      "identityUnknown": "未知成员",
       "statusActive": "在职",
       "statusInvited": "受邀",
       "statusSuspended": "已停用",

@@ -1,18 +1,27 @@
 /**
  * org-api.ts -- the app's hand-written half of go/org's HTTP surface:
- * the four typed calls the team surface needs. go/org's OpenAPI
- * fragment ships a backend leg only -- it predates the merge machinery
- * and is deliberately not part of the merged application document that
- * drives @speed/api-sdk (go/org/AGENTS.md's own note, the same status
- * go/sharing's fragment holds), so no generated operation exists for
- * any org route and the app reaches them through the api-client
- * RequestFn the host bound, the same seam every generated call travels
- * -- exactly the no-generated-surface mirror of the discipline that
- * share-api.ts already documents for go/sharing. The path literals are
- * hand-kept in step with the module's own mounted route
- * (/api/v1/org -- demo_subject.go's orgRoutePath), and the wire shapes
- * mirror go/org/api/openapi.yaml's schemas field-for-field, never the
- * generator's Go types.
+ * the three typed calls the team surface's invitation half needs. The
+ * members half of the team surface deliberately reads through the app's
+ * OWN roster-with-identity answer instead (team-api.ts -- GET
+ * /api/reference-app/team-members, the host composition that enriches
+ * org's membership rows with each member's display identity from
+ * authn's users table, because org's rows carry opaque user ids only by
+ * its own module-boundary rule), so org's raw member list has no typed
+ * call here: a surface that needs the raw list would add it back over
+ * ORG_MEMBERS_PATH, whose literal is kept below for that day.
+ *
+ * go/org's OpenAPI fragment ships a backend leg only -- it predates the
+ * merge machinery and is deliberately not part of the merged application
+ * document that drives @speed/api-sdk (go/org/AGENTS.md's own note, the
+ * same status go/sharing's fragment holds), so no generated operation
+ * exists for any org route and the app reaches them through the
+ * api-client RequestFn the host bound, the same seam every generated
+ * call travels -- exactly the no-generated-surface mirror of the
+ * discipline that share-api.ts already documents for go/sharing. The
+ * path literals are hand-kept in step with the module's own mounted
+ * route (/api/v1/org -- demo_subject.go's orgRoutePath), and the wire
+ * shapes mirror go/org/api/openapi.yaml's schemas field-for-field,
+ * never the generator's Go types.
  *
  * The caller identity question deserves stating once: org's two
  * caller-scoped operations (create and accept an invitation) resolve
@@ -25,7 +34,10 @@
 
 import type { RequestFn } from '@speed/api-client'
 
-/** GET/POST /api/v1/org/members -- org_listMembers / org_removeMember. */
+/** GET/POST /api/v1/org/members -- org_listMembers / org_removeMember.
+ * Unconsumed by this app's surfaces today (see the file header), kept
+ * as the module route's literal for the day a surface needs the raw
+ * list. */
 export const ORG_MEMBERS_PATH = '/api/v1/org/members'
 /** GET/POST /api/v1/org/invitations -- org_listInvitations /
  * org_createInvitation. */
@@ -36,7 +48,8 @@ export const ORG_NODES_PATH = '/api/v1/org/nodes'
 /** One person's binding to a node of the tenant's organization tree
  * (the spec's OrgMembership schema). org deliberately stores no other
  * identity data about the user -- the user id is opaque to this
- * surface, which is why the roster below can name only the caller. */
+ * surface, which is why the naming of a roster row lives in the host
+ * composition (team-api.ts) rather than here. */
 export interface OrgMembership {
   readonly membershipId: string
   /** An id in authn's users table, carried as an opaque string. */
@@ -45,11 +58,6 @@ export interface OrgMembership {
   /** One of "active", "invited", "suspended". */
   readonly status: string
   readonly createdAt: string
-}
-
-/** GET /api/v1/org/members' 200 answer (OrgListMembersResponse). */
-export interface OrgListMembersResponse {
-  readonly members?: OrgMembership[]
 }
 
 /** A node of the tenant's organization tree (the spec's OrgNode
@@ -101,17 +109,6 @@ export interface OrgListInvitationsResponse {
 export interface OrgCreateInvitationRequest {
   readonly email: string
   readonly nodeId: string
-}
-
-/**
- * Lists the caller's tenant's members -- the whole tenant's roster, the
- * shape a clinic's "who works here" read wants (no nodeId filter: this
- * app's demo clinics are single-root practices).
- */
-export async function listOrgMembers(
-  api: RequestFn,
-): Promise<OrgListMembersResponse> {
-  return api<OrgListMembersResponse>(ORG_MEMBERS_PATH)
 }
 
 /**

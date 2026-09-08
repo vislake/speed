@@ -4,15 +4,23 @@
  * joined, plus the invite-a-colleague flow the practice's second
  * employee is added through.
  *
- * The reads go through the app's own hand-written org calls (org-api.ts
- * -- go/org's fragment ships a backend leg only, the same status
- * go/sharing's holds, so no generated operation exists) over the one
+ * The reads go through the app's own hand-written calls over the one
  * RequestFn the host bound, on a tenant-namespaced query key
  * (['tenant', tenantId, 'team']) so a tenant switch can never read the
  * previous clinic's roster -- user-menu.tsx evicts the departing
  * tenant's ['tenant', tenantId] queries and main.tsx empties the whole
  * cache the moment the session ends, exactly as the notes surface's own
- * key relies on.
+ * key relies on. The members half of the roster reads the app's OWN
+ * roster-with-identity answer (team-api.ts -- GET
+ * /api/reference-app/team-members, the host composition
+ * cmd/server/team_members.go mounts, which enriches org's membership
+ * rows with each member's display identity from authn's users table,
+ * because org's fragment ships a backend leg only AND its member rows
+ * carry opaque user ids by its own module-boundary rule); the pending
+ * invitations and the clinic's root node read org's own surface
+ * (org-api.ts -- go/org's fragment ships a backend leg only, the same
+ * status go/sharing's holds, so no generated operation exists for
+ * either host).
  *
  * One snapshot query answers the whole surface -- members, pending
  * invitations and the clinic's root node -- so the surface has exactly
@@ -31,22 +39,30 @@
  * the mutation probing the write gate the way notes' create probes
  * notes:write.
  *
- * NAMING, AND WHAT THE SURFACE CANNOT NAME
+ * NAMING THE ROSTER
  *
- * go/org stores no identity data about members (its module-boundary
- * rule: membership rows carry opaque user ids only), and org's
- * invitation rows deliberately never echo the invitee's address across
- * the process boundary -- it is PII, encrypted at rest, and listing it
- * would turn the roster into an address book. So the surface names
- * exactly what the server lets it name: the signed-in caller's own
- * membership row is "You", another member's row is their opaque user
- * id, and a pending invitation's row shows the address only while the
- * inviting owner's own session remembers typing it (the module-level
- * memory below, paired with the row the create answered by its
- * invitation id). An invitation a different browser or an earlier
- * session sent stays listed -- it is the server's row, still pending --
- * under the "invited from another device" label rather than a
- * fabricated address.
+ * The roster names each member from the identity the composition
+ * answered -- the display name the account registered with when it
+ * typed one, the account's email otherwise -- with one exception: the
+ * signed-in caller's own membership row is "You", never their identity
+ * back at them. A member whose account row the composition could not
+ * read (a vanished account) answers empty identity fields and the row
+ * renders the surface's fallback label rather than the raw user id --
+ * the defect this round closed was exactly a raw id where a
+ * colleague's identity belongs, and nothing in this view renders a
+ * userId as a name. The user id itself stays on the row as its
+ * identity key: the "You" naming and the row's react-query key compare
+ * against it, but it never reaches the member column.
+ *
+ * The invitation half of the surface is unchanged by all of this and
+ * needs none of it: org holds the address it was asked to invite, so a
+ * pending invitation's row shows the address while the inviting
+ * owner's own session remembers typing it (the module-level memory
+ * below, paired with the row the create answered by its invitation
+ * id). An invitation a different browser or an earlier session sent
+ * stays listed -- it is the server's row, still pending -- under the
+ * "invited from another device" label rather than a fabricated
+ * address.
  *
  * That last pairing is what keeps the roster honest in both
  * directions: the invitation is not "sent" because a banner said so
@@ -73,17 +89,15 @@ import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { useAppServices } from '../app-services.js'
-import type {
-  OrgInvitation,
-  OrgMembership,
-} from '../org-api.js'
+import type { OrgInvitation } from '../org-api.js'
 import {
   createOrgInvitation,
   listOrgInvitations,
-  listOrgMembers,
   listOrgNodes,
 } from '../org-api.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { fetchTeamMembers } from '../team-api.js'
+import type { TeamMember } from '../team-api.js'
 import { CurrentClinicLine } from './current-clinic.js'
 
 /** The read gate's own refusal code, like the notes surface's: the rbac
@@ -217,7 +231,7 @@ export function TeamView(): ReactElement {
     queryKey: teamKey,
     queryFn: async () => {
       const [membersAnswer, invitationsAnswer, nodesAnswer] = await Promise.all([
-        listOrgMembers(api),
+        fetchTeamMembers(api),
         listOrgInvitations(api),
         listOrgNodes(api),
       ])
@@ -309,15 +323,31 @@ export function TeamView(): ReactElement {
     }
   }, [i18n.language])
 
-  const memberColumns: readonly DataTableColumn<OrgMembership>[] = useMemo(
+  const memberColumns: readonly DataTableColumn<TeamMember>[] = useMemo(
     () => [
       {
         id: 'member',
         header: t('team.members.memberColumn'),
-        cell: (membership) =>
-          membership.userId === principalUserId
-            ? t('team.members.youRow')
-            : membership.userId,
+        cell: (membership) => {
+          // The naming ladder of one roster row: the caller's own row is
+          // "You" (compared by the row's user id, the identity key the
+          // composition kept), a member who registered a display name is
+          // named by it, a member who registered none is named by the
+          // email their account was registered with, and a member whose
+          // account row answered no identity at all renders the
+          // fallback label. The raw user id is never a name -- the
+          // exact defect this surface's walk-through found.
+          if (membership.userId === principalUserId) {
+            return t('team.members.youRow')
+          }
+          if (membership.displayName !== '') {
+            return membership.displayName
+          }
+          if (membership.email !== '') {
+            return membership.email
+          }
+          return t('team.members.identityUnknown')
+        },
       },
       {
         id: 'status',

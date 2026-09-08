@@ -26,6 +26,18 @@
  * invite field must not come back to life under a roster that has
  * since moved on).
  *
+ * The roster naming is the defect this surface's walk-through found,
+ * pinned here at the unit tier: the members read goes to the app's own
+ * roster-with-identity answer (GET /api/reference-app/team-members,
+ * which the demo server answers from its account directory), and a
+ * member row renders the display identity the answer carried -- a
+ * member who registered no display name is named by their email, a
+ * member whose identity a suite scripts is named by it (display name
+ * winning over email, the composition's own precedence), a member
+ * whose account answered no identity renders the bundle's fallback
+ * label -- and the raw user id is never what a row renders as a name,
+ * which is the assertion that would have failed before this round.
+ *
  * The gate's error classification earns the same three checks the
  * notes surface's own suite runs: a refused read falls the gate shut
  * to the no-permission suit; a 5xx read failure renders the read-error
@@ -47,7 +59,11 @@ import type { RequestFn } from '@speed/api-client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
-import { demoServer } from '../test-utils/demo-server.js'
+import {
+  DEMO_READER_IDENTIFIER,
+  DEMO_READER_USER_ID,
+  demoServer,
+} from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
 import {
   errorResponse,
@@ -60,6 +76,7 @@ import {
   clearInvitedAddressMemory,
   TeamView,
 } from './team-view.js'
+import { TEAM_MEMBERS_PATH } from '../team-api.js'
 
 /** A transport whose every call rejects with a raw, code-less error --
  * the shape a bug-shaped transport throw arrives in (see the notes
@@ -128,23 +145,79 @@ describe('TeamView', () => {
     await view.findByRole('heading', { name: zhCN.team.members.heading, level: 2 })
     expect(view.getByRole('heading', { name: zhCN.team.invitations.heading, level: 2 })).toBeInTheDocument()
 
-    // The roster: the signed-in member's own row is the bundle's "you"
-    // label (the principal's user id names it), the reader's row is its
-    // opaque user id -- the only identity the server's membership rows
-    // carry.
+    // The roster names people: the signed-in member's own row is the
+    // bundle's "you" label (the principal's user id names it), and the
+    // reader's row is named by the email the account registered with --
+    // the demo directory's answer for the reader-shaped member. The raw
+    // user id is never what a row renders as a name: the assertion that
+    // failed before this round.
     expect(view.getByText(zhCN.team.members.youRow)).toBeInTheDocument()
-    expect(view.getByText('user-2')).toBeInTheDocument()
+    expect(view.getByText(DEMO_READER_IDENTIFIER)).toBeInTheDocument()
+    expect(view.queryByText(DEMO_READER_USER_ID)).not.toBeInTheDocument()
     expect(view.getByText(zhCN.team.invitations.emptyTitle)).toBeInTheDocument()
 
     // The invite opener is drawn (the clinic has a root node to bind
     // an invitee to), and the whole surface came from one snapshot:
-    // one read per org endpoint.
+    // one read per endpoint -- the members half on the host's own
+    // roster answer, never org's raw member list (the surface that
+    // would have served user ids as names).
     expect(
       view.getByRole('button', { name: zhCN.team.invite.action }),
     ).toBeInTheDocument()
-    expect(orgReads(rig, '/api/v1/org/members')).toBe(1)
+    expect(orgReads(rig, TEAM_MEMBERS_PATH)).toBe(1)
     expect(orgReads(rig, '/api/v1/org/invitations')).toBe(1)
     expect(orgReads(rig, '/api/v1/org/nodes')).toBe(1)
+    expect(orgReads(rig, '/api/v1/org/members')).toBe(0)
+  })
+
+  it('a member who registered a display name is named by it, never by their email or user id', async () => {
+    // The demo account directory knows the reader-shaped member by their
+    // email only (the real reader registered without a display name); a
+    // suite scripts the display name their registration carried, and the
+    // naming ladder must render the name -- display name winning over
+    // email, exactly the precedence the roster's composition decides.
+    const rig = makeRealClientRig(
+      demoServer({
+        initialTeamIdentities: {
+          [DEMO_READER_USER_ID]: { displayName: 'Demo Reader' },
+        },
+      }),
+    )
+    await signInWithPassword(rig)
+    const view = renderTeam(rig)
+
+    await view.findByRole('heading', { name: zhCN.team.members.heading, level: 2 })
+    expect(view.getByText('Demo Reader')).toBeInTheDocument()
+    expect(view.queryByText(DEMO_READER_IDENTIFIER)).not.toBeInTheDocument()
+    expect(view.queryByText(DEMO_READER_USER_ID)).not.toBeInTheDocument()
+  })
+
+  it('a member whose account answers no identity renders the fallback label, never the raw id', async () => {
+    // A roster row whose user the account directory cannot name -- the
+    // mirror of a member whose account row the real composition could
+    // not read. The surface renders the bundle's fallback label; the raw
+    // user id must not surface as the name.
+    const rig = makeRealClientRig(
+      demoServer({
+        initialTeamMembers: [
+          {
+            membershipId: 'membership-orphaned',
+            userId: 'user-99',
+            nodeId: DEMO_ROOT_NODE_ID,
+            status: 'active',
+            createdAt: '2026-09-01T00:00:00Z',
+          },
+        ],
+      }),
+    )
+    await signInWithPassword(rig)
+    const view = renderTeam(rig)
+
+    await view.findByRole('heading', { name: zhCN.team.members.heading, level: 2 })
+    expect(
+      view.getByText(zhCN.team.members.identityUnknown),
+    ).toBeInTheDocument()
+    expect(view.queryByText('user-99')).not.toBeInTheDocument()
   })
 
   it('the invite flow: open the form, send an address, and the pending list shows the invitation standing', async () => {
@@ -306,7 +379,7 @@ describe('TeamView', () => {
     const rig = makeRealClientRig((call) => {
       if (
         call.method === 'GET' &&
-        call.path === '/api/v1/org/members'
+        call.path === TEAM_MEMBERS_PATH
       ) {
         return errorResponse(500, 'org.internal_error')
       }

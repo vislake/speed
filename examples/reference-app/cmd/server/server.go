@@ -3275,6 +3275,27 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// authenticated route sits behind.
 	wireClinicName(mux, orgModule.Tree())
 
+	// wireTeamMembers mounts this host's own roster-with-identity answer
+	// (cmd/server/team_members.go): the tenant's org membership roster,
+	// each row enriched with the member's display identity from authn's
+	// users table -- the composition the Team surface's "who works in
+	// this clinic" promise needs, since org's member rows carry opaque
+	// user ids only by its own module-boundary rule (team_members.go's
+	// package doc has the full argument). The identity source is authn's
+	// user row behind every member -- demo seeds and self-registered
+	// clinics' invitees alike -- never the demo layer's own roster.
+	// Mounted here among the other hand-written app routes, behind the
+	// same chain every authenticated route sits behind, gated on the org
+	// read permission through the same rbac gate the org module route
+	// uses. The call cannot fail: nothing it does returns an error.
+	wireTeamMembers(mux, teamMembersDeps{
+		az:             rbacService,
+		members:        orgModule.Members(),
+		tree:           orgModule.Tree(),
+		users:          authnModule.Service().Users(),
+		headerDisabled: cfg.DisableDemoUserHeader,
+	})
+
 	// wireCasesRoutes mounts product round P2b's case domain
 	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped
 	// Case records the P3 web UI will sit on, each grouping a patient

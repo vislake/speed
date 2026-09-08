@@ -235,6 +235,7 @@
       "statusColumn": "Status",
       "joinedColumn": "Joined",
       "youRow": "You",
+      "identityUnknown": "Unknown member",
       "statusActive": "Active",
       "statusInvited": "Invited",
       "statusSuspended": "Suspended",

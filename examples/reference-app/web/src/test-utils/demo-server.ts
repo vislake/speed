@@ -105,17 +105,33 @@
  * job's terminal outcome settles the row in place (confirmed on
  * success, refunded when the simulateJobOutcome option scripts a
  * dead_letter generation -- see the two options' docs), plus the team
- * surface's four org calls mirroring go/org's backend-only fragment
- * (org-api.ts): GET /api/v1/org/members (200, the tenant's roster --
- * the configured account's own active row plus the reader's by
- * default), GET /api/v1/org/invitations (200, the tenant's pending
+ * surface's calls mirroring go/org's backend-only fragment
+ * (org-api.ts) and the host composition that names its members:
+ * GET /api/v1/org/invitations (200, the tenant's pending
  * invitations, newest first, stateful from a create),
  * GET /api/v1/org/nodes (200, the tenant's single root node, the
  * invitee's binding target) and POST /api/v1/org/invitations (201,
  * the created invitation appended to that tenant's list; an address
  * with no '@' or with whitespace answers the real service's 400
  * org.invalid_email, and the teamInviteRefusal option scripts the
- * other create refusals its surface renders). The notes
+ * other create refusals its surface renders). The members half of the
+ * surface reads the app's OWN roster-with-identity answer, GET
+ * /api/reference-app/team-members (200, {members: [...]}) -- the
+ * mirror of the host route cmd/server/team_members.go mounts: org's
+ * member rows carry opaque user ids only by its module-boundary rule,
+ * so the host answers the roster enriched with each member's display
+ * identity from authn's users table (the display name the account
+ * registered with, or its email). The demo answers the enrichment
+ * from its own account directory -- the configured account's row by
+ * the demo owner identifier, the reader's by DEMO_READER_IDENTIFIER,
+ * every registered account by the email and display name its
+ * registration carried -- and the initialTeamIdentities option
+ * scripts a row's identity for a suite that needs one outside that
+ * directory; a roster row whose user the directory does not know
+ * answers with empty identity fields, exactly what the real server
+ * answers for an account row that cannot be read (the surface's
+ * fallback label renders it). GET /api/v1/org/members itself remains
+ * served for the org surface's own wire-shape fidelity. The notes
  * answers mirror the real handler's
  * refusals: a create whose trimmed text is empty answers 400
  * notes.text_required (internal/notes/handler.go), one over the
@@ -308,20 +324,33 @@ export interface DemoServerOptions {
   /** Refuses a note create with the rbac write gate's 403 (the answer a
    * caller without notes:write gets); default false. */
   readonly denyNotesWrite?: boolean
-  /** The GET /api/v1/org/members roster of the default tenant as first
-   * served; defaults to the two seeded demo memberships of the
-   * configured tenant (the owner's own active row and the reader's --
-   * the mirror of the real boot's demo-owner and demo-reader
-   * registrations landing in org's memberships table). */
+  /** The roster of the default tenant as first served -- the rows the
+   * team surface's own GET /api/reference-app/team-members answer
+   * enriches with display identity from. Defaults to the two seeded
+   * demo memberships of the configured tenant (the owner's own active
+   * row and the reader's -- the mirror of the real boot's demo-owner
+   * and demo-reader registrations landing in org's memberships
+   * table). */
   readonly initialTeamMembers?: readonly DemoOrgMembership[]
+  /** The display identity of a roster row whose user is outside the
+   * demo account directory (or whose identity a suite wants to script
+   * over the directory's): user id to the account's own display name
+   * and email, mirroring what the real server reads from authn's
+   * users table for that member. A row whose user the directory and
+   * this option together do not name answers with empty identity
+   * fields, exactly as the real server answers for an account row it
+   * cannot read. Default undefined -- the two seeded rows answer from
+   * the directory alone. */
+  readonly initialTeamIdentities?: Readonly<Record<string, { displayName?: string; email?: string }>>
   /** The GET /api/v1/org/invitations pending list of the default
    * tenant as first served; default [] -- a freshly booted server has
    * none pending. Stateful from there: a create appends the invitation
    * later list answers of the same tenant carry. */
   readonly initialTeamInvitations?: readonly DemoOrgInvitation[]
-  /** Answers every org read (members, invitations, nodes) with the rbac
-   * read gate's 403 -- the answer a caller without org:read gets;
-   * default false. */
+  /** Answers the team surface's roster answer (GET
+   * /api/reference-app/team-members) and every org read (members,
+   * invitations, nodes) with the rbac read gate's 403 -- the answer a
+   * caller without org:read gets; default false. */
   readonly denyTeamRead?: boolean
   /** Refuses a POST /api/v1/org/invitations with this coded answer -- a
    * suite scripts the create refusals its surface must render (the
@@ -642,6 +671,23 @@ export interface DemoOrgMembership {
   readonly createdAt: string
 }
 
+/** One row of the team surface's roster answer (GET
+ * /api/reference-app/team-members) -- the wire shape of the app's own
+ * composition (cmd/server/team_members.go): the org membership facts
+ * above plus the member's display identity from authn's users table,
+ * each field the empty string when the account has none. */
+export interface DemoTeamMember {
+  readonly membershipId: string
+  readonly userId: string
+  readonly nodeId: string
+  readonly status: string
+  readonly createdAt: string
+  /** The account's own display name, '' when it registered none. */
+  readonly displayName: string
+  /** The account's own email, '' when it has none. */
+  readonly email: string
+}
+
 export interface DemoOrgInvitation {
   readonly id: string
   readonly nodeId: string
@@ -794,6 +840,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     denyNotesRead = false,
     denyNotesWrite = false,
     initialTeamMembers,
+    initialTeamIdentities,
     initialTeamInvitations,
     denyTeamRead = false,
     teamInviteRefusal,
@@ -914,6 +961,44 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       return fresh
     }
     return list
+  }
+  // The demo account directory behind the roster answer's display
+  // identity: user id to the account's own display name and email,
+  // mirroring what the real server reads from authn's users table for
+  // a roster member (cmd/server/team_members.go's enrichment). The
+  // seeded members answer from the configured account's own identifier
+  // and the reader's; a registration records the account its email and
+  // display name typed; and the initialTeamIdentities option scripts a
+  // row whose user the directory would not otherwise name (or
+  // overrides a seeded row's identity) for a suite that needs it. A
+  // user id none of the three sources names answers empty identity
+  // fields -- the exact shape the real server answers for a member
+  // whose account row cannot be read, which the surface renders with
+  // its fallback label.
+  const teamIdentityByUser = new Map<
+    string,
+    { readonly displayName: string; readonly email: string }
+  >([
+    [userId, { displayName: '', email: DEMO_OWNER_IDENTIFIER }],
+    [DEMO_READER_USER_ID, { displayName: '', email: DEMO_READER_IDENTIFIER }],
+  ])
+  for (const [id, identity] of Object.entries(initialTeamIdentities ?? {})) {
+    teamIdentityByUser.set(id, {
+      displayName: identity.displayName ?? '',
+      email: identity.email ?? '',
+    })
+  }
+  const teamIdentityOf = (
+    id: string,
+  ): { readonly displayName: string; readonly email: string } => {
+    const identity = teamIdentityByUser.get(id)
+    if (identity !== undefined) {
+      return identity
+    }
+    // A registered account's identity joins the directory at
+    // registration (see the register case); an id that still names
+    // nothing answers the empty pair.
+    return { displayName: '', email: '' }
   }
   const invitationsByTenant = new Map<string, DemoOrgInvitation[]>([
     [tenantId, [...(initialTeamInvitations ?? [])]],
@@ -1239,6 +1324,15 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
             clinic_name,
           })
           clinicNamesByTenant.set(tenant_id, clinic_name)
+          // The account's own display identity, recorded exactly as the
+          // real server's register stores it on the authn user row: the
+          // name the registration typed (trimmed), or none. This is
+          // what the roster answer enriches the account's row with if
+          // the account ever appears in a tenant's members list.
+          teamIdentityByUser.set(user_id, {
+            displayName: rawName.trim(),
+            email,
+          })
           return jsonResponse(201, {
             id: user_id,
             email,
@@ -1334,6 +1428,35 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
         }
         return jsonResponse(200, { members: membersOf(principal.tenant_id) })
+      }
+      case 'GET /api/reference-app/team-members': {
+        // The app's own roster-with-identity answer
+        // (cmd/server/team_members.go), which the team surface reads its
+        // members half from: the org membership rows of the bearer's
+        // tenant, each enriched with the member's display identity from
+        // the account directory above -- the display name the account
+        // registered with, or its email. It shares the org reads' gate:
+        // the real route is gated on org:read like the org module's
+        // member list, so the deny switch refuses it with the same 403.
+        const principal = principalOf(call)
+        if (denyTeamRead) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        const rows: DemoTeamMember[] = membersOf(principal.tenant_id).map(
+          (membership) => {
+            const identity = teamIdentityOf(membership.userId)
+            return {
+              membershipId: membership.membershipId,
+              userId: membership.userId,
+              nodeId: membership.nodeId,
+              status: membership.status,
+              createdAt: membership.createdAt,
+              displayName: identity.displayName,
+              email: identity.email,
+            }
+          },
+        )
+        return jsonResponse(200, { members: rows })
       }
       case 'GET /api/v1/org/invitations': {
         const principal = principalOf(call)
