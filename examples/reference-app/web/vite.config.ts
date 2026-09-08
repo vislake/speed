@@ -5,12 +5,12 @@
  * the web/packages/* libraries stay bundler-free by discipline (their
  * exports point at a dist/ each consumer-facing build emits), and a
  * delivered consumer project shapes its own tooling exactly this way.
- * The image round decided the server-side half of that question: the
- * reference-app Dockerfile builds this directory's dist/ into the image
- * and the Go server serves it from disk, not go:embed (cmd/server/
- * frontend.go, APP_WEB_DIST -- the dist is gitignored build output, so a
- * compile-time embed would force generated assets into the committed
- * tree). This file's own `base` stays vite's default "/", which is what
+ * The server-side half of that question is settled: the reference-app
+ * Dockerfile builds this directory's dist/ into the image and the Go
+ * server serves it from disk, not go:embed (cmd/server/frontend.go,
+ * APP_WEB_DIST -- the dist is gitignored build output, so a compile-time
+ * embed would force generated assets into the committed tree). This
+ * file's own `base` stays vite's default "/", which is what
  * the served page's /assets/* references line up with; nothing here
  * touches the Go server or any image path.
  *

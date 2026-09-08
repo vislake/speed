@@ -509,12 +509,12 @@ default.
 
 ### The three carrier adapters (aliyun, tencent, twilio)
 
-The SMS-provider-adapter round (2026-09-08) landed three real carrier
-adapters for this seam, each in its own subpackage of this module —
-`go/authn/sms/aliyun`, `go/authn/sms/tencent`, `go/authn/sms/twilio` — so a
-host wires whichever carrier it has an account with, exactly as it wires the
-console or HTTP-gateway transport: construct with the package's `NewSender`,
-hand the result to `WithSMSSender`. The subpackage split is the same
+This seam has three real carrier adapters, each in its own subpackage of
+this module — `go/authn/sms/aliyun`, `go/authn/sms/tencent`,
+`go/authn/sms/twilio` — so a host wires whichever carrier it has an account
+with, exactly as it wires the console or HTTP-gateway transport: construct
+with the package's `NewSender`, hand the result to `WithSMSSender`. The
+subpackage split is the same
 packaging answer `go/billing/gateway` gives for payment channels: an authn
 consumer that never wires a carrier imports none of the three, and none of
 the three adds a single `require` to this module's `go.mod`.
