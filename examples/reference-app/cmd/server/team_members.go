@@ -175,10 +175,17 @@ type teamMembersDeps struct {
 // request must hold: org's own read permission, the same permission the
 // org module route the web's roster used to read gates its node-less
 // member listing on (orgPermissionFor, demo_subject.go). Only reads
-// exist on this answer, so any other method demands nothing the gate
-// can grant -- a caller without org:read is refused the same 403 the
-// module route refuses, and one who holds it reaches the handler's own
-// method check and its 405.
+// exist on this answer, so any other method answers "" -- and an empty
+// selector is refused by RequirePermissionFunc before the handler runs,
+// the same 403 rbac.permission_denied the org route answers, a refusal
+// no caller passes with a write method, org:read held or not. The
+// handler's own method check (wireTeamMembers) is thus unreachable in
+// this wiring; it stays as defense in depth -- it costs nothing and
+// covers a caller that mounts the handler without the gate -- but the
+// honest expectation is that the branch is a no-op in production
+// traffic, and it would answer the 400-level
+// reference_app.method_not_allowed envelope, not a 405, if it were ever
+// reached.
 func teamMembersPermissionFor(r *http.Request) string {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
