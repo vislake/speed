@@ -40,6 +40,10 @@
 
 "notification.contact_not_verified" = "That address has not completed verification yet and cannot receive messages."
 
+"notification.contact_type_unsubscribed" = "That address has opted out of this notification type and receives nothing of it."
+
+"notification.contact_type_optout_not_allowed" = "This notification type cannot be turned off for a contact; only a type whose declaration permits opting out can be narrowed."
+
 "notification.contact_rate_limited" = "Too many attempts. Please try again in {{.retry_after_seconds}} seconds."
 
 "notification.dispatch_invalid" = "That notification request is not valid: {{.field}}."

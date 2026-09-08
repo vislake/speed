@@ -303,6 +303,49 @@ func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
 	}
 }
 
+// TestModule_Register_AttachesTheHostRegistrarToContactService pins the
+// type-scoped opt-out half of the same wiring promise: after Register, the
+// contact service's type-taxonomy reference is the host registry's live
+// notification-type registrar, so a type-scoped opt-out write validates
+// against the taxonomy a host's declaring modules populated. A Register
+// that attached the taxonomy to the preference service but not to the
+// contact service would hand out a ledger whose every UnsubscribeType
+// answered type_not_found (the nil-source contract) no matter what the
+// host declared. The write path itself (UnsubscribeType and its delivery
+// gate) is driven here through the module's own Contacts() face, end to
+// end over the module's database.
+func TestModule_Register_AttachesTheHostRegistrarToContactService(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db, testModuleOptions(t)...)
+	reg := newHostRegistry(t)
+
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	ctx := tenantCtx("tenant-acme")
+	contact, err := module.Contacts().CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateContact through the registered module: %v", err)
+	}
+
+	if err = module.Contacts().UnsubscribeType(ctx, UnsubscribeTypeInput{
+		ContactID: contact.ID,
+		TypeKey:   fixtureTypeAppointment,
+	}); err != nil {
+		t.Fatalf("UnsubscribeType through the registered module: %v", err)
+	}
+	_, err = module.Contacts().EnsureDeliverableForType(ctx, contact.ID, fixtureTypeAppointment)
+	assertCode(t, err, ErrContactTypeUnsubscribed.Code)
+	if _, err := module.Contacts().EnsureDeliverableForType(ctx, contact.ID, fixtureTypeResult); err != nil {
+		t.Errorf("the contact that only opted out of %s was refused for %s: %v", fixtureTypeAppointment, fixtureTypeResult, err)
+	}
+}
+
 // TestModule_Register_TaxonomyIsLiveNotASnapshot proves the reference is
 // live: a type the host registers AFTER Register still governs preference
 // writes and reads. The module must hold the registrar, never a copy taken at

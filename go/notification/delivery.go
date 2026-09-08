@@ -990,12 +990,17 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 }
 
 // deliverToContact is the external-contact delivery path, standing behind
-// the module's own consent ledger: ContactService.EnsureDeliverable is the
-// send-time recheck that refuses a delivery whose consent lapsed between
-// enqueue and delivery (AGENTS.md's "Every consent and address decision
-// is re-checked at send time" adjudication -- the module never sends to
-// an unverified address, the verification message itself being the only
-// exception, and delivery is not it).
+// the module's own consent ledger: ContactService.EnsureDeliverableForType
+// is the send-time recheck that refuses a delivery whose consent lapsed
+// between enqueue and delivery (AGENTS.md's "Every consent and address
+// decision is re-checked at send time" adjudication -- the module never
+// sends to an unverified address, the verification message itself being
+// the only exception, and delivery is not it). The type-aware gate answers
+// the whole-contact statuses AND the type-scoped opt-outs
+// (contact_type_unsubscribe.go): a verified contact that narrowed the
+// type being delivered out of its consent is refused exactly like a
+// whole-unsubscribed one, so an opt-out landing between enqueue and
+// attempt stops the send.
 //
 // The refusal mapping follows the ledger's statuses, split on whether a
 // retry can change the answer: a pending contact (consent never proved) and
@@ -1008,9 +1013,12 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // resolved, and a record without a channel could never be probed by a retry
 // (see settleContactRefusal) -- the attempt carries no record precisely so
 // the retry that follows a verification probes fresh and delivers. An
-// unsubscribed or bounced contact is terminal -- no retry changes the
-// answer -- and is recorded as a skipped send under the contact's own
-// channel. Before any channel's transport runs, the type registry is
+// unsubscribed, type-scoped-opted-out or bounced contact is terminal -- no
+// retry changes the answer -- and is recorded as a skipped send under the
+// contact's own channel (the type-scoped refusal under its own skip
+// reason, so an operator reading the records can tell "opted out of this
+// type" from "opted out of everything"). Before any channel's transport
+// runs, the type registry is
 // consulted and a type nobody declared is terminal-refused and recorded
 // (see the gate below) -- the contact path's half of the undeclared-type
 // refusal the user path makes through ResolveForDelivery, which no channel
@@ -1021,7 +1029,7 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // blacklist is a later round's work (blacklist.go's doc comment records
 // the boundary).
 func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string, d Dispatch) error {
-	contact, err := s.contacts.EnsureDeliverable(ctx, d.Recipient.ContactID)
+	contact, err := s.contacts.EnsureDeliverableForType(ctx, d.Recipient.ContactID, d.TypeKey)
 	if err != nil {
 		if perr, ok := apperr.As(err); ok {
 			switch perr.Code {
@@ -1033,7 +1041,7 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 				// returns for the queue's bounded horizon (see the doc
 				// comment), with nothing recorded.
 				return err
-			case ErrContactUnsubscribed.Code, ErrContactBounced.Code:
+			case ErrContactUnsubscribed.Code, ErrContactBounced.Code, ErrContactTypeUnsubscribed.Code:
 				return s.settleContactRefusal(ctx, tenantID, d, perr)
 			}
 		}
@@ -1093,20 +1101,22 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 }
 
 // settleContactRefusal records one terminal consent refusal -- a contact
-// that unsubscribed or bounced -- as a skipped send. The channel comes from
-// the refusal error's own "channel" parameter (EnsureDeliverable attaches
-// the contact's channel to these two refusals; the other refusals carry no
-// channel and are not recorded, because a send record without a channel
-// could never be probed by a retry). A refusal that lands on a key whose
-// record already says succeeded is dropped by settle's
-// never-downgrade-succeeded guard: the earlier delivery's outcome is the
-// durable fact, whatever the recipient's consent says now.
+// that whole-unsubscribed, narrowed the delivered type out (type-scoped
+// opt-out, contact_type_unsubscribe.go) or bounced -- as a skipped send.
+// The channel comes from the refusal error's own "channel" parameter
+// (EnsureDeliverable/EnsureDeliverableForType attach the contact's channel
+// to these refusals; the other refusals carry no channel and are not
+// recorded, because a send record without a channel could never be probed
+// by a retry). A refusal that lands on a key whose record already says
+// succeeded is dropped by settle's never-downgrade-succeeded guard: the
+// earlier delivery's outcome is the durable fact, whatever the recipient's
+// consent says now.
 func (s *DeliveryService) settleContactRefusal(ctx context.Context, tenantID string, d Dispatch, perr *apperr.Error) error {
 	channel, _ := perr.Params["channel"].(string)
 	if channel == "" {
-		// Defensive: every unsubscribed or bounced contact has a channel.
-		// Without one there is no record to write and no retry to
-		// converge, so the refusal is simply absorbed.
+		// Defensive: every refused contact here has a channel. Without one
+		// there is no record to write and no retry to converge, so the
+		// refusal is simply absorbed.
 		return nil
 	}
 	rec := s.sendRecordFor(tenantID, d, channel)
@@ -1117,8 +1127,11 @@ func (s *DeliveryService) settleContactRefusal(ctx context.Context, tenantID str
 	rec.IdempotencyKey = key
 
 	reason := skipReasonUnsubscribed
-	if perr.Code == ErrContactBounced.Code {
+	switch perr.Code {
+	case ErrContactBounced.Code:
 		reason = skipReasonBounced
+	case ErrContactTypeUnsubscribed.Code:
+		reason = skipReasonTypeUnsubscribed
 	}
 	return s.skipAndStop(ctx, tenantID, rec, reason)
 }
@@ -1222,14 +1235,16 @@ func (s *DeliveryService) sendSMS(ctx context.Context, parts map[string]string, 
 // among them -- can never carry plaintext PII.
 //
 // The skip reasons: a skip is a deliberate non-send -- no address on file,
-// consent withdrawn, the address bounced -- and the reason is the
-// operator's whole answer on why; the empty-string sentinel covers the
-// records that never skipped.
+// consent withdrawn (whole-contact or type-scoped, the two reasons
+// telling an operator reading the records apart), the address bounced --
+// and the reason is the operator's whole answer on why; the empty-string
+// sentinel covers the records that never skipped.
 const (
-	skipReasonNoEmail      = "no email address on file"
-	skipReasonNoPhone      = "no phone number on file"
-	skipReasonUnsubscribed = "contact unsubscribed"
-	skipReasonBounced      = "contact bounced"
+	skipReasonNoEmail          = "no email address on file"
+	skipReasonNoPhone          = "no phone number on file"
+	skipReasonUnsubscribed     = "contact unsubscribed"
+	skipReasonTypeUnsubscribed = "contact unsubscribed from this type"
+	skipReasonBounced          = "contact bounced"
 )
 
 // The failure classifications of a failed send record, grouped by the

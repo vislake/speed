@@ -355,7 +355,10 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 //  3. The registrars and the module's own machinery are attached: the host
 //     registry's notification-type registrar to the preference service
 //     (attachTypes, giving it the live taxonomy every preference write
-//     validates against), the registry reference plus the audit-action
+//     validates against) and to the contact service (attachTypes, giving
+//     the type-scoped opt-out write its taxonomy -- the two services hold
+//     the same live registrar, never a snapshot), the registry reference
+//     plus the audit-action
 //     registrar to the contact service (attachHost), the delivery pipeline's
 //     job handler (reg.Jobs.Handle on the delivery job type, so the host's
 //     queue workers run it) and its own host-registry reference
@@ -418,6 +421,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	m.prefs.attachTypes(reg.Notifications)
+	m.contacts.attachTypes(reg.Notifications)
 	m.contacts.attachHost(reg, reg.AuditActions)
 	m.deliveries.attachHost(reg)
 	reg.Events.Subscribe(EventInboxCreated, m.hub.HandleEvent)

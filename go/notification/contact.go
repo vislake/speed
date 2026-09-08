@@ -31,11 +31,14 @@ const tableVerifiedContacts = "verified_contacts"
 //
 // unsubscribed and bounced are terminal per contact: an unsubscribe is
 // permanent for the contact as a whole (see AGENTS.md's "Unsubscribe is
-// permanent for the contact as a whole" adjudication; type-scoped opt-out
-// is a deferred later-round shape and verified_contacts has no type_key
-// column), and a bounced contact has proven its address cannot
-// receive messages at all. Delivery refuses both before any transport is
-// touched (EnsureDeliverable).
+// permanent for the contact as a whole" adjudication), and a bounced
+// contact has proven its address cannot receive messages at all. The
+// type-scoped opt-out is the finer, orthogonal shape the ledger also
+// carries -- a verified contact may additionally opt out of ONE type
+// while staying reachable for the rest, in contact_type_unsubscribe.go's
+// contact_type_unsubscribes table (delivery consults both through
+// EnsureDeliverableForType). Delivery refuses every terminal whole-contact
+// status before any transport is touched (EnsureDeliverable).
 const (
 	ContactStatusPending      = "pending"
 	ContactStatusVerified     = "verified"
@@ -338,6 +341,20 @@ type ContactService struct {
 	audit        pkgcore.AuditActionRegistrar
 	now          func() time.Time
 
+	// typeUnsubs is the type-scoped opt-out ledger's data path
+	// (contact_type_unsubscribe.go): the per-(contact, type) terminal
+	// facts UnsubscribeType writes and EnsureDeliverableForType probes.
+	typeUnsubs *ContactTypeUnsubscribeRepository
+
+	// types is the live notification-type taxonomy the type-scoped
+	// opt-out write validates against. It is nil until Module.Register
+	// attaches the host registry's registrar through attachTypes; every
+	// method treats a nil source as an empty taxonomy -- see lookupType's
+	// doc comment for why that is the honest answer rather than an error
+	// about wiring. (The whole-contact Unsubscribe and EnsureDeliverable
+	// never consult it: a whole-contact consent fact is type-agnostic.)
+	types pkgcore.NotificationRegistrar
+
 	// limiter counts the two rate-limit dimensions. Nil means "build one
 	// from the host's KVStore on use", which is what production does;
 	// tests inject their own to drive a denial deterministically.
@@ -392,9 +409,42 @@ type contactHost interface {
 // the fields directly (same package).
 func NewContactService(db *gorm.DB) *ContactService {
 	return &ContactService{
-		repo: NewVerifiedContactRepository(db),
-		now:  time.Now,
+		repo:       NewVerifiedContactRepository(db),
+		typeUnsubs: NewContactTypeUnsubscribeRepository(db),
+		now:        time.Now,
 	}
+}
+
+// attachTypes binds the registry's notification-type registrar to the
+// service. Module.Register calls it during registration, mirroring
+// PreferenceService.attachTypes (see its doc comment for the live-taxonomy
+// reasoning); the type-scoped opt-out write path reads the registrar from
+// this reference at call time, never earlier. Attaching is idempotent --
+// the last registrar wins, and there is exactly one caller.
+func (s *ContactService) attachTypes(types pkgcore.NotificationRegistrar) {
+	s.types = types
+}
+
+// lookupType returns the declared notification type whose Key is typeKey,
+// or ErrTypeNotFound when nobody declared it -- the contact service's twin
+// of PreferenceService.lookupType, with the identical nil-source contract:
+// a nil registrar source (the service before Module.Register attached one)
+// is treated as declaring nothing at all, which is the same honest answer
+// a host that never registers any notification type should get. Only the
+// type-scoped opt-out write path consults it (UnsubscribeType); the
+// delivery-time probe of an opt-out row never needs the taxonomy -- the
+// row exists or it does not -- and the delivery job's own registry gate
+// answers undeclared types with its recorded failure before any transport.
+func (s *ContactService) lookupType(typeKey string) (pkgcore.NotificationType, error) {
+	if s.types == nil {
+		return pkgcore.NotificationType{}, ErrTypeNotFound.WithParam("type_key", typeKey)
+	}
+	for _, typ := range s.types.Types() {
+		if typ.Key == typeKey {
+			return typ, nil
+		}
+	}
+	return pkgcore.NotificationType{}, ErrTypeNotFound.WithParam("type_key", typeKey)
 }
 
 // attachHost binds the service's host reference and audit registrar.
@@ -413,9 +463,10 @@ func (s *ContactService) attachHost(host contactHost, auditActions pkgcore.Audit
 // reconstructible from the audit trail even though the contact rows
 // themselves are tenant data a tenant admin may legitimately prune.
 const (
-	AuditActionContactAttested     = "notification.contact.attested"
-	AuditActionContactVerified     = "notification.contact.verified"
-	AuditActionContactUnsubscribed = "notification.contact.unsubscribed"
+	AuditActionContactAttested         = "notification.contact.attested"
+	AuditActionContactVerified         = "notification.contact.verified"
+	AuditActionContactUnsubscribed     = "notification.contact.unsubscribed"
+	AuditActionContactTypeUnsubscribed = "notification.contact.type_unsubscribed"
 )
 
 // contactAuditActionDecls is the module's audit-action contribution,
@@ -426,6 +477,7 @@ var contactAuditActionDecls = []string{
 	AuditActionContactAttested,
 	AuditActionContactVerified,
 	AuditActionContactUnsubscribed,
+	AuditActionContactTypeUnsubscribed,
 }
 
 // auditResourceContact is the audit.Resource under which every contact
@@ -552,7 +604,7 @@ func (s *ContactService) CreateContact(ctx context.Context, in ContactCreateInpu
 		if err := s.repo.Create(ctx, contact); err != nil {
 			return nil, errInternal(err)
 		}
-		if err := s.emit(ctx, AuditActionContactAttested, contact, audit.Result{Success: true}); err != nil {
+		if err := s.emit(ctx, AuditActionContactAttested, contact, audit.Result{Success: true}, nil); err != nil {
 			return nil, err
 		}
 		return contact, nil
@@ -699,7 +751,7 @@ func (s *ContactService) VerifyCode(ctx context.Context, in VerifyCodeInput) (*V
 	contact.ConsentAt = &at
 	contact.VerifiedAt = &at
 
-	if err := s.emit(ctx, AuditActionContactVerified, contact, audit.Result{Success: true}); err != nil {
+	if err := s.emit(ctx, AuditActionContactVerified, contact, audit.Result{Success: true}, nil); err != nil {
 		return nil, err
 	}
 	return contact, nil
@@ -887,8 +939,11 @@ type UnsubscribeInput struct {
 // The permanence rule (AGENTS.md's "Unsubscribe is permanent for the
 // contact as a whole" adjudication): an unsubscribe is for the contact as
 // a whole, on every channel it might later be registered on, and it is
-// not reversible through this API. Type-scoped opt-out is a deferred
-// later-round shape (verified_contacts has no type_key column).
+// not reversible through this API. The type-scoped opt-out
+// (UnsubscribeType, contact_type_unsubscribe.go) is the finer shape a
+// contact uses to keep receiving everything but one type; it never
+// re-opens a whole-unsubscribed contact -- the write path refuses with
+// ErrContactUnsubscribed, the whole status outranking any narrower fact.
 func (s *ContactService) Unsubscribe(ctx context.Context, in UnsubscribeInput) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, in.ContactID)
 	if err != nil {
@@ -919,7 +974,7 @@ func (s *ContactService) Unsubscribe(ctx context.Context, in UnsubscribeInput) (
 	}
 
 	contact.Status = ContactStatusUnsubscribed
-	if err := s.emit(ctx, AuditActionContactUnsubscribed, contact, audit.Result{Success: true}); err != nil {
+	if err := s.emit(ctx, AuditActionContactUnsubscribed, contact, audit.Result{Success: true}, nil); err != nil {
 		return nil, err
 	}
 	return contact, nil
@@ -1009,8 +1064,8 @@ func (s *ContactService) markBounced(ctx context.Context, id string) (bool, erro
 // EnsureDeliverable is the consent gate delivery re-checks before every
 // send to an external contact -- the send-time status recheck AGENTS.md's
 // "Every consent and address decision is re-checked at send time"
-// adjudication describes, and the seam the notification.deliver job calls
-// with every message it is about to transport. Only a verified contact passes; every
+// adjudication describes, and the seam the notification.deliver job's
+// type-agnostic callers use. Only a verified contact passes; every
 // other status refuses with its own error, so a message can never ride to a
 // transport on consent that lapsed between enqueue and delivery:
 //
@@ -1030,7 +1085,23 @@ func (s *ContactService) markBounced(ctx context.Context, id string) (bool, erro
 // "channel" parameter -- the skip record the job writes for them is per
 // channel, and the job has no other way to learn the channel of a contact
 // the gate refused to return.
+//
+// The delivery pipeline itself calls the type-aware twin,
+// EnsureDeliverableForType (contact_type_unsubscribe.go), which answers
+// this same status gate and additionally refuses a verified contact that
+// opted out of the type being delivered. Both methods share one
+// implementation (ensureDeliverable), so the two gates cannot drift.
 func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string) (*VerifiedContact, error) {
+	return s.ensureDeliverable(ctx, contactID, "")
+}
+
+// ensureDeliverable is the shared consent gate behind EnsureDeliverable
+// and EnsureDeliverableForType: the status switch answers first -- the
+// whole-contact facts outrank any type-scoped one -- and a verified
+// contact with a non-empty typeKey is then probed against the type-scoped
+// opt-out ledger (contact_type_unsubscribe.go). The typeKey "" sentinel
+// skips the probe, which is EnsureDeliverable's whole-contact contract.
+func (s *ContactService) ensureDeliverable(ctx context.Context, contactID, typeKey string) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {
 		if isRecordNotFound(err) {
@@ -1040,6 +1111,15 @@ func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string
 	}
 	switch contact.Status {
 	case ContactStatusVerified:
+		if typeKey != "" {
+			optedOut, err := s.typeUnsubs.ByContactAndType(ctx, contact.ID, typeKey)
+			if err != nil {
+				return nil, errInternal(err)
+			}
+			if optedOut != nil {
+				return nil, ErrContactTypeUnsubscribed.WithParam("channel", contact.Channel)
+			}
+		}
 		return contact, nil
 	case ContactStatusPending:
 		return nil, ErrContactNotVerified
@@ -1284,17 +1364,22 @@ func normalizeContactAddress(channel, address string) (string, error) {
 // handler, which logs an emit failure and returns success: notification has
 // no logger to hand the failure to (it does not import observability --
 // see AGENTS.md's "No service logging" rule), so the caller is the only
-// sink. A known
+// sink. changes is the optional before/after diff the event carries; every
+// transition but the type-scoped opt-out's passes nil (there is no
+// field-level change worth recording in a status flip -- the status is the
+// record), and the type-scoped one names the narrowed type in its After
+// map (contact_type_unsubscribe.go). A known
 // limitation of this round follows from the same shape: an operation that
 // hits the idempotent return path of Unsubscribe (already unsubscribed)
 // emits nothing, which is correct -- the idempotent repeat is not a state
 // change -- and retries of a failed transition after its audit emit failed
 // do not re-emit (the state change itself is not re-run).
-func (s *ContactService) emit(ctx context.Context, action string, c *VerifiedContact, result audit.Result) error {
+func (s *ContactService) emit(ctx context.Context, action string, c *VerifiedContact, result audit.Result, changes *audit.Diff) error {
 	if err := audit.Emit(ctx, s.host.EventBus(), s.audit, audit.Input{
 		Action:   action,
 		Resource: auditResourceContact(c),
 		Result:   result,
+		Changes:  changes,
 	}); err != nil {
 		return errInternal(err)
 	}

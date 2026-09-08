@@ -38,6 +38,8 @@ var errorCatalog = []struct {
 	{"ErrContactUnsubscribed", ErrContactUnsubscribed, "notification.contact_unsubscribed", http.StatusConflict},
 	{"ErrContactBounced", ErrContactBounced, "notification.contact_bounced", http.StatusConflict},
 	{"ErrContactNotVerified", ErrContactNotVerified, "notification.contact_not_verified", http.StatusConflict},
+	{"ErrContactTypeUnsubscribed", ErrContactTypeUnsubscribed, "notification.contact_type_unsubscribed", http.StatusConflict},
+	{"ErrContactTypeOptoutNotAllowed", ErrContactTypeOptoutNotAllowed, "notification.contact_type_optout_not_allowed", http.StatusBadRequest},
 	{"ErrContactRateLimited", ErrContactRateLimited, "notification.contact_rate_limited", http.StatusTooManyRequests},
 
 	// The delivery group (delivery.go).

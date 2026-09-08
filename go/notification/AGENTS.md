@@ -11,7 +11,10 @@ this file is the module-level operating guide that ships to consuming projects.
 
 Implemented end to end: the in-app inbox, the per-type channel preference
 matrix, the external-contact consent ledger with double opt-in and business
-attestation, the async delivery pipeline with its per-attempt send records,
+attestation, the type-scoped opt-out (a verified contact narrows itself
+out of one notification type while staying reachable for the rest --
+contact_type_unsubscribe.go), the async delivery pipeline with its
+per-attempt send records,
 the platform-blacklist table (schema and read path; writers deferred, see
 below), the module's own OpenAPI fragment with a generated, compile-checked
 HTTP handler, the per-replica realtime hub behind the inbox stream, and the
@@ -92,10 +95,20 @@ module must import.
   decision layer (validate every write against the live taxonomy, refuse
   what a type cannot honor, resolve "which channels" by folding defaults
   under absent rows).
-- `contact.go`, `contact_code.go`, `repository`-adjacent queries -- the
+- `contact.go`, `contact_code.go`, `contact_type_unsubscribe.go`,
+  `repository`-adjacent queries -- the
   consent ledger: `VerifiedContact`, the status machine, the double opt-in
   code lifecycle, attestation, unsubscribe/mark-bounced, `EnsureDeliverable`,
-  and the audit emission of every consent transition.
+  and the audit emission of every consent transition. The type-scoped
+  opt-out half lives in `contact_type_unsubscribe.go`: the
+  `contact_type_unsubscribes` table (one terminal row per
+  (tenant, contact, type)), the write path `UnsubscribeType` (verified
+  contacts only, validated against the live taxonomy and the type's
+  `Unsubscribable` declaration), and the delivery gate
+  `EnsureDeliverableForType` -- the type-aware twin of `EnsureDeliverable`,
+  which both answers the whole-contact status gate and probes the opt-out
+  rows, so the delivery job re-checks a contact's per-type narrowing at
+  send time exactly as it re-checks the contact's status.
 - `blacklist.go` -- `PlatformBlacklist` (platform data) and its repository's
   cross-tenant `IsBlacklisted` read.
 - `send_record.go` -- `SendRecord` (platform data) and its repository
@@ -137,8 +150,9 @@ notification outside HTTP:
 - `Contacts()` -- the `ContactService`: `CreateContact` (double opt-in, or
   business attestation when the input carries a `ConsentRef`), `VerifyCode`
   (the compare-and-swap), `ResendCode`, `Unsubscribe`, `MarkBounced` (the
-  marking a hard transport failure calls), and the delivery gate
-  `EnsureDeliverable`.
+  marking a hard transport failure calls), the type-scoped opt-out write
+  `UnsubscribeType` (see "Type-scoped opt-out" below), and the delivery
+  gates `EnsureDeliverable` / `EnsureDeliverableForType`.
 - `Deliveries()` -- the `DeliveryService`: `Dispatch` (validate + enqueue,
   async by construction) and the job handler behind the queue.
 
@@ -179,8 +193,11 @@ the caller's own out of its buffer. The route carries no heartbeat (see
   m.deliveries)`. One handler delivers every declared type, deciding what to
   do per payload; the type string is deliberately not the name of a
   notification type.
-- Audit: three consent-transition actions under `notification.contact.*` --
-  `attested`, `verified`, `unsubscribed` -- registered on `reg.AuditActions`
+- Audit: four consent-transition actions under `notification.contact.*` --
+  `attested`, `verified`, `unsubscribed` and the type-scoped
+  `type_unsubscribed` (whose record names the narrowed type in its change,
+  so the trail can reconstruct which type a contact opted out of) --
+  registered on `reg.AuditActions`
   in `Register`. The audit `Resource`'s display name is the channel plus the
   address's blind index: the plaintext address must never reach the audit
   trail, whose records outlive the row.
@@ -189,7 +206,7 @@ the caller's own out of its buffer. The route carries no heartbeat (see
 
 ### Tables and data domains
 
-Three migrations per dialect (`sqlite/`, `postgres/`), each tested to apply
+Four migrations per dialect (`sqlite/`, `postgres/`), each tested to apply
 from zero against a real PostgreSQL server in the module's integration tier:
 
 | Table | Data domain | Isolation proof |
@@ -197,6 +214,7 @@ from zero against a real PostgreSQL server in the module's integration tier:
 | `in_app_messages` | tenant | `tenancytest.AssertIsolated` |
 | `notification_preferences` | tenant | `tenancytest.AssertIsolated` |
 | `verified_contacts` | tenant | `tenancytest.AssertIsolated` |
+| `contact_type_unsubscribes` | tenant | `tenancytest.AssertIsolated` |
 | `send_records` | platform | `tenancytest.AssertNotTenantScoped` |
 | `platform_blacklist` | platform | `tenancytest.AssertNotTenantScoped` |
 
@@ -480,10 +498,42 @@ and must not need the review artifacts those decisions originally lived in.
 An unsubscribe is for the contact -- one address on one channel -- for good:
 `unsubscribed` is terminal, and the row keeps the consent facts of its
 former life so a re-attestation cannot silently resurrect a messenger the
-recipient told to stop. There is no per-type or per-message-category
-opt-out: `verified_contacts` has no `type_key` column, and type-scoped
-opt-out is a deferred later-round shape (see below). Delivery's send-time
+recipient told to stop. Delivery's send-time
 gate (`EnsureDeliverable`) reads the terminal status fresh on every attempt.
+
+### Type-scoped opt-out: terminal per (contact, type), never a whole-contact status
+
+The consent ledger's second, finer shape (contact_type_unsubscribe.go)
+answers "this type, not that one": a verified contact keeps receiving
+everything but one notification type. The shape is a per-(tenant, contact,
+type) row in its own table, `contact_type_unsubscribes`, because a contact
+may narrow many types one at a time and each narrowing is its own consent
+fact with its own audit record -- the per-(entity, type) row shape
+`notification_preferences` already uses for per-user type state, never a
+column on `verified_contacts` (a set-in-a-cell would need a read-modify-write
+on a shared row, the race the module's row-per-fact tables exist to avoid).
+The rows are terminal for as long as the contact row lives -- no re-enable
+path exists, mirroring the whole-contact rule, and re-consent is a fresh
+contact cycle. UnsubscribeType (the write path) accepts only a VERIFIED
+contact: a pending contact has no consent to narrow, a whole-unsubscribed
+or bounced contact is already covered by its broader terminal status
+(`ErrContactNotVerified`/`ErrContactUnsubscribed`/`ErrContactBounced`
+respectively), a type nobody declared is refused (`ErrTypeNotFound`), and a
+declared type whose declaration does not permit opting out -- `Unsubscribable`
+false -- is refused (`ErrContactTypeOptoutNotAllowed`), the identical
+taxonomy discipline the preference matrix applies to a user's per-type
+opt-out. The whole-contact unsubscribe remains the one exit that predates
+this shape and is not touched by it. The write transition is idempotent
+(the repeat emits no second row and no second audit event) and is audited
+under `notification.contact.type_unsubscribed` with the narrowed type named
+in the change. Delivery consults the rows through
+`EnsureDeliverableForType`, the type-aware twin of `EnsureDeliverable` the
+delivery job calls for every contact send: a type-scoped opt-out landing
+between enqueue and attempt refuses the delivery at send time exactly as a
+whole-contact status change does, and the job settles the refusal as a
+skipped record under its own skip reason ("contact unsubscribed from this
+type"), so an operator reading the send records can tell a per-type
+narrowing from a whole-contact withdrawal.
 
 ### Every consent and address decision is re-checked at send time
 
@@ -610,10 +660,6 @@ claims it works.
   "contact is bounced" refusal). The record's `reason` vocabulary
   (`complaint`, `hard_bounce`) is shipped now so the schema does not move
   when the writers land.
-- **Type-scoped opt-out.** Unsubscribe is per contact, whole and permanent
-  (see Adjudications); the finer shape -- "this type, not that one" -- needs
-  a `type_key`-scoped design on the consent ledger and is deliberately not
-  half-built here.
 - **Per-contact locale negotiation.** External contacts render in the
   platform default locale (see Adjudications); giving a contact its own
   negotiated locale is a later-round change (a `locale` column, the
@@ -731,11 +777,18 @@ preference files' `AssertIsolated` suite, `contact_test.go` (the
 `AssertIsolated` suite, the double opt-in lifecycle, the code CAS, both
 rate-limit dimensions with their refusals pinning the name-not-key
 reporting contract over service and HTTP surfaces alike, address-at-rest
-encryption, terminal-state permanence), `blacklist_test.go` and
+encryption, terminal-state permanence), `contact_type_unsubscribe_test.go`
+(the type-scoped opt-out table's own `AssertIsolated` suite, the write
+path's verified-only and taxonomy refusals, the idempotent repeat that
+emits nothing, the tenant boundary both ways, the type-aware gate's status
+answers, and the opt-out's audit record naming the narrowed type),
+`blacklist_test.go` and
 `send_record_test.go`
 (`tenancytest.AssertNotTenantScoped` over the platform tables),
 `delivery_test.go` (the retry/converge/skip/deferral semantics, transport
-permanence marking contacts bounced, the resolver-failure and
+permanence marking contacts bounced, the type-scoped opt-out's
+enqueue-between-attempt refusal skipping exactly the narrowed type's
+delivery while other types still deliver, the resolver-failure and
 tenant-less-worker paths), `handler_test.go` and `hub_http_test.go` (the
 HTTP surface, driven through a real httptest server), `hub_test.go`,
 `module_test.go` (Register's validation and wiring), `errors_test.go` and

@@ -36,6 +36,10 @@
 
 "notification.contact_not_verified" = "该联系地址尚未完成验证,无法接收消息。"
 
+"notification.contact_type_unsubscribed" = "该联系地址已退订此类通知,不再接收此类型的消息。"
+
+"notification.contact_type_optout_not_allowed" = "此类通知不能对联系地址关闭;只有声明允许退订的类型才能按类型退订。"
+
 "notification.contact_rate_limited" = "操作过于频繁,请 {{.retry_after_seconds}} 秒后重试。"
 
 "notification.dispatch_invalid" = "该通知请求不合法:{{.field}}。"

@@ -2455,3 +2455,149 @@ func TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey(t 
 		t.Errorf("mail text = %q, want the referenced parameter rendered into the copy", mails[0].Text)
 	}
 }
+
+// TestDelivery_TypeOptOutBetweenEnqueueAndAttempt_SkipsThatTypeOnlyAndKeepsOthers
+// drives the type-scoped opt-out's freshness in the delivery's sharpest
+// form: two dispatches are enqueued while the contact is verified -- one
+// for fixtureTypeAppointment, one for fixtureTypeResult -- and the contact
+// narrows itself out of fixtureTypeResult BEFORE the worker attempts run.
+// The attempt of the opted-out type must settle a skipped record under the
+// type-scoped reason without ever calling the transport, while the other
+// type's attempt still delivers: the whole point of the shape is that one
+// type's opt-out leaves the contact reachable for the rest.
+func TestDelivery_TypeOptOutBetweenEnqueueAndAttempt_SkipsThatTypeOnlyAndKeepsOthers(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+	env.contacts.types = fixtureRegistrar{types: fixtureTypes}
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+
+	optedOut := Dispatch{
+		TypeKey: fixtureTypeResult,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	stillOn := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	optedOutPayload := env.enqueue(t, optedOut)
+	stillOnPayload := env.enqueue(t, stillOn)
+
+	if err := env.contacts.UnsubscribeType(ctx, UnsubscribeTypeInput{
+		ContactID: contact.ID,
+		TypeKey:   fixtureTypeResult,
+	}); err != nil {
+		t.Fatalf("UnsubscribeType: %v", err)
+	}
+
+	if err := env.attempt(t, optedOutPayload); err != nil {
+		t.Fatalf("delivery attempt of the opted-out type: %v", err)
+	}
+	if err := env.attempt(t, stillOnPayload); err != nil {
+		t.Fatalf("delivery attempt of the still-on type: %v", err)
+	}
+
+	mails := env.host.mailer.messages()
+	if len(mails) != 1 {
+		t.Fatalf("mailer sent %d messages, want exactly the still-on type's one email", len(mails))
+	}
+	if mails[0].Subject != "预约提醒" {
+		t.Errorf("mail subject = %q, want the still-on type's appointment copy", mails[0].Subject)
+	}
+
+	skip := env.sendRecordByChannel(t, ctx, optedOut, ChannelEmail)
+	if skip == nil {
+		t.Fatal("no send record for the type-opted-out delivery, want the skip recorded")
+	}
+	if skip.Status != SendRecordStatusSkipped {
+		t.Errorf("opted-out record status = %s, want %s", skip.Status, SendRecordStatusSkipped)
+	}
+	if skip.Error != skipReasonTypeUnsubscribed {
+		t.Errorf("opted-out record reason = %q, want %q", skip.Error, skipReasonTypeUnsubscribed)
+	}
+	if skip.RecipientClass != RecipientClassExternal || skip.ContactID != contact.ID {
+		t.Errorf("opted-out record recipient = (class %s, contact %q), want (external, %q)", skip.RecipientClass, skip.ContactID, contact.ID)
+	}
+
+	delivered := env.sendRecordByChannel(t, ctx, stillOn, ChannelEmail)
+	if delivered == nil {
+		t.Fatal("no send record for the still-on delivery, want the succeeded record")
+	}
+	if delivered.Status != SendRecordStatusSucceeded {
+		t.Errorf("still-on record status = %s, want %s", delivered.Status, SendRecordStatusSucceeded)
+	}
+}
+
+// TestDelivery_TypeOptedOutContact_WholeUnsubscribeStillSkipsWithTheWholeReason
+// pins the precedence between the two opt-out shapes at the delivery: a
+// contact that opts out of one type and THEN whole-unsubscribes is refused
+// by the whole-contact status answer (the broader, later withdrawal), never
+// by the narrower type-scoped one -- the whole unsubscribe is the contact's
+// durable fact, and its skip record carries the whole-contact reason.
+func TestDelivery_TypeOptedOutContact_WholeUnsubscribeStillSkipsWithTheWholeReason(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+	env.contacts.types = fixtureRegistrar{types: fixtureTypes}
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+	if err := env.contacts.UnsubscribeType(ctx, UnsubscribeTypeInput{
+		ContactID: contact.ID,
+		TypeKey:   fixtureTypeAppointment,
+	}); err != nil {
+		t.Fatalf("UnsubscribeType: %v", err)
+	}
+	if _, err := env.contacts.Unsubscribe(ctx, UnsubscribeInput{ContactID: contact.ID}); err != nil {
+		t.Fatalf("whole unsubscribe: %v", err)
+	}
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("delivery attempt: %v", err)
+	}
+
+	if got := len(env.host.mailer.messages()); got != 0 {
+		t.Errorf("mailer sent %d messages to a whole-unsubscribed contact, want none", got)
+	}
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil {
+		t.Fatal("no send record for the refused delivery, want the skip recorded")
+	}
+	if rec.Status != SendRecordStatusSkipped {
+		t.Errorf("record status = %s, want %s", rec.Status, SendRecordStatusSkipped)
+	}
+	if rec.Error != skipReasonUnsubscribed {
+		t.Errorf("record reason = %q, want the whole-contact reason %q", rec.Error, skipReasonUnsubscribed)
+	}
+}

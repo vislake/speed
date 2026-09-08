@@ -141,6 +141,30 @@ var (
 	// retry can change, are the permanent refusals).
 	ErrContactNotVerified = apperr.Conflict("notification.contact_not_verified")
 
+	// ErrContactTypeUnsubscribed reports a delivery attempt against a
+	// contact that has a type-scoped opt-out row for the type being
+	// delivered (contact_type_unsubscribe.go's EnsureDeliverableForType):
+	// the contact is verified and reachable for every other type, but this
+	// one was narrowed out, terminally, per (contact, type). The delivery
+	// job records the refusal as a skipped send under the type-scoped skip
+	// reason, exactly as it records the whole-contact unsubscribed and
+	// bounced refusals -- no retry changes the answer. The refusal carries
+	// the contact's channel in its "channel" parameter, like the two
+	// whole-contact terminal refusals.
+	ErrContactTypeUnsubscribed = apperr.Conflict("notification.contact_type_unsubscribed")
+
+	// ErrContactTypeOptoutNotAllowed reports a type-scoped opt-out write
+	// (UnsubscribeType) naming a notification type whose declaration does
+	// not permit opting out (Unsubscribable false -- transactional types
+	// above all). The refusal mirrors the preference matrix's own
+	// ErrPreferenceOptoutNotAllowed for a user's empty selection: a type
+	// that must reach its recipients is declared unsubscribable, and the
+	// declaration governs contact recipients as much as user ones. The
+	// whole-contact unsubscribe remains the one exit that predates this
+	// shape and is not touched by it. The refusal names the type in
+	// "type_key".
+	ErrContactTypeOptoutNotAllowed = apperr.Invalid("notification.contact_type_optout_not_allowed")
+
 	// ErrContactRateLimited reports a verification-code send or verify
 	// attempt denied by the module's rate limits (see contactRateLimits),
 	// carrying the dimension that denied it and the seconds until that
