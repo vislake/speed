@@ -648,19 +648,43 @@ defects it never looked for. The two lists below -- what the deployment
 cannot answer, and what is not gated at all -- are where that difference
 lives.
 
-**Open, with a gate waiting on them** (`pnpm test:e2e:pending`):
+**Nothing is open.** `pnpm test:e2e:pending` answers "No tests found":
+every gate this suite wrote against a defect has seen its fix land, and
+every unbuilt surface the brief named and this suite gated is built.
+Default tier 20 passed / 3 skipped, `@budget` 30 passed.
 
-| Gate | Waiting on | Kind |
-|---|---|---|
-| add-a-colleague (self-registered practice) | a practice that signed itself up cannot send an invitation at all: `POST /api/v1/org/invitations` answers 500 for a self-registered tenant and 200 for a boot-configured one | defect |
-
-**The members-list finding closed** (`42a14614`): the app composes an
+The members-list finding closed with `42a14614` -- the app composes an
 authn lookup of its own and names every member from the users table, so
-it holds for a self-registered clinic's invited colleague too -- which is
-why that gate did not need widening to the paying population after all.
+it holds for a self-registered clinic's invited colleague too, which is
+why that gate never needed widening to the paying population. The
+invitation one closed with `d3b4c184`, and it carries a correction of
+this suite's own reasoning.
 
-**The row above is the fourth wrong-population finding in this suite**,
-and it arrived by walking the surface the round had just built. The
+**A self-registered practice could not send an invitation at all.** The
+accept-link builder's only source of hosts was `hostByTenant`, the
+reverse index of `cfg.HostTenants`, and a clinic whose tenant is derived
+from its registrant's user id can never be in that map -- so the link
+could not be built and `invite.go`'s `ErrInternal` came back. Fixed with
+a deployment-level public origin, the demo tenants' links unchanged.
+
+**The correction:** when this suite swept `cfg.HostTenants`' uses after
+`5873f64` -- the periodic scheduler's tenant universe, the same shape --
+it cleared `hostByTenant` as "correct by construction, since a Host to
+tenant map IS the definition of the configured hosts". That is right
+about resolving an INCOMING request's host and wrong about the reverse
+direction: asked *which host belongs to this tenant*, every tenant needs
+an answer, not only the configured ones. One map, two directions, and
+only one of them definitionally configured-only. So the sweep that
+reported "the wrong-population error is in exactly one place" had
+cleared the source of the next one.
+
+The lesson is not "look at HostTenants again". It is that a sweep's
+clean result is only as good as the question asked at each site, and
+"this map is configured-only by definition" was a claim about a
+direction while being written down as a claim about a map.
+
+**That was the fourth wrong-population finding in this suite**, and it
+arrived by walking the surface the round had just built. The
 clinic-naming gate asked only about boot-configured clinics; the four
 core-journey gates only about seeded accounts; the periodic scheduler's
 tenant universe was the configured list alone (`5873f64`); and now the
