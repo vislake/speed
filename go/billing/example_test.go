@@ -242,3 +242,90 @@ func ExampleCreditService_Transactions() {
 	// 1: type=grant status=confirmed amount=100
 	// available: 100 reserved: 0
 }
+
+// ExampleCreditService_Expire walks the idempotency contract a
+// jobs-driven expiry sweep depends on -- CreditService.Expire's keyed
+// mode, added by the credit-expiry round so a scheduler's retried run (a
+// sweep window rerun after a crash or a timeout, under the same
+// deterministic per-tenant+period key) is answered with the first run's
+// own row instead of deducting twice. The unkeyed form has no such
+// contract and is for one-off, operator-driven deductions only
+// (CreditService.Expire's own doc comment has the full contrast). Which
+// credits a real sweep expires, and when, is the host's product-policy
+// decision, never this method's.
+func ExampleCreditService_Expire() {
+	ctx := context.Background()
+
+	// A real host opens PostgreSQL in the distributed deployment mode
+	// (dbkit.DialectPostgres). SQLite keeps this example self-contained
+	// under `go test`, with no external service required -- which is
+	// exactly what the standalone deployment mode does in production too.
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:billing_example_expire?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	m := billing.NewModule(db, nil)
+
+	// Migrations are versioned SQL, applied through dbkit's registry.
+	// There is no AutoMigrate anywhere in this codebase.
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(m); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-acme")
+	credits := m.Credits()
+
+	if _, grantErr := credits.Grant(tenantCtx, billing.GrantInput{Amount: 100, Reason: "plan:pro:monthly_included"}); grantErr != nil {
+		fmt.Println("grant credits:", grantErr)
+		return
+	}
+
+	// One expiry run for the policy period, keyed by the period the sweep
+	// is running for. A sweep run is retryable: crashing after this call
+	// committed and rerunning the same window must not deduct twice.
+	window := "expiry:2026-09-policy"
+	first, err := credits.Expire(tenantCtx, billing.ExpireInput{
+		Amount:         40,
+		IdempotencyKey: window,
+		Reason:         window,
+	})
+	if err != nil {
+		fmt.Println("expire credits:", err)
+		return
+	}
+
+	// The crashed run's retry: same window, same key. It is answered with
+	// the first run's own row -- no second deduction.
+	retried, err := credits.Expire(tenantCtx, billing.ExpireInput{
+		Amount:         40,
+		IdempotencyKey: window,
+		Reason:         window,
+	})
+	if err != nil {
+		fmt.Println("expire credits:", err)
+		return
+	}
+	fmt.Println("retry returned the first run's row:", retried.ID == first.ID)
+
+	balance, err := credits.Balance(tenantCtx)
+	if err != nil {
+		fmt.Println("read balance:", err)
+		return
+	}
+	fmt.Println("available:", balance.Available, "reserved:", balance.Reserved)
+
+	// Output:
+	// retry returned the first run's row: true
+	// available: 60 reserved: 0
+}

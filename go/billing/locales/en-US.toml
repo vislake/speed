@@ -29,6 +29,8 @@
 
 "billing.idempotency_key_required" = "An idempotency key is required."
 
+"billing.idempotency_key_collision" = "Idempotency key \"{{.idempotency_key}}\" is already in use by a credit-ledger entry of type \"{{.type}}\"; an expiry cannot reuse it."
+
 "billing.insufficient_credits" = "The tenant's available credit balance cannot cover {{.amount}} credits."
 
 "billing.credit_transaction_not_found" = "No pending credit transaction was found for idempotency key \"{{.idempotency_key}}\"."

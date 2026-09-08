@@ -40,8 +40,10 @@ const (
 	// expiry policy rather than a business operation: credits removed
 	// from Available directly, confirmed immediately (see
 	// CreditService.Expire). See AGENTS.md's Known limitations for what
-	// this round does NOT ship: a scheduler that calls Expire on its own
-	// initiative.
+	// is still NOT shipped: a scheduler that calls Expire on its own
+	// initiative. The row's ID is a fresh UUID for an unkeyed Expire or
+	// the caller's own IdempotencyKey for a keyed one --
+	// CreditService.Expire's doc comment has that contract.
 	CreditTransactionExpire CreditTransactionType = "expire"
 )
 
@@ -92,9 +94,10 @@ const (
 // TestRepository_HasNoUpdateOrDeleteMethod uses.
 type CreditTransaction struct {
 	// ID is an application-generated UUID (uuid.NewString) for a Grant or
-	// Expire row, or the caller's own IdempotencyKey for a Deduct row --
-	// see CreditService.PreDeduct's doc comment for why a Deduct row's
-	// primary key IS its idempotency key rather than a second, unrelated
+	// an unkeyed Expire row, or the caller's own IdempotencyKey for a
+	// Deduct row or a keyed Expire row -- see CreditService.PreDeduct's
+	// and CreditService.Expire's doc comments for why those rows' primary
+	// keys ARE their idempotency keys rather than a second, unrelated
 	// generated id.
 	//
 	// Because a Deduct row's ID comes from the CALLER (its
@@ -174,11 +177,12 @@ func NewCreditTransactionRepository(db *gorm.DB) *CreditTransactionRepository {
 // regardless of what it held on entry). A duplicate ID is a genuine
 // primary-key conflict -- Insert never updates an existing row, since
 // Repository has no notion of "the same entry happening again" to
-// reconcile. It is the strict insert (CreditService.PreDeduct's own
-// idempotent retry goes through the separate insertIdempotent core, which
-// reports a duplicate as a no-op answer rather than an error -- see that
-// method's doc comment); every other caller's rows carry fresh
-// uuid.NewString() ids that must never silently collide.
+// reconcile. It is the strict insert (the idempotent-retry callers --
+// PreDeduct's reserve half and a keyed Expire -- go through the separate
+// insertIdempotent core, which reports a duplicate as a no-op answer
+// rather than an error -- see that method's doc comment); every other
+// caller's rows (Grant, an unkeyed Expire) carry fresh uuid.NewString()
+// ids that must never silently collide.
 func (r *CreditTransactionRepository) Insert(ctx context.Context, tx *CreditTransaction) error {
 	return dbkit.WithTenantSession(ctx, r.db, func(session *gorm.DB) error {
 		return r.insert(ctx, session, tx)
@@ -190,8 +194,11 @@ func (r *CreditTransactionRepository) Insert(ctx context.Context, tx *CreditTran
 // dbkit.WithTenantSession session and must not open a second, nested one).
 // It is the strict core: a duplicate (id, tenant_id) is a genuine
 // primary-key conflict, returned as an error, never reconciled -- the
-// right answer for Grant and Expire, whose rows carry fresh
-// uuid.NewString() ids with no idempotent-retry contract of their own.
+// right answer for Grant and for an unkeyed Expire, whose rows carry
+// fresh uuid.NewString() ids with no idempotent-retry contract of their
+// own. A KEYED Expire (CreditService.Expire with ExpireInput.IdempotencyKey
+// set) inserts through insertIdempotent instead, exactly like PreDeduct's
+// reserve half.
 func (r *CreditTransactionRepository) insert(ctx context.Context, session *gorm.DB, tx *CreditTransaction) error {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {

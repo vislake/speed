@@ -333,7 +333,7 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 			// it into a nil result: the honest answer is a coded error a
 			// caller can retry on, exactly like go/metering's own
 			// errOutboxConflictRowVanished corner.
-			return errCreditReservationVanished
+			return errCreditLedgerRowVanished
 		}
 		result = existing
 		return nil
@@ -538,6 +538,21 @@ type ExpireInput struct {
 	// Amount is the credit count to remove from Available. Must be
 	// strictly positive.
 	Amount int64
+	// IdempotencyKey optionally names this expiry run. When set, it
+	// becomes the resulting CreditTransaction's own ID -- the identical
+	// ledger-ID-as-idempotency-key shape PreDeduct's mandatory
+	// IdempotencyKey uses -- and Expire's retry contract becomes
+	// idempotent: a retried call with the same key (a jobs-driven expiry
+	// sweep rerunning its own window after a crash or a timeout, deriving
+	// a deterministic per-tenant+period key the way go/storage's
+	// EnqueueExpirySweep does) is answered with the first call's own row
+	// and applies NO second deduction (see Expire's own doc comment for
+	// the full contract, including which existing rows count as the
+	// retry's own earlier run). Empty (the default) keeps Expire's legacy
+	// single-phase shape: a fresh uuid.NewString() transaction id per
+	// call, not idempotent under retry -- the right mode for a one-off,
+	// operator-driven expiry, wrong for any caller that may retry.
+	IdempotencyKey string
 	// Reason is a short, machine-readable note (e.g.
 	// "expiry:2026-09-policy"), declared a bounded phrase and validated by
 	// validateReason -- see CreditService's own doc comment for the
@@ -555,14 +570,44 @@ type ExpireInput struct {
 // refused, not clamped to zero, so a caller's own accounting error is
 // never silently absorbed.
 //
-// Expire is NOT idempotent under retry (its CreditTransaction.ID is a
-// fresh uuid.NewString() every call, unlike PreDeduct's caller-supplied
-// IdempotencyKey): this round ships the mechanism a future expiry
-// scheduler would call, not the scheduler itself -- see AGENTS.md's Known
-// limitations for what that later round would need to add (its own
-// idempotency key, e.g. deterministic per tenant+period, the same shape
-// go/storage's EnqueueExpirySweep already establishes for an identical
-// "scheduled sweep must not double-apply" need).
+// # Idempotency: the caller's choice, keyed by ExpireInput.IdempotencyKey
+//
+// An unkeyed Expire (IdempotencyKey empty) is NOT idempotent under retry:
+// its CreditTransaction.ID is a fresh uuid.NewString() every call, so a
+// retried call -- a scheduler that crashed after its first attempt
+// committed, rerunning without knowing -- would deduct a second time.
+// That is the single-phase shape Expire has shipped since round 1, and it
+// stays available for one-off, operator-driven expiries (an ad-hoc policy
+// deduction naming its own reason).
+//
+// A keyed Expire is the contract a jobs-driven expiry sweep needs: the
+// key becomes the row's own ID, and the insert runs through the same ON
+// CONFLICT DO NOTHING core PreDeduct's reserve half uses
+// (insertIdempotent) -- never a unique-constraint error, so the retry's
+// transaction stays healthy on both dialects, the identical reasoning
+// PreDeduct documents for its own insert-first shape. A retried call with
+// the same key -- the deterministic per-tenant+period key a sweep derives
+// for the window it is rerunning, the shape go/storage's EnqueueExpirySweep
+// establishes for an identical "scheduled sweep must not double-apply"
+// need -- finds its first call's row already present and returns it
+// unchanged, applying NO second deduction and recording NO second audit
+// event. Only an existing CreditTransactionExpire row can be the retry's
+// own earlier run: the ledger's row-ID namespace is shared across every
+// row type, and a key that names a row of another kind (a Grant, a Deduct,
+// an unkeyed row's UUID) is refused with ErrIdempotencyKeyCollision rather
+// than reported as a successful expiry it was not. A keyed retry whose
+// FIRST attempt was refused with ErrInsufficientCredits is a fresh attempt
+// again, not a retry: the refused call's whole transaction rolled back,
+// its inserted row included, so the key was never burned and a later,
+// better-funded run with the same key proceeds normally.
+//
+// What this method deliberately does NOT ship is the sweep itself --
+// deciding WHICH credits expire, when, in what amount, on what schedule is
+// product policy this module's data model cannot anchor (no
+// grant-vintage or expiry-window data exists in the ledger), and the
+// scheduler that runs such a policy is a host's jobs wiring. This method
+// supplies the at-most-once write that scheduler needs, never the policy;
+// see AGENTS.md's Known limitations for the recorded dependency.
 func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTransaction, error) {
 	if in.Amount <= 0 {
 		return nil, ErrInvalidAmount.WithParam("amount", in.Amount)
@@ -575,36 +620,123 @@ func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTran
 		return nil, err
 	}
 
-	row := &CreditTransaction{
-		ID:     uuid.NewString(),
-		Type:   string(CreditTransactionExpire),
-		Status: string(CreditTransactionStatusConfirmed),
-		Amount: in.Amount,
-		Reason: in.Reason,
-	}
+	var result *CreditTransaction
+	// expired is set true only on the branch that genuinely appended this
+	// call's own expiry row: the keyed path's duplicate branch (a retried
+	// sweep run finding its first call's row already present) changed
+	// nothing THIS call, and emitCreditAudit below must not record a
+	// second event for an operation that did not happen again -- the
+	// identical reserved-flag discipline PreDeduct's reserve half
+	// documents for its own retry branch.
+	var expired bool
 	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
-		if err := s.ensureBalance(session, tenant); err != nil {
-			return err
+		if in.IdempotencyKey == "" {
+			// Unkeyed: the legacy single-phase shape -- a fresh UUID per
+			// call, the balance CAS followed by a strict insert, all in
+			// one transaction. Not idempotent under retry by design; see
+			// Expire's own doc comment for which caller that fits.
+			row := &CreditTransaction{
+				ID:     uuid.NewString(),
+				Type:   string(CreditTransactionExpire),
+				Status: string(CreditTransactionStatusConfirmed),
+				Amount: in.Amount,
+				Reason: in.Reason,
+			}
+			if err := s.ensureBalance(session, tenant); err != nil {
+				return err
+			}
+			ok, err := applyBalanceDelta(session, string(tenant), -in.Amount, 0, s.now())
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return ErrInsufficientCredits.WithParam("amount", in.Amount)
+			}
+			if err := s.transactions.insert(ctx, session, row); err != nil {
+				return err
+			}
+			result = row
+			expired = true
+			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
+			return nil
 		}
-		ok, err := applyBalanceDelta(session, string(tenant), -in.Amount, 0, s.now())
+
+		// Keyed: the row's ID is the caller's own deterministic key, and
+		// the insert runs as ON CONFLICT DO NOTHING -- reporting a
+		// duplicate as inserted==false with NO error (see
+		// insertIdempotent's own doc comment for why that matters on
+		// PostgreSQL): the transaction stays healthy, and the retry's
+		// read-back below runs on it either way. The balance CAS runs only
+		// on the fresh-insert branch -- never on the retry branch, whose
+		// deduction already happened inside its first call's transaction.
+		row := &CreditTransaction{
+			ID:     in.IdempotencyKey,
+			Type:   string(CreditTransactionExpire),
+			Status: string(CreditTransactionStatusConfirmed),
+			Amount: in.Amount,
+			Reason: in.Reason,
+		}
+		inserted, insertErr := s.transactions.insertIdempotent(ctx, session, row)
+		if insertErr != nil {
+			return insertErr
+		}
+		if inserted {
+			if err := s.ensureBalance(session, tenant); err != nil {
+				return err
+			}
+			ok, err := applyBalanceDelta(session, string(tenant), -in.Amount, 0, s.now())
+			if err != nil {
+				return err
+			}
+			if !ok {
+				// The guard refused, so the whole transaction rolls back --
+				// this call's own just-inserted row included: the key is
+				// not burned, and a later, better-funded run with the same
+				// key is a fresh attempt again.
+				return ErrInsufficientCredits.WithParam("amount", in.Amount)
+			}
+			result = row
+			expired = true
+			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
+			return nil
+		}
+
+		// Idempotent retry: a row for this IdempotencyKey already exists --
+		// the transaction is still healthy (nothing aborted), so read the
+		// existing row back and decide whether it is this retry's own
+		// earlier run. Only an expire row can be: the ledger's row-ID
+		// namespace is shared across every row type, and reporting a
+		// different kind's row as a successful expiry would be the wrong
+		// answer, so any other kind is refused loudly
+		// (ErrIdempotencyKeyCollision) rather than guessed at.
+		existing, err := s.findTransaction(session, in.IdempotencyKey)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			return ErrInsufficientCredits.WithParam("amount", in.Amount)
+		if existing == nil {
+			// The conflicting row vanished between the no-op insert and
+			// this read-back -- the same unreachable-in-practice corner
+			// PreDeduct's reserve half documents for its own read-back
+			// (nothing in this module deletes credit-transaction rows, and
+			// a retry would get the correct outcome either way).
+			return errCreditLedgerRowVanished
 		}
-		if err := s.transactions.insert(ctx, session, row); err != nil {
-			return err
+		if existing.Type != string(CreditTransactionExpire) {
+			return ErrIdempotencyKeyCollision.
+				WithParam("idempotency_key", in.IdempotencyKey).
+				WithParam("type", existing.Type)
 		}
-		resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
+		result = existing
 		return nil
 	})
 	if txErr != nil {
 		return nil, txErr
 	}
-	s.emitCreditAudit(ctx, AuditActionCreditExpire, tenant, row.ID, in.Amount, in.Reason, resultBalance)
-	return row, nil
+	if expired {
+		s.emitCreditAudit(ctx, AuditActionCreditExpire, tenant, result.ID, result.Amount, result.Reason, resultBalance)
+	}
+	return result, nil
 }
 
 // ensureBalance materializes tenant's CreditBalance row at zero if it does
@@ -716,20 +848,21 @@ func applyBalanceDelta(session *gorm.DB, tenantID string, availableDelta, reserv
 	return res.RowsAffected == 1, nil
 }
 
-// errCreditReservationVanished reports the unreachable-in-practice corner
-// where a duplicate (id, tenant_id) PreDeduct insert skipped via ON
-// CONFLICT DO NOTHING but the read-back that follows finds no row: some
-// other writer deleted it between the two statements. Nothing in this
-// module deletes credit-transaction rows (the ledger is append-only, and
-// CreditTransactionRepository offers no Delete at all), so the branch
-// exists for completeness only; a caller retrying PreDeduct gets the
-// correct outcome either way, since a vanished row makes the retry a
-// plain first insert again. It is deliberately a plain package-internal
-// sentinel rather than an *apperr.Error: it is not reachable through any
-// user-facing surface, so it earns no error-index or locale entry -- the
-// identical choice go/metering's errOutboxConflictRowVanished makes for
-// the same corner in its own idempotent-insert path.
-var errCreditReservationVanished = errors.New("billing: conflicting credit-transaction row vanished between insert and read-back; retry PreDeduct")
+// errCreditLedgerRowVanished reports the unreachable-in-practice corner
+// where a duplicate (id, tenant_id) insert -- PreDeduct's reserve half or
+// a keyed Expire's -- skipped via ON CONFLICT DO NOTHING but the read-back
+// that follows finds no row: some other writer deleted it between the two
+// statements. Nothing in this module deletes credit-transaction rows (the
+// ledger is append-only, and CreditTransactionRepository offers no Delete
+// at all), so the branch exists for completeness only; a caller retrying
+// the operation gets the correct outcome either way, since a vanished row
+// makes the retry a plain first insert again. It is deliberately a plain
+// package-internal sentinel rather than an *apperr.Error: it is not
+// reachable through any user-facing surface, so it earns no error-index or
+// locale entry -- the identical choice go/metering's
+// errOutboxConflictRowVanished makes for the same corner in its own
+// idempotent-insert path.
+var errCreditLedgerRowVanished = errors.New("billing: conflicting credit-ledger row vanished between insert and read-back; retry the operation")
 
 // readBalanceForAudit reads tenant's CreditBalance row through session --
 // the SAME *gorm.DB passed to the mutating transaction's own

@@ -245,3 +245,64 @@ func hasCode(err error, code string) bool {
 	appErr, ok := apperr.As(err)
 	return ok && appErr.Code == code
 }
+
+// TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply is the PostgreSQL leg
+// of the unit tier's keyed-Expire regression
+// (TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply), in the shape
+// the defect class this tier exists for actually lives in: the retried
+// keyed Expire runs against real PostgreSQL, where a unique-violation
+// statement error on a still-open transaction would leave it aborted
+// (SQLSTATE 25P02) and the retry's read-back could never run. The keyed
+// Expire inserts as ON CONFLICT DO NOTHING on the shared insertIdempotent
+// core -- never a statement error -- so the retry's read-back runs on a
+// healthy transaction, returns the first run's own row, and applies no
+// second deduction: the same guarantee PreDeduct's reserve half already
+// proves on this tier, now for the expiry write a jobs-driven sweep would
+// call under its deterministic per-window key.
+func TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
+	db := newPostgresDB(t)
+	svc := billing.NewCreditService(db)
+	ctx := tenantCtx("tenant-a")
+
+	if _, err := svc.Grant(ctx, billing.GrantInput{Amount: 100}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	const key = "expiry:2026-09-policy:window-1"
+	first, err := svc.Expire(ctx, billing.ExpireInput{Amount: 40, IdempotencyKey: key})
+	if err != nil {
+		t.Fatalf("first keyed Expire: %v", err)
+	}
+	if first.ID != key {
+		t.Fatalf("keyed Expire row ID = %q, want the supplied key %q", first.ID, key)
+	}
+
+	second, err := svc.Expire(ctx, billing.ExpireInput{Amount: 40, IdempotencyKey: key})
+	if err != nil {
+		t.Fatalf("retried keyed Expire = %v: on PostgreSQL a statement error on the open transaction would abort it (25P02) and the read-back could never run", err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("retried keyed Expire = %+v, want the first run's own row %+v", second, first)
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 60 {
+		t.Errorf("balance after a retried keyed Expire = %+v, want Available=60 (deducted exactly once)", bal)
+	}
+
+	// Exactly one expire row for the key -- the retry must not have
+	// double-written the ledger.
+	var rows []billing.CreditTransaction
+	err = dbkit.WithTenantSession(ctx, db, func(session *gorm.DB) error {
+		return session.Where("id = ?", key).Find(&rows).Error
+	})
+	if err != nil {
+		t.Fatalf("read ledger rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("ledger rows for %q = %d, want exactly 1", key, len(rows))
+	}
+}

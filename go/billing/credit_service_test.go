@@ -386,6 +386,295 @@ func TestCreditService_Expire_MoreThanAvailable_Refused(t *testing.T) {
 	}
 }
 
+// TestCreditService_Expire_UnkeyedRetry_DoubleApplies pins the legacy
+// unkeyed contract ExpireInput.IdempotencyKey exists to replace: two
+// unkeyed Expire calls with the same amount and reason -- a scheduler that
+// crashed after its first attempt committed, retrying without a key --
+// deduct twice and append two ledger rows. This is the hazard the keyed
+// form (next tests) exists to close, deliberately pinned here so the
+// contrast between the two modes stays explicit: unkeyed is the one-off
+// operator shape, never the shape a retrying caller may use.
+func TestCreditService_Expire_UnkeyedRetry_DoubleApplies(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 100}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	if _, err := svc.Expire(ctx, ExpireInput{Amount: 40, Reason: "expiry:2026-09-policy"}); err != nil {
+		t.Fatalf("first unkeyed Expire: %v", err)
+	}
+	if _, err := svc.Expire(ctx, ExpireInput{Amount: 40, Reason: "expiry:2026-09-policy"}); err != nil {
+		t.Fatalf("retried unkeyed Expire: %v", err)
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 20 {
+		t.Errorf("Available = %d, want 20 -- an unkeyed retry deducted twice (the hazard the keyed form exists to close)", bal.Available)
+	}
+}
+
+// TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply is the scheduler
+// contract the credit-expiry round ships: ExpireInput.IdempotencyKey makes
+// a keyed Expire's row ID the caller's own deterministic per-window key
+// (the go/storage EnqueueExpirySweep shape), so a retried call -- a
+// jobs-driven sweep rerunning its own window after a crash or a timeout --
+// is answered with the first call's own row and applies NO second
+// deduction. Pre-fix, ExpireInput carried no IdempotencyKey at all and a
+// retrying sweep run deducted twice (see the unkeyed pin above); this
+// regression cannot compile against the pre-fix API by design -- the
+// compile failure IS the pre-fix state, the identical record the rescan
+// round made for its own new-API regressions.
+func TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 100}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	const key = "expiry:2026-09-policy:window-1"
+	first, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
+	if err != nil {
+		t.Fatalf("first keyed Expire: %v", err)
+	}
+	if first.ID != key {
+		t.Errorf("keyed Expire row ID = %q, want the supplied key %q", first.ID, key)
+	}
+	if first.Type != string(CreditTransactionExpire) || first.Status != string(CreditTransactionStatusConfirmed) {
+		t.Errorf("keyed Expire row = %+v, want Type=expire Status=confirmed", first)
+	}
+
+	// The retried sweep run: same window, same deterministic key.
+	second, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
+	if err != nil {
+		t.Fatalf("retried keyed Expire: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("retried keyed Expire returned row %q, want the first call's own row %q", second.ID, first.ID)
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 60 {
+		t.Errorf("Available = %d, want 60 -- a retried keyed sweep run must not deduct twice", bal.Available)
+	}
+
+	rows, err := svc.Transactions(ctx)
+	if err != nil {
+		t.Fatalf("Transactions: %v", err)
+	}
+	expireRows := 0
+	for _, row := range rows {
+		if row.Type == string(CreditTransactionExpire) {
+			expireRows++
+		}
+	}
+	if expireRows != 1 {
+		t.Errorf("expire ledger rows = %d, want exactly 1 -- the retry must not append a second row", expireRows)
+	}
+}
+
+// TestCreditService_Expire_KeyedRetry_DoesNotEmitASecondAuditEvent is the
+// audit half of the retry contract: the idempotent no-op retry changed
+// nothing THIS call, so it must not produce a second audit record -- the
+// identical "never write an audit record for something that did not
+// actually happen this call" rule PreDeduct's own reserved-flag guard
+// exists for. Pre-fix this test cannot compile (no IdempotencyKey field).
+func TestCreditService_Expire_KeyedRetry_DoesNotEmitASecondAuditEvent(t *testing.T) {
+	svc, received := newAuditedCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 100}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	recvAuditEvent(t, received) // drain the grant's own event.
+
+	const key = "expiry:2026-09-policy:window-1"
+	first, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
+	if err != nil {
+		t.Fatalf("first keyed Expire: %v", err)
+	}
+
+	evt := recvAuditEvent(t, received)
+	if evt.Action != AuditActionCreditExpire {
+		t.Errorf("Action = %q, want %q", evt.Action, AuditActionCreditExpire)
+	}
+	if evt.Resource.ID != key || evt.Resource.ID != first.ID {
+		t.Errorf("Resource.ID = %q, want the keyed row %q", evt.Resource.ID, first.ID)
+	}
+	if evt.Changes.After["resulting_available"] != int64(60) {
+		t.Errorf("Changes.After[resulting_available] = %v, want 60", evt.Changes.After["resulting_available"])
+	}
+	assertNoAuditEvent(t, received)
+
+	// The retried sweep run with the same key must record nothing: the
+	// deduction it would describe already happened in the first call.
+	if _, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"}); err != nil {
+		t.Fatalf("retried keyed Expire: %v", err)
+	}
+	assertNoAuditEvent(t, received)
+}
+
+// TestCreditService_Expire_KeyCollidingWithAnotherKind_Refused proves the
+// keyed retry branch distinguishes its own earlier run from a row of
+// another kind sitting under the same key: the ledger's row-ID namespace
+// is shared across every row type, and a key that names a Grant (or a
+// Deduct, or an unkeyed row's UUID) must never be answered as a successful
+// expiry -- reporting success on a row that is not an expiry record would
+// be a wrong answer the audit trail would then preserve. Such a call is
+// refused with ErrIdempotencyKeyCollision, and nothing is written.
+func TestCreditService_Expire_KeyCollidingWithAnotherKind_Refused(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	grantTx, err := svc.Grant(ctx, GrantInput{Amount: 100})
+	if err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	_, err = svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: grantTx.ID})
+	if !hasCode(err, ErrIdempotencyKeyCollision.Code) {
+		t.Errorf("keyed Expire reusing a grant row's id: err = %v, want %s", err, ErrIdempotencyKeyCollision.Code)
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100 {
+		t.Errorf("Available = %d, want 100 -- the refused call wrote nothing", bal.Available)
+	}
+
+	rows, err := svc.Transactions(ctx)
+	if err != nil {
+		t.Fatalf("Transactions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("ledger rows = %d, want exactly 1 (the grant, untouched)", len(rows))
+	}
+}
+
+// TestCreditService_Expire_KeyedRefusedAttempt_BurnsNoKey proves a keyed
+// Expire whose balance guard refuses leaves no trace at all: the whole
+// transaction rolls back, the just-inserted row included, so the key is
+// never burned and a later, better-funded run with the same key -- the
+// sweep's next window after the tenant tops up -- is a fresh attempt
+// again, not a retry that would no-op against nothing.
+func TestCreditService_Expire_KeyedRefusedAttempt_BurnsNoKey(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 10}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	const key = "expiry:2026-09-policy:window-1"
+	if _, err := svc.Expire(ctx, ExpireInput{Amount: 50, IdempotencyKey: key}); !hasCode(err, ErrInsufficientCredits.Code) {
+		t.Fatalf("Expire(50) over Available=10: err = %v, want %s", err, ErrInsufficientCredits.Code)
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 10 {
+		t.Errorf("Available after the refused attempt = %d, want 10", bal.Available)
+	}
+	rows, err := svc.Transactions(ctx)
+	if err != nil {
+		t.Fatalf("Transactions: %v", err)
+	}
+	for _, row := range rows {
+		if row.Type == string(CreditTransactionExpire) {
+			t.Errorf("a refused keyed Expire left an expire row behind: %+v", row)
+		}
+	}
+
+	// The tenant tops up; the same window's keyed run is a fresh attempt
+	// and succeeds -- the refused attempt never burned the key.
+	if _, grantErr := svc.Grant(ctx, GrantInput{Amount: 100}); grantErr != nil {
+		t.Fatalf("second Grant: %v", grantErr)
+	}
+	expired, err := svc.Expire(ctx, ExpireInput{Amount: 50, IdempotencyKey: key})
+	if err != nil {
+		t.Fatalf("keyed Expire after the top-up: %v", err)
+	}
+	if expired.ID != key {
+		t.Errorf("expire row ID = %q, want the supplied key %q", expired.ID, key)
+	}
+	bal, err = svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 60 {
+		t.Errorf("Available = %d, want 60", bal.Available)
+	}
+}
+
+// TestCreditService_Expire_ConcurrentSameKey_ExactlyOneDeducts is the
+// concurrency proof of the keyed contract, run under -race: two goroutines
+// expiring the same window with the same deterministic key -- a scheduler
+// with two replicas, or a manual re-run overlapping a scheduled one --
+// both succeed (the loser's retry branch returns the winner's row) while
+// exactly ONE deduction lands and exactly ONE ledger row exists. The
+// insert-first ON CONFLICT DO NOTHING shape makes the database itself the
+// arbiter: the second writer blocks on the first's row, no-ops, and reads
+// the winner's committed row back.
+func TestCreditService_Expire_ConcurrentSameKey_ExactlyOneDeducts(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 100}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	const key = "expiry:2026-09-policy:window-1"
+	var wg sync.WaitGroup
+	results := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key})
+			results[i] = err
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range results {
+		if err != nil {
+			t.Errorf("concurrent keyed Expire %d failed: %v", i, err)
+		}
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 60 {
+		t.Errorf("Available = %d, want 60 -- exactly one of the two same-key runs may deduct", bal.Available)
+	}
+
+	rows, err := svc.Transactions(ctx)
+	if err != nil {
+		t.Fatalf("Transactions: %v", err)
+	}
+	expireRows := 0
+	for _, row := range rows {
+		if row.Type == string(CreditTransactionExpire) {
+			expireRows++
+		}
+	}
+	if expireRows != 1 {
+		t.Errorf("expire ledger rows = %d, want exactly 1", expireRows)
+	}
+}
+
 // TestCreditService_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds is the
 // round's mandated proof: two concurrent PreDeduct calls whose combined
 // Amount exceeds the tenant's balance cannot both succeed. Run under

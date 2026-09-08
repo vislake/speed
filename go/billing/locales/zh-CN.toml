@@ -26,6 +26,8 @@
 
 "billing.idempotency_key_required" = "必须提供幂等键。"
 
+"billing.idempotency_key_collision" = "幂等键 \"{{.idempotency_key}}\" 已被类型为 \"{{.type}}\" 的信用点流水占用，不能用于本次过期扣减。"
+
 "billing.insufficient_credits" = "租户可用信用点余额不足以覆盖 {{.amount}} 点。"
 
 "billing.credit_transaction_not_found" = "未找到幂等键为 \"{{.idempotency_key}}\" 的待处理信用点交易。"
