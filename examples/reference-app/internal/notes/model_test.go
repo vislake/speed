@@ -3,6 +3,8 @@ package notes
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -215,4 +217,158 @@ func TestNote_GetDeletedAt_ReturnsFieldValue(t *testing.T) {
 	if got == nil || !got.Equal(now) {
 		t.Fatalf("GetDeletedAt() = %v, want %v", got, now)
 	}
+}
+
+// TestNote_FieldCaptureClasses_CoverEveryColumn is the field-granularity
+// companion of org's TestModule_AuditableModels_CaptureClasses_CoverEveryField
+// (go/org/module_test.go), applied to this module's one Auditable
+// model. Note is deliberately outside cmd/server's Options.AuditModels
+// scope -- this app's note trail runs through audit.Emit instead (see
+// Note.AuditResourceType's own doc comment) -- but the model keeps the
+// dbkit.Auditable marker precisely because host wiring is not the
+// protection: a host that wires capture with a nil or relaxed scope
+// captures every Auditable model written through its connection whole, so
+// Note.Text carries the audit:"redact" capture opt-out tag as the
+// model-side protection that survives any wiring. This gate makes that
+// protection field-complete: every schema column of Note must be
+// auto-redacted by the capture mechanism (a gorm serializer, or the
+// audit:"redact" tag) or be listed in judgedCaptured below with a written
+// judgment that recording the column's plaintext in the audit trail is
+// right. A plaintext-sensitive column added to Note with no tag and no
+// judgment entry fails here instead of having its values land verbatim in
+// the changes column of every captured row -- the column go/admin serves
+// to any admin:audit_read holder across every tenant and compliance's
+// RenderAuditReport exports verbatim (go/dbkit/audit/model.go's Changes
+// doc comment names both exits).
+//
+// The auto-redaction criteria are read off the same struct tags dbkit's
+// fieldValuesMap reads (go/dbkit/audit_capture.go), so a field classified
+// auto-redacted here is exactly a field the mechanism captures as
+// "[redacted]" -- the serializer half is tag-declared by construction,
+// since dbkit's RegisterEncryptedSerializer mechanism is the only way a
+// serializer exists in this ecosystem. If the mechanism's criteria ever
+// change, this test and go/dbkit's own audit_capture_test.go change
+// together.
+func TestNote_FieldCaptureClasses_CoverEveryColumn(t *testing.T) {
+	// The third class, written down: every non-auto-redacted column of
+	// Note, keyed "<model>.<GoField>" as fmt %T prints the model, with the
+	// judgment that its plaintext belongs in the trail. A new column
+	// without a line here fails below.
+	judgedCaptured := map[string]string{
+		"notes.Note.ID":            "application-generated UUID naming the note -- identifier vocabulary, never content",
+		"notes.Note.TenantID":      "owning-tenant attribution, the row's own first-class dimension -- never personal data",
+		"notes.Note.CreatorUserID": "opaque user id attributing the note's creator -- the compliance subject key retention and erasure operate on; attribution, the trail's purpose, never a display name",
+		"notes.Note.CreatedAt":     "auto-maintained timestamp (gorm autoCreateTime) -- never application content",
+		"notes.Note.DeletedAt":     "soft-delete marker timestamp, written through dbkit's own reflection-based soft-delete path -- lifecycle metadata, never content",
+		"notes.Note.DeletedBy":     "opaque user id of the deleting principal -- attribution, the trail's purpose, never a display name",
+	}
+
+	seen := map[string]bool{}
+	model := fmt.Sprintf("%T", Note{})
+	for _, field := range captureColumnFields(Note{}) {
+		key := model + "." + field.goName
+		seen[key] = true
+		if captureColumnAutoRedacts(field.sf) {
+			if reason, ok := judgedCaptured[key]; ok {
+				t.Errorf("%s is auto-redacted by the capture mechanism (serializer or audit:\"redact\" tag) but still listed in judgedCaptured (%q) -- a stale judgment entry, not a class", key, reason)
+			}
+			continue
+		}
+		reason, ok := judgedCaptured[key]
+		if !ok {
+			t.Errorf("%s (column %q) has no capture class: it is not auto-redacted (no gorm serializer, no audit:\"redact\" tag) and is not listed in judgedCaptured -- its plaintext would land in every audit row's changes column, an exit readable by any admin:audit_read holder across all tenants", key, field.column)
+			continue
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("%s is listed in judgedCaptured without a written judgment -- the reason IS the judgment, and an empty one records nothing", key)
+		}
+	}
+	for key := range judgedCaptured {
+		if !seen[key] {
+			t.Errorf("judgedCaptured entry %q names no captured column field of Note -- a stale or misspelled judgment", key)
+		}
+	}
+}
+
+// captureColumnField is one schema-column leaf of an Auditable model as
+// the write-capture plugin sees it: the model type flattened through its
+// anonymous embedded structs (dbkit.TenantModel first among them), exactly
+// the shape go/dbkit/audit_capture.go's fieldValuesMap walks. The helpers
+// below mirror go/org/module_test.go's identically named ones, deliberately
+// kept per-module: a shared home would be new public test-support API on
+// dbkit (whose test-support package dbtest is scoped to dual-dialect
+// database helpers), while each model-hosting module keeps its own gate
+// next to its own models, the same shape org's model-level
+// AuditableModels() gate already sets.
+type captureColumnField struct {
+	goName string // the leaf's own Go name ("TenantID", never the embedder chain)
+	column string // the gorm column: option when the field declares one, else ""
+	sf     reflect.StructField
+}
+
+// captureColumnFields enumerates every schema-column leaf of v's type:
+// fields gorm would give a DBName, flattened through anonymous embedded
+// structs and skipping unexported fields and gorm:"-" fields -- the
+// mechanism's own empty-DBName skip, mirrored here so a gorm:"-" field
+// (a value deliberately kept off the schema) is never demanded to carry a
+// capture judgment it can never need.
+func captureColumnFields(v any) []captureColumnField {
+	var out []captureColumnField
+	var walk func(t reflect.Type)
+	walk = func(t reflect.Type) {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.PkgPath != "" {
+				continue
+			}
+			if f.Anonymous && f.Type.Kind() == reflect.Struct {
+				// GORM flattens an anonymous embedded struct into its own
+				// fields (TenantModel's TenantID), so the gate must too:
+				// the plugin captures the promoted column, not the embedder.
+				walk(f.Type)
+				continue
+			}
+			if f.Tag.Get("gorm") == "-" {
+				continue
+			}
+			out = append(out, captureColumnField{
+				goName: f.Name,
+				column: gormColumnName(f),
+				sf:     f,
+			})
+		}
+	}
+	walk(reflect.TypeOf(v))
+	return out
+}
+
+// gormColumnName returns the column: option of f's gorm tag, or "" when
+// the field declares none (gorm would then derive a name from the field's
+// Go name -- the column still exists and the field still needs a class).
+func gormColumnName(f reflect.StructField) string {
+	for _, opt := range strings.Split(f.Tag.Get("gorm"), ";") {
+		if rest, ok := strings.CutPrefix(opt, "column:"); ok {
+			return rest
+		}
+	}
+	return ""
+}
+
+// captureColumnAutoRedacts reports whether dbkit's write-capture plugin
+// captures f's column as "[redacted]" on its own, by either of the two
+// automatic criteria go/dbkit/audit_capture.go's fieldValuesMap applies:
+// the audit:"redact" capture opt-out tag, or a GORM serializer declared
+// through the gorm tag. The two are read off the same struct tags the
+// mechanism itself reads (see the gate's doc comment above for why that
+// mirror is exact in this ecosystem).
+func captureColumnAutoRedacts(f reflect.StructField) bool {
+	if v, ok := f.Tag.Lookup("audit"); ok && v == "redact" {
+		return true
+	}
+	for _, opt := range strings.Split(f.Tag.Get("gorm"), ";") {
+		if strings.HasPrefix(opt, "serializer:") {
+			return true
+		}
+	}
+	return false
 }
