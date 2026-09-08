@@ -27,14 +27,20 @@ import (
 )
 
 const (
-	// healthzPath is the one route exempted from tenant resolution -- an
-	// orchestrator's liveness probe must never depend on tenant resolution
-	// succeeding.
+	// healthzPath serves the orchestrator's liveness probe. Nothing
+	// exempts it and nothing gates it: this selection has no authn module,
+	// so no Principal exists, no middleware chain wraps the mux and no
+	// tenancy allowlist exists at all (see buildServer's doc comment) -- no
+	// route in this composition has tenant resolution, so none needs an
+	// exemption from it.
 	healthzPath = "/healthz"
 
-	// metricsPath is the Prometheus scrape endpoint, exempted from tenant
-	// resolution for exactly the same reason healthzPath is: a scraper has
-	// no tenant to name and must not depend on one.
+	// metricsPath is the Prometheus scrape endpoint. Like every route in
+	// this composition it is served without tenant resolution -- not
+	// exempted from any, but simply ungated, since this selection has no
+	// middleware chain at all (see healthzPath's comment and buildServer's
+	// doc comment): a scraper with no tenant to name is served like any
+	// other caller.
 	metricsPath = "/metrics"
 )
 

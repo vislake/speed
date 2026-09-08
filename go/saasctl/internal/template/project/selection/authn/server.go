@@ -30,9 +30,12 @@ import (
 )
 
 const (
-	// healthzPath is the one route exempted from tenant resolution -- an
-	// orchestrator's liveness probe must never depend on tenant resolution
-	// succeeding.
+	// healthzPath is one of the routes exempted from tenant resolution: the
+	// tenancy allowlist in buildServer below names the four non-authn
+	// routes that must work before a Principal exists -- healthzPath,
+	// metricsPath and config's two pre-auth display endpoints, each for GET
+	// and HEAD. An orchestrator's liveness probe must never depend on
+	// tenant resolution succeeding.
 	healthzPath = "/healthz"
 
 	// metricsPath is the Prometheus scrape endpoint, exempted from tenant
