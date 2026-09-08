@@ -514,6 +514,72 @@ func TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8(t 
 	}
 }
 
+// TestRetireDeliveredOutboxRecords_ReceiptDeleteFailure_ReturnsCountExcludingTheRolledBackRow
+// is the P3-metering-F regression: retireDeliveredOutboxRecords used to
+// count a row retired the moment its outbox delete succeeded INSIDE the
+// transaction -- before the receipt delete that follows it in the same
+// transaction had run. When that receipt delete failed, the whole
+// transaction rolled back, the outbox delete with it: the row was NOT
+// retired, yet the returned count already included it, over-reporting by
+// exactly the uncommitted row and making the function's own "both deletes
+// committed" doc claim false in that case. The count now accumulates only
+// when the transaction genuinely commits.
+//
+// The receipt delete's failure is made deterministic by dropping the
+// ingest-receipts table before the call: the outbox delete succeeds
+// inside the transaction, the receipt delete errors, the transaction
+// rolls back -- and the count must exclude the row the rollback
+// resurrected. Fails before the fix (the count includes the uncommitted
+// row), passes after.
+func TestRetireDeliveredOutboxRecords_ReceiptDeleteFailure_ReturnsCountExcludingTheRolledBackRow(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// One delivered row whose retention window has passed, plus the
+	// receipt its delivery created.
+	rec := newTestOutboxRecord("rec-1", "tenant-a", "idem-retire-fail")
+	rec.Status = outboxStatusDelivered
+	deliveredAt := time.Now().Add(-defaultOutboxRetention - time.Hour)
+	rec.DeliveredAt = &deliveredAt
+	if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
+		t.Fatalf("insertOutboxRecord: %v", err)
+	}
+	receipts := NewIngestReceiptRepository(db)
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	if err := receipts.Create(tenantCtx, &IngestReceipt{ID: "idem-retire-fail"}); err != nil {
+		t.Fatalf("receipt Create: %v", err)
+	}
+
+	// Remove the receipts table so the transaction's second delete fails
+	// deterministically -- the stand-in for any transient receipt-delete
+	// error, the exact failure whose rollback the count must respect.
+	if err := db.Migrator().DropTable(&IngestReceipt{}); err != nil {
+		t.Fatalf("DropTable(IngestReceipt): %v", err)
+	}
+
+	retired, err := retireDeliveredOutboxRecords(ctx, db, time.Now(), 1)
+	if err == nil {
+		t.Fatal("retireDeliveredOutboxRecords = nil error, want the receipt delete's error")
+	}
+	if retired != 0 {
+		t.Errorf("retired = %d, want 0 -- the receipt delete failed, so the whole transaction rolled back and the row was NOT retired; counting it over-reports by exactly the uncommitted row (P3-metering-F)", retired)
+	}
+
+	// The rollback genuinely resurrected the row -- the scenario the count
+	// assertion above depends on really occurred, it is not passing on an
+	// empty sweep.
+	got, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-retire-fail")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found {
+		t.Fatal("the outbox row is gone after the failed retire -- the rollback did not restore it, so the pinned scenario did not occur")
+	}
+	if got.Status != outboxStatusDelivered {
+		t.Errorf("row Status = %q after the failed retire, want %q (untouched by the rolled-back delete)", got.Status, outboxStatusDelivered)
+	}
+}
+
 // TestOutbox_AssertNotTenantScoped proves metering_outbox_records is
 // platform data (model.go's OutboxRecord doc comment): the tenant-scoping
 // plugin must never filter it, and a row is visible regardless of which

@@ -217,6 +217,13 @@ func retireDeliveredOutboxRecords(ctx context.Context, db *gorm.DB, olderThan ti
 	retired := 0
 	for _, rec := range recs {
 		tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(rec.TenantID))
+		// txRetired records, inside the transaction, that this row's two
+		// deletes both succeeded. The count itself accumulates only
+		// OUTSIDE the transaction, once it has genuinely committed: a
+		// closure error rolls the outbox delete back, and a row the
+		// rollback resurrected was not retired and must not be counted
+		// (P3-metering-F).
+		var txRetired bool
 		err := dbkit.WithTenantSession(tenantCtx, db, func(tx *gorm.DB) error {
 			res := tx.Where("id = ? AND status = ?", rec.ID, outboxStatusDelivered).Delete(&OutboxRecord{})
 			if res.Error != nil {
@@ -228,11 +235,14 @@ func retireDeliveredOutboxRecords(ctx context.Context, db *gorm.DB, olderThan ti
 				// guard costs nothing) -- leave its receipt alone too.
 				return nil
 			}
-			retired++
+			txRetired = true
 			return tx.Where("id = ?", rec.IdempotencyKey).Delete(&IngestReceipt{}).Error
 		})
 		if err != nil {
 			return retired, err
+		}
+		if txRetired {
+			retired++
 		}
 	}
 	return retired, nil
