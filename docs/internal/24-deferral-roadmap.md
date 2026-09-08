@@ -385,7 +385,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 - **L 台账缓办(11 项)**:族属协调侧台账 COMMENT-NORMS-REMAINING.md 的缓办组(该台账于 2026-09-08 收尾工作流建立,EXCLUDED/DEFERRED/FIXED 三档分类,DEFERRED 共 9 组,每组有主台账文件位:CLAUDE.md census、spec 散文、工具注释、测试 finding 代号簇、整文件清理等)。台账在协调侧、不入仓;处理时按族核销,核销后移出。
 - **R 真剩余(18 项)**:记录时点仍在 main@1c279637 的文本(直接核读条目括注"抽查已核"),即未来文本修复轮的候选清单。
 
-档位判定以普查逐条记录为底;直接核读 31 条(A 11、L 8、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
+档位判定以普查逐条记录为底;直接核读 29 条(A 11、L 6、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
 ### 10.1 已闭于 main(A,42 项)
 
@@ -448,7 +448,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 47 | `CLAUDE.md` | 行 8/12 内 8 处 "the roadmap's M1/M2 … cell" 里程碑坐标标签未清理 | CLAUDE.md census 组:roadmap M1/M2 cell 坐标标签仍散布(抽查 2 处命中);随 census 措辞轮 |
 | 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)x1/(D5)x1/(P2-2)x3/(P2-3)x1 共 6 处仍在(P2-6@184、D5@223、P2-2@279/335/373、P2-3@946);抽查已核 |
-| 71 | `CLAUDE.md` | 流程自指词 census 共 4 处(行 8×2"The census closes with…"/"this census's go/dbkit entry"、行 12"the auth-ui census entry below"、行 14"the auth-ui census defers to this shell"),均位于其改动行内,未清理亦未 deferral;低信号,可改可留但应显式说明 | CLAUDE.md census 自指措辞(抽查 3 处命中);低信号,随 census 措辞轮 |
+| 71 | `CLAUDE.md` | 流程自指词 census 共 4 处(行 8×2"The census closes with…"/"this census's go/dbkit entry"、行 12"the auth-ui census entry below"、行 14"the auth-ui census defers to this shell"),均位于其改动行内,未清理亦未 deferral;低信号,可改可留但应显式说明 | CLAUDE.md census 自指措辞("this census's"×2、"census entry below"、"census defers to this shell" 共 4 处仍在);低信号,随 census 措辞轮 |
 
 ### 10.3 真剩余(R,18 项;未来文本修复候选)
 
