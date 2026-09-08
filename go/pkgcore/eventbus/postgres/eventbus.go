@@ -1087,15 +1087,6 @@ func (b *EventBus) deliverOutboxRow(ctx context.Context, row outboxRow) (pkgcore
 	return evt, owed
 }
 
-// runHandlerRecovered invokes one handler for a catch-up-delivered event,
-// containing any panic it raises. A recovered panic is reported (and
-// logged): the caller records the handler as owing its delivery of the
-// event rather than a delivery whose side effects never ran being silently
-// treated as done (see deliverOutboxRow and retryPanickedRows).
-//
-// pkgcore is the dependency floor of the workspace and cannot import
-// go/observability, so this reaches for log/slog directly, the same
-// precedent warnIfNotDurable sets in pkgcore's own root package.
 // runLocalHandler invokes one locally-subscribed handler on the publishing
 // goroutine with the containment Publish promises. A panic raised by the
 // handler is recovered here rather than let to unwind through the
@@ -1132,6 +1123,15 @@ func (b *EventBus) runLocalHandler(ctx context.Context, evt pkgcore.Event, i int
 	return err, false
 }
 
+// runHandlerRecovered invokes one handler for a catch-up-delivered event,
+// containing any panic it raises. A recovered panic is reported (and
+// logged): the caller records the handler as owing its delivery of the
+// event rather than a delivery whose side effects never ran being silently
+// treated as done (see deliverOutboxRow and retryPanickedRows).
+//
+// pkgcore is the dependency floor of the workspace and cannot import
+// go/observability, so this reaches for log/slog directly, the same
+// precedent warnIfNotDurable sets in pkgcore's own root package.
 func (b *EventBus) runHandlerRecovered(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) (panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
