@@ -11,6 +11,7 @@
       "@speed/auth-core",
       "@speed/auth-ui",
       "@speed/account-ui",
+      "@speed/billing-ui",
       "@speed/tenancy-ui",
       "@speed/product-shell"
     ]

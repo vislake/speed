@@ -67,6 +67,15 @@ web/
                                              announcements.sessionEnded, from its own
                                              bilingual product-shell namespace (a zh-CN
                                              twin under the same key)
+    account-ui/         @speed/account-ui    -- the signed-in account-management family:
+                                             sessions, sign-in history, social bindings and
+                                             step-up-gated two-factor setup over the
+                                             generated authn operations
+    billing-ui/         @speed/billing-ui    -- the billing-documents read surface: the
+                                             newest-first invoice list with per-row
+                                             document detail over the generated billing
+                                             read operations, bilingual billing-ui
+                                             namespace
 ```
 
 Root `package.json` holds only what every package shares (typescript,
@@ -142,8 +151,8 @@ query-key namespacing is not.)
 
 The lockstep release machinery exists in its M0, offline-verification
 form: the changesets bootstrap at `.changeset/` (the fixed version group
-over the ten packages, `config.json` — no changesets entries or bump
-runs yet) and the release coordinator in `tools/release/`, which checks
+over the twelve packages, `config.json` — no changesets entries or
+bump runs yet) and the release coordinator in `tools/release/`, which checks
 from the repository root that the fixed group covers exactly the
 packages that exist, that package versions are uniform, and that the Go
 half of the same one-version plan is consistent (`task release:plan
