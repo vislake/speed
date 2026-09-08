@@ -210,3 +210,46 @@ func TestAssertNotTenantScoped_DetectsHandRolledTenantFiltering(t *testing.T) {
 		t.Errorf("helper subprocess failed, as wanted, but apparently not for the expected reason; output:\n%s", output)
 	}
 }
+
+// TestImplementsTenantScoped_AnswersCorrectlyForEveryCallerShape pins the
+// shape handling implementsTenantScoped's doc comment promises: model may be
+// nil, a plain value, or a pointer — even a pointer to a pointer — and the
+// answer must be correct for whichever shape a caller happened to pass,
+// because GetTenantID is conventionally declared on a value receiver while
+// model might be handed to AssertNotTenantScoped as a pointer, or vice
+// versa.
+//
+// AssertNotTenantScoped's own passing runs only ever hand it the one shape
+// its positive fixture uses (a non-scoped value), and a scoped model of any
+// shape is refused before the run can proceed, so the nil guard, the direct
+// type assertion and the pointer-unwrap loop cannot be observed through the
+// exported surface in an ordinary run and are exercised here directly — the
+// same white-box treatment boundedTenantIDSegment already receives in
+// assert_isolated_test.go.
+func TestImplementsTenantScoped_AnswersCorrectlyForEveryCallerShape(t *testing.T) {
+	scopedPtr := &accidentallyScopedSetting{}
+	scopedPtrPtr := &scopedPtr
+	plainPtr := &platformSetting{}
+	plainPtrPtr := &plainPtr
+
+	tests := []struct {
+		name  string
+		model any
+		want  bool
+	}{
+		{"nil model", nil, false},
+		{"non-scoped value", platformSetting{}, false},
+		{"non-scoped pointer", plainPtr, false},
+		{"non-scoped pointer-to-pointer", plainPtrPtr, false},
+		{"scoped value", accidentallyScopedSetting{}, true},
+		{"scoped pointer", scopedPtr, true},
+		{"scoped pointer-to-pointer", scopedPtrPtr, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := implementsTenantScoped(tt.model); got != tt.want {
+				t.Errorf("implementsTenantScoped(%T) = %t, want %t", tt.model, got, tt.want)
+			}
+		})
+	}
+}
