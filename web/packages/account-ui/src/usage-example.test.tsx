@@ -459,7 +459,7 @@ describe('the README quick start, exercised over a real api-client', () => {
     // deliberate second click waits it out in real time, inside act, so
     // the lockout's auto-clear lands inside act -- exactly as a user who
     // read the re-labelled button would. The window's shape is pinned by
-    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    // the ui-kit double-click regression tests in ConfirmDialog.test.tsx.
     await act(async () => {
       await new Promise((resolve) =>
         setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),

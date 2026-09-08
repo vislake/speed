@@ -690,8 +690,8 @@ func TestCertificateRepository_RevokeIfActive_GuardedTransition(t *testing.T) {
 
 // --- CertificateRevocationRepository -----------------------------------------
 
-// TestCertificateRevocationRepository_CreateAndListByAuthority proves round
-// 3's ledger write and its per-authority read -- the query GenerateCRL
+// TestCertificateRevocationRepository_CreateAndListByAuthority proves the
+// ledger write and its per-authority read -- the query GenerateCRL
 // (crl.go) drives.
 func TestCertificateRevocationRepository_CreateAndListByAuthority(t *testing.T) {
 	repo := NewCertificateRevocationRepository(newTestDB(t))

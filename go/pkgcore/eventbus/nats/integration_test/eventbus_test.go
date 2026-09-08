@@ -16,12 +16,12 @@ package nats_test
 // peer's), and a reader whose consumer is removed out from under it
 // recreates it instead of wedging.
 //
-// TestEventBus_FanOutDeliversToEveryReplica is the section of this file that
-// answers this round's central design question directly: does JetStream
-// deliver fan-out (every replica's own handler runs) or load-balanced (one
-// handler, chosen from a shared group, wins)? It proves fan-out over two
-// wholly independent client connections, matching eventbus/redis's own
-// documented and tested behaviour.
+// TestEventBus_FanOutDeliversToEveryReplica is the section of this file
+// that answers the JetStream backend's central design question directly:
+// does JetStream deliver fan-out (every replica's own handler runs) or
+// load-balanced (one handler, chosen from a shared group, wins)? It proves
+// fan-out over two wholly independent client connections, matching
+// eventbus/redis's own documented and tested behaviour.
 
 import (
 	"context"
@@ -221,8 +221,9 @@ func streamExists(t *testing.T, ctx context.Context, js jetstream.JetStream, str
 	return false
 }
 
-// TestEventBus_FanOutDeliversToEveryReplica is this round's central proof:
-// two wholly independent client connections to the same JetStream-enabled
+// TestEventBus_FanOutDeliversToEveryReplica is the backend's central
+// proof: two wholly independent client connections to the same
+// JetStream-enabled
 // NATS server, each wrapped in its own EventBus and both subscribed to the
 // same event type, both receive one Publish from a third connection -- fan-
 // out to every replica, never load-balanced delivery to only one of them.

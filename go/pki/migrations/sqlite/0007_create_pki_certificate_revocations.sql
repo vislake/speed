@@ -1,4 +1,4 @@
--- pki_certificate_revocations is round 3's denormalized, append-only
+-- pki_certificate_revocations is the denormalized, append-only
 -- revocation ledger (go/pki/model.go's CertificateRevocation): one row per
 -- CAService.RevokeCertificate call, existing so CAService.GenerateCRL can
 -- enumerate every certificate an authority ever revoked WITHOUT a
@@ -8,9 +8,8 @@
 -- tenancytest.AssertNotTenantScoped. tenant_id is a real, deliberately
 -- UNENFORCED column, the same treatment go/notification's send_records and
 -- platform_blacklist and go/dbkit/audit's AuditEvent already get, kept here
--- purely as informational metadata for an eventual audit view -- see the
--- Go type's own doc comment for the full "why this table exists at all"
--- argument.
+-- purely as informational metadata -- see the Go type's own doc comment for
+-- the full "why this table exists at all" argument.
 --
 -- This is the SQLite copy; see the postgres/ sibling for the identical
 -- schema on that dialect.

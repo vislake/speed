@@ -14,8 +14,7 @@
 // There is no Redis tier here (unlike go/config's, which carries one to
 // prove cross-replica convergence): authn touches pkgcore.KVStore only
 // through go/ratelimit and the immediate-revocation list, and both of those
-// are already the KVStore contract's own test responsibility, not this
-// module's -- see the frozen round plan's §1.9 and go/ratelimit/AGENTS.md.
+// are the KVStore contract's own test responsibility, not this module's.
 //
 // Every test here spins up its own disposable PostgreSQL testcontainer
 // (via testutil.NewPostgresDB, go/authn/internal/testutil) and requires a

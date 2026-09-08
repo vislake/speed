@@ -174,8 +174,8 @@ func TestImpersonationMiddleware_LogoutUnderImpersonation_DoesNotKillAdminsSessi
 	}
 
 	// The logout the authn handler would perform for this request's
-	// principal -- pre-fix, gotPrincipal.SessionID IS the admin's real
-	// session row, and this call revokes it.
+	// principal -- the impersonated principal's SessionID must never be
+	// the admin's real session row, which this call would revoke.
 	if err = env.Authn.Service().Logout(context.Background(), gotPrincipal.SessionID); err != nil {
 		t.Fatalf("Logout() error = %v", err)
 	}

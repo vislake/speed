@@ -661,8 +661,8 @@ func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
 	}
 
 	// Exactly one real increment (Allow's own hit) always lands; a second
-	// lands only if Allow's code path still reaches a caller-side Set call at
-	// all after IncrByFloat -- which the fix must make impossible.
+	// lands only if Allow's code path still reaches a caller-side Set call
+	// at all after IncrByFloat.
 	want := float64(1)
 	if fake.injected {
 		want = 2
@@ -911,8 +911,8 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 // TestAllow_RateNearMaxInt_RemainingClampedConsistently below: it asserts
 // clampRemaining's contract directly, rather than relying on a bare
 // int(remaining) actually misbehaving on whatever machine happens to run
-// `go test` -- which, per that other test's own doc comment, an unfixed
-// build would not do on every architecture.
+// `go test` -- which, per that other test's own doc comment, it does not
+// do on every architecture.
 func TestClampRemaining(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -996,14 +996,13 @@ func TestRetryAfterSeconds(t *testing.T) {
 // only be observed to fail on this package's own darwin/arm64 development
 // host by cross-compiling to amd64 and running the binary under Rosetta:
 // arm64's own float64->int conversion happens to saturate correctly for
-// this input (see clampRemaining's doc comment), so an unfixed build run
-// natively on an arm64 machine passes this assertion anyway, and only an
-// amd64 run (the architecture the original bug report -- and most
-// production and CI environments -- actually runs on) demonstrates the
-// failure. TestClampRemaining above is what pins the fix independent of
-// which architecture `go test` happens to run on; this test additionally
-// proves the fix is actually wired into Allow's own return path, not just
-// implemented and unused.
+// this input (see clampRemaining's doc comment), so a bare int(remaining)
+// conversion passes this assertion anyway on an arm64 machine, and only an
+// amd64 run (the architecture most production and CI environments run on)
+// demonstrates the failure. TestClampRemaining above pins clampRemaining's
+// own contract independent of which architecture `go test` happens to run
+// on; this test additionally proves the clamping is actually wired into
+// Allow's own return path, not just implemented and unused.
 func TestAllow_RateNearMaxInt_RemainingClampedConsistently(t *testing.T) {
 	limit := Limit{Rate: math.MaxInt, Per: time.Minute}
 	lim := New(pkgcore.NewMemoryKVStore())

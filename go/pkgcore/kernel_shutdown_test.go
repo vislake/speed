@@ -205,9 +205,10 @@ func registerLifecycleObjectStore(t *testing.T, log *closeLog) string {
 // the seam lifecycle: a successful Bootstrap transfers the preset-resolved
 // implementations' closers to the Kernel, and Shutdown runs each of them
 // exactly once, in reverse resolution order (the object-store seam, resolved
-// last, closes first). Before this lifecycle existed, a preset-resolved
-// implementation's own dialed connections had no close path at all: nothing
-// in the Kernel (or anywhere reachable from it) ever released them.
+// last, closes first). Without the transferred closers, a preset-resolved
+// implementation's own dialed connections would have no close path at all:
+// nothing in the Kernel (or anywhere reachable from it) would ever release
+// them.
 func TestKernel_ShutdownClosesEveryPresetResolvedSeam(t *testing.T) {
 	log := &closeLog{}
 	preset := lifecyclePreset(t, log)

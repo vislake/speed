@@ -9,8 +9,8 @@
 // distributed_mode_test.go already uses, so every Docker-backed tier in
 // this repository exercises the same server behavior. It discharges, for
 // one selection, the "generated project boots under the distributed
-// deployment mode" acceptance the module's AGENTS.md records as a
-// limitation for the other four.
+// deployment mode" acceptance; the other four selections get no dual-mode
+// CI run of their own.
 //
 // # Why one selection, not all five
 //
@@ -31,9 +31,7 @@
 // module's offline unit suite (internal/new's golden byte-identity tests
 // -- deliberately a pin of the materializer against the committed assets
 // and nothing more: it is not a tidy/build proof, and not a freshness
-// check on the go.mod goldens, which nothing automatic re-verifies
-// today). Their own dual-mode CI coverage remains deferred, recorded as
-// such in AGENTS.md's Known limitations.
+// check on the go.mod goldens, which nothing automatic re-verifies).
 //
 // # What this does NOT prove
 //

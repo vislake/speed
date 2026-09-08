@@ -10,9 +10,8 @@ import (
 // TestInit_RegistersObjectStoreS3OnTheSharedRegistry proves this package's
 // init() really lands "objectstore.s3" on pkgcore's shared
 // ObjectStoreRegistry with the capability the distributed deployment mode
-// requires -- the same assertion pkgcore's own
-// builtin_implementations_test.go made before this implementation moved out
-// of its package, now owned by the package that performs the registration.
+// requires -- the registration this package itself performs, verified
+// from the consuming side.
 // pkgcore's PresetDistributed already names this implementation for the
 // "objectstore" seam (preset_test.go pins the name itself); this test is
 // what proves the name actually resolves once this package is imported.

@@ -1,11 +1,8 @@
 -- integration_webhook_deliveries is go/integration's delivery log
 -- (go/integration/webhook_model.go): one row per (subscription, observed
 -- occurrence) delivery attempted or about to be attempted -- the delivery
--- log the design requires. Tenant data,
--- isolation proven by tenancytest.AssertIsolated, and will carry a
--- PostgreSQL RLS policy in the distributed deployment mode once one is
--- wired for this module, the same way every other tenant-scoped table's
--- does.
+-- log the design requires. Tenant data, isolation proven by
+-- tenancytest.AssertIsolated.
 --
 -- The primary key is (id) alone, matching this module's other two tables.
 --

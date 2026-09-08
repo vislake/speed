@@ -760,12 +760,12 @@ func TestService_RestoreRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 // lookup returned but before this call's own un-delete write runs leaves the
 // write colliding with the partial unique index
 // uq_rbac_role_bindings_tenant_user_role_node -- two rows with deleted_at IS
-// NULL at one tuple -- which gorm reports as gorm.ErrDuplicatedKey. Before
-// this fix only dbkit.ErrRecordNotFound was checked against, so this race
-// surfaced as ErrStorage: a caller retrying under contention got a generic
-// storage error where the documented semantic answer (the concurrent assign
-// already achieved the caller's end state) promised ErrBindingNotFound, the
-// identical classification RevokeRole gives its own lost race. Reproduced
+// NULL at one tuple -- which gorm reports as gorm.ErrDuplicatedKey. The
+// race must surface as ErrBindingNotFound, the documented semantic answer
+// (the concurrent assign already achieved the caller's end state): were
+// only dbkit.ErrRecordNotFound checked, it would surface as ErrStorage --
+// a generic storage error under contention -- instead of the identical
+// classification RevokeRole gives its own lost race. Reproduced
 // deterministically via the beforeBindingRestore test hook, firing after
 // THIS call's own findMostRecentlyRevoked already succeeded but before its
 // Restore runs: inside it, the concurrent AssignRole creates the fresh live

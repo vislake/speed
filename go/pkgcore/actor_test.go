@@ -68,9 +68,9 @@ func TestOnBehalfOfFromContext_Absent_ReturnsZeroValueAndFalse(t *testing.T) {
 }
 
 // TestWithActor_WithOnBehalfOf_LayerIndependently is the core impersonation
-// guarantee (docs/internal/10-compliance-and-audit.md): setting Actor must
-// never clear OnBehalfOf, and vice versa, in either order, so an
-// impersonated request can carry both identities at once.
+// guarantee: setting Actor must never clear OnBehalfOf, and vice versa, in
+// either order, so an impersonated request can carry both identities at
+// once.
 func TestWithActor_WithOnBehalfOf_LayerIndependently(t *testing.T) {
 	impersonated := Actor{Type: ActorTypeUser, ID: "user-1", DisplayName: "Ada"}
 	admin := Actor{Type: ActorTypePlatformAdmin, ID: "admin-1", DisplayName: "Grace"}

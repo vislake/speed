@@ -14,18 +14,18 @@
 // lost forever, violating the at-least-once contract every doc comment in
 // this package claims.
 //
-// The fix has two halves, both pinned by the tests below:
+// The delivery design has two halves, both pinned by the tests below:
 //
 //   - Publish serializes same-type outbox inserts with a per-event-type
 //     pg_advisory_xact_lock taken inside the publish transaction (see
-//     insertOutboxAndNotify in outbox.go), so same-type commit order now
-//     equals id order and a catch-up batch that advances to its largest row
-//     id can no longer leap over an uncommitted smaller-id row. This is the
+//     insertOutboxAndNotify in outbox.go), so same-type commit order equals
+//     id order and a catch-up batch that advances to its largest row id can
+//     never leap over an uncommitted smaller-id row. This is the
 //     multi-writer shape TestEventBus_ConcurrentMultiReplicaPublish_
 //     NoEventLostNoDuplicate drives.
 //
-//   - Publish's own synchronous local-delivery path no longer advances the
-//     cursor at all: it records the row id in an in-process set instead,
+//   - Publish's own synchronous local-delivery path never advances the
+//     cursor itself: it records the row id in an in-process set instead,
 //     and the listener's catch-up loop is the sole cursor advancer, simply
 //     skipping a row it finds already marked rather than re-running its
 //     handlers. A local publish can therefore never advance the persisted
@@ -76,11 +76,11 @@ func receivedSequenceCounts(spy *eventSpy) map[float64]int {
 // goroutine is busy inside a slow handler (and therefore cannot fetch
 // anything), another replica commits a row of the same type, and then THIS
 // instance's own Publish path runs its local handlers for a later row and
-// advances the persisted cursor past it. On the pre-fix code the cursor
-// advance leaps over the still-undelivered remote row in one step, the
-// catch-up scan never fetches it again (it only asks for ids above the
-// cursor), and the remote event is lost forever. On the fixed code the
-// local Publish does not advance the cursor at all -- the row is marked in
+// advances the persisted cursor past it. A cursor advance leaping over
+// the still-undelivered remote row in one step would mean the catch-up
+// scan never fetches it again (it only asks for ids above the cursor),
+// and the remote event would be lost forever. The local Publish does not
+// advance the cursor at all -- the row is marked in
 // memory and the listener, once its slow handler returns, delivers the
 // remote row and skips the already-locally-delivered one.
 //
@@ -164,10 +164,10 @@ func TestEventBus_LaggingPoller_LocalPublishMustNotSkipUnseenRemoteRows(t *testi
 	}
 
 	// 3. ... and THIS instance publishes a later row of the same type
-	// through its own local-delivery path. Pre-fix, that path advances the
+	// through its own local-delivery path. That path must not advance the
 	// persisted cursor past its row in one GREATEST step, leaping over the
 	// remote row committed a moment earlier -- the loss this test exists
-	// to pin. Post-fix, it only marks the row in memory.
+	// to pin -- so it only marks the row in memory.
 	if err := subscriber.Publish(ctx, pkgcore.Event{
 		Type:     eventType,
 		TenantID: pkgcore.TenantID("tenant-lagging-poller"),
@@ -200,15 +200,17 @@ func TestEventBus_LaggingPoller_LocalPublishMustNotSkipUnseenRemoteRows(t *testi
 }
 
 // TestEventBus_ConcurrentMultiReplicaPublish_NoEventLostNoDuplicate is the
-// regression shape review asked for -- two replicas publishing the same
+// regression shape for concurrent publishers: two replicas publishing
+// the same
 // event type concurrently, the subscribing replica among them (so its own
 // local-delivery path interleaves with the catch-up poller) -- with enough
 // overlapping transactions that commit order provably diverges from id
-// order on the pre-fix code. When that divergence lands inside a catch-up
-// batch -- the batch's snapshot sees a larger-id row committed while a
-// smaller-id row of the same type is still uncommitted -- the pre-fix
-// advance to the batch's largest id skips the smaller row forever. On the
-// fixed code the per-type advisory transaction lock serializes same-type
+// order without serialization. When that divergence lands inside a
+// catch-up batch -- the batch's snapshot sees a larger-id row committed
+// while a
+// smaller-id row of the same type is still uncommitted -- an advance
+// to the batch's largest id would skip the smaller row forever. The
+// per-type advisory transaction lock serializes same-type
 // commits into id order, so no catch-up advance can ever leap over an
 // uncommitted row, and the local-delivery path never advances the cursor
 // at all. Every concurrently published event must therefore reach the

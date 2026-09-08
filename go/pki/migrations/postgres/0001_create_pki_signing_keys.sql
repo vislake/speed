@@ -9,21 +9,18 @@
 --
 -- id is the application-generated kid a JWT's header names. purpose groups
 -- keys by what they sign (e.g. "authn.access_token"); the partial unique
--- index below is what makes "at most one active key per purpose"
--- (docs/internal/22-pki.md's lifecycle state machine) a database-enforced
--- fact rather than a hope.
+-- index below is what makes "at most one active key per purpose" (the
+-- key-lifecycle state machine, service.go) a database-enforced fact
+-- rather than a hope.
 --
 -- public_key is the DER SubjectPublicKeyInfo encoding, not sensitive.
 -- signer_name/key_ref are the only pointers to the actual private key --
 -- there is no private-key column on this table, ever; see
 -- pki_local_keys for where a "local" signer's key material actually lives.
 --
--- status is the full five-value lifecycle vocabulary
--- (pending/active/retiring/retired/revoked) from day one, even though this
--- round's code only ever writes pending->active directly -- getting the
--- column's value set right now is what lets round 2's state machine avoid
--- a migration of its own (docs/internal/22-pki.md: "round 1 must get the
--- table shape right, or round 2's state machine has to be redone").
+-- status carries the full five-value lifecycle vocabulary
+-- (pending/active/retiring/retired/revoked): every value the key-lifecycle
+-- state machine writes has a home in this column from the start.
 CREATE TABLE pki_signing_keys (
     id                 VARCHAR(64)  NOT NULL,
     purpose            VARCHAR(128) NOT NULL,
@@ -47,15 +44,15 @@ CREATE TABLE pki_signing_keys (
 -- ListVerifiableByPurpose: both filter by purpose first.
 CREATE INDEX idx_pki_signing_keys_purpose ON pki_signing_keys (purpose);
 
--- The expiry-scan index round 2's jobs-driven scan will read; this round
--- adds it ahead of that scan existing, per this module's own "get the
--- table structure right now" instruction.
+-- The expiry-scan index: the periodic scan job reads not_after to find
+-- keys whose validity window has closed, so the lookup is indexed from
+-- the start.
 CREATE INDEX idx_pki_signing_keys_not_after ON pki_signing_keys (not_after);
 
 -- At most one active key per purpose -- a real database constraint behind
 -- SigningKeyRepository.FindActiveByPurpose's "the row" assumption, not just
--- an application-level convention. A partial unique index, the same
--- technique go/dbkit's soft-delete round documents for
+-- an application-level convention. A partial unique index -- the same
+-- technique go/dbkit's own soft-delete indexes use for
 -- "a value can repeat across states but not within one".
 CREATE UNIQUE INDEX uq_pki_signing_keys_active_purpose
     ON pki_signing_keys (purpose)

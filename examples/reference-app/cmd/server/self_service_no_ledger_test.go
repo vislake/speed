@@ -11,27 +11,25 @@ import (
 )
 
 // TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger is the
-// regression test for the enumeration gap's consumer half: a
+// regression test for the sign-in tenant-resolution contract: a
 // runtime-created self-service account's browser-shaped sign-in must
 // resolve its clinic tenant from org's own memberships table ALONE --
 // with every trace of the host's own clinic ledger wiped between the
-// boots. Before org grew MemberService.TenantsOf, the sign-in store
-// scanned its own tenant lists, and the self_service_clinics ledger row
-// was what told a restarted boot's scan set where to look for a clinic
-// its universe of configured tenants could not name; a boot whose ledger
-// had nothing to re-discover answered the clinic owner's no-tenant
-// sign-in with 403 authn.tenant_membership_required no matter how real
-// the org membership row was. The wipe below reproduces exactly that
-// state, so this test fails against the pre-query code (failing before:
-// boot-two's sign-in answers 403, because the store's scan needs the
-// ledger) and passes against org's own answer (passing after: the org
-// row alone resolves the clinic, and the ledger is not even read).
+// boots. The sign-in store scans org's memberships
+// (MemberService.TenantsOf) for the tenant to land the clinic owner in
+// and never consults a row of the host's self_service_clinics
+// bookkeeping; a resolution that needed the ledger would answer the
+// clinic owner's no-tenant sign-in with 403
+// authn.tenant_membership_required no matter how real the org
+// membership row was. The wipe below is that dependency's probe: it
+// reproduces a ledger-less state, so a sign-in that resolves the clinic
+// from the org row alone succeeds while one that needs the ledger
+// answers 403 and fails the test.
 //
 // The sqlite3 driver import below is this test's own, mirroring the
-// module's existing raw-DB probe pattern (dbkit's migration-ledger
-// counts in org's own upgrade tests): the wipe must reach the shared
-// database file directly because no in-process handle survives between
-// the two boots.
+// raw-DB probe pattern org's own upgrade tests use: the wipe must reach
+// the shared database file directly because no in-process handle
+// survives between the two boots.
 func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "reference-app-self-service-no-ledger.db")
 
@@ -61,13 +59,10 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 	}
 
 	// Wipe the host's own clinic-ledger table between the boots, if a
-	// pre-retirement boot created one (self_service.go's
-	// self_service_clinics ledger): on the pre-query
-	// tree this delete is exactly the state that broke boot-two's
-	// sign-in -- the ledger row was the boot-time re-discovery source --
-	// and on the fixed tree the table no longer exists at all, so the
-	// no-such-table answer is just as fine. Either way, what boot two
-	// signs in with may not depend on a row of this host bookkeeping.
+	// boot created one (self_service.go's self_service_clinics ledger).
+	// Whether the delete succeeds or the table does not exist at all,
+	// what boot two signs in with may not depend on a row of this host
+	// bookkeeping.
 	rawDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open the shared database to wipe the ledger: %v", err)

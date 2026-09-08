@@ -274,11 +274,9 @@ func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.
 // the module, but a host reaches the ledger through Contacts(); a Register
 // that validated them without attaching them to the service it hands out
 // would give the host a service whose first CreateContact dereferences a
-// nil blind indexer. The PostgreSQL tier's consent-flow test caught
-// exactly that wiring gap through a kernel-booted module -- the one path
-// no earlier test walked, every service test having built its service by
-// hand and assigned the fields directly. This test pins the invariant at
-// unit level, where it runs on every pull request.
+// nil blind indexer. The same invariant is exercised kernel-booted against
+// a real server by the PostgreSQL tier's consent-flow test; this test pins
+// it at unit level, where it runs on every pull request.
 func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)

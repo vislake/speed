@@ -351,7 +351,7 @@ func TestLoginLockoutDelay_DoublesPerFailureThenSaturates(t *testing.T) {
 // recording shape: RecordLoginFailure must not be a non-atomic
 // read-modify-write over one JSON state value, where concurrent failures
 // can land as fewer than were recorded (a burst of five concurrent
-// failures once measured landing as two) -- since the progressive delay
+// failures can land as two) -- since the progressive delay
 // doubles per recorded failure, the lost ones are exactly what keeps the
 // lockout from escalating under a burst. The recording is built from the
 // KVStore's atomic primitives, so N concurrent failures against one account
@@ -513,9 +513,8 @@ func TestRateGuard_CheckLogin_LockoutTail_RetryAfterRoundsUp(t *testing.T) {
 // double can produce, but the conversion must still answer 0 -- retry now
 // is the true hint once the window has reset -- never the negative whole
 // seconds an unclamped math.Ceil conversion would emit for a remainder
-// below -1s. A negative retry-after count is worse than the 0 the old
-// truncation produced: RFC 9110's delay-seconds grammar (1*DIGIT) cannot
-// express it at all.
+// below -1s. A negative retry-after count would be inexpressible: RFC
+// 9110's delay-seconds grammar (1*DIGIT) cannot represent it at all.
 func TestRateGuard_Allow_NegativeResetAfter_RetryAfterFloorsAtZero(t *testing.T) {
 	t.Parallel()
 

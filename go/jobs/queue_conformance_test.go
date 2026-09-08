@@ -30,8 +30,7 @@ import (
 // get_tenant_isolation, cancel_tenant_isolation_and_idempotency,
 // retry_succeeds_after_transient_failures,
 // dead_letter_exhausts_retries_and_invokes_failure_hook) are the single
-// home of the portable contract, covering what was once hand-maintained
-// separately for each implementation.
+// home of the portable contract, run against both implementations.
 func TestStandaloneQueue_ConformsToQueueContract(t *testing.T) {
 	queuetest.AssertConforms(t, func() queuetest.Runnable {
 		db := dbtest.NewSQLite(t)

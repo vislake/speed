@@ -79,8 +79,8 @@ func seedFakeNote(t *testing.T, repo *testutil.FakeRepository, tenant pkgcore.Te
 }
 
 // fakeNoteExists reports whether a row with id still exists at all (live
-// or soft-deleted) for tenant -- used to assert a HardDelete actually
-// removed the row, not merely hid it from ordinary reads.
+// or soft-deleted) for tenant; tests call it to assert a HardDelete
+// actually removed the row, not merely hid it from ordinary reads.
 func fakeNoteExists(t *testing.T, repo *testutil.FakeRepository, tenant pkgcore.TenantID, id string) bool {
 	t.Helper()
 	var count int64
@@ -448,8 +448,8 @@ func TestRetentionSweepHandler_RejectsAPayload(t *testing.T) {
 // SweepResult.Errors (asserted below to still carry the raw error -- the
 // in-process home) and the structured log at the failure site, behind
 // go/observability's redaction layer -- never the permanent audit record.
-// The unfixed emitSweepAudit wrote err.Error() verbatim into
-// Changes["errors"], so the assertions below fail against it.
+// emitSweepAudit must never write err.Error() verbatim into
+// Changes["errors"]; a verbatim write fails the assertions below.
 func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())

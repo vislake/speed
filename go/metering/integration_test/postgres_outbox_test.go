@@ -2,8 +2,8 @@
 
 // PostgreSQL regression for Enqueue's idempotent-retry guarantee on the
 // metering_outbox_records side of the billing-grade pipeline -- see the
-// package doc comment in postgres_isolation_test.go for the defect this
-// test reproduces and the fix it guards.
+// package doc comment in postgres_isolation_test.go for the defect class
+// this test reproduces and the contract it guards.
 package metering_test
 
 import (
@@ -18,25 +18,24 @@ import (
 
 // TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction is the
 // PostgreSQL leg of the unit tier's own
-// TestEnqueue_IdempotentRetry_ReturnsTheExistingRow, but in the shape the
-// defect actually lives in: the retried Enqueue runs inside a NEW caller
+// TestEnqueue_IdempotentRetry_ReturnsTheExistingRow, in the shape the
+// hazard actually lives in: the retried Enqueue runs inside a NEW caller
 // transaction -- exactly what a host does when it retries a whole
 // business transaction whose Enqueue response it never saw -- and that
 // same transaction also carries a second, unrelated business write (a
 // second enqueue with its own idempotency key), which must commit.
 //
-// Before the fix, the retry's insert hit the (tenant_id, idempotency_key)
-// unique index and the recovery then read the existing row back on the
-// SAME transaction. SQLite tolerates a failed statement inside an open
-// transaction; PostgreSQL does not -- the transaction is aborted and the
-// recovery's SELECT fails with SQLSTATE 25P02, so Enqueue returned the
-// insert error, the caller's whole transaction rolled back, and the
-// idempotency contract collapsed: a retried caller whose first attempt
-// had already committed got an error and lost its unrelated business
-// write too. After the fix the insert uses ON CONFLICT DO NOTHING (which
-// never aborts the transaction), the pre-existing row is read back on the
+// The retry's insert runs as ON CONFLICT DO NOTHING (which never aborts
+// the transaction), the pre-existing row is read back on the
 // still-healthy transaction, and both this call and the follow-up write
-// commit.
+// commit. The dialect difference underneath is why this shape matters:
+// SQLite tolerates a failed statement inside an open transaction,
+// PostgreSQL does not -- after a statement error the transaction is
+// aborted and the recovery's SELECT would fail with SQLSTATE 25P02, so
+// Enqueue would return the insert error and the caller's whole
+// transaction would roll back, collapsing the idempotency contract: a
+// retried caller whose first attempt had already committed would get an
+// error and lose its unrelated business write too.
 func TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction(t *testing.T) {
 	db := newPostgres(t)
 	ctx := context.Background()

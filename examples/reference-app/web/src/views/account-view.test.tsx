@@ -477,7 +477,7 @@ describe('AccountView', () => {
     // deliberate second click waits it out in real time, inside act, so
     // the lockout's auto-clear lands inside act -- exactly as a user who
     // read the re-labelled button would. The window's shape is pinned by
-    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    // the ui-kit double-click regression tests in ConfirmDialog.test.tsx.
     await act(async () => {
       await new Promise((resolve) =>
         setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
@@ -553,7 +553,7 @@ describe('AccountView', () => {
     const user = userEvent.setup()
 
     // The bound row renders its provider and address, and the add area
-    // offers only the four channels not yet bound.
+    // offers only the channels not yet bound.
     await view.findByText(accountUiZhCN.bindings.provider.github)
     expect(view.getByText(OWNER_EMAIL)).toBeInTheDocument()
     expect(

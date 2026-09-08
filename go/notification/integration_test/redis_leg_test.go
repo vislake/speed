@@ -36,9 +36,10 @@ package notification_test
 // type's delivery needs none of the tier's senders; that is exactly the
 // isolation a distributed-delivery proof wants.
 //
-// Container lifecycle follows go/rbac/integration_test's
-// redis_leg_test.go, which follows go/config's, which follows
-// go/pkgcore/integration_test's startRedisClient.
+// The disposable-container lifecycle is the shape every Redis-backed tier
+// in this workspace shares (the same shape go/pkgcore/integration_test's
+// startRedisClient uses): one container per test file, torn down through
+// t.Cleanup.
 
 import (
 	"context"
@@ -151,8 +152,8 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // entry appended before the group existed is never replayed; whether the
 // very first publish wins the race against the reader goroutine's group
 // creation is scheduling luck. The marker is therefore republished until
-// one is demonstrably delivered, mirroring go/rbac's, go/config's and
-// go/pkgcore's tiers. It must travel under the very event type the spy
+// one is demonstrably delivered. It must travel under the very event type
+// the spy
 // subscribes to (the bus streams by type), it names a tenant no test
 // reads, and its payload is a well-formed InboxCreatedPayload so the
 // writer replica's own Hub -- subscribed to the same type -- handles it

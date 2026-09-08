@@ -39,16 +39,16 @@ import (
 // delivery of its own that can fail, and handler failures are not observable
 // by construction.
 //
-// Under the seam contract's pre-correction text this bus was a contract
-// violator -- the suite asserted, on every implementation, that Publish
-// reports a same-instance handler's failure, and this bus's Publish returns
-// nil -- a check that all four real implementations passed only because the
-// path it exercised (same-instance delivery) is the one path on which every
-// one of them happens to run handlers synchronously, while the path on which
-// none of the three broker-backed ones can report (delivery to another
-// replica) was never exercised at all: "checked, no problems" for a property
-// the interface promised and three of four implementations cannot provide.
-// The corrected contract keeps error reporting out of the seam promise, so
+// Under the seam contract this bus is a compliant non-reporter: the
+// contract does not promise that Publish reports a same-instance handler's
+// failure, and this bus's Publish returns nil. A suite-wide assertion that
+// Publish does report it would be checkable only on implementations whose
+// same-instance delivery runs handlers synchronously -- all four real ones
+// happen to do so, while the path on which none of the three broker-backed
+// ones can report (delivery to another replica) would never be exercised at
+// all: "checked, no problems" for a property the interface promised and
+// three of four implementations cannot provide. The contract keeps error
+// reporting out of the seam promise, so
 // the corrected suite must accept this bus.
 type deferredDeliveryBus struct {
 	mu       sync.Mutex

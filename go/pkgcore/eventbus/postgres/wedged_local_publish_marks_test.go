@@ -3,15 +3,15 @@
 // The (d) half of the wedged-local-publish regression suite (the rest lives
 // in integration_test/, which is package postgres_test): a local Publish
 // whose handler never returns must not make the in-process locallyDelivered
-// mark map grow without bound. On the pre-fix code the per-Type in-flight
-// gate also sat between the poller and its mark pruning --
+// mark map grow without bound. The bound this pins: a per-Type in-flight
+// gate that also sat between the poller and its mark pruning --
 // deliverPendingForType's only prune of locallyDelivered runs after a
-// fetched row's cursor advance, unreachable while the gate held the poller
-// out -- so every local Publish that completed while a same-Type handler
-// was wedged left a mark behind with nothing to prune it for as long as the
-// wedge lasted. Post-fix the poller keeps fetching and advancing during the
-// wedge, and each completed local publish's mark is pruned by the advance
-// past its own row.
+// fetched row's cursor advance, out of reach while the gate held the
+// poller out -- would leave every local Publish that completed while a
+// same-Type handler was wedged with a mark behind and nothing to prune it
+// for as long as the wedge lasted. The poller keeps fetching and advancing
+// during the wedge, and each completed local publish's mark is pruned by
+// the advance past its own row.
 //
 // The test asserts the map directly, so it must live in package postgres
 // rather than in the integration tier's own postgres_test package; it
@@ -46,9 +46,9 @@ func TestEventBus_WedgedLocalPublish_LocalMarksStayBounded(t *testing.T) {
 		wedgeSeq  = float64(100)
 	)
 	// completedLocalPublishes marks must land while the wedge holds the
-	// pre-fix gate; markBound is the ceiling the post-fix poller's pruning
-	// keeps the set under (a completed publish's mark can sit unpruned for
-	// at most the instant before the poller's next cycle passes its row).
+	// in-flight gate; markBound is the ceiling the poller's pruning keeps
+	// the set under (a completed publish's mark can sit unpruned for at
+	// most the instant before the poller's next cycle passes its row).
 	const (
 		completedLocalPublishes = 15
 		markBound               = 3
@@ -113,9 +113,9 @@ func TestEventBus_WedgedLocalPublish_LocalMarksStayBounded(t *testing.T) {
 	}
 
 	// Wedge: this instance's own local delivery of wedgeSeq never returns
-	// until the test releases it, so the Type's in-flight count stays up for
-	// the whole wedge -- the pre-fix gate's condition, from before the
-	// publish's insert onward.
+	// until the test releases it, so the Type's in-flight count stays up
+	// for the whole wedge -- the state a count-only gate would withhold
+	// on, from before the publish's insert onward.
 	publishDone := make(chan error, 1)
 	go func() {
 		publishDone <- bus.Publish(wedgeCtx, pkgcore.Event{
@@ -133,10 +133,10 @@ func TestEventBus_WedgedLocalPublish_LocalMarksStayBounded(t *testing.T) {
 	// Local publishes that complete while the wedge is on: each runs the
 	// Type's handlers synchronously (the wedge handler passes every
 	// sequence but wedgeSeq straight through), records its mark in
-	// locallyDelivered, and returns. Pre-fix no poller cycle can prune
-	// those marks for as long as the wedge lasts; post-fix each one is
-	// pruned by the poller's own advance past its row within a wake of the
-	// publish.
+	// locallyDelivered, and returns. No poller cycle may prune those marks
+	// while the wedge lasts -- a count-only gate would stop every cycle;
+	// each mark is pruned by the poller's own advance past its row within
+	// a wake of the publish.
 	for i := 0; i < completedLocalPublishes; i++ {
 		if err := bus.Publish(ctx, pkgcore.Event{
 			Type:     eventType,

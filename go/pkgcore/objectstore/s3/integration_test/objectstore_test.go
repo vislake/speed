@@ -210,16 +210,11 @@ func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) 
 	// error, exactly as the local store's reader does. minio-go checks the
 	// request context against its already-buffered HTTP response bytes, so a
 	// Read() issued immediately after cancel() can still hand back bytes it
-	// had buffered before the cancellation took effect -- a real,
-	// nonzero-rate race under any Docker-backed S3-compatible server (a
-	// 40-50% rate was observed under Docker-backed MinIO; re-verified as
-	// still real, though not re-measured for its exact rate, against this
-	// exact RustFS pin -- 20/20 runs passed the polling loop below without
-	// needing more than a few attempts, but the raw single-read race the
-	// polling exists to route around was not independently instrumented).
-	// Poll a bounded number of reads instead of asserting on the very first
-	// one, so the test pins "the cancellation is eventually observed" rather
-	// than "observed on read number one". The payload is sized well beyond
+	// had buffered before the cancellation took effect -- a genuine race
+	// under any Docker-backed S3-compatible server, so this test polls a
+	// bounded number of reads instead of asserting on the very first one:
+	// it pins "the cancellation is eventually observed" rather than
+	// "observed on read number one". The payload is sized well beyond
 	// what a buffered chunk could plausibly hold, so a total read count that
 	// reaches the object's
 	// remaining bytes without ever seeing the cancellation error is itself
@@ -257,17 +252,13 @@ func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyLeavesTheLongerKeyIntact
 	// This test pins what the service does with them, so nobody mistakes the
 	// local store's refusal for pedantry -- and the answer is backend-
 	// specific, which is exactly why the interface makes no promise either
-	// way. Under the MinIO release this repository ran before the RustFS
-	// swap, deleting the shorter key took the longer key's object with it
-	// (a real, previously pinned finding, kept in this comment's history
-	// rather than silently dropped). Under this RustFS pin, the two keys are
+	// way. Under the RustFS image this suite pins, the two keys are
 	// independent: deleting the shorter key leaves the longer key's object
-	// completely intact, verified directly against this exact image before
-	// this test's assertion below was written to match it. A caller that
-	// lets a key and an extension of it exist at the same time hands its
-	// data to whatever each backend happens to do with the overlap -- MinIO
-	// cascades, RustFS does not, and the interface's contract asks for
-	// neither.
+	// completely intact (a MinIO-style backend, by contrast, cascades the
+	// delete into the longer key). A caller that lets a key and an
+	// extension of it exist at the same time hands its data to whatever
+	// each backend happens to do with the overlap, and the interface's
+	// contract asks for neither.
 	ctx := context.Background()
 	store := startRustfsObjectStore(t, ctx)
 
@@ -292,9 +283,8 @@ func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyLeavesTheLongerKeyIntact
 	}
 
 	// Deleting the shorter key leaves the longer key's object untouched on
-	// this RustFS pin -- the reverse of the MinIO-specific finding this test
-	// used to pin, and equally legal under the interface's contract, which
-	// promises the overlap's outcome to nobody.
+	// this RustFS pin -- equally legal under the interface's contract,
+	// which promises the overlap's outcome to nobody.
 	if err := store.DeleteObject(ctx, parentKey); err != nil {
 		t.Fatalf("DeleteObject(%q) error = %v, want nil", parentKey, err)
 	}

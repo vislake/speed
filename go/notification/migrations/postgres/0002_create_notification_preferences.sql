@@ -1,12 +1,11 @@
 -- notification_preferences is one recipient's stored channel selection for
 -- one notification type, inside one tenant (go/notification/preference.go).
 --
--- Data domain: TENANT data (docs/internal/04-data-and-tenancy.md
--- classifies it as isolated by tenant_id and makes
--- tenancytest.AssertIsolated mandatory for it). The isolation plugin of
--- dbkit.Open scopes every read and write to the tenant in the context,
--- and this table's own unique index starts with tenant_id like every
--- tenant-owned index in this codebase.
+-- Data domain: TENANT data -- the isolation plugin of dbkit.Open scopes
+-- every read and write to the tenant in the context, the table's
+-- repository must pass tenancytest.AssertIsolated, and the table's own
+-- composite index starts with tenant_id like every tenant-owned index in
+-- this codebase.
 --
 -- Semantics, briefly (preference.go's doc comment carries the full story):
 -- there is deliberately NO row for "the recipient has not chosen" -- absence
@@ -20,9 +19,9 @@
 -- recipient_user_id references authn's users.id WITHOUT a foreign key,
 -- exactly like in_app_messages.recipient_user_id and org's
 -- memberships.user_id: users is identity data, one person sits in several
--- tenants, and cross-module foreign keys are forbidden
--- (docs/internal/04, rule 4) because they make independently released
--- migrations and cascading deletes unmanageable.
+-- tenants, and cross-module foreign keys are forbidden because they
+-- make independently released migrations and cascading deletes
+-- unmanageable.
 --
 -- channels holds the choice as a JSON array of channel names
 -- ("in_app", "email", "sms" -- see go/notification/types.go) in the

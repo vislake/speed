@@ -6,16 +6,15 @@
 // (github.com/stripe/stripe-mock), plus a real-HTTP webhook-delivery-shape
 // leg in webhook_delivery_test.go. It is physically separate from the
 // package's unit tests (which live in package stripe itself, one file per
-// source file, per the backend coding standard's testing layout rule) and
-// carries the "integration" build tag: a plain "go test ./..." never
-// compiles or runs anything in this directory; it is invoked explicitly
-// with "go test -tags=integration ./..." (the form go/billing's own
-// PostgreSQL integration tier already uses, and the form full-check.yml's
-// integration-tiers matrix runs for the go/billing module row -- this
-// directory sits under go/billing, so the existing billing matrix row picks
-// it up with no workflow change).
+// source file) and carries the "integration" build tag: a plain
+// "go test ./..." never compiles or runs anything in this directory; it
+// is invoked explicitly with "go test -tags=integration ./..." (the form
+// go/billing's own PostgreSQL integration tier already uses, and the form
+// full-check.yml's integration-tiers matrix runs for the go/billing module
+// row -- this directory sits under go/billing, so the existing billing
+// matrix row picks it up with no workflow change).
 //
-// # Why this leg exists (the fail-before gap it closes)
+// # Why this leg exists
 //
 // The package's unit tests exercise CreateCharge/QueryStatus through
 // newGatewayWithBackend's scripted stripe.Backend double (gateway_test.go's
@@ -35,7 +34,7 @@
 // (verified live: a request carrying an unrecognized parameter is answered
 // with Stripe's own 400 error envelope) -- so any drift in the method, the
 // path, a parameter's name/type/nesting or the query encoding that would
-// make a genuine Stripe call fail now fails here with the mock's error
+// make a genuine Stripe call fail fails here with the mock's error
 // instead of passing the scripted double.
 //
 // stripe-mock needs no credential of any kind (any "valid looking testmode
@@ -151,8 +150,7 @@ func gatewayAgainstMock(t *testing.T, endpoint string) *stripegw.Gateway {
 		// stripe-mock requires a "valid looking testmode secret API key"
 		// (its own 401 message): the value is arbitrary and credential-free,
 		// but its SHAPE is validated -- sk_test_ followed by alphanumerics
-		// only, discovered live when the first draft of this leg used
-		// "sk_test_mock_credential_free" and the mock refused it with 401.
+		// only, anything else refused with 401.
 		APIKey:        "sk_test_12345",
 		WebhookSecret: testWebhookSecret,
 		SuccessURL:    "https://example.test/success",
@@ -182,12 +180,12 @@ const testWebhookSecret = "whsec_test_secret_0123456789"
 // The assertions run on what the mock genuinely answers: CreateCharge must
 // decode the mock's fixture (id + checkout URL) into a ChargeHandle, and
 // QueryStatus must map the fixture's "open" session to
-// ChannelStatusPending. On the pre-leg unit tier neither wire transaction
-// ever happened: the scripted double discarded the encoded request body and
-// every unit test reached the gateway through newGatewayWithBackend rather
-// than NewGateway, so a serialization defect invisible to those tests (a
-// wrong parameter name or nesting, a malformed query encoding, an
-// unparseable response) fails this leg with the mock's own error.
+// ChannelStatusPending. On the unit tier neither wire transaction ever
+// happens: the scripted double discards the encoded request body and every
+// unit test reaches the gateway through newGatewayWithBackend rather than
+// NewGateway, so a serialization defect invisible to those tests (a wrong
+// parameter name or nesting, a malformed query encoding, an unparseable
+// response) fails this leg with the mock's own error.
 func TestGateway_CreateChargeAndQueryStatus_RealStripeMockDialogue(t *testing.T) {
 	ctx := context.Background()
 	endpoint := startStripeMock(t, ctx)
@@ -236,8 +234,8 @@ func TestGateway_CreateChargeAndQueryStatus_RealStripeMockDialogue(t *testing.T)
 // accepted CreateCharge's request above must refuse a request carrying a
 // parameter Stripe's API schema does not define, with Stripe's own error
 // envelope -- exactly what a live Stripe account would answer, and exactly
-// the class of failure the pre-leg unit tier could never produce, since its
-// double never validated the request body it was handed.
+// the class of failure the unit tier's scripted double could never
+// produce, since it never validates the request body it is handed.
 func TestStripeMock_RejectsSchemaViolatingRequests(t *testing.T) {
 	ctx := context.Background()
 	endpoint := startStripeMock(t, ctx)

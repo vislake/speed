@@ -131,16 +131,17 @@ func registerFreshAccount(t *testing.T, srv *httptest.Server, email, password st
 // about what the clinic is NOT: the account holds no membership in any
 // configured tenant, so a sign-in asking for tenant-acme is refused --
 // the unified 401 authn.invalid_credentials answer, identical to a wrong
-// password's (the login endpoint no longer names the membership gate).
+// password's (the login endpoint never distinguishes the membership gate
+// from a bad password).
 func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing.T) {
 	srv, _, _ := buildTestServer(t)
 
 	// A fresh account registers through authn's real register route.
 	userID := registerFreshAccount(t, srv, selfServiceFreshEmail, selfServicePassword)
 
-	// The browser-shaped sign-in that a memberless account could not take now
-	// succeeds, and lands the principal in the account's OWN clinic -- the
-	// deterministic tenant derived from the registrant's user id
+	// The browser-shaped sign-in succeeds and lands the principal in the
+	// account's OWN clinic -- a sign-in a memberless account cannot take --
+	// the deterministic tenant derived from the registrant's user id
 	// (self_service.go's clinicTenantOf), never a configured demo tenant.
 	// The derivation is spelled out here rather than reached through the
 	// production helper so this suite keeps compiling (and failing with a
@@ -358,12 +359,13 @@ func (f *failOnceProvisioning) observed() bool {
 // that picks the retry job up, the browser-shaped sign-in -- is the real
 // composed server, nothing mocked.
 //
-// The pinned behavior: with the retry wiring absent register answers
-// 201, the injected failure was consumed by the one synchronous attempt,
-// and nothing ever ran provision again -- authn.user.created fires once
-// -- so the clinic never gained the registrant's org membership row and
-// the browser-shaped sign-in stayed refused. The membership poll below
-// therefore timed out and the test failed where it now passes.
+// The pinned behavior: register answers 201 and the injected failure is
+// consumed by the one synchronous attempt; the retry job is what re-runs
+// provision until the clinic exists. Without the retry, nothing would
+// ever run provision again -- authn.user.created fires once -- the
+// clinic would never gain the registrant's org membership row, and the
+// browser-shaped sign-in would stay refused: the membership poll below
+// would time out. Its passing is the retry-wiring proof.
 func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *testing.T) {
 	inject := &failOnceProvisioning{}
 	cfg := testConfig(t)

@@ -176,7 +176,7 @@ describe('defaultTokens shared-branch write enforcement', () => {
       color: { semantic: { primary: { main: '#000000' } } },
     })
     // The type layer seals the tree at every depth (readonly modifiers), so
-    // a real write needs the trigger channel the P1 finding names -- a JS
+    // a real write needs a trigger channel that bypasses it -- a JS
     // consumer, an `any`, or a cast -- which is what the writable view
     // below stands in for. The override rebuilt only the primary branch;
     // untouched branches of the result ARE the defaultTokens nodes

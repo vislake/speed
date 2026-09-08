@@ -110,9 +110,9 @@ describe('SignInView', () => {
     // channel is not offered when nothing can deliver its code. In this
     // deployment the SMS seam resolves to the console sender, so a code
     // the surface claims went to a phone reaches no phone -- and this
-    // page is what a prospect sees in a demo. Fails before the host
-    // stops offering the channel (the SMS tab and its phone field
-    // render), passes after.
+    // page is what a prospect sees in a demo. If the surface offered the
+    // channel here (the SMS tab and its phone field rendering), this
+    // test would fail.
     const rig = rigWithBrand()
     const view = rendered(rig)
 

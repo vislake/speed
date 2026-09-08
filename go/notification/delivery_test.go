@@ -1957,7 +1957,8 @@ func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCa
 //
 // The classification is asserted as its literal text ("transport refused",
 // the value of the module's unexported failureReasonTransportRefused
-// constant) so this regression reads identically against the unfixed code.
+// constant), not through the constant itself, so the assertion does not
+// share its data with the implementation it checks.
 func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesTheStoredRecord(t *testing.T) {
 	const refused = "transport refused"
 
@@ -2181,8 +2182,9 @@ func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *
 // the recipient-visible-params annotation: it declares exactly the two
 // names its templates interpolate (render_test.go's renderTestParams), the
 // way a declaring business module states which parameters may reach its
-// recipients (pkgcore.NotificationType.RecipientVisibleParams -- the P1
-// fix's contract, whose owner is the type's own declaration).
+// recipients (pkgcore.NotificationType.RecipientVisibleParams -- the
+// recipient-visible gate's contract, whose owner is the type's own
+// declaration).
 var annotatedAppointmentType = pkgcore.NotificationType{
 	Key:                    fixtureTypeAppointment,
 	Group:                  "appointments",
@@ -2196,12 +2198,12 @@ var annotatedAppointmentType = pkgcore.NotificationType{
 // declaration states which parameters may reach its recipient, a dispatch
 // carrying anything else is refused with ErrDispatchParamsNotAllowed --
 // naming the type and the sorted offending keys -- before anything is
-// enqueued. This is what makes the P1 fix structural rather than a matter
-// of caller memory: admin's impersonation notice declares the EMPTY list
-// (go/admin module.go), so internal context (an operator's free-text
-// reason, an administrator's user id) cannot even be dispatched for it,
-// and any future type's params surface is decided by declaration, never by
-// whatever a dispatch happens to carry.
+// enqueued. The refusal is structural rather than a matter of caller
+// memory: admin's impersonation notice declares the EMPTY list (go/admin
+// module.go), so internal context (an operator's free-text reason, an
+// administrator's user id) cannot even be dispatched for it, and every
+// type's params surface is decided by declaration, never by whatever a
+// dispatch happens to carry.
 func TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{annotatedAppointmentType}})
@@ -2235,15 +2237,15 @@ func TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration(t *te
 
 // TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey is the
 // allowlist-governance test at the persistence boundary: a delivery job
-// whose payload carries a parameter outside the type's declaration -- a job
-// enqueued before the declaration existed, which Dispatch's own refusal
-// never saw -- must still deliver (the notice is not lost), but nothing
-// beyond the declaration may derive into the delivery key or persist into
-// the inbox row. The row is the recipient-visible surface (the inbox API
-// serves it back as it stands), so the narrowing -- delivery.go's
+// whose payload carries a parameter outside the type's declaration -- a
+// payload whose enqueue path bypassed the boundary check, which Dispatch's
+// own refusal never saw -- must still deliver (the notice is not lost), but
+// nothing beyond the declaration may derive into the delivery key or
+// persist into the inbox row. The row is the recipient-visible surface (the
+// inbox API serves it back as it stands), so the narrowing -- delivery.go's
 // recipientVisibleOnly, applied to every payload that reaches the delivery
-// path -- is what makes the P1 fix hold for payloads of any age, not just
-// for dispatches validated at the enqueue boundary today.
+// path -- must hold for every payload the path sees, not only for
+// dispatches validated at the enqueue boundary.
 func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{annotatedAppointmentType}})
@@ -2254,8 +2256,8 @@ func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
 	stale.Params = maps.Clone(renderTestParams)
 	stale.Params["reason"] = "investigating suspected fraud on this account"
 	stale.Params["admin_user_id"] = "admin-1"
-	// The payload shape a pre-declaration job has: marshaled straight into
-	// the queue, so Dispatch's refusal never saw it.
+	// The payload shape that bypasses the enqueue gate: marshaled straight
+	// into the queue, so Dispatch's refusal never saw it.
 	payload, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatalf("marshal stale payload: %v", err)
@@ -2307,11 +2309,11 @@ func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
 // overDeclaredAppointmentType is a fixture appointment declaration whose
 // recipient-visible annotation is WIDER than its own copy: it declares an
 // extra recipient-visible name -- internal_marker -- that no template of
-// the type references. Such a declaration is the exact general root of the
-// P1 leak: on a restricted type the declared list is the whole gate, so a
-// value no copy anywhere uses would still be allowed to ride verbatim into
-// the inbox row and API. Copy governance must refuse it regardless of what
-// the declaration says.
+// the type references. Such a declaration is the general hole in the
+// restricted-type gate: on a restricted type the declared list is the whole
+// gate, so a value no copy anywhere uses would be allowed to ride verbatim
+// into the inbox row and API. Copy governance must refuse it regardless of
+// what the declaration says.
 var overDeclaredAppointmentType = pkgcore.NotificationType{
 	Key:                    fixtureTypeAppointment,
 	Group:                  "appointments",
@@ -2326,7 +2328,7 @@ var overDeclaredAppointmentType = pkgcore.NotificationType{
 // refused with ErrDispatchParamsUnreferenced -- naming the type and the
 // offending keys -- before anything is enqueued. The copy gate applies
 // whether or not the type's declaration restricts its recipient-visible
-// list: leg 1 drives the fixture's legacy unrestricted declaration (nil
+// list: leg 1 drives the fixture's unrestricted declaration (nil
 // RecipientVisibleParams, the shape on which the declaration gate has
 // nothing to refuse, so the copy gate is the whole protection against a
 // copy-inert parameter riding through), and leg 2 drives a restricted
@@ -2335,7 +2337,7 @@ var overDeclaredAppointmentType = pkgcore.NotificationType{
 // not reach the row even when a declaration says it may.
 func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
 	// Leg 1: the unrestricted fixture type. The recipient-visible gate has
-	// nothing to refuse (nil list = legacy unrestricted), so a copy-inert
+	// nothing to refuse (nil list = unrestricted), so a copy-inert
 	// parameter must be refused by the copy gate alone.
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
@@ -2388,8 +2390,9 @@ func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
 // TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey
 // is the copy-governance test at the persistence boundary: a delivery job
 // whose payload carries a parameter no template of the type references --
-// a job enqueued before the copy gate existed, which Dispatch's own
-// refusal never saw -- must still deliver (the message is not lost), but
+// a payload whose enqueue path bypassed the copy gate, which Dispatch's
+// own refusal never saw -- must still deliver (the message is not lost),
+// but
 // the copy-inert parameter must not derive into the delivery key and must
 // not persist into the inbox row: the row stores exactly the parameters
 // its own copy was rendered from, which is what the inbox API serves back.
@@ -2401,8 +2404,8 @@ func TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey(t 
 	stale := deliveryDispatch()
 	stale.Params = maps.Clone(renderTestParams)
 	stale.Params["internal_marker"] = "occurrence-42"
-	// The payload shape a pre-gate job has: marshaled straight into the
-	// queue, so Dispatch's refusal never saw it.
+	// The payload shape that bypasses the copy gate: marshaled straight into
+	// the queue, so Dispatch's refusal never saw it.
 	payload, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatalf("marshal stale payload: %v", err)
@@ -2413,8 +2416,9 @@ func TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey(t 
 
 	// No delivery may exist under the marker-bearing key: a parameter no
 	// copy renders must not distinguish the delivery (OccurrenceID is the
-	// first-class field for that). On unfixed code the delivery ran under
-	// exactly this key and the row under it carried the marker verbatim.
+	// first-class field for that). Without the narrowing the delivery would
+	// derive under exactly this key and the row under it would carry the
+	// marker verbatim.
 	full := deliveryDispatch()
 	full.Params = maps.Clone(stale.Params)
 	if row := env.inboxRowByChannel(t, ctx, full); row != nil {

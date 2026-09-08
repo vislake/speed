@@ -223,7 +223,7 @@ func TestEntitlementsService_Check_NilUsageReader_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestEntitlementsService_Check_Quota_FractionalUsage_RoundsUpNotDown is
+// TestEntitlementsService_Check_Quota_FractionalUsage_RoundsUpNotDown
 // pins the rounding direction: usage counters are float64, and truncating the used
 // count toward zero at the decision point lets 99.9 used + 1 requested
 // pass a limit of 100 -- 99.9 + 1 is already over. The decision must round

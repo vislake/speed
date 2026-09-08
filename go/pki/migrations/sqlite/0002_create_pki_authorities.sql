@@ -26,8 +26,9 @@ CREATE TABLE pki_authorities (
 -- The chain-walk index: finding every intermediate a given authority issued.
 CREATE INDEX idx_pki_authorities_parent_id ON pki_authorities (parent_id);
 
--- Lookup by serial (CRL and chain-validation paths a later round adds).
+-- Lookup by serial, resolving an authority from a certificate's issuer
+-- serial during chain validation.
 CREATE INDEX idx_pki_authorities_serial ON pki_authorities (serial);
 
--- The expiry-scan index round 2/3's jobs-driven scan will read.
+-- The expiry-scan index: the periodic scan job reads not_after.
 CREATE INDEX idx_pki_authorities_not_after ON pki_authorities (not_after);

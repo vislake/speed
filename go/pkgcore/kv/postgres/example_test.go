@@ -44,17 +44,18 @@ func ExampleNewKVStore() {
 	// store wired; its first operation dials the server
 }
 
-// ExampleWithClock shows WithClock's role as the one-clock regression seam:
-// the option accepts an application-clock source, and the store never
-// consults it -- expiries are computed inside PostgreSQL as now() + ttl and
-// judged against the database's own now(), so the clock supplied here is
-// provably irrelevant. A test constructs the store with a deliberately
-// skewed clock and pins that a Set with a live TTL still stays visible until
-// the TTL genuinely elapses on the database clock (the integration tier's
-// TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock does exactly
-// that); before the one-clock fix, the same construction made the key
-// vanish the instant it was written. The DSN points at a closed port so
-// this example stays hermetic, exactly like ExampleNewKVStore.
+// ExampleWithClock shows WithClock's role as the single-clock seam: the
+// option accepts an application-clock source, and the store never consults
+// it -- expiries are computed inside PostgreSQL as now() + ttl and judged
+// against the database's own now(), so the clock supplied here is provably
+// irrelevant. A test constructs the store with a deliberately skewed clock
+// and pins that a Set with a live TTL still stays visible until the TTL
+// genuinely elapses on the database clock (the integration tier's
+// TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock does
+// exactly that); under clock-based arithmetic the same construction would
+// make the key vanish the instant it was written. The DSN points at a
+// closed port so this example stays hermetic, exactly like
+// ExampleNewKVStore.
 func ExampleWithClock() {
 	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
 	if err != nil {
@@ -64,8 +65,9 @@ func ExampleWithClock() {
 	defer pool.Close()
 
 	kvpostgres.NewKVStore(pool, kvpostgres.WithClock(func() time.Time {
-		// A clock ten minutes behind the database's: the skew that used to
-		// make every TTL'd write expire instantly.
+		// A clock ten minutes behind the database's: the skew that would
+		// make every TTL'd write expire instantly under clock-based
+		// arithmetic.
 		return time.Now().Add(-10 * time.Minute)
 	}))
 

@@ -421,9 +421,9 @@ func TestGateway_ChatStream_UnroutedModel_Refused(t *testing.T) {
 // for -- but the module's own OpenAI-compatible providers both require a
 // base URL, and that refusal is declared where the provider's needs are
 // known: at registry-constructor time, as a coded, caller-distinguishable
-// error. The regression: resolving a route onto such a credential fails
-// with ErrProviderConfigInvalid, never an uncoded error a transport layer
-// can only fold into a bare internal 500.
+// error. Resolving a route onto such a credential fails with
+// ErrProviderConfigInvalid, never an uncoded error a transport layer can
+// only fold into a bare internal 500.
 func TestGateway_Chat_EmptyBaseURLCredential_RefusedWithCodedError(t *testing.T) {
 	credentials := NewCredentialService(newTestDB(t))
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))

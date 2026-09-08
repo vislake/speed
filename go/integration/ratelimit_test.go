@@ -199,12 +199,12 @@ func TestLayeredLimiter_InvalidLimit_ReturnsError(t *testing.T) {
 // Rate == 0 is the one "disabled" spelling, and a negative Rate -- a
 // host-computed value gone wrong, never an intent to disable -- must be
 // refused as a configuration error, not silently disable that layer's
-// throttle. Before this fix a negative Rate fell through the disabled
-// layer's Rate <= 0 check and every request passed the layer unthrottled
-// with no error anywhere; after it, Allow refuses the configuration up
-// front with an error naming the offending layer and the Rate value and
-// wrapping ratelimit.ErrInvalidLimit -- the coded class go/ratelimit's own
-// validate assigns the identical input.
+// throttle. Allow refuses the configuration up front with an error naming
+// the offending layer and the Rate value and wrapping
+// ratelimit.ErrInvalidLimit -- the coded class go/ratelimit's own validate
+// assigns the identical input -- rather than letting a negative Rate fall
+// through the disabled layer's Rate <= 0 check, which would pass every
+// request through the layer unthrottled with no error anywhere.
 func TestLayeredLimiter_NegativeRate_RefusedAsConfigurationError(t *testing.T) {
 	for _, tc := range []struct {
 		layer string

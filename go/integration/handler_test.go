@@ -119,18 +119,18 @@ func assertAuditGapSuccess(t *testing.T, rec *httptest.ResponseRecorder, wantSta
 }
 
 // TestHandler_IntegrationCreateAPIKey_AuditFailure_AnswersCreatedWithAuditRecordMissing
-// is the HTTP half of the audit-failure material-retention fix (Service
-// level pinned in service_test.go's
+// is the HTTP half of the audit-failure material-retention contract (the
+// Service level is pinned in service_test.go's
 // TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError): when the
 // key row committed but its audit record failed, the handler answers the
 // operation's ORDINARY success -- the key in its normal field, never in an
 // error envelope's params -- plus the response's auditRecordMissing field
 // true, so the caller persists the one-time key material AND knows the
-// audit record is missing. Before this P0 was closed the handler answered a
-// 500 whose params carried the plaintext credential: error responses flow
-// into logs, tickets and bug reports, a distribution channel no credential
-// may ride in. (Failing before: 500 + params.created_api_key.key; passing
-// after: 201 + key in place + auditRecordMissing true.)
+// audit record is missing. Error responses flow into logs, tickets and bug
+// reports, a distribution channel no credential may ride in, so moving the
+// credential into an error envelope's params -- a 500 with the key in
+// params.created_api_key.key -- is exactly the shape this test refuses:
+// the refusal must leave the key in its normal field on a 201.
 func TestHandler_IntegrationCreateAPIKey_AuditFailure_AnswersCreatedWithAuditRecordMissing(t *testing.T) {
 	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
 	m.service.bus = errBus{}
@@ -150,8 +150,10 @@ func TestHandler_IntegrationCreateAPIKey_AuditFailure_AnswersCreatedWithAuditRec
 // replacement key in its normal field (shown exactly once; a caller that
 // does not receive it can never learn the credential of a live key this
 // very call created) and auditRecordMissing true, so a caller never
-// assumes the predecessor is revoked. Before this P0 was closed the handler
-// answered a 500 whose params carried the plaintext replacement credential.
+// assumes the predecessor is revoked. Error responses flow into logs,
+// tickets and bug reports, a distribution channel no credential may ride
+// in, so a refusal shape that moved the replacement credential into an
+// error envelope's params is exactly what this test refuses.
 // (The revoke-leg partial itself is raced at the Service level in
 // TestService_Rotate_RevokeFails_ReportsErrorWithNewKeyStillCreated; both
 // partial legs reach this identical handler branch.)

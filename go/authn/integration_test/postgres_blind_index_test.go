@@ -43,8 +43,8 @@ func newUserRepository(t *testing.T, db *gorm.DB) *authn.UserRepository {
 // before the HMAC is computed, so both rows would compute the SAME index
 // value. This is worth its own PostgreSQL leg specifically because
 // collation and unique-index case-sensitivity behaviour genuinely differ
-// between the two dialects (the frozen round plan's §1.9) -- SQLite's
-// default collation and PostgreSQL's both happen to treat the raw index
+// between the two dialects -- SQLite's default collation and PostgreSQL's
+// both happen to treat the raw index
 // BYTES as case-sensitively distinct strings, which is exactly why the
 // NORMALIZATION (not the database's own collation) is what has to do the
 // case-folding work, and this test is what proves that division of labor

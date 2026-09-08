@@ -35,14 +35,13 @@
 -- outward-identical refusal a wrong key gets (errors.go's
 -- ErrAuthenticationFailed).
 --
--- 0001_create_integration_api_keys.sql's own comment on
--- uq_integration_api_keys_tenant_hash records the assumption that an
--- authentication lookup would already know its tenant. The real design
--- need did not bear that out -- see model.go's apiKeyHashIndex doc
--- comment for the full argument -- so this table exists instead of relying
--- on that index; 0001's own comment is left unedited as the historical
--- record, and uq_integration_api_keys_tenant_hash / APIKey.Hash's stored
--- format are both untouched by this migration.
+-- An authentication lookup by definition precedes any tenant resolution,
+-- so the tenant-scoped unique index on integration_api_keys
+-- (uq_integration_api_keys_tenant_hash, which only guarantees per-tenant
+-- hash uniqueness) cannot serve it: the presented key must resolve its
+-- tenant before the ordinary tenant-scoped row can be read -- model.go's
+-- apiKeyHashIndex doc comment carries the full argument. APIKey.Hash's
+-- stored format and that index are both untouched by this migration.
 --
 -- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
 -- schema on that dialect.

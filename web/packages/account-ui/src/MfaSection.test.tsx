@@ -562,7 +562,7 @@ describe('MfaSection', () => {
   it('render the mfa_not_enrolled guide text when the verified regenerate retry finds no factor', async () => {
     // A defensive leg: the authn module has no factor-disable operation,
     // so a step-up victory racing a factor that then vanished is not
-    // reachable through today's API -- but the retry answers it, and the
+    // reachable through the API -- but the retry answers it, and the
     // section renders its guide text rather than a dead panel.
     let regenerateCalls = 0
     const rig = makeRealClientRig(async (call) => {

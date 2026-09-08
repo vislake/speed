@@ -18,8 +18,8 @@ import (
 // keep agreeing, and a mirrored table is how a divergence would surface.
 
 func TestValidateBaseURL_PrivateIPLiteral_Blocked(t *testing.T) {
-	// The mandatory proof: a private-IP base URL is refused, not silently
-	// accepted -- the creation-time half of the P0 fix.
+	// The creation-time half of the defense: a private-IP base URL is
+	// refused, not silently accepted.
 	cases := []string{
 		"http://127.0.0.1:9000/v1",
 		"http://[::1]:9000/v1",
@@ -101,10 +101,10 @@ func TestValidateBaseURL_BlockedLiteralIP_RefusalCarriesTheLiteralIP(t *testing.
 	}
 }
 
-// TestValidateBaseURL_PublicIPLiteral_Allowed pins the product decision the
-// fix preserves: a tenant BYOK base URL naming a public OpenAI-compatible
-// endpoint is accepted. A literal public IP needs no DNS resolution, so
-// the case is deterministic offline.
+// TestValidateBaseURL_PublicIPLiteral_Allowed pins the product boundary
+// the SSRF guard preserves: a tenant BYOK base URL naming a public
+// OpenAI-compatible endpoint is accepted. A literal public IP needs no DNS
+// resolution, so the case is deterministic offline.
 func TestValidateBaseURL_PublicIPLiteral_Allowed(t *testing.T) {
 	if err := ValidateBaseURL(context.Background(), "https://93.184.216.34/v1"); err != nil {
 		t.Fatalf("ValidateBaseURL(public IP) = %v, want nil", err)
@@ -251,11 +251,12 @@ func TestGuardedProviderHTTPClient_AllowsPublicAddress(t *testing.T) {
 
 // TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral pins the
 // rebinding-defeating property this file's own header comment names as the
-// whole reason the dial ring exists: the address handed to the dialer for a
-// HOSTNAME input is the IP LITERAL that the dial-time resolution itself
-// validated, never the hostname -- so nothing between the check and the
-// connection performs a second, independent DNS lookup a rebinding
-// attacker could answer differently. This is the property the two literal-
+// whole reason the dial-time guard exists: the address handed to the
+// dialer for a HOSTNAME input is the IP LITERAL that the dial-time
+// resolution itself validated, never the hostname -- so nothing between
+// the check and the connection performs a second, independent DNS lookup
+// a rebinding attacker could answer differently. This is the property the
+// two literal-
 // address dial tests above do not exercise (a literal loopback input needs
 // no resolution and a literal public input needs no pin), and it cannot be
 // built against the real resolver offline, which is exactly why the two
@@ -419,8 +420,9 @@ func TestGateway_ResolveImage_TenantScopeCredential_GetsGuardedHTTPClient(t *tes
 // resolved at the TENANT tier, never silently allowed to dial unguarded.
 // An unguardable provider has no rebinding-defeating dial-time re-check at
 // all, so allowing the combination would leave the tenant-influenced dial
-// at exactly the write-time-validation-only state the dial ring exists to
-// close. The platform tier stays allowed on the provider's own client --
+// at exactly the write-time-validation-only state the dial-time guard
+// exists to close. The platform tier stays allowed on the provider's own
+// client --
 // the operator's intranet-gateway default, outside the guard by scope
 // boundary.
 func TestGateway_Resolve_TenantScopeCredential_UnguardableProvider_Refused(t *testing.T) {

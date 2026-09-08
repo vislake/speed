@@ -37,8 +37,9 @@ describe('createMemoryAccessTokenStore', () => {
   })
 
   it('is a plain interface hosts implement (sync get/set, string | null)', () => {
-    // Auth-core (M1) will bind its own implementation here; the client
-    // only depends on the shape, so drift breaks compilation.
+    // The client depends only on the AccessTokenStore shape -- a host
+    // supplies the real store (auth-core's createAuthSession takes one)
+    // -- so drift in the shape breaks compilation.
     let hostToken: string | null = 'host-issued-token'
     const hostStore: AccessTokenStore = {
       get(): string | null {

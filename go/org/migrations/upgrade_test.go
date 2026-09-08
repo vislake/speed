@@ -81,9 +81,8 @@ func stageSingleRootUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 
 	// Stage 2: the upgrade. A second registry applies the FULL set; its
 	// ledger already records 0001..0007 (same module name, same filenames),
-	// so it executes exactly the new files -- 0008_single_root_live.sql and
-	// every migration that has landed since (0009_memberships_user_lookup.sql
-	// at the time of writing).
+	// so it executes exactly the files after 0007 -- 0008_single_root_live.sql
+	// and everything later in the module's migration set.
 	full := dbkit.NewMigrationRegistry()
 	if err := full.Register(migrationSetModule{name: "org", fs: FS}); err != nil {
 		t.Fatalf("Register(full set): %v", err)

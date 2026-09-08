@@ -51,8 +51,9 @@ func TestErrMetadataEncodeFailed_IsInternal(t *testing.T) {
 	}
 }
 
-// TestErrUsageSummariesUnconfigured_IsInternal pins the new error's kind
-// the way TestErrMetadataEncodeFailed_IsInternal pins its own: it reports
+// TestErrUsageSummariesUnconfigured_IsInternal pins
+// ErrUsageSummariesUnconfigured's kind the way
+// TestErrMetadataEncodeFailed_IsInternal pins its own: it reports
 // an unconfigured construction (RealtimeCount over NewAggregator(nil)),
 // never a malformed caller input, so it is deliberately apperr.Internal
 // (500), not apperr.Invalid (400) -- the same judgment go/billing's

@@ -448,13 +448,12 @@ func TestPreferenceService_ListForUser_StoredRowsOrderedByTypeKey(t *testing.T) 
 // loser's write into a wait, so the loser deterministically sees the winner's
 // committed row (as a duplicate on insert, or as the row on re-read).
 //
-// Since the dbkit SQLite busy-timeout round this explicit parameter is
-// redundant with dbkit's own declared default: the dialect factory this
-// Open goes through appends its own _pragma=busy_timeout(5000) after this
-// one (last wins, same value), and the driver beneath dbkit applied the
-// same 5000 ms implicitly all along, so the parameter never changed the
-// effective timeout. It is kept to state at the DSN, where this test's
-// determinism is decided, that the test requires a bounded busy_timeout.
+// The explicit parameter is redundant with dbkit's own declared default:
+// the dialect factory this Open goes through appends its own
+// _pragma=busy_timeout(5000) after this one (last wins, same value), so
+// the effective timeout is 5000 ms with or without it. It is kept to state
+// at the DSN, where this test's determinism is decided, that the test
+// requires a bounded busy_timeout.
 func newBusyTimeoutSQLite(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := filepath.Join(t.TempDir(), "preferences.sqlite") + "?_pragma=busy_timeout%3d5000"

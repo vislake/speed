@@ -592,10 +592,10 @@ func TestRegisterPIISerializer_RejectsANilCipher(t *testing.T) {
 
 // TestUserRepository_MarkPhoneVerified_OnlySetsTheFlagAndOnlyForTheVerifiedPhone
 // pins MarkPhoneVerified's write scope: a single-column, guarded update
-// that can never regress a column another caller committed between a
-// caller's read and this write (the whole-row Save it replaced would have),
-// and that never blesses a phone which is no longer the one the caller
-// verified. It fails if the write ever grows back to whole-row scope.
+// whose SET clause names nothing but the phone_verified flag, so no column
+// another caller committed between a caller's read and this write can be
+// regressed, and no phone which is no longer the one the caller verified
+// can be blessed. It fails if the write ever grows to whole-row scope.
 func TestUserRepository_MarkPhoneVerified_OnlySetsTheFlagAndOnlyForTheVerifiedPhone(t *testing.T) {
 	t.Parallel()
 
@@ -663,8 +663,8 @@ func TestUserRepository_MarkPhoneVerified_OnlySetsTheFlagAndOnlyForTheVerifiedPh
 // TestUserRepository_ReplacePasswordHashIfStillCurrent_OnlyWritesWhenTheStoredHashMatches
 // pins ReplacePasswordHashIfStillCurrent's guard: the hash write lands only
 // while the row's stored hash is still the one the caller verified, and the
-// write's SET clause names nothing but the hash (the whole-row Save it
-// replaced would regress every other column of the caller's stale read).
+// write's SET clause names nothing but the hash, so no other column of the
+// caller's stale read can be regressed by the write.
 func TestUserRepository_ReplacePasswordHashIfStillCurrent_OnlyWritesWhenTheStoredHashMatches(t *testing.T) {
 	t.Parallel()
 

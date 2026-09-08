@@ -75,9 +75,8 @@ func TestPollingService_Poll_ResolvesStuckPendingRow(t *testing.T) {
 }
 
 // TestPollingService_Poll_ResolvesZeroedAmountRow is the end-to-end
-// regression test for "a payment event zeroed to Amount=0 by the pending-
-// branch fix keeps Amount=0 forever even after resolving to Succeeded": a
-// row inserted with a zero-valued Amount -- exactly the shape event.go's
+// regression test for the zero-amount-stuck defect: a row inserted with a
+// zero-valued Amount -- exactly the shape event.go's
 // normalizeCheckoutSession's ChannelStatusPending branch produces for an
 // unsettled checkout.session.completed webhook -- must land with the real,
 // freshly re-queried Amount once Poll resolves it, driven through the whole
@@ -217,14 +216,13 @@ func TestPollingService_Poll_QueryErrorIsSkippedNotFatal(t *testing.T) {
 // key names, never arbitrary free text under the ubiquitous "error" key,
 // so the log point must bound the value itself. Two failure shapes are
 // scripted, each carrying a distinctive fragment that must not appear in
-// any of the poll log's attributes after the fix: an opaque gateway error
-// (the shape every non-typed QueryStatus failure takes -- wechat's wrapped
-// vendor refusals, alipay's query-failed envelopes, stripe's SDK errors)
-// and a typed billing error carrying the fragment as its unbounded cause
-// (the sharp case, since (*apperr.Error).Error() renders "code: cause" --
-// the classification must read the error's code, never its text). Before
-// the fix, the log's "error" attribute carried the whole error text
-// verbatim and both legs failed.
+// any of the poll log's attributes: an opaque gateway error (the shape
+// every non-typed QueryStatus failure takes -- wechat's wrapped vendor
+// refusals, alipay's query-failed envelopes, stripe's SDK errors) and a
+// typed billing error carrying the fragment as its unbounded cause (the
+// sharp case, since (*apperr.Error).Error() renders "code: cause" -- the
+// classification must read the error's code, never its text). A log
+// point that wrote the raw error text verbatim would fail both legs.
 func TestPollingService_Poll_QueryFailureLogsClassificationNeverRawText(t *testing.T) {
 	const echoedFragment = "mango-vendor-echo-4c9d7"
 

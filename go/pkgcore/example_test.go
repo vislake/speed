@@ -13,7 +13,7 @@ package pkgcore_test
 // ExampleWithPreset below -- and this same test binary's internal tests in
 // preset_test.go and builtin_implementations_test.go that resolve
 // PresetDistributed's eventbus/kv/objectstore entries -- exercise the real,
-// split-out implementations instead of failing with ErrUnknownImplementation:
+// subpackage implementations instead of failing with ErrUnknownImplementation:
 // go test links the internal "pkgcore" test package and this external
 // "pkgcore_test" one into one binary, so an init() triggered by an import
 // here runs before any test in either package, and the registries it
@@ -339,11 +339,10 @@ func ExampleValidateFeatureGraph() {
 }
 
 // ExampleWithEventBus shows the code-injection layer of implementation
-// composition, and the capability validation that replaced the old
-// mode-keyed "distributed mode has no built-in implementation" checks.
-// DeploymentModeDistributed requires every seam's resolved implementation to
-// declare MultiReplicaSafe; the standalone Preset a bare NewKernel() would
-// otherwise resolve to does not, so the host injects its own.
+// composition and the capability validation that gates assembly:
+// DeploymentModeDistributed requires every seam's resolved implementation
+// to declare MultiReplicaSafe; the standalone Preset a bare NewKernel()
+// would otherwise resolve to does not, so the host injects its own.
 func ExampleWithEventBus() {
 	// Assembling a distributed-mode kernel with nothing injected resolves
 	// every seam through the standalone Preset, whose implementations do not
@@ -692,9 +691,9 @@ func ExampleCapability() {
 
 // ExampleSeamRegistry shows the name-to-constructor mechanism a Preset
 // resolves through: pkgcore pre-populates one SeamRegistry per seam
-// (EventBusRegistry and its siblings) with the built-in implementations
-// listed in this package's AGENTS.md, and a host registers its own the same
-// way this example registers a test one.
+// (EventBusRegistry and its siblings) with the built-in implementations it
+// ships, and a host registers its own the same way this example registers
+// a test one.
 func ExampleSeamRegistry() {
 	registry := pkgcore.NewSeamRegistry[pkgcore.KVStore]()
 

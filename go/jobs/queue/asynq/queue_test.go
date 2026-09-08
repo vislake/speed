@@ -56,16 +56,15 @@ func TestQueue_RegisterHandler_DistinctTypes_BothRegister(t *testing.T) {
 }
 
 // TestQueue_DepthGauge_StoppedQueueDoesNotQueryRedis is the Queue half of
-// the queue-depth gauge lifecycle regression
+// the queue-depth gauge lifecycle guarantee
 // TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose proves for
-// jobs.StandaloneQueue (same defect, same fix shape; see that test and
-// both registerQueueDepthGauge doc comments for the full story). A queue
-// that has been stopped must answer nil -- never touch its data source --
-// so the harness simulates the stopped state with a bare *Queue whose
-// stopCh is closed and whose inspector is nil: any query would panic on
-// the nil *asynqlib.Inspector receiver, which is exactly the sharper
-// version of the error the unguarded callback produced. (Registering the
-// real NewQueue path and driving Close against a real Redis is the
+// jobs.StandaloneQueue (see that test and both registerQueueDepthGauge doc
+// comments for the full story). A queue that has been stopped must answer
+// nil -- never touch its data source -- so the harness simulates the
+// stopped state with a bare *Queue whose stopCh is closed and whose
+// inspector is nil: any query would panic on the nil *asynqlib.Inspector
+// receiver, the crash the stopped-answer contract prevents. (Registering
+// the real NewQueue path and driving Close against a real Redis is the
 // integration tier's job, per this module's testing convention -- this
 // unit test pins the callback's stopped-answer contract alone.)
 func TestQueue_DepthGauge_StoppedQueueDoesNotQueryRedis(t *testing.T) {

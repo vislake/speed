@@ -4,12 +4,10 @@
 // the tier that exists because PreDeduct's poisoned-transaction recovery
 // is a PostgreSQL-only defect class. It is physically separate from
 // go/billing's unit tests (which live in package billing, one file per
-// source file, per the backend
-// coding standard's testing layout rule) and carries the "integration"
-// build tag: a plain "go test ./..." never compiles or runs anything in
-// this directory; it is invoked explicitly with
-// "go test -tags=integration ./..." (and, in CI, under -race) from the
-// module directory.
+// source file) and carries the "integration" build tag: a plain
+// "go test ./..." never compiles or runs anything in this directory; it
+// is invoked explicitly with "go test -tags=integration ./..." (and, in
+// CI, under -race) from the module directory.
 //
 // Every test here opens its own disposable PostgreSQL 16 container via
 // testcontainers (through billing/internal/testutil.NewPostgres, which
@@ -23,22 +21,24 @@
 //
 // What this tier exists to prove:
 //
-//   - credit_service.go's PreDeduct recovered a duplicate (id, tenant_id)
-//     insert -- a retried PreDeduct meeting its own earlier attempt's row
-//     -- by catching the unique-constraint violation and reading the
-//     existing row back on the SAME open dbkit.WithTenantSession
-//     transaction. SQLite tolerates that; PostgreSQL does not: after a
-//     statement error the transaction is aborted and every later
-//     statement fails with SQLSTATE 25P02 until ROLLBACK, so the read-back
-//     failed, PreDeduct returned an error, and the idempotent-retry
-//     contract collapsed -- a retried PreDeduct whose first attempt had
-//     already committed got an error instead of its own earlier
-//     reservation, on the money path itself. The recovery now inserts with
-//     ON CONFLICT DO NOTHING, which never aborts the transaction, and only
-//     then reads the pre-existing row back on the still-healthy
-//     transaction (postgres_credit_transactions_test.go's
+//   - PreDeduct's duplicate handling must never leave an open transaction
+//     poisoned. SQLite tolerates a failed statement inside an open
+//     transaction; PostgreSQL does not: after a statement error the
+//     transaction is aborted and every later statement fails with SQLSTATE
+//     25P02 until ROLLBACK. A recovery that caught a duplicate (id,
+//     tenant_id) insert -- a retried PreDeduct meeting its own earlier
+//     attempt's row -- by swallowing the unique-constraint violation and
+//     then reading the existing row back on the SAME open
+//     dbkit.WithTenantSession transaction would fail that read-back on
+//     PostgreSQL and return an error, collapsing the idempotency-retry
+//     contract: a retried PreDeduct whose first attempt had already
+//     committed would get an error instead of its own earlier reservation,
+//     on the money path itself. The recovery inserts with ON CONFLICT DO
+//     NOTHING, which never aborts the transaction, and only then reads the
+//     pre-existing row back on the still-healthy transaction
+//     (postgres_credit_transactions_test.go's
 //     TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation,
-//     which only real PostgreSQL can make fail).
+//     a regression only real PostgreSQL can catch).
 //
 //   - the whole credit reserve -> confirm -> refund family runs on the
 //     real server: the full lifecycle with both idempotent-retry legs,

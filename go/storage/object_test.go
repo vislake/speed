@@ -376,7 +376,7 @@ func TestObjectService_Create_ReservesUploadRowAndCanonicalizesTheType(t *testin
 	if !row.UploadExpiresAt.After(now) || !row.UploadExpiresAt.Before(now.Add(31*time.Minute)) {
 		t.Errorf("upload window expires at %v, want roughly now+30m", row.UploadExpiresAt)
 	}
-	// No requested retention is no longer "never expires": the module's
+	// No requested retention does not mean "never expires": the module's
 	// maximum lifetime is the default life of an ordinary upload, so the row
 	// carries an expiry at roughly now + the configured maximum. The test
 	// service's configuration runs the module-default 90-day ceiling.

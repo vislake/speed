@@ -24,8 +24,7 @@ import { ConfirmDialog, CONFIRM_ARM_LOCKOUT_MS } from './ConfirmDialog.js'
 /**
  * A minimal stand-in for a host that reuses one mounted ConfirmDialog to
  * confirm a SEQUENCE of targets -- a batch-delete-next-item flow. Its
- * onConfirm handler (handleConfirmed) mirrors the audit finding's own
- * illustrative host code verbatim: it closes the current confirmation and
+ * onConfirm handler (handleConfirmed) closes the current confirmation and
  * opens the next one from inside the very onConfirm call that just fired,
  * all in one synchronous callback, so React 18's automatic batching folds
  * every state update here into a single commit. `open` (derived from
@@ -171,7 +170,7 @@ describe('ConfirmDialog', () => {
     // deliberate second click waits it out (in real time, inside act, so
     // the lockout's auto-clear lands in act), exactly as a user who read
     // the re-labelled button would. The window's own shape is pinned by
-    // the P1 regression tests below.
+    // the double-click regression tests below.
     await act(async () => {
       await new Promise((resolve) =>
         setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
@@ -361,7 +360,7 @@ describe('ConfirmDialog', () => {
     // Each deliberate confirm click below waits the double-click lockout
     // window its arming click entered out (in real time, inside act -- a
     // user who read the re-labelled button would take as long); the
-    // window's own shape is pinned by the P1 regression tests.
+    // window's own shape is pinned by the double-click regression tests.
     const waitOutLockout = () =>
       act(async () => {
         await new Promise((resolve) =>
@@ -379,7 +378,7 @@ describe('ConfirmDialog', () => {
     // Confirm item A: the SECOND click. Its onConfirm handler
     // (BatchDeleteHarness's handleConfirmed) synchronously swaps in item
     // B's confirmation, batched into the same commit as this click --
-    // the finding's own reproduction shape. Item B must render UNARMED.
+    // the reproduction shape this test pins. Item B must render UNARMED.
     await waitOutLockout()
     await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel }))
     expect(getByRole('button', { name: zhCN.confirmDialog.confirmLabel })).toBeInTheDocument()

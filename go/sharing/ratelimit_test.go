@@ -191,18 +191,20 @@ func TestService_AccessPublic_TokenBudgetExhaustedByWrongPasswords_AdmitsTheCorr
 	}
 }
 
-// TestService_AccessPublic_IPDimensionStillLimitsUnconditionally pins that
-// the per-IP dimension is untouched by the timing fix: its protected party
-// and its consumable party are the same caller (an address that exhausts its
-// own budget refuses only itself), so it may stay unconditional -- checked in
-// accessPublicPrelude before the token is even resolved, refusing an
-// over-budget address whatever it presents, a fully legitimate correct
-// attempt included. The IP budget is filled with attempts at unrecognized
-// tokens -- each answered cheaply by the token-index lookup with no argon2id
-// burn, which is exactly the scanning shape the dimension exists to cap --
-// and the attempt that pushes the address over its own limit is the correct
-// holder's: refused with ErrRateLimited on the IP dimension before the
-// password comparison is ever reached.
+// TestService_AccessPublic_IPDimensionStillLimitsUnconditionally pins
+// that the per-IP dimension stays unconditional -- in deliberate contrast
+// to the per-token wrong-guess budget's after-judgment consumption: its
+// protected party and its consumable party are the same caller (an
+// address that exhausts its own budget refuses only itself), so it may
+// stay unconditional -- checked in accessPublicPrelude before the token
+// is even resolved, refusing an over-budget address whatever it presents,
+// a fully legitimate correct attempt included. The IP budget is filled
+// with attempts at unrecognized tokens -- each answered cheaply by the
+// token-index lookup with no argon2id burn, which is exactly the scanning
+// shape the dimension exists to cap -- and the attempt that pushes the
+// address over its own limit is the correct holder's: refused with
+// ErrRateLimited on the IP dimension before the password comparison is
+// ever reached.
 func TestService_AccessPublic_IPDimensionStillLimitsUnconditionally(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	password := "s3cret"
@@ -238,9 +240,9 @@ func TestService_AccessPublic_IPDimensionStillLimitsUnconditionally(t *testing.T
 
 // TestService_AccessTokenWrongGuess_RateLimitedDecoration pins the
 // token-dimension check's own refusal shape against a scripted limiter,
-// mirroring the decoration tests checkAccessRateLimit's old combined shape
-// used to carry: an exhausted budget answers ErrRateLimited with the
-// dimension named "token" and the window's recovery time recorded.
+// the same decoration every other dimension check in this module applies:
+// an exhausted budget answers ErrRateLimited with the dimension named
+// "token" and the window's recovery time recorded.
 func TestService_AccessTokenWrongGuess_RateLimitedDecoration(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	svc.limiter = scriptedLimiter{allowed: false, resetAfter: 42 * time.Second}

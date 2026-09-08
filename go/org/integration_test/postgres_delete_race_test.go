@@ -20,14 +20,14 @@ import (
 
 // This file holds the deterministic PostgreSQL proofs behind
 // Repository.deleteSubtree's doc comment ("Why the id set is captured via
-// lockSubtree, not a plain Find", repository.go): an earlier version of that
-// method captured DeletedNodeIds -- the per-row id set published on
-// org.node.deleted, the set rbac's onNodeDeleted reaper reaps role bindings
-// by -- with one plain, unlocked "path LIKE prefix%" Find sitting between
-// nodeID's own lock and the cascade's mark-delete UPDATE. Under PostgreSQL's
-// READ COMMITTED isolation that two-statement gap is a real race against a
-// concurrent writer of an INTERIOR descendant (CreateChild/Move/Restore lock
-// only the row they act on, never nodeID), in both directions:
+// lockSubtree, not a plain Find", repository.go): a capture of
+// DeletedNodeIds -- the per-row id set published on org.node.deleted, the
+// set rbac's onNodeDeleted reaper reaps role bindings by -- taken with one
+// plain, unlocked "path LIKE prefix%" Find sitting between nodeID's own
+// lock and the cascade's mark-delete UPDATE would race, under PostgreSQL's
+// READ COMMITTED isolation, against a concurrent writer of an INTERIOR
+// descendant (CreateChild/Move/Restore lock only the row they act on,
+// never nodeID), in both directions:
 //
 //   - OVER-count: a Move that carries an interior descendant OUT of the
 //     subtree and commits inside the gap leaves the descendant's id captured
@@ -286,9 +286,9 @@ func assertCascadeDeleteConsistency(t *testing.T, db *gorm.DB, ctx context.Conte
 // Find had already captured D's id, but the UPDATE's EvalPlanQual re-check
 // skips D the moment its committed path no longer matches the prefix -- the
 // event over-counts, and only assertCascadeDeleteConsistency's
-// event-set-vs-reality comparison catches it. The fixed code re-scans after
-// D's lock is taken, sees D leave the subtree, and reports exactly the
-// rows it deletes.
+// event-set-vs-reality comparison catches it. The current code re-scans
+// after D's lock is taken, sees D leave the subtree, and reports exactly
+// the rows it deletes.
 func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	tree, _, events := wiredOrgTree(t, db)

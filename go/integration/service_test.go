@@ -480,8 +480,9 @@ func TestService_List_MultipleKeys_TenantIsolated(t *testing.T) {
 // failed (the bus is down). Service.Create must return the created key
 // ALONGSIDE the error -- key material is shown exactly once and never
 // reproduced, so returning nil would orphan a live, working key whose
-// credential nobody ever received. Before the fix Create returned
-// (nil, err) on this path and the raw key was lost forever.
+// credential nobody ever received. The test asserts the returned key is
+// genuinely live: a (nil, err) answer on this path loses the raw key
+// forever.
 func TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	svc.bus = errBus{}

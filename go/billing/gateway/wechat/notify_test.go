@@ -267,8 +267,8 @@ func TestGateway_VerifyWebhook_StaleTimestamp_Refused(t *testing.T) {
 }
 
 // TestGateway_VerifyWebhook_CurrentTimestamp_StillAccepted pins the other
-// side of the freshness bound: a genuinely fresh delivery keeps verifying
-// exactly as before, so the check cannot become overzealous.
+// side of the freshness bound: a genuinely fresh delivery keeps verifying,
+// so the check cannot become overzealous.
 func TestGateway_VerifyWebhook_CurrentTimestamp_StillAccepted(t *testing.T) {
 	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, platformPubPEM)

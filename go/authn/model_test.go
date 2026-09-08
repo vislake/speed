@@ -283,9 +283,9 @@ func TestExportRevokeReason_UnknownReasonsFoldNeverPassThrough(t *testing.T) {
 // projection-only property structurally at the vocabulary level:
 // revokeReasonExportSecurity must never equal a declared stored reason, or
 // a revocation could record the folded value in Session.RevokeReason and
-// destroy the forensic evidence the ruling's constraint three preserves
-// (replay_detected stays in the column; the write path references no reason
-// but the RevokeReason* constants).
+// destroy the forensic evidence the column exists to keep: the stored
+// vocabulary (replay_detected among them) must reach the column verbatim,
+// and the write path references no reason but the RevokeReason* constants.
 func TestExportRevokeReason_FoldValueIsNotPartOfTheStoredVocabulary(t *testing.T) {
 	t.Parallel()
 

@@ -1174,9 +1174,9 @@ func TestSSOService_SaveConfig_RefusesOverWidthConfigFields(t *testing.T) {
 }
 
 // TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths is the honest
-// acceptance boundary of finding (2): values exactly AT their columns'
-// widths (512-rune issuer, 255-rune client id, a 1024-rune domain list)
-// still save and read back end to end.
+// acceptance boundary of the width refusals above: values exactly AT their
+// columns' widths (512-rune issuer, 255-rune client id, a 1024-rune domain
+// list) still save and read back end to end.
 func TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths(t *testing.T) {
 	t.Parallel()
 
@@ -1207,11 +1207,11 @@ func TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths(t *testing.T) {
 
 // TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure is the
 // consumer-shaped proof that AuditActionSSOConfigure is genuinely emitted:
-// SaveConfig has no in-repo callers, so this test is its first real one,
-// driving the write through the same construction a host uses -- a Module
-// registered on a real pkgcore.Registry, exactly module.go's Register runs
-// in production -- and asserting the rows land on the shared bus under the
-// declared action.
+// SaveConfig has no in-repo caller beyond this test, so the emission would
+// otherwise go unproven. The write is driven through the same construction
+// a host uses -- a Module registered on a real pkgcore.Registry, exactly
+// module.go's Register runs in production -- and the rows land on the
+// shared bus under the declared action.
 //
 // The operator's identity travels the way every audit carrier in this
 // module travels: a pkgcore.Actor (and pkgcore.OnBehalfOf, when an
@@ -1372,12 +1372,13 @@ func TestSSOConfigRepository_RefusesOverWidthConfigRows(t *testing.T) {
 	assertErrorCode(t, repo.Create(ctx, over), ssoIssuerTooLongCode)
 }
 
-// TestSSOService_AuthorizeURL_RefusesAnOverLongTenantID is finding (1)'s
-// entry-time regression: a configuration row for the over-long tenant can
-// exist (it was written before the SaveConfig gate, or straight through the
-// repository), so the entry path refuses the tenant itself before any state
-// is issued -- a state issued for such a tenant would only lead the member
-// to a callback whose identity write cannot succeed on PostgreSQL.
+// TestSSOService_AuthorizeURL_RefusesAnOverLongTenantID pins the
+// entry-time boundary of the over-long-tenant refusals: a configuration
+// row for the over-long tenant can still exist -- the repository's write
+// surface does not refuse it, only SaveConfig's does -- so the entry path
+// refuses the tenant itself before any state is issued. A state issued
+// for such a tenant would only lead the member to a callback whose
+// identity write cannot succeed on PostgreSQL.
 func TestSSOService_AuthorizeURL_RefusesAnOverLongTenantID(t *testing.T) {
 	t.Parallel()
 
@@ -1390,11 +1391,11 @@ func TestSSOService_AuthorizeURL_RefusesAnOverLongTenantID(t *testing.T) {
 	assertErrorCode(t, err, ssoTenantIDTooLongCode)
 }
 
-// TestSSOService_Callback_RefusesAnOverLongTenantID is finding (1)'s
-// last-line regression on the callback path: an over-long tenant id is
-// refused with the named error before anything else, so a flow begun before
-// the gates existed answers the same refusal instead of a raw 22001 from
-// the identity write it would otherwise reach.
+// TestSSOService_Callback_RefusesAnOverLongTenantID pins the same boundary
+// at the callback path: an over-long tenant id is refused with the named
+// error before anything else, so a flow that reached the callback under a
+// configuration the entry gate would have refused answers the same named
+// refusal instead of a raw 22001 from the identity write.
 func TestSSOService_Callback_RefusesAnOverLongTenantID(t *testing.T) {
 	t.Parallel()
 
@@ -1405,11 +1406,12 @@ func TestSSOService_Callback_RefusesAnOverLongTenantID(t *testing.T) {
 	assertErrorCode(t, err, ssoTenantIDTooLongCode)
 }
 
-// TestSSOService_ServesTheLongestRepresentableTenantID is finding (1)'s
-// honest acceptance boundary, end to end: a tenant id of exactly 59 runes --
-// whose "oidc:<tenant>" provider name is exactly 64 runes, the width of
-// user_identities.provider -- completes the full enterprise sign-in round
-// trip, resolving to an identity stored under SSOChannelName(boundaryTenant).
+// TestSSOService_ServesTheLongestRepresentableTenantID is the honest
+// acceptance boundary of the same refusals, end to end: a tenant id of
+// exactly 59 runes -- whose "oidc:<tenant>" provider name is exactly 64
+// runes, the width of user_identities.provider -- completes the full
+// enterprise sign-in round trip, resolving to an identity stored under
+// SSOChannelName(boundaryTenant).
 func TestSSOService_ServesTheLongestRepresentableTenantID(t *testing.T) {
 	t.Parallel()
 

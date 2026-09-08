@@ -125,15 +125,14 @@ describe('DataTable', () => {
 
   it('wraps the table in a horizontally scrollable container regardless of column count or width', () => {
     // Renders deliberately wider than any reasonable host container
-    // (12 columns at 300px each = 3600px) to exercise the contract this
-    // round makes explicit in the component's own doc comment: more or
-    // wider columns than the host's container scroll inside the
-    // TableContainer wrapper rather than overflowing the page. jsdom
-    // does no real layout, so this cannot prove a scrollbar renders at
-    // any actual width -- it proves the wrapper MUI gives `overflow-x:
-    // auto` by default is genuinely present, so a future refactor that
-    // drops `TableContainer` (the thing that gives this for free today)
-    // would fail this test instead of silently regressing.
+    // (12 columns at 300px each = 3600px) to exercise the contract the
+    // component's own doc comment states: more or wider columns than the
+    // host's container scroll inside the TableContainer wrapper rather
+    // than overflowing the page. jsdom does no real layout, so this
+    // cannot prove a scrollbar renders at any actual width -- it proves
+    // the wrapper MUI gives `overflow-x: auto` by default is genuinely
+    // present, so dropping `TableContainer` (the thing that gives this
+    // for free) would fail this test instead of silently regressing.
     const manyWideColumns: DataTableColumn<Member>[] = Array.from(
       { length: 12 },
       (_, index) => ({

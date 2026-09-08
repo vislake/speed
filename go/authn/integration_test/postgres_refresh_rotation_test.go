@@ -17,9 +17,8 @@ import (
 // concurrentRefreshers is how many goroutines race to consume the SAME
 // refresh token at once. More than two is deliberate: two racing
 // goroutines can pass under SQLite's coarse table-level locking by sheer
-// luck even when the underlying compare-and-swap is broken, which is
-// exactly the false confidence the frozen round plan's §1.9 calls out; a
-// double-digit fan-out against a real PostgreSQL connection pool is what
+// luck even when the underlying compare-and-swap is broken; a double-digit
+// fan-out against a real PostgreSQL connection pool is what
 // actually exercises the row-level CAS RefreshTokenRepository.Consume
 // relies on (repository.go's own doc comment on why CAS, not
 // SELECT ... FOR UPDATE, is this codebase's answer to the lack of a common

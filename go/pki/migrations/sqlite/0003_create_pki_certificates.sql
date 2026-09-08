@@ -34,5 +34,5 @@ CREATE INDEX idx_pki_certificates_tenant_authority ON pki_certificates (tenant_i
 CREATE INDEX idx_pki_certificates_tenant_purpose ON pki_certificates (tenant_id, purpose);
 CREATE INDEX idx_pki_certificates_tenant_serial ON pki_certificates (tenant_id, serial);
 
--- The expiry-scan index round 2/3's jobs-driven scan will read.
+-- The expiry-scan index: the periodic scan job reads not_after.
 CREATE INDEX idx_pki_certificates_tenant_not_after ON pki_certificates (tenant_id, not_after);

@@ -716,9 +716,9 @@ func TestService_Watch_RecoversPanickingCallbackAndLogsIt(t *testing.T) {
 	// callback's position in registration order and the panic value -- on
 	// the publishing Set's own context logger, so tenant and trace
 	// correlation survive -- while the watchers registered after it still
-	// receive the value. Before the fix, fire recovered the panic into the
-	// blank identifier: a buggy host callback disappeared on every change
-	// with zero diagnostics while the claim in cache.go promised the same
+	// receive the value. A fire that recovered the panic into the blank
+	// identifier would make a buggy host callback disappear on every change
+	// with zero diagnostics, contradicting cache.go's claim of the same
 	// logged robustness the in-memory bus gives its subscribers.
 	svc := attachDefaultServiceForTest(t)
 	logs := &capturedLogs{}
@@ -1017,8 +1017,8 @@ func TestService_PublicSnapshot_SkipsAnItemWhoseStoredRowDoesNotDecode(t *testin
 	// naming it -- while a caller that must see the corruption reads the
 	// item through Get, which still reports it. The row cannot be written
 	// through Set (validation refuses a value that does not canonicalize),
-	// so it is planted directly in the table, the way a buggy or older
-	// writer would have left it.
+	// so it is planted directly in the table, the way a writer that
+	// bypassed Set would have left it.
 	items := []pkgcore.ConfigItem{
 		{Key: "brand.site_name", Type: "string", Default: "Smile Studio", Public: true, Description: "The tenant's display name", Group: "brand"},
 		{Key: "billing.retry_limit", Type: "int", Default: int(3), Public: true, Description: "How many payment retries an invoice gets", Group: "billing"},
@@ -1336,9 +1336,9 @@ func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.
 // relies on Close's return meaning the background goroutine is gone before
 // it tears down whatever that goroutine reads from.
 //
-// The fixed Close leaves pollDone in place as the terminal signal every
-// caller waits on; only pollStop is closed and cleared, by whichever caller
-// finds it non-nil. This test pins the per-caller guarantee: each Close
+// Close leaves pollDone in place as the terminal signal every caller
+// waits on; only pollStop is closed and cleared, by whichever caller finds
+// it non-nil. This test pins the per-caller guarantee: each Close
 // result, as it arrives, must find the poller's done channel already
 // closed. The choreography makes a second Close provably race a still-alive
 // poller, the only situation the lost guarantee could surface in: the
@@ -1346,17 +1346,16 @@ func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.
 // hook, holding pollMu), both Close calls queue behind it, and the release
 // is timed so the poller -- which owns the CPU the instant the parked
 // Refresh returns, before either queued Close can be scheduled -- selects
-// the provably pending second tick and re-enters another Refresh. On the
-// unfixed code the second Close then returns while the poller is still
-// queued inside that Refresh; on the fixed code it waits on pollDone like
-// the first caller, and only the poller's own exit releases both. The one
+// the provably pending second tick and re-enters another Refresh. A second
+// Close returning while the poller is still queued inside that Refresh
+// would be the lost guarantee; instead it waits on pollDone like the
+// first caller, and only the poller's own exit releases both. The one
 // piece this cannot pin down is the rare case where the first Close is
 // scheduled before the poller's post-release select and the poller's select
 // then picks the closed stop over the pending tick -- an unforceable coin
 // flip by language design -- so the scenario is repeated enough times that
-// never once landing the failing half against the unfixed code is
-// vanishingly unlikely, while the fixed code passes every iteration
-// deterministically.
+// never once landing in the failing half is vanishingly unlikely, while
+// the current code passes every iteration deterministically.
 func TestService_Close_EveryConcurrentCallerWaitsForThePollerExit(t *testing.T) {
 	const iterations = 25
 	for i := 0; i < iterations; i++ {
@@ -1400,8 +1399,9 @@ func TestService_Close_EveryConcurrentCallerWaitsForThePollerExit(t *testing.T) 
 		close(proceedRefresh)
 
 		// Every Close result, as it arrives, must find the poller already
-		// exited. The unfixed code's second caller returns here while the
-		// poller is still queued inside the Refresh it re-entered above.
+		// exited -- a second caller returning while the poller is still
+		// queued inside the Refresh it re-entered above would be the lost
+		// guarantee.
 		for received := 0; received < 2; received++ {
 			select {
 			case err := <-closeResults:
@@ -1494,10 +1494,10 @@ func TestService_RemoteDelivery_InvalidatesFromTheWireMap(t *testing.T) {
 	// Regression test for the cross-replica delivery path: pkgcore's
 	// distributed bus reconstructs a remote event's payload as the JSON
 	// decoded map (encoding/json into interface{}), never as the concrete
-	// ItemChangedEvent. The subscriber must read that shape -- before the
-	// fix it dropped it, and a replica with a warm cache would serve the
+	// ItemChangedEvent. The subscriber must read that shape -- a subscriber
+	// that dropped it would leave a replica with a warm cache serving the
 	// stale value until the anti-loss poller happened to sweep it, making
-	// the event path dead in the very deployment mode it was designed for.
+	// the event path dead in the very deployment mode it exists for.
 	svc := attachDefaultServiceForTest(t)
 	if err := svc.Set(tenantA(), ScopeTenant, "brand.site_name", Value{Data: "Studio A"}, "alice"); err != nil {
 		t.Fatalf("Set: %v", err)

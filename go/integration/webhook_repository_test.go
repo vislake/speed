@@ -208,17 +208,16 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 // guard is weakened (the deleted_at IS NULL condition removed) or the
 // write is widened back to whole-row scope.
 //
-// One honesty note on what this replay no longer mirrors:
-// RestoreWebhookSubscription's restore now lands through the single
-// restorePaused write, whose WHERE requires deleted_at IS NOT NULL
-// instead -- so a
+// One honesty note on what this replay covers and does not:
+// RestoreWebhookSubscription's restore lands through the single
+// restorePaused write, whose WHERE requires deleted_at IS NOT NULL -- so a
 // delete landing before that write makes it match nothing in the first
 // place, and no read-then-flip window exists inside the restore at all
 // (see restorePaused's own doc comment in webhook_repository.go, and
 // webhook_service_test.go's
 // TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPause).
-// The guarded-flip property below remains load-bearing for the UPDATE
-// path's own identical race, which is why this replay stays.
+// The guarded-flip property below is load-bearing for the UPDATE path's
+// own identical race, which is why this replay exists.
 func TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLandedAfterTheRestoreRead(t *testing.T) {
 	db := newWebhookTestDB(t)
 	repo := NewWebhookSubscriptionRepository(db)

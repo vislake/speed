@@ -775,7 +775,7 @@ func TestSendRecordRepository_SaveGuarded_PreservesCreatedAt(t *testing.T) {
 // an unbounded read the caller never asked for -- and a negative Offset is
 // meaningless, so both are refused with the filter's coded error before any
 // query runs, never silently served as an unlimited dump or a nonsense
-// page. A valid page still answers exactly as before.
+// page. A valid page is served unchanged.
 func TestSendRecordRepository_ListByFilter_ValidatesLimitAndOffset(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)

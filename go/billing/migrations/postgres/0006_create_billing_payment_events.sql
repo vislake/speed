@@ -25,7 +25,7 @@
 -- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
 -- schema on that dialect. No PostgreSQL-only feature is used (no
 -- gen_random_uuid(), no native array, no JSONB operator filtering, no
--- NOW()), per the backend coding standard's database rule.
+-- NOW()).
 CREATE TABLE billing_payment_events (
     id                  VARCHAR(36)  NOT NULL,
     tenant_id           VARCHAR(64)  NOT NULL,

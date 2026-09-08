@@ -47,9 +47,7 @@ func seedNode(t *testing.T, repo *Repository, ctx context.Context, node OrgNode)
 // The fixture seeds each tenant ONE root row (the first record requested for
 // that tenant) and every further record beneath it: uq_org_nodes_single_root
 // (migrations/0007_single_root.sql) admits exactly one root row per tenant,
-// and the suite's records must be rows the schema admits -- the old
-// all-roots shape stopped being one the day the single-root invariant
-// became database-arbitrated.
+// and the suite's records are always shapes the schema admits.
 func TestRepository_AssertIsolated(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
 

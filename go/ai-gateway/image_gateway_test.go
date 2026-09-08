@@ -728,7 +728,7 @@ func TestImageGenerateHandler_HandleCalledAgainAfterSuccess_SkipsVendorAndUsage(
 }
 
 // TestImageUsageIdempotencyKey_StablePerJobAndFeature is the direct,
-// job-machinery-free proof of the key-derivation change: the same job id
+// job-machinery-free proof of the key-derivation contract: the same job id
 // and feature always converge on the same key (the property a
 // UsageRecorder-side dedup needs), while either input changing changes the
 // key.

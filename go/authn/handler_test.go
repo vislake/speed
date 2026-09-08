@@ -1527,7 +1527,7 @@ func TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip(t *testing.T) {
 	}
 
 	// A bare, un-stepped-up session (the shape a stolen access token has)
-	// must be refused: this is the gap that let a stolen bare token
+	// must be refused: without the step-up gate, a stolen bare token could
 	// silently regenerate recovery codes for an already-active factor with
 	// no re-proof at all.
 	regenNoStepUp := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/recovery-codes/regenerate", nil, principal)
@@ -1559,9 +1559,9 @@ func TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip(t *testing.T) {
 // TestHandler_EnrollTOTP_ReplacingActiveFactor_RequiresStepUp proves the
 // enroll endpoint itself refuses to replace an already-ACTIVE TOTP factor
 // for a bare, un-stepped-up principal -- the shape a stolen access token
-// has. Before the fix, a bare token could call this endpoint to delete the
-// victim's active factor and enroll an attacker-known secret in its place
-// with no re-proof at all.
+// has. Without the step-up gate, a bare token could delete the victim's
+// active factor and enroll an attacker-known secret in its place with no
+// re-proof at all.
 func TestHandler_EnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 	t.Parallel()
 	h, f := newTestHandler(t)
@@ -1806,7 +1806,7 @@ func TestHandler_ListSessions_ExposesSessionExpiry(t *testing.T) {
 }
 
 // TestHandler_ListSessions_TieredRevokeReasonExport is the wire-level proof
-// of the tiered export ruling on revoke reasons. Three sessions of one
+// of the tiered revoke-reason export contract. Three sessions of one
 // account end by the three routes a revoked row can take: one is killed by
 // a GENUINE replay (the refresh token is consumed by a normal refresh, then
 // the consumed token is presented again -- the detection path, not a direct
@@ -1818,10 +1818,10 @@ func TestHandler_ListSessions_ExposesSessionExpiry(t *testing.T) {
 // generic value ("security_revoked"), so the response bytes cannot even
 // contain "replay_detected"; and the active session carries no
 // revoke_reason at all. The same test re-proves the storage half of the
-// ruling (constraint three): the session rows themselves -- the in-process
-// read of the same data -- keep the real reasons verbatim, replay_detected
-// included, because the fold is an API-projection-only change and the
-// column remains the forensics record.
+// contract: the session rows themselves -- the in-process read of the same
+// data -- keep the real reasons verbatim, replay_detected included,
+// because the fold is an API-projection-only change and the column remains
+// the forensics record.
 func TestHandler_ListSessions_TieredRevokeReasonExport(t *testing.T) {
 	t.Parallel()
 	h, f := newTestHandler(t)

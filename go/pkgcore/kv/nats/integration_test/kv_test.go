@@ -552,17 +552,17 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	})
 }
 
-// TestKVStore_NewKVStore_RefusesAdoptedMemoryStorageBucket is the regression
-// for the first half of the adopt-anything hazard NewKVStore's probe used to
-// carry: an existing bucket was adopted with no check at all, so a bucket an
-// operator provisioned on memory storage -- which loses every key it holds
-// the moment the NATS server itself restarts -- was silently adopted while
-// this package's registration went on declaring pkgcore.SurvivesRestart, and
-// the distributed-mode bootstrap capability check against that declaration
-// passed on a claim the adopted bucket already contradicted (the check
-// exists to fail startup, naming the seam, when a composition cannot run in
-// the declared mode; adoption bypassed it entirely). Adoption must instead
-// refuse a bucket whose configuration cannot satisfy what this
+// TestKVStore_NewKVStore_RefusesAdoptedMemoryStorageBucket pins the first
+// half of the adopt-anything refusal: NewKVStore's probe must not adopt an
+// existing bucket unchecked -- a bucket an operator provisioned on memory
+// storage (which loses every key it holds the moment the NATS server itself
+// restarts) would be silently adopted while this package's registration
+// goes on declaring pkgcore.SurvivesRestart, and the distributed-mode
+// bootstrap capability check against that declaration would pass on a claim
+// the adopted bucket already contradicts (the check exists to fail startup,
+// naming the seam, when a composition cannot run in the declared mode;
+// adoption would bypass it entirely). Adoption must instead refuse a bucket
+// whose configuration cannot satisfy what this
 // implementation declares: NewKVStore must fail with the named
 // kvnats.ErrUnadoptableBucket rather than hand back a store whose
 // persistence the operator never provisioned for, and the refusal must

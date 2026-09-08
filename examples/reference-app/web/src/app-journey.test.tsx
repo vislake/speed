@@ -165,7 +165,8 @@ describe('the app journey', () => {
   // passed as a plain-number third argument to `describe` itself --
   // the supported form of vitest's `SuiteOptions.timeout` (the same
   // shorthand `it('name', fn, 30_000)` uses per test; the
-  // object-options form as a third argument was removed in Vitest 4) --
+  // object-options third-argument form is not part of the pinned
+  // Vitest's describe signature) --
   // read while the suite is being built, before any test body or hook
   // runs, and applied to every test collected under it. 30s leaves the
   // owner-day journey generous headroom; a test that ever comes close

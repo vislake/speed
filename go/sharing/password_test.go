@@ -95,7 +95,8 @@ func phcForTest(password string, memory uint32, iterations uint32, parallel uint
 // A stored hash written under different cost parameters (m=4096,t=1,p=1
 // here, far below the package's m=19456,t=2 floor) verified under the
 // package constants would recompute a different digest and report "wrong
-// password" for the correct one -- failing before the fix, passing after.
+// password" for the correct one -- the regression this test refuses:
+// verification must follow the stored parameters.
 func TestVerifySharePassword_VerifiesUnderStoredCostParams(t *testing.T) {
 	const password = "same password, other cost parameters"
 	phc := phcForTest(password, 4096, 1, 1, "m=4096,t=1,p=1")
@@ -250,12 +251,13 @@ func TestVerifySharePassword_RefusesUnreadableVersion(t *testing.T) {
 // TestService_Access_PasswordHashWrittenUnderOtherParams_StillVerifies is
 // the service-level proof of the same contract: a share whose stored
 // PasswordHash was produced under cost parameters different from this
-// package's own writer constants (here m=4096,t=1,p=1 -- a future cost
-// bump's shape) still grants its access with the correct password, because
-// Service.Access verifies through verifySharePassword's
-// stored-parameters re-derivation. Before the fix the reader recomputed
-// the digest under the package constants, so the correct password was
-// answered as wrong and the access denied.
+// package's own writer constants (here m=4096,t=1,p=1 -- the shape a
+// higher-cost writer leaves behind) still grants its access with the
+// correct password, because Service.Access verifies through
+// verifySharePassword's stored-parameters re-derivation. A reader that
+// recomputed the digest under the package constants would answer the
+// correct password as wrong and deny the access -- the regression this
+// test refuses.
 func TestService_Access_PasswordHashWrittenUnderOtherParams_StillVerifies(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	password := "stored under other cost params"

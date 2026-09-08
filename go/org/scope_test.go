@@ -12,9 +12,9 @@ import (
 // This is the executable form of the claim scope.go makes in prose: a
 // consumer -- rbac above all -- declares this exact method set in its own
 // package and accepts org's implementation structurally, so neither module
-// imports the other. If a future change gave any method an org-owned type in
-// its signature, rbac could no longer restate it, and this declaration would
-// stop compiling here rather than in somebody else's repository.
+// imports the other. If a change gave any method an org-owned type in its
+// signature, the local declaration could not restate it and would stop
+// compiling here rather than in somebody else's repository.
 type rbacShapedScope interface {
 	Path(ctx context.Context, nodeID string) (string, error)
 	DescendantIDs(ctx context.Context, nodeID string) ([]string, error)

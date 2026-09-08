@@ -897,8 +897,8 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 // TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError is the
-// cross-module shape of the same bug: two modules each claiming one flag key
-// used to bootstrap successfully with two contradictory defaults.
+// cross-module shape of the same refusal: two modules each claiming one
+// flag key with contradictory defaults must fail Bootstrap.
 func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) {
 	billing := regTestModule{
 		name: "billing",
@@ -1023,9 +1023,10 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 }
 
 // TestRegistry_EventBus_FollowsTheEventsRegistrar pins the invariant that a
-// substituted Events registrar takes the bus with it. When the bus was stored
-// separately, replacing Events left EventBus() pointing at the old bus, so
-// publishers and subscribers ended up on different buses with no error.
+// substituted Events registrar takes the bus with it: EventBus() must return
+// the substituted registrar's bus, never a separately stored construction
+// bus that replacing Events would leave behind -- publishers and
+// subscribers would end up on different buses with no error.
 func TestRegistry_EventBus_FollowsTheEventsRegistrar(t *testing.T) {
 	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 
@@ -1698,15 +1699,13 @@ func TestKernel_DeploymentMode_ReportsTheConfiguredDeploymentMode(t *testing.T) 
 }
 
 // TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck pins
-// the fail-fast rule from docs/internal/03-deployment-modes.md: the built-in
-// "eventbus.memory" implementation is single-process, so a distributed-mode
-// kernel that resolves to it (the PresetStandalone default, since nothing was
-// injected and no wider Preset was chosen) must refuse to assemble instead of
-// handing every module a bus its replicas cannot share. This is the
-// capability-validation replacement for the old
-// TestBootstrap_DistributedModeWithoutEventBus_FailsFast, which asserted the
-// same fail-fast property against the mode-keyed ErrMissingDistributedEventBus
-// this retrofit removed.
+// the deployment-mode capability rule: the built-in "eventbus.memory"
+// implementation is single-process, so a distributed-mode kernel that
+// resolves to it (the PresetStandalone default, since nothing was injected
+// and no wider Preset was chosen) must refuse to assemble instead of
+// handing every module a bus its replicas cannot share. Bootstrap answers
+// ErrCapabilityUnsatisfied, naming the seam, implementation, missing
+// capability and mode.
 func TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
@@ -1735,9 +1734,7 @@ func TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck(t *tes
 // instead of handing every module a store its replicas cannot share. The bus
 // and mailer are injected and declared MultiReplicaSafe here so their checks
 // inside Bootstrap, which run first, pass and the failure actually exercises
-// the KVStore check instead of masking it. This replaces the old
-// TestBootstrap_DistributedModeWithoutKVStore_FailsFast, which asserted the
-// same property against ErrMissingDistributedKVStore.
+// the KVStore check instead of masking it.
 func TestBootstrap_DistributedModeWithMemoryKVStore_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
@@ -1904,9 +1901,9 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 	}
 }
 
-// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam pins the startup banner
-// of docs/internal/03-deployment-modes.md's constraint 5 to the standalone
-// preset's actual shape: a resolved seam whose implementation keeps state
+// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam pins the startup
+// banner's standalone-preset shape: a resolved seam whose implementation
+// keeps state
 // without declaring SurvivesRestart warns once, naming the seam, while a
 // Stateless implementation is skipped -- mailer.console hands each message
 // to its writer and keeps nothing, so a restart drops nothing it holds and a
@@ -1934,8 +1931,8 @@ func (m *accumulatingMailer) Send(ctx context.Context, mail Mail) error {
 }
 
 // TestBootstrap_StatelessSeamSkipsWarning_StatefulBitlessSeamWarns pins the
-// Stateless/SurvivesRestart warning distinction at the Bootstrap layer, on
-// the seam the Stateless bit was added for: a boot whose mailer seam
+// Stateless/SurvivesRestart warning distinction at the Bootstrap layer for
+// the mailer seam: a boot whose mailer seam
 // resolves to a Stateless implementation must print no restart warning for
 // it, while a boot whose mailer seam resolves to an implementation that
 // holds state without declaring SurvivesRestart must print one, naming the
@@ -2012,8 +2009,8 @@ func TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam(t *testing.T) {
 // WithMailer(NewSMTPMailer(...)) start up printing its verification codes
 // to stdout and reporting success. The line is fact, not judgement, so it
 // has no such hole: a boot with no WithMailer logs mailer=mailer.console
-// (the fail-before shape: nothing was logged about the mailer seam's
-// resolution), and a boot whose mailer seam is wired logs mailer=<injected>
+// (the unwired shape: the line still names the console default the seam
+// resolved to), and a boot whose mailer seam is wired logs mailer=<injected>
 // instead -- the discriminator between "chose the console" and "forgot the
 // wiring".
 //
@@ -2135,9 +2132,7 @@ func TestSeamOptions_PanicOnNilValue(t *testing.T) {
 // a mailer whose output nobody reads. Bus and KVStore are injected and
 // declared MultiReplicaSafe here so their checks inside Bootstrap, which run
 // first, pass and the failure actually exercises the Mailer check instead of
-// masking it. This replaces the old
-// TestBootstrap_DistributedModeWithoutMailer_FailsFast, which asserted the
-// same property against ErrMissingDistributedMailer.
+// masking it.
 func TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
@@ -2163,15 +2158,13 @@ func TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck(t *test
 
 // TestBootstrap_DistributedModeWithLocalObjectStore_FailsCapabilityCheck
 // mirrors TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck
-// and its older counterparts for the object-store seam: the built-in
+// and its seam-wise counterparts for the object-store seam: the built-in
 // "objectstore.local" implementation is a directory on one host's disk, so a
 // distributed-mode kernel that resolves to it must refuse to assemble instead
 // of handing every module a store whose objects its replicas can never see.
 // Bus, KVStore and Mailer are injected and declared MultiReplicaSafe here so
 // their checks inside Bootstrap, which run first, pass and the failure
-// actually exercises the ObjectStore check instead of masking it. This
-// replaces the old TestBootstrap_DistributedModeWithoutObjectStore_FailsFast,
-// which asserted the same property against ErrMissingDistributedObjectStore.
+// actually exercises the ObjectStore check instead of masking it.
 func TestBootstrap_DistributedModeWithLocalObjectStore_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
@@ -2492,18 +2485,18 @@ func TestBootstrap_EmptyLocaleFilesYieldEmptyCatalog_HandBuiltRegistryStaysNil(t
 }
 
 // TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes pins
-// the pkgcore half of the compliance error-text finding: RetentionParticipant
-// is the seam a host's own participants register against (reg.Retention.Add
+// the compliance error-text contract on RetentionParticipant's doc comment:
+// the seam is how a host's own participants register against (reg.Retention.Add
 // is how a consumer project contributes a participant), so its doc comment
 // is the one place a participant author learns where the error their
 // Sweep/Erase/Export callback returns actually goes. It must state that
 // the compliance layer records the text only in its in-process results and
 // structured logs, and classifies it -- never records it verbatim -- in
 // the audit record and (on the export path) the delivered export
-// manifest. The unfixed godoc said nothing about the returned err, so a
-// participant author could not know their error text would be serialized
-// into the export deliverable and the permanent audit table; every
-// assertion below fails against that godoc.
+// manifest. A doc comment that said nothing about the returned err would
+// leave a participant author unable to know their error text gets
+// serialized into the export deliverable and the permanent audit table --
+// the gap every assertion below guards.
 func TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "registry.go", nil, parser.ParseComments)

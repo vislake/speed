@@ -27,10 +27,10 @@ import (
 // produce. The constant is the only hand-written copy of the name left in
 // host-facing org code.
 //
-// A regression on the old teaching string cannot fail these tests (they
-// never knew it); the tests fail when EmailIndexColumn itself drifts from
-// the model's gorm tag or from the migrated column -- the drift that would
-// otherwise re-create the dormant wrong-column indexer.
+// These tests fail when EmailIndexColumn itself drifts from the model's
+// gorm tag or from the migrated column -- the drift that would otherwise
+// re-create the dormant wrong-column indexer; a wrong literal a host
+// duplicated on its own would not trip them.
 func TestEmailIndexColumn_MatchesModelGormTag(t *testing.T) {
 	if got := modelColumnName(t, Invitation{}, "EmailIndex"); got != EmailIndexColumn {
 		t.Fatalf("Invitation.EmailIndex gorm `column:` tag = %q, want EmailIndexColumn (%q): a host indexer built over the constant would blind-index the wrong column", got, EmailIndexColumn)

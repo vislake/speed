@@ -1,12 +1,11 @@
 -- in_app_messages is one tenant's in-app notification inbox: one row per
 -- message delivered to one recipient (go/notification/model.go).
 --
--- Data domain: TENANT data (docs/internal/04-data-and-tenancy.md
--- classifies it as isolated by tenant_id and makes
--- tenancytest.AssertIsolated mandatory for it). The isolation plugin of
--- dbkit.Open scopes every read and write to the tenant in the context,
--- and this table's own composite index starts with tenant_id like every
--- tenant-owned index in this codebase.
+-- Data domain: TENANT data -- the isolation plugin of dbkit.Open scopes
+-- every read and write to the tenant in the context, the table's
+-- repository must pass tenancytest.AssertIsolated, and the table's own
+-- composite index starts with tenant_id like every tenant-owned index in
+-- this codebase.
 --
 -- recipient_user_id references authn's users.id WITHOUT a foreign key,
 -- exactly like org's memberships.user_id: users is identity data and one
@@ -15,9 +14,8 @@
 -- isolated by tenant_id alone, which is correct for an inbox: a person
 -- who belongs to several tenants has one inbox in each, and the tenant
 -- scoping keeps tenant A's messages invisible to tenant B. Cross-module
--- foreign keys are forbidden (docs/internal/04, rule 4) because they
--- make independently released migrations and cascading deletes
--- unmanageable.
+-- foreign keys are forbidden: they make independently released
+-- migrations and cascading deletes unmanageable.
 --
 -- The column is named "group" after the inbox grouping it serves, even
 -- though GROUP is a reserved word on PostgreSQL: it is quoted in the DDL
@@ -42,7 +40,7 @@
 -- error the subscriber re-reads as "already delivered". It is globally
 -- unique, not per tenant, because the derivation (shipped with the
 -- producer of a later block) folds the tenant in: a key can then never
--- collide across tenants, and a future derivation bug that forgets the
+-- collide across tenants, and a derivation bug that forgets the
 -- tenant fails loudly with a false duplicate instead of silently
 -- deduplicating two tenants' messages. Rows without a key are never
 -- deduplicated: dedupe_key is nullable, and NULLs are distinct under a

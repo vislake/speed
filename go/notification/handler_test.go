@@ -238,8 +238,8 @@ func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int
 // "address" or "address_index" key at any depth -- the PII guarantee the
 // contact surface makes (the spec serves id, channel, status and
 // timestamps only; toContactResponse strips the rest). The structural
-// check walks the raw tree so a future spec field that reintroduces an
-// address key fails here by construction, whatever shape it takes.
+// check walks the raw tree so a spec field that reintroduces an address
+// key fails here by construction, whatever shape it takes.
 func assertNoAddressLeak(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	var root interface{}
@@ -1552,9 +1552,8 @@ var (
 // that does not ALSO directly implement Flush, exactly the shape every
 // request reaching this handler through this app's real composed HTTP
 // chain has, since go/observability's Middleware wraps every response
-// writer in its own statusRecorder, which exposes Flush only via Unwrap
-// (the wrapper shape the reference app's distributed-mode suite first
-// drove through this route). This test reproduces the same wrapper shape
+// writer in its own statusRecorder, which exposes Flush only via Unwrap.
+// This test reproduces the same wrapper shape
 // without needing the whole app: the stream must still open (a 200 status
 // and at least one flush) despite the response writer never satisfying
 // http.Flusher directly.

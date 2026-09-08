@@ -35,11 +35,10 @@ func (exampleUserResolver) Resolve(_ context.Context, userID string) (notificati
 	}
 }
 
-// ExampleInboxMessage walks a delivery into one tenant's in-app inbox the
-// way the module's future consumers will: open and migrate the database,
-// create a message under the recipient's tenant, read it back, mark it
-// read, and watch the same id read as not-found from a tenant that does not
-// own it.
+// ExampleInboxMessage walks a delivery into one tenant's in-app inbox end
+// to end: open and migrate the database, create a message under the
+// recipient's tenant, read it back, mark it read, and watch the same id
+// read as not-found from a tenant that does not own it.
 //
 // The example needs no testcontainers: dbkit.Open over an in-memory SQLite
 // database is the standalone deployment mode's ordinary shape, and the

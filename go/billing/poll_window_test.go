@@ -13,25 +13,22 @@ import (
 )
 
 // This file pins the window semantics of the poll idempotency key
-// (pollIdempotencyKey): enqueues inside one poll window collapse
-// into one job (the concurrency protection the key exists for,
-// preserved), enqueues in a later window become new jobs and the poll
-// runs again (periodicity -- the property the pre-window key destroyed,
-// since jobs' dedup is permanent on StandaloneQueue and a tenant-only key
-// gave each tenant exactly one poll task per database file), and a poll
-// job that dead-letters poisons only its own window, never its tenant's
-// later windows. All three run against a REAL jobs.StandaloneQueue over a
-// real SQLite database -- the dedupe behaviour under test lives in jobs'
-// partial unique index and row semantics, which a fake queue cannot
-// exercise. Tests (b) and (c) fail on the pre-window key (tenant only):
-// the later enqueue resolves the first job's id and no second poll ever
-// runs.
+// (pollIdempotencyKey): enqueues inside one poll window collapse into one
+// job (the concurrency protection the key exists for, preserved),
+// enqueues in a later window become new jobs and the poll runs again
+// (periodicity -- jobs' dedup is permanent on StandaloneQueue, so a
+// tenant-only key would give each tenant exactly one poll task per
+// database file and a stuck payment would never be polled once its
+// one-ever poll had run), and a poll job that dead-letters poisons only
+// its own window, never its tenant's later windows. All three run against
+// a REAL jobs.StandaloneQueue over a real SQLite database -- the dedupe
+// behaviour under test lives in jobs' partial unique index and row
+// semantics, which a fake queue cannot exercise.
 //
 // The window boundary constants below are the implementation's own
 // (pollIdempotencyWindowSize, 15 minutes -- DefaultPollStuckAfter, the
-// poll's own detection granularity) spelled as local literals so this
-// file compiles and runs against the pre-window code unchanged; a drift
-// between the two would break test (b) loudly, since an enqueue
+// poll's own detection granularity) spelled as local literals so a drift
+// between the two would break the later-window test loudly: an enqueue
 // pollWindowB apart would then land inside the implementation's own
 // window and collapse instead of creating the second job.
 //
@@ -111,12 +108,12 @@ func waitForPollRun(t *testing.T, runs chan jobs.JobID, what string) jobs.JobID 
 	}
 }
 
-// TestEnqueuePoll_SameWindowEnqueuesCollapseIntoOneJob pins regression
-// (a): the concurrency protection the poll key exists for must survive
-// the windowing -- two enqueues for one tenant inside the same poll
-// window collapse into the first job (one row, one run), so two scheduler
-// replicas ticking in one window still never poll the tenant twice at
-// once.
+// TestEnqueuePoll_SameWindowEnqueuesCollapseIntoOneJob pins the
+// same-window collapse: the concurrency protection the poll key exists
+// for must survive the windowing -- two enqueues for one tenant inside
+// the same poll window collapse into the first job (one row, one run), so
+// two scheduler replicas ticking in one window still never poll the
+// tenant twice at once.
 func TestEnqueuePoll_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	q, db := startPollWindowQueue(t)
 	svc := newPollingService(NewPaymentEventRepository(db), nil, q)
@@ -156,15 +153,15 @@ func TestEnqueuePoll_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	}
 }
 
-// TestEnqueuePoll_LaterWindowEnqueuesNewJobAndRunsAgain pins regression
-// (b): an enqueue in a later window is a NEW job and the poll runs again.
-// Fails on the pre-window key (tenant only), where the later enqueue
-// resolves the first job's id -- the first-ever poll's permanent dedupe --
-// so no second row is ever created and nothing ever runs again: the harm
-// the windowing closes, a stuck payment that is never actively polled
-// once the payment chain is connected (the single run of the tenant's
-// one-ever poll usually finds nothing, since no row is stuck yet at
-// DefaultPollStuckAfter past its start).
+// TestEnqueuePoll_LaterWindowEnqueuesNewJobAndRunsAgain pins the
+// later-window periodicity: an enqueue in a later window is a NEW job and
+// the poll runs again. A tenant-only key would fail this: the later
+// enqueue would resolve the first job's id -- the first-ever poll's
+// permanent dedupe -- so no second row is ever created and nothing ever
+// runs again: the harm the windowing closes, a stuck payment that is
+// never actively polled once the payment chain is connected (the single
+// run of the tenant's one-ever poll usually finds nothing, since no row
+// is stuck yet at DefaultPollStuckAfter past its start).
 func TestEnqueuePoll_LaterWindowEnqueuesNewJobAndRunsAgain(t *testing.T) {
 	q, db := startPollWindowQueue(t)
 	svc := newPollingService(NewPaymentEventRepository(db), nil, q)
@@ -198,14 +195,15 @@ func TestEnqueuePoll_LaterWindowEnqueuesNewJobAndRunsAgain(t *testing.T) {
 	}
 }
 
-// TestEnqueuePoll_DeadLetteredWindowDoesNotPoisonLaterOnes pins regression
-// (c): a poll job that dead-letters poisons only its own window. A stuck
-// payment left unpolled is money-path harm, and a permanently-failing
-// poll pass (a database outage lasting out the retry budget) must never
-// silence its tenant's later windows. Fails on the pre-window key (tenant
-// only), where the dead job's idempotency key stays resolved forever --
-// every later enqueue returns the dead job's id, no second row is ever
-// created and the tenant is never polled again.
+// TestEnqueuePoll_DeadLetteredWindowDoesNotPoisonLaterOnes pins the
+// dead-letter isolation: a poll job that dead-letters poisons only its
+// own window. A stuck payment left unpolled is money-path harm, and a
+// permanently-failing poll pass (a database outage lasting out the retry
+// budget) must never silence its tenant's later windows. A tenant-only
+// key would fail this: the dead job's idempotency key would stay resolved
+// forever -- every later enqueue would return the dead job's id, no
+// second row would ever be created and the tenant would never be polled
+// again.
 func TestEnqueuePoll_DeadLetteredWindowDoesNotPoisonLaterOnes(t *testing.T) {
 	q, db := startPollWindowQueue(t)
 	svc := newPollingService(NewPaymentEventRepository(db), nil, q)

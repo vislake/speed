@@ -31,8 +31,8 @@ import (
 // the outbox rows and the per-replicaID cursor row this bus reads and
 // writes live in the PostgreSQL server, and committed rows must survive a
 // genuine restart of that server. The proof is the file's consumer-restart
-// catch-up protocol with the container restart inserted where the
-// simulation used to stand: a replica's cursor is established at the
+// catch-up protocol with a real container restart at the point the
+// protocol needs one: a replica's cursor is established at the
 // outbox's live end and the replica closes, events are published into the
 // downtime window (each Publish commits an outbox row), the PostgreSQL
 // container stops and starts again, and a fresh bus under the SAME

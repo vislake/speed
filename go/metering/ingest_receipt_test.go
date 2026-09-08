@@ -35,7 +35,7 @@ func TestIngestReceiptRepository_AssertIsolated(t *testing.T) {
 // raw unique-violation error, re-proven against real PostgreSQL by the
 // integration tier's
 // TestPostgres_IngestReceiptRepository_DuplicateCreate_IsErrDuplicatedKey.
-// The idempotent fold path itself no longer depends on catching this
+// The idempotent fold path itself does not depend on catching this
 // error: it avoids it entirely through an ON CONFLICT DO NOTHING insert
 // (see foldIntoSummaryOnce's doc comment for why catching it would abort
 // the transaction on PostgreSQL).

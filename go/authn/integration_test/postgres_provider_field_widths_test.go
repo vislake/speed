@@ -197,9 +197,9 @@ func TestSocialSignIn_OverWidthProviderProfile_Postgres(t *testing.T) {
 // while the provider's profile fits its columns, the provider then grows the
 // name and avatar past VARCHAR(128) and VARCHAR(512), and the next login --
 // which refreshes the stored profile through TouchLogin -- must still
-// succeed with the grown values bounded at the write. Before the fix that
-// very login was refused with SQLSTATE 22001: the refresh had become a
-// self-inflicted breaker of an existing identity.
+// succeed with the grown values bounded at the write. An unguarded refresh
+// would refuse that very login with SQLSTATE 22001 and turn the refresh
+// into a self-inflicted breaker of an existing identity.
 func TestSocialSignIn_GrownProviderProfile_Postgres(t *testing.T) {
 	t.Parallel()
 

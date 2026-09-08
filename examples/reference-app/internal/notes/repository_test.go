@@ -98,11 +98,10 @@ func newAuditCaptureRepository(t *testing.T, bus pkgcore.EventBus) *Repository {
 // tests grant themselves. The tests exercise the gate, not the grant's
 // legitimacy: production code that actually erases rows sits at or above
 // tenancy and enters the system context through tenancy.WithSystemContext's
-// audited wrapper from a whitelisted module (admin, compliance, jobs, authn
-// -- the erase orchestration itself being compliance-module (M4) work), so
-// the raw pkgcore grant below stands in for that audited entry, on the same
-// fixture-purpose convention dbkit's own hard_delete_test.go and tenancy's
-// system-context tests follow one layer down.
+// audited wrapper from a whitelisted module (admin, compliance, jobs,
+// authn), so the raw pkgcore grant below stands in for that audited entry,
+// on the same fixture-purpose convention dbkit's own hard_delete_test.go
+// and tenancy's system-context tests follow one layer down.
 const notesHardDeletePurpose pkgcore.SystemPurpose = "notes.test.hard_delete"
 
 // hardDeleteSystemCtx returns a system-context copy of ctx (tenant and
@@ -171,11 +170,11 @@ func TestRepository_AssertIsolated(t *testing.T) {
 // row is still present, restore, confirm it reappears, delete again,
 // confirm it is hidden again.
 //
-// This is a service-level proof, not an HTTP one: notes exposes no
-// delete/restore endpoint in its OpenAPI fragment yet (a good, named
-// follow-up scope -- see this package's model.go doc comment on
-// DeletedAt/DeletedBy), so this test exercises Repository directly rather
-// than going through handler.go.
+// This is a service-level proof, not an HTTP one: notes' OpenAPI
+// fragment carries no delete/restore endpoint, so this test exercises
+// Repository directly rather than going through handler.go (see this
+// package's model.go doc comment on DeletedAt/DeletedBy for why the
+// lifecycle stays Service-level).
 func TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle(t *testing.T) {
 	repo, db := newMigratedRepositoryWithDB(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-a"))

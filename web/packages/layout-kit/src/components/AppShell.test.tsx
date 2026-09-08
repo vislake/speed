@@ -459,8 +459,9 @@ describe('AppShell', () => {
       expect(window.location.hash).toBe('#/notes')
       // ... and focus moved into the main landmark. jsdom performs the
       // fragment navigation itself (it rewrites the hash and never
-      // moves focus), so both halves of this pair fail on the old
-      // mechanism: the hash is replaced by the target id and focus
+      // moves focus), so this half passes only when the app's own
+      // activation handler moved focus into the landmark -- with the
+      // native mechanism, the hash lands on the target id and focus
       // stays on the link.
       expect(document.activeElement).toBe(main)
     })

@@ -97,8 +97,8 @@ func TestAnalyticsRecorder_Stop_BeforeStart_IsSafe(t *testing.T) {
 // delivered into the aggregator before Stop returns (drained by Stop
 // itself, since the flush goroutine may already be exiting and must never
 // be the only deliverer), rather than silently vanishing with Dropped()
-// none the wiser. Before the fix Stop simply returned, leaving every
-// buffered event unaccounted for.
+// none the wiser. A Stop that simply returned would leave every buffered
+// event unaccounted for.
 func TestAnalyticsRecorder_Stop_DeliversEventsBufferedAtStopTime(t *testing.T) {
 	agg := newTestAggregator(t)
 	r := NewAnalyticsRecorder(agg)
@@ -164,11 +164,12 @@ func TestAnalyticsRecorder_Record_AfterStop_DropsAndCounts(t *testing.T) {
 }
 
 // TestAnalyticsRecorder_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop
-// pins the lifecycle finding: an early Stop (before any Start) consumed
-// the stop signal, so a loop Started afterwards could never be stopped
-// and the later Stop blocked forever on the never-closed done channel --
-// a goroutine leak plus a hang. Stop before Start must leave a later
-// Start's loop fully stoppable.
+// pins the stop-signal lifecycle contract: Stop before any Start must
+// not consume the ability to stop a later loop -- a Stop that consumed
+// the signal would leave a loop Started afterwards unstoppable, the
+// later Stop blocking forever on the never-closed done channel: a
+// goroutine leak plus a hang. Stop before Start leaves a later Start's
+// loop fully stoppable.
 func TestAnalyticsRecorder_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop(t *testing.T) {
 	agg := newTestAggregator(t)
 	r := NewAnalyticsRecorder(agg)
@@ -303,10 +304,10 @@ func TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered(t 
 	r.Start(ctx1)
 	cancel1()
 
-	// Wait for the canceled loop to actually exit. Pre-fix this never
-	// happens: the started flag stays set forever, so waitFor fails here
-	// (the defect the finding names -- Start after a cancel-driven stop
-	// was a permanent no-op and Record buffered into nothing).
+	// Wait for the canceled loop to actually exit: run clears the started
+	// flag for its own generation on exit, so a canceled ctx leaves Start
+	// restartable -- a flag left set forever would make the next Start a
+	// permanent no-op and buffer every later Record into nothing.
 	waitFor(t, func() bool {
 		r.mu.Lock()
 		defer r.mu.Unlock()

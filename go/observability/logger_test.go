@@ -130,11 +130,11 @@ func TestFromContext_FallsBackToSlogDefault(t *testing.T) {
 }
 
 // TestFromContext_NoEnrichment_WritesThroughAttachedSink pins down what
-// FromContext returns when ctx carries nothing to enrich: no longer the
-// exact *slog.Logger WithLogger attached -- the redaction layer sits
-// between the logger and the sink now -- but a logger that writes through
-// the very same sink handler, so the attached sink's output (formatting,
-// level filter, destination) is preserved bit for bit.
+// FromContext returns when ctx carries nothing to enrich: a logger that
+// writes through the very same sink handler as the *slog.Logger WithLogger
+// attached -- the redaction layer sits between the logger and the sink --
+// so the attached sink's output (formatting, level filter, destination) is
+// preserved bit for bit.
 func TestFromContext_NoEnrichment_WritesThroughAttachedSink(t *testing.T) {
 	var buf bytes.Buffer
 	custom := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))

@@ -41,12 +41,12 @@ func envelopeKeyRef() string {
 // its own repository against the migrated schema, reading back exactly what
 // was written.
 //
-// What this test is NOT is stated honestly: it cannot fail against the
-// pre-0009 schema on SQLite, because SQLite does not enforce VARCHAR length
-// -- an over-length write refusal is a PostgreSQL-only failure mode, and
-// this module has no PostgreSQL integration tier. This test pins the other
-// half: the migrated schema must admit and preserve the real envelope
-// keyRef shape without truncation or error.
+// What this test is NOT is stated honestly: it cannot fail on SQLite,
+// because SQLite does not enforce VARCHAR length -- an over-length write
+// refusal is a PostgreSQL-only failure mode, and the module's PostgreSQL
+// tier does not exercise migration 0009. This test pins the other half:
+// the migrated schema must admit and preserve the real envelope keyRef
+// shape without truncation or error.
 func TestKeyRefColumns_RoundTripEnvelopeLengthKeyRefs(t *testing.T) {
 	db := newTestDB(t)
 	keyRef := envelopeKeyRef()
@@ -122,12 +122,12 @@ func TestKeyRefColumns_RoundTripEnvelopeLengthKeyRefs(t *testing.T) {
 // type in the table definition. SQLite does not enforce VARCHAR length,
 // but it does report the declared type, so this is the direct proof on
 // this dialect that migration 0009 rewrote the three tables' key_ref
-// columns to VARCHAR(4096) -- and it DOES fail against the pre-0009
-// schema, where PRAGMA table_info reports VARCHAR(255). The length
-// enforcement the widening exists for lives only on PostgreSQL, whose
-// half of 0009 is a plain ALTER COLUMN TYPE this module cannot execute in
-// its unit suite (no PostgreSQL integration tier; the migration follows
-// the module's own dialect conventions, reviewed as such).
+// columns to VARCHAR(4096): PRAGMA table_info must report VARCHAR(4096),
+// and would report the pre-widening VARCHAR(255) if 0009 regressed. The
+// length enforcement the widening exists for lives only on PostgreSQL,
+// whose half of 0009 is a plain ALTER COLUMN TYPE the module's PostgreSQL
+// tier does not exercise; the migration follows the module's own dialect
+// conventions, reviewed as such.
 func TestMigration0009_SQLiteDeclaresTheWidenedKeyRefColumns(t *testing.T) {
 	db := newTestDB(t)
 	sqlDB, err := db.DB()

@@ -45,9 +45,8 @@ func (adminMigrationModule) Register(*pkgcore.Registry) error { return nil }
 // SummaryRepository.List, the cross-module read path a WithMetering
 // wiring opens (Summary calls meteringModule.Summaries().List once per
 // ledger tenant). A comment naming that path would not prove it; the
-// executed read does. This example is the execution-evidence leg of the
-// usage dashboard's no-consumer exception's compensating obligations, the
-// limitation stated plainly in this module's AGENTS.md.
+// executed read does -- this example is that read path executed rather
+// than described.
 //
 // go/billing is deliberately absent (the WithBilling counterpart of the
 // same wiring choice), so the row's CreditBalance/ActiveSubscription

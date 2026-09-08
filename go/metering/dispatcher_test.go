@@ -388,11 +388,12 @@ func TestDispatcher_Stop_BeforeStart_IsSafe(t *testing.T) {
 }
 
 // TestDispatcher_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop pins
-// the lifecycle finding in its Dispatcher form: an early Stop (before any
-// Start) consumed the stop signal, so the poll loop Started afterwards
-// could never be stopped and the later Stop blocked forever on the
-// never-closed done channel -- a goroutine leak plus a hang. Stop before
-// Start must leave a later Start's loop fully stoppable.
+// the stop-signal lifecycle contract in its Dispatcher form: Stop before
+// any Start must not consume the ability to stop a later loop -- a Stop
+// that consumed the signal would leave the poll loop Started afterwards
+// unstoppable, the later Stop blocking forever on the never-closed done
+// channel: a goroutine leak plus a hang. Stop before Start leaves a later
+// Start's loop fully stoppable.
 func TestDispatcher_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop(t *testing.T) {
 	d, _, _ := newTestDispatcher(t)
 	d.Stop() // before Start -- must not consume the ability to stop a later loop
@@ -447,18 +448,19 @@ func TestDispatcher_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
 }
 
 // TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows pins
-// the pile half of the claim-query fairness finding: rows Enqueue-era
-// validation could never produce but an older build or a corruption could
-// leave behind -- here: an empty Feature, which delivery-time validation
-// refuses forever -- fail every attempt, and a pile of them at the head
-// of the queue must not keep a healthy row enqueued behind them from
-// being claimed. The claim query this test pins (migration 0005's
-// schedule shape, see claimPendingOutboxRecords) makes the whole pile
-// ineligible for the retry delay after the poison cycle, so the healthy
-// row is claimed on the very next cycle; the ordering this replaced
-// (attempts ASC) bought the same outcome by ranking never-failed rows as
-// a class, at the price of starving failed rows under a flood -- the
-// other half of the finding, pinned by
+// the pile half of the claim query's schedule-ordering fairness: rows
+// that can never deliver -- here: an empty Feature, which delivery-time
+// validation refuses forever, a shape current Enqueue validation never
+// produces, so only a corrupt or foreign row can carry it -- fail every
+// attempt, and a pile of them at the head of the queue must not keep a
+// healthy row enqueued behind them from being claimed. The claim query
+// this test pins orders by the re-claim schedule, retry_after (see
+// claimPendingOutboxRecords): after one poison cycle the whole pile sits
+// inside its retry delay, ineligible, so the healthy row is claimed on
+// the very next cycle. Ranking never-failed rows ahead of every
+// already-failed row as a strict class would buy the same headway at the
+// price of starving failed rows under a flood -- the other half of the
+// same fairness contract, pinned by
 // TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals.
 func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.T) {
 	d, agg, db := newTestDispatcher(t)
@@ -565,12 +567,12 @@ func pendingRowsForTest(t *testing.T, ctx context.Context, db *gorm.DB, limit in
 // already-failed row would, under a sustained enqueue rate -- every
 // batch filled with never-failed rows -- leave a row that had failed
 // ONCE unclaimed forever: permanent starvation of exactly the rows
-// retry exists to reach. Under the schedule ordering (retry_after,
-// migration 0005) the once-failed row is claimable again the moment its
-// re-claim window opens, and because its schedule slot predates every
-// row enqueued afterwards, no flood of new arrivals can push it out of
-// the batch: it is retried -- and here, recovered -- on the very next
-// cycle.
+// retry exists to reach. Under the schedule ordering (retry_after, see
+// claimPendingOutboxRecords) the once-failed row is claimable again the
+// moment its re-claim window opens, and because its schedule slot
+// predates every row enqueued afterwards, no flood of new arrivals can
+// push it out of the batch: it is retried -- and here, recovered -- on
+// the very next cycle.
 func TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "metering_dispatcher_starvation.sqlite")
 	db := openAndMigrate(t, dsn)
@@ -705,8 +707,8 @@ func TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention(t *tes
 	}
 
 	// The running poll loop's retention pass retires the rows and their
-	// receipts within a few cycles. Pre-fix there was no retention pass
-	// at all, so both waits time out: delivered rows grew without bound.
+	// receipts within a few cycles; without the pass the delivered rows
+	// would stay on their tables and grow without bound.
 	d.Start(ctx)
 	defer d.Stop()
 	waitFor(t, func() bool {
@@ -737,10 +739,10 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 	d.Start(ctx1)
 	cancel1()
 
-	// Wait for the canceled loop to actually exit. Pre-fix this never
-	// happens: the started flag stays set forever, so waitFor fails here
-	// (the defect the finding names -- Start after a cancel-driven stop
-	// was a permanent no-op).
+	// Wait for the canceled loop to actually exit: run clears the started
+	// flag for its own generation on exit, so a canceled ctx leaves Start
+	// restartable -- a flag left set forever would make the next Start a
+	// permanent no-op.
 	waitFor(t, func() bool {
 		d.mu.Lock()
 		defer d.mu.Unlock()

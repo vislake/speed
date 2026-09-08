@@ -127,8 +127,8 @@ func tenantContext(tenant pkgcore.TenantID) context.Context {
 // Service.CreateWebhookSubscription, because Create refuses any EventTypes
 // selection naming a mapping nothing declared -- this tier deliberately
 // declares none, so seeding through SQL sidesteps that check in the same
-// motion it sidesteps ValidateWebhookURL's real SSRF refusal, without this
-// Module needing integration.WithWebhookURLValidator's now-exported
+// motion it sidesteps ValidateWebhookURL's real SSRF refusal, without
+// needing integration.WithWebhookURLValidator's exported
 // production-behavior override (module.go) at all; see the individual
 // tests' own row-seeding SQL.
 func attachIntegrationService(t *testing.T, db *gorm.DB) *integration.Service {

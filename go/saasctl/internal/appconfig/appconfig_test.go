@@ -469,8 +469,8 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 // variable name, the parse order, the defaults, the two error format
 // strings and the two development key byte sequences. A template edit that
 // changes any of these without its twin failing is an edit this test
-// exists to make impossible -- a generated project that boots on values
-// saasctl no longer resolves would strand every project the CLI maintains.
+// exists to make impossible -- a generated project booting on values
+// saasctl does not resolve would strand every project the CLI maintains.
 func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	content, err := template.Project.ReadFile("project/cmd/server/config.go")
 	if err != nil {

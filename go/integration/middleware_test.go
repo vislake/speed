@@ -136,12 +136,11 @@ func TestAuthMiddleware_ValidKey_AttachesTenantAndAuthenticatedAPIKey_CallsNext(
 // the regression test for the pre-auth rate-limit gate: a request bearing a
 // forged X-API-Key must consume the configured rate-limit budget and, once
 // the budget is spent, answer 429 WITHOUT any Authenticate call running.
-// Before WithAuthenticationGuard existed, every forged request reached
-// Service.Authenticate's lookups with no bound at all -- unlimited 401s,
-// each costing two database queries -- because the module's HTTPGuard is
-// composed behind authentication in the classic chain and never sees a
-// request that fails to authenticate (middleware.go's own doc comment
-// documents the corrected layering). With the guard wired at a budget of
+// The module's HTTPGuard is composed in FRONT of authentication
+// (middleware.go's own doc comment documents the layering), so a forged
+// request -- which would otherwise reach Service.Authenticate's lookups
+// with no bound at all, each failed lookup costing database queries -- pays
+// the guard's budget. With the guard wired at a budget of
 // two global hits -- the smallest budget go/ratelimit accepts, a Rate of 1
 // being refused as un-honourable (see LayeredLimits' own doc comment) -- the
 // first two forged requests pass the guard and are refused by Authenticate

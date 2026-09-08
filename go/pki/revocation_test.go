@@ -359,7 +359,7 @@ func TestCAService_VerifyCertificate_CertificateNotFound(t *testing.T) {
 // trial is repeated because one race is a scheduling accident and twenty-five
 // are a property. 8 goroutines race per trial so that several FindByID
 // reads routinely complete before the first winner's certificate update
-// commits -- the overlap the old check-then-act revoke turned into a second
+// commits -- the overlap a check-then-act revoke would hand a second
 // ledger row and a second event.
 func TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner(t *testing.T) {
 	const (
@@ -534,9 +534,10 @@ func TestCAService_RevokeCertificate_ConcurrentDifferentReasons_CertificateAndLe
 
 // TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConverges
 // proves the ledger write's honest failure contract end to end. A revocation
-// whose ledger insert fails must surface as an ERROR -- never as the
-// log-and-return-success the old code had, whose already-revoked early
-// return then meant no later call could ever retry the lost ledger write.
+// whose ledger insert fails must surface as an ERROR -- never as a reported
+// success: a log-and-return-success shape would leave the certificate
+// already revoked with its ledger entry missing, and no later call could
+// ever retry the lost write.
 // The error contract carries the state the caller needs to retry: the
 // certificate itself is revoked and its ledger entry is missing. Dropping
 // the failure and calling RevokeCertificate again must converge: exactly one

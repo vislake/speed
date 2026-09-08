@@ -3,10 +3,7 @@
 -- programmatic access to its own data. Tenant data -- a key belongs to
 -- exactly one tenant and must never be visible from another -- so its
 -- isolation is proven by tenancytest.AssertIsolated, never
--- AssertNotTenantScoped, and
--- (per that same doc's distributed-mode rule) will carry a PostgreSQL RLS
--- policy in the distributed deployment mode once one is wired for this
--- module, the same way every other tenant-scoped table's does.
+-- AssertNotTenantScoped.
 --
 -- The primary key is (id) alone, matching go/storage's Object precedent
 -- (see go/storage/model.go's own "Primary key" doc comment section): id is

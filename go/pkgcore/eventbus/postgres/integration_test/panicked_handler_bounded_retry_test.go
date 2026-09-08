@@ -3,31 +3,23 @@
 package postgres_test
 
 // Regression tests for the delivery semantics of a panicking remote handler
-// on the PostgreSQL-backed bus (P0-pkgcore-eb-3). The scenario every test
-// drives: a row whose catch-up delivery invokes a handler that panics. On
-// the pre-fix code the delivery path returned BEFORE advancing the cursor,
-// so the next catch-up cycle refetched the same row and handed it to ALL
-// subscribers again: the panicking handler re-ran every cycle (and was
-// re-joined by its healthy siblings), the type's later rows were never
-// delivered on this replica, and the cycle repeated on every NOTIFY and
-// every listenBlock timeout -- an unbounded hot loop that permanently
-// stalled the type (measured on the pre-fix code: 9 panicking-handler runs
-// in 12s, later rows never delivered). The old round-own test asserted only
-// that the panic attempt count kept GROWING (the symptom, as the target)
-// and never published after the panic row; the redis twin test asserts the
-// right property -- later entries still reach the healthy handlers exactly
-// once -- and that shape is replicated here, together with the boundedness
-// the postgres redelivery mechanism must add (the redis reader never
-// refetches a pending entry, so it needs no cap; the postgres scan would
-// refetch forever, so its retry is capped).
-//
-// Post-fix semantics, pinned by the tests below: a panicked delivery never
-// blocks the cursor -- the row is advanced past exactly like a clean one,
-// so later same-type rows keep flowing and the healthy sibling handlers
-// never re-run -- while the row is not silently acked-as-delivered either:
-// the panicked handler values are retried in-process, with a per-row
-// spacing and a bounded attempt budget, and a handler that exhausts the
-// budget settles with a terminal log line rather than an unbounded loop.
+// on the PostgreSQL-backed bus. The scenario every test drives: a row whose
+// catch-up delivery invokes a handler that panics. The contract under test:
+// a panicked delivery never blocks the cursor -- the row is advanced past
+// exactly like a clean one, so later same-type rows keep flowing and the
+// healthy sibling handlers never re-run -- while the row is not silently
+// acked-as-delivered either: the panicked handler values are retried
+// in-process, with a per-row spacing and a bounded attempt budget, and a
+// handler that exhausts the budget settles with a terminal log line rather
+// than an unbounded loop. Without that shape, a delivery path that returned
+// before advancing the cursor would make the next catch-up cycle refetch
+// the same row and hand it to ALL subscribers again: the panicking handler
+// would re-run every cycle (re-joined by its healthy siblings), the type's
+// later rows would never be delivered on this replica, and the cycle would
+// repeat on every NOTIFY and every listenBlock timeout -- an unbounded hot
+// loop permanently stalling the type. The redis reader never refetches a
+// pending entry, so it needs no retry cap; the postgres scan would refetch
+// forever, so its retry is capped.
 
 import (
 	"context"
@@ -87,9 +79,10 @@ func spyCountSeq(spy *eventSpy, seq float64) int {
 // assertEventuallyFlat waits until value() has reached at least minValue and
 // then stayed unchanged for a full flatWindow -- the shape of "this counter
 // is no longer being driven by anything" -- and returns the settled value.
-// On the pre-fix code no such window exists: the panicked row is redelivered
-// by every catch-up cycle, so any counter its delivery touches changes again
-// within every ~2s wake and the deadline expires instead.
+// For a row still being redriven no such window exists: a panicked row
+// redelivered by every catch-up cycle would keep changing any counter its
+// delivery touches within every ~2s wake, and the deadline would expire
+// instead.
 func assertEventuallyFlat(t *testing.T, what string, minValue int64, value func() int64) int64 {
 	t.Helper()
 	deadline := time.Now().Add(settleDeadline)
@@ -113,12 +106,12 @@ func assertEventuallyFlat(t *testing.T, what string, minValue int64, value func(
 }
 
 // TestEventBus_PanickingRemoteHandler_LaterSameTypeRowsStillReachHealthyHandlers
-// pins the property the redis twin test asserts for its own backend (see the
+// pins the property its redis twin asserts for its own backend (see the
 // file's doc comment): after one event whose delivery panics, LATER events
 // of the same type must still reach the healthy handler, each exactly once.
-// On the pre-fix code the panicked row wedged the type's cursor -- the scan
-// returned before advancing past it -- so the later rows were never
-// delivered on this replica at all.
+// A panicked row must not wedge the type's cursor: a delivery that returned
+// before advancing past the row would leave every later row undelivered on
+// this replica.
 func TestEventBus_PanickingRemoteHandler_LaterSameTypeRowsStillReachHealthyHandlers(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
@@ -149,8 +142,8 @@ func TestEventBus_PanickingRemoteHandler_LaterSameTypeRowsStillReachHealthyHandl
 	}
 
 	// The later rows must reach the healthy handler despite the earlier
-	// row's panicking handler. RED (pre-fix): the panicked row wedged the
-	// cursor, so 200 and 201 were never delivered.
+	// row's panicking handler -- a wedged cursor would leave 200 and 201
+	// undelivered.
 	eventually(t, "the healthy handler to receive every row published after the panicking one", func() bool {
 		return spyCountSeq(spy, 200) >= 1 && spyCountSeq(spy, 201) >= 1 && spyCountSeq(spy, 100) >= 1
 	})
@@ -169,9 +162,9 @@ func TestEventBus_PanickingRemoteHandler_LaterSameTypeRowsStillReachHealthyHandl
 // TestEventBus_PanickingRemoteHandler_HealthySiblingDoesNotRerun pins that a
 // healthy sibling handler does not re-run because of a panicking one: the
 // panicked row's redelivery is scoped to the panicked handler values, so the
-// healthy sibling's count for the panicked row must settle at exactly 1.
-// RED (pre-fix): every catch-up cycle redelivered the row to ALL
-// subscribers, so the sibling's count kept growing without bound.
+// healthy sibling's count for the panicked row must settle at exactly 1: a
+// catch-up cycle redelivering the row to ALL subscribers would make the
+// sibling's count grow without bound.
 func TestEventBus_PanickingRemoteHandler_HealthySiblingDoesNotRerun(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
@@ -205,8 +198,8 @@ func TestEventBus_PanickingRemoteHandler_HealthySiblingDoesNotRerun(t *testing.T
 	// panicking handler must be retried at least once (the row is not
 	// acked-as-delivered) WITHOUT the sibling being re-invoked: the sibling
 	// count settles at 1 while the attempts counter keeps climbing to its
-	// budget. RED (pre-fix): the sibling count never settles -- it grows
-	// with every catch-up cycle's redelivery.
+	// budget. Without the value-scoped retry the sibling count would grow
+	// with every catch-up cycle's redelivery and never settle.
 	settled := assertEventuallyFlat(t, "the healthy sibling's count for the panicked row", 1, func() int64 {
 		return int64(spyCountSeq(spy, 100))
 	})
@@ -220,11 +213,10 @@ func TestEventBus_PanickingRemoteHandler_HealthySiblingDoesNotRerun(t *testing.T
 
 // TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal pins
 // that the panicked row's own redelivery is bounded: the panicking handler
-// is retried (at-least-once, the P1-8 intent -- never acked-as-delivered)
-// but only up to a fixed attempt budget, after which the row settles with a
-// terminal log line -- never an unbounded hot loop. RED (pre-fix): the
-// attempt count never stopped growing (measured on the pre-fix code at 9
-// runs in 12s and climbing), and no terminal settlement ever existed.
+// is retried (at-least-once -- never acked-as-delivered) but only up to a
+// fixed attempt budget, after which the row settles with a terminal log
+// line -- never an unbounded hot loop and never an attempt count that grows
+// without settling.
 func TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
@@ -259,7 +251,7 @@ func TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal(t *testi
 	}
 
 	// Retried (>= 2 attempts), then settled: the count must stay put
-	// through two full idle wake cycles. RED (pre-fix): it never settles.
+	// through two full idle wake cycles.
 	settled := assertEventuallyFlat(t, "the panicking handler's attempt count", 2, attempts.Load)
 	if settled > 6 {
 		t.Errorf("panicking handler ran %d times, want a bounded budget (at most a handful of retries)", settled)
@@ -284,8 +276,7 @@ func TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal(t *testi
 
 // TestEventBus_NoPanickingHandler_ControlDeliveryExactlyOnce is the control
 // shape for the suite: without a panicking handler the same publish
-// sequence must be delivered to the healthy handler exactly once, unchanged
-// by the fix.
+// sequence must be delivered to the healthy handler exactly once.
 func TestEventBus_NoPanickingHandler_ControlDeliveryExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)

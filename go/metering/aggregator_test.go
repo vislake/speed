@@ -367,9 +367,9 @@ func TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest(t *testing
 
 	// The bus recovers. Event B, still within the same period, folds the
 	// bucket to 6 -- still above the threshold -- so it must now be the
-	// crossing event: A's failed publish must not have consumed the latch.
-	// Pre-fix this second ingest published nothing (the latch was already
-	// set), and the overage signal was gone for the rest of the period.
+	// crossing event: a failed publish leaves the latch open (the latch is
+	// set only once a publish succeeds), so the overage signal cannot be
+	// lost for the rest of the period to a transient publish failure.
 	agg.bus = bus
 	if err = agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-pubfail-b", OccurredAt: at}); err != nil {
 		t.Fatalf("Ingest(after the bus recovered): %v", err)
@@ -400,20 +400,19 @@ func TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest(t *testing
 	}
 }
 
-// TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage is
-// the regression proof for the overage-latch ordering bug: the event that
-// first crosses a configured threshold is also the event whose UsageSummary
-// write fails, and the old count-then-persist order had already latched
-// notifiedOverage and incremented the real-time counter before Ingest
-// returned the persistence error. The crossing was never published, and no
-// later event in the same period could publish it either -- the latch was
-// already set, so every subsequent event's crossed came back false while
-// the in-memory counter held a delta the database never received. The fix
-// persists the summary row before touching the counter, mirroring
-// IngestBillingGrade's own persist-then-count order: a failed write leaves
-// counter and latch untouched, so the next successful crossing event in
-// the same period still publishes EventOverageThresholdCrossed, and
-// real-time counter and summary row agree on what was actually accepted.
+// TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage
+// pins the persist-then-count ordering of the overage path: a crossing
+// event whose UsageSummary write fails must leave the notifiedOverage
+// latch and the real-time counter untouched, and Ingest must refuse the
+// event entirely -- a fold that latched or incremented before surfacing
+// its persistence error would lose the crossing for the whole period:
+// every later event's crossed check would come back false (the latch
+// already set) while the in-memory counter held a delta the database
+// never received. Ingest persists the summary row before touching the
+// counter, mirroring IngestBillingGrade's own persist-then-count order,
+// so the next successful crossing event in the same period still
+// publishes EventOverageThresholdCrossed, and real-time counter and
+// summary row agree on what was actually accepted.
 func TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage(t *testing.T) {
 	db := newTestDB(t)
 	agg := NewAggregator(NewSummaryRepository(db))
@@ -1034,8 +1033,8 @@ func TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires(t *testi
 // TestAggregator_Restart_ThresholdConfiguredWhereNoneApplied_CrossingFires
 // pins the NULL-record arm of the threshold-identity rule: a row whose
 // folds all ran under NO threshold records a nil OverageThreshold -- the
-// identical durable state a row written before migration 0006 carries
-// after it -- and a restart that CONFIGURES a threshold below the
+// durable state every unattested row carries -- and a restart that
+// CONFIGURES a threshold below the
 // existing quantity is the same "new configuration, crossing never
 // fired" shape as the lowering case: the seed must not latch on the
 // quantity comparison alone, or the newly configured threshold's signal
@@ -1153,8 +1152,7 @@ func TestAggregator_NilSummariesRepository_IngestPathsRefuse(t *testing.T) {
 // assertNilSummariesRefusal is the shared assertion both ingest-path
 // refusals above check: a non-nil error that is the coded
 // metering.usage_summaries_unconfigured, never a nil error and never a
-// bare nil-pointer panic (pre-closure the fold crashed on the nil
-// repository's connection field).
+// bare nil-pointer panic on the nil repository's connection field.
 func assertNilSummariesRefusal(t *testing.T, path string, err error) {
 	t.Helper()
 	if err == nil {

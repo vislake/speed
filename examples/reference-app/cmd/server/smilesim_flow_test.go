@@ -40,7 +40,7 @@ package main
 // its Complete) and the ai-gateway.image.generate job for the
 // SAME request run concurrently on buildServer's one shared
 // jobs.StandaloneQueue (WorkerCount 4 by default) against the app's one
-// file-backed SQLite database. The root cause is now precisely known: the
+// file-backed SQLite database. The root cause is precise: the
 // derive job's gate (go/storage/repository.go's insertDerivativeIfAbsent)
 // is a read-then-write transaction, and SQLite answers such a
 // transaction's write -- upgrading the SHARED lock its earlier gate
@@ -56,23 +56,18 @@ package main
 // failed, scheduling retry" with error "storage.internal_error: database
 // is locked (5) (SQLITE_BUSY)" and succeeds on its very next attempt,
 // which is why this test's own assertions (including on Attempts via the
-// job's final state) still pass deterministically. The dbkit-wide SQLite
-// DSN change once floated as a cure has since landed -- as of 2026-09-06
-// dbkit's dialect/sqlite factory declares _pragma=busy_timeout(5000)
-// explicitly on every connection -- and the WARN is not eliminated: the
-// immediate-`SQLITE_BUSY` failure is a deterministic property of the
-// gate's transaction shape, pinned in isolation by
-// go/dbkit/dialect/sqlite/busy_timeout_test.go's read-then-write-upgrade
-// test, while whether this test run actually hits the collision is
-// scheduling-dependent -- 140 consecutive runs in the dbkit
-// environment logged none, so neither "reproduces on every run"
-// nor "gone" is claimable from test runs alone, and a WARN-free run does
-// not mean the race is gone. Genuinely removing the WARN line now means
-// go/storage-module work on the gate's transaction shape (taking the
-// write lock first, e.g. BEGIN IMMEDIATE) or a queue-concurrency change
-// in this app's own wiring (cmd/server/server.go's shared
-// StandaloneQueue); recorded here rather than silently worked
-// around inside these tests.
+// job's final state) still pass deterministically. A busy_timeout pragma
+// does not cure it: the immediate-`SQLITE_BUSY` failure is a
+// deterministic property of the gate's transaction shape, pinned in
+// isolation by go/dbkit/dialect/sqlite/busy_timeout_test.go's
+// read-then-write-upgrade test. Whether a given run actually hits the
+// collision is scheduling-dependent, and a WARN-free run does not mean
+// the failure mode is gone. The WARN stays by design: removing it would
+// be go/storage work on the gate's transaction shape (taking the write
+// lock first, e.g. BEGIN IMMEDIATE) or a queue-concurrency change in
+// this app's own wiring (cmd/server/server.go's shared StandaloneQueue)
+// -- a boundary recorded here rather than worked around inside these
+// tests.
 
 import (
 	"bytes"

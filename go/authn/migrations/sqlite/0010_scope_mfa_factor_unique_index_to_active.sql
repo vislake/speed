@@ -22,8 +22,8 @@
 -- index; ruling them out stays the application layer's job:
 -- Service.EnrollTOTP deletes any existing PENDING row of the type before
 -- creating a fresh one, while the ACTIVE row is spared until a confirm
--- genuinely succeeds (migration 0011 later constrains the pending case in
--- the schema as well).
+-- genuinely succeeds (migration 0011 constrains the pending case in the
+-- schema as well).
 DROP INDEX idx_user_mfa_factors_user_type;
 
 CREATE UNIQUE INDEX idx_user_mfa_factors_user_type

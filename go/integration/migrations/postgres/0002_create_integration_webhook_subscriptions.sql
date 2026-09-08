@@ -2,9 +2,7 @@
 -- (go/integration/webhook_model.go): one row per outbound webhook a tenant
 -- has configured -- which public event types it wants delivered, and to
 -- which URL. Tenant data, isolation proven by tenancytest.AssertIsolated,
--- never AssertNotTenantScoped; in the distributed deployment mode it will
--- carry a PostgreSQL RLS policy once one is wired for this module, the
--- same way every other tenant-scoped table's does.
+-- never AssertNotTenantScoped.
 --
 -- The primary key is (id) alone, matching integration_api_keys' precedent:
 -- id is an application-generated UUID, globally unique on its own, so

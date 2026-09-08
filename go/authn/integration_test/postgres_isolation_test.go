@@ -41,8 +41,8 @@ func countRows[T any](db *gorm.DB) (int64, error) {
 // identity_test.go, mfa_test.go and verification_test.go, all package
 // authn, all against SQLite): the same eight identity-domain tables, the
 // same fail-if-TenantScoped check, now against a real PostgreSQL server
-// where the isolation plugin and RLS session wiring genuinely apply (the
-// frozen round plan's §1.9 -- SQLite structurally cannot exercise either).
+// where the isolation plugin and RLS session wiring genuinely apply --
+// SQLite structurally cannot exercise either.
 func TestIdentityModels_AreNotTenantScoped_Postgres(t *testing.T) {
 	t.Parallel()
 
@@ -159,9 +159,10 @@ func TestIdentityModels_AreNotTenantScoped_Postgres(t *testing.T) {
 // TestSSOConfigRepository_AssertIsolated_Postgres is the postgres-dialect
 // leg of the unit tier's TestSSOConfigRepository_AssertIsolated
 // (oidc_test.go, package authn, against SQLite): the ONE table this module
-// owns that IS tenant data (docs/internal/05's "one TenantSSOConfig per
-// tenant" rule), now proven against a real PostgreSQL server where the
-// isolation plugin and RLS session wiring genuinely apply.
+// owns that IS tenant data -- an SSO configuration belongs to the tenant
+// that configured it, one per tenant -- now proven against a real
+// PostgreSQL server where the isolation plugin and RLS session wiring
+// genuinely apply.
 func TestSSOConfigRepository_AssertIsolated_Postgres(t *testing.T) {
 	t.Parallel()
 

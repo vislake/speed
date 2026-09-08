@@ -201,7 +201,7 @@ func platformStaffToken(t *testing.T, srv *httptest.Server) string {
 // seed (seedDemoUsers' addDemoOrgMembership, demo_users.go) already
 // created that tenant's root at boot, idempotently, the identical
 // Root-then-CreateRoot shape this helper mirrors. Only a tenant no demo
-// account reaches -- none, today -- would still need the create branch.
+// seed provisions a root for would still need the create branch.
 func existingOrgRoot(t *testing.T, srv *httptest.Server, token string) orgNode {
 	t.Helper()
 	var listed struct {
@@ -622,10 +622,9 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, d
 // immediately.
 //
 // The other admin surfaces (role management, usage, notifications
-// send-records, audit export) are proven at go/admin's own
-// module level, the same "real, tested, but not yet a reference-app HTTP
-// consumer" treatment go/pki's X.509 layer and go/billing and go/metering
-// carry for their unwired surfaces.
+// send-records, audit export) are proven at go/admin's own module level;
+// this journey is the reference-app consumer proof of the suspension
+// surface alone.
 func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	const tenant = pkgcore.TenantID("tenant-suspend-flow")
 

@@ -749,9 +749,8 @@ func TestExportService_Export_ParticipantErrorClassifiedNeverRawText(t *testing.
 // text can name other subjects and internal object keys the export bundle
 // itself was gathering. The error text's homes are the structured log at
 // the gather site (behind go/observability's redaction layer) and the
-// returned in-process result -- never the permanent audit record. The
-// unfixed emitExportAudit wrote the whole raw-text map into
-// Changes["errors"], so the assertions below fail against it.
+// returned in-process result -- never the permanent audit record. emitExportAudit must never write the whole raw-text map into
+// Changes["errors"]; a verbatim write fails the assertions below.
 func TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText(t *testing.T) {
 	// The failure text names another subject whose rows the gather was
 	// touching -- the class of content the permanent record must never
@@ -819,9 +818,9 @@ func TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText(t *t
 // transport error as ErrExportDeliveryFailed's own cause, asserted below)
 // and the structured log at the failure site, behind go/observability's
 // redaction layer; the audit record -- effectively permanent -- carries
-// only the classification. The unfixed code wrote
-// fmt.Sprintf("delivery failed: %s", deliverErr.Error()) into the audit
-// event's FailureReason, so the assertions below fail against it.
+// only the classification: the delivery-failure audit event's
+// FailureReason must never be fmt.Sprintf("delivery failed: %s",
+// deliverErr.Error()) -- a verbatim write fails the assertions below.
 func TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText(t *testing.T) {
 	transport := errors.New("create share for compliance/exports/tenant-a/x.json failed: sharing database unavailable")
 	svc, repo, _, fakeSharing, captured := newExportHarnessWith(t)

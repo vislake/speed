@@ -47,9 +47,9 @@ func isoJobID(tenant string, n int) jobs.JobID {
 
 // TestSimulationStore_AssertIsolated is SimulationStore's equivalent of
 // the mandatory tenancytest.AssertIsolated suite (the multi-tenant
-// multi-tenant isolation rule; backend coding standard §3.3; the suite
-// tools/check_repo_isolation.py requires every tenant-data repository to
-// run). It cannot run the tenancytest suite itself: AssertIsolated
+// isolation rule that suite and tools/check_repo_isolation.py enforce for
+// every tenant-data repository). It cannot run the tenancytest suite
+// itself: AssertIsolated
 // reflects T's exported "ID" field and queries the "id" column, while
 // simulationRecord's primary key is the go/jobs queue's application-
 // generated JobID -- the exact documented reason this record embeds

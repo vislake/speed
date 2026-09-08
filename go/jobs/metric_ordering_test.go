@@ -35,15 +35,13 @@ func (*succeedingCancelRaceHandler) Handle(context.Context, *Job, ProgressFn) (R
 
 var _ Handler = (*succeedingCancelRaceHandler)(nil)
 
-// TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog is the success
-// half of the metric-ordering defect the dead-letter branch already fixed:
-// execute recorded the "job succeeded" log line and the StatusSucceeded
-// rows of the attempts/duration instruments BEFORE calling
-// completeSucceeded, so a concurrent Cancel that no-op'd the write (the row
-// was already StatusCancelled) still produced a fake success log and fake
-// success metrics for a Job that never succeeded. The records must now fire
-// strictly after completeSucceeded's transition report and only for a
-// genuine running -> succeeded move, leaving the cancelled Job exactly one
+// TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog pins the
+// success half of the metric-ordering contract: the "job succeeded" log
+// line and the StatusSucceeded rows of the attempts/duration instruments
+// must fire strictly after completeSucceeded's transition report and only
+// for a genuine running -> succeeded move. A concurrent Cancel that no-op'd
+// the write (the row was already StatusCancelled) must leave the cancelled
+// Job exactly one
 // truthful record: the "job cancelled before its outcome could be recorded,
 // outcome discarded" Info line carrying the discarded_outcome=succeeded
 // attribute. Deterministic by construction, exactly like the dead-letter
@@ -146,17 +144,14 @@ func (*failingCancelRaceHandler) Handle(context.Context, *Job, ProgressFn) (Resu
 
 var _ Handler = (*failingCancelRaceHandler)(nil)
 
-// TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog is the retry half
-// of the same metric-ordering defect: execute recorded the "job attempt
-// failed, scheduling retry" log line and the StatusRetrying rows of the
-// attempts/duration instruments BEFORE calling completeRetrying, so a
-// concurrent Cancel that no-op'd the write still produced a fake retry log
-// and fake retry metrics for a Job that was cancelled, never retrying. The
-// records must now fire strictly after completeRetrying's transition report
-// and only for a genuine running -> retrying move, leaving the cancelled
-// Job exactly one truthful record: the "job cancelled before its outcome
-// could be recorded, outcome discarded" Info line carrying the
-// discarded_outcome=retrying attribute. Deterministic by construction,
+// TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog pins the retry
+// half of the same contract: the "job attempt failed, scheduling retry"
+// log line and the StatusRetrying rows of the attempts/duration
+// instruments must fire strictly after completeRetrying's transition
+// report and only for a genuine running -> retrying move, leaving a
+// concurrently cancelled Job exactly one truthful record: the "job
+// cancelled before its outcome could be recorded, outcome discarded" Info
+// line carrying the discarded_outcome=retrying attribute. Deterministic by construction,
 // exactly like the success and dead-letter halves.
 func TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog(t *testing.T) {
 	reader := setupTestMeterProvider(t)

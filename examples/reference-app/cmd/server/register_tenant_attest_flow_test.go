@@ -53,8 +53,8 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	const freshEmail = "p1-authn-fresh@example.com"
 	const freshPassword = "the fresh account's own passphrase"
 
-	// The caller: a real, signed-in member of tenant-acme -- the
-	// reviewer's demo-owner stand-in, an account that genuinely holds a
+	// The caller: a real, signed-in member of tenant-acme, standing in for
+	// any legitimate tenant member -- an account that genuinely holds a
 	// tenant-acme bearer (registerAndAuthenticate drives the real register
 	// and login routes and grants the tenant membership the sign-in
 	// verifies).
@@ -62,9 +62,9 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 
 	// tenant-acme's org root is created BEFORE the register, through org's
 	// real HTTP surface -- the state a real tenant already has, which is
-	// what makes the roster question meaningful in both the
-	// the post-fix shape (a tenant's own members are the accounts org's
-	// handleUserCreated subscriber would seat there).
+	// what makes the roster question meaningful: a tenant's own members
+	// are exactly the accounts org's handleUserCreated subscriber would
+	// seat there.
 	var acmeRoot orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", callerToken, "",
 		map[string]string{"name": "Acme Dental Group", "kind": "group"}, &acmeRoot)
@@ -132,10 +132,8 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	// Leg 2, the refusal: a sign-in of the fresh account naming
 	// tenant-acme is refused -- the account holds no membership there. The
 	// refusal is the unified 401 authn.invalid_credentials answer a wrong
-	// password also gets (this leg answers the unified 401
-	// authn.tenant_membership_required; the answer was deliberately
-	// unified, the specific reason now recorded in the login history,
-	// never the response).
+	// password also gets (the answer is deliberately unified: the specific
+	// reason lives in the login history, never the response).
 	status, code, _ := demoLogin(t, srv, freshEmail, freshPassword, "tenant-acme")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("sign-in of the freshly registered account into tenant-acme: status = %d, code = %q, want 401 %q "+

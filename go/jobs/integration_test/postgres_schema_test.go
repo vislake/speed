@@ -49,8 +49,8 @@ func TestStandaloneQueue_PostgresSchema_BuildsAndRoundTrips(t *testing.T) {
 
 	// Start applies ensureJobsSchema (CREATE TABLE jobs with BYTEA columns,
 	// the partial idempotency index, the queue_writers table) against the
-	// real PostgreSQL. Pre-fix, this is where the run fails: the
-	// BLOB-typed CREATE TABLE is refused with `type "blob" does not exist`.
+	// real PostgreSQL; a BLOB-typed CREATE TABLE is refused here with
+	// `type "blob" does not exist`.
 	if err := q.Start(context.Background()); err != nil {
 		t.Fatalf("StandaloneQueue.Start over PostgreSQL error = %v; want nil -- the jobs DDL must build on the postgres dialect", err)
 	}

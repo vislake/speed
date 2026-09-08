@@ -108,8 +108,8 @@ func TestMetricsHandler_WithOTLPEndpoint_ReturnsNotFound(t *testing.T) {
 	// exact order: t.Cleanup callbacks all run strictly after the test
 	// function (and every one of its own defers) has already returned,
 	// so a shutdown registered via t.Cleanup here would run AFTER
-	// stopFakeCollector already tore down the fake server -- exactly the
-	// ordering bug this comment exists to prevent reintroducing. Plain
+	// stopFakeCollector already tore down the fake server -- the ordering
+	// hazard this arrangement guards. Plain
 	// defers run LIFO within this function, so registering
 	// stopFakeCollector first and shutdown second makes shutdown (which
 	// needs the fake server still listening to flush against) run first.
@@ -240,13 +240,13 @@ func TestInit_WithOTLPEndpoint_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) 
 // actually failing this test:
 //   - without a defer registered before the early exit (the undeferred
 //     shape), Init's background goroutines measurably leak. If this
-//     stopped being true (e.g. a future OTel SDK version started
-//     lazily starting these goroutines, or stopped needing Shutdown to
-//     stop them), this test would no longer be proving anything, so
-//     the leak is asserted explicitly rather than assumed.
+//     stopped being true (e.g. an OTel SDK version that started these
+//     goroutines lazily, or stopped needing Shutdown to stop them),
+//     this test would be proving nothing, so the leak is asserted
+//     explicitly rather than assumed.
 //   - with a defer registered right after Init's error check -- the
 //     shape every endpoint-configuring Init call in
-//     this file now uses -- they do not.
+//     this file uses -- they do not.
 func TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t *testing.T) {
 	lis, srv := startFakeCollector(t)
 	defer stopFakeCollector(t, lis, srv)
@@ -448,11 +448,10 @@ func stopFakeCollector(t *testing.T, _ net.Listener, srv *fakeCollectorServer) {
 // TestInit_WithOTLPEndpoint_ExportsRealSpansAndMetricsOverOTLP's own
 // count-after-shutdown assertion), so a span ended through the FIRST
 // Init's global provider is exported to the fake collector exactly when
-// the second Init tears that first pair down. Fails before the fix
-// (verified): the second Init leaves the first pair running, nothing ever
-// shuts it down, and the fake collector receives zero trace export
-// requests; passes after: the second Init's return is preceded by the
-// first pair's shutdown, and the pending span has reached the collector.
+// the second Init tears that first pair down. The second Init must shut
+// the first pair down before its own providers come up: the first pair's
+// shutdown precedes the second Init's return, and the pending span has
+// reached the collector.
 func TestInit_SecondCall_TearsDownThePreviousProviders(t *testing.T) {
 	lis, srv := startFakeCollector(t)
 	defer stopFakeCollector(t, lis, srv)
@@ -508,9 +507,8 @@ func TestInit_SecondCall_TearsDownThePreviousProviders(t *testing.T) {
 	// being safely callable afterwards: every shutdown Init hands out is
 	// once-guarded (the OTel SDK's own provider Shutdown methods are not
 	// error-idempotent at the reader level), so the re-invocation is a
-	// no-op returning the first run's result. With the fix, both pairs'
-	// goroutines are gone and the count returns to baseline. Before the
-	// fix the first pair's goroutines survive every one of these calls.
+	// no-op returning the first run's result. After both calls, the two
+	// pairs' goroutines must be gone: the count returns to baseline.
 	if err := shutdown2(ctx); err != nil {
 		t.Errorf("shutdown #2: %v", err)
 	}
@@ -533,10 +531,9 @@ func TestInit_SecondCall_TearsDownThePreviousProviders(t *testing.T) {
 // "speed". Options cannot report errors (their signature is func(*Config)),
 // so Init -- the module's established point for refusing an option outcome,
 // the way it refuses WithOTLPEndpoint with no registered exporter -- must.
-// Fails before the fix (verified): Init succeeds and returns a usable
-// shutdown; passes after: Init fails with an error naming the empty
-// service name, and no providers are installed (the failure precedes every
-// provider-construction and global-install step).
+// Init must fail with an error naming the empty service name, and no
+// providers may be installed: the failure precedes every
+// provider-construction and global-install step.
 func TestInit_EmptyServiceName_Refused(t *testing.T) {
 	shutdown, err := obs.Init(context.Background(), obs.WithServiceName(""))
 	if err == nil {

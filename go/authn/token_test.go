@@ -344,15 +344,14 @@ func TestIssue_EveryTokenCarriesADistinctJTI(t *testing.T) {
 	}
 }
 
-// TestVerify_RejectsAlgorithmMismatch is the new gate
-// docs/internal/22-pki.md's "authn's signing algorithm" section requires: a token
+// TestVerify_RejectsAlgorithmMismatch pins the algorithm binding: a token
 // header's alg must match the algorithm the kid's KeySource entry itself
 // declares, even though the token is a completely genuine, correctly
 // verifying Ed25519/EdDSA signature and the parser's own allowlist (single
-// EdDSA) has already passed it. This is deliberately redundant with that
-// allowlist today -- it becomes load-bearing the day a second algorithm is
-// ever added, and the whole point is that the gate is already in place
-// before that day arrives.
+// EdDSA) has already passed it. The check is deliberately redundant with
+// that allowlist: the allowlist gates which algorithms parse at all, while
+// this binding ties the header to what the key entry declares, so a key
+// entry can never sign under an algorithm its entry does not name.
 func TestVerify_RejectsAlgorithmMismatch(t *testing.T) {
 	t.Parallel()
 

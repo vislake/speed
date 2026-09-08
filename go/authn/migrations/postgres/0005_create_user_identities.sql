@@ -18,7 +18,7 @@
 -- which is the value an operator will compare against their own directory.
 -- external_id is sized at 191 rather than 255 because that is the largest
 -- prefix a utf8mb4 unique index tolerates on the MySQL-family engines a
--- consuming project might later add; neither supported dialect needs it, and
+-- consuming project may adopt; neither supported dialect needs it, and
 -- no provider issues a subject anywhere near that long.
 --
 -- email is encrypted at rest by dbkit's serializer and has NO blind index,

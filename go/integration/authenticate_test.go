@@ -201,10 +201,10 @@ func TestService_Authenticate_RecordsLastUsedAt(t *testing.T) {
 // exercised deterministically: read the live row exactly as Authenticate
 // would, revoke, then perform the recordLastUsed write Authenticate
 // performs against its now-stale copy -- the row must still be revoked and
-// the key must still refuse to authenticate. Before the fix (a full-row
-// Repository[APIKey].Update carrying the stale copy's nil RevokedAt) this
-// write revived the key; after it (a targeted last_used_at-only UPDATE) it
-// cannot.
+// the key must still refuse to authenticate. recordLastUsed is a targeted
+// last_used_at-only UPDATE; a full-row save of the stale copy, whose nil
+// RevokedAt would overwrite the committed revocation mark, is exactly the
+// shape this test refuses.
 func TestService_Authenticate_RevokedKey_StaleLastUsedWrite_DoesNotRevive(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 

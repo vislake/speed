@@ -114,8 +114,8 @@ func TestCredentialService_Resolve_TenantBYOKOverridesPlatformRow(t *testing.T) 
 
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")
 	// A literal public IP: tenant-tier base URLs are SSRF-validated at write
-	// time now (credential.go), and a hostname this test cannot resolve
-	// would be refused as unresolvable -- the IP is what this test's
+	// time (credential.go), and a hostname this test cannot resolve would be
+	// refused as unresolvable -- the IP is what this test's
 	// resolution-override point needs, and it is never dialed here.
 	if err = svc.SetTenantCredential(acmeCtx, ProviderOpenAICompatible, "sk-acme-byok", "https://93.184.216.34/v1"); err != nil {
 		t.Fatalf("SetTenantCredential: %v", err)
@@ -294,16 +294,13 @@ func TestCredentialService_SetPlatformCredential_PrivateBaseURL_StillAccepted(t 
 }
 
 // TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersions
-// is a cross-version regression harness: it deliberately references only
-// symbols that exist without the SSRF guard (no ErrBaseURLBlocked, no
-// ValidateBaseURL), so the identical test body compiles against both
-// unguarded and guarded builds of the module and fails against the
-// unguarded one. What it asserts at the service boundary: a blocked-
-// destination write is refused, and no row is stored -- the blocked
-// destination never becomes a stored dial target waiting for a later call
-// to reach it. (The code-level assertions of the refusal shape -- which
-// coded error, which params -- live in the sibling tests above, which
-// reference the guard's symbols and are not this harness's job.)
+// pins the service-boundary refusal using only symbols that exist
+// independently of the SSRF guard's own API (no ErrBaseURLBlocked, no
+// ValidateBaseURL): a blocked-destination write is refused, and no row is
+// stored -- the blocked destination never becomes a stored dial target
+// waiting for a later call to reach it. (The code-level assertions of the
+// refusal shape -- which coded error, which params -- live in the sibling
+// tests above, which reference the guard's symbols directly.)
 func TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersions(t *testing.T) {
 	svc := NewCredentialService(newTestDB(t))
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")

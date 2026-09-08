@@ -15,7 +15,7 @@ import (
 	"github.com/vislake/speed/go/pki/api"
 )
 
-// This file tests Handler, pki's round-3 HTTP surface: the five operations
+// This file tests Handler, pki's HTTP surface: the five operations
 // api/openapi.yaml defines, served behind the spec-generated
 // api.ServerInterface (api/pki-server.gen.go) -- the enforcement half of
 // the spec-first flow. Every test drives whole requests through Handler's

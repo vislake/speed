@@ -1,31 +1,23 @@
 package main
 
 // tenant_config_reader_flow_test.go is the mandatory-first-consumer proof
-// the suite pins go/sharing's and go/compliance's own "no live
-// TenantConfigReader adapter over go/config" limitation with (each
-// module's own docs, "Tenant-configured default expiry" / "Expiry,
-// view limit and no password" sections): it drives the exact
-// sharingConfigReader/complianceConfigReader adapters server.go's real
-// buildServer wires (defined alongside orgFeatureGate) against a real
-// go/config Service, a real go/sharing Service and a real
-// go/compliance.ExportService, all composed through the same
-// pkgcore.NewKernel().Bootstrap + Module.Attach sequence buildServer
-// itself uses -- proving both halves rule 2's own "N days if the tenant
-// has not configured one" phrasing promises: a tenant that DOES configure
-// one gets it, and a tenant that does not still gets the module's own
-// fixed default when no tenant row overrides it.
+// for the sharingConfigReader/complianceConfigReader host adapters over
+// go/config that server.go's real buildServer wires (defined alongside
+// orgFeatureGate): it drives them against a real go/config Service, a
+// real go/sharing Service and a real go/compliance.ExportService, all
+// composed through the same pkgcore.NewKernel().Bootstrap +
+// Module.Attach sequence buildServer itself uses. The tenant-configured
+// default expiry applies when the tenant has configured one; a tenant
+// that has not still gets the module's own fixed default when no tenant
+// row overrides it.
 //
-// This does not go through the composed HTTP stack buildTestServer wires:
-// neither sharing.Service.Create nor compliance.ExportService.Export has
-// an owner-facing HTTP route yet (both modules record this
-// as a known limitation), so sharing_flow_test.go's
-// own secondSharingService already established the precedent of reaching
-// these two Service-level operations directly rather than through HTTP.
-// What this file adds beyond that precedent is wiring the SAME
+// This file reaches these Service-level operations directly rather than
+// through the composed HTTP stack buildTestServer wires (the precedent
+// sharing_flow_test.go's secondSharingService set), because what is
+// under test is the reader wiring itself: the SAME
 // sharingConfigReader/complianceConfigReader types production code uses,
-// rather than an unwired *sharing.Service/*compliance.Module, so what is
-// proven here is the host adapters' own new code, not a stand-in for
-// it.
+// composed with the real services, not an unwired
+// *sharing.Service/*compliance.Module stand-in.
 
 import (
 	"context"

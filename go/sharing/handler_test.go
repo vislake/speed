@@ -256,13 +256,13 @@ func (r tenantAssertingResolver) OpenResource(ctx context.Context, _ string) (Re
 }
 
 // TestHandler_SharingAccessShare_ResolverSeesTheShareOwningTenant is the
-// direct regression test for the bug the reference app's own flow test
-// caught: Service.AccessPublic resolves the tenant only inside its own
-// call to Service.Access, never mutating the *http.Request's own context
-// -- a resolver that itself needs a tenant in ctx (like go/storage's
-// ObjectService.OpenContent) would otherwise fail closed with
-// pkgcore.ErrNoTenant on every granted access. Handler must rebuild the
-// tenant from the granted Share's own row before calling OpenResource.
+// direct regression test for the tenant-rebuilding contract: Handler must
+// rebuild the tenant from the granted Share's own row before calling
+// OpenResource. Service.AccessPublic resolves the tenant only inside its
+// own call to Service.Access, never mutating the *http.Request's own
+// context -- a resolver that itself needs a tenant in ctx (like
+// go/storage's ObjectService.OpenContent) would otherwise fail closed
+// with pkgcore.ErrNoTenant on every granted access.
 func TestHandler_SharingAccessShare_ResolverSeesTheShareOwningTenant(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	svc.now = fixedClock(time.Now())

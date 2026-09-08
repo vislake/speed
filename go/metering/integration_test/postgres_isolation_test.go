@@ -1,14 +1,12 @@
 //go:build integration
 
 // Package metering_test holds go/metering's PostgreSQL integration tier,
-// the tier that exists because three PostgreSQL-only defects escaped the
-// SQLite-only unit suite. It is physically separate from go/metering's
-// unit tests (which
-// live in package metering, one file per source file, per the backend
-// coding standard's testing layout rule) and carries the "integration"
-// build tag: a plain "go test ./..." never compiles or runs anything in
-// this directory; it is invoked explicitly with
-// "go test -tags=integration ./..." from the module directory.
+// the tier that exists because three defect classes SQLite cannot surface
+// live only on a real server. It is physically separate from go/metering's
+// unit tests (which live in package metering, one file per source file)
+// and carries the "integration" build tag: a plain "go test ./..." never
+// compiles or runs anything in this directory; it is invoked explicitly
+// with "go test -tags=integration ./..." from the module directory.
 //
 // Every test here opens its own disposable PostgreSQL 16 container via
 // testcontainers (through metering/internal/testutil.NewPostgres, which

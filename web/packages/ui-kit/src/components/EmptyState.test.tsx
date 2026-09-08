@@ -140,10 +140,10 @@ describe('EmptyState', () => {
   // all. This test supplies the ancestor itself so the skip is actually
   // reachable.
   it('does not skip a heading level under a real h1/h2 ancestor', async () => {
-    // The default is h6 -- an un-migrated caller that does not pass
-    // headingLevel still skips from h1 straight to h6 here, the
-    // heading-order skip axe's heading-order rule flags. Supplying the
-    // correct level is the fix. Both halves are asserted below.
+    // The default is h6: a caller that does not pass headingLevel under
+    // a real h1 ancestor skips straight to h6 -- the skip axe's
+    // heading-order rule flags. The test pins both halves: the default
+    // skips, an explicit headingLevel does not.
     renderWithProviders(
       <div>
         <h1>Page title</h1>

@@ -45,15 +45,14 @@ func killEveryPooledConnection(t *testing.T, ctx context.Context, pool *pgxpool.
 }
 
 // TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvance_NoDuplicate
-// is the regression test for a real correctness bug review found in this
-// package: deliverPendingForType (outbox.go) runs a catch-up row's handlers
-// BEFORE persisting that the row was delivered (advanceCursorAtLeast). With
-// no retry around that call, a connection failure landing in exactly that
-// gap -- a killed backend, a dropped TCP session, nothing more exotic than
-// that -- left the persisted cursor stuck behind a row whose handlers had
-// already run, and the very next catch-up cycle re-fetched and redelivered
-// the same row: a genuine duplicate, reviewed and confirmed reproducible
-// against this package before this test existed.
+// pins the delivery-duplicate hazard of the cursor-advance gap:
+// deliverPendingForType (outbox.go) runs a catch-up row's handlers BEFORE
+// persisting that the row was delivered (advanceCursorAtLeast). A
+// connection failure landing in exactly that gap -- a killed backend, a
+// dropped TCP session, nothing more exotic than that -- would leave the
+// persisted cursor stuck behind a row whose handlers had already run, and
+// the very next catch-up cycle would re-fetch and redeliver the same row:
+// a genuine duplicate.
 //
 // The reproduction here is deterministic, not a timing race: the sabotage
 // (killing every backend connection) runs SYNCHRONOUSLY inside the
@@ -72,10 +71,9 @@ func killEveryPooledConnection(t *testing.T, ctx context.Context, pool *pgxpool.
 // later, lands on a freshly dialed, healthy connection -- the server
 // itself was never stopped, only every existing backend session was
 // killed -- so the cursor is correctly persisted before any later
-// catch-up cycle ever gets a chance to find it stale. Reverting
-// advanceCursorAtLeast to a single, non-retried attempt reliably turns
-// this test red: the poisoned event's delivered count settles at 2, not 1
-// (verified by hand against the pre-fix code as part of this review).
+// catch-up cycle can find it stale. (Reverting advanceCursorAtLeast to a
+// single, non-retried attempt makes the poisoned event's delivered count
+// settle at 2, not 1.)
 func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvance_NoDuplicate(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)

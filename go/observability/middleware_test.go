@@ -373,16 +373,17 @@ func isStandardMethod(method string) bool {
 // TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded is the negative
 // control for the method-dimension half of the live, unauthenticated
 // exploit described in Middleware's own "Metric label cardinality caveats"
-// doc comment: the route label was already bounded, but the
-// http.request.method METRIC label is fed by
+// doc comment: the route label is bounded, but the http.request.method
+// METRIC label is fed by
 // (*http.Request).Method -- the raw request-line method token, which
 // net/http accepts from any unauthenticated caller with no set constraint,
 // no normalization and no truncation. Middleware sits OUTSIDE
-// tenancy.Middleware in the fixed chain (its own doc comment), so pre-auth
-// 404s and 403s are counted exactly like the route exploit's traffic, and
+// tenancy.Middleware in the middleware chain (its own doc comment), so
+// pre-auth 404s and 403s are counted exactly like the route exploit's
+// traffic, and
 // without a bound an attacker sending one distinct method token per request
 // creates one new, permanent metric series per token -- the identical
-// cardinality-explosion failure mode the route limiter already closes, one
+// cardinality-explosion failure mode the route limiter closes, one
 // dimension over.
 //
 // This drives one Middleware instance with (a) every one of the nine
@@ -393,10 +394,9 @@ func isStandardMethod(method string) bool {
 // preface) -- and asserts, from observable, black-box behavior, that the
 // set of distinct http.request.method METRIC values ever emitted stays
 // exactly the known set plus the single fixed overflow value: never one
-// series per attacker token. On the unfixed code every distinct token
-// becomes its own series and the distinct-value set grows without bound --
-// this test fails there (verified by hand before the fix landed) and passes
-// after.
+// series per attacker token. Without the overflow fold, every distinct
+// token would become its own series and the distinct-value set would grow
+// without bound -- the cardinality failure this test pins.
 func TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded(t *testing.T) {
 	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -440,8 +440,8 @@ func TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded(t *testing.T) {
 
 	// The boundedness assertion proper: every emitted method label must be
 	// one of the nine standard tokens or the single fixed overflow value --
-	// pre-fix, the 100 attacker tokens plus "get"/"PROPFIND"/"PRI" each emit
-	// their own label and this fails.
+	// without the fold, the 100 attacker tokens plus "get"/"PROPFIND"/"PRI"
+	// each emit their own label and this fails.
 	seen := make(map[string]int64, len(dataPoints))
 	var overflowFound bool
 	var totalRecorded int64
@@ -461,8 +461,8 @@ func TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded(t *testing.T) {
 	}
 
 	// The overflow bucket must exist and must have absorbed every
-	// non-standard token sent, exactly: on the unfixed code there is no
-	// overflow bucket at all.
+	// non-standard token sent, exactly: there is no overflow bucket without
+	// the fold.
 	if !overflowFound {
 		t.Fatalf("expected one series labeled http.request.method=%q (the overflow bucket) among the %d gathered series, found none",
 			obs.MethodLabelOverflowValue, len(dataPoints))
@@ -490,8 +490,8 @@ func TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded(t *testing.T) {
 
 	// The near-miss and non-standard tokens must NOT have their own series:
 	// "get" is a different, case-sensitive token from GET and folds; so do
-	// PROPFIND and PRI. (On the unfixed code each of these three is its own
-	// series and this check fails at the boundedness assertion above first.)
+	// PROPFIND and PRI. (Without the fold each of these three would get its
+	// own series and the boundedness assertion above would fail first.)
 	for _, m := range nonStandard {
 		if _, ok := seen[m]; ok {
 			t.Errorf("non-standard method token %q got its own http.request.method series: everything outside the known set must fold to %q",
@@ -566,21 +566,19 @@ func longAttackerPath(suffix byte) string {
 //     length.
 //   - The two requests must collapse into exactly ONE series, not two.
 //     This is the internal-state proof: if routeLabelLimiter's "seen" map
-//     used the raw, untruncated path as its key (the pre-fix behavior),
-//     these two paths -- which differ after byte longAttackerPathPrefixLen
-//     -- would be two distinct map entries and therefore two distinct
-//     series. They can collapse into one only if both were truncated to
-//     the same obs.MaxRouteLabelLength-byte prefix BEFORE either became a
-//     map key, which is exactly what routeLabelLimiter.label must now do.
+//     keyed on the raw, untruncated path, these two paths -- which differ
+//     after byte longAttackerPathPrefixLen -- would be two distinct map
+//     entries and therefore two distinct series. They can collapse into
+//     one only if both were truncated to the same
+//     obs.MaxRouteLabelLength-byte prefix BEFORE either became a map key,
+//     which is exactly what routeLabelLimiter.label does.
 //
-// Negative-control proof (per this repository's established technique --
-// see TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded's own use of
-// it): temporarily removing the "path = truncateRouteLabel(path)" line
-// from routeLabelLimiter.label makes this test fail on both fronts at
-// once -- 2 series instead of 1, and a recorded label
-// longAttackerPathTotalLen bytes long instead of obs.MaxRouteLabelLength
-// -- then restoring it makes the test pass again. This was verified by
-// hand while writing this test, not merely asserted here.
+// Negative control (the technique
+// TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded's own use of it
+// demonstrates): removing the "path = truncateRouteLabel(path)" line from
+// routeLabelLimiter.label fails this test on both fronts at once -- 2
+// series instead of 1, and a recorded label longAttackerPathTotalLen
+// bytes long instead of obs.MaxRouteLabelLength.
 func TestMiddleware_LongRoutePaths_LabelLengthIsBounded(t *testing.T) {
 	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -864,11 +862,10 @@ func TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes(t *testing.T) {
 // and UTF-8 bounds -- so an operator can still find the exact resource a
 // slow trace was for, in exporter-safe form. The span's METHOD attribute
 // keeps the exact raw token (protocol-bounded ASCII, never a disclosure or
-// validity surface). Fails before the fix (verified): the span's http.route
-// attribute carries the raw request path and the span name carries method +
-// raw path; passes after: route attribute and name carry the same bounded
-// value the request's metric label carries, and url.path carries the
-// bounded actual path.
+// validity surface). The span's http.route attribute and the span name
+// must carry the same bounded value the request's metric label carries --
+// never the raw request path or method + raw path -- and url.path carries
+// the bounded actual path.
 func TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel(t *testing.T) {
 	t.Run("folded to the seeded mount label", func(t *testing.T) {
 		exp := setupTracerProvider(t)
@@ -1120,9 +1117,8 @@ func TestAnnotateTenant_NoTenant_LeavesSpanUnmodified(t *testing.T) {
 // response that never reached the client (see the defer's own comment) --
 // and an error-status span. The panic itself is deliberately NOT recovered
 // here: it keeps propagating to net/http's recovery above, exactly as it
-// would without this middleware in the chain. Fails before the fix
-// (verified): the collect below finds no counter series at all, and the
-// span's status code is Unset.
+// would without this middleware in the chain. The collect below must
+// find the counter series and an error-status span.
 func TestMiddleware_PanickingHandler_StillRecordsMetricsAndErrorSpan(t *testing.T) {
 	exp := setupTracerProvider(t)
 	reader := setupMeterProvider(t)
@@ -1179,8 +1175,8 @@ func TestMiddleware_PanickingHandler_StillRecordsMetricsAndErrorSpan(t *testing.
 // length bounds never covered). The label must instead carry the Unicode
 // replacement rune in the invalid byte's place -- the request is still
 // counted, under a valid label -- while a valid path is never touched.
-// Fails before the fix (verified): the recorded route label is "/api/..."'
-// with the raw 0xFF byte in it and utf8.ValidString reports false.
+// The recorded route label must carry the replacement rune, never the raw
+// 0xFF byte.
 func TestMiddleware_InvalidUTF8Path_SanitizesBeforeTheLabel(t *testing.T) {
 	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1255,12 +1251,11 @@ func TestMiddleware_InvalidUTF8Path_SanitizesBeforeTheLabel(t *testing.T) {
 // name and every request-controlled attribute carry the Unicode
 // replacement rune in the invalid byte's place, never the byte itself.
 //
-// Fails before the fix (verified): the exported span's name is
-// "GET /api/<0xFF>junk" (the formatter's raw method + path) and its
-// url.path, user_agent.original and client.address attributes each carry
-// the raw invalid byte; passes after: the name is method + the bounded
-// route value "GET /api/<U+FFFD>junk" and the three attributes carry the
-// same path or header text with the invalid byte replaced by U+FFFD.
+// The exported span's name must be method + the bounded route value
+// "GET /api/<U+FFFD>junk", never the formatter's raw method + path, and
+// its url.path, user_agent.original and client.address attributes must
+// carry the path or header text with the invalid byte replaced by
+// U+FFFD.
 func TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte(t *testing.T) {
 	exp := setupTracerProvider(t)
 	setupMeterProvider(t) // Middleware always records metrics too; give it a live provider.
@@ -1274,8 +1269,8 @@ func TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte(t *te
 		t.Fatalf("test setup: URL.Path %q must not be valid UTF-8 for this regression to be exercised", req.URL.Path)
 	}
 	// net/http applies no byte validation to header values, so these reach
-	// the middleware (and, before the fix, otelhttp's semconv attributes)
-	// with raw invalid bytes exactly like the path does.
+	// the middleware with raw invalid bytes exactly like the path does
+	// (otelhttp's own semconv attributes would carry them unmodified).
 	req.Header.Set("User-Agent", "probe\xffagent")
 	req.Header.Set("X-Forwarded-For", "1.2.3.4\xff")
 	handler.ServeHTTP(httptest.NewRecorder(), req)
@@ -1341,19 +1336,16 @@ func TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte(t *te
 	}
 }
 
-// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded is the regression
-// for the route limiter's first-come-first-served pre-emption: before a
-// host can register its real route table (obs.RegisterMountedRoutes), the
-// limiter's distinct-value budget was filled by whatever request traffic
-// arrived first, so 256 distinct garbage paths sent right after startup
-// collapsed every genuine route -- /api/v1/notes included -- to
+// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded pins the route
+// limiter's seeded-table behavior: unseeded, the limiter fills its
+// distinct-value budget with whatever request traffic arrives first --
+// 256 distinct garbage paths sent right after startup would collapse
+// every genuine route, /api/v1/notes included, to
 // RouteLabelOverflowValue for the process lifetime, with no bound
 // violated. With the route table seeded at construction (the register call
 // below, which Middleware snapshots when it builds the limiter), a real
-// route keeps its own series whatever garbage arrives. Fails before the
-// seeding lands (verified by removing the seeding loop in Middleware):
-// the series labeled http.route="/api/v1/notes" does not exist -- the real
-// route's request lands in the overflow bucket instead.
+// route keeps its own series whatever garbage arrives: the series labeled
+// http.route="/api/v1/notes" must exist -- never the overflow bucket.
 func TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded(t *testing.T) {
 	reader := setupMeterProvider(t)
 
@@ -1442,14 +1434,14 @@ func TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded(t *testing.T) {
 // without a real route-capture mechanism -- so a deep operation
 // requested only after the budget is exhausted still records a
 // measurable series of its own (under its mount's label), never the
-// overflow bucket. The two prefix==path baselines below (the shape the
-// pre-fix regression TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded
-// already pinned) must keep passing before and after, so a failure of
-// the deep-route assertion cannot be blamed on the flood not reaching
-// the limiter. Fails before the fix (verified): no series labeled
-// http.route="/api/v1/authn" exists -- the deep operation's request
-// lands in the overflow bucket instead, whose count is one higher than
-// the 104 the garbage alone produces.
+// overflow bucket. The two prefix==path baselines below (the shape
+// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded pins) must keep
+// passing, so a failure of the deep-route assertion cannot be blamed on
+// the flood not reaching the limiter. A series labeled
+// http.route="/api/v1/authn" must exist for the deep operation's
+// request -- without the fold it would land in the overflow bucket
+// instead, whose count would be one higher than the garbage alone
+// produces.
 func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testing.T) {
 	reader := setupMeterProvider(t)
 
@@ -1503,8 +1495,8 @@ func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testi
 		series[labelMap(dp.Attributes)["http.route"]] += dp.Value
 	}
 
-	// Baselines (pass before the fix too): a host leaf route and a module
-	// mount requested at its own path keep their seeded series.
+	// Baselines: a host leaf route and a module mount requested at its own
+	// path keep their seeded series.
 	for _, path := range []string{"/healthz", "/api/v1/notes"} {
 		if got := series[path]; got != 1 {
 			t.Fatalf("baseline http.route=%q recorded %d requests, want exactly 1 (the one real request above); series: %v",
@@ -1512,19 +1504,19 @@ func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testi
 		}
 	}
 
-	// The regression: the deep operation keeps a measurable series of its
-	// own, labeled by its mount's seeded prefix -- never the overflow
-	// bucket. Pre-fix the request lands in {overflow} and no
-	// /api/v1/authn series exists at all.
+	// The deep operation keeps a measurable series of its own, labeled by
+	// its mount's seeded prefix -- never the overflow bucket: without the
+	// prefix fold the request would land in {overflow} and no /api/v1/authn
+	// series would exist.
 	if got := series["/api/v1/authn"]; got != 1 {
 		t.Errorf("http.route=%q (the seeded mount prefix the deep operation request /api/v1/authn/login/password must fold onto) recorded %d requests, want exactly 1: the deep operation collapsed to %q despite its mount prefix being seeded",
 			"/api/v1/authn", got, obs.RouteLabelOverflowValue)
 	}
 
 	// The overflow bucket holds exactly the garbage that overflowed: 356
-	// garbage paths minus the 252 the 4-seed-reduced budget tracked.
-	// Pre-fix the deep operation's request is in here too, making it one
-	// higher.
+	// garbage paths minus the 252 the seeded budget tracks (see the
+	// overflowedGarbage constant below). A folded deep operation is not in
+	// here.
 	const overflowedGarbage = garbagePaths - (obs.MaxRouteLabelValues - seededRoutes)
 	if got := series[obs.RouteLabelOverflowValue]; got != overflowedGarbage {
 		t.Errorf("overflow bucket recorded %d requests, want %d (the garbage paths beyond the seeded budget; pre-fix the deep operation's request lands here too, making it %d)",
@@ -1542,8 +1534,7 @@ func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testi
 	// series and the remaining 104 garbage paths share the single
 	// overflow bucket -- 252 tracked garbage + 3 requested real routes +
 	// 1 overflow bucket = obs.MaxRouteLabelValues distinct series, the
-	// same ceiling the exact-match seed enforced. Pre-fix the deep
-	// operation emits nothing of its own, so only 255 series exist.
+	// same ceiling the exact-match seed enforces.
 	if got := len(counter.DataPoints); got != obs.MaxRouteLabelValues {
 		t.Errorf("got %d distinct series, want exactly %d (252 tracked garbage + 3 requested real routes + 1 overflow bucket): folding onto seeded prefixes must not grow the series bound",
 			got, obs.MaxRouteLabelValues)
@@ -1564,11 +1555,10 @@ func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testi
 // which is what keeps labels deterministic -- the same series for the
 // same operation whatever order traffic and garbage arrive in -- and
 // what keeps attacker garbage below a seeded prefix from ever minting a
-// label at all. Fails before the fix (verified): the exact-match seed
-// leaves /api/v1/notes/abc, /api/v1/notesXYZ and /api/v1/billing/xyz to
-// each mint their own verbatim series, so the /api/v1/notes series
-// counts 1, no /api/v1 series exists and a "/api/v1/notes/abc" series
-// does.
+// label at all. A seed matching only its own exact path would leave
+// /api/v1/notes/abc, /api/v1/notesXYZ and /api/v1/billing/xyz to each
+// mint their own verbatim series, counting /api/v1/notes as 1 with no
+// /api/v1 series at all.
 func TestMiddleware_SeededMountPrefix_FoldsRequestsAtOrBelowIt(t *testing.T) {
 	reader := setupMeterProvider(t)
 
@@ -1663,16 +1653,15 @@ func (erroringMeter) Float64Histogram(name string, _ ...metric.Float64HistogramO
 	return noop.Float64Histogram{}, fmt.Errorf("probe: cannot create histogram %q", name)
 }
 
-// TestMiddleware_InstrumentConstructionError_IsReported is the regression
-// for Middleware dropping its instrument-construction errors
-// (requestCount, _ := meter.Int64Counter(...)): a construction error means
-// the meter handed back a no-op instrument, so requests would go
-// uncounted or untimed with no startup signal at all -- the silent-failure
-// mode a future rename or collision of these instrument names would
-// otherwise produce. Middleware now routes each construction error to
-// OTel's global error handler (stderr by default; captured here via
-// otel.SetErrorHandler), naming the instrument that failed. Fails before
-// the fix (verified): the capturing error handler is never invoked.
+// TestMiddleware_InstrumentConstructionError_IsReported pins Middleware's
+// instrument-construction error handling: a construction error means the
+// meter hands back a no-op instrument, so requests would go uncounted or
+// untimed with no startup signal at all -- the silent-failure mode a
+// rename or collision of these instrument names would produce. Middleware
+// routes each construction error to OTel's global error handler (stderr
+// by default; captured here via otel.SetErrorHandler), naming the
+// instrument that failed: the capturing error handler must be invoked for
+// both instruments.
 func TestMiddleware_InstrumentConstructionError_IsReported(t *testing.T) {
 	var mu sync.Mutex
 	var reported []error

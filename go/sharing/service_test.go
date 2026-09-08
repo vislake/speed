@@ -959,9 +959,9 @@ func TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount(t *testin
 	// tournament of many goroutines hammering the view-recording guard on
 	// one unlimited share. Every call must be granted (a viewer of an
 	// unlimited share is refused only by revocation or expiry, never by
-	// losing too many races) and every grant must land in the count. Under
-	// the old bounded-CAS code this is where the false 404s appeared: a
-	// goroutine that lost 8 consecutive races in a row was refused.
+	// losing too many races) and every grant must land in the count. A
+	// bounded-CAS retry loop would refuse a goroutine that lost enough
+	// consecutive races -- the false-404 shape this tournament refuses.
 	second, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-2"})
 	if err != nil {
 		t.Fatalf("Create (second leg): %v", err)
@@ -1031,10 +1031,10 @@ func TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount(t *testin
 // revoked_at-only update (ShareRepository.markRevoked) preserves every
 // view-count increment that committed before the revocation, so the count
 // the owner reads back afterwards equals the number of accesses actually
-// granted. Under the old code Revoke wrote the whole row back from its own
-// pre-revoke read, so an increment landing between that read and the write
-// was silently erased. Each iteration uses a fresh share so the race is
-// replayed many times rather than once. Run with -race.
+// granted. A whole-row write from the revoking side's own pre-revoke read
+// would erase an increment landing between that read and the write --
+// exactly the shape this race refuses. Each iteration uses a fresh share
+// so the race is replayed many times rather than once. Run with -race.
 func TestService_Access_ConcurrentViewsSurviveRevoke(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1085,10 +1085,10 @@ func TestService_Access_ConcurrentViewsSurviveRevoke(t *testing.T) {
 		}
 
 		// Wait until at least one view has been recorded, then revoke while
-		// the workers are still recording -- the race window the old
-		// read-modify-write Revoke lost increments in. Bounded: a worker
-		// population that never records anything is a broken test, not a
-		// hang.
+		// the workers are still recording -- the race window a whole-row
+		// read-modify-write Revoke would lose increments in. Bounded: a
+		// worker population that never records anything is a broken test,
+		// not a hang.
 		deadline := time.Now().Add(5 * time.Second)
 		for atomic.LoadInt32(&granted) == 0 && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
@@ -1299,8 +1299,6 @@ func TestService_Create_NoTenantInContext(t *testing.T) {
 	}
 }
 
-// --- Rules-reinforcement round regression tests ---------------------------
-
 // TestService_Create_ExpiryInThePast_Refused pins resolveExpiry's future
 // requirement: an explicit ExpiresAt that is not strictly in the future is
 // refused with sharing.expiry_out_of_range, never persisted as a share
@@ -1380,11 +1378,8 @@ func TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored(t *tes
 // explicit-expiry ceiling for that tenant is RAISED to its configured
 // default (explicitExpiryCeiling), so the module never refuses a
 // caller-supplied explicit expiry that lies within the very envelope its
-// own default path already grants -- the contradiction of accepting 90
-// days by omission while refusing 45 by explicitness. Before the
-// two-role split of defaultShareExpiry/MaxExplicitShareLifetime this
-// scenario refused the explicit 45-day request (the 30-day ceiling was
-// applied to it) while happily granting the 90-day default -- "the more
+// own default path already grants -- accepting 90 days by omission while
+// refusing 45 by explicitness would be the contradiction "the more
 // specific you are, the more you are refused". The never-expiring-in-
 // disguise arm survives the raise: an explicit request BEYOND the
 // tenant's own configured default is still refused, 9999-12-31 included.
@@ -1676,11 +1671,11 @@ func TestService_Access_RecordViewStoreFailure_StillLeavesLogAndEvent(t *testing
 // TestService_AccessPublic_UnknownTokenRefusalIsCheap pins the
 // unauthenticated surface's anti-amplification property: refusing a token
 // that names no share at all must cost a rate-limit check plus one
-// token-index lookup, NOT a full ~19 MiB argon2id verification. Under the
-// old code every unknown token burned that check, giving a scanner that
-// sprays random tokens (each hashing differently, so per-token rate limits
-// cannot bind it) a memory- and CPU-amplification primitive capped only by
-// the per-IP budget. The unknown refusal must therefore take a small
+// token-index lookup, NOT a full argon2id verification. Burning that
+// check on every unknown token would give a scanner that sprays random
+// tokens (each hashing differently, so per-token rate limits cannot bind
+// it) a memory- and CPU-amplification primitive capped only by the
+// per-IP budget. The unknown refusal must therefore take a small
 // fraction of the time a real verification against a known
 // password-protected share takes. Timing test: skipped under -short,
 // min-of-samples like its sibling
@@ -1715,8 +1710,8 @@ func TestService_AccessPublic_UnknownTokenRefusalIsCheap(t *testing.T) {
 		return best
 	}
 
-	// The real cost an unknown-token refusal used to pay: one argon2id
-	// verification against a known password-protected share.
+	// The reference cost the unknown-token refusal must be cheap against:
+	// one argon2id verification on a known password-protected share.
 	realCheck := minDuration(func() {
 		_, _ = svc.AccessPublic(context.Background(), protected.Token, AccessParams{Password: &wrong})
 	})

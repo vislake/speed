@@ -40,9 +40,9 @@ const (
 )
 
 // reentrantDeadlockTimeout bounds the outer Publish (and bus Close below),
-// mirroring pkgcore's own deadlockTimeout: a re-entrant Publish on the
-// pre-fix code blocks forever on deliverMu, so the wait must fail rather
-// than hang CI.
+// mirroring pkgcore's own deadlockTimeout: a re-entrant Publish blocked on
+// deliverMu would block forever, so the wait must fail rather than hang
+// CI.
 const reentrantDeadlockTimeout = 5 * time.Second
 
 // reentrantQuiescePeriod is how long a test waits after the nested event's
@@ -57,9 +57,9 @@ const reentrantQuiescePeriod = 5 * time.Second
 // closeBusWithin registers a cleanup that closes bus on a background
 // goroutine, failing the test -- never hanging the run -- if Close does not
 // return within reentrantDeadlockTimeout. Close must wait for the listener
-// goroutine (listenDone), and a listener stuck on deliverMu -- the pre-fix
-// deadlock, where its deliverPending holds the lock while a handler's
-// re-entrant Publish waits for it forever -- would make a bare
+// goroutine (listenDone), and a listener stuck on deliverMu -- its
+// deliverPending holding the lock while a handler's re-entrant Publish
+// waits for it forever -- would make a bare
 // t.Cleanup(bus.Close) hang the whole test binary instead of reporting the
 // deadlock this file exists to prove. The wedged goroutine is left to die
 // with the process in that case.
@@ -82,9 +82,10 @@ func closeBusWithin(t *testing.T, bus *eventbuspostgres.EventBus) {
 // TestEventBus_HandlerMayPublishReentrantly_LocalDeliveryPath covers the
 // local-delivery arm of the deadlock: the handler runs synchronously inside
 // Publish, on the publisher's own goroutine, and its own nested Publish on
-// the same bus must not deadlock. On the pre-fix code the nested Publish
-// blocks forever on deliverMu (already held by the outer Publish on this
-// very goroutine), so the goroutine-wrapped outer Publish times out.
+// the same bus must not deadlock -- the nested Publish takes deliverMu
+// again on the very goroutine whose outer Publish already holds it, so an
+// unguarded re-entry would block forever and the goroutine-wrapped outer
+// Publish would time out.
 func TestEventBus_HandlerMayPublishReentrantly_LocalDeliveryPath(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
@@ -95,9 +96,9 @@ func TestEventBus_HandlerMayPublishReentrantly_LocalDeliveryPath(t *testing.T) {
 	rootSpy := &eventSpy{}
 	bus.Subscribe(reentrantOrgRootEvent, rootSpy.handler())
 	bus.Subscribe(reentrantUserCreatedEvent, func(ctx context.Context, _ pkgcore.Event) error {
-		// The nested publish that used to self-deadlock: Publish ran this
-		// handler while holding deliverMu, and this call tries to take
-		// deliverMu again on the same goroutine.
+		// The nested publish: Publish runs this handler while holding
+		// deliverMu, and this call takes deliverMu again on the same
+		// goroutine.
 		return bus.Publish(ctx, pkgcore.Event{Type: reentrantOrgRootEvent})
 	})
 
@@ -136,7 +137,7 @@ func TestEventBus_HandlerMayPublishReentrantly_LocalDeliveryPath(t *testing.T) {
 // same lock forever. The subscriber's listener never delivers the nested
 // event (its own nested Publish wrote the outbox row, but the wedged
 // listener can never advance past it), so the exactly-once assertion below
-// times out on the pre-fix code.
+// would time out on a deadlocked delivery path.
 func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
@@ -178,15 +179,15 @@ func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T)
 
 	// The subscriber's nested publish is delivered synchronously on its own
 	// listener goroutine, so rootSpy reaches 1 as soon as the handler above
-	// runs -- which, on the pre-fix code, it never does.
+	// runs -- the delivery the handler's re-entrant publish must achieve.
 	eventually(t, "the listener-path handler's re-entrant publish to be delivered", func() bool {
 		return rootSpy.count() >= 1
 	})
 
 	// Wait out the catch-up poller's window, then assert exactly once: the
 	// nested event's outbox row must never be redelivered by the subscriber's
-	// own poller -- the double-delivery hazard the fix's in-flight gate
-	// exists to rule out.
+	// own poller -- the double-delivery hazard the in-flight gate rules
+	// out.
 	time.Sleep(reentrantQuiescePeriod)
 	if got := rootSpy.count(); got != 1 {
 		t.Errorf("nested handler invoked %d times, want exactly 1 (no duplicate from the catch-up path)", got)

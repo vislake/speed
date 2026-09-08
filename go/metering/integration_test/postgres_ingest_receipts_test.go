@@ -2,8 +2,8 @@
 
 // PostgreSQL regressions for the metering_ingest_receipts side of the
 // billing-grade pipeline -- see the package doc comment in
-// postgres_isolation_test.go for the defect each test reproduces and the
-// fix each guards.
+// postgres_isolation_test.go for the defect class each test reproduces
+// and the contract each guards.
 package metering_test
 
 import (
@@ -25,7 +25,7 @@ import (
 // TranslateError must classify PostgreSQL's own "duplicate key value
 // violates unique constraint" (SQLSTATE 23505) as the portable
 // gorm.ErrDuplicatedKey, the classification the unit tier proves on
-// SQLite only. The idempotent fold path itself no longer depends on this
+// SQLite only. The idempotent fold path itself does not depend on this
 // classification -- it avoids the error entirely through ON CONFLICT DO
 // NOTHING (see TestPostgres_IngestBillingGrade_Redelivery_IsANoOp below)
 // -- but the raw path's answer still matters for callers that use
@@ -51,17 +51,20 @@ func TestPostgres_IngestReceiptRepository_DuplicateCreate_IsErrDuplicatedKey(t *
 // TestAggregator_IngestBillingGrade_RedeliveredEvent_DoesNotDoubleCount:
 // the SAME UsageEvent is handed to IngestBillingGrade twice, standing in
 // for Dispatcher reclaiming a still-"pending" outbox row whose first
-// delivery's aggregation already committed.
+// delivery's aggregation already committed. The second call must be a
+// safe no-op returning nil, with the event applied exactly once.
 //
-// Before the fix, foldIntoSummaryOnce swallowed the second call's
-// receipt-insert unique violation and returned nil, so the enclosing
-// transaction committed in the aborted state PostgreSQL left it in -- and
-// the pgx driver surfaces that COMMIT-became-ROLLBACK as an error, making
-// the whole redelivery fail. On SQLite (no aborted-transaction semantics)
-// the same code path was a silent, correct no-op, which is exactly why
+// The PostgreSQL-specific hazard the no-op must avoid: a receipt-insert
+// conflict recognized by swallowing the unique-violation error would
+// leave the enclosing transaction in the aborted state PostgreSQL put it
+// in, and a COMMIT on an aborted transaction is turned into a ROLLBACK by
+// the server, which the pgx driver surfaces as an error -- making the
+// whole redelivery fail. On SQLite (no aborted-transaction semantics)
+// such a swallow would be a silent, correct no-op, which is exactly why
 // this regression must run against real PostgreSQL to be a regression at
-// all: the second call must be a safe no-op returning nil, with the event
-// applied exactly once.
+// all. foldIntoSummaryOnce's receipt insert therefore runs as ON
+// CONFLICT DO NOTHING: the conflict is recognized through RowsAffected ==
+// 0 with the transaction healthy, and the commit is a real commit.
 func TestPostgres_IngestBillingGrade_Redelivery_IsANoOpNotAnError(t *testing.T) {
 	db := newPostgres(t)
 	summaries := metering.NewSummaryRepository(db)
@@ -99,19 +102,17 @@ func TestPostgres_IngestBillingGrade_Redelivery_IsANoOpNotAnError(t *testing.T) 
 }
 
 // TestPostgres_Dispatcher_RedeliveredRow_RetiresInsteadOfErroring is the
-// end-to-end form of the same defect, driven through the real
+// end-to-end form of the same contract, driven through the real
 // billing-grade delivery loop: an outbox row whose aggregation already
 // committed but whose mark-delivered write never ran (the crash window
 // IngestReceipt closes -- simulated here by calling IngestBillingGrade
 // directly and leaving the row pending) is reclaimed by the next
-// Dispatcher.RunOnce and redelivered.
-//
-// Before the fix the redelivery's IngestBillingGrade call failed on
-// PostgreSQL (see the test above), deliverOne recorded the failed attempt
-// and left the row pending, and the next cycle reproduced the identical
-// failure forever -- the outbox row never retired even though its event
-// was durably applied. After the fix the redelivery is a no-op that
-// commits cleanly, so the row retires on its first redelivery cycle.
+// Dispatcher.RunOnce and redelivered. The redelivery must be a no-op
+// that commits cleanly (see the test above), so the row retires on its
+// first redelivery cycle -- a redelivery that failed would be recorded
+// as a failed attempt and leave the row pending, the next cycle
+// reproducing the identical failure forever even though the event was
+// durably applied.
 func TestPostgres_Dispatcher_RedeliveredRow_RetiresInsteadOfErroring(t *testing.T) {
 	db := newPostgres(t)
 	summaries := metering.NewSummaryRepository(db)

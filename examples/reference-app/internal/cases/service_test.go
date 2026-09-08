@@ -359,10 +359,9 @@ func TestService_Get_NotFoundIsTenantIndistinguishable(t *testing.T) {
 
 // TestService_List_ClinicWide pins the block-A list semantic at service
 // level: every case of the tenant is visible to every member of the
-// tenant, whatever creator each row carries -- the property the
-// acceptance chain names (a case one colleague opened is visible to
-// another), and the semantic that replaced the earlier creator-scoped
-// "my cases" list. Only the tenant boundary hides a case: the second
+// tenant, whatever creator each row carries -- the clinic-wide semantic,
+// never a creator-scoped "my cases" list (a case one colleague opened is
+// visible to another). Only the tenant boundary hides a case: the second
 // half lists a second service over a second tenant and sees nothing.
 func TestService_List_ClinicWide(t *testing.T) {
 	svc := newService(t)

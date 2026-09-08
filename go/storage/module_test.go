@@ -560,8 +560,8 @@ func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 
 // TestModule_Objects_ReturnsAUsableRepository drives the repository the
 // module hands out against a real, migrated database: seed through the
-// module's own accessor and read the row back -- the same journey the
-// service round's first consumer takes.
+// module's own accessor and read the row back -- the journey the module's
+// own services run for their consumers.
 func TestModule_Objects_ReturnsAUsableRepository(t *testing.T) {
 	m := newWiredModule(t, newTestDB(t))
 	ctx := tenantCtx("tenant-a")

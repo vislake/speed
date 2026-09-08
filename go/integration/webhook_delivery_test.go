@@ -189,12 +189,13 @@ func TestService_handleDomainEvent_Redelivery_SameOccurrence_IsIdempotent(t *tes
 // byte-identical -- the same member removed and later re-added, when the
 // mapping's payload names only the member; testMapping's own transform
 // renders the same {"seen":true} body for every event -- must produce two
-// deliveries. Before the fix the key was derived from the body alone, so
-// the second occurrence probed the first's settled delivery row and was
-// silently dropped: a delivery the receiver never got and this module
-// never retried. Each call's subscription-boundary clock reading differs
-// (the clock is advanced deterministically between the two calls), so each
-// occurrence derives its own key and fans out on its own.
+// deliveries. A key derived from the body alone cannot tell the second
+// occurrence apart from the first: it would probe the first's settled
+// delivery row and be silently dropped -- a delivery the receiver never
+// got and this module never retried. Each call's subscription-boundary
+// clock reading differs (the clock is advanced deterministically between
+// the two calls), so each occurrence derives its own key and fans out on
+// its own.
 func TestService_handleDomainEvent_DistinctOccurrences_SameBody_TwoDeliveries(t *testing.T) {
 	fq := &fakeQueue{}
 	_, svc := newWebhookTestService(t, WithWebhookQueue(fq))
@@ -311,9 +312,9 @@ func TestService_handleDeliveryJob_ReceiverError_MarksFailedAndRetries(t *testin
 }
 
 // TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoResolvedIP
-// is the delivery-log half of the dial-time SSRF oracle fix (the creation-
-// time half is pinned by ssrf_test.go's own asymmetry tests, and the
-// dial-time refusal mechanism itself by
+// is the delivery-log half of the dial-time SSRF non-disclosure contract
+// (the creation-time half is pinned by ssrf_test.go's own asymmetry tests,
+// and the dial-time refusal mechanism itself by
 // TestNewSafeHTTPClient_RefusesLoopbackAtDialTime): when a delivery's
 // dial-time re-check refuses a hostname that resolves to
 // a blocked address, the refusal text persisted into the delivery row and
@@ -323,12 +324,11 @@ func TestService_handleDeliveryJob_ReceiverError_MarksFailedAndRetries(t *testin
 // network it is exactly the answer an internal-DNS reconnaissance oracle
 // would give, the same disclosure errors.go's own ErrWebhookURLBlocked
 // comment already rules out of the creation-time answer -- and the detail
-// belongs in the server-side log, never in LastError. Before this P0 was
-// closed the dial-time refusal text carried the resolved address shaped
-// "host -> 10.x.y.z", and the delivery-log API returned it to the tenant on
-// every read. (Failing before: LastError over the delivery-log API carries
-// the resolved loopback address of "localhost"; passing after: it names no
-// IP at all.)
+// belongs in the server-side log, never in LastError. The test drives one
+// real delivery whose dial is refused, then reads the failure back through
+// the delivery-log API and asserts the persisted LastError -- which must
+// stay identifiable as the blocked-destination refusal -- contains no
+// token that parses as an IP address.
 func TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoResolvedIP(t *testing.T) {
 	cipher, err := dbkit.NewCipher(testWebhookCipherKey)
 	if err != nil {
@@ -396,18 +396,19 @@ func TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoRe
 }
 
 // TestTruncateWebhookErrorText_MultibyteText_StaysValidUTF8AndCutsByRune is
-// the regression test for the byte-truncation bug this fix closes:
-// truncateWebhookErrorText used to cut with text[:webhookDeliveryErrorBudget],
-// a BYTE cut that lands wherever byte 4000 of the text happens to fall --
-// inside a multi-byte rune whenever the failure text carries one there.
-// The stored result then held a split rune: invalid UTF-8 bytes that the
-// last_error column (VARCHAR(4000) on both dialects) received. SQLite
-// accepts and stores them (dirty data every later reader of the row --
+// the regression test for the rune-safe truncation contract:
+// truncateWebhookErrorText cuts by RUNE after sanitizing, never by byte --
+// a byte cut lands wherever byte 4000 of the text happens to fall, inside
+// a multi-byte rune whenever the failure text carries one there, and the
+// stored result would hold a split rune: invalid UTF-8 bytes in the
+// last_error column (VARCHAR(4000) on both dialects). SQLite accepts and
+// stores them (dirty data every later reader of the row --
 // ListRecentWebhookDeliveries' JSON encoding included -- has to live with);
 // PostgreSQL refuses the write outright (SQLSTATE 22021), so on the second
-// dialect a receiver answering multi-byte text at the boundary permanently
-// wedged the delivery record: every failure-path update of the row failed,
-// and the retry horizon's dead-letter write failed the same way.
+// dialect a receiver answering multi-byte text at the boundary would
+// permanently wedge the delivery record: every failure-path update of the
+// row would fail, and the retry horizon's dead-letter write would fail the
+// same way.
 //
 // The input below is 5000 three-byte runes: byte 4000 falls inside the
 // 1334th one, so a byte cut would deterministically produce invalid
@@ -459,10 +460,11 @@ func TestTruncateWebhookErrorText_InvalidUTF8WithinBudget_IsSanitized(t *testing
 }
 
 // TestService_handleDeliveryJob_ReceiverError_MultibyteBody_StoresValidLastError
-// is the end-to-end regression for the truncation fix: a receiver answering
-// a multi-byte body that crosses the error-text budget mid-rune must leave
-// the delivery row's LastError valid UTF-8 of at most the budget in runes,
-// exactly like any other failure text. The body is crafted so byte 4000 of
+// is the end-to-end regression for the truncation contract: a receiver
+// answering a multi-byte body that crosses the error-text budget mid-rune
+// must leave the delivery row's LastError valid UTF-8 of at most the
+// budget in runes, exactly like any other failure text. The body is
+// crafted so byte 4000 of
 // the recorded failure text falls inside a three-byte rune, and the
 // receiver's body itself also ends mid-rune at the 4096-byte snippet
 // budget -- both places a byte-based cut could store a split rune. Invalid
@@ -542,13 +544,12 @@ func TestService_handleDeliveryJob_SubscriptionDeleted_TerminatesWithoutRetry(t 
 // FindByID failure -- a transient store error, a secret whose ciphertext no
 // longer decrypts -- must be returned so jobs retries it, and must leave
 // the delivery row pending rather than dead-lettered with a diagnostic
-// text blaming the subscription. Before the fix, any FindByID error at all
-// dead-lettered the delivery as "webhook subscription no longer exists",
-// which both lost a recoverable delivery and misdiagnosed it. The
-// non-not-found failure is injected by pointing the subscription repository
-// at a database whose connection pool is closed: every query fails with a
-// driver error, deterministically, while the delivery row lives on the
-// service's own healthy database.
+// text blaming the subscription. Classifying every FindByID error as the
+// not-found would both lose a recoverable delivery and misdiagnose it.
+// The non-not-found failure is injected by pointing the subscription
+// repository at a database whose connection pool is closed: every query
+// fails with a driver error, deterministically, while the delivery row
+// lives on the service's own healthy database.
 func TestService_handleDeliveryJob_SubscriptionLoadFailure_RetriesNotDeadLetters(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 	subID, _ := createTestSubscription(t, svc, "https://example.com/hook")

@@ -37,19 +37,20 @@ func assertSSOErrorCode(t *testing.T, err error, wantCode string) {
 // legs re-run them against real PostgreSQL, where an unguarded write would
 // be refused -- SQLSTATE 22001 -- in a way SQLite never reproduces:
 //
-//   - A tenant id of 60 runes makes the synthetic "oidc:<tenant>" provider
-//     name overflow user_identities.provider (VARCHAR(64), migration 0005)
-//     at the identity write of the tenant's first enterprise sign-in. The
-//     configuration write itself fit (tenant_sso_configs.tenant_id is
-//     VARCHAR(64)), so the divergence was silent until a random login.
-//     The fix refuses such a tenant id at SaveConfig, AuthorizeURL and
-//     Callback with authn.sso_tenant_id_too_long -- the same named answer
-//     on both dialects.
+//   - A tenant id of 60 runes would make the synthetic "oidc:<tenant>"
+//     provider name overflow user_identities.provider (VARCHAR(64),
+//     migration 0005) at the identity write of the tenant's first
+//     enterprise sign-in, while the configuration write itself fits
+//     (tenant_sso_configs.tenant_id is VARCHAR(64)) -- the divergence
+//     would stay silent until a random login. SaveConfig, AuthorizeURL
+//     and Callback each refuse such a tenant id with
+//     authn.sso_tenant_id_too_long, the same named answer on both
+//     dialects.
 //   - A tenant administrator's configuration value longer than its column
 //     (issuer VARCHAR(512), client_id VARCHAR(255), allowed_domains
-//     VARCHAR(1024), migration 0006) was stored verbatim by SQLite and
-//     refused raw by PostgreSQL. The fix refuses it at SaveConfig and at
-//     SSOConfigRepository's own Create/Update with an error naming the
+//     VARCHAR(1024), migration 0006) would be stored verbatim by SQLite
+//     and refused raw by PostgreSQL; SaveConfig and SSOConfigRepository's
+//     own Create/Update refuse it up front with an error naming the
 //     field.
 //
 // The widths and expected codes below are restated as literals (with the
@@ -90,13 +91,14 @@ var (
 )
 
 // TestSaveConfig_OverLongTenantID_Refused_Postgres re-runs the unit tier's
-// finding (1) regression against real PostgreSQL: configuring enterprise SSO
-// under a 60-rune tenant id must answer authn.sso_tenant_id_too_long and
-// persist nothing. Before the fix this call SUCCEEDED on PostgreSQL too --
-// the config row's own tenant_id column held the 60-rune id -- leaving the
-// divergence for the tenant's first sign-in, whose identity insert would
-// have been refused with SQLSTATE 22001 for the 65-rune "oidc:<tenant>"
-// provider name. The identity-column boundary itself is pinned by
+// over-long-tenant regression against real PostgreSQL: configuring
+// enterprise SSO under a 60-rune tenant id must answer
+// authn.sso_tenant_id_too_long and persist nothing. The config row's own
+// tenant_id column (VARCHAR(64)) would hold a 60-rune id, so without the
+// configuration-time refusal the divergence would only surface at the
+// tenant's first sign-in, whose identity insert would be refused with
+// SQLSTATE 22001 for the 65-rune "oidc:<tenant>" provider name. The
+// identity-column boundary itself is pinned by
 // TestSSOIdentityProviderBoundary_Postgres below.
 func TestSaveConfig_OverLongTenantID_Refused_Postgres(t *testing.T) {
 	t.Parallel()
@@ -116,10 +118,11 @@ func TestSaveConfig_OverLongTenantID_Refused_Postgres(t *testing.T) {
 }
 
 // TestSaveConfig_OverWidthConfigFields_Refused_Postgres re-runs the unit
-// tier's finding (2) regressions against real PostgreSQL: each over-width
-// configuration value must answer the field-naming refusal before the
-// database is touched. Before the fix these writes were refused here by
-// PostgreSQL with SQLSTATE 22001 while SQLite stored the values verbatim.
+// tier's over-width configuration regressions against real PostgreSQL:
+// each over-width configuration value must answer the field-naming
+// refusal before the database is touched. An unguarded write would be
+// refused here by PostgreSQL with SQLSTATE 22001 while SQLite stores the
+// value verbatim.
 func TestSaveConfig_OverWidthConfigFields_Refused_Postgres(t *testing.T) {
 	t.Parallel()
 
@@ -163,7 +166,7 @@ func TestSaveConfig_OverWidthConfigFields_Refused_Postgres(t *testing.T) {
 // acceptance boundary against real PostgreSQL: a 59-rune tenant id (the
 // longest the enterprise channel can represent) and configuration values
 // exactly at their columns' widths still save and read back end to end --
-// nothing about the fix may shrink what the columns themselves accept.
+// the refusals above must not shrink what the columns themselves accept.
 func TestSaveConfig_ColumnWidthBoundary_Accepted_Postgres(t *testing.T) {
 	t.Parallel()
 
@@ -193,8 +196,8 @@ func TestSaveConfig_ColumnWidthBoundary_Accepted_Postgres(t *testing.T) {
 	}
 }
 
-// TestSSOIdentityProviderBoundary_Postgres pins the exact column where
-// finding (1)'s divergence lived: the synthetic provider name for the
+// TestSSOIdentityProviderBoundary_Postgres pins the column the
+// over-long-tenant refusals protect: the synthetic provider name for the
 // longest representable tenant id -- "oidc:" plus 59 runes, 64 runes in all
 // -- must insert into user_identities.provider (VARCHAR(64)) on real
 // PostgreSQL, the dialect that enforces the width. This is what makes the

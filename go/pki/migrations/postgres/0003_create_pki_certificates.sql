@@ -5,31 +5,29 @@
 -- isolation proven by tenancytest.AssertIsolated.
 --
 -- Keeping this split -- platform CAs in pki_authorities, tenant
--- certificates here, never merged into one table -- is round 1's central
--- schema decision: docs/internal/22-pki.md's diagnosed system put both a
--- platform CA and per-tenant certificates in one table under one weak key,
--- and that is the exact anti-pattern this split exists to rule out
--- ("one table must never mix two data domains").
+-- certificates here, never merged into one table -- is this schema's
+-- central rule: a single table holding both would carry a platform CA and
+-- per-tenant certificates under one key, the two-data-domains-in-one-table
+-- shape this split exists to rule out.
 --
 -- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
 -- schema on that dialect.
 --
 -- authority_id names the pki_authorities row that signed this certificate.
 -- Deliberately not a foreign key: cross-module foreign keys are forbidden
--- in this codebase (docs/internal/04-data-and-tenancy.md rule 4), and here
--- the two tables additionally sit in different data domains, so a foreign
--- key would also cross the tenant/platform boundary a single constraint
--- cannot express correctly.
+-- (they make independently released migrations and cascading deletes
+-- unmanageable), and here the two tables additionally sit in different data
+-- domains, so a foreign key would also cross the tenant/platform boundary a
+-- single constraint cannot express correctly.
 --
 -- sans is a JSON array of subject alternative names, plain TEXT on both
 -- dialects (datatypes.JSON on the Go side) -- never a native array column,
 -- and nothing ever filters into its structure.
 --
 -- key_delivered records whether the private key itself has left this
--- platform's custody (some consumers, per docs/internal/22-pki.md's
--- diagnosis, must hand the raw key to a downstream system). Once true, the
--- Signer-side protection has nothing left to protect -- see the Go type's
--- doc comment for the full argument.
+-- platform's custody (some consumers must hand the raw key to a downstream
+-- system). Once true, the Signer-side protection has nothing left to
+-- protect -- see the Go type's doc comment for the full argument.
 CREATE TABLE pki_certificates (
     id                 VARCHAR(36)  NOT NULL,
     tenant_id          VARCHAR(64)  NOT NULL,
@@ -58,5 +56,5 @@ CREATE INDEX idx_pki_certificates_tenant_authority ON pki_certificates (tenant_i
 CREATE INDEX idx_pki_certificates_tenant_purpose ON pki_certificates (tenant_id, purpose);
 CREATE INDEX idx_pki_certificates_tenant_serial ON pki_certificates (tenant_id, serial);
 
--- The expiry-scan index round 2/3's jobs-driven scan will read.
+-- The expiry-scan index: the periodic scan job reads not_after.
 CREATE INDEX idx_pki_certificates_tenant_not_after ON pki_certificates (tenant_id, not_after);

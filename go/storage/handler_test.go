@@ -181,7 +181,7 @@ func TestHandler_StorageCreateObject_DeclaresAnUpload(t *testing.T) {
 	if obj.UploadExpiresAt == nil || !obj.UploadExpiresAt.After(time.Now()) {
 		t.Errorf("uploadExpiresAt = %v, want a future window", obj.UploadExpiresAt)
 	}
-	// An absent expiresAt in the request no longer means "never expires": the
+	// An absent expiresAt in the request does not mean "never expires": the
 	// module's maximum lifetime is the default life of an ordinary upload, so
 	// the declaration carries an expiry at the default ceiling (90 days on
 	// the handler harness's unconfigured module).

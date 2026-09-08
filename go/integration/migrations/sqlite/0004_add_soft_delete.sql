@@ -10,9 +10,8 @@
 -- webhookRepo.Delete(ctx, id) call is the only real delete-shaped operation
 -- this module has against a table without its own domain-specific
 -- revocation mark -- APIKey already carries RevokedAt and never calls
--- Delete at all (see the module's Soft-deletion record),
--- and WebhookDelivery is a transient, append-only attempt log with no
--- Delete operation of its own, so integration_api_keys and
+-- Delete at all -- and WebhookDelivery is a transient, append-only attempt
+-- log with no Delete operation of its own, so integration_api_keys and
 -- integration_webhook_deliveries are untouched by this migration.
 --
 -- Unlike go/org's and go/rbac's identically-purposed migrations,

@@ -1,14 +1,9 @@
 /**
- * The notes surface: the app's one tenant-scoped business surface today,
+ * The notes surface: the app's demo tenant-scoped content surface,
  * driven end to end -- an empty list, a note created through the form,
  * the row that appears for it, and the field that answers for itself.
- *
- * The surface stands in for the patient-and-case surfaces the product
- * design calls for (examples/reference-app is an AI smile-simulation
- * platform; notes is the placeholder its own module doc admits to), so
- * this spec is deliberately shaped as the template those will follow:
- * read the list, write through the form, assert the row a person sees --
- * never a request or a cache key.
+ * The spec reads the list, writes through the form and asserts the row
+ * a person sees -- never a request or a cache key.
  *
  * One sign-in covers both behaviours. Sign-in is rate-limited per
  * account (the limits live in go/authn's ratelimit.go) and this file

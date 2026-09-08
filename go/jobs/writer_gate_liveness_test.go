@@ -215,10 +215,10 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 	}
 	waitRowStatus(t, db1, id2, StatusRunning, 3*time.Second)
 
-	// Pre-fix, the last heartbeat is the tick that claimed job2; the
-	// registration is stale once the window elapses. Post-fix the keeper
-	// heartbeats on its own ticker through the whole handoff block, so this
-	// wait is exactly the condition the fix must survive.
+	// The keeper heartbeats on its own ticker, independent of the
+	// dispatcher's claim tick, so q1's registration stays fresh through the
+	// whole handoff block; this wait (one full stale window plus poll
+	// margin) is exactly the interval that must not go unbeaten.
 	time.Sleep(q1.writerStaleAfter + 3*q1.pollInterval)
 
 	q2 := NewStandaloneQueue(db2, opts...)
@@ -226,9 +226,8 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 	// taker's own window plays no part in judging the incumbent -- q1's
 	// registration carries its own stale moment (q1's override above),
 	// refreshed by q1's own beats, and that is the only number judged.
-	// (Pre-fix this site shrank both sides to one value and commented that
-	// "the acquiring side judges staleness against its own window" -- the
-	// cadence asymmetry this file's bottom regression pins.)
+	// (One shared value on both sides would make the taker's own window
+	// judge the incumbent -- the cadence asymmetry the test below pins.)
 	if err := q2.RegisterHandler(handler); err != nil {
 		t.Fatalf("q2 RegisterHandler() error = %v", err)
 	}
@@ -240,10 +239,11 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 	})
 
 	if q2Err == nil {
-		// Pre-fix failure evidence: the second writer stole the gate, reset
-		// the first queue's mid-Handle row and re-claimed it. Wait for its
-		// own Handle on the SAME job to enter while the first Handle is still
-		// in flight (release is still shut) -- the double execution, live.
+		// The failure this branch detects: a second writer that stole the
+		// gate, reset the first queue's mid-Handle row and re-claimed it.
+		// Wait for its own Handle on the SAME job to enter while the first
+		// Handle is still in flight (release is still shut) -- the double
+		// execution, live.
 		waitExecCount(t, execs, string(id1), 2, 3*time.Second)
 		t.Errorf("second StandaloneQueue.Start() error = nil while the first queue's dispatcher was blocked mid-handoff; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id1, execs.count(string(id1)))
 	} else {
@@ -352,9 +352,9 @@ func TestStandaloneQueue_SecondStart_DuringCloseDrain_StillRefused(t *testing.T)
 	}
 dispatcherGone:
 
-	// Pre-fix, the registration is stale once this elapses and the worker is
-	// still inside Handle (release is still shut) -- the drain has crossed
-	// the stale window. Post-fix the keeper keeps beating through the drain.
+	// The registration is stale once this elapses and the worker is still
+	// inside Handle (release is still shut) -- the drain has crossed the
+	// stale window; the keeper must keep beating through the drain.
 	time.Sleep(q1.writerStaleAfter + 3*q1.pollInterval)
 
 	q2 := NewStandaloneQueue(db2, opts...)
@@ -362,9 +362,8 @@ dispatcherGone:
 	// taker's own window plays no part in judging the incumbent -- q1's
 	// registration carries its own stale moment (q1's override above),
 	// refreshed by q1's own beats, and that is the only number judged.
-	// (Pre-fix this site shrank both sides to one value and commented that
-	// "the acquiring side judges staleness against its own window" -- the
-	// cadence asymmetry this file's bottom regression pins.)
+	// (One shared value on both sides would make the taker's own window
+	// judge the incumbent -- the cadence asymmetry the test below pins.)
 	if err := q2.RegisterHandler(handler); err != nil {
 		t.Fatalf("q2 RegisterHandler() error = %v", err)
 	}
@@ -376,10 +375,10 @@ dispatcherGone:
 	})
 
 	if q2Err == nil {
-		// Pre-fix failure evidence: the second writer stole the gate mid-
-		// drain and re-claimed the row the first queue's worker is still
-		// executing -- its Handle enters a second time while the first is in
-		// flight (release is still shut).
+		// The failure this branch detects: a second writer that stole the
+		// gate mid-drain and re-claimed the row the first queue's worker is
+		// still executing -- its Handle entering a second time while the
+		// first is in flight (release is still shut).
 		waitExecCount(t, execs, string(id1), 2, 3*time.Second)
 		t.Errorf("second StandaloneQueue.Start() error = nil during the first queue's Close drain; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id1, execs.count(string(id1)))
 	} else {
@@ -465,9 +464,9 @@ func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *te
 // second Start on the same database would steal the live incumbent's
 // registration, resetInterruptedRecords would flip its mid-Handle row back
 // to pending, and the second queue's Handle on the same job would enter
-// while the first was still in flight -- the double execution this file's
-// whole subject exists to prevent. The same second Start, at the same
-// instant, is refused under the authored-moment judgment.
+// while the first was still in flight -- the double-execution hazard the
+// single-writer gate prevents. The same second Start, at the same instant,
+// is refused under the authored-moment judgment.
 //
 // The cadences are the production shape scaled to milliseconds: the
 // incumbent polls once per second (beating every second, an order of
@@ -583,12 +582,12 @@ func TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_Stil
 	})
 
 	if q2Err == nil {
-		// Pre-fix failure evidence: the second writer stole the live
-		// incumbent's registration, reset its mid-Handle row and re-claimed
-		// it. Wait for its own Handle on the SAME job to enter while the
-		// first Handle is still in flight (release is still shut) -- the
-		// double execution, live, of a writer whose heartbeats were arriving
-		// on time throughout.
+		// The failure this branch detects: a second writer that stole the
+		// live incumbent's registration, reset its mid-Handle row and
+		// re-claimed it. Wait for its own Handle on the SAME job to enter
+		// while the first Handle is still in flight (release is still shut)
+		// -- the double execution, live, of a writer whose heartbeats were
+		// arriving on time throughout.
 		waitExecCount(t, execs, string(id), 2, 3*time.Second)
 		t.Errorf("second StandaloneQueue.Start() error = nil while the incumbent's own heartbeats were still arriving on time; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id, execs.count(string(id)))
 	} else {

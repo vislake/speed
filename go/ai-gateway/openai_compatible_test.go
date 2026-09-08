@@ -111,12 +111,12 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_ReturnsProviderRequestFailed(
 }
 
 // TestOpenAICompatibleProvider_Chat_NonOKStatus_EnvelopeFieldsOnlyInLog
-// is the response-reflux regression closing the raw-text sink (SSRF ring
-// 4 follow-up, openai_compatible.go's errorFromResponse): the dialed
-// endpoint's non-2xx response body must never travel back to the caller
-// inside the returned error's params -- the caller steered this dial, so
-// a body the server read on its behalf would otherwise be echoed verbatim
-// -- and no part of the raw body may enter the server-side log either.
+// pins the response-reflux boundary at errorFromResponse
+// (openai_compatible.go): the dialed endpoint's non-2xx response body
+// must never travel back to the caller inside the returned error's params
+// -- the caller steered this dial, so a body the server read on its
+// behalf would otherwise be echoed verbatim -- and no part of the raw
+// body may enter the server-side log either.
 // Content-moderation-class refusals routinely echo the offending request
 // input into the envelope's free-text message, and observability's
 // redaction layer masks credential shapes, not arbitrary echoed content,
@@ -161,10 +161,10 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_EnvelopeFieldsOnlyInLog(t *te
 
 // TestOpenAICompatibleProvider_Chat_NonOKStatus_NonJSONBodyNotLogged pins
 // the same boundary for a body that is not the vendor's JSON error
-// envelope -- an HTML error page or a reverse-proxy banner, the shape the
-// ring-4 intranet scenario worried about. The envelope parse contributes
-// no structured fields, and none of the body's text may appear in the
-// log: the line carries the status code alone.
+// envelope -- an HTML error page or a reverse-proxy banner, the shape an
+// intranet endpoint behind the caller-steered dial can answer with. The
+// envelope parse contributes no structured fields, and none of the body's
+// text may appear in the log: the line carries the status code alone.
 func TestOpenAICompatibleProvider_Chat_NonOKStatus_NonJSONBodyNotLogged(t *testing.T) {
 	const bannerFragment = "intranet-echo-7f3c9"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -505,8 +505,8 @@ func TestOpenAICompatibleProvider_ChatStream_DoneWithNoUsage_WarnsAndEndsCleanly
 }
 
 // TestOpenAICompatibleProvider_ChatStream_UsageSent_NoWarning is the
-// negative case pinning that the warning added above never fires on the
-// ordinary, correctly-behaving path.
+// negative case pinning that the warning never fires on the ordinary,
+// correctly-behaving path.
 func TestOpenAICompatibleProvider_ChatStream_UsageSent_NoWarning(t *testing.T) {
 	srv := httptest.NewServer(sseHandler(
 		`{"choices":[{"delta":{"content":"Hi"}}]}`,

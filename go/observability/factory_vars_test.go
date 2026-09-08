@@ -35,9 +35,8 @@ import (
 // TestInit_NoEndpoint_NoLocalMetricsReader_LogsStartupWarning both depend
 // on the registrars staying in their blank-import state).
 //
-// Fails under -race before the fix (verified: the race detector reports
-// both factories' write-vs-read collisions the moment the loops overlap);
-// passes after.
+// The race detector is the assertion: a write-vs-read collision on either
+// factory the moment the loops overlap fails this test under -race.
 func TestFactoryVars_ConcurrentRegisterAndInit_NoDataRace(t *testing.T) {
 	previousOTLP := otlpFactory
 	previousReader := metricsReaderFactory

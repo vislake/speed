@@ -12,9 +12,9 @@ package billing_test
 // reserve -> confirm pattern -- the two independent paths the module's own
 // split describes.
 //
-// This module has no reference-app consumer for these surfaces yet; this
+// This module has no reference-app consumer for these surfaces; this
 // Example is the compensating obligation for that gap, the identical
-// shape go/pki's X.509 layer already uses for the same reason.
+// shape go/pki's X.509 layer uses for the same reason.
 
 import (
 	"context"
@@ -244,14 +244,13 @@ func ExampleCreditService_Transactions() {
 
 // ExampleCreditService_Expire walks the idempotency contract a
 // jobs-driven expiry sweep depends on -- CreditService.Expire's keyed
-// mode, added by the credit-expiry round so a scheduler's retried run (a
-// sweep window rerun after a crash or a timeout, under the same
-// deterministic per-tenant+period key) is answered with the first run's
-// own row instead of deducting twice. The unkeyed form has no such
-// contract and is for one-off, operator-driven deductions only
-// (CreditService.Expire's own doc comment has the full contrast). Which
-// credits a real sweep expires, and when, is the host's product-policy
-// decision, never this method's.
+// mode, the shape that answers a scheduler's retried run (a sweep window
+// rerun after a crash or a timeout, under the same deterministic
+// per-tenant+period key) with the first run's own row instead of
+// deducting twice. The unkeyed form has no such contract and is for
+// one-off, operator-driven deductions only (CreditService.Expire's own
+// doc comment has the full contrast). Which credits a real sweep expires,
+// and when, is the host's product-policy decision, never this method's.
 func ExampleCreditService_Expire() {
 	ctx := context.Background()
 

@@ -8,12 +8,9 @@
 --
 -- Service.Authenticate is the lookup path that feeds hashAPIKeyToken a
 -- presented key, and this table is how it resolves a tenant from a raw
--- presented key alone, mirroring go/sharing's sharing_token_index table
--- exactly. See
--- model.go's apiKeyHashIndex doc comment for the full "why a new table"
--- argument, including why 0001's own uq_integration_api_keys_tenant_hash
--- comment's original assumption ("every lookup already knows its tenant")
--- did not survive the real design need.
+-- presented key alone, before any tenant is known at all, mirroring
+-- go/sharing's sharing_token_index table exactly; model.go's apiKeyHashIndex
+-- doc comment carries the full "why a new table" argument.
 --
 -- This is the SQLite copy; see the postgres/ sibling for the full
 -- rationale. The dialect differences stop at the allowed SQL surface: no

@@ -33,7 +33,7 @@
 -- (createPending), and never updated afterward -- Accept and Revoke leave
 -- it in place, since a tenantless Accept needs it to resolve a tenant and
 -- reach the ordinary tenant-scoped path even for a token whose invitation
--- has since been accepted or revoked, exactly how that path is meant to
+-- has already been accepted or revoked, exactly how that path is meant to
 -- answer the case (org.invitation_already_accepted / org.invitation_revoked,
 -- not a dead end before it is ever reached).
 --

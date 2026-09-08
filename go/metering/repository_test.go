@@ -121,13 +121,13 @@ func TestInsertOutboxRecord_AndFindByIdempotencyKey(t *testing.T) {
 }
 
 // TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema pins the
-// schema-level invariant in its repository form: retry_after is NOT NULL
-// (migration 0007), so an insert that fails to schedule the row is
-// refused by the constraint itself. Enqueue and markOutboxAttemptFailed
-// always write a concrete value, so the refusal can only ever bite a
-// write path that forgets; the point of the schema force is that such a
-// writer fails LOUDLY at the write instead of storing a NULL the claim
-// query would otherwise have to accommodate (it no longer does).
+// schema-level invariant in its repository form: retry_after is NOT NULL,
+// so an insert that fails to schedule the row is refused by the
+// constraint itself. Enqueue and markOutboxAttemptFailed always write a
+// concrete value, so the refusal can only ever bite a write path that
+// forgets; the point of the schema force is that such a writer fails
+// LOUDLY at the write instead of storing a NULL the claim query would
+// otherwise have to accommodate.
 func TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -153,15 +153,16 @@ func TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema(t *testing.T) {
 }
 
 // TestInsertOutboxRecord_DuplicateKey_IsANoOpNotAnError pins the
-// dialect-independent half of the outbox idempotent-retry fix: a second
-// insert for the same (tenant_id, idempotency_key) reports inserted ==
-// false with NO error -- the insert runs as ON CONFLICT DO NOTHING, so
-// the transaction is never left in the aborted state that would break
-// Enqueue's read-back recovery (and the caller's own transaction) on
-// PostgreSQL, where a statement error aborts the whole transaction. A
-// plain insert would return gorm.ErrDuplicatedKey here; the integration
-// tier (TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction)
-// is where the aborted transaction is actually observable.
+// dialect-independent half of the outbox idempotent-retry contract: a
+// second insert for the same (tenant_id, idempotency_key) reports
+// inserted == false with NO error -- the insert runs as ON CONFLICT DO
+// NOTHING, so the transaction is never left in the aborted state that
+// would break Enqueue's read-back recovery (and the caller's own
+// transaction) on PostgreSQL, where a statement error aborts the whole
+// transaction. A plain insert would return gorm.ErrDuplicatedKey here;
+// the integration tier
+// (TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction) is
+// where the aborted transaction is actually observable.
 func TestInsertOutboxRecord_DuplicateKey_IsANoOpNotAnError(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -260,8 +261,8 @@ func TestClaimPendingOutboxRecords(t *testing.T) {
 
 // TestClaimPendingOutboxRecords_OrderedByRetrySchedule pins the claim
 // query's schedule semantics -- ordering by the row's retry_after
-// schedule, migration 0005's design, rather than by an attempts class:
-// only pending rows whose retry_after has arrived are claimable, and they
+// schedule rather than by an attempts class: only pending rows whose
+// retry_after has arrived are claimable, and they
 // come back oldest-scheduled first. A row that failed once and whose
 // re-claim window has opened is claimed before a never-failed row
 // enqueued after it (its schedule slot is older), while a row still
@@ -404,12 +405,11 @@ func TestTruncateError(t *testing.T) {
 }
 
 // TestTruncateError_DoesNotSplitAMultiByteRune pins the UTF-8 boundary
-// finding: truncateError cut on byte 500 unconditionally, so a cause
-// whose 500th byte fell inside a multi-byte rune stored an invalid-UTF-8
-// tail -- a value PostgreSQL rejects on write with SQLSTATE 22021, taking
-// the failure-record write (markOutboxAttemptFailed) down with it. The
-// truncation must end on a rune boundary, whatever the byte offset of the
-// cut.
+// contract: truncateError ends on a rune boundary, whatever the byte
+// offset of the cut -- a cut on the raw byte bound can land inside a
+// multi-byte rune and store an invalid-UTF-8 tail, a value PostgreSQL
+// rejects on write with SQLSTATE 22021, taking the failure-record write
+// (markOutboxAttemptFailed) down with it.
 func TestTruncateError_DoesNotSplitAMultiByteRune(t *testing.T) {
 	// A 4-byte rune (U+1F600), placed so the 500-byte cut lands at each of
 	// the three possible offsets inside it.
@@ -466,7 +466,7 @@ func TestTruncateError_ShortInvalidUTF8_IsSanitized(t *testing.T) {
 }
 
 // TestMarkOutboxAttemptFailed_ShortInvalidUTF8Cause_StoredValueIsSanitized
-// pins the same finding at the write path itself, mirroring the existing
+// pins the same property at the write path itself, mirroring the
 // long-cause stored-value test: a short cause carrying invalid bytes is
 // stored sanitized -- the stored value is the assertion target, exactly
 // as PostgreSQL would validate it on its way into the column.

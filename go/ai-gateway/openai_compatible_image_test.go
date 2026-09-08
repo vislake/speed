@@ -319,8 +319,8 @@ func TestOpenAICompatibleImageProvider_ImageEdit_RequestsB64JSONEncoding(t *test
 // ignores the requested response_format and answers with a "url" entry --
 // or an empty b64_json value -- delivers zero decodable bytes, and this
 // provider refuses that rather than reporting a zero-byte successful image
-// with ImageCount 1. Before the fix such an answer surfaced as a success;
-// after it, the call fails with the coded ErrProviderResponseInvalid.
+// with ImageCount 1: such an answer fails the call with the coded
+// ErrProviderResponseInvalid, never a zero-byte success.
 func TestOpenAICompatibleImageProvider_TextToImage_EmptyImageData_Refused(t *testing.T) {
 	// A url-shaped answer: the data entry carries only "url", never
 	// b64_json -- exactly what a vendor defaulting response_format to "url"

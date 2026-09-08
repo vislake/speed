@@ -201,10 +201,11 @@ func TestGateway_QueryStatus_MapsSessionStatus(t *testing.T) {
 // being populated, which stripego.Subscription's own custom UnmarshalJSON
 // only does for an expanded reference (an unexpanded one arrives as an
 // ID-only stub with every other field, Status included, left zero-valued).
-// Losing this Expand silently defeats the whole fix below without failing
-// any status-mapping assertion on its own, since a scripted test body can
-// always hand-supply a populated Subscription object regardless of what was
-// actually requested -- this test is what would catch that regression.
+// Losing this Expand silently defeats the terminal-subscription resolution
+// the next test drives, without failing any status-mapping assertion on
+// its own -- a scripted test body can always hand-supply a populated
+// Subscription object regardless of what was actually requested; this test
+// is what catches that regression.
 func TestGateway_QueryStatus_RequestsSubscriptionExpand(t *testing.T) {
 	backend := &fakeBackend{
 		respond: func(string, string) ([]byte, error) {
@@ -273,13 +274,13 @@ func TestGateway_QueryStatus_CompleteUnpaidTerminalSubscription_ReportsFailed(t 
 	}
 }
 
-// TestGateway_QueryStatus_CompleteUnpaidRetryingSubscription_StillPending is
-// the overzealous-fix guard: while the underlying Subscription is still
-// "incomplete" (Stripe's smart payment retries still in play) or has no
-// Subscription expanded at all, the session may yet succeed on a later
-// attempt, so QueryStatus must keep answering ChannelStatusPending exactly
-// as it did before this fix -- never jump straight to Failed just because
-// the session is Complete/Unpaid.
+// TestGateway_QueryStatus_CompleteUnpaidRetryingSubscription_StillPending
+// is the boundary guard for the terminal-subscription resolution above:
+// while the underlying Subscription is still "incomplete" (Stripe's smart
+// payment retries still in play) or has no Subscription expanded at all,
+// the session may yet succeed on a later attempt, so QueryStatus must keep
+// answering ChannelStatusPending -- never jump straight to Failed just
+// because the session is Complete/Unpaid.
 func TestGateway_QueryStatus_CompleteUnpaidRetryingSubscription_StillPending(t *testing.T) {
 	tests := []struct {
 		name string
@@ -668,9 +669,8 @@ func invoiceEventPayload(t *testing.T, eventType, eventID, invoiceID, tenantID, 
 
 // invoiceEventPayloadWithInvoiceLevelMetadata builds an invoice.paid event
 // whose identifiers sit ONLY on the Invoice object's own metadata field --
-// the hand-seeded shape the earlier revision of invoiceEventPayload used,
-// which real Stripe subscription-invoice deliveries do not carry (see
-// invoiceEventPayload's own doc comment). Used by
+// the hand-seeded shape real Stripe subscription-invoice deliveries do not
+// carry (see invoiceEventPayload's own doc comment). Used by
 // TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized
 // to pin that normalizeInvoice reads the parent snapshot, never the
 // invoice's own metadata.
@@ -840,13 +840,13 @@ func TestGateway_VerifyWebhook_SubscriptionUpdatedCanceled_RecognizedAsSubscript
 }
 
 // TestGateway_VerifyWebhook_SubscriptionUpdatedActive_StillUnrecognized
-// keeps the pre-existing unrecognized-event discipline alive for a
-// genuinely unrelated status this module's own vocabulary was never
-// designed to represent as a second, amount-less signal (normalizeSubscriptionUpdated's
-// own doc comment) -- customer.subscription.updated moving to "active" (or
-// any status other than "canceled") stays ErrWebhookPayloadUnrecognized,
-// exactly like TestGateway_VerifyWebhook_UnrecognizedEventType already pins
-// for a wholly different event type.
+// keeps the unrecognized-event discipline for a genuinely unrelated status
+// this module's own vocabulary is not designed to represent as a second,
+// amount-less signal (normalizeSubscriptionUpdated's own doc comment) --
+// customer.subscription.updated moving to "active" (or any status other
+// than "canceled") stays ErrWebhookPayloadUnrecognized, exactly like
+// TestGateway_VerifyWebhook_UnrecognizedEventType already pins for a wholly
+// different event type.
 func TestGateway_VerifyWebhook_SubscriptionUpdatedActive_StillUnrecognized(t *testing.T) {
 	payload := subscriptionUpdatedPayload(t, "evt_sub_active_1", "sub_stripe_2", "tenant-a", "sub-1", "inv-1", "active")
 	_, err := signAndVerify(t, payload)

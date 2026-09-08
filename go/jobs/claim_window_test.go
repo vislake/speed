@@ -23,11 +23,10 @@ import (
 // worker -- the exact claimed-but-not-started window. Get() during that
 // window must honestly report the Job as claimed (StatusRunning) but not
 // started: Attempts still 0 (no Handle has been invoked for it) and
-// StartedAt still nil. Pre-fix, claimOne counted the attempt and stamped
-// StartedAt at claim time, so Get() reported Running with Attempts 1 for a
-// Handle call that had not begun. After the worker picks the Job up and
-// runs it, the honest figures catch up: final Attempts 1 with StartedAt
-// set. Deterministic without wall-clock sleeps: the worker's occupancy of
+// StartedAt still nil -- claiming a Job never counts an attempt or stamps
+// StartedAt; those advance only when Handle actually begins. After the
+// worker picks the Job up and runs it, the honest figures catch up: final
+// Attempts 1 with StartedAt set. Deterministic without wall-clock sleeps: the worker's occupancy of
 // the second Job is guaranteed by the first Job's blocked Handle.
 func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *testing.T) {
 	q := newTestQueue(t, WithWorkerCount(1))

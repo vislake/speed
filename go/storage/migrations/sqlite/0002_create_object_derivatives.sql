@@ -1,6 +1,6 @@
 -- object_derivatives is the storage module's rendition table
 -- (go/storage/model.go): one row per derived rendition of a completed
--- Object -- in this round, exactly the thumbnail the derive pipeline
+-- Object -- exactly the thumbnail the derive pipeline
 -- produces. The rendition's bytes live in the ObjectStore under the
 -- internal key this row names, like the original's.
 --
@@ -8,7 +8,7 @@
 --
 -- object_id is a plain id reference, deliberately not a foreign key:
 -- cross-table foreign keys make independently released migrations and
--- cascading deletes unmanageable (root CLAUDE.md's own rule), so the
+-- cascading deletes unmanageable, so the
 -- referential integrity between an Object and its derivatives is maintained
 -- by LifecycleService, which deletes an object's derivatives when it
 -- deletes the object.
@@ -18,7 +18,7 @@
 -- re-derive (a completion retried after a crash, say) is a no-op instead of
 -- a duplicate row. Its leftmost columns also serve the delete cascade's
 -- per-object scan, WHERE tenant_id = ? AND object_id = ?. There is no
--- (tenant_id, created_at) index here: nothing lists derivatives this round,
+-- (tenant_id, created_at) index here: no surface lists derivatives,
 -- and the objects cursor index lives on the objects table, where the
 -- objects listing actually scans -- see 0001's header note.
 CREATE TABLE object_derivatives (

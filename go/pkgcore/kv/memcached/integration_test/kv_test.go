@@ -470,19 +470,18 @@ func TestKVStore_ConcurrentCompareAndSwapSetIfAbsent_ExactlyOneWins(t *testing.T
 	}
 }
 
-// TestKVStore_ReviveRaceInTheTTLFlipWindow_LosesNoIncrement is the
-// regression for the unguarded-delete hazard this store's read path used to
-// carry: when a key sits in the TTL-flip window -- logically expired by its
-// envelope, but still physically present because Memcached's own eviction
-// runs on the whole-second exptime the write scheduled -- every reader that
-// discovered the expired row used to delete it with an unconditional Delete.
-// A Delete issued from a stale read could land after a concurrent writer had
+// TestKVStore_ReviveRaceInTheTTLFlipWindow_LosesNoIncrement pins the
+// revive rule of the TTL-flip window: when a key sits in that window --
+// logically expired by its envelope, but still physically present because
+// Memcached's own eviction runs on the whole-second exptime the write
+// scheduled -- readers must not delete the expired row unconditionally. A
+// Delete issued from a stale read could land after a concurrent writer has
 // already revived the key with its fresh value, silently destroying that
 // writer's increment: two (or more) concurrent IncrByFloatWithTTL reviving
-// the key in the same window then reported their own private "1"s and the
-// stored total lost every increment but one.
+// the key in the same window would report their own private "1"s and the
+// stored total would lose every increment but one.
 //
-// The fix routes every revive through Memcached's own compare-and-swap at
+// Every revive is routed through Memcached's own compare-and-swap at
 // the token the stale read returned, so a concurrent writer who revived the
 // key between the read and the revive simply wins the race and the loser
 // retries from a fresh read -- no write is ever clobbered. This test drives

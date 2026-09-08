@@ -198,12 +198,11 @@ func TestService_UpdateWebhookSubscription_EmptyEventTypesSlice_Refused(t *testi
 // that write must not resurrect the subscription. The two calls are raced
 // against fresh subscriptions in a loop; whichever way each race resolves,
 // the invariant is the same -- after both calls settle, the subscription is
-// no longer readable as a live row. Before the fix (a full-row
-// Repository[WebhookSubscription].Update of the updating side's stale
-// read, whose nil DeletedAt overwrote the mark-delete) an interleaving
-// where the delete's write committed first resurrected the row, Active
-// value included; after it (updateFields' targeted, deleted_at IS NULL
-// guarded write) no interleaving can.
+// no longer readable as a live row. The update side writes through
+// updateFields' targeted, deleted_at IS NULL guarded UPDATE: a whole-row
+// save of the stale read, whose nil DeletedAt would overwrite the
+// committed mark-delete and resurrect the row (Active value included), is
+// exactly the interleaving this test refuses.
 func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 
@@ -247,25 +246,23 @@ func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *test
 
 // TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins is
 // the regression test for the resurrection race in
-// RestoreWebhookSubscription's own tail. A Restore that had already
-// un-marked the row used to re-read it and, when it was Active, write it
-// back through a whole-row Repository[WebhookSubscription].Update with
-// Active=false -- a save whose snapshot carried the fresh, post-restore
-// row but whose unconditional scope wrote every column of it, nil
-// DeletedAt included. A DeleteWebhookSubscription that committed its
-// mark-delete between that read and that write found its deletion silently
-// undone: the stale save resurrected the subscription the tenant had just
-// deleted again, Active value rewritten along with it.
+// RestoreWebhookSubscription's own tail. The restore's un-mark and its
+// forced pause land in ONE guarded write (restorePaused,
+// webhook_repository.go): a restore that first un-marked the row and then
+// saved it back through a whole-row write -- a save whose snapshot carries
+// the fresh, post-restore row but whose unconditional scope writes every
+// column of it, nil DeletedAt included -- would let a
+// DeleteWebhookSubscription that committed its mark-delete between the
+// read and that save find its deletion silently undone: the stale save
+// resurrects the subscription the tenant had just deleted again, Active
+// value rewritten along with it.
 //
 // The two calls are raced against fresh, delete-then-restore subscriptions
 // in a loop; whichever way each race resolves, the invariant is the same
 // -- once the delete has reported success, the subscription is no longer
-// readable as a live row. Before the fix (the whole-row save above) an
-// interleaving where the delete's mark committed between the restore's
-// read and its save resurrected the row; after it (the same guarded,
-// deleted_at IS NULL updateFields write the UpdateWebhookSubscription
-// path uses) no interleaving can: the flip only ever lands on a row that
-// is still live at the moment of the write.
+// readable as a live row. The restore's flip only ever lands on a row
+// that is still live at the moment of the write, so no interleaving can
+// resurrect the row.
 //
 // One honesty note on this race's reachability: the restore's read-to-write
 // window is far narrower than the update path's (the delete is always one
@@ -470,11 +467,11 @@ func TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPa
 // pause write, and the test observes the injected failure's aftermath:
 // the unmark committed, the pause did not, and the row is live with
 // Active true --
-// matched by ListActiveByTenant, the fan-out's own query. In the post-fix
-// code no pause-shaped statement exists (the restore is one UPDATE
-// carrying Active and DeletedAt together), the injection cannot fire, and
-// the single write either lands the row paused or leaves it mark-deleted:
-// either way, never restored-active.
+// matched by ListActiveByTenant, the fan-out's own query. Against the
+// actual one-write restore no pause-shaped statement exists (the restore
+// is one UPDATE carrying Active and DeletedAt together), the injection
+// cannot fire, and the single write either lands the row paused or leaves
+// it mark-deleted: either way, never restored-active.
 func TestService_RestoreWebhookSubscription_PauseWriteFailure_LeavesNoRestoredActiveSubscription(t *testing.T) {
 	m, svc := newWebhookTestService(t)
 	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
@@ -502,9 +499,9 @@ func TestService_RestoreWebhookSubscription_PauseWriteFailure_LeavesNoRestoredAc
 	restoreErr := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID)
 
 	// The invariant, however the restore call itself answered: the
-	// subscription must not be deliverable. Pre-fix the injected pause
-	// failure left it restored-ACTIVE -- ListActiveByTenant, the exact
-	// query the fan-out runs, matches it -- while restoreErr reported
+	// subscription must not be deliverable. The injected failure must not
+	// leave it restored-ACTIVE -- ListActiveByTenant, the exact query the
+	// fan-out runs, matches it -- with restoreErr reporting only
 	// ErrInternal.
 	active, err := svc.webhookRepo.ListActiveByTenant(ctxFor(testTenant))
 	if err != nil {
@@ -538,15 +535,14 @@ func TestService_UpdateWebhookSubscription_CrossTenant_NotFound(t *testing.T) {
 }
 
 // TestService_CreateWebhookSubscription_AuditFailureAfterCommit_ReturnsSecretWithError
-// is the webhook twin of the API-key material-retention regression
+// is the webhook twin of the API-key material-retention contract
 // (service_test.go's TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError):
 // the subscription row has committed, but recording its audit event failed
 // (the bus is down). Service.CreateWebhookSubscription must return the
 // created subscription ALONGSIDE the error -- its signing secret is shown
-// exactly once and never reproduced, so returning nil would orphan a live,
-// already-delivering subscription whose secret nobody ever received.
-// Before the fix the method returned (nil, err) on this path and the raw
-// secret was lost forever.
+// exactly once and never reproduced, so a (nil, err) answer would orphan a
+// live, already-delivering subscription whose secret nobody ever received
+// and whose raw secret is lost forever.
 func TestService_CreateWebhookSubscription_AuditFailureAfterCommit_ReturnsSecretWithError(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 	svc.bus = errBus{}
@@ -595,7 +591,7 @@ func TestService_ListRecentWebhookDeliveries_LimitClampedToMaximum(t *testing.T)
 
 	// 120 pending deliveries: above both the 50 default and the 100
 	// maximum. Each handleDomainEvent must create a DISTINCT delivery (the
-	// fan-out key now carries an occurrence marker -- see
+	// fan-out key carries an occurrence marker -- see
 	// webhook_delivery_test.go), so the clock is pinned to advance one
 	// nanosecond per call.
 	at := fixedNow
@@ -643,10 +639,10 @@ func TestService_DeleteWebhookSubscription_RemovesIt(t *testing.T) {
 }
 
 // TestService_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving
-// proves DeleteWebhookSubscription is now a mark-delete: the row survives
-// in the table (findable through the unscoped repository) with deleted_at
-// set, rather than vanishing, the property a physical DELETE could never
-// have offered.
+// proves DeleteWebhookSubscription performs a mark-delete: the row
+// survives in the table (findable through the unscoped repository) with
+// deleted_at set, rather than vanishing -- the property a physical DELETE
+// could never offer.
 func TestService_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving(t *testing.T) {
 	m, svc := newWebhookTestService(t)
 	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{

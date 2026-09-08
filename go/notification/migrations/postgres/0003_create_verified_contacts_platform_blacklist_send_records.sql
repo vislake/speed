@@ -1,10 +1,9 @@
--- This migration creates the three tables of the consent-ledger and
--- delivery round: verified_contacts, platform_blacklist and send_records
--- (go/notification/{contact.go,blacklist.go}; the send_records model
--- arrives with the delivery job in the same round).
+-- This migration creates the consent-ledger and delivery-log tables --
+-- verified_contacts, platform_blacklist and send_records -- the models in
+-- go/notification/{contact.go,blacklist.go,send_record.go}.
 --
--- The three tables span two data domains
--- (docs/internal/04-data-and-tenancy.md's data-domain table):
+-- The three tables span two data domains, each with its own
+-- conventions:
 --
 --   verified_contacts   TENANT data: one tenant's consent ledger for
 --                       external addresses. dbkit's isolation plugin
@@ -35,8 +34,9 @@
 -- blind index of the canonical address form (dbkit.NewBlindIndexer over
 -- dbkit.NormalizeEmail / NormalizePhoneE164), the only form of the address
 -- that is ever queryable, deduplicated on or rate-limited on. The
--- encryption key and the index keys are separate and never the same bytes
--- (AGENTS.md's "Separate index keys from the cipher key" adjudication).
+-- encryption key and the index keys are separate and never the same
+-- bytes: an index key that could also decrypt would turn the blind index
+-- into an oracle for the address column.
 --
 -- verified_contacts' status column carries the consent state machine
 -- (pending / verified / unsubscribed / bounced -- contact.go's

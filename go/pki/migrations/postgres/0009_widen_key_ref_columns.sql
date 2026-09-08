@@ -4,7 +4,7 @@
 -- vault and kmsaws providers in envelope mode that handle is the base64 of
 -- the whole provider-side ciphertext (go/pki/signer/kmsaws/signer.go:
 -- keyRef = base64.StdEncoding.EncodeToString of the KMS Encrypt
--- CiphertextBlob; go/pki/AGENTS.md's P1-2 record carries the assessment).
+-- CiphertextBlob).
 -- The arithmetic is deterministic: base64 of any blob of 192 bytes or more
 -- exceeds the 255 characters every key_ref column declared at creation
 -- (0001/0002/0003), and a real KMS symmetric ciphertext blob for an

@@ -286,8 +286,8 @@ describe('evictQueriesOnSessionEnd', () => {
     // a tenant-prefixed removal to reach, so without total eviction a
     // different account signing in afterward would inherit them. The
     // eviction is total: every domain is asserted gone, including a
-    // key no eviction call site knows about, so a future surface's
-    // domain cannot leak either.
+    // key no eviction call site knows about -- a domain no eviction
+    // path names cannot leak either.
     const rig = makeRealClientRig(respond)
     const queryClient = new QueryClient()
     evictQueriesOnSessionEnd(rig.session, queryClient)

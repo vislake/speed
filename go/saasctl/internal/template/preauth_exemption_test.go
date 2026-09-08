@@ -30,9 +30,8 @@ import (
 // directly behind authn.Middleware, tenancy.Middleware wrapping only the
 // other routes. Authn answers a provider it has never seen with its own
 // coded refusal -- 400 authn.provider_unknown -- which is the proof the
-// request crossed the tenancy layer: the pre-fix allowlist shape answered
-// this exact request 403 tenancy.tenant_unresolved, asserted by the
-// legacyShape leg below.
+// request crossed the tenancy layer: the allowlist shape (asserted by the legacyShape leg below)
+// answered this exact request 403 tenancy.tenant_unresolved.
 func TestPreauthExemption_DrivesTheGeneratedProjectShape(t *testing.T) {
 	handler := buildComposedHandler(t, composedShapeNew)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/oidc:acme/authorize?redirect_uri=https%3A%2F%2Fapp.example%2Fcb", nil)
@@ -53,8 +52,8 @@ func TestPreauthExemption_DrivesTheGeneratedProjectShape(t *testing.T) {
 // TestPreauthExemption_CallbackAlsoReachesAuthn drives the callback half
 // of the same pair. An anonymous POST with no usable state answers authn's
 // own refusal once it reaches the handler; the assertion that matters is
-// the negative one -- never the tenancy 403 that the pre-fix allowlist
-// shape produced for this path.
+// the negative one -- never the tenancy 403 the allowlist shape produced
+// for this path.
 func TestPreauthExemption_CallbackAlsoReachesAuthn(t *testing.T) {
 	handler := buildComposedHandler(t, composedShapeNew)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/social/oidc:acme/callback", strings.NewReader(`{"code":"c","state":"s"}`))
@@ -68,14 +67,15 @@ func TestPreauthExemption_CallbackAlsoReachesAuthn(t *testing.T) {
 
 // TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest is the
 // anchor that shows why the structural exemption exists: compose the
-// legacy generated shape -- the whole mux, authn subtree included, wrapped
-// in tenancy.Middleware with the fixed allowlist that enumerated the
-// built-in social channels -- and the identical anonymous oidc:acme
-// authorize request is refused 403 tenancy.tenant_unresolved, because no
-// fixed enumeration can contain a per-tenant provider name. If this leg
-// ever starts passing, the tenancy layer no longer refuses unlisted
-// anonymous pairs and the structural exemption would be moot; if the
-// current shape ever regresses to the legacy one, the first test fails.
+// allowlist shape -- the whole mux, authn subtree included, wrapped in
+// tenancy.Middleware with a fixed allowlist enumerating the built-in
+// social channels -- and the identical anonymous oidc:acme authorize
+// request is refused 403 tenancy.tenant_unresolved, because no fixed
+// enumeration can contain a per-tenant provider name. This leg is the
+// negative control: if it started passing, the tenancy layer would no
+// longer refuse unlisted anonymous pairs and the structural exemption
+// would be moot; if the current shape ever changed into the allowlist
+// one, the first test would fail.
 func TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest(t *testing.T) {
 	handler := buildComposedHandler(t, composedShapeLegacy)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/oidc:acme/authorize", nil)
@@ -143,10 +143,10 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	}
 
 	if shape == composedShapeLegacy {
-		// The pre-fix shape: every route -- authn's subtree included --
+		// The allowlist shape: every route -- authn's subtree included --
 		// behind tenancy.Middleware, with authn's pre-auth operations
-		// allowlisted one (method, path) pair at a time, the fixed
-		// built-in social channels enumerated by hand.
+		// allowlisted one (method, path) pair at a time, the built-in
+		// social channels enumerated by hand.
 		allMux := http.NewServeMux()
 		for _, route := range reg.Routes.Routes() {
 			allMux.Handle(route.Path, route.Handler)
@@ -186,11 +186,11 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 
 // TestPreauthExemption_ComposedShapeIsTheTemplatesOwn pins the test's
 // composition constants to the template files it claims to mirror: if the
-// generated server.go templates ever compose differently (a renamed
-// constant, a different dispatch), the behavior test would silently be
-// testing a shape the templates no longer produce -- this twin assertion
-// closes that gap by requiring the templates to carry the very markers
-// this test's composition is built from.
+// generated server.go templates compose differently (a renamed constant,
+// a different dispatch), the behavior test would be testing a shape the
+// templates do not produce -- this twin assertion closes that gap by
+// requiring the templates to carry the very markers this test's
+// composition is built from.
 func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
 		content, err := fs.ReadFile(Project, ProjectRoot+"/selection/"+key+"/server.go")

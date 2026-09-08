@@ -100,12 +100,9 @@ func TestRedact_SensitiveKeyValues(t *testing.T) {
 // the "token" stem's over-redaction bug: a legitimate, non-secret
 // diagnostic key that merely contains "token" as a substring of a
 // different word ("tokens", the ordinary plural for an LLM/usage count --
-// ai-gateway's gateway.go records its own usage counts under the natural
-// prompt_tokens/completion_tokens names at three sites today; the module
-// once logged them as prompt_units/completion_units to dodge this
-// redactor's bare-substring "token" match, and reverted to the natural
-// names once the word-boundary fix this test pins made those safe) must
-// survive verbatim, both key and value.
+// ai-gateway's gateway.go records its usage counts under the natural
+// prompt_tokens/completion_tokens names) must survive verbatim, both key
+// and value.
 func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 	keys := []string{"prompt_tokens", "completion_tokens", "tokens", "tokenizer_version"}
 	for _, key := range keys {
@@ -132,13 +129,13 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 //
 //  1. legitimate diagnostic keys where "token" is merely a substring of a
 //     longer, different word must survive unredacted (the over-redaction
-//     class the fix closed), and
+//     class this test pins), and
 //  2. every genuinely secret-shaped "token" key from the existing
 //     TestRedact_SensitiveKeyValues vocabulary, plus several additional
 //     realistic secret-shaped names built the same way (an underscore-
-//     joined "token" segment), must still redact (the fix must not have
-//     narrowed the word-boundary check so far that it stops matching
-//     "token" as a whole segment).
+//     joined "token" segment), must still redact (the word-boundary check
+//     must not narrow so far that it stops matching "token" as a whole
+//     segment).
 //
 // The vocabulary spans both separator styles the boundary rule must treat
 // identically. The underscore-joined forms below ("access_token") mark
@@ -203,14 +200,13 @@ func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 	}
 
 	secretShaped := []string{
-		// From the existing 34-row table (TestRedact_SensitiveKeyValues) --
-		// re-verified here so this adversarial pass is self-contained.
+		// From the existing vocabulary table (TestRedact_SensitiveKeyValues)
+		// -- re-verified here so this adversarial pass is self-contained.
 		"token", "access_token", "refresh_token", "session_token",
 		"id_token", "api_token", "csrf_token", "auth_token", "Token",
 		// Additional realistic secret-shaped names built the same way
 		// (an underscore-joined "token" segment), not present verbatim in
-		// the 34-row table, to widen the net past exactly what was already
-		// pinned.
+		// that table, to widen the net past what it already pins.
 		"oauth_token", "bearer_token", "reset_token", "verification_token",
 		"TOKEN", "x_auth_token",
 		// Separator-free camelCase compounds, both boundary directions:
@@ -680,7 +676,8 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 //     shape class other than the parameter name can identify it.
 //
 // A test case carrying a '?' or '://', or putting the secret parameter
-// first, would pass the old gate and prove nothing.
+// first, would bypass the value-shape detection this case targets and
+// prove nothing.
 func TestRedact_OpaqueRefreshTokenNonFirstInBareFormBody(t *testing.T) {
 	const body = "grant_type=refresh_token&refresh_token=a1b2c3d4e5f6g7h8i9j0"
 	const refreshToken = "a1b2c3d4e5f6g7h8i9j0"
@@ -977,17 +974,17 @@ func TestRedact_ExemptKeysUnderSensitivePaths(t *testing.T) {
 // an attribute whose key is empty while its VALUE is a group of named
 // children, and the built-in sinks render those children normally (an
 // empty group key adds no qualification, so the children appear inline,
-// and an empty-key scalar renders as ""=value), which made the early
-// return a live leak path: a password logged inside an empty-key group
-// reached the sink verbatim, and an empty-key string carrying a bearer
-// token skipped the value-shape scan entirely. An empty key must skip
+// and an empty-key scalar renders as ""=value) -- an early return on an
+// empty key would be a live leak path: a password logged inside an
+// empty-key group would reach the sink verbatim, and an empty-key string
+// carrying a bearer token would skip the value-shape scan entirely. An
+// empty key must skip
 // only what is genuinely absent -- a key-name rule has nothing to match,
 // and an empty segment can neither be exempted nor sensitive -- while the
 // value rules still apply exactly as they do under a benign key: a
 // group's children are still visited, and a string or error value is
-// still scanned for secret shapes. Fails before the fix (verified): the
-// text sink renders "password=hunter2-super-secret" and the full bearer
-// token verbatim; passes after.
+// still scanned for secret shapes. The text sink must render the secret
+// and the full bearer token masked, never verbatim.
 func TestRedact_EmptyKeyAttributes_ValueRulesStillApply(t *testing.T) {
 	t.Run("empty-key group is recursed into", func(t *testing.T) {
 		var buf bytes.Buffer
@@ -1043,23 +1040,22 @@ func TestRedact_EmptyKeyAttributes_ValueRulesStillApply(t *testing.T) {
 	})
 }
 
-// TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale is
-// the regression for a path-rule bypass in redactAttr's empty-key branch:
-// the branch must run the pathSensitive(groups) check every sibling
-// branch runs, not reason only about what the empty key ITSELF
-// contributes to an attribute's key path -- true for the key's own empty
-// segment, over-broad for the branch, which already holds the segments in
-// groups as an independent input. A logger-level WithGroup("credentials")
-// context therefore redacted a non-empty benign key wholesale (the sibling
-// branches' group-name rule) while an empty-key scalar under that same
-// context reached only the value rules -- a value with no recognizable
-// secret shape passed through the group-name rule entirely. The empty key
+// TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale pins
+// the path rule redactAttr's empty-key branch must follow: the branch
+// runs the pathSensitive(groups) check every sibling branch runs, not
+// reasoning only about what the empty key ITSELF contributes to an
+// attribute's key path -- true for the key's own empty segment, over-broad
+// for the branch, which already holds the segments in groups as an
+// independent input. Under a logger-level WithGroup("credentials")
+// context, the sibling branches' group-name rule redacts a non-empty
+// benign key wholesale; an empty-key scalar under that same context must
+// not reach only the value rules, letting a value with no recognizable
+// secret shape pass through the group-name rule entirely. The empty key
 // contributes nothing to the path; the group context contributes
-// everything, so the empty-key branch must run the same pathSensitive
-// check as its siblings and collapse wholesale when it fires. Fails before
-// the fix (verified): the sink renders the empty-key scalar's value
-// verbatim with no redaction marker; passes after: the attribute collapses
-// to RedactedValue exactly as a non-empty key under the same group does.
+// everything, so the empty-key branch runs the same pathSensitive check
+// as its siblings and collapses wholesale when it fires: the sink must
+// render the empty-key scalar's value as RedactedValue, exactly as a
+// non-empty key under the same group does.
 func TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale(t *testing.T) {
 	var buf bytes.Buffer
 	logger := obs.FromContext(textLoggerCtx(context.Background(), &buf))
@@ -1075,18 +1071,18 @@ func TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale(t *testi
 	}
 }
 
-// TestRedact_KeyStemDoesNotOverRedactCorrelationReferences is the
-// regression for the "key" stem's false-positive class: the stem used a
-// bare substring match, so any attribute whose name merely contained
-// "key" was redacted wholesale -- including correlation-only fields that
-// must stay queryable, exactly the class the "token" stem's word-boundary
-// treatment already closes. Two real call sites were damaged: the
-// reference-app integration module logs "key_id" holding an opaque API-key
-// row id (go/integration/authenticate.go -- an operator needs it to tell
-// which key failed its last-used update), and examples/reference-app's
-// smilesim service logs "credit_idempotency_key" holding the derived key
-// of an orphaned credit reservation precisely so an operator can reconcile
-// it (smilesim/service.go -- the value the log line exists for was masked).
+// TestRedact_KeyStemDoesNotOverRedactCorrelationReferences pins the
+// "key" stem's boundary rule: correlation-only fields whose names merely
+// contain "key" must stay queryable -- never redacted wholesale --
+// exactly the protection the "token" stem's word-boundary treatment
+// already gives its own names. Two call sites depend on these names
+// surviving: the reference-app integration module logs "key_id" holding
+// an opaque API-key row id (go/integration/authenticate.go -- an operator
+// needs it to tell which key failed its last-used update), and
+// examples/reference-app's smilesim service logs "credit_idempotency_key"
+// holding the derived key of an orphaned credit reservation precisely so
+// an operator can reconcile it (smilesim/service.go -- the value the log
+// line exists for is exactly what must show).
 // Both names are references or correlation identifiers whose values the
 // log line exists to show: "key_id" is an _id-suffixed row reference (the
 // naming convention neverRedactKeys' own user_id/job_id entries follow),
@@ -1104,8 +1100,9 @@ func TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale(t *testi
 // say) apart from an ordinary identifier -- that is caller-declared
 // content, and go/jobs' Task.IdempotencyKey doc comment, the key
 // builder's own gate, warns of exactly that.
-// Fails before the fix (verified): "key_id" and "credit_idempotency_key"
-// both render "[REDACTED]" and the values never reach the sink.
+// The correlation references must survive unmasked while a
+// secret-shaped key or a secret-shaped value under a surviving reference
+// name still redacts wholesale.
 func TestRedact_KeyStemDoesNotOverRedactCorrelationReferences(t *testing.T) {
 	benign := []struct {
 		key, value string

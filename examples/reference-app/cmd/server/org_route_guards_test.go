@@ -125,31 +125,22 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 
 // TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree is THE scenario:
 // demoReaderUserID holds notes:read alone (seedDemoGrants' demoReaderRoleKey,
-// demo_subject.go), no org permission whatsoever, yet reaches org's route --
-// still true today, since tenancy.Middleware and the fixed authn+tenancy
-// chain never distinguished org's operations from any other tenant member's
-// ordinary traffic. Before the org-route-guards fix, every case below
-// SUCCEEDED (2xx): demoRouteGuards[orgRoutePath] was routePublic, so no
-// permission was ever checked and the cascade-delete case actually deleted
-// the tree. This test fails while org's route is
-// gated per operation (demo_subject.go's guardOrgRoute).
+// demo_subject.go) and no org permission whatsoever, yet reaches org's
+// routes -- tenancy.Middleware and the fixed authn+tenancy chain never
+// distinguish org's operations from any other tenant member's ordinary
+// traffic, so the per-operation permission gate (demo_subject.go's
+// guardOrgRoute) is the only layer that refuses this caller. Every case
+// below must fail: without the gate all of them would succeed (2xx) -- the
+// cascade-delete case would even delete the tree.
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
-	// This test's own review flagged an unreproduced, once-in-roughly-eight
-	// flake where a full-package `go test ./... -race` run let demo-reader
-	// reach org's business logic despite holding no org:* permission --
-	// with no static logic error found in guardOrgRoute, orgPermissionFor,
-	// demoSubjectResolver or rbac's own Can/RequirePermissionFunc, and no
-	// reproduction across several full-package runs under real concurrent
-	// load while investigating it. cfg.OnRBACReady (buildServer, mirroring
+	// cfg.OnRBACReady (buildServer, mirroring
 	// TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly below)
-	// replaces buildTestServer here so this test can assert the rbac
-	// DECISION directly -- exactly what the flake investigation checked by
-	// hand with temporary debug instrumentation -- rather than only the
-	// HTTP status the coarse gate produces from it. If the flake recurs,
-	// this pins whether the decision itself was wrong or the bug lies
-	// somewhere in the HTTP/route-table plumbing downstream of a correct
-	// decision, instead of requiring that distinction to be re-diagnosed
-	// from scratch.
+	// replaces buildTestServer here so this test asserts the rbac DECISION
+	// directly rather than only the HTTP status the coarse gate produces
+	// from it -- a wrong allowance or a wrong refusal originates in the
+	// decision layer, and pinning the decision here makes the failure name
+	// that layer instead of leaving the HTTP/route-table plumbing
+	// downstream of a correct decision to be re-diagnosed.
 	cfg := testConfig(t)
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
@@ -350,10 +341,8 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 	// A role carrying every org permission, assigned to a fresh identity
 	// SCOPED TO NODE A ALONE -- never the tenant root, which is what makes
 	// this grant narrower than every seedDemoGrants grant in this app
-	// (that function's own doc comment: "this example has no organization
-	// tree, so it wires no rbac.SubtreeResolver either" no longer describes
-	// server.go's real wiring, but every DEMO grant it seeds stays
-	// tenant-wide regardless -- this test's grant is the one exception).
+	// (every demo grant it seeds stays tenant-wide; this test's grant is
+	// the one exception).
 	const subtreeAdminRoleKey = "org-subtree-admin"
 	const subtreeAdminUserID = "demo-org-subtree-admin"
 	tenantCtx := pkgcore.WithTenant(context.Background(), tenant)

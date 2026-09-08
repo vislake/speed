@@ -301,7 +301,7 @@ func TestSelfCheckDetectsReplaceDrift(t *testing.T) {
 	}
 }
 
-// TestSelfCheckDetectsStaleSpeedModuleReplacePin is the P1 regression for
+// TestSelfCheckDetectsStaleSpeedModuleReplacePin is the regression pin for
 // the upgrade self-check: a replace directive whose TARGET is a speed
 // module pinned at a version other than the goal survives the rewrite
 // (replaces are left untouched by contract) and WINS at build time -- go
@@ -364,12 +364,12 @@ replace github.com/vislake/speed/go/config => /opt/speed/go/config
 	}
 }
 
-// TestRewriteRefusesAStaleSpeedModuleReplacePin drives the whole P1
-// scenario at the Rewrite level: requires at v0.1.0 plus a replace pinning
-// authn at v0.1.0, rewritten to v0.2.0. Before the fix this rewrote the two
-// require lines, passed the self-check (the replaces were unchanged, which
-// was all it compared) and reported clean with the stale pin intact; the
-// refusal must now name the pin and change nothing.
+// TestRewriteRefusesAStaleSpeedModuleReplacePin drives the replace-pin
+// refusal at the Rewrite level: requires at v0.1.0 plus a replace pinning
+// authn at v0.1.0, rewritten to v0.2.0. A self-check that compared only
+// the rewritten require lines (leaving the unchanged replaces aside) would
+// report clean with the stale pin intact; the refusal must name the pin
+// and change nothing.
 func TestRewriteRefusesAStaleSpeedModuleReplacePin(t *testing.T) {
 	orig := readFixture(t, "pinned_replace.go.mod")
 	out, changed, err := Rewrite(orig, "v0.2.0")

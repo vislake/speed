@@ -260,8 +260,8 @@ var _ Handler = panickingHandler{}
 // compile into one binary, so no process boundary contains the crash. The
 // outer defer/recover below exists only to turn such a crash into a
 // well-labeled t.Fatal instead of a bare process exit, should this ever
-// regress; it does not run today, since invokeHandle (worker.go) already
-// recovers the panic before it reaches this test.
+// regress; it stays dormant because invokeHandle (worker.go) recovers the
+// panic before it reaches this test.
 func TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	if err := q.RegisterHandler(panickingHandler{}); err != nil {
@@ -747,8 +747,8 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 // they pass through untouched) -- with failErr, then stops failing. It is
 // the deterministic fault injection the outcome-write-failure regressions
 // below need: a failure that hits exactly the write under test and leaves
-// every other write -- in particular the convergence writes the fix
-// performs -- working.
+// every other write -- in particular the convergence writes of the
+// outcome paths -- working.
 func injectResultWriteFailures(db *gorm.DB, remaining *int, failErr error) {
 	db.Callback().Update().Before("gorm:update").Register("test:fail-result-writes", func(tx *gorm.DB) {
 		if remaining == nil || *remaining <= 0 {

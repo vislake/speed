@@ -13,16 +13,14 @@
 -- and a real nullable column is the honest representation.
 --
 -- serial is 16 bytes of crypto/rand, lower-case hex encoded -- never a
--- timestamp; docs/internal/22-pki.md's diagnosis names
--- System.currentTimeMillis()-derived serials as a real collision risk under
--- concurrent issuance. certificate_pem is this authority's own certificate;
+-- timestamp: timestamp-derived serials risk collisions under concurrent
+-- issuance. certificate_pem is this authority's own certificate;
 -- safe to expose, since a certificate is not a secret. signer_name/key_ref
 -- point at the private key the same no-private-key-column way
 -- pki_signing_keys does.
 --
--- status carries both eventual values (active/revoked) from day one, even
--- though this round's code only ever writes 'active' -- revocation is round
--- 3's work, but the column shape is this round's.
+-- status carries the authority lifecycle's two values (active/revoked),
+-- 'active' the column default.
 CREATE TABLE pki_authorities (
     id                 VARCHAR(36)  NOT NULL,
     type               VARCHAR(16)  NOT NULL,
@@ -45,8 +43,9 @@ CREATE TABLE pki_authorities (
 -- The chain-walk index: finding every intermediate a given authority issued.
 CREATE INDEX idx_pki_authorities_parent_id ON pki_authorities (parent_id);
 
--- Lookup by serial (CRL and chain-validation paths a later round adds).
+-- Lookup by serial, resolving an authority from a certificate's issuer
+-- serial during chain validation.
 CREATE INDEX idx_pki_authorities_serial ON pki_authorities (serial);
 
--- The expiry-scan index round 2/3's jobs-driven scan will read.
+-- The expiry-scan index: the periodic scan job reads not_after.
 CREATE INDEX idx_pki_authorities_not_after ON pki_authorities (not_after);

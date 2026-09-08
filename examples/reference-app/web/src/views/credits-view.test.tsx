@@ -267,9 +267,10 @@ describe('CreditsView', () => {
     expect(
       pendingView.queryByText(zhCN.credits.rows.deductConfirmed),
     ).not.toBeInTheDocument()
-    // The pending view leaves the document before the second mount --
-    // unmounting keeps the later queries from matching its DOM (the
-    // reload the settled mount stands in for replaced the whole page).
+    // The pending view leaves the document before the second mount:
+    // unmounting keeps the later queries from matching its DOM, and the
+    // fresh mount stands in for the reload a real user performs after
+    // the job finished.
     pendingView.unmount()
 
     // The job runs to success: a later read of the same responder

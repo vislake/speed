@@ -1,8 +1,8 @@
 //go:build integration
 
-// PostgreSQL regression for UsageEvent.validate's missing length bounds --
-// see the package doc comment in postgres_isolation_test.go for the
-// defect this test reproduces and the fix it guards.
+// PostgreSQL regression for UsageEvent.validate's length bounds -- see
+// the package doc comment in postgres_isolation_test.go for the defect
+// class this test reproduces and the contract it guards.
 package metering_test
 
 import (

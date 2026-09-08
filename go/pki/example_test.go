@@ -5,6 +5,7 @@ package pki_test
 // executed by `go test`, so a change to pki's public API that breaks the
 // documented usage fails the build rather than only rotting in prose.
 //
+ HEAD
 // The examples together discharge the godoc `Example` obligation the X.509
 // layer carried while it had no real consumer, and retain it -- with a
 // narrowed narrative -- now that the layer does (the reference app's

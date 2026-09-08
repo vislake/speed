@@ -20,28 +20,29 @@
 //
 //   - a successful Bootstrap under a Redis-backed preset followed by
 //     Kernel.Shutdown must return the Redis server's connected-clients
-//     count to its baseline (before the seam lifecycle existed, nothing
-//     anywhere closed the client the registration built, so those
-//     connections stayed open for the process's lifetime);
+//     count to its baseline (without the seam lifecycle, nothing anywhere
+//     closes the client the registration built, so those connections would
+//     stay open for the process's lifetime);
 //   - the same shape over a real NATS server must drop the server's
 //     connection count to zero on its own monitoring endpoint, and the
 //     closed seam values must fail their next operation;
 //   - a Bootstrap that fails after resolving real NATS seams must close
 //     the connections it already dialed before returning the error
-//     (pre-fix, the dialed connections had no close path at all).
+//     (without the failure-path close, the dialed connections would have
+//     no close path at all).
 //
 // # Why the containers bind the default client ports
 //
 // The registration constructors under test ("eventbus.redis", "kv.redis",
 // "eventbus.nats", "kv.nats") build their clients from a Preset's Config,
-// which is always empty today (the preset layer's per-implementation
-// parameter channel is deliberately deferred -- PresetDistributed's own doc
-// comment records that gap). Their zero-configuration fallbacks are
-// "localhost:6379" and nats.DefaultURL ("nats://127.0.0.1:4222"), so these
-// legs publish the container's client port to exactly that host port -- the
-// same "a zero-configuration composition against local infrastructure"
-// shape those fallbacks exist for, and the only shape a Preset-built Kernel
-// can reach at all today. The host ports are checked for conflicts at
+// which is always empty (the preset layer has no per-implementation
+// parameter channel -- PresetDistributed's own doc comment records that).
+// Their zero-configuration fallbacks are "localhost:6379" and
+// nats.DefaultURL ("nats://127.0.0.1:4222"), so these legs publish the
+// container's client port to exactly that host port -- the same "a
+// zero-configuration composition against local infrastructure" shape those
+// fallbacks exist for, and the only shape a Preset-built Kernel can
+// reach. The host ports are checked for conflicts at
 // container start (Docker refuses the bind loudly rather than silently
 // sharing a server).
 package pkgcore_test
@@ -412,9 +413,9 @@ func TestKernel_Shutdown_RealNATSConnectionsReleased(t *testing.T) {
 // dialed connection) and "kv.nats" (another), then fails resolving the
 // mailer seam. The two already-resolved seams' connections must be closed
 // before the error is returned -- the server's monitoring endpoint counts
-// them back down to zero. Before the seam lifecycle existed, the dialed
-// connections had no close path at all and leaked for the process's
-// lifetime.
+// them back down to zero. Without the failure-path close, the dialed
+// connections would have no close path at all and would leak for the
+// process's lifetime.
 func TestBootstrapFailure_RealNATSConnectionsClosed(t *testing.T) {
 	ctx := context.Background()
 	monitor := startNATSOnDefaultPort(t, ctx)

@@ -542,15 +542,14 @@ func TestRegisterQueueDepthGauge_Smoke(t *testing.T) {
 	}
 }
 
-// TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose is the regression
-// proof for the queue-depth gauge lifecycle defect the reference app's own
-// wiring surfaced (its obs.Init shutdown failed with "jobs: query queue
-// depth: sql: database is closed"): the "jobs.queue.depth" ObservableGauge
-// callback cannot be unregistered from the meter it was registered on -- the
-// OTel API has no such operation -- so it keeps running for the life of the
-// process, replayed onto every MeterProvider the process ever installs. A
-// queue that has been Close()d, and whose database the host has since closed,
-// must therefore answer nil rather than touch its closed data source. The
+// TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose pins the
+// stopped-queue answer of the queue-depth gauge lifecycle: the
+// "jobs.queue.depth" ObservableGauge callback cannot be unregistered from
+// the meter it was registered on -- the OTel API has no such operation --
+// so it keeps running for the life of the process, replayed onto every
+// MeterProvider the process ever installs. A queue that has been Close()d,
+// and whose database the host closed afterwards, must therefore answer nil
+// rather than touch its closed data source. The
 // callback and Close are ordered by depthGaugeMu: the callback holds the
 // read lock across its stopped-check and its query, and Close holds the
 // write lock while signaling stopCh, so once Close returns no callback is

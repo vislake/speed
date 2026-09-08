@@ -12,19 +12,17 @@
 // go/notification's unit tests (all of which live in package notification
 // itself, one file per source file) and carries the "integration" build
 // tag: a plain "go test ./..." never compiles or runs anything in this
-// directory; the
-// tier is invoked explicitly with "go test -tags=integration
-// ./integration_test/..." from the module directory. This mirrors the
-// identical convention of go/dbkit, go/jobs, go/pkgcore, go/config,
-// go/rbac, go/authn, go/storage and go/org.
+// directory; the tier is invoked explicitly with "go test -tags=integration
+// ./integration_test/..." from the module directory -- the tag-and-directory
+// convention every Docker-backed tier in this workspace follows.
 //
 // Every test here spins up its own disposable container(s) and requires a
 // working Docker (or Docker-API-compatible) daemon; there is no fallback
 // or skip-on-missing-Docker path, matching the other modules' tiers.
 //
-// Why PostgreSQL earns a leg of its own: root CLAUDE.md requires the
-// module's migrations to run from zero on BOTH dialects, and the unit tier
-// can only run the SQLite half. The PostgreSQL half is not a formality --
+// Why PostgreSQL earns a leg of its own: the module's migrations must run
+// from zero on BOTH dialects, and the unit tier can only run the SQLite
+// half. The PostgreSQL half is not a formality --
 // the consent ledger's verify transition (contact.go's consumePendingCode)
 // is a compare-and-swap UPDATE whose single-winner property SQLite cannot
 // even put at risk: SQLite serializes whole-database writes, so two
@@ -254,9 +252,9 @@ func channelsJSON(channels []string) datatypes.JSON {
 // ---------------------------------------------------------------------------
 
 // startPostgresContainer starts a disposable PostgreSQL 16 container for
-// one test, already registered for termination via t.Cleanup. It follows
-// go/rbac/integration_test's helper, which follows go/config's, which
-// follows go/dbkit's.
+// one test, already registered for termination via t.Cleanup -- the
+// disposable-container pattern every Docker-backed tier in this workspace
+// shares.
 func startPostgresContainer(t *testing.T, ctx context.Context) *postgres.PostgresContainer {
 	t.Helper()
 
@@ -287,8 +285,8 @@ func startPostgresContainer(t *testing.T, ctx context.Context) *postgres.Postgre
 // applies notification's own migrations to it with the dialect they ship
 // for, exactly the way a host applies them at startup. Nothing here calls
 // AutoMigrate; the versioned SQL under migrations/postgres is what creates
-// every table, which is what makes this the zero-to-head proof root
-// CLAUDE.md asks for on the second dialect. The address serializer is
+// every table, which is what makes this the zero-to-head proof on the
+// second dialect. The address serializer is
 // registered too: every row the tier writes through a model carrying an
 // encrypted address column needs the process-global cipher registration a
 // host performs at bootstrap.

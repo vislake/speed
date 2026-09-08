@@ -114,8 +114,7 @@ func Example() {
 	// A leaf node deletes cleanly -- and a delete is a mark-delete, not a
 	// physical DELETE: the row survives, hidden from ordinary reads, and
 	// Restore brings it back with its original data intact. This is the
-	// "oops, get it back" scenario mark-delete exists for; see
-	// go/org/AGENTS.md's "Soft deletion" section.
+	// "oops, get it back" scenario mark-delete exists for.
 	if delErr := tree.Delete(ctx, store.ID, false); delErr != nil {
 		fmt.Println("delete store:", delErr)
 		return

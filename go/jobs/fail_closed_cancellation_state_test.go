@@ -32,8 +32,7 @@ import (
 // marker-key reproduction applies). Every read the queue makes — Get,
 // DeadLetterJobs, and the dispatcher's claim polls alike — answers "no such
 // table" for the outage, and the rename back repairs it: the fail-closed
-// baseline the finding this tier closes records (standalone already failed
-// closed; it was asynq that diverged) is verified here against the queue's
+// contract the shared suite pins is verified here against the queue's
 // genuine behaviour, not asserted by inspection.
 //
 // The queue keeps running through the outage on purpose: the dispatcher

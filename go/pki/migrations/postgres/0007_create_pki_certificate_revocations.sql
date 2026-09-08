@@ -1,4 +1,4 @@
--- pki_certificate_revocations is round 3's denormalized, append-only
+-- pki_certificate_revocations is the denormalized, append-only
 -- revocation ledger (go/pki/model.go's CertificateRevocation). See the
 -- sqlite/ sibling for the full rationale; this is the PostgreSQL copy.
 CREATE TABLE pki_certificate_revocations (

@@ -37,19 +37,20 @@ import (
 // UTF-8, the Go protobuf encoder refuses an entire ExportTraceServiceRequest
 // containing one invalid string ("string field contains invalid UTF-8"),
 // and otlptracegrpc drops the failed batch (codes.Internal sits outside its
-// retry whitelist) -- so before the fix one request carrying one invalid
-// byte silently killed the export of every span in its batch, continuously,
-// for the life of the process: sustained 100% trace loss, and traces are
+// retry whitelist) -- so one request carrying one invalid byte would
+// silently kill the export of every span in its batch, continuously, for
+// the life of the process: sustained 100% trace loss, and traces are
 // exactly what an operator reaches for to investigate the request that did
-// it. This test drives the whole composed path a real host wires --
+// it. The exporter has no way to save such a batch; the guard lives at
+// span formation, and this test drives the whole composed path a real host
+// wires --
 // obs.Init with WithOTLPEndpoint (blank-importing this package, exactly as
 // a host does), then obs.Middleware -- against an in-process OTLP/gRPC
 // collector, and asserts on what the collector actually received.
 //
-// Fails before the fix (verified): the batcher's shutdown flush cannot
-// encode the one-span batch and the collector receives nothing within the
-// wait window; passes after: the batch arrives and the received span's
-// name, url.path and user_agent.original carry the Unicode replacement rune
+// The batcher's shutdown flush must encode and deliver the one-span batch:
+// the collector receives it, and the received span's name, url.path,
+// user_agent.original and client.address carry the Unicode replacement rune
 // in the invalid byte's place, never the byte itself.
 func TestMiddleware_InvalidUTF8Request_ExportBatchStillArrives(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -125,8 +126,8 @@ func TestMiddleware_InvalidUTF8Request_ExportBatchStillArrives(t *testing.T) {
 		t.Errorf("exported client.address = %q (present: %v), want %q", got, ok, wantAddr)
 	}
 	// Blanket scan over the decoded batch: no string field of the received
-	// span may hold an invalid-UTF-8 value -- the very condition that made
-	// the batch unencodable before the fix.
+	// span may hold an invalid-UTF-8 value -- the condition that would make
+	// a batch unencodable.
 	for _, kv := range span.Attributes {
 		if _, isString := kv.Value.Value.(*commonv1.AnyValue_StringValue); isString && !utf8.ValidString(kv.Value.GetStringValue()) {
 			t.Errorf("exported span attribute %q carries a value that is not valid UTF-8 (%q)", kv.Key, kv.Value.GetStringValue())

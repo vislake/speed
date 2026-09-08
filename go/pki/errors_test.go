@@ -49,15 +49,13 @@ func TestErrors_HaveTheExpectedCodesAndStatuses(t *testing.T) {
 //
 // tools/check_i18n_keys.py already proves the two files carry identical key
 // sets, and pkgcore/i18n's Builder.AddModule fails a bootstrap when they do
-// not. Neither of those notices the case that matters most here: an error
-// code returned by handler.go but declared in NEITHER file -- exactly the
-// bug this test reproduces (pki.invalid_request_body and
-// pki.revocation_reason_required were built inline via apperr.Invalid(...)
-// in handler.go, absent from errors.go's var block and from both locale
-// files; because both files omitted them equally, the key-parity check
-// between the two languages could never have caught it). A client receiving
-// such a code has nothing to render and falls back to showing the raw code
-// to a user.
+// not. Neither check covers the case that matters most here: an error code
+// this module returns but that is declared in NEITHER file. Two codes
+// omitted from both files equally keep the parity checks green -- yet a
+// client receiving such a code has nothing to render and falls back to
+// showing the raw code to a user. errorCodes (errors.go) is the module's
+// own catalog of returnable codes, so the assertion below closes the gap
+// by checking every entry of it against each file.
 func TestErrorCatalog_EveryCodeHasBothLocales(t *testing.T) {
 	t.Parallel()
 

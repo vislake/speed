@@ -125,15 +125,14 @@ func TestInvoiceRepository_VoidOnPaidInvoice_Refused(t *testing.T) {
 }
 
 // TestInvoiceRepository_MarkPaidAndVoid_RacingTransitions_ExactlyOneCommits
-// is the regression test for setStatus's write shape. setStatus validated
-// the move against the invoice status it had just read and then applied it
-// through a whole-row dbkit.Repository[Invoice].Update -- a write with no
-// guard tying it to that read. Two racing transitions that both validated
-// from Open could therefore BOTH commit: a Void landing after a MarkPaid
-// rewrote a settled payment's record into a voided one, silently breaking
-// the transition table's own terminal-state invariant ("an invoice that
-// recorded a settled payment ... must not be rewritten into a voided one"),
-// and neither caller saw an error.
+// pins the guard on setStatus's write shape: a transition validates the
+// move against the invoice status it reads and applies through a write
+// tied to that read -- a write with no such tie would let two racing
+// transitions that both validated from Open BOTH commit: a Void landing
+// after a MarkPaid would rewrite a settled payment's record into a voided
+// one, silently breaking the transition table's own terminal-state
+// invariant ("an invoice that recorded a settled payment ... must not be
+// rewritten into a voided one"), and neither caller would see an error.
 //
 // The two transitions are raced against fresh invoices in a loop;
 // whichever way each race resolves, exactly one transition may commit --

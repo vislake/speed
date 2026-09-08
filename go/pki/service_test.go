@@ -163,10 +163,10 @@ func TestService_ActiveSigner_KeyPastNotAfterIsRefused(t *testing.T) {
 		t.Fatalf("ActiveSigner AT NotAfter error = %v, want success (NotAfter is inclusive)", err)
 	}
 
-	// ...and refused a moment later. This is the regression's failing leg
-	// on pre-fix code: an active key past its NotAfter used to keep signing
-	// because status alone decided usability, with the key's real expiry
-	// depending on whether the scan job happened to have run.
+	// ...and refused a moment later. Usability is decided against the key's
+	// own validity window at take time, never by status alone: an active key
+	// past its NotAfter must not keep signing just because the scan job has
+	// not run yet.
 	svc.now = func() time.Time { return key.NotAfter.Add(time.Nanosecond) }
 	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
 		t.Fatalf("ActiveSigner just past NotAfter error = %v, want ErrNoActiveKey (regression: an expired key must not sign)", err)
@@ -177,8 +177,8 @@ func TestService_ActiveSigner_KeyPastNotAfterIsRefused(t *testing.T) {
 // not-yet-valid half of the window. No shipped code path creates a
 // future-dated key (NotBefore is always the creation instant), but the
 // enforcement must cover the whole window, not just the expiry end: a
-// future code path that pre-provisions keys must not be able to sign with
-// them early.
+// pre-provisioning code path must not be able to sign with a not-yet-valid
+// key early.
 func TestService_ActiveSigner_KeyBeforeNotBeforeIsRefused(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -249,9 +249,9 @@ func TestService_VerificationKeys_DropsKeysPastTheirNotAfter(t *testing.T) {
 	}
 
 	// ...and once the retiring key's NotAfter passes, it must be dropped
-	// even though its status is still SigningKeyStatusRetiring (this is the
-	// regression's failing leg on pre-fix code, where status alone decided
-	// the verifiable set and the key stayed offered until the scan ran).
+	// even though its status is still SigningKeyStatusRetiring: the
+	// verifiable set is bounded by each key's validity window, not by status
+	// alone, so a past-NotAfter key cannot stay offered until the scan runs.
 	svc.now = func() time.Time { return base.Add(time.Hour).Add(time.Nanosecond) }
 	keys, err = svc.VerificationKeys(ctx, "authn.access_token")
 	if err != nil {
@@ -285,8 +285,8 @@ func TestService_EnsurePurpose_ReplacesAnExpiredActiveKeyWhenNothingIsStaged(t *
 	}
 
 	// Well past the 365-day default validity: the purpose's only key is
-	// expired. ActiveSigner must refuse (this is the regression's failing
-	// leg on pre-fix code, where the expired key kept signing)...
+	// expired. ActiveSigner must refuse (an expired active key must not keep
+	// signing)...
 	svc.now = func() time.Time { return base.Add(2 * 365 * 24 * time.Hour) }
 	if _, _, _, errAtExpiry := svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(errAtExpiry, ErrNoActiveKey) {
 		t.Fatalf("ActiveSigner past the key's NotAfter error = %v, want ErrNoActiveKey (regression: an expired key must not sign)", errAtExpiry)

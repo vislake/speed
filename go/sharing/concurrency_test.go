@@ -64,16 +64,15 @@ func TestShareRepository_GuardedWritesStaySerializedOnSQLite(t *testing.T) {
 // This file's tests pin withTxRetry's classification contract
 // deterministically: which errors retry (dbkit.IsRetryableConflict's
 // transient-contention class), which surface immediately, the attempt
-// bound, and the exhaustion answer. The concurrency the retry exists to
-// absorb is exercised by the real multi-connection SQLite tournaments in
-// service_test.go's TestService_Access_Concurrent* family -- the -race
-// suite runs those, and the plain runner's harsher scheduling (a
-// GOMAXPROCS=1 run included) is where a single-attempt guarded write used
-// to lose the file's write lock past the busy_timeout and fail the
-// views-survive-revoke regression as sharing.internal_error. Those tests
-// cannot fail deterministically on the pre-retry code the way this file's
-// can; this file is the deterministic half of the pin, they are the
-// end-to-end half.
+// bound, and the exhaustion answer. The concurrency the retry absorbs is
+// exercised end to end by the real multi-connection SQLite tournaments in
+// service_test.go's TestService_Access_Concurrent* family: under a
+// single-attempt guarded write those tournaments can lose the file's
+// write lock past the busy_timeout and fail the views-survive-revoke
+// regression as sharing.internal_error (the plain runner's harsher
+// scheduling, a GOMAXPROCS=1 run included), but they cannot fail
+// deterministically the way this file's injected conflicts can. This file
+// is the deterministic half of the pin, they are the end-to-end half.
 
 // retryableConflictErr returns an error dbkit.IsRetryableConflict
 // classifies as transient contention, using the same driver wording the

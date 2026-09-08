@@ -35,7 +35,7 @@ import { SIGN_IN_TEXT, readSettledText, visitSignIn } from './test-utils/journey
 const VALID_PHONE = '+8613800138000'
 
 /**
- * The claim the surface makes today. Quoted from auth-ui's own en-US
+ * The claim the surface ships. Quoted from auth-ui's own en-US
  * bundle (smsSignIn.sentNotice, "Code sent to {{phone}}"), reduced to the
  * part that does not interpolate.
  */

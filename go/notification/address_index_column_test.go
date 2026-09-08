@@ -16,20 +16,20 @@ import (
 //
 // Why this pin at all: dbkit.NewBlindIndexer's contract makes the column
 // argument the blind-index column's exact SQL name, and it refuses an EMPTY
-// name but has no guard for a non-empty wrong one -- the reference app's
-// original wiring (hand-typed "contact_email_index"/"contact_phone_index"
-// for a column that is really address_index) is the failure that guard gap
-// allowed. Nothing in this module's behaviour can fail on such a wrong name
-// while Equal is never called (the contact service only ever uses Index),
-// so the name is pinned here instead, from the two sources that together
-// define it: the models' own `column:` gorm tags (the authority dbkit's
-// doc names) and the schema the module's real migration files produce. The
-// constant is the only hand-written copy left.
+// name but has no guard for a non-empty wrong one -- a hand-typed name for
+// a column that is really address_index would silently blind-index the
+// wrong column. Nothing in this module's behaviour can fail on such a wrong
+// name while Equal is never called (the contact service only ever uses
+// Index), so the name is pinned here instead, from the two sources that
+// together define it: the models' own `column:` gorm tags (the authority
+// dbkit's doc names) and the schema the module's real migration files
+// produce. The constant is the only hand-written copy left.
 //
-// A regression on the OLD strings cannot fail these tests (they never knew
-// the old strings); the tests fail when AddressIndexColumn itself drifts
-// from either model's gorm tag or from the migrated column -- the drift
-// that would otherwise re-create the dormant wrong-column indexer.
+// A wrong-name regression cannot slip through these assertions: each
+// compares the constant against a source that still says address_index, so
+// the tests fail when AddressIndexColumn drifts from either model's gorm
+// tag or from the migrated column -- the drift that would otherwise leave a
+// host indexer blind-indexing the wrong column.
 func TestAddressIndexColumn_MatchesBothModelsGormTags(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

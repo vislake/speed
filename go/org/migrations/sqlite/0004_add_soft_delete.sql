@@ -32,8 +32,8 @@ ALTER TABLE memberships ADD COLUMN deleted_at TIMESTAMP NULL;
 ALTER TABLE memberships ADD COLUMN deleted_by VARCHAR(64) NOT NULL DEFAULT '';
 
 -- Sibling names are unique among LIVE rows only: a soft-deleted node's name
--- becomes reusable immediately, rather than staying reserved until some
--- future hard-delete.
+-- becomes reusable immediately, rather than staying reserved until the row
+-- is physically deleted.
 DROP INDEX uq_org_nodes_sibling_name;
 CREATE UNIQUE INDEX uq_org_nodes_sibling_name
     ON org_nodes (tenant_id, parent_id, name)

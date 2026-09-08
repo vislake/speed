@@ -27,9 +27,9 @@ import (
 // The collapse tests run against a REAL jobs.StandaloneQueue over a real
 // SQLite database, the same shape go/storage's sweep_window_test.go uses:
 // the dedupe behaviour under test lives in jobs' partial unique index and
-// row semantics, which a fake queue cannot exercise. The two collapse
-// tests fail on pre-fix code, where both tasks were enqueued with NO
-// idempotency key and every enqueue created its own independent job.
+// row semantics, which a fake queue cannot exercise. The windowed
+// idempotency key is what the collapse tests pin: without it every enqueue
+// would create its own independent job.
 //
 // EnqueueExpiryScan and EnqueueCRLRegenerate return no job id (both are
 // fire-and-forget schedule points), so the tests observe the queue's own
@@ -52,7 +52,7 @@ var (
 // minute, examples/reference-app's defaultPeriodicTaskSchedulerInterval),
 // or every tick would land in a fresh window and the dedup would be void.
 // The 60:1 ratio is asserted as a relationship between the two constants
-// so a future change to either surfaces here, at the contract, rather than
+// so a change to either surfaces here, at the contract, rather than
 // silently voiding the dedup in every host that ticks once a minute.
 func TestEnqueueWindowDefaults_SatisfyTheWindowToIntervalRatio(t *testing.T) {
 	const referenceHostSchedulerInterval = time.Minute
@@ -129,14 +129,14 @@ func waitForWindowRun(t *testing.T, runs chan jobs.JobID, what string) jobs.JobI
 
 // --- Expiry scan (job.go) ------------------------------------------------
 
-// TestEnqueueExpiryScan_SameWindowEnqueuesCollapseIntoOneJob pins
-// regression (a) for the expiry scan: two enqueues inside one
+// TestEnqueueExpiryScan_SameWindowEnqueuesCollapseIntoOneJob pins the
+// expiry scan's same-window collapse: two enqueues inside one
 // DefaultExpiryScanWindow window -- a second replica's tick ten minutes
 // after the first's -- collapse into the first job (the real queue's
 // idempotent Enqueue resolves the key to the existing row: one row, one
 // run), so N scheduler replicas never fire N concurrent scans of one
-// window. Fails on pre-fix code, where the keyless enqueues created two
-// independent jobs and the scan ran twice.
+// window. Without the windowed key the two enqueues would create two
+// independent jobs and the scan would run twice.
 func TestEnqueueExpiryScan_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	svc := newTestService(t)
 	q, db := startEnqueueWindowQueue(t)
@@ -177,9 +177,9 @@ func TestEnqueueExpiryScan_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	}
 }
 
-// TestEnqueueExpiryScan_LaterWindowEnqueuesNewJobAndScansAgain pins
-// regression (b) for the expiry scan: an enqueue in a later window is a
-// NEW job and the scan runs again -- the property that keeps the scan
+// TestEnqueueExpiryScan_LaterWindowEnqueuesNewJobAndScansAgain pins the
+// expiry scan's cross-window periodicity: an enqueue in a later window is
+// a NEW job and the scan runs again -- the property that keeps the scan
 // periodic on queues whose idempotency is unconditional. (A keyless task
 // also runs each tick; this test guards the windowed key against
 // regressing into a window-less constant key, which would resolve the
@@ -219,13 +219,13 @@ func TestEnqueueExpiryScan_LaterWindowEnqueuesNewJobAndScansAgain(t *testing.T) 
 	}
 }
 
-// TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock pins regression
-// (c) for the expiry scan: with a pinned clock, the window boundary is
-// exactly expiryScanWindowStart's absolute-clock truncation -- two
-// enqueues inside one window (the window's start, and one nanosecond
-// before its end) share one key, and an enqueue AT the next window's start
-// gets a fresh one. Fails on pre-fix code, where the keyless enqueues all
-// carried an empty key.
+// TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock pins the expiry
+// scan's window boundary against the pinned clock: the boundary is exactly
+// expiryScanWindowStart's absolute-clock truncation -- two enqueues inside
+// one window (the window's start, and one nanosecond before its end) share
+// one key, and an enqueue AT the next window's start gets a fresh one. A
+// keyless enqueue would carry an empty key and defeat the collapse; these
+// key assertions refuse that shape.
 func TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	svc := newTestService(t)
 	queue := &recordingQueue{}
@@ -272,8 +272,9 @@ func TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 // two regenerations enqueued inside one DefaultCRLRegenerateWindow window
 // collapse into one job, so N scheduler replicas never fire N concurrent
 // regenerations of one window (each of which would produce its own full
-// document and advance the authority's crl_number register). Fails on
-// pre-fix code, where the keyless enqueues created two independent jobs.
+// document and advance the authority's crl_number register). Without the
+// windowed key the two enqueues would create two independent jobs and
+// regenerate twice.
 func TestEnqueueCRLRegenerate_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	ca := newTestCAService(t)
 	q, db := startEnqueueWindowQueue(t)
@@ -359,8 +360,9 @@ func TestEnqueueCRLRegenerate_LaterWindowEnqueuesNewJobAndRegeneratesAgain(t *te
 // TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock is the CRL
 // task's twin of TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock:
 // with a pinned clock, the window boundary is exactly
-// crlRegenerateWindowStart's absolute-clock truncation. Fails on pre-fix
-// code, where the keyless enqueues all carried an empty key.
+// crlRegenerateWindowStart's absolute-clock truncation. A keyless enqueue
+// would carry an empty key and defeat the collapse; the key assertions
+// below refuse that shape.
 func TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	ca := newTestCAService(t)
 	queue := &recordingQueue{}

@@ -114,8 +114,8 @@ func TestSelfServiceSignup_ClinicIsIdentifiedByTheNameItsRegistrationGave(t *tes
 	// The clinic's org root itself carries that name: org's row for
 	// "what is this clinic called" is the route's source, read back
 	// here through org's own HTTP surface (a tenant-scoped read under
-	// the clinic owner's bearer token), so a future rename of the node
-	// is what renames the clinic.
+	// the clinic owner's bearer token) -- renaming the node renames the
+	// clinic.
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/org/nodes", nil)
 	if err != nil {
 		t.Fatalf("build org nodes request: %v", err)

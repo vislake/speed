@@ -17,8 +17,7 @@ import (
 
 // testPhone is a syntactically valid E.164 phone number every verification
 // test registers its user under. dbkit.NormalizePhoneE164 refuses a bare
-// national number (B1's own note for later blocks), so this is
-// deliberately already in E.164 form.
+// national number, so this is deliberately already in E.164 form.
 const testPhone = "+8613800000099"
 
 // registerPhoneUser creates an account identified by phone only, wires
@@ -264,16 +263,16 @@ func TestLoginWithSMSCode_WrongCode_Refused(t *testing.T) {
 	}
 }
 
-// TestLoginWithSMSCode_AuthMetricCountsTheChannel is the F3 regression: the
-// SMS-code sign-in channel is brute-forceable (a six-digit code behind a
-// per-target wrong-guess budget, the 10th wrong guess refused) and yet
-// recorded nothing on authCountMetricName/authDurationMetricName -- the
-// metric vocabulary covered password login, refresh and MFA challenge
-// only, so an operator alerting on sign-in failure rate saw a dashboard
-// that looked like login coverage and was a quarter of it. A wrong guess
-// here is refused and must land under operation=login_sms (authOpSMSCodeLogin);
-// before that operation value existed, no data point carries it and
-// authCounterValue fails the test.
+// TestLoginWithSMSCode_AuthMetricCountsTheChannel pins the metric
+// vocabulary's coverage of the SMS-code sign-in channel: the channel is
+// brute-forceable (a six-digit code behind a per-target wrong-guess
+// budget, the 10th wrong guess refused), so an operator alerting on
+// sign-in failure rate needs the channel's own data point on
+// authCountMetricName/authDurationMetricName -- the vocabulary that covers
+// password login, refresh and MFA challenge must cover this channel too. A
+// wrong guess here is refused and must land under operation=login_sms
+// (authOpSMSCodeLogin); without an operation value for the channel, no
+// data point carries it and authCounterValue fails the test.
 //
 // Deliberately not t.Parallel(): it swaps the process-wide global otel
 // MeterProvider (see setupAuthMetricsMeterProvider's own doc comment).
@@ -296,12 +295,13 @@ func TestLoginWithSMSCode_AuthMetricCountsTheChannel(t *testing.T) {
 		t.Fatal("LoginWithSMSCode(wrong code) error = nil, want a refusal")
 	}
 
-	// "login_sms" is the operation value the fix adds (authOpSMSCodeLogin
-	// in service.go). The literal is asserted rather than the constant so
-	// the fail-before run of this regression is a behavioral one -- no
-	// data point carries the label -- instead of a compile error; a
-	// future rename of the constant's value breaks this assertion, which
-	// is the same pin the constant reference would give.
+	// "login_sms" is the operation label (authOpSMSCodeLogin in
+	// service.go). The literal is asserted rather than the constant, so a
+	// regression that labels the channel's data points differently fails
+	// this test at runtime -- no data point carries the label -- instead
+	// of reusing the very constant the regression changed; a rename of
+	// the constant's value breaks this assertion, the same pin a constant
+	// reference would give.
 	count := collectAuthMetric(t, reader, authCountMetricName)
 	if got := authCounterValue(t, count, "login_sms", authOutcomeFailed); got != 1 {
 		t.Errorf("%s{operation=login_sms,outcome=failed} = %d, want 1", authCountMetricName, got)
@@ -478,8 +478,8 @@ func TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts(t *tes
 	}
 
 	// The code is now locked: even the REAL code, from the same source,
-	// must be refused -- this is the brute-force defense the rate-limiter
-	// fix above must not have weakened.
+	// must be refused -- the per-code lock must hold independently of how
+	// the shared rate-limit budget is shaped.
 	if _, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
 		Phone: testPhone, Code: real, IP: "198.51.100.77",
 	}); !errors.Is(err, ErrVerificationCodeInvalid) {

@@ -58,7 +58,7 @@ func TestNote_GetTenantID_ReturnsEmbeddedTenantModelValue(t *testing.T) {
 
 // TestNote_ImplementsTenantScoped is a runtime-checkable companion to
 // model.go's compile-time `var _ dbkit.TenantScoped = Note{}` assertion --
-// redundant with it today, but unlike that line, a test failure here shows
+// redundant with it, but unlike that line, a test failure here shows
 // up in `go test`'s own output instead of only a build error, which is
 // easier for a reader to spot in CI.
 func TestNote_ImplementsTenantScoped(t *testing.T) {

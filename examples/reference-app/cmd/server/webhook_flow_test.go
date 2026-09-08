@@ -1,30 +1,24 @@
 package main
 
 // webhook_flow_test.go is go/integration's outbound-webhook DELIVERY
-// surface mandatory-first-consumer proof
-// reference-app consumer yet" section named this the compensating
-// It
-// drives a real webhook subscription through the composed HTTP stack --
-// the REAL org.member.joined domain event org's own invite/accept flow
-// publishes (the identical flow org_flow_test.go itself drives),
+// surface mandatory-first-consumer proof: it drives a real webhook
+// subscription through the composed HTTP stack -- the REAL
+// org.member.joined domain event org's own invite/accept flow publishes
+// (the identical flow org_flow_test.go itself drives),
 // go/integration's real HMAC signing, and its real
 // jobs.StandaloneQueue-backed delivery pipeline -- against two real,
 // non-fake receiver processes this test controls.
 //
-// How a subscription is created here: through the module's
-// spec-generated webhook-subscription-CRUD surface
-// (go/integration/api/openapi.yaml, mounted under /api/v1/integration)
-// (the spec-generated surface this
-// file's createWebhookSubscription helper drives (webhooks.go's own
-// package doc records that retirement): each test below now subscribes
-// through the spec surface's integration_createWebhookSubscription
-// operation instead -- the POST createWebhookSubscription issues, mounted
-// through the same generic mountModuleRoutes loop every other module's
-// fragment uses, gated by demo_subject.go's guardIntegrationRoute.
-// 7's own consumer proof -- the whole CRUD + recent-deliveries surface
-// driven end to end -- lives in webhook_crud_flow_test.go; this file's
-// remaining job is the DELIVERY side, which no CRUD
-// surface exercises.
+// A subscription is created through the module's spec-generated
+// webhook-subscription-CRUD surface (go/integration/api/openapi.yaml,
+// mounted under /api/v1/integration): each test below subscribes through
+// the integration_createWebhookSubscription operation -- the POST
+// webhooks.go's createWebhookSubscription helper issues, mounted through
+// the same generic mountModuleRoutes loop every other module's fragment
+// uses, gated by demo_subject.go's guardIntegrationRoute. The whole CRUD
+// + recent-deliveries surface, driven end to end, lives in
+// webhook_crud_flow_test.go; this file's job is the DELIVERY side, which
+// no CRUD surface exercises.
 //
 // # Why this needs cfg.WebhookURLValidator/cfg.WebhookHTTPClient at all
 //

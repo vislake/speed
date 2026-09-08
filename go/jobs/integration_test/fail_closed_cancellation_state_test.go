@@ -24,22 +24,19 @@ import (
 // marker (queue/asynq/queue.go's cancelMarkerKey, an "asynqjobs:cancelled:"
 // key written by Cancel and read by Get/DeadLetterJobs and the dispatch
 // check alike), a second state source that can fail while asynq's own
-// task machinery keeps working — the exact shape of the divergence this
-// tier exists to catch. The leg's adapter therefore sabotages the marker
-// key itself, the destructive injection the tier's design names: the
+// task machinery keeps working — the exact read-failure shape the shared
+// fault suite targets. The leg's adapter therefore sabotages the marker
+// key itself, the destructive injection the suite's design names: the
 // marker (a string) is deleted and replaced with a Redis LIST,
 // so every read of it answers a real WRONGTYPE error on a real Redis, and
 // Repair deletes the sabotage and restores the captured marker value — the
 // outage delays the report, it does not lose the cancellation.
 //
-// The c26b058b round's own hand-written regressions (marker_read_fail_
-// closed_test.go) proved the same direction against the same sabotage for
-// asynq alone, before this tier existed; this leg is the shared-suite form
-// of that proof — the same two checks (Get on a possibly-cancelled Job, a
-// DeadLetterJobs listing) that StandaloneQueue's leg in go/jobs's unit tier
-// runs against its own real injection, so the failure direction is measured
-// by ONE suite across both implementations instead of by two independently
-// hand-maintained files.
+// This leg is the asynq half of the shared-suite proof: the same two
+// checks (Get on a possibly-cancelled Job, a DeadLetterJobs listing) that
+// StandaloneQueue's leg in go/jobs's unit tier runs against its own real
+// injection, so the failure direction is measured by ONE suite across both
+// implementations.
 func TestAsynqQueue_FailsClosedOnUnreadableCancellationState(t *testing.T) {
 	ctx := context.Background()
 	queuetest.AssertFailsClosedOnUnreadableCancellationState(t, func() queuetest.FaultRunnable {

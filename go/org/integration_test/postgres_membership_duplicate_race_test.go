@@ -62,10 +62,10 @@ import (
 //     violation once the winner commits either way. Which side wins is a
 //     coin flip no assertion depends on.
 //
-// Pre-fix, the loser's same-transaction recovery re-read then failed with
-// 25P02 and Add reported org.internal_error; post-fix the loser's insert
-// ends its transaction the moment it loses the race and the winner is
-// re-read on a fresh session, so Add answers the coded org.membership_exists
+// The loser's insert ends its transaction the moment it loses the race
+// and the winner is re-read on a fresh session -- a recovery that re-read
+// on the aborted transaction would fail with 25P02 and make Add report
+// org.internal_error -- so Add answers the coded org.membership_exists
 // and exactly one membership row exists. Three rounds, each on a fresh
 // tenant, mirroring the delete-race file's own repetition.
 func TestMemberService_ConcurrentAddSameUser_LoserAnswersMembershipExists_Postgres(t *testing.T) {
@@ -124,9 +124,9 @@ func TestMemberService_ConcurrentAddSameUser_LoserAnswersMembershipExists_Postgr
 
 		// Exactly one of the two racing Adds created the membership; the
 		// other lost the unique-index race and must answer the same coded
-		// org.membership_exists a sequential duplicate would. Pre-fix the
-		// loser's recovery re-read on the aborted transaction failed with
-		// SQLSTATE 25P02 and Add reported org.internal_error right here.
+		// org.membership_exists a sequential duplicate would. A recovery
+		// that re-read on the aborted transaction would fail with SQLSTATE
+		// 25P02 and make Add report org.internal_error right here.
 		creators, codedExists := 0, 0
 		for i, err := range addErrs {
 			switch {

@@ -16,10 +16,10 @@ import (
 // (see assert_conforms.go), so these tests drive the checks — with the
 // cross-instance wait budget shortened, since a rejection only happens once
 // a wait runs out — against a deliberately defective pair and require the
-// check to reject it. A check that accepted the pair would silently
-// regress to the single-instance shape this round removed, so these tests
-// are the guard against that regression, the same way a test that asserts
-// an error is returned guards the error's existence.
+// check to reject it. A check that accepted the pair would silently regress to the
+// single-instance-only shape, so these tests are the guard against that
+// regression, the same way a test that asserts an error is returned guards
+// the error's existence.
 //
 // teethBudget bounds the probes: a genuine rejection is a wait that runs
 // out, and with the real crossInstanceBudget each probe would take several
@@ -120,8 +120,8 @@ func newWedgePair() *wedgePair {
 // wedgePublisher is the publishing half: local synchronous fan-out with
 // joined errors (the path every pre-existing single-instance check
 // exercises) plus a best-effort forward of the event onto the shared queue
-// for the receiver's reader — the delivery path whose breakage this round
-// exists to make visible.
+// for the receiver's reader — the cross-instance delivery path the
+// cross-instance checks exist to make visible.
 type wedgePublisher struct {
 	mu       sync.Mutex
 	handlers map[string][]pkgcore.EventHandler

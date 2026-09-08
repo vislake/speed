@@ -41,10 +41,11 @@ import (
 //     dispatched) and Cancelled -- the marker exists, the Handle must
 //     never run.
 //  2. The marker key is sabotaged into a LIST, so the marker read at
-//     dispatch time fails. Pre-fix, processTask logged the failure and ran
-//     Handle anyway: a cancelled Job executed. Post-fix, the attempt is
-//     refused (errCancelMarkerUnreadable, bounce-class: no retry budget
-//     consumed) and the Job stays retryable, Handle never invoked.
+//     dispatch time fails. The attempt must be refused
+//     (errCancelMarkerUnreadable, bounce-class: no retry budget consumed)
+//     and the Job stays retryable, Handle never invoked -- a dispatch that
+//     logged the failure and ran Handle anyway would execute a cancelled
+//     Job.
 //  3. The sabotage is removed: the next refusal cycle reads a clean "no
 //     marker" answer and the Job runs normally -- proving the refusal was
 //     the transient marker outage's, not a wedged Job.
@@ -146,9 +147,9 @@ func TestRedisQueue_UnreadableCancellationMarker_RefusesToRunUntilReadableAgain(
 // that was Cancelled and whose run the worker then skipped (asynq records
 // the skip as an ordinary Completed, retained like a real success) must
 // never be REPORTED as StatusSucceeded when the cancellation marker can no
-// longer be read. Pre-fix, Get logged the read failure and reported the
-// Job's natural asynq state: StatusSucceeded with an empty Result -- the
-// exact answer the poll-then-unmarshal consumer pattern (ai-gateway's
+// longer be read: Get must fail closed rather than report the Job's
+// natural asynq state -- StatusSucceeded with an empty Result is the exact
+// answer the poll-then-unmarshal consumer pattern (ai-gateway's
 // image_gateway.go) treats as a successful completion and then fails on as
 // "unexpected end of JSON input" when it decodes the empty Result.
 func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *testing.T) {
@@ -193,7 +194,7 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 
 	// Wait for the worker to dequeue the cancelled Job and skip Handle,
 	// which asynq records as an ordinary Completed -- the underlying state
-	// the finding this test pins corrupts. Observed through asynq's own
+	// the reporting overlay must keep visible. Observed through asynq's own
 	// Inspector because Get's overlay reports StatusCancelled from the
 	// moment Cancel returned, hiding the underlying state; the Get right
 	// after confirms the overlay is live over that Completed record (calls

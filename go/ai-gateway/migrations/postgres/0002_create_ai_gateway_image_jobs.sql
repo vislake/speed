@@ -6,9 +6,8 @@
 -- successfully for it and, once go/storage has durably written the
 -- output, what it was written as.
 --
--- It is tenant data (docs/internal/04-data-and-tenancy.md's data-domain
--- table), deliberately implementing dbkit.TenantScoped (through the
--- embedded dbkit.TenantModel in go/ai-gateway/image_job_store.go's
+-- It is tenant data, deliberately implementing dbkit.TenantScoped (through
+-- the embedded dbkit.TenantModel in go/ai-gateway/image_job_store.go's
 -- imageJobRow) exactly like go/storage's own objects table: an image-
 -- generation job's marker is meaningless outside the tenant it was
 -- enqueued under and must never be visible across one. It is reached only
@@ -16,19 +15,18 @@
 -- and its isolation is proven by tenancytest.AssertIsolated
 -- (image_job_store_test.go).
 --
--- The row exists to close a real bug (this table's own introducing round):
--- go/jobs retries a Handle call that returned an error, and a failure AFTER
--- the vendor call already succeeded (a go/storage write failure -- the
--- module's own AGENTS.md records the SQLITE_BUSY contention this actually
--- hits in practice) must never let the retry call the vendor a second
--- time, since that both bills the tenant again and produces a second usage
--- record for one logical job. imageGenerateHandler.Handle consults this
--- table FIRST, before ever calling ImageProvider, and claims a row (status
--- "pending") BEFORE calling the vendor, never after -- see
--- go/ai-gateway/image_job_store.go's own doc comment for why that ordering,
--- not a marker written only once the vendor already answered, is what
--- closes both a transient claim-write failure and two overlapping Handle
--- calls for the same job, not merely a sequential retry.
+-- The row exists to close a real failure window: go/jobs retries a Handle
+-- call that returned an error, and a failure AFTER the vendor call already
+-- succeeded (a go/storage write failure -- the SQLITE_BUSY contention this
+-- actually hits in practice) must never let the retry call the vendor a
+-- second time, since that both bills the tenant again and produces a
+-- second usage record for one logical job. imageGenerateHandler.Handle
+-- consults this table FIRST, before ever calling ImageProvider, and claims
+-- a row (status "pending") BEFORE calling the vendor, never after -- see
+-- go/ai-gateway/image_job_store.go's own doc comment for why that
+-- ordering, not a marker written only once the vendor already answered,
+-- is what closes both a transient claim-write failure and two overlapping
+-- Handle calls for the same job, not merely a sequential retry.
 --
 -- status is "pending" (claimed, no vendor answer recorded yet -- content/
 -- mime/image_count/steps/resolution_tier are all still zero), "generated"
@@ -41,9 +39,9 @@
 --
 -- content/mime are the vendor's raw answer, persisted for exactly as long
 -- as it takes a retry to redo the storage write without asking the vendor
--- again -- see go/ai-gateway/AGENTS.md for the accepted trade-off of
--- storing image bytes here temporarily, in exchange for closing the
--- ordering window a marker written only after the storage write could not.
+-- again -- the accepted trade-off of storing image bytes here
+-- temporarily, in exchange for closing the ordering window a marker
+-- written only after the storage write could not.
 --
 -- provider records which ImageProviderRegistry name actually answered, so
 -- an attempt that skips the vendor call (because status is already

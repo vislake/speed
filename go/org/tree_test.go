@@ -1376,8 +1376,8 @@ func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
 // (migrations/{sqlite,postgres}/0004_add_soft_delete.sql) actually frees a
 // mark-deleted node's (parent_id, name) slot for reuse. Against a
 // full unique index this Create would fail with
-// ErrDuplicateSiblingName -- a real functional regression the migration
-// exists to avoid.
+// ErrDuplicateSiblingName -- the functional regression the partial index
+// prevents.
 func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")
@@ -1505,7 +1505,7 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 	}
 
 	// Restoring the ancestor first, then the descendant -- the order the
-	// module's own docs prescribe -- must still succeed.
+	// dead-parent refusal makes mandatory -- must still succeed.
 	if _, err := tree.Restore(ctx, north.ID); err != nil {
 		t.Fatalf("Restore(north): %v", err)
 	}
@@ -1655,9 +1655,9 @@ func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 // Restore(child), Move(child, newParent), Delete(child) again -- racing a
 // second Restore(child) that read the row BEFORE that sequence committed
 // must not land child LIVE with ParentID = newParent but a materialized Path
-// naming the OLD parent. restoreNodeTx wrote Path/Depth conditioned only on
+// naming the OLD parent. restoreNodeTx writes Path/Depth conditioned only on
 // id and deleted_at IS NOT NULL, never touching or checking ParentID, so its
-// write matched the re-deleted row and resurrected it under a path its own
+// write can match the re-deleted row and resurrect it under a path its own
 // ParentID contradicts -- the state path.go calls "corrupt, not a supported
 // state", with subtree-scope consequences in both directions and a two-way
 // data-scope mismatch once the row feeds rbac through ScopeService.Path.
@@ -1684,10 +1684,10 @@ func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 // one test-only pause point -- the restoreGate field, invoked between the
 // read and the retry, inert unless a test sets it -- so this test parks the
 // racing Restore after its read, commits the competing sequence through the
-// real service methods, then resumes it and asserts the landed row. Before
-// the fix the resumed call restores under the stale parent; after the fix
-// its in-transaction re-read sees the current parent, locks it, and
-// re-expresses the row under it.
+// real service methods, then resumes it and asserts the landed row: the
+// resumed call's in-transaction re-read must see the current parent, lock
+// it, and re-express the row under it -- never under the stale parent its
+// initial read captured.
 func TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent(t *testing.T) {
 	db := newTestDB(t)
 	tree := newTestTreeOn(t, db)

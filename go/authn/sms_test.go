@@ -34,21 +34,18 @@ func TestConsoleSMSSender_WritesToInjectedWriter(t *testing.T) {
 	}
 }
 
-// TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest is the
-// regression for the P2 finding that the distributed-mode SMS gateway
-// endpoint did not require TLS while its payload is a phone number and a
-// rendered verification-code message -- the code being the credential of
-// this module's phone-login channel. Before the fix a sender built with an
-// http:// endpoint accepted it with no signal anywhere, so a deployment
-// whose gateway URL pointed at a public plaintext gateway would send every
-// code across the public internet in cleartext. The gateway here is a live
-// plaintext server that RECORDS whether it was reached: the fixed sender
-// must refuse the endpoint with safehttp's scheme error BEFORE any request
-// is made -- on the unfixed code this send succeeds silently, which is the
-// whole defect. The plain client is injected exactly as the delivery-path
-// tests do, so the refusal under test is the endpoint's scheme, not the
-// dialler (which a loopback gateway would trip first on the default
-// client).
+// TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest pins the
+// transport's standing contract for its gateway endpoint: a sender built
+// with an http:// endpoint must refuse it with safehttp's scheme error
+// BEFORE any request is made. The payload is a phone number and a rendered
+// verification-code message -- the code being the credential of this
+// module's phone-login channel -- so sending it over a plaintext gateway
+// would put every code on the public internet in cleartext. The gateway
+// here is a live plaintext server that RECORDS whether it was reached, so
+// a refusal that happens after the request would be caught. The plain
+// client is injected exactly as the delivery-path tests do, so the refusal
+// under test is the endpoint's scheme, not the dialler (which a loopback
+// gateway would trip first on the default client).
 func TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest(t *testing.T) {
 	t.Parallel()
 
@@ -76,9 +73,9 @@ func TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest(t *testing.T) {
 // ORDER of the two duties on the default guarded client: an http:// endpoint
 // whose host the dialler would also refuse must answer with the scheme error,
 // because the plaintext endpoint is a confidentiality violation before any
-// address question is even reached -- on the unfixed code this send answers
-// with the dialler's ErrBlockedAddress instead, which is the refusal for the
-// wrong axis and says nothing about the cleartext problem.
+// address question is even reached -- an answer with the dialler's
+// ErrBlockedAddress instead would be the refusal for the wrong axis and
+// would say nothing about the cleartext problem.
 func TestHTTPSMSSender_PlaintextEndpoint_RefusedBySchemeNotDialler(t *testing.T) {
 	t.Parallel()
 
@@ -147,8 +144,8 @@ func TestHTTPSMSSender_GatewayErrorStatus_ReturnsError(t *testing.T) {
 
 // TestHTTPSMSSender_PrivateEndpoint_Refused proves the default (no
 // WithHTTPSMSSenderClient override) transport refuses to connect to a
-// private address -- the SSRF guard authn's AGENTS.md documents as
-// mandatory for every operator-configurable outbound destination.
+// private address -- the SSRF guard, mandatory for an operator-configurable
+// outbound destination whose URL no code review of a caller can vouch for.
 func TestHTTPSMSSender_PrivateEndpoint_Refused(t *testing.T) {
 	t.Parallel()
 

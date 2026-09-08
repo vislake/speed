@@ -41,16 +41,16 @@ func TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker(t *testing.
 	task := asynqlib.NewTaskWithHeaders("marker-guarded", []byte("payload"), map[string]string{headerTenantID: "tenant-a"})
 	log := obs.FromContext(context.Background())
 
-	// An unreadable marker must refuse the run: a marker-read failure that
-	// was only logged while the attempt proceeded to execute would let a
-	// cancelled Job run anyway, then report StatusCancelled later.
+	// An unreadable marker must refuse the run: logging the read failure
+	// while letting the attempt proceed would let a cancelled Job run
+	// anyway, then report StatusCancelled later.
 	err := q.dispatchAfterMarkerRead(context.Background(), task, "job-1", log, nil /* cancelledAt */, errors.New("WRONGTYPE simulated marker read failure"))
 	if !errors.Is(err, errCancelMarkerUnreadable) {
 		t.Fatalf("dispatchAfterMarkerRead(unreadable marker) error = %v, want errCancelMarkerUnreadable", err)
 	}
 
 	// A readable marker that says "cancelled" skips Handle without an
-	// error -- the fail-closed change must not have broken the skip path.
+	// error -- the skip path keeps working alongside the refusal.
 	cancelledAt := time.Now()
 	if skipErr := q.dispatchAfterMarkerRead(context.Background(), task, "job-1", log, &cancelledAt, nil); skipErr != nil {
 		t.Fatalf("dispatchAfterMarkerRead(cancelled marker) error = %v, want nil (skip)", skipErr)

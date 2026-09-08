@@ -329,8 +329,8 @@ func TestNewClient_AppliesItsOptions(t *testing.T) {
 // is the TLS test server's own transport, which keeps everything else about
 // Client() intact, including the redirect policy under test.
 //
-// Before the policy checked schemes, this test failed: the client followed
-// the downgrading redirect and the capture server received the re-sent
+// Without the scheme re-check on the hop, the client would follow the
+// downgrading redirect and the capture server would receive the re-sent
 // body.
 func TestGuard_Client_RefusesA307Or308RedirectToAForbiddenScheme(t *testing.T) {
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {

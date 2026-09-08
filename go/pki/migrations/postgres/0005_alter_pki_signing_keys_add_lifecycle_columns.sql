@@ -1,6 +1,5 @@
--- Round 2's lifecycle state machine (docs/internal/22-pki.md's "lifecycle
--- state machine and propagation window" section) needs two columns
--- 0001_create_pki_signing_keys.sql did not anticipate:
+-- The signing-key lifecycle state machine needs two further columns on
+-- pki_signing_keys:
 --
 --   * retiring_at: when a key was demoted from 'active' to 'retiring', the
 --     reference point the retiring->retired transition is measured from.

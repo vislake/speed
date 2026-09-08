@@ -827,9 +827,9 @@ func TestMemoryKVStore_IncrByFloatWithTTLExpiry(t *testing.T) {
 // races hundreds of goroutines to create the same fresh window key at once --
 // exactly the shape go/ratelimit's Allow does on a window boundary -- and
 // proves both halves of IncrByFloatWithTTL's atomicity contract survive: no
-// increment is lost (the final count equals the goroutine count, unlike the
-// pre-fix Get-then-Set sequence this primitive replaces, which could lose
-// double-digit percentages under this exact load) AND the key ends up with a
+// increment is lost (the final count equals the goroutine count, where a
+// Get-then-Set sequence loses double-digit percentages under this exact
+// load) AND the key ends up with a
 // ttl attached (observable here as a non-zero expiresAt; a broken
 // implementation that silently dropped the ttl on some races would leave the
 // key permanently live instead of aging out with its window).

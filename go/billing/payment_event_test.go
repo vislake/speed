@@ -168,16 +168,14 @@ func TestPaymentEventRepository_MarkStatus(t *testing.T) {
 }
 
 // TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount is the
-// regression test for the "a payment event zeroed to Amount=0 by the
-// pending-branch fix keeps Amount=0 forever even after resolving to
-// Succeeded" defect: a row inserted with a zero-valued Amount (exactly the
-// shape event.go's normalizeCheckoutSession's ChannelStatusPending branch
-// produces for an unsettled checkout.session.completed webhook) must have
-// its real, freshly re-queried Amount actually persisted when markStatus
-// later resolves it to Succeeded -- proving markStatus's third parameter
-// is wired all the way through, not silently dropped. markStatus without
-// the Money parameter would only ever write Status, leaving
-// AmountCents/Currency at their zero-valued insert-time values forever.
+// regression test for the zero-amount-stuck defect: a row inserted with a
+// zero-valued Amount -- exactly the shape event.go's
+// normalizeCheckoutSession's ChannelStatusPending branch produces for an
+// unsettled checkout.session.completed webhook -- would keep Amount=0
+// forever even after resolving to Succeeded unless markStatus's third
+// parameter is genuinely persisted. markStatus without the Money
+// parameter would only ever write Status, leaving AmountCents/Currency
+// at their zero-valued insert-time values forever.
 func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
 	repo := NewPaymentEventRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -215,11 +213,11 @@ func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
 // poll racing the webhook that resolved the row) could have the later,
 // stale mark clobber the earlier resolution the record had already
 // committed. The payment_events row is the ledger of record: once a row
-// has been marked out of Pending, no later mark may change it. The fix
-// keys the UPDATE's WHERE on the row's own current Status (Pending) too,
-// so an attempt against an already-resolved row affects nothing and
-// returns nil -- the record stands, nothing regresses. An unguarded
-// second mark would overwrite the row back to Failed.
+// has been marked out of Pending, no later mark may change it -- the
+// UPDATE's WHERE is keyed on the row's own current Status (Pending), so
+// an attempt against an already-resolved row affects nothing and returns
+// nil: the record stands, nothing regresses. An unguarded second mark
+// would overwrite the row back to Failed.
 func TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow(t *testing.T) {
 	repo := NewPaymentEventRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

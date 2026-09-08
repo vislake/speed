@@ -724,14 +724,12 @@ func TestService_SwitchTenant_RefusesATenantTheUserDoesNotBelongTo(t *testing.T)
 	})
 }
 
-// TestService_SwitchTenant_RefusesAnExpiredSession is the regression for the
-// go/authn audit's other confirmed finding: SwitchTenant checked
-// session.Status but never session.ExpiresAt -- the one check Refresh
-// already performs -- so a session past its own configured TTL, whose
-// Status row nothing here ever proactively flips away from active, stayed
-// usable for as long as the caller's already-issued access token remained
-// valid, extending the session's practical lifetime by one access-token
-// lifetime.
+// TestService_SwitchTenant_RefusesAnExpiredSession pins the expiry half of
+// SwitchTenant's session check: a session past its own configured TTL --
+// whose Status row nothing here ever proactively flips away from active --
+// must refuse the switch, whatever the caller's already-issued access
+// token still says. A switch that only consulted session.Status would
+// extend the session's practical lifetime by one access-token lifetime.
 func TestService_SwitchTenant_RefusesAnExpiredSession(t *testing.T) {
 	t.Parallel()
 
@@ -1333,14 +1331,14 @@ func authHistogramCount(t *testing.T, m metricdata.Metrics, operation, outcome s
 }
 
 // TestService_AuthMetrics_RecordCountAndDurationByOperationAndOutcome is the
-// regression proof that Service actually emits the
-// docs/internal/09-observability.md must-instrument row for the
-// authentication domain -- login success/failure rate, MFA challenge
-// volume, refresh failure rate -- rather than leaving every outcome
-// observable only through login_attempts rows and structured logs. Before
-// registerAuthMetrics/recordAuthMetric existed, every collectAuthMetric call
-// below would fail with "metric ... not found", which is the negative
-// control this test relies on.
+// regression proof that Service emits the must-instrument authentication
+// metrics -- login success/failure rate, MFA challenge volume, refresh
+// failure rate -- on authCountMetricName/authDurationMetricName rather
+// than leaving every outcome observable only through login_attempts rows
+// and structured logs. Every operation/outcome pair in the vocabulary is
+// asserted through collectAuthMetric, which fails with "metric ... not
+// found" when no data point carries the pair -- the negative control an
+// operation the metric path fails to record trips.
 //
 // Deliberately not t.Parallel(): it swaps the process-wide global otel
 // MeterProvider (see setupAuthMetricsMeterProvider's own doc comment).

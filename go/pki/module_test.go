@@ -217,12 +217,11 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 // own domain). One name spanning the two leaves half of it wrong in
 // whichever domain it is evaluated in: a tenant-domain holder of the
 // platform half could stop the whole deployment's token issuance. The
-// declared catalog is therefore the exact five-name set below -- the old
-// spanning "pki:revoke" name is declared by NO ONE, so a grant of it is
-// refused by rbac's own attach-time catalog freeze rather than half
-// meaning something. Written with literal strings, not the module
-// constants, so this regression also runs against pre-fix code (where the
-// catalog still carried the spanning name) and fails there.
+// declared catalog is therefore exactly the five names below: no spanning
+// name exists in it, so a grant of one would be refused by rbac's own
+// attach-time catalog freeze rather than half meaning something. The names
+// are literal strings rather than the module constants, so the assertion
+// does not share its data with the catalog it checks.
 func TestModule_Register_RevokePermissionsAreSplitByDataDomain(t *testing.T) {
 	db := newTestDB(t)
 	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(db))

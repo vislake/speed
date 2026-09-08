@@ -499,16 +499,15 @@ func TestBoundedTenantIDSegment_LongNamesSharingAPrefixDoNotCollide(t *testing.T
 }
 
 // TestIsolationTenants_LongDescriptiveSubtestName_StaysWithinMaxTenantIDLen
-// reproduces the exact originally reported failure shape end to end through
-// the actual exported entry point isolationTenants feeds: a realistic,
-// descriptive subtest name -- the kind backend-coding-standards §13 asks
-// authors to write -- long enough that the OLD, unbounded formula
-// ("tenancytest-" + sanitizeForTenantID(t.Name()) + "-a"/"-b", with no
-// bound at all) would have exceeded the 64-character tenant_id column every
-// fixture in this package declares. Before the fix, the two assertions
-// below on len(a)/len(b) fail for exactly this t.Name(); after the fix,
-// they pass, because the overflowing tail is now replaced with a short
-// hash instead of being embedded verbatim.
+// pins the bounded-name behaviour end to end through the actual exported
+// entry point isolationTenants feeds: a realistic, descriptive subtest
+// name -- the kind backend-coding-standards §13 asks authors to write --
+// long enough that an unbounded formula ("tenancytest-" +
+// sanitizeForTenantID(t.Name()) + "-a"/"-b", with no bound at all) would
+// exceed the 64-character tenant_id column every fixture in this package
+// declares. The overflowing tail is replaced with a short hash rather
+// than embedded verbatim, so the two assertions below on len(a)/len(b)
+// hold for exactly this t.Name().
 func TestIsolationTenants_LongDescriptiveSubtestName_StaysWithinMaxTenantIDLen(t *testing.T) {
 	// Deliberately mirrors a real, plausible descriptive subtest name, not
 	// a synthetic worst case: this is close to the exact subtest name whose

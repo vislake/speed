@@ -6,10 +6,8 @@
 // redis itself, one file per source file, per the backend coding standard's
 // testing layout rule) and carries the "integration" build tag: a plain
 // "go test ./..." never compiles or runs anything in this directory; it is
-// invoked explicitly with "go test -tags=integration ./...". This mirrors
-// go/pkgcore's own (pre-split) integration tier, which this directory's
-// tests are moved out of, and go/jobs/integration_test's identical
-// convention.
+// invoked explicitly with "go test -tags=integration ./...", the same
+// layout-and-build-tag convention go/jobs/integration_test follows.
 //
 // Every test here spins up its own disposable Redis container and requires
 // a working Docker (or Docker-API-compatible) daemon; there is no fallback
@@ -42,8 +40,8 @@ import (
 // kv/redis's own integration tier carries an identical copy of this helper:
 // the two packages' integration tiers are independent of each other and
 // neither owns a shared package worth introducing just for a dozen lines
-// (go/pkgcore/AGENTS.md's packaging rule, the same reasoning behind
-// register.go's duplicated clientFromConfig).
+// (the same packaging reasoning behind register.go's duplicated
+// clientFromConfig).
 func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
 

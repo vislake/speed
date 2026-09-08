@@ -2,7 +2,8 @@
 
 // PostgreSQL regressions for CreditService's credit ledger on the real
 // server -- see the package doc comment in postgres_isolation_test.go for
-// the defect this tier was built against and the fix it guards.
+// the defect class this tier exists for and the contract each test
+// guards.
 package billing_test
 
 import (
@@ -30,23 +31,23 @@ func newPostgresDB(t *testing.T) *gorm.DB {
 // TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation is the
 // PostgreSQL leg of the unit tier's own
 // TestCreditService_PreDeduct_IdempotentRetry_ReturnsTheSameReservation,
-// in the shape the defect actually lives in: the retried PreDeduct runs
+// in the shape the hazard actually lives in: the retried PreDeduct runs
 // against the same database as a first attempt that already committed, on
 // PostgreSQL itself.
 //
-// Before the fix, the retry's insert hit the (id, tenant_id) primary key
-// and the recovery then read the existing row back on the SAME open
-// transaction. SQLite tolerates a failed statement inside an open
-// transaction; PostgreSQL does not -- the transaction is aborted and the
-// recovery's read fails with SQLSTATE 25P02, so PreDeduct returned an
-// error and the idempotency contract collapsed: a caller retrying a
-// PreDeduct whose first attempt had already committed got an error instead
-// of its own earlier reservation, on the money path itself (no balance was
-// double-reserved -- the transaction aborted before anything else ran --
-// but the retry could never succeed, so every retry-driven caller broke).
-// After the fix the insert uses ON CONFLICT DO NOTHING (which never aborts
-// the transaction), the pre-existing row is read back on the still-healthy
-// transaction, and the retry returns the identical reservation.
+// The retry's insert runs as ON CONFLICT DO NOTHING (which never aborts
+// the transaction), the pre-existing row is read back on the
+// still-healthy transaction, and the retry returns the identical
+// reservation. The dialect difference underneath is why the shape
+// matters: SQLite tolerates a failed statement inside an open
+// transaction, PostgreSQL does not -- after a statement error the
+// transaction is aborted and the recovery's read would fail with SQLSTATE
+// 25P02, so PreDeduct would return an error and the idempotency contract
+// would collapse: a caller retrying a PreDeduct whose first attempt had
+// already committed would get an error instead of its own earlier
+// reservation, on the money path itself (no balance double-reserved --
+// the transaction aborts before anything else runs -- but the retry could
+// never succeed, so every retry-driven caller breaks).
 func TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation(t *testing.T) {
 	db := newPostgresDB(t)
 	svc := billing.NewCreditService(db)
@@ -99,8 +100,8 @@ func TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation(t *testing
 // tier covers on SQLite, re-proven on the second dialect where the
 // statement-level semantics genuinely differ. This is the family-level
 // counterpart of the PreDeduct-specific regression above: it pins that the
-// fixed reserve half and the confirm/refund half compose into a working
-// ledger lifecycle on the real server.
+// reserve half and the confirm/refund half compose into a working ledger
+// lifecycle on the real server.
 func TestPostgres_CreditLifecycle_ReserveConfirmRefundAndRetries(t *testing.T) {
 	svc := billing.NewCreditService(newPostgresDB(t))
 	ctx := tenantCtx("tenant-a")
@@ -249,7 +250,7 @@ func hasCode(err error, code string) bool {
 // TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply is the PostgreSQL leg
 // of the unit tier's keyed-Expire regression
 // (TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply), in the shape
-// the defect class this tier exists for actually lives in: the retried
+// the hazard actually lives in: the retried
 // keyed Expire runs against real PostgreSQL, where a unique-violation
 // statement error on a still-open transaction would leave it aborted
 // (SQLSTATE 25P02) and the retry's read-back could never run. The keyed

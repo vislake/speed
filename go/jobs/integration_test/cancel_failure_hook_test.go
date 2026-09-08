@@ -45,18 +45,17 @@ func (h *cancelDuringFinalAttemptHandler) OnFailure(context.Context, *jobs.Job, 
 	h.onFailureCh <- struct{}{}
 }
 
-// TestRedisQueue_CancelDuringFinalAttempt_SkipsOnFailureHook is the
-// regression test for the defect where go/jobs/queue/asynq's Queue ran a
-// FailureHook's OnFailure even when a concurrent Cancel had already settled
-// the Job as StatusCancelled while its final attempt was executing:
-// handleErrorAttempt never consulted the cancellation marker, so a terminal
-// attempt's failure invoked business compensation for a Job the caller had
-// deliberately cancelled -- the asynq-backed Queue violating the same
-// cancel-wins boundary handler.go's FailureHook doc comment promises and
-// StandaloneQueue's completeDeadLetter transition report already enforces
-// (jobs' worker.go). With MaxRetries(0) the very first attempt is terminal,
-// so Cancel landing mid-attempt is by construction "while that final attempt
-// was executing".
+// TestRedisQueue_CancelDuringFinalAttempt_SkipsOnFailureHook pins the
+// cancel-wins delivery rule on the asynq-backed Queue: when a concurrent
+// Cancel has settled the Job as StatusCancelled while its final attempt is
+// still executing, a FailureHook's OnFailure must not run -- business
+// compensation for a Job the caller deliberately cancelled would violate
+// the same boundary handler.go's FailureHook doc comment promises and
+// StandaloneQueue's completeDeadLetter transition report enforces (jobs'
+// worker.go). The terminal-attempt failure path consults the cancellation
+// marker before invoking OnFailure. With MaxRetries(0) the very first
+// attempt is terminal, so Cancel landing mid-attempt is by construction
+// "while that final attempt was executing".
 //
 // The interleaving is deterministic in Cancel's favor: Cancel returns only
 // after the cancellation marker is durably written -- and writes it BEFORE
@@ -102,7 +101,8 @@ func TestRedisQueue_CancelDuringFinalAttempt_SkipsOnFailureHook(t *testing.T) {
 	// (Get reports it from the marker immediately, well before asynq's own
 	// dispatch loop has even finished processing the interrupted attempt),
 	// and the failure-processing that attempt goes through is exactly what
-	// the fix gates on the marker. The 5s window -- the same bound the other
+	// the delivery gate keys on the marker. The 5s window -- the same bound
+	// the other
 	// integration tests here use -- is far wider than the sub-second
 	// localhost round trips in which an unguarded OnFailure could fire, and
 	// nothing can fire it later: a cancelled Job is never dispatched again

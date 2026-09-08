@@ -1,18 +1,16 @@
 -- Adds notes' creator_user_id column, the retention/erasure subject-
--- attribution column the compliance round needs (see model.go's
--- CreatorUserID doc comment and retention_participant.go): Erase targets
--- every note whose creator_user_id matches a pkgcore.SubjectRef's
--- SubjectID, and Export gathers a tenant's notes by creator. The column
--- is dialect-portable (kept identical to the sqlite/ copy of this
--- file) -- no PostgreSQL-only type, no gen_random_uuid(), no NOW() --
--- and carries NOT NULL DEFAULT '' so pre-existing rows stay valid: an
--- empty CreatorUserID is the "no attributable creator" sentinel.
+-- attribution column the notes RetentionParticipant operates on (see
+-- model.go's CreatorUserID doc comment and retention_participant.go):
+-- Erase targets every note whose creator_user_id matches a
+-- pkgcore.SubjectRef's SubjectID, and Export gathers a tenant's notes by
+-- creator. The column is dialect-portable (kept identical to the
+-- sqlite/ copy of this file) -- no PostgreSQL-only type, no
+-- gen_random_uuid(), no NOW() -- and carries NOT NULL DEFAULT '' so
+-- pre-existing rows stay valid: an empty CreatorUserID is the "no
+-- attributable creator" sentinel.
 --
 -- No index is added here: retention/erasure lookups filter by
 -- creator_user_id within one tenant's own rows (the tenant-scope plugin
 -- injects the tenant half of the filter; see repository.go's
--- listByCreator), and a tenant-scoped composite index over a column
--- that is empty for every row seeded before this migration would buy
--- nothing this round's row counts justify. A future round that makes
--- creator lookup a hot path can add one.
+-- listByCreator).
 ALTER TABLE notes ADD COLUMN creator_user_id VARCHAR(64) NOT NULL DEFAULT '';

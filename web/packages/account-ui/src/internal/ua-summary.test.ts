@@ -8,12 +8,11 @@
  * Safari/ token of its own -- each precedence rule exists because a
  * wrong order answers the wrong label, which the raw strings below all
  * contain) and the bounded-vocabulary rule (every answer is a mapped
- * label, never a fragment of the input). The gate that accepted the
- * original defect names the machine substrings that only ever appear in
- * a raw UA (Mozilla/, AppleWebKit, Gecko, curl/, Safari/); the
- * corpus-wide check below holds the same line for every sample this
- * module claims to understand, so a future marker that parsed into a
- * row would fail here first.
+ * label, never a fragment of the input). The e2e gate's vocabulary names
+ * the machine substrings that only ever appear in a raw UA (Mozilla/,
+ * AppleWebKit, Gecko, curl/, Safari/); the corpus-wide check below
+ * holds the same line for every sample this module claims to
+ * understand, so a marker that parsed into a row fails here first.
  */
 
 import { describe, expect, it } from 'vitest'

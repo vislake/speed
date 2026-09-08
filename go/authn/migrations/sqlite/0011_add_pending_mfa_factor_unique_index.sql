@@ -18,11 +18,10 @@
 -- producing a second pending row, and ReplacePending retries its
 -- delete-then-create once the refusing row has committed.
 --
--- A database that holds two pending rows for one (user_id, type) --
--- possible when enrollments raced before this index -- will see this index
--- creation refuse loudly at upgrade; the stale pending rows are safe to
--- remove (a pending factor verifies nothing), and the migration can then
--- be re-run.
+-- A database that still holds two pending rows for one (user_id, type)
+-- will see this index creation refuse loudly at upgrade; the stale pending
+-- rows are safe to remove (a pending factor verifies nothing), and the
+-- migration can then be re-run.
 CREATE UNIQUE INDEX idx_user_mfa_factors_user_type_pending
     ON user_mfa_factors (user_id, type)
     WHERE status = 'pending';

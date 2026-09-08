@@ -836,10 +836,9 @@ func TestCompleteSucceeded_NoOpWhenNotRunning(t *testing.T) {
 // writer's claim — the state a second writer's reset-and-re-claim of the
 // first writer's mid-Handle row leaves behind — must not be settled by the
 // first writer's completion write. A completion write whose WHERE named
-// only id and status would let the stale execution's success land on the
-// sibling's running row, marking it succeeded with this attempt's result
-// while the sibling is still inside Handle — the secondary harm of the
-// writer-takeover double-execution defect, and exactly why the no-op must
+// only id and status would let a stale execution's success land on the
+// sibling's running row while the sibling is still inside Handle -- the
+// double-execution harm the status-guarded no-op prevents -- and it must
 // never be read as a concurrent Cancel (see worker.go's
 // logDiscardedOutcome).
 func TestCompleteSucceeded_NoOpWhenRowClaimedByAnotherWriter(t *testing.T) {
@@ -1144,8 +1143,8 @@ func TestResetInterruptedRecords(t *testing.T) {
 // TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone pins the WHERE
 // clause's defensive tail: a Running row already claimed under the
 // resetting owner's own token is not this reset's business. Not reachable
-// through StandaloneQueue.Start today (a fresh token claims nothing before
-// the reset runs -- see resetInterruptedRecords' own doc comment), but the
+// through StandaloneQueue.Start (a fresh token claims nothing before the
+// reset runs -- see resetInterruptedRecords' own doc comment), but the
 // clause exists exactly so a re-entrant Start over a live run could never
 // reset the very rows it is executing.
 func TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone(t *testing.T) {
@@ -1181,8 +1180,8 @@ func TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone(t *testing.T) {
 // datum throughout is the stale moment the INCUMBENT authored (its own
 // stale window applied to its own last beat), never the acquiring side's
 // window: "zero stale window makes the incumbent stale immediately" — the
-// semantics that would produce the cadence-mismatch double-execution
-// defect — is pinned gone here.
+// semantics that would let a fast-cadence taker steal a live beating
+// incumbent — is pinned absent here.
 func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -1229,7 +1228,7 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	// incumbent. A "zero stale window makes the incumbent stale
 	// immediately" reading would let a fast-cadence taker steal a live
 	// incumbent beating at its own slower cadence — the double-execution
-	// defect this test pins closed.
+	// hazard this test pins closed.
 	err = acquireWriterRegistration(ctx, db, "successor", now.Add(2*time.Second+400*time.Millisecond), 0)
 	if !errors.Is(err, ErrQueueWriterActive) {
 		t.Fatalf("acquire before the incumbent's own stale moment error = %v, want ErrQueueWriterActive (the taker's own window must not judge the incumbent)", err)

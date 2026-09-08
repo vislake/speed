@@ -576,7 +576,7 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 // failingResolver deliberately fails every resolution, standing in for any
 // Resolver's failure mode in general -- an invalid or missing bearer token
-// under authn.NewPrincipalResolver today (server.go's middleware-chain doc
+// under authn.NewPrincipalResolver (server.go's middleware-chain doc
 // comment). Using a resolver that always fails, rather than driving
 // buildServer's real composed chain with a missing/invalid token, keeps
 // this test about the allowlist mechanism in isolation.
@@ -821,17 +821,16 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 
 // TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation pins
-// what requesting the distributed deployment mode means since the retrofit
-// removed buildServer's hard refusal of it: the composition is no longer
-// rejected up front, it is validated -- and with every seam resolved from
-// the Preset, the distributed mode's required capabilities cannot be met.
-// Kernel.Bootstrap must fail with ErrCapabilityUnsatisfied, naming the
-// first shortfall: the "eventbus" seam's in-process memory implementation
-// lacking MultiReplicaSafe while the mode is "distributed". Bootstrap
-// performs that validation before any Subscribe or goroutine starts, so
-// this test needs no Docker and never touches a network, and it guarantees
-// the mode can never silently degrade into a SQLite-and-in-memory run
-// under a "distributed" label.
+// what requesting the distributed deployment mode means: the composition
+// is not rejected up front, it is validated -- and with every seam
+// resolved from the Preset, the distributed mode's required capabilities
+// cannot be met. Kernel.Bootstrap must fail with ErrCapabilityUnsatisfied,
+// naming the first shortfall: the "eventbus" seam's in-process memory
+// implementation lacking MultiReplicaSafe while the mode is "distributed".
+// Bootstrap performs that validation before any Subscribe or goroutine
+// starts, so this test needs no Docker and never touches a network, and it
+// guarantees the mode can never silently degrade into a
+// SQLite-and-in-memory run under a "distributed" label.
 //
 // The event bus is constructed by buildServer itself
 // -- before dbkit.Open, so the automatic org audit capture can publish on
@@ -1133,8 +1132,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 // injection whose first N provisioning attempts of each account fail and
 // whose later attempts of the same account succeed, and anything else
 // (not a number, or a negative count) refuses boot with the variable
-// named. Failing before the switch existed: configFromEnv ignored the
-// variable entirely, so no value of it could arm or refuse anything.
+// named. The regression it pins: an unparsed variable is inert -- every
+// value class would behave like the absent one -- so each class below
+// must land in a distinct state.
 func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
@@ -1869,12 +1869,13 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	// notes.note.create audit trail -- audit_events carries a real
 	// tenant_id column precisely so this remains true even though the
 	// table is platform data, not dbkit.TenantScoped (see go/dbkit/audit's
-	// model.go doc comment). This is deliberately no longer "zero events
-	// of any kind": tenant-globex is demo-seeded credits too
-	// (demoHostTenants lists it alongside tenant-acme), so it carries its
-	// own boot-time "billing.credit.grant" AuditEvent -- exactly the same
-	// real, expected row this test's own tenant-acme assertion above now
-	// tolerates -- the point being that NONE of it is acme's note.
+	// model.go doc comment). The control asserts on notes.note.create
+	// events specifically, not "zero events of any kind": tenant-globex
+	// is demo-seeded credits too (demoHostTenants lists it alongside
+	// tenant-acme), so it carries its own boot-time
+	// "billing.credit.grant" AuditEvent -- exactly the same real,
+	// expected row this test's own tenant-acme assertion above tolerates
+	// -- the point being that NONE of it is acme's note.
 	globexEvents, err := audit.NewRepository(auditDB).ListByTenant(context.Background(), "tenant-globex")
 	if err != nil {
 		t.Fatalf("ListByTenant(%q): %v", "tenant-globex", err)

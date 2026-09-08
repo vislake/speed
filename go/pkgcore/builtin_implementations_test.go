@@ -89,9 +89,8 @@ func TestBuiltinObjectStoreRegistry_ResolvesEveryDocumentedName(t *testing.T) {
 }
 
 // TestLocalObjectStoreFromConfig_EmptyDirectoryFallsBackToATemporaryOne pins
-// the throwaway-by-default behaviour the pre-retrofit Kernel's
-// DeploymentModeStandalone case had for its ObjectStore: an empty
-// cfg["directory"] must not fail, and must still produce a usable store.
+// the throwaway-by-default behaviour: an empty cfg["directory"] must not
+// fail, and must still produce a usable store.
 func TestLocalObjectStoreFromConfig_EmptyDirectoryFallsBackToATemporaryOne(t *testing.T) {
 	store, err := localObjectStoreFromConfig(Config{})
 	if err != nil {

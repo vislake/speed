@@ -116,9 +116,9 @@ func TestDecodeResultEnvelope_EmptyOrMalformed_ReturnsZeroValue(t *testing.T) {
 
 // TestAttemptsFromTaskInfo pins attemptsFromTaskInfo's per-state formula
 // against the exact boundary asynq's own internal/rdb Retry/Archive Lua
-// scripts implement (traced in attemptsFromTaskInfo's own doc comment): a
-// future asynq upgrade that changed this contract would need this test
-// updated deliberately, not silently drift past it.
+// scripts implement (traced in attemptsFromTaskInfo's own doc comment), so
+// an asynq change to that boundary surfaces as this test failing rather
+// than as silent drift.
 func TestAttemptsFromTaskInfo(t *testing.T) {
 	tests := []struct {
 		name    string

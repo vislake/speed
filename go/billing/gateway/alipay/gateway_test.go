@@ -499,7 +499,6 @@ func TestGateway_QueryStatus_TradeClosedWithoutRefundFee_StillFailed(t *testing.
 }
 
 // TestGateway_QueryStatus_TradeSuccessWithPartialRefundFee_StillSucceeded
-// TestGateway_QueryStatus_TradeSuccessWithPartialRefundFee_StillSucceeded
 // pins the poll-side boundary next to the full-refund case: a PARTIAL
 // refund leaves the trade at TRADE_SUCCESS (only a full refund moves the
 // order off it, per Alipay's own status definitions), so a query response

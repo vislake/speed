@@ -22,10 +22,9 @@
 -- neither does.
 --
 -- id is a database-generated, strictly increasing identity column --
--- deliberately NOT an application-generated ULID/UUID the way every
--- tenant-facing table in this codebase is required to be (root
--- CLAUDE.md's migrations section) -- because the catch-up mechanism's
--- whole job is answering "everything after row N for this event type",
+-- deliberately NOT an application-generated ULID/UUID -- because the
+-- catch-up mechanism's whole job is answering "everything after row N
+-- for this event type",
 -- which needs a single total ordering source shared by every concurrent
 -- publisher; only a database sequence gives that. The sequence alone
 -- orders the ids, though; Publish additionally serializes same-event-type

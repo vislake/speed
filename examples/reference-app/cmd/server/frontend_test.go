@@ -151,10 +151,9 @@ func TestFrontend_GETBuiltAsset_ServesBytes(t *testing.T) {
 func TestFrontend_UnknownNonAPIPath_ServesIndex(t *testing.T) {
 	for _, target := range []string{
 		"/some/deep/link",
-		// The social-binding callback convention a real deployment serves
-		// with its SPA fallback (web/README.md): a provider's redirect
-		// lands on a real path, and the page that handles the exchange is
-		// index.html.
+		// The social-binding callback convention a real deployment serves:
+		// a provider's redirect lands on a real path, and the page that
+		// handles the exchange is index.html.
 		"/callback/social/demo-google",
 	} {
 		rec := serveFrontendRequest(t, http.MethodGet, target)

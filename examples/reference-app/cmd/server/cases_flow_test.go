@@ -313,7 +313,7 @@ func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 }
 
 // TestCasesFlow_ValidationAndConflicts_OverHTTP pins the coded refusals
-// the P3 create form will render: patient-name validation, duplicate
+// the case create form renders: patient-name validation, duplicate
 // object ids within one request, and the conflict a reused photo object
 // answers.
 func TestCasesFlow_ValidationAndConflicts_OverHTTP(t *testing.T) {

@@ -424,12 +424,11 @@ func TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid(t *testing.T) {
 	}
 }
 
-// TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode is regression (b) of
-// the honest-step-up-error round, the pin that keeps the split one-way: a
-// code the factor's secret never produces must keep answering
-// authn.mfa_invalid_code -- the spent-code distinction must never leak to
-// a guesser, who can only ever present codes that fail the actual TOTP
-// check.
+// TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode pins the
+// guesser-facing half of the spent-code split: a code the factor's secret
+// never produces must keep answering authn.mfa_invalid_code -- the
+// spent-code distinction must never leak to a guesser, who can only ever
+// present codes that fail the actual TOTP check.
 func TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode(t *testing.T) {
 	t.Parallel()
 
@@ -443,8 +442,8 @@ func TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode(t *testing.T) {
 	}
 }
 
-// TestVerifyStepUp_AnotherUsersRecoveryCode_AnswersInvalidCode is the
-// recovery half of regression (b): a recovery code issued to ANOTHER user
+// TestVerifyStepUp_AnotherUsersRecoveryCode_AnswersInvalidCode pins the
+// recovery half of the same split: a recovery code issued to ANOTHER user
 // is a code no row of this user's matches, so it must keep answering
 // authn.mfa_invalid_code -- the consumed-versus-never-issued split must
 // not turn another user's real code into a distinguishable answer here.

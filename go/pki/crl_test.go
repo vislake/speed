@@ -145,8 +145,7 @@ func TestCAService_GenerateCRL_IncrementsCRLNumber(t *testing.T) {
 // TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner's
 // identical rig (revocation_test.go): 8 goroutines released through a
 // closed channel, no sleeps, 25 trials. Each trial asserts every call
-// returned successfully and the final CRLNumber is exactly initial+8 --
-// under the unguarded code most trials lost at least one update -- plus
+// returned successfully and the final CRLNumber is exactly initial+8, plus
 // the stored document's own Number field agreeing with the column, the
 // invariant a verifier actually relies on.
 func TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber(t *testing.T) {

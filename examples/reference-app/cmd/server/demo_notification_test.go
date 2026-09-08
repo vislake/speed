@@ -3,7 +3,7 @@ package main
 // demo_notification_test.go unit-tests simulationCompletedFieldsFromPayload
 // in isolation, the exact way noteCreatedFieldsFromPayload's own probe
 // would be tested if it carried a dedicated file: a concrete
-// smilesim.SimulationCompletedPayload value (today's in-process EventBus
+// smilesim.SimulationCompletedPayload value (the in-process EventBus
 // shape), a map[string]any shaped like what pkgcore/eventbus/redis's
 // EventBus actually hands a subscriber after its JSON round-trip (the
 // shape a same-process subscriber sees whenever it is not the bus instance
@@ -11,16 +11,15 @@ package main
 // for why that is not the same as "same process, always safe"), and a
 // handful of genuinely unreadable shapes that must still warn-and-drop.
 //
-// This is the regression: before
-// this probe existed, the subscription's naked
-// evt.Payload.(smilesim.SimulationCompletedPayload) type assertion passed
-// case (1) below and failed case (2) -- exactly the failure this test's
-// "decoded map" cases would have caught. The Docker-backed integration
-// regression in examples/reference-app/integration_test proves the same
-// thing end to end, over a real Redis EventBus and a real subprocess.
+// This is the regression: a subscription that type-asserts the naked
+// evt.Payload.(smilesim.SimulationCompletedPayload) passes case (1)
+// below and fails case (2) -- the failure this test's "decoded map"
+// cases catch. The Docker-backed integration test in
+// examples/reference-app/integration_test proves the same end to end,
+// over a real Redis EventBus and a real subprocess.
 //
-// The probe has since grown a third required field: the completing job's
-// image id, which the subscription's dispatch carries in its Params as the
+// The probe carries three required fields; the third, the completing
+// job's image id, rides in the subscription's dispatch Params as the
 // per-occurrence marker that keeps two completed simulations for the same
 // recipient from collapsing into one delivery (see the probe's own doc
 // comment in demo_notification.go). Every readable-payload case below
@@ -33,11 +32,11 @@ import (
 )
 
 // TestSimulationCompletedFieldsFromPayload_ConcreteStruct proves the probe
-// extracts correctly from the exact shape the in-process EventBus delivers
-// today -- a straight pass-through of the publisher's own Go value -- so
-// switching the subscription from a naked type assertion to this probe is
-// not a regression for the composition every unit test in this package
-// already runs under.
+// extracts correctly from the exact shape the in-process EventBus
+// delivers -- a straight pass-through of the publisher's own Go value --
+// the shape the unit tests in this package compose under, where a
+// type-asserting subscription reads the value directly while the probe
+// must decode it like any other delivery.
 func TestSimulationCompletedFieldsFromPayload_ConcreteStruct(t *testing.T) {
 	payload := smilesim.SimulationCompletedPayload{
 		ImageJobID:      "job-1",

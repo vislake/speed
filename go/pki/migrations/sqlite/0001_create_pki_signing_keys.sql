@@ -30,14 +30,14 @@ CREATE TABLE pki_signing_keys (
 -- ListVerifiableByPurpose: both filter by purpose first.
 CREATE INDEX idx_pki_signing_keys_purpose ON pki_signing_keys (purpose);
 
--- The expiry-scan index round 2's jobs-driven scan will read; this round
--- adds it ahead of that scan existing, per this module's own "get the
--- table structure right now" instruction.
+-- The expiry-scan index: the periodic scan job reads not_after to find
+-- keys whose validity window has closed, so the lookup is indexed from
+-- the start.
 CREATE INDEX idx_pki_signing_keys_not_after ON pki_signing_keys (not_after);
 
 -- At most one active key per purpose -- see the postgres/ sibling's doc
--- comment. SQLite has supported partial indexes since 3.8.0, and
--- go/dbkit's soft-delete round already relies on the identical
+-- comment. SQLite supports partial indexes (since 3.8.0), and
+-- go/dbkit's own soft-delete indexes already rely on the identical
 -- WHERE-qualified-unique-index technique across both dialects.
 CREATE UNIQUE INDEX uq_pki_signing_keys_active_purpose
     ON pki_signing_keys (purpose)

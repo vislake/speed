@@ -1,45 +1,33 @@
--- Fixes integration_webhook_subscriptions.secret's PostgreSQL column type.
--- It was declared VARCHAR(512) by 0002_create_integration_webhook_
--- subscriptions.sql, but the column stores CIPHERTEXT written through
--- WebhookSecretSerializerName's GORM serializer (webhook_model.go), never
--- plaintext -- AES-256-GCM ciphertext is effectively random binary data,
--- which fails to be valid UTF-8 text almost every time it is generated.
+-- integration_webhook_subscriptions.secret stores CIPHERTEXT written
+-- through WebhookSecretSerializerName's GORM serializer (webhook_model.go),
+-- never plaintext: AES-256-GCM ciphertext is effectively random binary
+-- data, which is not valid UTF-8 text almost every time it is generated.
 -- PostgreSQL enforces its configured client/server encoding (UTF8, this
--- project's only supported one) on every VARCHAR/TEXT value, so writing a
--- genuine encrypted secret through this column failed with "invalid byte
--- sequence for encoding \"UTF8\"" the first time the module's PostgreSQL
--- integration tier (integration_test/postgres_softdelete_test.go) actually
--- exercised it -- exactly the kind of bug a first real-database proof
--- exists to catch, and one the SQLite-only unit tier could not have
--- surfaced.
+-- project's only supported one) on every VARCHAR/TEXT value, so the column
+-- must be BYTEA on this dialect; a VARCHAR column would refuse a genuine
+-- encrypted secret with "invalid byte sequence for encoding \"UTF8\"".
 --
--- go/org's identical WebhookSecretSerializerName-shaped precedent --
--- org_invitations.email, encrypted under EmailSerializerName the exact same
--- way -- already gets this right: BYTEA on PostgreSQL
--- (go/org/migrations/postgres/0003_create_org_invitations.sql), BLOB on
--- SQLite (go/org/migrations/sqlite/0003_create_org_invitations.sql). This
--- migration brings integration_webhook_subscriptions.secret in line with
--- that precedent on PostgreSQL.
+-- go/org's identically-shaped precedent -- org_invitations.email,
+-- encrypted under EmailSerializerName the exact same way -- stores the
+-- same class of value as BYTEA on PostgreSQL
+-- (go/org/migrations/postgres/0003_create_org_invitations.sql) and BLOB on
+-- SQLite (go/org/migrations/sqlite/0003_create_org_invitations.sql); this
+-- column follows that precedent.
 --
--- No sqlite/ sibling accompanies this file, unlike every other migration in
--- this module: SQLite's TEXT/VARCHAR columns have no fixed encoding to
--- violate (SQLite's dynamic type system already stores arbitrary binary
--- through a VARCHAR-declared column without error, which is exactly why
--- this module's own unit test suite -- SQLite only -- never caught this),
--- so nothing on that dialect needs to change. This is the first migration
--- in this module that genuinely does not need identical DDL on both
--- dialects, because the bug it fixes is itself dialect-specific rather
--- than a schema addition common to both -- dbkit.MigrationRegistry.Apply
--- reads each dialect's own subdirectory independently and has no
--- cross-dialect pairing requirement (go/dbkit/migrations.go's own
--- migrationFiles), so an asymmetric fix like this one applies cleanly.
+-- No sqlite/ sibling accompanies this file, unlike every other migration
+-- in this module: SQLite's TEXT/VARCHAR columns have no fixed encoding to
+-- violate -- SQLite's dynamic type system stores arbitrary binary through
+-- a VARCHAR-declared column without error -- so nothing on that dialect
+-- needs to change. The asymmetry is deliberate and applies cleanly:
+-- dbkit.MigrationRegistry.Apply reads each dialect's own subdirectory
+-- independently and has no cross-dialect pairing requirement
+-- (go/dbkit/migrations.go's own migrationFiles), so a dialect-only
+-- migration like this one stands alone.
 --
--- This column has never held real data outside this module's own test
--- suites, so the column is dropped and re-added rather than converted in
--- place with a USING cast: there is no existing ciphertext on this dialect
--- a cast would need to preserve correctly, and a cast's own encoding
--- assumptions would be exactly as fragile as the bug this migration
--- fixes.
+-- The column is dropped and re-added rather than converted in place with
+-- a USING cast: no existing ciphertext on this dialect needs preserving by
+-- a cast, and a cast's own encoding assumptions would be exactly as
+-- fragile as the type mismatch it papers over.
 ALTER TABLE integration_webhook_subscriptions DROP COLUMN secret;
 ALTER TABLE integration_webhook_subscriptions ADD COLUMN secret BYTEA NOT NULL DEFAULT '';
 ALTER TABLE integration_webhook_subscriptions ALTER COLUMN secret DROP DEFAULT;

@@ -25,9 +25,9 @@
 -- 'node-deletion', and a deliberate RevokeRole row is never restored by an
 -- org restore event -- only by an explicit manual Service.RestoreRole.
 --
--- BACKFILL POLICY (stated honestly): the rows soft-deleted before this
--- migration are indistinguishable -- the reaps' and RevokeRole's marks
--- were identical two-column writes -- so the ALTER cannot tell a genuinely
+-- BACKFILL POLICY: rows already soft-deleted when this migration runs are
+-- indistinguishable -- the reaps' and RevokeRole's writers leave identical
+-- two-column marks -- so the ALTER cannot tell a genuinely
 -- reaped row from a deliberate revocation. Every existing row therefore
 -- lands on the deliberate value '' and is never auto-reinstated by either
 -- restore-side subscriber. That is the fail-closed direction for

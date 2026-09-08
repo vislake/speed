@@ -268,10 +268,9 @@ func TestGateway_VerifyWebhook_FullRefundTradeClosed_MapsToRefunded(t *testing.T
 // TestGateway_VerifyWebhook_TradeClosedUnpaidTimeout_StillChargeFailed pins
 // the other half of the TRADE_CLOSED distinction: a trade closed by
 // timeout without ever being paid carries no refund markers (no refund_fee,
-// no gmt_refund) and keeps mapping to NormalizedEventChargeFailed/
-// ChannelStatusFailed, exactly as it always has -- the two TRADE_CLOSED
-// fates must produce two different events, never be conflated in either
-// direction.
+// no gmt_refund) and maps to NormalizedEventChargeFailed/
+// ChannelStatusFailed -- the two TRADE_CLOSED fates must produce two
+// different events, never be conflated in either direction.
 func TestGateway_VerifyWebhook_TradeClosedUnpaidTimeout_StillChargeFailed(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)

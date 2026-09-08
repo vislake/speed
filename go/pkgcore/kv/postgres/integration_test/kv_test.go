@@ -6,8 +6,8 @@
 // expiry, IncrByFloat keeping a live key's expiry, CompareAndSwap as
 // set-if-absent, expiry untouched by a swap -- plus the atomicity properties
 // only a shared server can genuinely exercise: this file's own
-// ConcurrentIncrements and ConcurrentCompareAndSwap tests are the actual
-// point of this round, per the task's own instructions -- a single-threaded
+// ConcurrentIncrements and ConcurrentCompareAndSwap tests are the point of
+// this integration tier -- a single-threaded
 // AssertConforms pass alone does not prove IncrByFloat and CompareAndSwap
 // are race-free under real concurrent callers.
 package postgres_test
@@ -568,25 +568,24 @@ func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testin
 		})
 }
 
-// TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock is the
-// deterministic regression for the one-clock hardening of this store's TTL
-// arithmetic: every expiry must be computed inside PostgreSQL as now() +
-// ttl and judged against PostgreSQL's own now(), never written as an
-// absolute instant computed on the application clock.
+// TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock pins the
+// single-clock rule of this store's TTL arithmetic: every expiry is
+// computed inside PostgreSQL as now() + ttl and judged against
+// PostgreSQL's own now(), never written as an absolute instant computed on
+// the application clock.
 //
 // The store under test is deliberately built with an application clock ten
-// minutes behind the database's (kvpostgres.WithClock supplies the seam; a
-// store built before the hardening consulted exactly such a clock to compute
-// the absolute expiry its statements stored). A Set with a live ttl must
-// still be visible to a plain Get -- before the fix, the skewed clock made
-// the stored expiry already past by the database's reckoning, and the key
-// vanished instantly, a security control (a rate-limit window, a lockout)
-// failing silently early. The stored row must additionally carry an
-// expires_at about ttl after the database's own now() -- the assertion that
-// keeps this test protective even against a future regression that stops
-// consulting the injected clock and goes back to time.Now() directly: that
-// code's expiry would trail the database clock by the full ten-minute skew
-// and this second check would fail.
+// minutes behind the database's (kvpostgres.WithClock supplies the seam).
+// A store that computed the absolute expiry its statements store from that
+// clock would see every written expiry already past by the database's
+// reckoning: the key would vanish instantly, a security control (a
+// rate-limit window, a lockout) failing silently early. A Set with a live
+// ttl must therefore still be visible to a plain Get, and the stored row
+// must additionally carry an expires_at about ttl after the database's own
+// now() -- the assertion that keeps this test protective even against a
+// regression that stops consulting the injected clock and goes back to
+// time.Now() directly: that code's expiry would trail the database clock
+// by the full ten-minute skew and this second check would fail.
 //
 // The whole test is timing-robust by construction: the skew (ten minutes) is
 // enormous next to the ttl (two seconds), so no scheduling jitter can blur

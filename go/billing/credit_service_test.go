@@ -162,10 +162,10 @@ func TestCreditService_PreDeduct_ReservesAgainstAvailable(t *testing.T) {
 	}
 }
 
-// TestCreditService_PreDeduct_InsufficientBalance_WritesNothing is the
-// round's mandated proof that a refused reservation leaves no trace: the
-// balance is unchanged and no CreditTransaction row exists for the
-// attempted IdempotencyKey.
+// TestCreditService_PreDeduct_InsufficientBalance_WritesNothing pins the
+// no-trace refusal contract: a reservation the balance guard refuses
+// leaves the balance unchanged and no CreditTransaction row exists for
+// the attempted IdempotencyKey.
 func TestCreditService_PreDeduct_InsufficientBalance_WritesNothing(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -386,14 +386,14 @@ func TestCreditService_Expire_MoreThanAvailable_Refused(t *testing.T) {
 	}
 }
 
-// TestCreditService_Expire_UnkeyedRetry_DoubleApplies pins the legacy
-// unkeyed contract ExpireInput.IdempotencyKey exists to replace: two
-// unkeyed Expire calls with the same amount and reason -- a scheduler that
-// crashed after its first attempt committed, retrying without a key --
-// deduct twice and append two ledger rows. This is the hazard the keyed
-// form (next tests) exists to close, deliberately pinned here so the
-// contrast between the two modes stays explicit: unkeyed is the one-off
-// operator shape, never the shape a retrying caller may use.
+// TestCreditService_Expire_UnkeyedRetry_DoubleApplies pins the unkeyed
+// Expire mode's behavior: two unkeyed Expire calls with the same amount
+// and reason -- a scheduler that crashed after its first attempt
+// committed, retrying without a key -- deduct twice and append two ledger
+// rows. This is the hazard the keyed form (next tests) exists to close,
+// deliberately pinned here so the contrast between the two modes stays
+// explicit: unkeyed is the one-off operator shape, never the shape a
+// retrying caller may use.
 func TestCreditService_Expire_UnkeyedRetry_DoubleApplies(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -483,7 +483,8 @@ func TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 // nothing THIS call, so it must not produce a second audit record -- the
 // identical "never write an audit record for something that did not
 // actually happen this call" rule PreDeduct's own reserved-flag guard
-// exists for. Pre-fix this test cannot compile (no IdempotencyKey field).
+// exists for: the keyed retry branch applies no deduction and must stay
+// equally silent on the audit side.
 func TestCreditService_Expire_KeyedRetry_DoesNotEmitASecondAuditEvent(t *testing.T) {
 	svc, received := newAuditedCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -673,10 +674,11 @@ func TestCreditService_Expire_ConcurrentSameKey_ExactlyOneDeducts(t *testing.T) 
 	}
 }
 
-// TestCreditService_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds is the
-// round's mandated proof: two concurrent PreDeduct calls whose combined
-// Amount exceeds the tenant's balance cannot both succeed. Run under
-// -race per this codebase's own concurrency-hot-spot testing requirement.
+// TestCreditService_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds pins
+// the balance guard under concurrency: two concurrent PreDeduct calls
+// whose combined Amount exceeds the tenant's balance cannot both succeed
+// -- raced under -race so the database-arbitrated guard, not Go-level
+// scheduling luck, is what lets exactly one through.
 func TestCreditService_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -759,38 +761,38 @@ func TestCreditService_Grant_ConcurrentCallsForANewTenant_BothSucceed(t *testing
 
 // TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransactionCommits
 // pins the resulting-balance read's correctness: the
-// resulting_available/resulting_reserved audit fields must be read from
-// INSIDE the mutating transaction, never by a separate post-commit query
+// resulting_available/resulting_reserved audit fields are read from
+// INSIDE the mutating transaction (credit_service.go's readBalanceForAudit
+// reads the balance in the same transaction that applies the delta,
+// before it commits), never by a separate post-commit query
 // (s.balances.FindByID after the mutating dbkit.WithTenantSession
 // transaction has committed) -- a post-commit read has no synchronization
 // at all against a second, concurrently-committing operation for the SAME
 // tenant. Two concurrent Grants (100 and 1 credits) racing for one tenant
-// could interleave as: the 100-credit grant commits (Available 0->100),
+// can interleave as: the 100-credit grant commits (Available 0->100),
 // then the 1-credit grant commits (Available 100->101), then the
 // 100-credit grant's own post-commit read finally runs and observes 101 --
 // not the 100 its own operation actually produced -- so its audit event
 // would wrongly record resulting_available=101 for an operation whose own
 // effect was to move a starting balance of 0 to 100.
 //
-// The fix (credit_service.go's readBalanceForAudit) reads the balance
-// INSIDE the same transaction that applies the delta, before it commits.
-// This test proves the fix's actual load-bearing property directly rather
-// than hoping real goroutine scheduling happens to hit the old race's
-// narrow window (which it is not guaranteed to on every run, making a pure
-// racing test unreliable in either direction): using
+// This test proves the in-transaction read's load-bearing property
+// directly rather than hoping real goroutine scheduling happens to hit
+// the race's narrow window (which it is not guaranteed to on every run,
+// making a pure racing test unreliable in either direction): using
 // testHookAfterBalanceDelta, it pauses Grant A's transaction right after
-// its own delta is applied -- exactly the point after which the old code
-// would have committed and only THEN opened its separate, unsynchronized
-// read -- and starts a second, concurrent Grant B for the SAME tenant
-// while A is paused there. If Grant B could commit during that window (the
-// old code's own exposure), this test's own next step -- reading back
-// Grant A's audit event once both finish -- would observe
-// resulting_available=101 for Grant A, exactly the bug's failure shape.
-// Under the fix, B's write is provably still blocked by A's own
-// not-yet-committed transaction throughout that window (asserted directly
-// below via a timeout), so it can only land after A commits, and Grant A's
-// own audit event deterministically shows resulting_available=100 -- its
-// own delta alone -- every time.
+// its own delta is applied -- the point where a separate post-commit read
+// would still have no synchronization against B -- and starts a second,
+// concurrent Grant B for the SAME tenant while A is paused there. If
+// Grant B could commit during that window, the in-transaction read would
+// offer no protection: this test's own next step -- reading back Grant
+// A's audit event once both finish -- would observe
+// resulting_available=101 for Grant A, the wrong-answer failure shape.
+// B's write is provably still blocked by A's own not-yet-committed
+// transaction throughout that window (asserted directly below via a
+// timeout), so it can only land after A commits, and Grant A's own audit
+// event deterministically shows resulting_available=100 -- its own delta
+// alone -- every time.
 func TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransactionCommits(t *testing.T) {
 	svc, received := newAuditedCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-lock")
@@ -826,10 +828,10 @@ func TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransa
 
 	// Grant A's transaction has applied its own delta and is now paused,
 	// still open (not committed). Start Grant B for the SAME tenant here:
-	// under the fix, its own applyBalanceDelta UPDATE cannot proceed until
-	// A's transaction ends, which is exactly the property that makes
-	// reading the resulting balance INSIDE the transaction (rather than
-	// via a separate post-commit query) safe.
+	// its own applyBalanceDelta UPDATE cannot proceed until A's
+	// transaction ends, which is exactly the property that makes reading
+	// the resulting balance INSIDE the transaction (rather than via a
+	// separate post-commit query) safe.
 	grantBErr := make(chan error, 1)
 	go func() {
 		_, err := svc.Grant(ctx, GrantInput{Amount: amountB})
@@ -1157,8 +1159,8 @@ func changesAfterOrNil(c *audit.Diff, key string) any {
 // column (emitCreditAudit), and dbkit/audit's Diff content contract
 // (go/dbkit/audit/emit.go) forbids free text there -- a reason carrying
 // prose (an email address, a complaint) would be carved into the one table
-// no code can ever delete from. The ungated behavior accepted any string
-// and wrote it into both the ledger row and the audit diff.
+// no code can ever delete from. Without the phrase gate, any string would
+// be written into both the ledger row and the audit diff.
 func TestCreditService_Reason_NonPhraseRefused(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

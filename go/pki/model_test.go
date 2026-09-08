@@ -71,7 +71,7 @@ func TestKeyRef_ModelTagsMatchMigration0009(t *testing.T) {
 // dbkit's TenantModel doc comment describes exactly how shadowing the
 // promoted TenantID field silently breaks this -- leaving the column
 // correct while GetTenantID returns "" and FindByID denies the row's own
-// owner -- so this is a guard against that specific future edit, not a
+// owner -- so this guards against exactly that shape rather than being a
 // tautology.
 func TestCertificate_GetTenantID_ReadsTheEmbeddedTenantModel(t *testing.T) {
 	tests := []struct {

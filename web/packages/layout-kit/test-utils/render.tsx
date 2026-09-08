@@ -7,10 +7,9 @@
  * ui-kit's EmptyState) around ui-kit's own AppThemeProvider, the same
  * theme runtime every real host composes rather than a second,
  * hand-rolled one. AppShell only reads `theme.breakpoints` /
- * `theme.zIndex`, both MUI-identical to the speed token defaults (see
- * the package AGENTS.md's tokens adjudication), so this is a faithful
- * stand-in for what a real host renders even though this package takes
- * no *direct* dependency on @speed/tokens itself.
+ * `theme.zIndex`, both MUI-identical to the speed token defaults, so
+ * this is a faithful stand-in for what a real host renders even though
+ * this package takes no *direct* dependency on @speed/tokens itself.
  *
  * The provider tree is passed as the RTL `wrapper` option, not wrapped
  * around `ui` by hand: RTL re-wraps a `rerender(ui)` call in the very

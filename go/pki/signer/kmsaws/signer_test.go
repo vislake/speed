@@ -136,12 +136,12 @@ func TestSigner_DirectMode_GenerateKey_CreatesAsymmetricKeyAndReadsPublicKey(t *
 // MessageType RAW -- the PureEdDSA combination a plain crypto/ed25519.Verify
 // call accepts -- and that this package's own decode path (a direct pass-
 // through of SignOutput.Signature, no re-encoding) hands back bytes that
-// verify. A future edit that swaps in ED25519_PH_SHA_512 or MessageType
-// DIGEST would still make this test's fake return SOMETHING, but the
-// asserted request fields below catch the swap directly, and a real KMS
-// server would additionally refuse to produce a PureEdDSA-verifiable
-// signature under that combination -- see doc.go for why that failure mode
-// is silent-until-verification and worth pinning explicitly.
+// verify. A swap to ED25519_PH_SHA_512 or MessageType DIGEST would still
+// make this test's fake return SOMETHING, but the asserted request fields
+// below catch the swap directly, and a real KMS server would additionally
+// refuse to produce a PureEdDSA-verifiable signature under that
+// combination -- see doc.go for why that failure mode is
+// silent-until-verification and worth pinning explicitly.
 func TestSignDirect_ProducesAPureEdDSASignature(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -207,8 +207,8 @@ func TestSigner_DirectMode_Sign_NilResponse_FailsClosed(t *testing.T) {
 // TestSigner_DirectMode_Sign_EmptySignature_FailsClosed pins the other half
 // of the same failure-semantics agreement: a Sign that answers with no
 // Signature bytes must fail with a coded error, never (nil, nil) -- an
-// empty signature reported as success is exactly the defect this test was
-// written against (signDirect returned out.Signature unconditionally).
+// empty signature is not a signature, and reporting it as success would
+// hand the caller bytes that fail every verification.
 func TestSigner_DirectMode_Sign_EmptySignature_FailsClosed(t *testing.T) {
 	fake := &fakeKMSClient{
 		sign: func(context.Context, *kms.SignInput, ...func(*kms.Options)) (*kms.SignOutput, error) {

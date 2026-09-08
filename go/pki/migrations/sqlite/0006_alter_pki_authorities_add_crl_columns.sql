@@ -1,6 +1,5 @@
--- Round 3's CRL generation (docs/internal/22-pki.md's "revocation" section:
--- "generate a CRL, not an OCSP responder") needs five columns
--- 0002_create_pki_authorities.sql did not anticipate -- see
+-- CRL generation (the module's revocation design: generate a CRL, not an
+-- OCSP responder) needs five further columns on pki_authorities -- see
 -- go/pki/model.go's Authority.CRLDistributionPoint/CRLNumber/CRLPEM/
 -- CRLIssuedAt/CRLNextUpdate doc comments for the full rationale of each:
 --

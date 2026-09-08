@@ -4,7 +4,7 @@
 -- tenancytest.AssertNotTenantScoped.
 --
 -- This is the SQLite copy; see the postgres/ sibling for the full rationale
--- of every column, including why not_after exists unpopulated this round.
+-- of every column, including why not_after exists unpopulated.
 CREATE TABLE pki_local_keys (
     key_ref                VARCHAR(64) NOT NULL,
     algorithm              VARCHAR(32) NOT NULL,
@@ -15,6 +15,5 @@ CREATE TABLE pki_local_keys (
     PRIMARY KEY (key_ref)
 );
 
--- Round 2's expiry-scan index -- schema now, scan later, per this file's
--- own doc comment above.
+-- The expiry-scan index -- see the doc comment above.
 CREATE INDEX idx_pki_local_keys_not_after ON pki_local_keys (not_after);

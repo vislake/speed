@@ -88,13 +88,12 @@ func TestUserRepository_Search_DisplayNamePrefix_CaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestUserRepository_Search_DisplayNamePrefix_EscapesLikeMetacharacters is
-// the regression test for the shape a naive db.Where("... LIKE ?", prefix+"%")
-// would have: a display name containing a literal '%' or '_' would let
-// those characters act as SQL wildcards instead of being matched literally,
-// so a search for "50% off" would also match completely
-// unrelated names like "50X off". It fails on the unescaped implementation
-// and passes once escapeLikePattern is applied.
+// TestUserRepository_Search_DisplayNamePrefix_EscapesLikeMetacharacters
+// pins the escaping contract of the prefix search: a display name
+// containing a literal '%' or '_' must match literally, never act as SQL
+// wildcards, so a search for "50%" must match "50% off promo" and not the
+// unrelated "50X off". A prefix handed to LIKE unescaped would let the
+// caller's own search term widen into a wildcard match.
 func TestUserRepository_Search_DisplayNamePrefix_EscapesLikeMetacharacters(t *testing.T) {
 	db := testutil.NewDB(t)
 	repo := newTestUserRepository(t, db)

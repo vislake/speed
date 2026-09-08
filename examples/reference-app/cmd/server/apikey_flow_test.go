@@ -158,7 +158,8 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 	// optional, and no host-wired PermissionLister is needed for a key
 	// requesting zero scopes (see integration.Service.Create's own doc
 	// comment) -- this app's own integration.NewModule wiring never wires
-	// one, so this is the only legal request shape end to end today.
+	// one, so a zero-scope key request is the only legal shape end to
+	// end.
 	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
 	if created.ID == "" {
@@ -219,9 +220,9 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 		apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, demoOwnerUserID),
 		http.StatusConflict, "integration.key_already_revoked", "rotate the already-revoked predecessor")
 
-	// The predecessor no longer lists (it is revoked, not deleted, but
-	// integration_listAPIKeys still lists every row of the tenant -- what
-	// changed is its Revoked flag, not its presence).
+	// The predecessor is revoked, not deleted: integration_listAPIKeys
+	// still lists the row (predecessor + replacement both present below),
+	// the difference living in the Revoked flag, not the row's presence.
 	postRotateListResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, demoOwnerUserID)
 	postRotateList := decodeListAPIKeys(t, postRotateListResp, http.StatusOK, "list after rotate")
 	if len(postRotateList.APIKeys) != 2 {

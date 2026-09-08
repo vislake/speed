@@ -160,15 +160,13 @@ func TestEventBus_AssertConforms(t *testing.T) {
 }
 
 // TestEventBus_FanOut_BothReplicasReceiveEveryEvent is this package's
-// explicit proof of the cross-replica semantic the task set out to
-// determine: two independent EventBus instances -- distinct replicaIDs,
-// sharing one pool -- both Subscribed to the same event Type, both receive
-// the SAME Publish. This is fan-out, matching PostgreSQL NOTIFY's own
-// native broadcast behaviour and eventbus/redis's own tested guarantee
-// (go/notification's TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas),
-// not a load-balanced "exactly one of them" contract, which is exactly the
-// distinction this round's task said must be determined and built for
-// rather than assumed.
+// explicit proof of the cross-replica delivery semantic: two independent
+// EventBus instances -- distinct replicaIDs, sharing one pool -- both
+// Subscribed to the same event Type, both receive the SAME Publish. This
+// is fan-out, matching PostgreSQL NOTIFY's own native broadcast behaviour
+// and eventbus/redis's own tested guarantee (go/notification's
+// TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas), not a
+// load-balanced "exactly one of them" contract.
 func TestEventBus_FanOut_BothReplicasReceiveEveryEvent(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)

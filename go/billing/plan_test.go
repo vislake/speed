@@ -82,10 +82,10 @@ func TestPlanStore_Create_SameKeyDifferentTenants_Allowed(t *testing.T) {
 	}
 }
 
-// TestPlanStore_Resolve_TenantCustomOverridesPlatformWide is the mandated
-// proof of the tenant-custom Plan lookup precedence: a tenant-custom Plan
-// for (tenantID, key) is used when one exists; the platform-wide Plan for
-// key is used otherwise; ErrPlanNotFound when neither exists.
+// TestPlanStore_Resolve_TenantCustomOverridesPlatformWide pins the
+// tenant-custom Plan lookup precedence: a tenant-custom Plan for
+// (tenantID, key) is used when one exists; the platform-wide Plan for key
+// is used otherwise; ErrPlanNotFound when neither exists.
 func TestPlanStore_Resolve_TenantCustomOverridesPlatformWide(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()

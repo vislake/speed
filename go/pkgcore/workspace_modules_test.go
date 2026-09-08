@@ -22,13 +22,11 @@ import (
 // still exits 0: it silently never resolves into the missing module at all,
 // so a green root build is not evidence the new module is wired in.
 //
-// This exact failure shipped once: go/ratelimit was fully implemented,
-// tested and documented -- AGENTS.md, doc.go, limiter.go, limiter_test.go,
-// example_test.go, a well-formed go.mod with its own `replace` directive to
-// pkgcore -- but was never added to go.work's `use` block, so no other
-// module in the workspace, including its own documented consumers (authn,
-// ai-gateway, sharing, integration -- see docs/internal/01-architecture.md),
-// could `go get`/import it without someone first hand-editing go.work.
+// The failure shape is not hypothetical: any module in this state -- fully
+// implemented, tested and documented (go.mod, doc.go, source, tests), but
+// absent from go.work's `use` block -- cannot be `go get`/imported by any
+// other workspace member, and nothing else fails until a hand edit of
+// go.work or this check.
 //
 // The check runs from pkgcore rather than from whichever module goes
 // missing, deliberately: a module absent from go.work's use block cannot

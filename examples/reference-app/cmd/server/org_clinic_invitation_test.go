@@ -11,46 +11,36 @@ import (
 	"testing"
 )
 
-// org_clinic_invitation_test.go is the regression for the e2e walk-through
-// defect that hit exactly one population: org_createInvitation from a
-// self-registered clinic answered HTTP 500 {"code":"org.internal_error"}
-// every time, while the same call from a configured demo tenant
-// (tenant-acme) answered 201. The Team page's "sending the invitation
-// failed. Try again later." and the always-empty pending list were the
-// browser's face of it.
+// org_clinic_invitation_test.go pins invitation creation from a
+// self-registered clinic -- the population every other invitation flow
+// test skips, since those invite from a configured demo tenant. The
+// invitation host wiring is tenant-scoped: org's invitation email needs
+// an accept link, and the host builds it through the
+// WithInvitationLinkBuilder seam (go/org/mail.go), a choice of host that
+// is display, never acceptance -- InviteService.Accept resolves the
+// invitation's own tenant from the token, server-side, and this app
+// allowlists the accept path through tenant resolution. server.go's
+// builder covers cfg.HostTenants' branded hosts and falls back to the
+// deployment's own public origin for every other tenant -- which is
+// every self-registered clinic: self_service.go's clinicTenantOf derives
+// the clinic tenant as "tenant-" + the registrant's user id, by
+// construction never a cfg.HostTenants value (that derivation's own doc
+// comment says so). A clinic that fell through to no host at all would
+// answer org.internal_error on every invitation -- the link builder's
+// "no host configured for tenant" error failing the delivery leg and
+// InviteService.Invite revoking the fresh row -- so the invitation must
+// land for the clinic population, not only for the branded demo tenants.
 //
-// The population difference is a host-wiring gap, not an org-module bug:
-// org's invitation email needs an accept link, and the host builds it
-// through the WithInvitationLinkBuilder seam (go/org/mail.go), a
-// tenant-scoped choice of host that is display, never acceptance --
-// InviteService.Accept resolves the invitation's own tenant from the
-// token, server-side, and this app allowlists the accept path through
-// tenant resolution. server.go's builder drew its hosts from
-// cfg.HostTenants (demoHostTenants, the two configured demo tenants)
-// alone, and FAILED the whole invitation for any tenant outside the map
-// -- which is every self-registered clinic: self_service.go's
-// clinicTenantOf derives the clinic tenant as "tenant-" + the
-// registrant's user id, by construction never a cfg.HostTenants value
-// (that derivation's own doc comment says so), so a clinic owner could
-// register, sign in and open the team surface, but no invitation from
-// the clinic could ever be created. Every flow test that invited before
-// this one invited from a configured demo tenant, which is why the
-// composed defect sat invisible.
-//
-// The journey below is the walk-through's own shape, driven end to end
+// The journey below is the browser's own shape, driven end to end
 // through the real composed stack: a fresh account registers through the
 // real register route (provisioning its own clinic, self_service.go),
 // the browser-shaped sign-in lands in that clinic, the clinic's org tree
 // answers the account's bearer token, and the invitation is created with
-// the clinic's root node -- bearer token only, no demo identity header,
-// the browser's own request shape. The invitation must answer 201, list
-// back as pending, and the invitation email must reach the captured
-// mailer carrying an accept link against the deployment's public origin
-// -- never a configured demo tenant's branded host, and never a 500 that
-// revokes the row the moment it is created (the earlier behavior: the
-// link builder's "no host configured for tenant" error failed the
-// delivery leg, InviteService.Invite revoked the fresh row and answered
-// org.internal_error).
+// the clinic's root node -- bearer token only, no demo identity header.
+// The invitation must answer 201, list back as pending, and the
+// invitation email must reach the captured mailer carrying an accept
+// link against the deployment's public origin -- never a configured demo
+// tenant's branded host, and never a 500.
 func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *testing.T) {
 	cfg := testConfig(t)
 	mailer := &capturingMailer{}

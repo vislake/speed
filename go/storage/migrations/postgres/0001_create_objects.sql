@@ -23,7 +23,7 @@
 -- listing scans: object pages read objects, so idx_objects_tenant_created
 -- is declared here rather than next to object_derivatives' unique index in
 -- 0002. object_derivatives carries no cursor-order index of its own:
--- nothing lists derivatives this round, and the (tenant_id, object_id)
+-- no surface lists derivatives, and the (tenant_id, object_id)
 -- prefix of uq_object_derivatives_object_kind already serves the delete
 -- cascade's per-object scan.
 CREATE TABLE objects (

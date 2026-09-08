@@ -4,10 +4,9 @@
 // single env-gated leg that drives the package's real HTTP dialogue with
 // Alipay's open platform against Alipay's genuine sandbox environment. It
 // is physically separate from the package's unit tests (which live in
-// package alipay itself, one file per source file, per the backend coding
-// standard's testing layout rule) and carries the "integration" build tag:
-// a plain "go test ./..." never compiles or runs anything in this
-// directory.
+// package alipay itself, one file per source file) and carries the
+// "integration" build tag: a plain "go test ./..." never compiles or runs
+// anything in this directory.
 //
 // # Why the leg is env-gated (and what it needs to run)
 //
@@ -138,14 +137,14 @@ func sandboxConfigFromEnv(t *testing.T) alipaygw.Config {
 
 // TestGateway_Sandbox_PrecreateAndQuery drives CreateCharge and QueryStatus
 // through the package's real HTTP client against Alipay's genuine sandbox
-// gateway. On the pre-leg unit tier neither call ever left the process: the
-// scripted httpDoer double asserted the signed request shape and returned a
-// self-signed canned envelope, so (a) whether Alipay's own gateway accepts
-// this package's RSA2-signed request and (b) whether this package's
-// response-envelope verification accepts a genuinely Alipay-signed envelope
-// were both unproven -- precisely the two properties a sandbox exists to
-// prove. Both directions fail loudly here on any signature or
-// request-shape defect, with the sandbox's own error text.
+// gateway. The unit tier's scripted httpDoer double asserts the signed
+// request shape and returns a self-signed canned envelope, so (a) whether
+// Alipay's own gateway accepts this package's RSA2-signed request and (b)
+// whether this package's response-envelope verification accepts a
+// genuinely Alipay-signed envelope stay unproven there -- precisely the
+// two properties this sandbox leg exists to prove. Both directions fail
+// loudly here on any signature or request-shape defect, with the sandbox's
+// own error text.
 func TestGateway_Sandbox_PrecreateAndQuery(t *testing.T) {
 	cfg := sandboxConfigFromEnv(t)
 

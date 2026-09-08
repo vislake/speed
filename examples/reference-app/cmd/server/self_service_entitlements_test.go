@@ -16,7 +16,7 @@ package main
 // credit balance through the SAME shared per-tenant helpers the
 // boot-time demo seeding itself calls
 // (ensureDemoSubscription and grantDemoCredits), so the two paths cannot
-// drift apart; the demo tenants keep exactly what they had. Each test
+// drift apart. Each test
 // below drives the REAL composed HTTP stack (buildServer behind
 // httptest), never a mock, and reads balances and subscriptions back
 // through SECOND database connections -- the deterministic read shapes
@@ -39,10 +39,11 @@ package main
 //     to fail gains its subscription and credits from the retry job,
 //     exactly as it gains its org membership.
 //   - TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance
-//     is regression (c): after the shared-helper extraction the demo
-//     tenants' boot seeding is unchanged -- one Active demo subscription
-//     and exactly one demoSimulationCreditGrant balance each, on the
-//     unchanged demo Plan with its unchanged Boolean grants.
+//     is regression (c): the demo tenants' boot seeding is invariant
+//     under the provisioning path's use of the same shared per-tenant
+//     helpers -- one Active demo subscription and exactly one
+//     demoSimulationCreditGrant balance each, on the unchanged demo Plan
+//     with its unchanged Boolean grants.
 
 import (
 	"context"
@@ -116,10 +117,10 @@ func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg serverConfig, ten
 // route, job polled to success, the fake image provider genuinely reached
 // exactly once -- the whole block-D journey a browser would run.
 //
-// Without the provisioning grants the clinic held no
-// subscription, so the simulate request answered 403 with
+// The un-granted shape this test guards: a clinic whose provisioning
+// granted no subscription answers 403 with
 // aigateway.entitlement_denied (the entitlement pre-flight,
-// internal/smilesim/service.go) before any job existed -- the exact
+// internal/smilesim/service.go) before any job exists -- the exact
 // refusal this test's assertion names in its failure output.
 func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
@@ -215,9 +216,9 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 // the assertion is on the database's own rows, never on what the server
 // process happens to hold in memory.
 //
-// Without the provisioning grants, the
-// subscription read found nothing and the balance read exactly zero --
-// the numbers this test's assertions name in their failure output.
+// The un-granted shape this test guards: no subscription row and a
+// balance of exactly zero -- the numbers this test's assertions name in
+// their failure output.
 func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 
@@ -243,10 +244,10 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 // TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo
 // is regression (d): the failure-injection/retry shape self_service_test.go's
 // own suite pins (an injected synchronous failure, recovered by the retry
-// job the queue runs) must converge the provisioning's NEW steps as
-// faithfully as it converges the org ones -- the retry is the clinic's
-// only recovery, so a subscription or credit step that only the
-// synchronous attempt could have landed would strand the clinic's paid
+// job the queue runs) must converge the provisioning's subscription and
+// credit steps as faithfully as it converges the org ones -- the retry is
+// the clinic's only recovery, so a subscription or credit step that only
+// the synchronous attempt could land would strand the clinic's paid
 // halves the same way a missing membership strands its sign-in.
 //
 // The shape mirrors TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists
@@ -256,8 +257,9 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 // seeded balance must follow from the SAME retried provision -- polled
 // through second connections rather than assumed synchronous.
 //
-// Without the retry's grants, the retry converged the org rows and nothing
-// else, so the balance poll below timed out on a permanent zero.
+// The stranded shape this test guards: a retry that re-ran provision but
+// skipped the subscription and credit steps would leave the balance poll
+// below timing out on a permanent zero.
 func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo(t *testing.T) {
 	inject := &failOnceProvisioning{}
 	cfg := testConfig(t)
@@ -313,15 +315,14 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 }
 
 // TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance
-// is regression (c): after provision started sharing the demo seeding's
-// per-tenant grant logic into the shared helpers the clinic provisioning
-// path now calls, the demo tenants keep exactly what they had -- each
-// cfg.HostTenants tenant holds one Active subscription to the demo Plan
-// (whose Boolean grants are unchanged) and exactly one
+// is regression (c): the demo tenants' boot seeding is invariant under
+// the provisioning path's use of the same shared per-tenant helpers --
+// each cfg.HostTenants tenant holds one Active subscription to the demo
+// Plan (whose Boolean grants are unchanged) and exactly one
 // demoSimulationCreditGrant balance, read through second connections.
-// This test passes before AND after the fix: its job is to prove the
-// extraction changed nothing on the demo side, not to fail on the old
-// code.
+// The test passes whether the shared helpers or a private path seeded a
+// given tenant: its job is the demo tenants' seeded state, not which
+// internal path produced it.
 func TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance(t *testing.T) {
 	_, cfg, _ := buildTestServer(t)
 

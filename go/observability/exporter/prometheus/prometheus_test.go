@@ -195,20 +195,19 @@ func TestBuildReader_InvalidUTF8Path_NeverVoidsTheScrape(t *testing.T) {
 
 // TestBuildReader_OneUnscrapableSeries_DoesNotVoidTheScrape pins the
 // scrape handler's error-handling mode: promhttp's default (HTTPErrorOnError)
-// turns ANY one gather error into a 500 with no metrics at all, which is
-// what made the invalid-UTF-8 label class of the test above take the whole
-// /metrics endpoint down rather than just dropping the offending series.
-// With ErrorHandling: promhttp.ContinueOnError, one unscrapable series
-// costs only itself (and a logged error); every healthy series is still
-// served.
+// turns ANY one gather error into a 500 with no metrics at all -- under it,
+// one invalid-UTF-8 label value (the class the test above records) would
+// take the whole /metrics endpoint down rather than just dropping the
+// offending series. With ErrorHandling: promhttp.ContinueOnError, one
+// unscrapable series costs only itself (and a logged error); every healthy
+// series is still served.
 //
 // The unscrapable series is recorded through a raw instrument whose label
 // value is invalid UTF-8 -- bypassing Middleware's own path sanitization,
-// standing in for any future series the exporter cannot translate (an
-// invalid-UTF-8 label value is today's instance of the class; see the test
-// above for why the exporter rejects it). Fails before the fix (verified):
-// status 500 with zero metrics; passes after, with the request counter
-// family served alongside.
+// standing in for any series the exporter cannot translate (an
+// invalid-UTF-8 label value is one instance of the class; see the test
+// above for why the exporter rejects it). The scrape must answer 200 with
+// the request counter family served alongside.
 func TestBuildReader_OneUnscrapableSeries_DoesNotVoidTheScrape(t *testing.T) {
 	ctx := context.Background()
 	shutdown, err := obs.Init(ctx)
