@@ -652,8 +652,17 @@ lives.
 
 | Gate | Waiting on | Kind |
 |---|---|---|
-| keep-the-result | no way to save the generated image -- the only way out of the product is a screenshot | unbuilt surface |
 | add-a-colleague | no surface for a practice's people, so a colleague can only be invited through the API | unbuilt surface |
+
+`keep-the-result` closed (`6d4e895d`): a real `<a download>` over the
+Blob URL of the bytes the result image already fetched. Verified three
+ways rather than one -- the gate on three engines, the saved bytes (69,
+a real PNG, the exact size the threshold this gate used to carry would
+have rejected), and by hand, where a case named "Chen Wei (VIP)"
+downloads `Chen Wei (VIP) smile simulation.png`. The last of those is
+the one a gate cannot check: whether the name is something a dentist
+can still recognise in a downloads folder a week later, which is the
+point of keeping the file at all.
 
 **Both remaining gates wait on a surface the brief names and nobody
 built. No gate here waits on a defect.** Four defects were found by

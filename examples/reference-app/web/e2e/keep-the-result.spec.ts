@@ -122,9 +122,29 @@ const IMAGE_OR_ARCHIVE_MAGIC: readonly (readonly number[])[] = [
  */
 const OVERFLOW = /more|actions|options|menu/i
 
+// Closed by 6d4e895d, and closed as a real anchor rather than a
+// script-driven save: `<a download>` over a Blob URL of the bytes the
+// result image already fetched (no second request), revoked when those
+// bytes change or the panel unmounts, and absent entirely when the data
+// has not arrived or was refused -- so there is never a control that
+// hands over nothing.
+//
+// Verified three ways, because a gate's own green is the weakest of
+// them:
+//   - this gate, on all three engines;
+//   - the bytes: 69 of them, first four 137 80 78 71, a real PNG --
+//     the exact size the byte threshold this gate used to carry would
+//     have rejected, measured this time on the shipped implementation;
+//   - by hand, as a person: a case named "Chen Wei (VIP)" downloads
+//     "Chen Wei (VIP) smile simulation.png". The patient's name, what
+//     the image is, and an extension -- a name a dentist can still
+//     recognise in a downloads folder a week later, which is the actual
+//     point of keeping the file at all.
+//
+// @budget rather than untagged: it signs in and generates.
 test(
   'a practice can save the simulation it paid for, not just look at it',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await openCaseWithSimulation(page)
