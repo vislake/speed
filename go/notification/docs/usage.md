@@ -38,8 +38,8 @@ dispatch at run time.
 |---|---|---|
 | `WithSMSSender(sender)` | Where SMS goes | `notification.NewConsoleSMSSender(w)` prints to a writer -- fine for the standalone deployment mode and for local development; wire a real HTTP-backed sender for a distributed deployment. |
 | `WithMailFrom(addr)` | The `From:` address of every email this module composes | A plain string; the module has no mail-provider config of its own -- it sends through the `pkgcore.Mailer` seam the host's `Kernel.Bootstrap` resolves. |
-| `WithContactEmailIndexer(idx)` | Blind indexer for email contact addresses | `dbkit.NewBlindIndexer("email_index", key, dbkit.NormalizeEmail)`. **Must use a different key than the address cipher** -- see `AGENTS.md`'s "Separate index keys from the cipher key". |
-| `WithContactPhoneIndexer(idx)` | Blind indexer for phone contact addresses | Same shape, `dbkit.NormalizePhoneE164`. |
+| `WithContactEmailIndexer(idx)` | Blind indexer for email contact addresses | `dbkit.NewBlindIndexer(notification.AddressIndexColumn, key, dbkit.NormalizeEmail)` -- the column argument is the module's exported `AddressIndexColumn`, the blind-index column's exact SQL name, carried as a referenced constant rather than a hand-typed string. **Must use a different key than the address cipher** -- see `AGENTS.md`'s "Separate index keys from the cipher key". |
+| `WithContactPhoneIndexer(idx)` | Blind indexer for phone contact addresses | Same shape over the same column constant: `dbkit.NewBlindIndexer(notification.AddressIndexColumn, key, dbkit.NormalizePhoneE164)`. |
 | `WithDeliveryQueue(queue)` | The `jobs.Queue` deliveries run on | `jobs.NewStandaloneQueue(db)` for standalone, `queue/asynq.Queue` for distributed. |
 | `WithUserAddressResolver(resolver)` | How to turn a user id into an email/phone | Your own type implementing `notification.UserAddressResolver` -- notification's own tables hold no identity data, so it never imports `authn`. |
 
