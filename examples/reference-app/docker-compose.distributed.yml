@@ -153,10 +153,23 @@ services:
       # requires authn's "SMS sender" seam to be WIRED (a non-empty URL),
       # never that it is reachable, and this demo never drives the
       # phone-login flow that would dial it (authn.NewHTTPSMSSender's own
-      # construction dials nothing either). This is the identical
-      # convention examples/reference-app/integration_test/distributed_mode_test.go
-      # already uses for the same reason, spelled out in that file's own
-      # comment on this exact value.
+      # construction dials nothing either). The unreachable-port fixture
+      # is shared with
+      # examples/reference-app/integration_test/distributed_mode_test.go,
+      # whose own http://127.0.0.1:1/sms values carry that file's
+      # never-dialed rationale; the SCHEME is deliberately not shared.
+      # This file is a copy-me example for operators, and this URL is
+      # the HTTP sender's only credential channel -- no credential
+      # setting exists separate from the endpoint, and the body a real
+      # send would carry is the phone-login verification code itself,
+      # so the sender refuses a plaintext endpoint before any request
+      # leaves the process. An example operators copy must therefore
+      # show https, never http: an http value would model a credential
+      # channel in cleartext. The test values are fixtures nobody ever
+      # dials, copies or sends through -- they exist only to satisfy
+      # the wiring-time presence check -- so their http stays as-is.
+      # Neither side is a mistake: do not "restore" either to match
+      # the other.
       APP_SMS_GATEWAY_URL: https://127.0.0.1:1/sms
 
 volumes:
