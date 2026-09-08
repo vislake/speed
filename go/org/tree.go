@@ -948,8 +948,31 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // afterward blocks behind this transaction instead of racing it -- so the
 // restore write that follows, inside the same transaction, can never observe
 // a parent that was live at lock time but dead by the time the restore
-// itself commits. withRetry wraps the whole thing for the same contention
-// reasons Move's own doc comment gives.
+// itself commits. withRetry wraps the whole transaction for the same
+// contention reasons Move's own doc comment gives, and that retry envelope
+// is the other half of the fail-closed guarantee this method's conditional
+// write makes (see restoreNodeTx's own doc comment and "The initial read is
+// a hint" below): a transient conflict -- SQLite's SQLITE_BUSY,
+// PostgreSQL's detected deadlock or serialization failure (see
+// dbkit.IsRetryableConflict) -- aborts the whole attempt, and the next
+// runs again from the transaction's own fresh reads, so ordinary
+// contention converges instead of surfacing; an attempt that reaches the
+// write either commits under the placement it derived from the parent this
+// transaction actually locked, or fails closed on the write's parent_id
+// predicate rather than overwriting the row's placement with a stale one.
+//
+// The one failure the envelope itself can add is exhausting its budget:
+// past txRetryBudget attempts (concurrency.go) withRetry answers
+// ErrConcurrentUpdate (coded org.concurrent_update, the last conflict as
+// its cause -- see errors.go), which this method's outer mapping below
+// passes through unmodified, mapWriteError rewriting only a
+// duplicated-key or a record-not-found error. A caller reading
+// ErrConcurrentUpdate therefore knows this call wrote nothing -- no
+// attempt that conflicted ever committed -- and that the row is wherever
+// the winning writers' committed state left it: re-calling Restore reads
+// that state from scratch, restoring the row if it is still mark-deleted,
+// or answering ErrNodeNotFound if a competing restore already brought it
+// back live.
 //
 // # The initial read is a hint; the transaction re-reads the row it restores
 //
