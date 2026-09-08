@@ -1038,6 +1038,20 @@ func (q *Queue) readCancelMarker(ctx context.Context, id string) (*time.Time, er
 // are low-cardinality and neither ever includes tenant_id, per root
 // CLAUDE.md's Prometheus-cardinality rule.
 //
+// The callback reports only the tiers asynq's own registry actually names,
+// discovered per scrape from Inspector.Queues rather than assumed:
+// asynq registers a queue only when its first task lands on it, so on a
+// fresh deployment most of the tier set has never been registered. Probing
+// a never-registered tier with GetQueueInfo is the one Inspector path
+// whose missing-queue answer does not wrap the exported
+// asynqlib.ErrQueueNotFound (asynq's GetQueueInfo delegates to its
+// CurrentStats, which reports an internal NotFound instead), so an
+// errors.Is tolerance against that sentinel never matched and a single
+// traffic-less tier used to fail every Collect with NOT_FOUND until a task
+// had reached it -- the defect the ListQueues-driven discovery fixes (see
+// the regression pair in go/jobs/integration_test's queue_depth_gauge_test
+// and job_metrics_test).
+//
 // The gauge's callback carries the same unregisterable-lifecycle contract
 // StandaloneQueue.registerQueueDepthGauge's own doc comment records: it
 // holds depthGaugeMu's read lock across its stopped-check AND its Redis
@@ -1061,7 +1075,32 @@ func (q *Queue) registerQueueDepthGauge(meter metric.Meter) error {
 				return nil
 			default:
 			}
+			// Discover which of the three priority tiers this Queue
+			// actually owns from asynq's queue registry (its asynq:queues
+			// set) instead of probing the fixed tier set: asynq registers
+			// a queue only when its first task lands on it, and
+			// GetQueueInfo for a never-registered tier answers an
+			// internal NotFound that does not wrap the exported
+			// asynqlib.ErrQueueNotFound -- see this function's doc
+			// comment for the failure that caused. Enumerating first
+			// makes absence a fact of the registry, not an error shape
+			// to recognize; the membership filter keeps the (queue,
+			// status) label set bounded to this Queue's own three tiers,
+			// so a queue name another asynq application shares this
+			// Redis DB with can never appear under our gauge either.
+			registeredQueues, err := q.inspector.Queues()
+			if err != nil {
+				return err
+			}
+			registered := make(map[string]bool, len(registeredQueues))
+			for _, queueName := range registeredQueues {
+				registered[queueName] = true
+			}
 			for _, queueName := range priorityQueues {
+				if !registered[queueName] {
+					// A tier with no traffic yet: nothing to report.
+					continue
+				}
 				info, err := q.inspector.GetQueueInfo(queueName)
 				if err != nil {
 					if errors.Is(err, asynqlib.ErrQueueNotFound) {
