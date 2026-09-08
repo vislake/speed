@@ -156,6 +156,13 @@ func BenchmarkStandaloneQueueJobRoundTrip(b *testing.B) {
 			// WithLogger), which would flood the output at any real
 			// iteration count; route the default logger to io.Discard for
 			// this benchmark's duration, restoring it on the way out.
+			//
+			// slog.SetDefault is process-global, so this mutation is safe
+			// only while this benchmark suite is the sole mutator of the
+			// default logger in its process: a future suite running in the
+			// same binary (another benchmark file, t.Parallel, or a
+			// benchmark run alongside tests that capture logs) would have
+			// its own logging silently routed to io.Discard too.
 			prevDefault := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 			b.Cleanup(func() { slog.SetDefault(prevDefault) })
