@@ -143,11 +143,17 @@ linters:
         #     span attributes (the sanctioned home of the tenant
         #     dimension); what else beyond attribute/ modules may import
         #     is a decision for the observability round.
-        #   * rbac importing authn, and importing another business
-        #     module's structs for database relations -- both disciplines
-        #     belong to M1 business modules that are still stubs; a deny
-        #     rule needs lint targets to be live (the go-module-ci matrix
-        #     lints only real modules).
+        #   * rbac importing authn -- encoded below as the
+        #     rbac-must-not-import-authn rule now that M1 business modules
+        #     are real and the go-module-ci matrix lints them (the old
+        #     "still stubs" deferral died with the stubs). The GENERAL
+        #     discipline rows -- importing another business module's
+        #     structs for database relations, and the whole module-import
+        #     graph -- remain unencoded: they need either go-arch-lint or
+        #     a per-module fan-in transcription of docs/internal/
+        #     01-architecture.md's graph (an allow-list per module whose
+        #     mistakes would redden every module at once), which no round
+        #     has chosen yet; code review owns them.
         redis-only-in-pkgcore-and-jobs:
           # go/jobs' own exemption is narrowed to its queue/asynq
           # subpackage, not the whole module: the deployment-composition
@@ -296,6 +302,30 @@ linters:
           deny:
             - pkg: gorm.io/driver/postgres
               desc: "the PostgreSQL driver belongs to go/dbkit/dialect/postgres alone; every other caller depends on dbkit.Open with dbkit.DialectPostgres and blank-imports that subpackage for its init side effect"
+        # rbac-must-not-import-authn: the 18-cicd discipline-table row
+        # "rbac must not depend on authn" and root CLAUDE.md's
+        # module-boundary rule ("authorization knows only
+        # Subject{TenantID, UserID}; the authenticating side assembles
+        # the Subject and calls authorization"). rbac never needs authn:
+        # it declares the two structural seams (SubtreeResolver,
+        # WithSubjectResolver) that hosts -- authn's module included --
+        # implement. Files are constrained to the rbac module's own
+        # tree; test files are exempted the same way the discipline
+        # treats them elsewhere, because a module's tests may import a
+        # sibling module's test-support packages to build subjects (no
+        # such import exists in rbac today; the exemption keeps the
+        # rule about the discipline, which governs shipped code).
+        # Deny matches the module path and its subpackages, so an
+        # authn-internal package import would fire the same way.
+        rbac-must-not-import-authn:
+          files:
+            - "**/go/rbac/**"
+            - "!**/go/rbac/**/*_test.go"
+            - "!**/go/rbac/integration_test/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/vislake/speed/go/authn
+              desc: "rbac never imports authn: authorization knows only Subject{TenantID, UserID}, and the authenticating side (authn's module in a real host) assembles the Subject through rbac's own WithSubjectResolver seam"
         # go/observability's exporter split (issue #1 site 3): unlike the
         # three rules above, these two narrow their exemption to the
         # IMPLEMENTATION PACKAGE, not the owning module -- go/observability's
