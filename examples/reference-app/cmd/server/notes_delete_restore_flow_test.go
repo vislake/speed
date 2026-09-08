@@ -1,10 +1,10 @@
 package main
 
 // notes_delete_restore_flow_test.go drives the notes module's HTTP
-// delete/restore operations -- the pair this round adds to the module's
-// fragment, handler and generated interface -- through the reference app's
-// real composed stack (buildTestServer's output: authn, tenancy, the rbac
-// route gate and a real SQLite database). The repository-level mark-delete
+// delete/restore operations -- the pair the module's fragment, handler and
+// generated interface carry together -- through the reference app's real
+// composed stack (buildTestServer's output: authn, tenancy, the rbac route
+// gate and a real SQLite database). The repository-level mark-delete
 // lifecycle was already proven (internal/notes/repository_test.go); what
 // these tests pin is the HTTP surface on top of it: the uniform 404
 // refusal semantics the fragment documents (an unknown id, another

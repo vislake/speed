@@ -57,8 +57,7 @@ type Config struct {
 	// bootstrap settings and passes it here via WithOTLPEndpoint. This
 	// field is the seam a real host wires up.
 	//
-	// examples/reference-app demonstrates that wiring since the
-	// OTLP-endpoint round closed this record: cmd/server/server.go's
+	// examples/reference-app demonstrates that wiring: cmd/server/server.go's
 	// configFromEnv reads the bootstrap variable APP_OTLP_ENDPOINT
 	// (empty -- the default -- leaves Init on the local exporters),
 	// cmd/server/main.go's observabilityOptions hands a non-empty value
