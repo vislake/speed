@@ -82,11 +82,11 @@ const (
 	failureReasonColumnRunes = 1000
 	// tenantIDColumnRunes bounds tenant_id.
 	tenantIDColumnRunes = 64
-	// ipColumnRunes bounds ip (a cut column, reserved -- see the IP field's doc comment).
+	// ipColumnRunes bounds ip (a cut column, request metadata -- see the IP field's doc comment).
 	ipColumnRunes = 64
-	// userAgentColumnRunes bounds user_agent (a cut column, reserved -- see the IP field's doc comment).
+	// userAgentColumnRunes bounds user_agent (a cut column, request metadata -- see the IP field's doc comment).
 	userAgentColumnRunes = 500
-	// traceIDColumnRunes bounds trace_id (a cut column, reserved -- see the IP field's doc comment).
+	// traceIDColumnRunes bounds trace_id (a cut column, request metadata -- see the IP field's doc comment).
 	traceIDColumnRunes = 64
 	// idColumnRunes bounds the primary key id.
 	idColumnRunes = 36
@@ -116,10 +116,9 @@ type Result struct {
 // happened" -- the six-element shape docs/internal/10-compliance-and-audit.
 // md defines (Actor, OnBehalfOf, Action, Resource, Result, Changes), plus
 // the context fields every record carries regardless of which module
-// produced it: OccurredAt and TenantID. The schema additionally declares
-// three request-context columns (IP, UserAgent, TraceID) that NO code
-// writes today -- see the IP field's own doc comment for what "reserved"
-// means here, and never read an empty one of them as information.
+// produced it: OccurredAt, TenantID and the three request-context columns
+// (IP, UserAgent, TraceID) -- see the IP field's own doc comment for when
+// those three carry a value and when they store the empty string.
 //
 // Every element except OnBehalfOf is flattened directly onto columns
 // (ActorType/ID/DisplayName, ResourceType/ID/DisplayName, Success/
@@ -293,24 +292,30 @@ type AuditEvent struct {
 	// shape.
 	TenantID string `gorm:"column:tenant_id;size:64;not null"`
 
-	// IP, UserAgent and TraceID are three request-context columns the
-	// schema declares but NO code writes today: neither collection
-	// mechanism's payload type (RecordedEvent, dbkit.WriteCapturedEvent)
-	// carries a field for any of them, so every row stores the empty
-	// string. They are reserved for a future request-context carrier --
+	// IP, UserAgent and TraceID are three request-context columns filled
+	// by both collection mechanisms from the dbkit.RequestMetadata
+	// context carrier (WithRequestMetadata/RequestMetadataFromContext,
 	// the shape pkgcore's WithActor/ActorFromContext already sets for
-	// identity -- that HTTP layers would populate and the audit write
-	// paths would read when present. Until that carrier exists, do NOT
-	// read an empty value here as information: "empty" does not mean
-	// "this record came from a background job with no request context"
-	// (the framing earlier revisions of this comment used, which dressed
-	// an always-empty column as a conditionally-empty one); it means the
-	// column has no writer at all. go/dbkit/audit/AGENTS.md's "Column
-	// inventory" section carries the standing three-question account (who
-	// fills each column, when, and what an unfillable case stores) for
-	// every column of this table, these three included. The migration
-	// files' comments were updated alongside this one in the same round,
-	// so all three say the same thing.
+	// identity): Emit reads it from the caller's context (emit.go), the
+	// write-capture plugin from the write's own context
+	// (go/dbkit/audit_capture.go's capture), and the values ride the
+	// event payloads to the persister, which stores each as the empty
+	// string when no RequestMetadata was present -- a background job with
+	// no request behind it. Read an empty value exactly that way: "no
+	// request context was carried", never as information about which
+	// background process ran (the framing earlier revisions of this
+	// comment used, which dressed an always-empty column as a
+	// conditionally-empty one; the carrier is what makes the column
+	// genuinely conditional now). The system-context-entered subscriber
+	// (module.go's onSystemContextEntered) is the one row-producing path
+	// that stores the empty string unconditionally, because tenancy's
+	// system-context event payload carries no request context by design.
+	// go/dbkit/audit/AGENTS.md's "Column inventory" section carries the
+	// standing three-question account (who fills each column, when, and
+	// what an unfillable case stores) for every column of this table,
+	// these three included. The migration files' comments were updated
+	// alongside this one in the same round, so all three say the same
+	// thing.
 	IP        string `gorm:"column:ip;size:64;not null"`
 	UserAgent string `gorm:"column:user_agent;size:500;not null"`
 	TraceID   string `gorm:"column:trace_id;size:64;not null"`

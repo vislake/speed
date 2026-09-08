@@ -221,6 +221,14 @@ func (m *Module) onWriteCaptured(ctx context.Context, evt pkgcore.Event) error {
 	row.SetResource(Resource{Type: payload.ResourceType, ID: payload.ResourceID})
 	row.SetResult(Result{Success: true})
 	row.Changes = changesJSON(payload.Before, payload.After)
+	// The request-context trio, captured by the write-capture plugin from
+	// the write's own context (RequestMetadataFromContext in
+	// go/dbkit/audit_capture.go) and carried on the event: each column
+	// stores the empty string when the write had no request context behind
+	// it (see AuditEvent's IP field doc comment).
+	row.IP = payload.IP
+	row.UserAgent = payload.UserAgent
+	row.TraceID = payload.TraceID
 	return m.repo.InsertIdempotent(ctx, row)
 }
 
@@ -276,6 +284,14 @@ func (m *Module) onRecorded(ctx context.Context, evt pkgcore.Event) error {
 	if payload.Changes != nil {
 		row.Changes = changesJSON(payload.Changes.Before, payload.Changes.After)
 	}
+	// The request-context trio, read by Emit from the caller's context
+	// (dbkit.RequestMetadataFromContext in emit.go) and carried on the
+	// event: each column stores the empty string when the recorded action
+	// had no request context behind it (see AuditEvent's IP field doc
+	// comment).
+	row.IP = payload.IP
+	row.UserAgent = payload.UserAgent
+	row.TraceID = payload.TraceID
 	return m.repo.InsertIdempotent(ctx, row)
 }
 
@@ -504,6 +520,9 @@ func writeCapturedFromWire(payload any) (dbkit.WriteCapturedEvent, bool) {
 			Operation:    stringFromWire(p["Operation"]),
 			Before:       stringMapFromWire(p["Before"]),
 			After:        stringMapFromWire(p["After"]),
+			IP:           stringFromWire(p["IP"]),
+			UserAgent:    stringFromWire(p["UserAgent"]),
+			TraceID:      stringFromWire(p["TraceID"]),
 			OccurredAt:   timeFromWire(p["OccurredAt"]),
 		}, true
 	default:
@@ -527,6 +546,9 @@ func recordedFromWire(payload any) (RecordedEvent, bool) {
 			Actor:      actorFromWire(p["Actor"]),
 			OnBehalfOf: onBehalfOfFromWire(p["OnBehalfOf"]),
 			TenantID:   stringFromWire(p["TenantID"]),
+			IP:         stringFromWire(p["IP"]),
+			UserAgent:  stringFromWire(p["UserAgent"]),
+			TraceID:    stringFromWire(p["TraceID"]),
 			Action:     action,
 			Resource:   resourceFromWire(p["Resource"]),
 			Result:     resultFromWire(p["Result"]),

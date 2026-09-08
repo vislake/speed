@@ -14,8 +14,9 @@
 -- the flattened Resource and Result elements; changes carries an optional
 -- before/after diff as plain JSON text; tenant_id holds the owning tenant
 -- or the empty-string sentinel for a platform-level event (never NULL);
--- ip/user_agent/trace_id are reserved request-context columns that no
--- code writes today (always empty, whatever the action was; see the
+-- ip/user_agent/trace_id are request-context columns both collection
+-- mechanisms fill from the dbkit.RequestMetadata context carrier when the
+-- captured action carried one (empty string when it did not; see the
 -- postgres/ sibling's own comment for the full account). No column here
 -- is ever updated or deleted by application code.
 CREATE TABLE audit_events (

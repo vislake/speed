@@ -95,6 +95,9 @@ func TestModule_OnWriteCaptured_PersistsAuditEvent(t *testing.T) {
 		ResourceID:   "note-1",
 		Operation:    "create",
 		After:        map[string]any{"title": "Meeting notes"},
+		IP:           "203.0.113.7",
+		UserAgent:    "speed-client/1.0",
+		TraceID:      "trace-abc",
 		OccurredAt:   time.Now(),
 	}
 	err := reg.Events.Bus().Publish(context.Background(), pkgcore.Event{
@@ -133,6 +136,17 @@ func TestModule_OnWriteCaptured_PersistsAuditEvent(t *testing.T) {
 	if len(got.Changes) == 0 {
 		t.Errorf("Changes is empty, want the After snapshot to have been recorded")
 	}
+	// The request-context trio, carried on the event from the capture
+	// plugin's read of the write's context, must land on the row.
+	if got.IP != "203.0.113.7" {
+		t.Errorf("IP = %q, want the payload's request metadata IP", got.IP)
+	}
+	if got.UserAgent != "speed-client/1.0" {
+		t.Errorf("UserAgent = %q, want the payload's request metadata UserAgent", got.UserAgent)
+	}
+	if got.TraceID != "trace-abc" {
+		t.Errorf("TraceID = %q, want the payload's request metadata TraceID", got.TraceID)
+	}
 }
 
 func TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent(t *testing.T) {
@@ -155,6 +169,9 @@ func TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent(t *testing.T) 
 		ResourceType: "note",
 		ResourceID:   "note-1",
 		Operation:    "update",
+		IP:           "203.0.113.7",
+		UserAgent:    "speed-client/1.0",
+		TraceID:      "trace-abc",
 		OccurredAt:   time.Now(),
 	}
 	raw, err := json.Marshal(original)
@@ -176,6 +193,13 @@ func TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent(t *testing.T) 
 	}
 	if len(rows) != 1 || rows[0].Action != "note.update" || rows[0].Actor().ID != "user-1" {
 		t.Fatalf("ListByTenant() = %+v, want one row Action=note.update Actor.ID=user-1", rows)
+	}
+	// The request-context trio must survive the JSON round trip -- this is
+	// the distributed-bus shape, where the payload crosses the wire as a
+	// map and the trio rides it like Actor and TenantID do.
+	if rows[0].IP != "203.0.113.7" || rows[0].UserAgent != "speed-client/1.0" || rows[0].TraceID != "trace-abc" {
+		t.Errorf("persisted row request-context fields = (%q, %q, %q), want the payload's (203.0.113.7, speed-client/1.0, trace-abc)",
+			rows[0].IP, rows[0].UserAgent, rows[0].TraceID)
 	}
 }
 
@@ -245,6 +269,11 @@ func TestModule_OnRecorded_PersistsAuditEvent(t *testing.T) {
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+	ctx = dbkit.WithRequestMetadata(ctx, dbkit.RequestMetadata{
+		IP:        "203.0.113.7",
+		UserAgent: "speed-client/1.0",
+		TraceID:   "trace-abc",
+	})
 	in := Input{
 		Action:   action,
 		Resource: Resource{Type: "note", ID: "note-1"},
@@ -264,6 +293,12 @@ func TestModule_OnRecorded_PersistsAuditEvent(t *testing.T) {
 	}
 	if got := rows[0]; got.Action != action || got.Actor().ID != "user-1" || len(got.Changes) == 0 {
 		t.Errorf("ListByTenant()[0] = %+v, want Action=%q Actor.ID=user-1 with Changes populated", got, action)
+	}
+	// The request-context trio, read by Emit from the caller's context and
+	// carried on the event, must land on the row end to end.
+	if got := rows[0]; got.IP != "203.0.113.7" || got.UserAgent != "speed-client/1.0" || got.TraceID != "trace-abc" {
+		t.Errorf("persisted row request-context fields = (%q, %q, %q), want (203.0.113.7, speed-client/1.0, trace-abc)",
+			got.IP, got.UserAgent, got.TraceID)
 	}
 }
 

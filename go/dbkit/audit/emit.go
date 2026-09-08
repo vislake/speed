@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -110,6 +111,16 @@ type RecordedEvent struct {
 	// TenantID is read from ctx via pkgcore.TenantFromContext, empty for a
 	// platform-level action.
 	TenantID string
+	// IP, UserAgent and TraceID are the request-context values read from
+	// ctx via dbkit.RequestMetadataFromContext, each the empty string when
+	// ctx carried no RequestMetadata — a background job with no request
+	// behind it. They travel on the event for the same reason Actor and
+	// TenantID do: the persister that turns this event into an audit_events
+	// row runs on the subscriber side of a bus that may have crossed a real
+	// network hop, where the subscriber's ctx is not the publisher's ctx.
+	IP        string
+	UserAgent string
+	TraceID   string
 	// Action, Resource, Result and Changes are copied verbatim from Input.
 	Action   string
 	Resource Resource
@@ -228,6 +239,11 @@ func Emit(ctx context.Context, bus pkgcore.EventBus, actions pkgcore.AuditAction
 	}
 	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
 		evt.TenantID = string(tenant)
+	}
+	if md, ok := dbkit.RequestMetadataFromContext(ctx); ok {
+		evt.IP = md.IP
+		evt.UserAgent = md.UserAgent
+		evt.TraceID = md.TraceID
 	}
 
 	err := bus.Publish(ctx, pkgcore.Event{

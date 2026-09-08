@@ -49,6 +49,18 @@ type WriteCapturedEvent struct {
 	// captured from pkgcore.OnBehalfOfFromContext. Nil when the write's
 	// context carried none — the ordinary, non-impersonated case.
 	OnBehalfOf *pkgcore.Actor
+	// IP, UserAgent and TraceID are the request-context values captured
+	// from the write's context (RequestMetadataFromContext), each the
+	// empty string when the context carried no RequestMetadata — a
+	// background job with no request behind it. They travel on the event
+	// for the same reason Actor does: the audit persister that turns this
+	// event into an audit_events row (go/dbkit/audit's Module) runs on
+	// the subscriber side of a bus that may have crossed a real network
+	// hop, where the subscriber's ctx is not the publisher's ctx, so
+	// anything the trail needs must travel on the event itself.
+	IP        string
+	UserAgent string
+	TraceID   string
 	// TenantID is the tenant of the row the write actually affected. For a
 	// model implementing TenantScoped it is the write's ctx tenant, which the
 	// co-installed tenantScopePlugin has already enforced -- forced tenant_id
@@ -771,6 +783,11 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	if onBehalfOf, ok := pkgcore.OnBehalfOfFromContext(db.Statement.Context); ok {
 		copyOf := onBehalfOf
 		evt.OnBehalfOf = &copyOf
+	}
+	if md, ok := RequestMetadataFromContext(db.Statement.Context); ok {
+		evt.IP = md.IP
+		evt.UserAgent = md.UserAgent
+		evt.TraceID = md.TraceID
 	}
 	stampTenantID(db.Statement, &evt)
 

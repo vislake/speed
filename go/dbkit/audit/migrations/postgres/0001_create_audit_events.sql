@@ -36,21 +36,22 @@
 -- (docs/internal/10-compliance-and-audit.md's by-time-range retrieval
 -- need).
 --
--- ip/user_agent/trace_id are three reserved request-context columns: the
--- schema declares them (they were part of the original design shape
--- docs/internal/10-compliance-and-audit.md describes), but NO code writes
--- them today -- neither collection mechanism's payload type carries a
--- field for any of them, so every row stores the empty string. Do not
--- read an empty value as information: "empty" does not mean "this record
--- came from a background job with no request context"; it means the
--- column has no writer at all. They are reserved for a future
--- request-context carrier (the shape pkgcore's WithActor/ActorFromContext
--- already sets for identity) that HTTP layers would populate and the
--- audit write paths would read when present -- go/dbkit/audit/AGENTS.md's
--- "Column inventory" section and model.go's IP field doc comment carry
--- the standing account. model.go's field comments were updated
--- alongside this one in the same round, so all three say the same
--- thing.
+-- ip/user_agent/trace_id are three request-context columns both
+-- collection mechanisms fill from the dbkit.RequestMetadata context
+-- carrier (WithRequestMetadata/RequestMetadataFromContext, the shape
+-- pkgcore's WithActor/ActorFromContext already sets for identity):
+-- audit.Emit reads it from the caller's context, the write-capture
+-- plugin from the write's own context, and the values ride the event
+-- payloads to the persister. Each column stores the empty string when no
+-- RequestMetadata was present -- a background job with no request behind
+-- it -- and a row produced from tenancy's system-context-entered event
+-- stores the empty string unconditionally, since that event payload
+-- carries no request context by design. Read an empty value exactly that
+-- way, never as information about which background process ran --
+-- go/dbkit/audit/AGENTS.md's "Column inventory" section and model.go's
+-- IP field doc comment carry the standing account. model.go's field
+-- comments were updated alongside this one in the same round, so all
+-- three say the same thing.
 --
 -- No column here is ever updated or deleted by application code -- see
 -- go/dbkit/audit/repository.go's own doc comment on why Repository

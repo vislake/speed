@@ -279,6 +279,62 @@ func TestAuditCapturePlugin_Create_CapturesOnBehalfOf(t *testing.T) {
 	}
 }
 
+func TestAuditCapturePlugin_Create_CapturesRequestMetadataFromContext(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = dbkit.WithRequestMetadata(ctx, dbkit.RequestMetadata{
+		IP:        "203.0.113.7",
+		UserAgent: "speed-client/1.0",
+		TraceID:   "trace-abc",
+	})
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	got := events[0]
+	if got.IP != "203.0.113.7" {
+		t.Errorf("IP = %q, want the request metadata's IP", got.IP)
+	}
+	if got.UserAgent != "speed-client/1.0" {
+		t.Errorf("UserAgent = %q, want the request metadata's UserAgent", got.UserAgent)
+	}
+	if got.TraceID != "trace-abc" {
+		t.Errorf("TraceID = %q, want the request metadata's TraceID", got.TraceID)
+	}
+}
+
+func TestAuditCapturePlugin_Create_NoRequestMetadata_LeavesTheTrioEmpty(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+
+	// A bare write with a tenant and an actor but no RequestMetadata is the
+	// background-job shape: the captured event's request-context fields must
+	// be the empty strings, never invented values.
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	got := events[0]
+	if got.IP != "" || got.UserAgent != "" || got.TraceID != "" {
+		t.Errorf("request-context fields = (%q, %q, %q), want all empty when the context carried no RequestMetadata",
+			got.IP, got.UserAgent, got.TraceID)
+	}
+}
+
 func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)

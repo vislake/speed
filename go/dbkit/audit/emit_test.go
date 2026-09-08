@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -114,6 +115,49 @@ func TestEmit_NoActorOrOnBehalfOfOrTenantInContext_LeavesThemAtZeroValue(t *test
 	}
 	if got.TenantID != "" {
 		t.Errorf("TenantID = %q, want empty", got.TenantID)
+	}
+	if got.IP != "" || got.UserAgent != "" || got.TraceID != "" {
+		t.Errorf("request-context fields = (%q, %q, %q), want all empty when the context carried no RequestMetadata",
+			got.IP, got.UserAgent, got.TraceID)
+	}
+}
+
+// TestEmit_RequestMetadataInContext_CarriesTheTrio pins Emit's read of the
+// dbkit.RequestMetadata context carrier -- the write path for the three
+// request-context columns (IP, UserAgent, TraceID) of audit_events (model.go):
+// when the caller's context carries request metadata, the published
+// RecordedEvent carries the trio, exactly as it carries Actor and TenantID,
+// so the persister on the other side of the bus can store them.
+func TestEmit_RequestMetadataInContext_CarriesTheTrio(t *testing.T) {
+	reg := newTestRegistry()
+	const action = "notes.note.create"
+	if err := reg.AuditActions.Add(action); err != nil {
+		t.Fatalf("AuditActions.Add() error = %v", err)
+	}
+
+	var got RecordedEvent
+	reg.Events.Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		got = evt.Payload.(RecordedEvent)
+		return nil
+	})
+
+	ctx := dbkit.WithRequestMetadata(context.Background(), dbkit.RequestMetadata{
+		IP:        "203.0.113.7",
+		UserAgent: "speed-client/1.0",
+		TraceID:   "trace-abc",
+	})
+	if err := Emit(ctx, reg.Events.Bus(), reg.AuditActions, Input{Action: action}); err != nil {
+		t.Fatalf("Emit() error = %v", err)
+	}
+
+	if got.IP != "203.0.113.7" {
+		t.Errorf("IP = %q, want the request metadata's IP", got.IP)
+	}
+	if got.UserAgent != "speed-client/1.0" {
+		t.Errorf("UserAgent = %q, want the request metadata's UserAgent", got.UserAgent)
+	}
+	if got.TraceID != "trace-abc" {
+		t.Errorf("TraceID = %q, want the request metadata's TraceID", got.TraceID)
 	}
 }
 

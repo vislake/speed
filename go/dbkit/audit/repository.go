@@ -62,7 +62,7 @@ func NewRepository(db *gorm.DB) *Repository {
 // dialects alike -- keeps the outcome dialect-identical, where leaving it
 // to the database would let SQLite store the row silently and PostgreSQL
 // refuse it with 22001. Descriptive columns (display names, failure
-// reason, the reserved request-metadata trio) are NOT refused: an
+// reason, the request-metadata trio) are NOT refused: an
 // over-long value there is legal content and is cut instead, with the cut
 // recorded in a structured warning (see fitEventToColumns).
 var ErrEventFieldTooLong = errors.New("audit: event field exceeds its declared column width")
