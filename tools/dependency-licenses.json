@@ -158,6 +158,7 @@
       "license": "MIT",
       "name": "github.com/testcontainers/testcontainers-go",
       "used_by": [
+        "go/billing",
         "go/config",
         "go/dbkit",
         "go/integration",
@@ -413,6 +414,7 @@
       "used_by": [
         "web/packages/account-ui",
         "web/packages/auth-ui",
+        "web/packages/billing-ui",
         "web/packages/i18n",
         "web/packages/layout-kit",
         "web/packages/product-shell",
@@ -432,6 +434,7 @@
         "web/packages/api-sdk",
         "web/packages/auth-core",
         "web/packages/auth-ui",
+        "web/packages/billing-ui",
         "web/packages/i18n",
         "web/packages/layout-kit",
         "web/packages/product-shell",
@@ -448,6 +451,7 @@
       "used_by": [
         "web/packages/account-ui",
         "web/packages/auth-ui",
+        "web/packages/billing-ui",
         "web/packages/layout-kit",
         "web/packages/product-shell",
         "web/packages/tenancy-ui",
@@ -463,6 +467,7 @@
       "used_by": [
         "web/packages/account-ui",
         "web/packages/auth-ui",
+        "web/packages/billing-ui",
         "web/packages/layout-kit",
         "web/packages/product-shell",
         "web/packages/tenancy-ui",
@@ -478,6 +483,7 @@
       "used_by": [
         "web/packages/account-ui",
         "web/packages/auth-ui",
+        "web/packages/billing-ui",
         "web/packages/layout-kit",
         "web/packages/product-shell",
         "web/packages/tenancy-ui",
@@ -504,7 +510,8 @@
       "name": "@tanstack/react-query",
       "used_by": [
         "web/packages/account-ui",
-        "web/packages/api-sdk"
+        "web/packages/api-sdk",
+        "web/packages/billing-ui"
       ],
       "version": "5.102.8"
     },
