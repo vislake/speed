@@ -40,6 +40,20 @@ var layerOrder = [...]string{LayerGlobal, LayerTenant, LayerKey}
 // all three layers, which is a legal, if unusual, configuration: every
 // request is allowed, with LayeredDecision.Layer left empty.
 //
+// A negative Rate is not a second "disabled" spelling. The disabled case
+// is Rate == 0 and only Rate == 0; a negative Rate is the signature of a
+// value gone wrong -- a subtraction, an unset field defaulting to -1 --
+// not an intent to disable (an unset int zero-value is Rate == 0, the
+// deliberate all-layers-disabled configuration above), and silently
+// folding it into the disabled case would take a layer that is meant to
+// throttle and make it simply not exist, with no error anywhere.
+// LayeredLimiter.Allow therefore refuses a negative Rate before any layer
+// is evaluated, with an error naming the offending layer and the Rate
+// value and wrapping ratelimit.ErrInvalidLimit -- the coded class
+// go/ratelimit's own validate assigns the identical input (see
+// go/ratelimit/limiter.go), so the refusal is the same kind of failure a
+// misconfigured, non-zero Limit already earns.
+//
 // A Rate of 1 is refused by go/ratelimit rather than accepted -- whatever
 // Per it is paired with, that limiter cannot honour "once per Per": the
 // weighted sliding-window formula would admit a key's very first hit and
@@ -134,6 +148,13 @@ func NewLayeredLimiter(limiter ratelimit.Limiter, limits LayeredLimits) *Layered
 // LayeredLimiter built with, say, only Limits.Key set evaluates exactly one
 // layer per call.
 //
+// A negative Rate on any one layer is refused up front, before the first
+// layer is evaluated and before any counter is touched, with an error
+// naming the layer and the Rate value and wrapping
+// ratelimit.ErrInvalidLimit: Rate == 0 is the one disabled spelling (see
+// LayeredLimits' own doc comment), and a negative Rate is a configuration
+// error, not an intent to disable.
+//
 // An error from the underlying Limiter (a KVStore failure, or
 // ErrInvalidLimit for a misconfigured, non-zero-but-otherwise-invalid
 // Limit) is returned unmodified, exactly as go/ratelimit.Limiter.Allow's own
@@ -151,11 +172,23 @@ func (l *LayeredLimiter) Allow(ctx context.Context, globalKey, tenantKey, apiKey
 		LayerKey:    l.limits.Key,
 	}
 
+	// A negative Rate on any layer is refused before the first layer is
+	// evaluated and before any counter is touched: Rate == 0 is the one
+	// "disabled" spelling (see LayeredLimits' own doc comment), and a
+	// negative Rate is a configuration error, never an intent to disable.
+	for _, layer := range layerOrder {
+		if limit := limits[layer]; limit.Rate < 0 {
+			return LayeredDecision{}, fmt.Errorf("integration: %s layer rate limit: negative Rate %d: %w", layer, limit.Rate, ratelimit.ErrInvalidLimit)
+		}
+	}
+
 	last := LayeredDecision{Allowed: true}
 	for _, layer := range layerOrder {
 		limit := limits[layer]
-		if limit.Rate <= 0 {
-			// Disabled layer -- see LayeredLimits' own doc comment.
+		if limit.Rate == 0 {
+			// Disabled layer -- Rate == 0 is the model's one disabled
+			// value; a negative Rate was refused above. See LayeredLimits'
+			// own doc comment.
 			continue
 		}
 

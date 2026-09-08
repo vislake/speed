@@ -2,6 +2,9 @@ package integration
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,15 +179,90 @@ func TestLayeredLimiter_AllLayersDisabled_AlwaysAllows(t *testing.T) {
 }
 
 // TestLayeredLimiter_InvalidLimit_ReturnsError uses a negative Per, not a
-// non-positive Rate: a non-positive Rate is what LayeredLimits' own doc
-// comment defines as "disabled" and Allow intercepts before the underlying
-// Limiter is ever called, so it is Per that must be invalid here to actually
-// reach go/ratelimit.Limit.validate's own rejection.
+// non-positive Rate: Rate 0 is what LayeredLimits' own doc comment defines
+// as "disabled" and Allow intercepts before the underlying Limiter is ever
+// called, and a negative Rate is refused by Allow itself before any layer is
+// evaluated (see TestLayeredLimiter_NegativeRate_RefusedAsConfigurationError
+// below), so it is Per that must be invalid here to actually reach
+// go/ratelimit.Limit.validate's own rejection.
 func TestLayeredLimiter_InvalidLimit_ReturnsError(t *testing.T) {
 	l := newTestLayeredLimiter(LayeredLimits{
 		Global: ratelimit.Limit{Rate: 10, Per: -1},
 	})
 	if _, err := l.Allow(context.Background(), "g", "t1", "k1"); err == nil {
 		t.Error("Allow with an invalid (negative Per) Limit returned no error")
+	}
+}
+
+// TestLayeredLimiter_NegativeRate_RefusedAsConfigurationError pins the
+// model's negative-Rate boundary (see LayeredLimits' own doc comment):
+// Rate == 0 is the one "disabled" spelling, and a negative Rate -- a
+// host-computed value gone wrong, never an intent to disable -- must be
+// refused as a configuration error, not silently disable that layer's
+// throttle. Before this fix a negative Rate fell through the disabled
+// layer's Rate <= 0 check and every request passed the layer unthrottled
+// with no error anywhere; after it, Allow refuses the configuration up
+// front with an error naming the offending layer and the Rate value and
+// wrapping ratelimit.ErrInvalidLimit -- the coded class go/ratelimit's own
+// validate assigns the identical input.
+func TestLayeredLimiter_NegativeRate_RefusedAsConfigurationError(t *testing.T) {
+	for _, tc := range []struct {
+		layer string
+		rate  int
+	}{
+		{layer: LayerGlobal, rate: -1},
+		{layer: LayerTenant, rate: -7},
+		{layer: LayerKey, rate: -1000},
+	} {
+		t.Run(tc.layer, func(t *testing.T) {
+			limits := LayeredLimits{
+				Global: ratelimit.Limit{Rate: 100, Per: minute},
+				Tenant: ratelimit.Limit{Rate: 100, Per: minute},
+				Key:    ratelimit.Limit{Rate: 100, Per: minute},
+			}
+			switch tc.layer {
+			case LayerGlobal:
+				limits.Global.Rate = tc.rate
+			case LayerTenant:
+				limits.Tenant.Rate = tc.rate
+			case LayerKey:
+				limits.Key.Rate = tc.rate
+			}
+
+			l := newTestLayeredLimiter(limits)
+			got, err := l.Allow(context.Background(), "g", "t1", "k1")
+			if err == nil {
+				t.Fatalf("Allow with Rate %d on the %s layer = %+v, want a configuration error (a negative Rate must never silently disable the layer)", tc.rate, tc.layer, got)
+			}
+			if !errors.Is(err, ratelimit.ErrInvalidLimit) {
+				t.Errorf("Allow error = %v, want it to wrap ratelimit.ErrInvalidLimit", err)
+			}
+			msg := err.Error()
+			for _, want := range []string{tc.layer, fmt.Sprintf("negative Rate %d", tc.rate)} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("Allow error = %q, want it to name %q", msg, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLayeredLimiter_RateOne_RefusedByUnderlyingLimiter pins that the
+// up-front negative-Rate scan above refuses nothing but negatives: Rate == 1
+// is not intercepted by LayeredLimiter itself -- it is forwarded to
+// go/ratelimit, whose own validate refuses it with
+// ratelimit.ErrRateOneUnsupported on the layer's evaluation, exactly as
+// LayeredLimits' doc comment maps it. If the scan ever widened into a
+// "Rate < 2" check, this test would fail on the changed error shape.
+func TestLayeredLimiter_RateOne_RefusedByUnderlyingLimiter(t *testing.T) {
+	l := newTestLayeredLimiter(LayeredLimits{
+		Key: ratelimit.Limit{Rate: 1, Per: minute},
+	})
+	_, err := l.Allow(context.Background(), "g", "t1", "k1")
+	if err == nil {
+		t.Fatal("Allow with Rate 1 on the key layer returned no error")
+	}
+	if !errors.Is(err, ratelimit.ErrRateOneUnsupported) {
+		t.Errorf("Allow error = %v, want it to wrap ratelimit.ErrRateOneUnsupported", err)
 	}
 }
