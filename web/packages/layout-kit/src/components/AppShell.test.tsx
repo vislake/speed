@@ -18,13 +18,15 @@
  * (a hash-routed host would lose the route to fragment navigation),
  * the uncontrolled temporary drawer closing itself on nav-item
  * activation with the scrim cleared and focus released (controlled
- * contract untouched), the uncontrolled open state resetting when the
- * drawer leaves the temporary variant for the permanent one, and the
- * header-spacer placeholders deriving from the measured header height
- * ("measured header spacer" describe block states what jsdom can and
- * cannot prove about the wrap case).
+ * contract untouched), the open state resetting when the drawer leaves
+ * the temporary variant for the permanent one -- the uncontrolled state
+ * cleared, a controlled host told through onMobileOpenChange on the
+ * same crossing -- and the header-spacer placeholders deriving from
+ * the measured header height ("measured header spacer" describe block
+ * states what jsdom can and cannot prove about the wrap case).
  */
 
+import { useCallback, useState } from 'react'
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -49,6 +51,37 @@ const NAV_ITEMS: readonly AppShellNavItem[] = [
   { id: 'home', label: 'Home', href: '/home', selected: true },
   { id: 'reports', label: 'Reports', href: '/reports' },
 ]
+
+// The controlled drawer's host, the shape a real controlled consumer
+// renders: the open state lives in the host component, AppShell reports
+// every change through onMobileOpenChange, and nothing else writes it.
+// The widen-and-narrow regression below must be driven by that callback
+// alone -- a host that closed itself at the crossing would test nothing.
+function ControlledDrawerHost({
+  initialOpen,
+  onMobileOpenChange,
+}: {
+  readonly initialOpen: boolean
+  readonly onMobileOpenChange: (open: boolean) => void
+}) {
+  const [open, setOpen] = useState(initialOpen)
+  const reportOpenChange = useCallback(
+    (next: boolean) => {
+      onMobileOpenChange(next)
+      setOpen(next)
+    },
+    [onMobileOpenChange],
+  )
+  return (
+    <AppShell
+      navItems={NAV_ITEMS}
+      mobileOpen={open}
+      onMobileOpenChange={reportOpenChange}
+    >
+      content
+    </AppShell>
+  )
+}
 
 describe('AppShell', () => {
   describe('nav items', () => {
@@ -268,6 +301,73 @@ describe('AppShell', () => {
           'false',
         )
       })
+    })
+
+    it('tells a controlled host that a portrait-open drawer must close when the viewport widens, so narrowing back finds it closed', async () => {
+      // Regression: the widen-and-narrow reset above only cleared the
+      // uncontrolled state. The controlled half of the same
+      // configuration was never told that the variant had left
+      // temporary -- the reset effect was gated off by !isControlled and
+      // no other path fires on a breakpoint crossing -- so a host
+      // holding mobileOpen=true rode through the permanent spell
+      // untouched and its drawer re-popped open (scrim and all) when the
+      // viewport narrowed back. The breakpoint is AppShell's own
+      // useMediaQuery knowledge, so onMobileOpenChange is the only
+      // channel the host can reset through; the host below stores the
+      // prop and is driven by that callback alone.
+      const media = mockMatchMedia(false)
+      const onMobileOpenChange = vi.fn()
+      const { getByRole } = renderWithProviders(
+        <ControlledDrawerHost initialOpen onMobileOpenChange={onMobileOpenChange} />,
+      )
+
+      // Portrait: the host's drawer starts open.
+      expect(
+        getByRole('button', { name: zhCN.appShell.closeNav, hidden: true }),
+      ).toHaveAttribute('aria-expanded', 'true')
+
+      // Widen past md: leaving temporary means open should become false,
+      // reported exactly once -- the host applies it, and no re-fire
+      // follows on the renders the reset itself causes.
+      act(() => {
+        media.changeMatches(true)
+      })
+      expect(onMobileOpenChange).toHaveBeenCalledTimes(1)
+      expect(onMobileOpenChange).toHaveBeenCalledWith(false)
+
+      // Narrow back below md: the temporary drawer comes back closed,
+      // because the host's state followed the notification -- pre-fix
+      // the host never heard about the crossing and the drawer re-popped
+      // open.
+      act(() => {
+        media.changeMatches(false)
+      })
+      await waitFor(() => {
+        expect(getByRole('button', { name: zhCN.appShell.openNav })).toHaveAttribute(
+          'aria-expanded',
+          'false',
+        )
+      })
+    })
+
+    it('does not hand a controlled host a meaningless close when the viewport widens past a drawer that is already closed', () => {
+      // The reset notification is gated on the drawer actually being
+      // open: a host already at false crossing into the permanent
+      // variant has nothing to learn from the crossing, so no callback
+      // fires -- the gate keeps the crossing silent for the closed case
+      // while still reporting it for the open one.
+      const media = mockMatchMedia(false)
+      const onMobileOpenChange = vi.fn()
+      renderWithProviders(
+        <ControlledDrawerHost initialOpen={false} onMobileOpenChange={onMobileOpenChange} />,
+      )
+      act(() => {
+        media.changeMatches(true)
+      })
+      act(() => {
+        media.changeMatches(false)
+      })
+      expect(onMobileOpenChange).not.toHaveBeenCalled()
     })
   })
 

@@ -115,7 +115,12 @@ export interface AppShellProps {
    * for a fully host-controlled drawer.
    */
   readonly mobileOpen?: boolean
-  /** Fired whenever the mobile drawer's open state should change. */
+  /**
+   * Fired whenever the mobile drawer's open state should change: the
+   * toggle and the drawer's own close report here, and so does the
+   * narrow-to-wide breakpoint crossing -- at md+ the drawer is
+   * permanent and the mobile open state should be false.
+   */
   readonly onMobileOpenChange?: (open: boolean) => void
   /** Drawer width in px, both variants. Defaults to 280. */
   readonly sidebarWidth?: number
@@ -214,17 +219,26 @@ export function AppShell({
     onMobileOpenChange?.(next)
   }
 
-  // The uncontrolled drawer's open state belongs to the temporary
-  // variant: a portrait-open drawer that grows into the permanent
-  // (always-open) variant at md+ must not come back open when the
-  // viewport narrows again. Reset it the moment the variant leaves
-  // temporary. Controlled hosts own the state themselves; nothing is
-  // reset on their behalf.
+  // The mobile drawer's open state belongs to the temporary variant: a
+  // portrait-open drawer that grows into the permanent (always-open)
+  // variant at md+ must not come back open when the viewport narrows
+  // again, so leaving temporary resets it. The uncontrolled half clears
+  // its own state; a controlled host owns the state but not the
+  // breakpoint -- the desktop/mobile split is AppShell's own
+  // useMediaQuery knowledge -- so the crossing is reported through the
+  // same onMobileOpenChange channel the host already reads: when the
+  // variant leaves temporary, the mobile drawer's open state should be
+  // false. Only an open drawer is reset, so a host already closed is
+  // never handed a meaningless callback.
   useEffect(() => {
-    if (isDesktop && !isControlled) {
-      setUncontrolledOpen(false)
+    if (isDesktop && mobileOpen) {
+      if (isControlled) {
+        onMobileOpenChange?.(false)
+      } else {
+        setUncontrolledOpen(false)
+      }
     }
-  }, [isDesktop, isControlled])
+  }, [isDesktop, isControlled, mobileOpen, onMobileOpenChange])
 
   // The header row wraps under real overflow pressure, so its rendered
   // height is measured and every spacer placeholder derives its height
