@@ -1,74 +1,38 @@
 name: fast-check
-
-# Fast per-PR check pipeline -- docs/internal/18-cicd.md's pipeline table,
-# fast-check row: lint + unit tests + build of the modules a PR can affect,
-# plus the repository-level discipline checks that exist today. Target
-# duration under 8 minutes; every job carries a timeout and stale runs are
-# cancelled via concurrency (18-cicd cost-control rules 4 and 5).
+# Fast per-PR check pipeline: lint + unit tests + build of every real
+# module and package, plus the repository-level discipline checks that
+# exist. Target duration under 8 minutes; every job carries a timeout
+# and stale runs are cancelled via concurrency.
 #
-# COVERAGE -- what genuinely runs today
-#   * go-modules job: the twenty-one modules with real, tested implementation
-#     (the thirteen root CLAUDE.md's Repository Status census already
-#     records, plus go/pki, go/integration, go/metering, go/sharing,
-#     go/billing, go/ai-gateway, go/compliance and go/admin -- their own
-#     rounds' additions, documented in go/pki/AGENTS.md,
-#     go/integration/AGENTS.md, go/metering/AGENTS.md, go/sharing/AGENTS.md,
-#     go/billing/AGENTS.md, go/ai-gateway/AGENTS.md, go/compliance/AGENTS.md
-#     and go/admin/AGENTS.md respectively) each run through the reusable
-#     go-module-ci workflow: golangci-lint (the
-#     project-standard lint leg, .golangci.yml at the repo root -- pinned,
-#     checksummed binary and analysis cache from setup-go-env), go vet,
-#     unit tests under -race, a workspace-context build and a GOWORK=off
-#     standalone build. Stub modules (a go.mod + doc.go only) are
-#     deliberately absent: they have no code to check, and listing them
-#     would imply coverage that does not exist. Adding a module to this
-#     matrix is the whole cost of adding it to CI.
-#   * npm-packages job: the npm packages with real, tested implementation
-#     (@speed/tokens, @speed/i18n, @speed/ui-kit, @speed/api-client,
-#     @speed/api-sdk -- the generated frontend SDK, orval output from
-#     the merged speed.yaml, notes + authn fragments, whose regenerated
-#     src/ must keep passing these same legs -- @speed/layout-kit, the
-#     shared AppShell/RouteGuard app-chrome layer with no auth-mechanism
-#     opinion, and @speed/auth-core, the headless session layer over
-#     the generated authn surface (the api-sdk's first in-workspace
-#     compile consumer, and @speed/auth-ui, the sign-in component
-#     family over that session, whose usage example drives the composed
-#     flows through a real api-client over a scripted fetch -- the
-#     authn surface's runtime end-to-end consumption discharged in
-#     form, and @speed/tenancy-ui, the tenant-switch affordance over
-#     that same session (its usage example pins one login and three
-#     switch attempts the same in-form way), and @speed/product-shell,
-#     the tenant-facing assembly shell composing the AppShell frame,
-#     the sign-in family and the session hooks into one three-branch
-#     view machine with zero text of its own -- the whole
-#     sign-in/switch/sign-out journey discharged in form, the browser
-#     and real-server leg still the reference-app shell's), and
-#     @speed/account-ui, the signed-in account-management surface over
-#     that same session -- session and login-history lists, social
-#     bindings and step-up-gated two-factor management -- the account
-#     face the authn and auth-ui rounds deferred), and
-#     @speed/billing-ui, the billing-documents read surface over the
-#     generated billing read operations -- the newest-first invoice
-#     list with per-row document detail, its usage example discharging
-#     the same in-form way); root
-#     CLAUDE.md, Repository Status) each
-#     run through the reusable npm-package-ci workflow: a frozen-lockfile
-#     workspace install from the web/ root, then lint (the flat-config
-#     ESLint at web/ -- typescript-eslint recommended, no-explicit-any,
-#     plus the workspace speed/no-literal-text rule over package src and
-#     speed/no-direct-http -- whose single config-level whitelist is
-#     packages/api-client, where hand-written HTTP is designed to live),
-#     strict typecheck, the vitest unit suite and the dist/ build. Node
-#     and pnpm versions come from setup-node-env's single sources
-#     (web/.nvmrc, web/package.json's packageManager field); the pnpm
-#     store cache is keyed on the lockfile hash (18-cicd cost-control
-#     rule 3). Adding a package to this matrix is the whole cost of
-#     adding it to CI.
-#   * repo-checks job, repository-level, all existing today:
-#       - tools/scan_cjk.py -- the CJK discipline scanner enforcing the root
-#         CLAUDE.md Language Rule (18-cicd discipline table row). Scans the
-#         whole tree including this .github directory: comments in these
-#         files must stay English.
+# COVERAGE -- what runs:
+#   * go-modules job: the modules with real, tested implementation --
+#     every row of the matrix below -- each run through the reusable
+#     go-module-ci workflow: golangci-lint (the project-standard lint
+#     leg, .golangci.yml at the repo root -- pinned, checksummed binary
+#     and analysis cache from setup-go-env), go vet, unit tests under
+#     -race, a workspace-context build and a GOWORK=off standalone
+#     build. Stub modules (a go.mod + doc.go only) are deliberately
+#     absent: they have no code to check, and listing them would imply
+#     coverage that does not exist. Adding a module to this matrix is
+#     the whole cost of adding it to CI.
+#   * npm-packages job: the packages with real, tested implementation --
+#     every row of the matrix below -- each run through the reusable
+#     npm-package-ci workflow: a frozen-lockfile workspace install from
+#     the web/ root, then lint (the flat-config ESLint at web/ --
+#     typescript-eslint recommended, no-explicit-any, plus the workspace
+#     speed/no-literal-text rule over package src and speed/no-direct-http,
+#     whose single config-level whitelist is packages/api-client, where
+#     hand-written HTTP is designed to live), strict typecheck, the
+#     vitest unit suite and the dist/ build. Node and pnpm versions come
+#     from setup-node-env's single sources (web/.nvmrc, web/package.json's
+#     packageManager field); the pnpm store cache is keyed on the
+#     lockfile hash. Adding a package to this matrix is the whole cost
+#     of adding it to CI.
+#   * repo-checks job, repository-level:
+#       - tools/scan_cjk.py -- the CJK discipline scanner enforcing the
+#         repository Language Rule (docs/internal/ is Chinese; everything
+#         else is English). Scans the whole tree including this .github
+#         directory: comments in these files must stay English.
 #       - tools/check_toolchain.py -- the .mise.toml drift gate: every
 #         version the root .mise.toml pins (task/go/node/pnpm/
 #         golangci-lint) must mirror its authoritative source (Taskfile.yml
@@ -126,19 +90,18 @@ name: fast-check
 #         the green tree scan unnoticed (the mirror of how the
 #         no-literal-text rule's own unit tests keep that rule honest).
 #         Pinned at 1.176.0 -- the version the rules' local proofs ran
-#         against -- so the only merge-gating tool in the repository is no
-#         longer a floating version (see tools/README.md, execution status).
+#         against -- so the merge-gating semgrep cannot float (see
+#         tools/README.md).
 #       - go build github.com/vislake/speed/go/... -- every module compiles
 #         in workspace context from the go.work root.
 #       - go build ./... (workspace context) then GOWORK=off go build ./...
 #         in examples/reference-app -- the app's module lives outside the
 #         go/... pattern, and the standalone leg proves its own go.mod is
-#         tidy enough to resolve every import without go.work (the shape
-#         the notification round's missing replace shipped as).
+#         tidy enough to resolve every import without go.work.
 #       - go work sync + git diff --exit-code -- the checked-in workspace
-#         sum files must be canonical. This repo has been bitten by a stale
-#         go.work.sum before; the fix discipline (Taskfile setup) is to
-#         commit the sync result together with dependency changes.
+#         sum files must be canonical: a stale go.work.sum can hide
+#         dependency drift, so the sync result is committed together with
+#         dependency changes (Taskfile setup runs the sync).
 #       - the workspace eslint rules' own unit tests -- vitest over
 #         web/eslint-rules/no-literal-text.test.mjs and
 #         web/eslint-rules/no-direct-http.test.mjs from the web/ root.
@@ -148,42 +111,19 @@ name: fast-check
 #         from setup-node-env's single sources and the frozen-lockfile
 #         workspace install (steps at the end of this job).
 #
-# DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
-# does not exist in the repository yet; each lands with its tooling round --
-# wiring them now would be fake checks):
-#   * oasdiff and Playwright e2e -- that tooling does not exist yet
-#     (see the gated pipeline stubs e2e/scaffold-verify/nightly in this
-#     directory for where each wires in; security.yml is no longer a
-#     stub -- its scans moved to the live security pipeline, and
-#     release.yml is its own live pipeline, dispatched manually). Spec
-#     merging and the redocly naming lint are real, but they run in the
-#     API-contract pipeline below, not here. The ESLint foundation is wired, not
-#     deferred: the workspace's speed/no-literal-text rule enforces
-#     i18n-sourced text over React package src, and speed/no-direct-http
-#     enforces the API-contract HTTP discipline (hand-written
-#     fetch/XMLHttpRequest/axios/node-fetch is an error everywhere
-#     except packages/api-client, the rule's single config-level
-#     whitelist), both in eslint.config.mjs + web/eslint-rules/, both
-#     firing in every npm-packages lint leg, and both with their own
-#     unit tests in the repo-checks job described above -- the rules
-#     live outside any package, so only a repo-level run exercises
-#     them. The react-hooks plugin awaits a stateful-components round.
-#     The API-contract toolchain runs as its own path-filtered
-#     pipeline, api-contract.yml: on PRs touching one of the six
-#     module fragments (notes, org, storage, authn, notification,
-#     sharing) or the generator side it regenerates the touched
-#     fragments' backend interfaces via pinned oapi-codegen -- three of
-#     the six (notes, authn, notification) also feed the merged
-#     document's frontend SDK via pinned orval into @speed/api-sdk (the
-#     merge itself -- notes + authn + notification joined by pinned
-#     redocly, linted against redocly.yaml; org/storage/sharing stay
-#     backend-only), every regenerated artifact diffed against the
-#     committed one, and builds the reference app so a spec that
-#     outgrew its handler fails compilation without needing a full-ci
-#     label.
-#     i18n key-parity wiring exists and runs in docs-check on
-#     doc/i18n-touching PRs -- deliberately not here, so this fast
-#     per-PR check stays under its 8-minute budget.
+# DELIBERATELY NOT WIRED HERE -- checks whose tooling or venue lies
+# elsewhere (wiring them here would be fake checks or budget waste):
+#   * oasdiff and Playwright e2e: that tooling does not exist yet (the
+#     gated pipeline stubs in this directory -- e2e, nightly -- carry
+#     the plans; security.yml is live and release.yml is its own live
+#     pipeline, dispatched manually). Spec merging and the redocly
+#     naming lint are real, but they run in the API-contract pipeline,
+#     not here. The ESLint foundation is wired: speed/no-literal-text
+#     and speed/no-direct-http fire in every npm-packages lint leg and
+#     have their own unit tests in the repo-checks job. The react-hooks
+#     plugin does not exist yet. i18n key-parity wiring runs in
+#     docs-check on doc/i18n-touching PRs -- deliberately not here, so
+#     this fast per-PR check stays under its 8-minute budget.
 #   * reference-app lint and unit suite: the reference app runs its
 #     golangci-lint leg and unit suite in full-check's reference-app job
 #     (full-ci-labeled PRs), keeping this per-PR check on its budget. Its
@@ -194,24 +134,22 @@ name: fast-check
 #     is also built standalone (GOWORK=off) here, mirroring the go/ module
 #     matrix's own standalone leg: the workspace-context build resolves
 #     the app's imports against go.work, so a missing require+replace
-#     pair in the app's own go.mod -- the shape the notification round
-#     shipped and that only a standalone build surfaces -- cannot slip
-#     through green.
+#     pair in the app's own go.mod -- a shape only a standalone build
+#     surfaces -- cannot slip through green.
 #   * Docker-backed integration tiers (-tags=integration): wired, but in
-#     full-check -- 18-cicd's layered-triggering rule assigns them to the
+#     full-check -- the layered-triggering rule assigns them to the
 #     pre-merge full matrix (PRs labeled full-ci), not to the fast per-PR
 #     check.
-#   * dorny/paths-filter path filtering: the module set is small enough that
-#     every PR runs every real module; when the set grows, adopt paths-
-#     filter with the downstream-dependency derivation of 18-cicd's cost-
-#     control section -- a caller-side change only, thanks to the reusable
-#     go-module-ci workflow.
+#   * dorny/paths-filter path filtering: the module set is small enough
+#     that every PR runs every real module; if the set grows past that,
+#     paths-filter with downstream-dependency derivation is a caller-side
+#     change only, thanks to the reusable go-module-ci workflow.
 
 on:
   pull_request:
   workflow_dispatch:
   # A commit that lands on main without going through a pull_request (a
-  # locally-merged worktree round pushed straight to origin, an admin
+  # locally-merged worktree pushed straight to origin, an admin
   # merge, anything else that bypasses PR review) gets none of the checks
   # above -- pull_request only fires for the PR's own commits, and
   # workflow_dispatch only runs when someone remembers to trigger it by
@@ -382,13 +320,12 @@ jobs:
         run: go build ./...
       # The workspace-context build above resolves the app's imports
       # against go.work, so it cannot see a missing require+replace pair
-      # in the app's own go.mod -- a gap the notification round shipped
-      # and that only the standalone leg surfaces. The go/ module matrix
-      # runs the same standalone leg through go-module-ci; the app gets
-      # its own here so CLAUDE.md's per-module standalone-build rule
-      # (`GOWORK=off go build`, and a tidy that resolves without the
-      # workspace) genuinely covers every implemented module the app
-      # imports.
+      # in the app's own go.mod -- a shape only the standalone leg
+      # surfaces. The go/ module matrix runs the same standalone leg
+      # through go-module-ci; the app gets its own here so the per-module
+      # standalone-build rule (`GOWORK=off go build`, and a tidy that
+      # resolves without the workspace) genuinely covers every implemented
+      # module the app imports.
       - name: Build the reference app standalone (GOWORK=off)
         working-directory: examples/reference-app
         env:

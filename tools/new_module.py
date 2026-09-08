@@ -1,36 +1,33 @@
 #!/usr/bin/env python3
 """Scaffold the canonical stub of a new speed Go module.
 
-docs/internal/19-dev-workflow.md's module-generator section promises
-`task new:module` so that adding a module never means hand-repeating the
-same skeleton (the doc lists the eight things a new module needs --
-go.mod, directory skeleton, AGENTS.md, design doc, migration directory, test
-skeleton, CI matrix registration, lockstep release registration -- which
-in this repository is the go.work use entry itself: the release
-coordinator (tools/release/lockstep-release.py) derives the per-module
-tag list from go.work at runtime, so a module never registered there
-cannot be released). This script
-is the generator behind that task: the root Taskfile.yml's new:module task
-invokes it, and --help documents the wiring contract (see the epilog).
+`task new:module` exists so that adding a module never means hand-repeating
+the same skeleton (the eight things a new module needs -- go.mod,
+directory skeleton, AGENTS.md, design doc, migration directory, test
+skeleton, CI matrix registration, lockstep release registration). In
+this repository the go.work use entry is the lockstep release
+registration: the release coordinator (tools/release/lockstep-release.py)
+derives the per-module tag list from go.work at runtime, so a module
+never registered there cannot be released. This script is the generator
+behind that task: the root Taskfile.yml's new:module task invokes it,
+and --help documents the wiring contract (see the epilog).
 
-What it scaffolds is exactly the canonical stub the not-yet-implemented
-modules under go/ already carry (go/sharing, go/notification, go/storage,
-...): three files, nothing more:
+What it scaffolds is the canonical stub shape of a Go module under go/
+(three files, nothing more):
 
-  go/<name>/go.mod     "module github.com/vislake/speed/go/<name>" plus the
-                       stub convention's bare "go 1.23" directive. Real
-                       modules with dependencies carry "go 1.25.0" and
-                       require/replace blocks instead -- those lines appear
-                       when an implementation round adds the first
-                       dependency, not in the stub.
+  go/<name>/go.mod     "module github.com/vislake/speed/go/<name>" plus a
+                       bare "go 1.23" directive. A module with real
+                       dependencies carries its own go directive and
+                       require/replace blocks instead -- those lines
+                       appear with the first dependency, not in the stub.
   go/<name>/doc.go     The one-line English package doc form every module
                        uses ("// Package sharing provides public share links
                        with expiry and access tracking."). The Go package
                        name is the module name with hyphens removed,
                        matching the repo's go/ai-gateway -> package
                        aigateway precedent. The package doc sentence is the
-                       --description argument and must be ASCII (the root
-                       CLAUDE.md Language Rule would flag anything else).
+                       --description argument and must be ASCII: the
+                       repo-wide CJK scan would flag anything else.
   go/<name>/AGENTS.md  The one-liner stub form exactly as written in the
                        existing stubs: "# <name>\n\nNot yet implemented. See
                        docs/internal/XX-*.md for the design." The design-doc
@@ -58,9 +55,9 @@ Refusals and guardrails:
     README.md, AGENTS.md} for --category npm. The npm skeleton is the
     common core the twelve shipped @speed packages share, distilled to
     the files a package needs to pass the four npm-package-ci legs
-    (pnpm lint/typecheck/test/build from the package directory) before
-    its implementation round ships any API: the index.ts is a doc
-    comment only -- nothing is exported, so no placeholder symbol can
+    (pnpm lint/typecheck/test/build from the package directory) while
+    it carries no API yet: the index.ts is a doc comment only --
+    nothing is exported, so no placeholder symbol can
     ever become a released package's frozen public API -- and
     index.test.ts pins the skeleton's own identity and scripts, the
     npm-side mirror of a Go stub's compiling doc.go. docs/internal/
@@ -72,8 +69,7 @@ use entry (which is also the lockstep release registration, see below),
 CI matrix row, roadmap/design-doc rows -- as actionable reminders. It never modifies any of those shared repository
 files itself -- that is deliberate: a scaffolder that silently edits go.work
 and CI matrices makes review diffs impossible to read, so the checklist is
-the contract with the human (or with the future Taskfile task, which can
-perform the mechanical registrations on top of this script).
+the contract with the human.
 
 Usage:
     python3 tools/new_module.py NAME --description '...' \
@@ -106,13 +102,13 @@ import sys
 # (go.mod files under go/ all read "module github.com/vislake/speed/go/X").
 MODULE_PATH_PREFIX = "github.com/vislake/speed/go"
 
-# The go directive of the canonical stub, byte for byte what every
-# not-yet-implemented module's go.mod carries ("go 1.23"). Modules with
-# real dependencies use "go 1.25.0" instead; the directive is bumped by the
-# implementation round that adds the first dependency, not by the stub.
+# The go directive of the scaffolded go.mod ("go 1.23"). A module with
+# real dependencies carries its own go directive plus require/replace
+# blocks instead; those lines are added with the first dependency, not
+# by the stub.
 GO_VERSION_LINE = "go 1.23"
 
-# Where stubs live relative to the repo root (docs/internal/02-repo-and-release.md).
+# Every Go module in the repository lives under go/ at the repo root.
 GO_DIR_NAME = "go"
 
 # Marker file that identifies the repository root during --target-dir
@@ -128,8 +124,8 @@ DESIGN_DOC_PATTERN = re.compile(r"^docs/internal/\d{2}-[a-z0-9-]+\.md$")
 # name downstream (go.work use entry, CI matrix row, release tag path
 # go/<name>/<version>) is built verbatim from this one and none of them
 # want underscores. The repo's own underscore-named directories (the
-# go/*/integration_test test tiers that root CLAUDE.md's testing rule
-# physically separates) are test packages, never module names.
+# go/*/integration_test test tiers, physically separate test packages)
+# are test packages, never module names.
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 # The 25 Go keywords. None of them can name a package clause ("package
@@ -211,8 +207,8 @@ def build_plan(module_name: str, description: str, design_doc: str) -> list[tupl
 # is a doc comment only -- but its WIRING is real: the four
 # npm-package-ci legs (pnpm lint / typecheck / test / build from the
 # package directory, reusable-npm-package-ci.yml) all pass on the
-# skeleton, so the package's CI row can be registered before its
-# implementation round, exactly as a Go stub's go.mod/doc.go/AGENTS.md
+# skeleton, so the package's CI row can be registered while it is still
+# a stub, exactly as a Go stub's go.mod/doc.go/AGENTS.md
 # make a not-yet-implemented module a real go.work member.
 NPM_SCRIPTS = ('lint', 'typecheck', 'test', 'build')
 
@@ -283,20 +279,18 @@ def build_npm_plan(
         f"// Package index of the @speed/{module_name} stub.\n"
         "//\n"
         "// The canonical package skeleton this scaffolder materializes\n"
-        "// carries a real build/lint/test wiring and no API yet: the\n"
-        "// package's public surface lands in its implementation round,\n"
-        "// in the same PR as its design doc. Nothing is exported until\n"
-        "// then, so no placeholder symbol ever becomes a released\n"
-        "// package's frozen public API.\n"
+        "// carries a real build/lint/test wiring and no API yet; the\n"
+        "// package's public API ships in the same PR as its design doc.\n"
+        "// Nothing is exported until then, so no placeholder symbol ever\n"
+        "// becomes a released package's frozen public API.\n"
     )
     index_test = (
         "// Stub-wiring test of the canonical @speed/package skeleton.\n"
         "// Named after its source file (index.ts -> index.test.ts, the\n"
         "// frontend naming rule). It pins the skeleton itself -- the\n"
         "// package identity and the four npm-package-ci legs' scripts --\n"
-        "// so a scaffolded package is proven green before its\n"
-        "// implementation round fills the API in; delete the whole file\n"
-        "// with the implementation round's real tests.\n"
+        "// so a scaffolded package is proven green before any API\n"
+        "// exists; delete the whole file when the real tests land.\n"
         "import { readFileSync } from 'node:fs'\n"
         "import { describe, expect, it } from 'vitest'\n"
         "\n"

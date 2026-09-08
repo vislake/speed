@@ -30,7 +30,7 @@ const InstrumentationName = "github.com/vislake/speed/go/billing"
 //     status mutations the row can hang an honest count on. The
 //     module's Subscription lifecycle has the identical state machine
 //     (SubscriptionService.transition) and is deliberately not
-//     double-instrumented this round: the row names orders, invoices
+//     double-instrumented: the row names orders, invoices
 //     are its ledger face, and subscriptions carry their own
 //     intermediate-state vocabulary this row does not distinguish.
 //   - billing.invoice.open_dwell -- how long an invoice stayed open

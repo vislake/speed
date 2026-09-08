@@ -1,5 +1,4 @@
 version: '3'
-
 # Task definitions for the speed monorepo.
 #
 # NOTE ON PACKAGE PATTERNS
@@ -10,19 +9,14 @@ version: '3'
 # Anything that must span every module therefore uses the import-path pattern
 # github.com/vislake/speed/go/... instead of ./... .
 #
-# The commands planned in docs/internal/19-dev-workflow.md and the root
-# CLAUDE.md are either implemented honestly or present as an explicit
+# The commands are either implemented honestly or present as an explicit
 # "not implemented yet" stub that exits non-zero; nothing here promises
 # behaviour the repository cannot yet deliver. The discipline checkers in
-# tools/ are intentionally wired into no task: docs/internal/18-cicd.md's
-# discipline table assigns them to CI workflows, and they run directly,
-# exactly as tools/README.md documents. Two of the three are wired today:
-# tools/scan_cjk.py runs in fast-check's repo-checks job
-# (.github/workflows/fast-check.yml) and tools/check_i18n_keys.py runs in
-# the docs-check pipeline (.github/workflows/docs-check.yml), which fires
-# on doc/i18n-touching PRs; only tools/check_repo_isolation.py is still
-# wired into no workflow, so it keeps running directly until its row lands
-# in a future round.
+# tools/ are intentionally wired into no task: the CI workflows run them
+# directly, exactly as tools/README.md documents (tools/scan_cjk.py and
+# tools/check_repo_isolation.py in fast-check's repo-checks job,
+# tools/check_i18n_keys.py in the docs-check pipeline, which fires on
+# doc/i18n-touching PRs).
 #
 # NOTE ON RUNNING IN ANOTHER DIRECTORY
 # Commands that must run from a module directory rather than the workspace
@@ -73,19 +67,18 @@ tasks:
 
   setup:
     desc: Install the pinned toolchain (mise must be on PATH; skipped with a warning when absent), then sync the Go workspace so every module agrees on shared dependency versions.
-    # docs/internal/19-dev-workflow.md plans more for setup: toolchain
-    # installation (mise) and database initialization. The toolchain half is
-    # now real -- the root .mise.toml pins task/go/node/pnpm/golangci-lint,
-    # each version mirroring an authoritative source (go.work, web/.nvmrc,
+    # Setup does toolchain installation (mise) and Go workspace sync. The
+    # root .mise.toml pins task/go/node/pnpm/golangci-lint, each version
+    # mirroring an authoritative source (go.work, web/.nvmrc,
     # web/package.json, the Taskfile header, setup-go-env's GOLANGCI_VERSION),
     # and the first leg below runs `mise install` against it. The leg warns
     # and continues when mise is not on PATH rather than failing, because the
     # underlying commands stay directly runnable: `mise install` from the
     # repository root once mise is on PATH, and `go work sync` always.
-    # Database initialization is still absent by design: standalone mode has
+    # Database initialization is absent by design: standalone mode has
     # nothing to initialize -- the reference app opens its own SQLite file
     # and runs its migrations at server start -- and pre-commit hooks
-    # (lefthook) wait for a later round.
+    # (lefthook) do not exist yet.
     #
     # When the sync moves a module's go.mod/go.sum (a dependency bumped by the
     # workspace union, or a require relabeled), run `go mod tidy` from inside
@@ -145,11 +138,10 @@ tasks:
 
   test:full:
     desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis, RustFS/S3). Requires Docker.
-    # docs/internal/19-dev-workflow.md's full matrix will eventually mean dual
-    # deployment mode x dual dialect across every module. Until the
-    # distributed mode and a second dialect's integration tiers exist, the
-    # honest full form is: the whole unit suite under the race detector with
-    # coverage, plus the Docker-backed integration tiers. {{.INTEGRATION_DIRS}}
+    # The honest full matrix while the dual deployment mode x dual dialect
+    # combination has no integration tiers: the whole unit suite under the
+    # race detector with coverage, plus the Docker-backed integration tiers.
+    # {{.INTEGRATION_DIRS}}
     # carries one entry per module under go/ with an integration_test/
     # directory, so the enumeration cannot drift from the modules that
     # actually ship a tier -- adding a tier means adding its module to that
@@ -161,12 +153,12 @@ tasks:
       - cd "{{.APP_DIR}}" && go test -race -cover ./...
       # The reference app's own Docker-backed tier (its integration_test/,
       # testcontainers Redis) is the APP_DIR leg of the same matrix: it
-      # boots the real server with a real Redis Streams EventBus -- the
-      # standalone-topology + MultiReplicaSafe composition the
-      # deployment-composition retrofit proves. Kept out of
-      # {{.INTEGRATION_DIRS}} because that list enumerates modules under
-      # go/ (see its comment above); full-check.yml mirrors this leg in the
-      # reference-app job.
+      # boots the real server with a real Redis Streams EventBus -- a
+      # MultiReplicaSafe implementation composing into a STANDALONE
+      # topology, the proof that implementation composition is orthogonal
+      # to deployment mode. Kept out of {{.INTEGRATION_DIRS}} because that
+      # list enumerates modules under go/ (see its comment above);
+      # full-check.yml mirrors this leg in the reference-app job.
       - cd "{{.APP_DIR}}" && go test -race -tags=integration ./...
       - |
         for d in {{.INTEGRATION_DIRS}}; do
@@ -180,8 +172,8 @@ tasks:
     # workspace-wide pass; the reference app is a separate module outside go/
     # and gets its own dir-scoped vet.
     #
-    # golangci-lint is the project standard (docs/internal/20-quality-and-
-    # security.md; .golangci.yml at the repo root, v2 schema) and CI enforces
+    # golangci-lint is the project standard (.golangci.yml at the repo
+    # root, v2 schema) and CI enforces
     # it on every pull request (the reusable go-module-ci workflow's
     # golangci-lint leg; the reference app lints in full-check). It cannot run
     # from the workspace root, though: with go.work in effect, golangci-lint
@@ -217,15 +209,14 @@ tasks:
         fi
       - |
         # web/ is a separate pnpm workspace (not part of go.work), and the
-        # eleven @speed/* packages plus the reference app's web host
+        # @speed/* packages plus the reference app's web host
         # (examples/reference-app/web, wired in as an external member of
-        # web/pnpm-workspace.yaml) all carry their own lint script (root
-        # CLAUDE.md's Repository Status: "pnpm -r lint ... genuinely run
-        # and pass today"; CI enforces it per-package in the reusable
-        # npm-package-ci workflow). Guarded exactly like the golangci-lint
-        # loop above: warn and skip rather than hard-fail when pnpm is not
-        # on PATH, so a bare `task lint` still gets as far as it can on a
-        # machine that never ran `task setup`.
+        # web/pnpm-workspace.yaml) all carry their own lint script; CI
+        # enforces it per-package in the reusable npm-package-ci workflow.
+        # Guarded exactly like the golangci-lint loop above: warn and skip
+        # rather than hard-fail when pnpm is not on PATH, so a bare
+        # `task lint` still gets as far as it can on a machine that never
+        # ran `task setup`.
         if command -v pnpm >/dev/null 2>&1; then
           echo "== pnpm -r lint (web)"
           (cd web && pnpm -r lint) || exit 1
@@ -269,109 +260,68 @@ tasks:
     # line. A not-implemented stub exists to print this message, so silent
     # keeps the message the only output; the exit-1 contract is unaffected.
     # Same for seed below -- the only other task that is both a
-    # not-implemented stub and marked silent. api:gen and docs:serve were
-    # stubs when this note was written; both are real tasks now.
+    # not-implemented stub and marked silent.
     silent: true
 
   api:gen:
     desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, billing, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + cases + smilesim + authn + notification + billing).
-    # The backend half of the contract-change flow (docs/internal/
-    # 21-api-contract.md's order: edit the spec, regenerate, compile
-    # failures reveal every handler to fix) is real for the thirteen
-    # surfaces that ship a fragment: this task runs oapi-codegen, pinned
-    # at v2.8.0, over each module's own api/openapi.yaml with that
-    # directory's own oapi-codegen.yaml -- rewriting
-    # examples/reference-app/internal/notes/api/notes-server.gen.go,
-    # examples/reference-app/internal/cases/api/cases-server.gen.go,
-    # examples/reference-app/internal/smilesim/api/smilesim-server.gen.go
-    # (the two latter added by the P3a fragment round: the app's own
-    # case-domain and smile-simulation surfaces, whose interfaces the
-    # cmd/server handlers implement -- see cmd/server/cases.go and
-    # cmd/server/smilesim.go's compile-time assertions),
-    # go/org/api/org-server.gen.go, go/storage/api/storage-server.gen.go,
-    # go/authn/api/authn-server.gen.go,
-    # go/notification/api/notification-server.gen.go,
-    # go/billing/api/billing-server.gen.go (billing's leg added by the
-    # block-D frontend round, the same chore(ci)-shaped follow-up
-    # go/sharing's 9366b9d and go/pki's 28a7332 discharged for their own
-    # backend-only fragments),
-    # go/sharing/api/sharing-server.gen.go, go/pki/api/pki-server.gen.go,
-    # go/admin/api/admin-server.gen.go (admin's leg added by the same
-    # round that wired its fragment into api-contract.yml),
-    # go/integration/api/integration-server.gen.go and
-    # go/ai-gateway/api/ai-gateway-server.gen.go respectively. Each
-    # generated ServerInterface's growth is what makes an un-updated handler
-    # stop compiling (the compile-time assertions live in
-    # internal/notes/handler.go, go/org/handler.go, go/storage/handler.go,
-    # go/authn/handler.go, go/notification/handler.go, go/billing/handler.go,
-    # go/sharing/handler.go,
-    # go/pki/handler.go, go/admin/handler.go, go/integration/handler.go,
-    # go/ai-gateway/handler.go -- and, for the app's own case-domain and
-    # smile-simulation fragments, cmd/server/cases.go and
-    # cmd/server/smilesim.go).
+    # The backend half of the contract-change flow (edit the spec,
+    # regenerate, compile failures reveal every handler to fix) is real
+    # for the surfaces that ship a fragment: this task runs oapi-codegen,
+    # pinned at v2.8.0, over each module's own api/openapi.yaml with that
+    # directory's own oapi-codegen.yaml -- rewriting the reference app's
+    # notes, cases and smilesim generated artifacts
+    # (examples/reference-app/internal/{notes,cases,smilesim}/api, the
+    # latter two being the app's own case-domain and smile-simulation
+    # surfaces, whose interfaces the cmd/server handlers implement -- see
+    # cmd/server/cases.go and cmd/server/smilesim.go's compile-time
+    # assertions), then the module artifacts go/org, go/storage, go/authn,
+    # go/notification, go/billing, go/sharing, go/pki, go/admin,
+    # go/integration and go/ai-gateway (each under its own api/
+    # directory). Each generated ServerInterface's growth is what makes an
+    # un-updated handler stop compiling (the compile-time assertions live
+    # in the handlers, listed in .github/workflows/api-contract.yml's own
+    # header).
     #
     # The frontend half of the api:gen promise is live for every fragment
     # in the merged document: the api:merge dependency below joins the
     # notes, cases, smilesim, authn, notification and billing fragments
-    # into
-    # build/openapi/speed.yaml, and the orval leg below regenerates the
-    # @speed/api-sdk package from that merged document -- orval pinned at
-    # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
-    # dependency), followed by web/scripts/orval-nodenext-fixup.mjs --
-    # see that package's AGENTS.md for the seam and the fixup's why.
-    # notification joined the merged document when its recipient-facing
-    # HTTP surface shipped (the notification round): its fragment feeds
-    # the merge and orval like authn's, because its operations are
-    # self-service surfaces a consumer shell's SDK calls. billing joined
-    # in the block-D frontend round for the same reason: the credit
-    # view's balance and ledger reads are the first in-workspace web
-    # caller of its two operations. The cases and
-    # smilesim fragments joined in the P3a round for the same reason:
-    # they are the reference app's own case-domain and smile-simulation
-    # surfaces, the operations the P3 web UI calls. org's and storage's
-    # fragments feed neither the merge nor orval: org's frontend leg
-    # defers to the M1 org-web round that joins org into the merged
-    # document (go/org/AGENTS.md's deferrals table and
-    # docs/internal/21-api-contract.md's implementation-status note);
-    # storage's frontend leg defers to that same future extension of the
-    # merged document -- org's fragment is queued first, storage's would
-    # ride the same regeneration (go/storage/AGENTS.md's deferrals
-    # table). sharing's fragment carries the identical backend-only
-    # deferral, for the identical reason storage's does: it has no
-    # frontend consumer yet, and the public access route it serves is a
-    # browser-navigated link, not a call a generated SDK hook would ever
-    # make (go/sharing/AGENTS.md's Deferred list). authn's fragment, by
-    # contrast, has no "no consumer shell" deferral left: its generated
-    # surface has been compile-consumed by @speed/auth-core since the
-    # auth-core round. pki's fragment (round 3) is the same shape as
-    # org's/storage's: no in-workspace web consumer, its frontend leg
-    # deferred for the identical reason -- see go/pki/AGENTS.md's Known
-    # limitations. integration's fragment (the round that closed round 1's
-    # own "no HTTP surface" gap) carries the identical backend-only
-    # deferral: its one consumer is the reference app's own Go HTTP client
-    # (apikey_flow_test.go), not a generated-SDK caller, so joining the
-    # merge and running it through orval would generate frontend code
-    # nothing calls -- see go/integration/api/openapi.yaml's own header.
-    # ai-gateway's fragment (the credential-write round) carries the
-    # identical backend-only deferral, for the identical reason: its
-    # consumers are host-side router gates and the reference app's own Go
-    # HTTP tests (ai_gateway_flow_test.go), never a generated-SDK caller --
-    # see go/ai-gateway/api/openapi.yaml's own header. The
-    # redocly merge of the fragments into
-    # build/openapi/speed.yaml, and its spec lint, live in the api:merge
-    # task below -- api:gen DEPENDS on api:merge (deps above), because
-    # the merged document is the frontend leg's input: a fragment edit
-    # must regenerate through a fresh merge, never through a stale
-    # committed speed.yaml. The backend legs stay independent of the
-    # merge, per docs/internal/21-api-contract.md's "spec organization
-    # and merging" section. Still deferred: breaking-change detection
-    # (oasdiff), which waits for the first release baseline (M4).
+    # into build/openapi/speed.yaml, and the orval leg below regenerates
+    # the @speed/api-sdk package from that merged document -- orval
+    # pinned at 8.17.0 and run from web/ via pnpm dlx (orval is never a
+    # workspace dependency), followed by
+    # web/scripts/orval-nodenext-fixup.mjs -- see that package's AGENTS.md
+    # for the seam and the fixup's why. notification's fragment feeds the
+    # merge and orval like authn's, because its operations are
+    # self-service surfaces a consumer shell's SDK calls; billing's joined
+    # because the credit view's balance and ledger reads are an
+    # in-workspace web caller of its two operations; the cases and
+    # smilesim fragments joined because they are the reference app's own
+    # case-domain and smile-simulation surfaces, the operations the P3
+    # web UI calls. org's, storage's, sharing's, pki's, integration's and
+    # ai-gateway's fragments feed neither the merge nor orval:
+    # backend-only, each without an in-workspace web consumer -- org's
+    # and storage's frontend legs are deferred in their own AGENTS.md
+    # deferral tables, sharing's Deferred list names the same reason (its
+    # public access route is a browser-navigated link, not a call a
+    # generated SDK hook would ever make), pki's Known limitations
+    # section names the identical shape, integration's one consumer is
+    # the reference app's own Go HTTP client (apikey_flow_test.go), and
+    # ai-gateway's consumers are host-side router gates and the reference
+    # app's own Go HTTP tests (ai_gateway_flow_test.go). The redocly
+    # merge of the fragments into build/openapi/speed.yaml, and its spec
+    # lint, live in the api:merge task below -- api:gen DEPENDS on
+    # api:merge (deps above), because the merged document is the frontend
+    # leg's input: a fragment edit must regenerate through a fresh merge,
+    # never through a stale committed speed.yaml. The backend legs stay
+    # independent of the merge. Breaking-change detection (oasdiff) is
+    # not wired: it needs a released baseline to diff against.
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
-    # go run from the same thirteen backend directories, and the same pnpm
-    # dlx orval + fixup pair from web/, then that workflow's porcelain
-    # gate fails any PR whose spec change was not committed with its
+    # go run from the same backend directories, and the same pnpm dlx
+    # orval + fixup pair from web/, then that workflow's porcelain gate
+    # fails any PR whose spec change was not committed with its
     # regenerated artifact.
     deps:
       - api:merge
@@ -435,22 +385,15 @@ tasks:
 
   api:merge:
     desc: Merge every module's OpenAPI fragment into build/openapi/speed.yaml, stamp its info block, and lint the result against redocly.yaml's naming-convention rules.
-    # docs/internal/21-api-contract.md's "spec organization and merging"
-    # section: each module fragment still generates its own backend
-    # artifacts independently, but the MERGED document is a real release
-    # artifact (build/openapi/speed.yaml, committed -- see .gitignore's
-    # carve-out) in its own right once two or more fragments exist (which
-    # happened when authn's fragment landed alongside notes', grew a
-    # third member when notification's recipient-facing surface shipped,
-    # grew to five when the P3a round joined the reference app's own
-    # cases and smilesim fragments, whose operations the P3 web UI
-    # calls, and grew to six when the block-D frontend round joined
-    # billing's read-only credits surface, whose operations the credit
-    # view calls),
-    # and it is also the frontend leg's input: api:gen depends on this
-    # task (see above), so a fragment edit regenerates through a fresh
-    # merge rather than a stale committed speed.yaml. The merge itself
-    # stays independent -- api:merge never depends on api:gen.
+    # Each module fragment still generates its own backend artifacts
+    # independently, but the MERGED document is a real release artifact
+    # (build/openapi/speed.yaml, committed -- see .gitignore's carve-out)
+    # joining the fragments whose operations the generated SDK or a
+    # consumer shell calls: notes, authn, notification, cases, smilesim
+    # and billing. It is also the frontend leg's input: api:gen depends
+    # on this task (see above), so a fragment edit regenerates through a
+    # fresh merge rather than a stale committed speed.yaml. The merge
+    # itself stays independent -- api:merge never depends on api:gen.
     #
     # `join`, not `bundle`: bundle expects one root document with $refs into
     # the others; these fragments are peers, each a complete document with
@@ -482,21 +425,15 @@ tasks:
   docs:serve:
     desc: Preview the docs site (docs/site/) locally with Hugo's live-reload server.
     # docs/site/ is a real Hugo project (theme: hugo-book, pinned as a git
-    # submodule) as of this round's machinery decision -- this is no
-    # longer the buildless, no-npm, no-network skeleton the previous
-    # framing here described (docs/site/README.md's earlier "real
-    # skeleton, machinery deferred" note is superseded; see its current
-    # text and docs/internal/13-documentation-standards.md's own
-    # implementation-status note for what changed and why hugo-book was
-    # chosen over Docsy). Previewing now needs the pinned Hugo binary
-    # itself (root .mise.toml's `hugo` entry; `mise install` by way of
-    # the setup task's toolchain leg) and the theme submodule checked out
+    # submodule -- docs/site/README.md has the machinery-decision
+    # rationale). Previewing needs the pinned Hugo binary itself (root
+    # .mise.toml's `hugo` entry; `mise install` by way of the setup
+    # task's toolchain leg) and the theme submodule checked out
     # (`git submodule update --init` if it is not already). The
     # structural check keeping the built output honest in CI is
-    # tools/check_docs_site.py (docs-check pipeline), which now builds
-    # the site and checks docs/site/public/, not the Markdown source
-    # tree. The underlying command is directly runnable without the task
-    # CLI:
+    # tools/check_docs_site.py (docs-check pipeline), which builds the
+    # site and checks docs/site/public/, not the Markdown source tree.
+    # The underlying command is directly runnable without the task CLI:
     #   hugo server --minify --source docs/site
     # `hugo server` watches content/config/layout changes and live-reloads
     # the browser; Ctrl-C stops it. It binds 1313 by default -- pass
@@ -546,9 +483,8 @@ tasks:
 
   new:module:
     desc: Scaffold a new Go module stub under go/<name> and print its registration checklist.
-    # Wraps tools/new_module.py; the generator contract is documented in the
-    # script's --help epilog and in docs/internal/19-dev-workflow.md's
-    # module-generator section. Pass the arguments as CLI vars:
+    # Wraps tools/new_module.py; the generator contract is documented in
+    # the script's --help epilog. Pass the arguments as CLI vars:
     #   task new:module NAME=sharing DESCRIPTION='...' DESIGN_DOC=docs/internal/NN-name.md
     # The script prints a registration checklist (go.work use entry -- which is
     # itself the lockstep release registration, since the coordinator derives
@@ -564,15 +500,15 @@ tasks:
 
   release:plan:
     desc: Verify the lockstep release plan for one version, offline (M0 round).
-    # Wraps tools/release/lockstep-release.py's default verification mode --
-    # the offline half of the M0 release machinery (docs/internal/
-    # 18-cicd.md, docs/internal/02-repo-and-release.md). The coordinator
-    # derives the publishable set at runtime (go.work + web/packages), prints
-    # the full one-version plan and exits 0 only when the plan is consistent;
-    # nothing is tagged, written or published. Pass the version as a CLI var:
+    # Wraps tools/release/lockstep-release.py's default verification mode
+    # -- the offline verification half of the lockstep release machinery.
+    # The coordinator derives the publishable set at runtime (go.work +
+    # web/packages), prints the full one-version plan and exits 0 only
+    # when the plan is consistent; nothing is tagged, written or
+    # published. Pass the version as a CLI var:
     #   task release:plan VERSION=v1.2.0
-    # Real publishing is scheduled for the v1.0 release at M4; .github/
-    # workflows/release.yml runs this same verification on its version input.
+    # Real publishing is not wired; .github/workflows/release.yml runs
+    # this same verification on its version input.
     cmds:
       # Quoted for the same reason as new:module: a malformed VERSION reaches
       # the script whole and fails there with its own message (exit 2).
@@ -580,14 +516,12 @@ tasks:
 
   docker:build:
     desc: Build the reference app's Docker image locally (examples/reference-app/Dockerfile) and load it into the local Docker daemon.
-    # The reference-app-docker-image round's local-build convenience --
-    # mirrors the single-platform (native-arch), --load leg
-    # .github/workflows/reusable-docker-build.yml runs in CI, minus the
-    # multi-arch (linux/amd64,linux/arm64) discard-on-success leg CI also
-    # runs, which proves cross-platform buildability but produces nothing
-    # a local Docker daemon could load or run anyway (see that workflow's
-    # own header for why a genuinely multi-platform result cannot be
-    # --load-ed at all). The build context MUST be the repository root,
+    # Local-build convenience mirroring the single-platform (native-arch),
+    # --load leg .github/workflows/reusable-docker-build.yml runs in CI
+    # for its smoke test -- minus the registry push and the
+    # cross-architecture manifest combination, which produce nothing a
+    # local Docker daemon needs (see that workflow's own header). The
+    # build context MUST be the repository root,
     # not examples/reference-app/ -- see the Dockerfile's own header for
     # why (its go.mod's replace directives reach every sibling go/*
     # module by relative path, and it builds under go.work workspace

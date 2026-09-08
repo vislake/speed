@@ -1,20 +1,19 @@
 /**
  * codes-alignment.test.ts -- the reference-app shell's reachable-error
- * alignment suite: every server-emittable error code the shell's ten
+ * alignment suite: every server-emittable error code the shell's
  * surfaces can be answered with (the auth-ui sign-in/session family, the
  * account-ui signed-in family, the tenancy-ui switch family, the notes
- * create surface, the cases surface, the smile-simulation surface the
- * block-B round added, the two block-C share surfaces: the clinic's
- * share action on the case page and the patient's share page, the
- * credits surface the block-D round added, and the team surface the
- * add-a-colleague round added -- its invite send resolving go/org's
- * create-operation sentinels through the same whitelist shape) is
- * rendered through a reachable-error whitelist, and this suite pins the
- * whitelists to the server codes themselves.
+ * create surface, the cases surface, the smile-simulation surface, the
+ * two share surfaces: the clinic's share action on the case page and
+ * the patient's share page, the credits surface, and the team surface
+ * -- its invite send resolving go/org's create-operation sentinels
+ * through the same whitelist shape) is rendered through a
+ * reachable-error whitelist, and this suite pins the whitelists to the
+ * server codes themselves.
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
- * these ten surfaces. "Can answer with" is the reachability criterion
+ * these surfaces. "Can answer with" is the reachability criterion
  * the enumeration is audited against, judged from the surfaces' own
  * flows rather than from the Go side's full answerable vocabulary: a
  * code earns an entry when some request one of the ten surfaces' flows
@@ -22,7 +21,7 @@
  * operations the surface invokes, the request shapes its code sends
  * through the typed generated client, and this app's own middleware
  * chain all decide what is reachable. A code no such request can draw
- * stays out, and the boundary rulings are recorded where they fall:
+ * stays out, and the boundary decisions are recorded where they fall:
  * request shapes a flow cannot produce (the notes create form submits
  * typed client output whose text is capped well inside the notes
  * handler's body bound, so the malformed-body answer
@@ -48,7 +47,7 @@
  * seven surfaces' whitelists come from the app's own modules:
  * notes-view for the notes create surface, cases-errors for the cases
  * one, smile-sim-errors for the smile-simulation one, share-errors
- * for both block-C share surfaces, team-view for the team one and
+ * for both share surfaces, team-view for the team one and
  * credits-view for the credits one. Ten per-surface whitelists drawn
  * from nine source modules; the imports below are the complete set.
  * The two directions are asserted separately so a drift names its
@@ -144,23 +143,12 @@ function textOf(bundle: Record<string, unknown>, key: string): string {
  * the code, and the parenthesised line where the sentinel was declared
  * when the annotation was last written. The identifier is the
  * load-bearing half; the line is a human-audit aid only, NOT an
- * assertion. Both halves of that history matter: a citation carrying
- * only a line number cannot be checked without re-opening the Go file,
- * one carrying the identifier can -- which is how the
- * reference-app-web.md P2-1 drift (a sentinel inserted above the authn
- * block shifted 25 of 30 line citations and stayed silent until an
- * audit re-measured them) became visible at all. But once the suite
- * began asserting the annotated line mechanically, every unrelated Go
- * edit that inserted or removed a line above a sentinel reddened it:
- * the retellings that once annotated each block below recorded
- * twenty-odd re-pin episodes, the latest a docs round that never
- * touched behaviour -- 89f3077, docs(jobs) -- moving ErrJobNotFound
- * from go/jobs/job.go:186 to :201 (the jobs-3 round that landed in the
- * same window took the blame; 0eb0644, the round's other real mover,
- * shifted billing's ErrInsufficientCredits and ErrInternal the same
- * three lines). Each re-pin round discovered the further drifted
- * citations only one at a time, since the line check reported the
- * first mismatch in traversal order and stopped.
+ * assertion. A citation carrying only a line number cannot be checked
+ * without re-opening the Go file; one carrying the identifier can --
+ * and a line annotation drifts on every unrelated Go edit that
+ * inserts or removes a line above the sentinel, so asserting it
+ * mechanically would redden the suite on edits that never touched the
+ * sentinel.
  *
  * The deep check below therefore asserts the property worth keeping --
  * the cited FILE declares the identifier exactly once. That still
@@ -168,20 +156,17 @@ function textOf(bundle: Record<string, unknown>, key: string): string {
  * from the file) or when a citation points at the wrong file (the
  * identifier is not declared there), with the code, the file and the
  * identifier named; it no longer fails when a sentinel merely moves
- * within its file. Where the annotation drifts from the re-measured
- * declaration site, the check prints the found line instead -- visible
- * information in the run output for whoever next reads the
- * annotation, never a red. All 73 annotations were re-measured
- * accurate by the re-pin round this change replaces (a6b2be8); none
- * of them is asserted after it.
+ * within its file. Where the annotation drifts from the declaration
+ * site, the check prints the found line instead -- visible information
+ * in the run output for whoever next reads the annotation, never a
+ * red.
  */
 const GO_PINNED: Readonly<Record<string, string>> = {
   // go/authn/errors.go -- the authn module's error sentinels, in current
   // file order (the enumeration carries only the codes these surfaces
   // can be answered with; authn.token_invalid's reachability reasoning
-  // sits with its entry below, and authn.authentication_required --
-  // once cited here -- moved to WHITELISTED_BEYOND_THIS_APP, see its
-  // entry).
+  // sits with its entry below, and authn.authentication_required's
+  // citation lives in WHITELISTED_BEYOND_THIS_APP, see its entry).
   'authn.invalid_credentials': 'go/authn/errors.go:37 (ErrInvalidCredentials)',
   'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
   'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
@@ -230,10 +215,9 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.verification_code_invalid': 'go/authn/errors.go:330 (ErrVerificationCodeInvalid)',
   'authn.mfa_not_enrolled': 'go/authn/errors.go:347 (ErrMFANotEnrolled)',
   'authn.mfa_already_enrolled': 'go/authn/errors.go:351 (ErrMFAAlreadyEnrolled)',
-  // authn.mfa_code_used -- the honest-split round's new sentinel: the
-  // spent-code answer (a code that passed the real check but whose
-  // single-use guard already consumed it) that authn now distinguishes
-  // from the never-valid authn.mfa_invalid_code.
+  // authn.mfa_code_used -- the spent-code answer (a code that passed
+  // the real check but whose single-use guard already consumed it),
+  // distinguished from the never-valid authn.mfa_invalid_code.
   'authn.mfa_invalid_code': 'go/authn/errors.go:369 (ErrMFAInvalidCode)',
   'authn.mfa_code_used': 'go/authn/errors.go:384 (ErrMFACodeUsed)',
   'authn.step_up_required': 'go/authn/errors.go:388 (ErrStepUpRequired)',
@@ -244,15 +228,13 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // examples/reference-app/internal/notes/handler.go -- the notes module
   // handler's own sentinels.
   'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31 (ErrTextRequired)',
-  // The two declarations below sit after the maxRequestBodyBytes constant
-  // block the request-body-cap round added above ErrTextTooLong.
+  // The two declarations below sit after the maxRequestBodyBytes
+  // constant block above ErrTextTooLong.
   'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:80 (ErrTextTooLong)',
   'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:84 (errInternal)',
   // examples/reference-app/internal/cases/service.go -- the cases
-  // domain layer's own sentinels (the block-A round's clinic-wide list
-  // left the code set unchanged: these are the create/read refusals
-  // the cases fragment documents, now reachable text on the cases
-  // surface's routes).
+  // domain layer's own sentinels: the create/read refusals the cases
+  // fragment documents, reachable text on the cases surface's routes.
   'cases.patient_name_required': 'examples/reference-app/internal/cases/service.go:64 (ErrPatientNameRequired)',
   'cases.patient_name_too_long': 'examples/reference-app/internal/cases/service.go:69 (ErrPatientNameTooLong)',
   'cases.photo_object_id_required': 'examples/reference-app/internal/cases/service.go:81 (ErrPhotoObjectIDRequired)',
@@ -263,9 +245,9 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'cases.not_found': 'examples/reference-app/internal/cases/service.go:109 (ErrNotFound)',
   'cases.subject_unresolved': 'examples/reference-app/internal/cases/service.go:122 (ErrSubjectUnresolved)',
   // examples/reference-app/cmd/server/cases_photos.go -- the photo
-  // upload/content route sentinels the block-A round added (surface
-  // orchestration codes; the photo_content_too_large answers both the
-  // upload route and the content route).
+  // upload/content route sentinels (surface orchestration codes; the
+  // photo_content_too_large answers both the upload route and the
+  // content route).
   'cases.photo_content_required': 'examples/reference-app/cmd/server/cases_photos.go:73 (ErrPhotoContentRequired)',
   'cases.photo_content_invalid': 'examples/reference-app/cmd/server/cases_photos.go:78 (ErrPhotoContentInvalid)',
   'cases.photo_content_too_large': 'examples/reference-app/cmd/server/cases_photos.go:85 (ErrPhotoContentTooLarge)',
@@ -280,8 +262,8 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'cases.internal_error': 'examples/reference-app/cmd/server/cases.go:58 (casesErrInternal)',
   'cases.invalid_request_body': 'examples/reference-app/cmd/server/cases.go:66 (casesInvalidRequestBody)',
   // examples/reference-app/internal/smilesim/options.go -- the option
-  // validation sentinels (named declarations the block-B round's web
-  // surface made reachable text for the first time).
+  // validation sentinels (named declarations the surface's option
+  // pickers made reachable text).
   'smilesim.unsupported_smile_style': 'examples/reference-app/internal/smilesim/options.go:154 (ErrUnsupportedSmileStyle)',
   'smilesim.unsupported_tooth_shade': 'examples/reference-app/internal/smilesim/options.go:158 (ErrUnsupportedToothShade)',
   'smilesim.strength_out_of_range': 'examples/reference-app/internal/smilesim/options.go:162 (ErrStrengthOutOfRange)',
@@ -289,7 +271,7 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // surface's handler-level sentinels (the internal envelope, the
   // simulate route's request-shape refusals, the recipient gate, the
   // poll/content routes' not-found answers and the simulation-content
-  // route's refusals the block-B round added).
+  // route's refusals).
   'smilesim.internal_error': 'examples/reference-app/cmd/server/smilesim.go:55 (smileSimErrInternal)',
   'smilesim.invalid_request_body': 'examples/reference-app/cmd/server/smilesim.go:66 (smilesimErrInvalidRequestBody)',
   'smilesim.photo_object_id_required': 'examples/reference-app/cmd/server/smilesim.go:70 (smilesimErrPhotoObjectIDRequired)',
@@ -304,20 +286,20 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // answers when the tenant's balance cannot cover one generation.
   'billing.insufficient_credits': 'go/billing/errors.go:73 (ErrInsufficientCredits)',
   // go/billing/errors.go -- the handler-level envelope the credits
-  // surface's two GETs fold an unclassifiable failure into (the block-D
-  // round's own surface addition; billing.invalid_limit and
-  // billing.invalid_request stay out of the enumeration because the
-  // credits view never sends a limit -- the server's default window is
-  // the read it needs -- so neither 400 is reachable on this surface).
+  // surface's two GETs fold an unclassifiable failure into.
+  // billing.invalid_limit and billing.invalid_request stay out of the
+  // enumeration because the credits view never sends a limit -- the
+  // server's default window is the read it needs -- so neither 400 is
+  // reachable on this surface.
   'billing.internal_error': 'go/billing/errors.go:174 (ErrInternal)',
   // go/ai-gateway/errors.go -- the entitlement-gate refusal a simulate
   // answers for a tenant whose subscription lacks the image model.
   'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:42 (ErrEntitlementDenied)',
   // go/sharing/errors.go and go/sharing/ratelimit.go -- the sharing
-  // module's sentinels the block-C round's two surfaces made reachable
-  // text (the clinic share action's POST /api/v1/sharing/shares can be
-  // answered with the create rate limit and the internal envelope; the
-  // patient page's GET /api/v1/sharing/access can be answered with the
+  // module's sentinels the two share surfaces made reachable text (the
+  // clinic share action's POST /api/v1/sharing/shares can be answered
+  // with the create rate limit and the internal envelope; the patient
+  // page's GET /api/v1/sharing/access can be answered with the
   // outward-identical not-accessible refusal, the per-IP/per-token rate
   // limit, the granted-but-unopenable 502 and the internal envelope.
   // The route-level rbac answer the share action can draw is the
@@ -327,15 +309,15 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'sharing.resource_unavailable': 'go/sharing/errors.go:111 (ErrResourceUnavailable)',
   'sharing.rate_limited': 'go/sharing/ratelimit.go:79 (ErrRateLimited)',
   // go/org/errors.go -- the org-module sentinels the team surface's
-  // invite send and its reads can be answered with (the add-a-colleague
-  // round's own addition). org.invalid_email is the create's address
-  // refusal (an address the caller typed), org.node_not_found the
-  // create's answer for a binding target that went stale under the
-  // form, org.invitation_rate_limited and org.invitations_disabled the
-  // two invitation gates, org.internal_error the envelope every
-  // unclassifiable org failure folds into -- and the route-level rbac
-  // answer the surface's reads and its send can draw is the
-  // already-pinned rbac.permission_denied above (go/rbac/errors.go:56).
+  // invite send and its reads can be answered with. org.invalid_email
+  // is the create's address refusal (an address the caller typed),
+  // org.node_not_found the create's answer for a binding target that
+  // went stale under the form, org.invitation_rate_limited and
+  // org.invitations_disabled the two invitation gates, org.internal_error
+  // the envelope every unclassifiable org failure folds into -- and the
+  // route-level rbac answer the surface's reads and its send can draw
+  // is the already-pinned rbac.permission_denied above
+  // (go/rbac/errors.go:56).
   'org.invalid_email': 'go/org/errors.go:222 (ErrInvalidEmail)',
   'org.invitation_rate_limited': 'go/org/errors.go:215 (ErrInvitationRateLimited)',
   'org.invitations_disabled': 'go/org/errors.go:226 (ErrInvitationsDisabled)',
@@ -362,10 +344,9 @@ const WHITELISTED_BEYOND_THIS_APP: Readonly<Record<string, string>> = {
     'identity.go, SocialCallback\'s gate, which runs before any identity analysis) ' +
     'with authn.channel_disabled. The code therefore has no in-app answer.',
   // go/authn/errors.go:93 (ErrAuthenticationRequired) -- the sentinel
-  // citation moved here with the code when composed-stack verification
-  // overturned its in-app reachability (see the token_invalid citation
-  // above for who writes each and why the switch route cannot draw the
-  // no-credential answer).
+  // citation sits here because the composed stack cannot answer with
+  // the code (see the token_invalid citation above for who writes each
+  // and why the switch route cannot draw the no-credential answer).
   'authn.authentication_required':
     'tenancy-ui whitelists the token-verification answers of authn\'s per-operation ' +
     'and per-route guards, and any host whose guard mounts without a preceding ' +
@@ -455,10 +436,9 @@ describe('reachable-error whitelists vs the server code set', () => {
     // suite with the code, the file and the identifier named. The line
     // number is deliberately not asserted -- an unrelated Go edit that
     // merely moves a sentinel inside its file must not redden the
-    // suite (the re-pin episodes the GO_PINNED doc comment recounts
-    // all began that way); the re-measured declaration line is printed
-    // instead whenever it differs from the citation's annotation, so a
-    // drift is visible information in the run output, never a red.
+    // suite; the re-measured declaration line is printed instead
+    // whenever it differs from the citation's annotation, so a drift
+    // is visible information in the run output, never a red.
     // The files are read relative to this test file (the app lives at
     // examples/reference-app/web, four levels under the repository
     // root, and the citations are repository-root-relative paths).
@@ -537,45 +517,18 @@ describe('reachable-error whitelists vs the server code set', () => {
   })
 
   it('keeps the hand-maintained enumeration at its audited size', () => {
-    // 35 authn sentinels (the 34 of the previous audit -- the 33 of
-    // the audit before plus authn.token_invalid, the middleware-era
-    // addition that stayed -- plus this round's authn.mfa_code_used,
-    // the honest-split spent-code answer; the other middleware-era
-    // addition, authn.authentication_required, has already left
-    // GO_PINNED again: composed-stack verification overturned its
-    // in-app reachability, and its citation now lives in
-    // WHITELISTED_BEYOND_THIS_APP with the reasoning) +
-    // rbac.permission_denied + the three notes sentinels + the
-    // sixteen cases sentinels the block-A round's cases surface added
-    // (nine domain codes in internal/cases/service.go, five photo
-    // route codes in cmd/server/cases_photos.go, and the two
-    // handler-level envelopes in cmd/server/cases.go) + the thirteen
-    // smile-simulation sentinels the block-B round's web surface added
-    // (seven app-side handler sentinels in cmd/server/smilesim.go, the
-    // three option-validation sentinels in internal/smilesim/options.go
-    // that round named, and the three gateway/queue sentinels a
-    // simulate call can surface from go/jobs, go/billing and
-    // go/ai-gateway) + the four sharing sentinels the block-C round's
-    // two surfaces added (three in go/sharing/errors.go and the
-    // creation/access rate-limit sentinel in go/sharing/ratelimit.go) +
-    // billing.internal_error, the one handler-level envelope the
-    // block-D round's credits surface can be answered with + the five
-    // org-module sentinels in go/org/errors.go the add-a-colleague
-    // round's team surface added (its invite send can draw the address
-    // refusal, the node gone stale and the two invitation gates, and
-    // its reads and send fold an unclassifiable failure into the
-    // internal envelope; org's other codes, which no operation this
-    // surface calls can answer with, stay out of the enumeration
-    // exactly as billing.invalid_limit does). The
-    // size guard makes a GO_PINNED edit (in either direction) fail
-    // loudly here rather than silently through the subset assertions
-    // below.
+    // The audited total is asserted below; the enumeration's per-module
+    // composition is readable from the citations above, and the suite's
+    // two directions keep it honest. The size guard makes a GO_PINNED
+    // edit (in either direction) fail loudly here rather than silently
+    // through the subset assertions below.
     expect(Object.keys(GO_PINNED)).toHaveLength(78)
   })
 
   it('renders a bilingual text for every reachable smile-simulation code', () => {
-    // Regression (c) of the block-B gate: a code this surface can be
-    // answered with must resolve to HUMAN text in both languages --
+    // The bilingual-text leg of the smile-simulation whitelist: a code
+    // this surface can be answered with must resolve to HUMAN text in
+    // both languages --
     // never a missing key that would render a raw code. The whitelist
     // itself is pinned to the server sentinels by the directions above;
     // this test pins the other half, that every whitelisted code's text
@@ -600,8 +553,9 @@ describe('reachable-error whitelists vs the server code set', () => {
   })
 
   it('renders a bilingual text for every reachable share-action code', () => {
-    // Regression (c) of the block-C gate, the clinic half: a code the
-    // case page's share action can be answered with must resolve to
+    // The bilingual-text leg of the share whitelist, the clinic half:
+    // a code the case page's share action can be answered with must
+    // resolve to
     // HUMAN text in both languages -- the rbac gate's denial, the
     // module's creation rate limit and the internal envelope included
     // -- never a raw key and never another language's text.
@@ -623,12 +577,13 @@ describe('reachable-error whitelists vs the server code set', () => {
   })
 
   it('renders a bilingual text for every reachable patient-page code', () => {
-    // Regression (c) of the block-C gate, the patient half: a code the
-    // share page can be answered with must resolve to HUMAN text in
-    // both languages -- the outward-identical not-accessible refusal
-    // (expired and revoked alike, per the module's rule 5), the rate
-    // limit, the granted-but-unopenable 502 and the internal envelope
-    // -- never a raw key and never another language's text.
+    // The bilingual-text leg of the share whitelist, the patient half:
+    // a code the share page can be answered with must resolve to HUMAN
+    // text in both languages -- the outward-identical not-accessible
+    // refusal (expired and revoked alike, the outward answers being
+    // identical for every refusal reason), the rate limit, the
+    // granted-but-unopenable 502 and the internal envelope -- never a
+    // raw key and never another language's text.
     const unknownEn = textOf(enUS, 'shareView.errors.unknown')
     const unknownZh = textOf(zhCN, 'shareView.errors.unknown')
     expect(unknownEn).not.toBe('')
@@ -647,12 +602,11 @@ describe('reachable-error whitelists vs the server code set', () => {
   })
 
   it('renders a bilingual text for every reachable team-surface code', () => {
-    // The add-a-colleague round's own leg of the same regression: a
-    // code the team surface's invite send can be answered with must
-    // resolve to HUMAN text in both languages -- the rbac gate's
-    // denial, go/org's create-operation refusals and the internal
-    // envelope included -- never a raw key and never another
-    // language's text.
+    // The bilingual-text leg of the team whitelist: a code the team
+    // surface's invite send can be answered with must resolve to HUMAN
+    // text in both languages -- the rbac gate's denial, go/org's
+    // create-operation refusals and the internal envelope included --
+    // never a raw key and never another language's text.
     const unknownEn = textOf(enUS, 'team.invite.errors.unknown')
     const unknownZh = textOf(zhCN, 'team.invite.errors.unknown')
     expect(unknownEn).not.toBe('')
