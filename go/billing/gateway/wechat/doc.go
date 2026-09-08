@@ -61,9 +61,31 @@
 // unit-tested against a scripted httpDoer double that asserts the exact
 // signed request this package sends and returns a canned response -- proof
 // the request/response shapes and the outgoing signature are correct,
-// never proof against WeChat Pay's real, live API. No integration tier
-// exists (see go/billing/gateway/AGENTS.md's Known limitations): WeChat
-// Pay's sandbox requires a registered merchant account this repository
-// does not hold today. Real verification against WeChat Pay's sandbox or
-// production environment has not been performed as part of this round.
+// never proof against WeChat Pay's real, live API.
+//
+// # No sandbox exists for what this package implements
+//
+// The sandbox round investigated WeChat Pay's test environments and found
+// none for this package's API surface, so -- unlike stripe (stripe-mock
+// tier) and alipay (env-gated sandbox leg) -- wechat ships no integration
+// leg, and the boundary is recorded here rather than papered over. The
+// evidence is WeChat Pay's own merchant documentation, the "Payment
+// acceptance guide -- common rules" (pay.wechatpay.cn/doc/v2/merchant/
+// 4011984810, under the product docs' V2 section): the simulation system
+// it describes is a V2-API environment -- a request reaches it by
+// inserting an xdc/apiv2sandbox path segment into the V2 host; it
+// supports only the micropay product's success/abnormal test cases (the
+// order-creation APIs, unifiedorder and the like, are explicitly not
+// supported there); its abnormal cases are triggered by a request header
+// (Wechatpay-Negative-Test); and even it requires a real merchant
+// sign-in and a dedicated sandbox signing key fetched through
+// xdc/apiv2getsignkey. This package implements APIv3 -- POST
+// /v3/pay/transactions/native and friends under WECHATPAY2-SHA256-RSA2048
+// -- which no WeChat Pay sandbox or simulation environment covers: there
+// is no APIv3 sandbox host, no sandbox certificate/key material to
+// configure, and nothing a merchant can do short of operating a real,
+// registered merchant account with a real (small-amount) payment. Real
+// verification against WeChat Pay's production environment therefore has
+// not been performed as of the sandbox round, and cannot be without a
+// registered merchant account.
 package wechat

@@ -42,10 +42,27 @@
 // httpDoer double that asserts the exact signed form body this package
 // sends and returns a canned response -- proof the request/response shapes
 // and the outgoing RSA2 signature are correct, never proof against
-// Alipay's real, live open platform. No integration tier exists (see
-// go/billing/gateway/AGENTS.md's Known limitations): Alipay's sandbox
-// requires a registered application and merchant credentials this
-// repository does not hold today. Real verification against Alipay's
-// sandbox or production environment has not been performed as part of this
-// round.
+// Alipay's real, live open platform.
+//
+// Since the sandbox round, an integration tier (integration_test/,
+// -tags=integration) carries one env-gated leg against Alipay's genuine
+// sandbox environment (open.alipaydev.com): Alipay does operate a real
+// sandbox -- its FACE_TO_FACE_PAYMENT product is sandbox-testable per
+// opendocs.alipay.com/support/01rbcw, at the fixed sandbox gateway
+// https://openapi-sandbox.dl.alipaydev.com/gateway.do -- and unlike
+// stripe-mock it is a real Ant-hosted gateway that authenticates every
+// request against a real sandbox application, so the leg is gated on that
+// application's own credentials, injected through environment variables
+// (ALIPAY_SANDBOX_APP_ID, ALIPAY_SANDBOX_APP_PRIVATE_KEY,
+// ALIPAY_SANDBOX_ALIPAY_PUBLIC_KEY); without them the leg self-skips with
+// an explicit recorded note. When it runs, both directions of the
+// signature dialogue are proven against Alipay's own gateway: this
+// package's RSA2 request signature is accepted, and a genuinely
+// Alipay-signed response envelope (verified against the real sandbox
+// public key) is accepted back. What still cannot be driven server-side:
+// paying the created order (the sandbox payment client is Android-only),
+// so the order stays at WAIT_BUYER_PAY and the asynchronously-notified
+// post-payment half remains on the untestable boundary go/billing/gateway/
+// AGENTS.md records. Real verification against Alipay's production
+// environment has not been performed as of the sandbox round.
 package alipay

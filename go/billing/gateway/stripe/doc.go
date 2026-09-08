@@ -44,10 +44,24 @@
 // exercised in this package's own unit tests against a scripted
 // stripe.Backend double that asserts the exact HTTP method/path/params this
 // package sends and returns a canned response -- proof the request/response
-// shapes are correct, never proof against Stripe's real, live API. No
-// integration tier exists (see go/billing/gateway/AGENTS.md's Known
-// limitations): Stripe's own published Go SDK test suite already needs a
-// live test-mode account, and this repository ships no sandbox credentials
-// today. Real verification against a live Stripe test-mode account has not
-// been performed as part of this round.
+// shapes are correct, never proof against Stripe's real, live API.
+//
+// Since the sandbox round, an integration tier (integration_test/,
+// -tags=integration, Docker-backed) drives the REAL HTTP dialogue -- the
+// production NewGateway construction path over stripe-go's genuine HTTP
+// backend -- against stripe/stripe-mock, the official Stripe mock server
+// Stripe itself publishes (credential-free; any key shaped like a test-mode
+// key -- sk_test_ plus alphanumerics -- is accepted). CreateCharge's POST
+// /v1/checkout/sessions and QueryStatus's
+// GET /v1/checkout/sessions/{id}?expand[]=subscription run against a server
+// that validates requests against the same OpenAPI-derived schema Stripe's
+// real API enforces, so a wire-format defect that the scripted double could
+// never notice fails the tier with the mock's own error envelope; a real-HTTP
+// webhook-delivery leg proves the receiving path end to end (stripe-mock
+// itself cannot sign deliveries -- verified in its source -- so the
+// signature there is SDK-generated). What still requires a live test-mode
+// account: a session completed by a real payer, a delivery actually signed
+// by Stripe's own servers, and Stripe's genuine error taxonomy on a live
+// account. Real verification against a live Stripe test-mode account has
+// not been performed as of the sandbox round.
 package stripe
