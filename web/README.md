@@ -62,7 +62,11 @@ web/
     product-shell/      @speed/product-shell -- the tenant-facing assembly shell: ProductShell
                                              composes the AppShell frame, the sign-in family
                                              and the session hooks into one three-branch view
-                                             machine with zero text of its own
+                                             machine, and renders one string of its own:
+                                             the session-ended announcement under
+                                             announcements.sessionEnded, from its own
+                                             bilingual product-shell namespace (a zh-CN
+                                             twin under the same key)
 ```
 
 Root `package.json` holds only what every package shares (typescript,
