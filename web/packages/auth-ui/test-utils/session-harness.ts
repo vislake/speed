@@ -108,7 +108,11 @@ export function makeHarness(script: Script = {}): Harness {
     const method = options?.method ?? 'GET'
     const key = `${method} ${path}`
     calls.push({ method, path, options })
-    const handler = script[key]
+    // Read the handler only when the key is an own property of the
+    // script object: a prototype-chain key such as 'constructor' or
+    // 'toString' must take the same missing-handler path as any other
+    // unknown key, never dispatch onto an inherited function.
+    const handler = Object.hasOwn(script, key) ? script[key] : undefined
     if (handler === undefined) {
       throw new Error(`no scripted handler for ${key}`)
     }
