@@ -101,6 +101,7 @@ against this file (docs-check.yml runs it next to --check).
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -606,6 +607,62 @@ def code_counts(entries: list[ErrorEntry]) -> tuple[int, int, int]:
     return n_sites, n_codes, n_sites - n_codes
 
 
+def winning_rows(entries: list[ErrorEntry]) -> list[ErrorEntry]:
+    """One row per code, the same collapse render_markdown applies: a
+    named declaration's row wins over an inline site's row for the same
+    code (the declaration carries the code's own doc comment), and
+    among equal kinds the earliest source wins. The machine-readable
+    output and the Markdown table must agree row for row, so both are
+    derived from this one collapse."""
+    by_module: dict[str, list[ErrorEntry]] = {}
+    for e in entries:
+        by_module.setdefault(e.module, []).append(e)
+    winners: list[ErrorEntry] = []
+    for module in by_module:
+        seen_codes: set[str] = set()
+        ranked = sorted(
+            by_module[module],
+            key=lambda e: (e.code, 0 if e.kind == "declared" else 1, e.source),
+        )
+        for e in ranked:
+            if e.code in seen_codes:
+                continue
+            seen_codes.add(e.code)
+            winners.append(e)
+    return winners
+
+
+def render_machine_json(entries: list[ErrorEntry]) -> str:
+    """The machine-readable twin of the Markdown table, one row per
+    code with the same collapse (winning_rows). Each row carries the
+    code's construction site as file and line separately (the Markdown
+    Source column's "file:line" split), the bound identifier when the
+    construction binds one, and the kind. This is the artifact the
+    reference-app shell's codes-alignment suite reads back to verify
+    its hand-maintained server-code enumeration against the extracted
+    census (examples/reference-app/web/src/codes-alignment.test.ts)."""
+    rows = [
+        {
+            "code": e.code,
+            "module": e.module,
+            "status": e.status,
+            "file": e.source.rsplit(":", 1)[0],
+            "line": int(e.source.rsplit(":", 1)[1]),
+            "ident": e.ident,
+            "kind": e.kind,
+        }
+        for e in sorted(winning_rows(entries), key=lambda e: e.code)
+    ]
+    return json.dumps(
+        {
+            "generated_by": "tools/gen_error_code_index.py",
+            "rows": rows,
+        },
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+
+
 def render_markdown(entries: list[ErrorEntry]) -> str:
     lines = [
         "# Error code index",
@@ -642,11 +699,14 @@ def render_markdown(entries: list[ErrorEntry]) -> str:
         " its enclosing function's doc comment, verbatim.",
         "",
     ]
-    # One row per code; a named declaration's row wins over an inline
-    # site's row for the same code (the declaration carries the code's own
-    # doc comment), and among equal kinds the earliest source wins.
+    # One row per code, the same collapse the machine-readable twin
+    # derives from (winning_rows): a named declaration's row wins over
+    # an inline site's row for the same code (the declaration carries
+    # the code's own doc comment), and among equal kinds the earliest
+    # source wins. The table and docs/error-codes.json must agree row
+    # for row, so both are built from the one collapse.
     by_module: dict[str, list[ErrorEntry]] = {}
-    for e in entries:
+    for e in winning_rows(entries):
         by_module.setdefault(e.module, []).append(e)
 
     for module in sorted(by_module):
@@ -654,20 +714,7 @@ def render_markdown(entries: list[ErrorEntry]) -> str:
         lines.append("")
         lines.append("| Code | Status | Message | Triggering condition | Source |")
         lines.append("|---|---|---|---|---|")
-        seen_codes: set[str] = set()
-        ranked = sorted(
-            by_module[module],
-            key=lambda e: (e.code, 0 if e.kind == "declared" else 1, e.source),
-        )
-        for e in ranked:
-            if e.code in seen_codes:
-                # The same code constructed more than once (a rare,
-                # deliberate re-export, an inline code built at several
-                # sites, or a code with both a declaration and inline
-                # uses) -- keep the winning row only, so the index stays
-                # one row per code rather than duplicating it.
-                continue
-            seen_codes.add(e.code)
+        for e in by_module[module]:
             # The entryless marker must not assert a class: the header
             # paragraph above defines the two entryless shapes (a boot-time
             # wiring refusal that never reaches an end user, and a
@@ -702,7 +749,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--roots", nargs="+", default=["go", "examples"], help="Directories to scan for *.go files (relative to the repo root).")
     parser.add_argument("--out", default="docs/error-codes.md", help="Output Markdown file (relative to the repo root).")
-    parser.add_argument("--check", action="store_true", help="Exit nonzero if --out is not already up to date, instead of writing it.")
+    parser.add_argument("--machine-out", default="docs/error-codes.json", help="Output machine-readable JSON file, the row-for-row twin of the Markdown table (relative to the repo root).")
+    parser.add_argument("--check", action="store_true", help="Exit nonzero if the outputs are not already up to date, instead of writing them.")
     args = parser.parse_args()
 
     repo_root = pathlib.Path(__file__).resolve().parent.parent
@@ -715,25 +763,35 @@ def main() -> int:
         e.message = messages.get(e.code, "")
 
     rendered = render_markdown(entries)
+    rendered_json = render_machine_json(entries)
     out_path = repo_root / args.out
+    machine_path = repo_root / args.machine_out
 
     n_sites, n_codes, n_dups = code_counts(entries)
 
     if args.check:
         current = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
-        if current != rendered:
-            print(f"{args.out} is out of date; run: python3 tools/gen_error_code_index.py", file=sys.stderr)
+        current_json = machine_path.read_text(encoding="utf-8") if machine_path.exists() else ""
+        if current != rendered or current_json != rendered_json:
+            print(
+                f"{args.out} (or {args.machine_out}) is out of date; run: "
+                "python3 tools/gen_error_code_index.py",
+                file=sys.stderr,
+            )
             return 1
         print(
-            f"{args.out} is up to date ({n_sites} construction sites, {n_codes} "
-            f"codes, {n_dups} duplicate site(s) removed)."
+            f"{args.out} and {args.machine_out} are up to date "
+            f"({n_sites} construction sites, {n_codes} codes, "
+            f"{n_dups} duplicate site(s) removed)."
         )
         return 0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(rendered, encoding="utf-8")
+    machine_path.write_text(rendered_json, encoding="utf-8")
     print(
-        f"wrote {args.out} ({n_sites} construction sites, {n_codes} codes, "
+        f"wrote {args.out} and {args.machine_out} "
+        f"({n_sites} construction sites, {n_codes} codes, "
         f"{n_dups} duplicate site(s) removed, across "
         f"{len(set(e.module for e in entries))} modules)"
     )

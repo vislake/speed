@@ -11,6 +11,7 @@ directory, no network. Run directly:
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import tempfile
@@ -497,6 +498,55 @@ class RenderMarkdownTests(unittest.TestCase):
         ]
         self.assertEqual(m.code_counts(entries), (4, 3, 1))
         self.assertEqual(m.code_counts([]), (0, 0, 0))
+
+
+class MachineOutputTests(unittest.TestCase):
+    """The docs/error-codes.json twin the reference-app shell's
+    codes-alignment suite reads back: one row per code with the SAME
+    collapse as the Markdown table, file/line split, ident and kind
+    carried per row."""
+
+    def _entries(self):
+        return [
+            m.ErrorEntry(ident="ErrA", code="foo.a", status=400, source="a.go:1", doc="doc a"),
+            m.ErrorEntry(ident="ErrA2", code="foo.a", status=400, source="a2.go:1", doc="doc a again"),
+            m.ErrorEntry(ident="", code="foo.a", status=400, source="queue.go:1", doc="", kind="inline"),
+            m.ErrorEntry(ident="ErrB", code="bar.b", status=404, source="b.go:1", doc="doc b"),
+        ]
+
+    def test_machine_json_mirrors_markdown_collapse(self):
+        # The declared ErrA row wins over its inline twin, exactly as
+        # the table renders it; both artifacts derive from winning_rows.
+        entries = self._entries()
+        rows = json.loads(m.render_machine_json(entries))["rows"]
+        self.assertEqual([r["code"] for r in rows], ["bar.b", "foo.a"])
+        foo = [r for r in rows if r["code"] == "foo.a"][0]
+        self.assertEqual(foo["file"], "a.go")
+        self.assertEqual(foo["line"], 1)
+        self.assertEqual(foo["ident"], "ErrA")
+        self.assertEqual(foo["kind"], "declared")
+
+    def test_machine_json_is_valid_json_with_expected_keys(self):
+        entries = self._entries()
+        data = json.loads(m.render_machine_json(entries))
+        self.assertEqual(data["generated_by"], "tools/gen_error_code_index.py")
+        row = data["rows"][0]
+        for key in ("code", "module", "status", "file", "line", "ident", "kind"):
+            self.assertIn(key, row)
+
+    def test_winning_rows_prefers_declared_over_inline_earliest_source(self):
+        entries = self._entries()
+        winners = m.winning_rows(entries)
+        self.assertEqual([e.code for e in winners], ["foo.a", "bar.b"])
+
+    def test_inline_source_splits_into_file_and_line(self):
+        entries = [
+            m.ErrorEntry(ident="", code="foo.inline", status=500, source="go/x/queue.go:77", kind="inline"),
+        ]
+        rows = json.loads(m.render_machine_json(entries))["rows"]
+        self.assertEqual(rows[0]["file"], "go/x/queue.go")
+        self.assertEqual(rows[0]["line"], 77)
+        self.assertEqual(rows[0]["ident"], "")
 
 
 if __name__ == "__main__":

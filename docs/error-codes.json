@@ -1,0 +1,3470 @@
+{
+  "generated_by": "tools/gen_error_code_index.py",
+  "rows": [
+    {
+      "code": "admin.authn_service_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrAuthnServiceRequired",
+      "kind": "declared",
+      "line": 120,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.compliance_module_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrComplianceModuleRequired",
+      "kind": "declared",
+      "line": 130,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.export_operator_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrExportOperatorRequired",
+      "kind": "declared",
+      "line": 201,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.impersonation_grant_ended",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationGrantEnded",
+      "kind": "declared",
+      "line": 82,
+      "module": "admin",
+      "status": 409
+    },
+    {
+      "code": "admin.impersonation_grant_not_found",
+      "file": "go/admin/errors.go",
+      "ident": "ErrGrantNotFound",
+      "kind": "declared",
+      "line": 42,
+      "module": "admin",
+      "status": 404
+    },
+    {
+      "code": "admin.impersonation_not_wired",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationNotWired",
+      "kind": "declared",
+      "line": 245,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.impersonation_notification_unavailable",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationNotificationUnavailable",
+      "kind": "declared",
+      "line": 100,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.impersonation_reason_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationReasonRequired",
+      "kind": "declared",
+      "line": 47,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.impersonation_self_not_allowed",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationSelfNotAllowed",
+      "kind": "declared",
+      "line": 58,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.impersonation_target_forbidden",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationTargetForbidden",
+      "kind": "declared",
+      "line": 77,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.impersonation_target_not_found",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationTargetNotFound",
+      "kind": "declared",
+      "line": 89,
+      "module": "admin",
+      "status": 404
+    },
+    {
+      "code": "admin.impersonation_target_not_member",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationTargetNotMember",
+      "kind": "declared",
+      "line": 223,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.impersonation_target_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationTargetRequired",
+      "kind": "declared",
+      "line": 51,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.impersonation_target_validation_unavailable",
+      "file": "go/admin/errors.go",
+      "ident": "ErrImpersonationTargetValidationUnavailable",
+      "kind": "declared",
+      "line": 232,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.internal",
+      "file": "go/admin/handler.go",
+      "ident": "errInternal",
+      "kind": "declared",
+      "line": 25,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.notification_module_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrNotificationModuleRequired",
+      "kind": "declared",
+      "line": 136,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.org_module_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrOrgModuleRequired",
+      "kind": "declared",
+      "line": 125,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.principal_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrPrincipalRequired",
+      "kind": "declared",
+      "line": 108,
+      "module": "admin",
+      "status": 401
+    },
+    {
+      "code": "admin.queue_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrQueueRequired",
+      "kind": "declared",
+      "line": 142,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.rbac_service_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrRBACServiceRequired",
+      "kind": "declared",
+      "line": 159,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "admin.request_body_invalid",
+      "file": "go/admin/errors.go",
+      "ident": "ErrRequestBodyInvalid",
+      "kind": "declared",
+      "line": 215,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.roles_system_domain_forbidden",
+      "file": "go/admin/errors.go",
+      "ident": "ErrRolesSystemDomainForbidden",
+      "kind": "declared",
+      "line": 183,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.tenant_already_exists",
+      "file": "go/admin/errors.go",
+      "ident": "ErrTenantAlreadyExists",
+      "kind": "declared",
+      "line": 23,
+      "module": "admin",
+      "status": 409
+    },
+    {
+      "code": "admin.tenant_concurrent_update",
+      "file": "go/admin/errors.go",
+      "ident": "ErrTenantConcurrentUpdate",
+      "kind": "declared",
+      "line": 254,
+      "module": "admin",
+      "status": 409
+    },
+    {
+      "code": "admin.tenant_id_required",
+      "file": "go/admin/errors.go",
+      "ident": "ErrTenantIDRequired",
+      "kind": "declared",
+      "line": 27,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.tenant_not_found",
+      "file": "go/admin/errors.go",
+      "ident": "ErrTenantNotFound",
+      "kind": "declared",
+      "line": 17,
+      "module": "admin",
+      "status": 404
+    },
+    {
+      "code": "admin.tenant_status_invalid",
+      "file": "go/admin/errors.go",
+      "ident": "ErrTenantStatusInvalid",
+      "kind": "declared",
+      "line": 38,
+      "module": "admin",
+      "status": 400
+    },
+    {
+      "code": "admin.usage_modules_not_wired",
+      "file": "go/admin/errors.go",
+      "ident": "ErrUsageModulesNotWired",
+      "kind": "declared",
+      "line": 191,
+      "module": "admin",
+      "status": 500
+    },
+    {
+      "code": "aigateway.base_url_blocked",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrBaseURLBlocked",
+      "kind": "declared",
+      "line": 118,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.base_url_invalid",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrBaseURLInvalid",
+      "kind": "declared",
+      "line": 82,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.base_url_unresolvable",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrBaseURLUnresolvable",
+      "kind": "declared",
+      "line": 87,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.credential_not_found",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrCredentialNotFound",
+      "kind": "declared",
+      "line": 55,
+      "module": "aigateway",
+      "status": 404
+    },
+    {
+      "code": "aigateway.credential_required",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrCredentialRequired",
+      "kind": "declared",
+      "line": 60,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.empty_messages",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrEmptyMessages",
+      "kind": "declared",
+      "line": 32,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.empty_model",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrEmptyModel",
+      "kind": "declared",
+      "line": 28,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.empty_prompt",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrEmptyPrompt",
+      "kind": "declared",
+      "line": 173,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.entitlement_denied",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrEntitlementDenied",
+      "kind": "declared",
+      "line": 42,
+      "module": "aigateway",
+      "status": 403
+    },
+    {
+      "code": "aigateway.image_generation_unavailable",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageGenerationUnavailable",
+      "kind": "declared",
+      "line": 199,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.image_input_not_allowed",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageInputNotAllowed",
+      "kind": "declared",
+      "line": 193,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.image_input_required",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageInputRequired",
+      "kind": "declared",
+      "line": 181,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.image_job_claim_in_flight",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageJobClaimInFlight",
+      "kind": "declared",
+      "line": 235,
+      "module": "aigateway",
+      "status": 409
+    },
+    {
+      "code": "aigateway.image_mask_required",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageMaskRequired",
+      "kind": "declared",
+      "line": 185,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.image_object_unavailable",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageObjectUnavailable",
+      "kind": "declared",
+      "line": 214,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.image_output_write_failed",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageOutputWriteFailed",
+      "kind": "declared",
+      "line": 219,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.image_requires_tenant",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrImageRequiresTenant",
+      "kind": "declared",
+      "line": 207,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.internal_error",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 260,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.invalid_image_operation",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrInvalidImageOperation",
+      "kind": "declared",
+      "line": 177,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.multiple_image_results",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrMultipleImageResults",
+      "kind": "declared",
+      "line": 250,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.provider_config_invalid",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrProviderConfigInvalid",
+      "kind": "declared",
+      "line": 146,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.provider_not_ssrf_guardable",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrProviderNotSSRFGuardable",
+      "kind": "declared",
+      "line": 169,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.provider_request_failed",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrProviderRequestFailed",
+      "kind": "declared",
+      "line": 124,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.provider_response_invalid",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrProviderResponseInvalid",
+      "kind": "declared",
+      "line": 129,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.rate_limit_check_failed",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrRateLimitCheckFailed",
+      "kind": "declared",
+      "line": 51,
+      "module": "aigateway",
+      "status": 500
+    },
+    {
+      "code": "aigateway.rate_limited",
+      "file": "go/ai-gateway/ratelimit.go",
+      "ident": "ErrRateLimited",
+      "kind": "declared",
+      "line": 69,
+      "module": "aigateway",
+      "status": 429
+    },
+    {
+      "code": "aigateway.system_scope_requires_system_context",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrSystemScopeRequiresSystemContext",
+      "kind": "declared",
+      "line": 75,
+      "module": "aigateway",
+      "status": 403
+    },
+    {
+      "code": "aigateway.tenant_scope_requires_tenant",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrTenantScopeRequiresTenant",
+      "kind": "declared",
+      "line": 67,
+      "module": "aigateway",
+      "status": 400
+    },
+    {
+      "code": "aigateway.unrouted_model",
+      "file": "go/ai-gateway/errors.go",
+      "ident": "ErrUnroutedModel",
+      "kind": "declared",
+      "line": 37,
+      "module": "aigateway",
+      "status": 404
+    },
+    {
+      "code": "authn.account_locked",
+      "file": "go/authn/errors.go",
+      "ident": "ErrAccountLocked",
+      "kind": "declared",
+      "line": 303,
+      "module": "authn",
+      "status": 429
+    },
+    {
+      "code": "authn.authentication_required",
+      "file": "go/authn/errors.go",
+      "ident": "ErrAuthenticationRequired",
+      "kind": "declared",
+      "line": 93,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.channel_disabled",
+      "file": "go/authn/errors.go",
+      "ident": "ErrChannelDisabled",
+      "kind": "declared",
+      "line": 313,
+      "module": "authn",
+      "status": 403
+    },
+    {
+      "code": "authn.display_name_too_long",
+      "file": "go/authn/errors.go",
+      "ident": "ErrDisplayNameTooLong",
+      "kind": "declared",
+      "line": 82,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.email_already_registered",
+      "file": "go/authn/errors.go",
+      "ident": "ErrEmailAlreadyRegistered",
+      "kind": "declared",
+      "line": 62,
+      "module": "authn",
+      "status": 409
+    },
+    {
+      "code": "authn.identifier_required",
+      "file": "go/authn/errors.go",
+      "ident": "ErrIdentifierRequired",
+      "kind": "declared",
+      "line": 41,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.identity_already_bound",
+      "file": "go/authn/errors.go",
+      "ident": "ErrIdentityAlreadyBound",
+      "kind": "declared",
+      "line": 220,
+      "module": "authn",
+      "status": 409
+    },
+    {
+      "code": "authn.identity_not_found",
+      "file": "go/authn/errors.go",
+      "ident": "ErrIdentityNotFound",
+      "kind": "declared",
+      "line": 226,
+      "module": "authn",
+      "status": 404
+    },
+    {
+      "code": "authn.identity_requires_binding",
+      "file": "go/authn/errors.go",
+      "ident": "ErrIdentityRequiresBinding",
+      "kind": "declared",
+      "line": 216,
+      "module": "authn",
+      "status": 409
+    },
+    {
+      "code": "authn.internal_error",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 286,
+      "module": "authn",
+      "status": 500
+    },
+    {
+      "code": "authn.invalid_credentials",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInvalidCredentials",
+      "kind": "declared",
+      "line": 37,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.invalid_email",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInvalidEmail",
+      "kind": "declared",
+      "line": 45,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.invalid_phone",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInvalidPhone",
+      "kind": "declared",
+      "line": 49,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.invalid_request_body",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 416,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.last_login_method",
+      "file": "go/authn/errors.go",
+      "ident": "ErrLastLoginMethod",
+      "kind": "declared",
+      "line": 232,
+      "module": "authn",
+      "status": 409
+    },
+    {
+      "code": "authn.mfa_already_enrolled",
+      "file": "go/authn/errors.go",
+      "ident": "ErrMFAAlreadyEnrolled",
+      "kind": "declared",
+      "line": 361,
+      "module": "authn",
+      "status": 409
+    },
+    {
+      "code": "authn.mfa_code_used",
+      "file": "go/authn/errors.go",
+      "ident": "ErrMFACodeUsed",
+      "kind": "declared",
+      "line": 394,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.mfa_invalid_code",
+      "file": "go/authn/errors.go",
+      "ident": "ErrMFAInvalidCode",
+      "kind": "declared",
+      "line": 379,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.mfa_not_enrolled",
+      "file": "go/authn/errors.go",
+      "ident": "ErrMFANotEnrolled",
+      "kind": "declared",
+      "line": 357,
+      "module": "authn",
+      "status": 404
+    },
+    {
+      "code": "authn.oauth_state_invalid",
+      "file": "go/authn/errors.go",
+      "ident": "ErrOAuthStateInvalid",
+      "kind": "declared",
+      "line": 167,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.password_too_long",
+      "file": "go/authn/errors.go",
+      "ident": "ErrPasswordTooLong",
+      "kind": "declared",
+      "line": 72,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.password_too_short",
+      "file": "go/authn/errors.go",
+      "ident": "ErrPasswordTooShort",
+      "kind": "declared",
+      "line": 69,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.password_too_weak",
+      "file": "go/authn/errors.go",
+      "ident": "ErrPasswordTooWeak",
+      "kind": "declared",
+      "line": 86,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.phone_already_registered",
+      "file": "go/authn/errors.go",
+      "ident": "ErrPhoneAlreadyRegistered",
+      "kind": "declared",
+      "line": 66,
+      "module": "authn",
+      "status": 409
+    },
+    {
+      "code": "authn.provider_unknown",
+      "file": "go/authn/errors.go",
+      "ident": "ErrProviderUnknown",
+      "kind": "declared",
+      "line": 176,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.rate_limited",
+      "file": "go/authn/errors.go",
+      "ident": "ErrRateLimited",
+      "kind": "declared",
+      "line": 295,
+      "module": "authn",
+      "status": 429
+    },
+    {
+      "code": "authn.redirect_uri_not_allowed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrRedirectURINotAllowed",
+      "kind": "declared",
+      "line": 171,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.refresh_token_invalid",
+      "file": "go/authn/errors.go",
+      "ident": "ErrRefreshTokenInvalid",
+      "kind": "declared",
+      "line": 113,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.refresh_token_reused",
+      "file": "go/authn/errors.go",
+      "ident": "ErrRefreshTokenReused",
+      "kind": "declared",
+      "line": 119,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.revocation_check_failed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrRevocationCheckFailed",
+      "kind": "declared",
+      "line": 147,
+      "module": "authn",
+      "status": 500
+    },
+    {
+      "code": "authn.search_criteria_required",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSearchCriteriaRequired",
+      "kind": "declared",
+      "line": 58,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.session_not_found",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSessionNotFound",
+      "kind": "declared",
+      "line": 407,
+      "module": "authn",
+      "status": 404
+    },
+    {
+      "code": "authn.session_revoked",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSessionRevoked",
+      "kind": "declared",
+      "line": 109,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.sms_delivery_failed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSMSDeliveryFailed",
+      "kind": "declared",
+      "line": 351,
+      "module": "authn",
+      "status": 500
+    },
+    {
+      "code": "authn.social_exchange_failed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSocialExchangeFailed",
+      "kind": "declared",
+      "line": 183,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.social_identity_incomplete",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSocialIdentityIncomplete",
+      "kind": "declared",
+      "line": 190,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.sso_allowed_domains_too_long",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSOAllowedDomainsTooLong",
+      "kind": "declared",
+      "line": 273,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.sso_client_id_too_long",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSOClientIDTooLong",
+      "kind": "declared",
+      "line": 268,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.sso_domain_not_allowed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSODomainNotAllowed",
+      "kind": "declared",
+      "line": 277,
+      "module": "authn",
+      "status": 403
+    },
+    {
+      "code": "authn.sso_issuer_not_allowed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSOIssuerNotAllowed",
+      "kind": "declared",
+      "line": 242,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.sso_issuer_too_long",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSOIssuerTooLong",
+      "kind": "declared",
+      "line": 264,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.sso_not_configured",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSONotConfigured",
+      "kind": "declared",
+      "line": 236,
+      "module": "authn",
+      "status": 404
+    },
+    {
+      "code": "authn.sso_tenant_id_too_long",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSOTenantIDTooLong",
+      "kind": "declared",
+      "line": 256,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.sso_token_invalid",
+      "file": "go/authn/errors.go",
+      "ident": "ErrSSOTokenInvalid",
+      "kind": "declared",
+      "line": 282,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.step_up_required",
+      "file": "go/authn/errors.go",
+      "ident": "ErrStepUpRequired",
+      "kind": "declared",
+      "line": 398,
+      "module": "authn",
+      "status": 403
+    },
+    {
+      "code": "authn.tenant_membership_required",
+      "file": "go/authn/errors.go",
+      "ident": "ErrTenantMembershipRequired",
+      "kind": "declared",
+      "line": 133,
+      "module": "authn",
+      "status": 403
+    },
+    {
+      "code": "authn.tenant_membership_unavailable",
+      "file": "go/authn/errors.go",
+      "ident": "ErrTenantMembershipUnavailable",
+      "kind": "declared",
+      "line": 141,
+      "module": "authn",
+      "status": 403
+    },
+    {
+      "code": "authn.token_expired",
+      "file": "go/authn/errors.go",
+      "ident": "ErrTokenExpired",
+      "kind": "declared",
+      "line": 105,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.token_invalid",
+      "file": "go/authn/errors.go",
+      "ident": "ErrTokenInvalid",
+      "kind": "declared",
+      "line": 98,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "authn.token_verification_failed",
+      "file": "go/authn/errors.go",
+      "ident": "ErrTokenVerificationFailed",
+      "kind": "declared",
+      "line": 159,
+      "module": "authn",
+      "status": 500
+    },
+    {
+      "code": "authn.verification_code_invalid",
+      "file": "go/authn/errors.go",
+      "ident": "ErrVerificationCodeInvalid",
+      "kind": "declared",
+      "line": 340,
+      "module": "authn",
+      "status": 401
+    },
+    {
+      "code": "billing.channel_reference_not_found",
+      "file": "go/billing/errors.go",
+      "ident": "ErrChannelReferenceNotFound",
+      "kind": "declared",
+      "line": 141,
+      "module": "billing",
+      "status": 404
+    },
+    {
+      "code": "billing.credit_balance_inconsistent",
+      "file": "go/billing/errors.go",
+      "ident": "ErrCreditBalanceInconsistent",
+      "kind": "declared",
+      "line": 121,
+      "module": "billing",
+      "status": 500
+    },
+    {
+      "code": "billing.credit_transaction_already_resolved",
+      "file": "go/billing/errors.go",
+      "ident": "ErrCreditTransactionAlreadyResolved",
+      "kind": "declared",
+      "line": 111,
+      "module": "billing",
+      "status": 409
+    },
+    {
+      "code": "billing.credit_transaction_not_found",
+      "file": "go/billing/errors.go",
+      "ident": "ErrCreditTransactionNotFound",
+      "kind": "declared",
+      "line": 102,
+      "module": "billing",
+      "status": 404
+    },
+    {
+      "code": "billing.duplicate_plan_key",
+      "file": "go/billing/errors.go",
+      "ident": "ErrDuplicatePlanKey",
+      "kind": "declared",
+      "line": 37,
+      "module": "billing",
+      "status": 409
+    },
+    {
+      "code": "billing.idempotency_key_collision",
+      "file": "go/billing/errors.go",
+      "ident": "ErrIdempotencyKeyCollision",
+      "kind": "declared",
+      "line": 82,
+      "module": "billing",
+      "status": 409
+    },
+    {
+      "code": "billing.idempotency_key_required",
+      "file": "go/billing/errors.go",
+      "ident": "ErrIdempotencyKeyRequired",
+      "kind": "declared",
+      "line": 68,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.insufficient_credits",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInsufficientCredits",
+      "kind": "declared",
+      "line": 97,
+      "module": "billing",
+      "status": 409
+    },
+    {
+      "code": "billing.internal_error",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 198,
+      "module": "billing",
+      "status": 500
+    },
+    {
+      "code": "billing.invalid_amount",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvalidAmount",
+      "kind": "declared",
+      "line": 61,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.invalid_invoice_transition",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvalidInvoiceTransition",
+      "kind": "declared",
+      "line": 57,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.invalid_limit",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvalidLimit",
+      "kind": "declared",
+      "line": 175,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.invalid_reason",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvalidReason",
+      "kind": "declared",
+      "line": 92,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.invalid_request",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvalidRequest",
+      "kind": "declared",
+      "line": 191,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.invalid_subscription_transition",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvalidSubscriptionTransition",
+      "kind": "declared",
+      "line": 46,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.invoice_not_found",
+      "file": "go/billing/errors.go",
+      "ident": "ErrInvoiceNotFound",
+      "kind": "declared",
+      "line": 50,
+      "module": "billing",
+      "status": 404
+    },
+    {
+      "code": "billing.payment_event_not_found",
+      "file": "go/billing/errors.go",
+      "ident": "ErrPaymentEventNotFound",
+      "kind": "declared",
+      "line": 145,
+      "module": "billing",
+      "status": 404
+    },
+    {
+      "code": "billing.plan_key_required",
+      "file": "go/billing/errors.go",
+      "ident": "ErrPlanKeyRequired",
+      "kind": "declared",
+      "line": 32,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.plan_not_found",
+      "file": "go/billing/errors.go",
+      "ident": "ErrPlanNotFound",
+      "kind": "declared",
+      "line": 29,
+      "module": "billing",
+      "status": 404
+    },
+    {
+      "code": "billing.subscription_not_found",
+      "file": "go/billing/errors.go",
+      "ident": "ErrSubscriptionNotFound",
+      "kind": "declared",
+      "line": 41,
+      "module": "billing",
+      "status": 404
+    },
+    {
+      "code": "billing.unsupported_currency",
+      "file": "go/billing/errors.go",
+      "ident": "ErrUnsupportedCurrency",
+      "kind": "declared",
+      "line": 153,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.usage_reader_unconfigured",
+      "file": "go/billing/errors.go",
+      "ident": "ErrUsageReaderUnconfigured",
+      "kind": "declared",
+      "line": 165,
+      "module": "billing",
+      "status": 500
+    },
+    {
+      "code": "billing.webhook_payload_unrecognized",
+      "file": "go/billing/errors.go",
+      "ident": "ErrWebhookPayloadUnrecognized",
+      "kind": "declared",
+      "line": 136,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "billing.webhook_signature_invalid",
+      "file": "go/billing/errors.go",
+      "ident": "ErrWebhookSignatureInvalid",
+      "kind": "declared",
+      "line": 128,
+      "module": "billing",
+      "status": 400
+    },
+    {
+      "code": "cases.duplicate_photo_object",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrDuplicatePhotoObject",
+      "kind": "declared",
+      "line": 91,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.internal_error",
+      "file": "examples/reference-app/cmd/server/cases.go",
+      "ident": "casesErrInternal",
+      "kind": "declared",
+      "line": 58,
+      "module": "cases",
+      "status": 500
+    },
+    {
+      "code": "cases.invalid_request_body",
+      "file": "examples/reference-app/cmd/server/cases.go",
+      "ident": "casesInvalidRequestBody",
+      "kind": "declared",
+      "line": 66,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.not_found",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrNotFound",
+      "kind": "declared",
+      "line": 109,
+      "module": "cases",
+      "status": 404
+    },
+    {
+      "code": "cases.patient_name_required",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrPatientNameRequired",
+      "kind": "declared",
+      "line": 64,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.patient_name_too_long",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrPatientNameTooLong",
+      "kind": "declared",
+      "line": 69,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.patient_ref_too_long",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrPatientRefTooLong",
+      "kind": "declared",
+      "line": 73,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.photo_already_attached",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrPhotoAlreadyAttached",
+      "kind": "declared",
+      "line": 103,
+      "module": "cases",
+      "status": 409
+    },
+    {
+      "code": "cases.photo_content_invalid",
+      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "ident": "ErrPhotoContentInvalid",
+      "kind": "declared",
+      "line": 78,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.photo_content_required",
+      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "ident": "ErrPhotoContentRequired",
+      "kind": "declared",
+      "line": 73,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.photo_content_too_large",
+      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "ident": "ErrPhotoContentTooLarge",
+      "kind": "declared",
+      "line": 85,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.photo_not_found",
+      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "ident": "ErrPhotoNotFound",
+      "kind": "declared",
+      "line": 100,
+      "module": "cases",
+      "status": 404
+    },
+    {
+      "code": "cases.photo_object_id_required",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrPhotoObjectIDRequired",
+      "kind": "declared",
+      "line": 81,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.photo_object_id_too_long",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrPhotoObjectIDTooLong",
+      "kind": "declared",
+      "line": 86,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.photo_rejected",
+      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "ident": "ErrPhotoRejected",
+      "kind": "declared",
+      "line": 93,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "cases.subject_unresolved",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrSubjectUnresolved",
+      "kind": "declared",
+      "line": 122,
+      "module": "cases",
+      "status": 401
+    },
+    {
+      "code": "cases.too_many_photos",
+      "file": "examples/reference-app/internal/cases/service.go",
+      "ident": "ErrTooManyPhotos",
+      "kind": "declared",
+      "line": 95,
+      "module": "cases",
+      "status": 400
+    },
+    {
+      "code": "compliance.audit_query_requires_system_context",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrAuditQueryRequiresSystemContext",
+      "kind": "declared",
+      "line": 56,
+      "module": "compliance",
+      "status": 400
+    },
+    {
+      "code": "compliance.audit_record_failed",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrAuditRecordFailed",
+      "kind": "declared",
+      "line": 49,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.config_service_required",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrConfigServiceRequired",
+      "kind": "declared",
+      "line": 36,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.empty_subject_ref",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrEmptySubjectRef",
+      "kind": "declared",
+      "line": 62,
+      "module": "compliance",
+      "status": 400
+    },
+    {
+      "code": "compliance.erasure_partial_failure",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrErasurePartialFailure",
+      "kind": "declared",
+      "line": 75,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.erasure_tenant_mismatch",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrErasureTenantMismatch",
+      "kind": "declared",
+      "line": 134,
+      "module": "compliance",
+      "status": 400
+    },
+    {
+      "code": "compliance.export_delivery_failed",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrExportDeliveryFailed",
+      "kind": "declared",
+      "line": 111,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.export_partial_failure",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrExportPartialFailure",
+      "kind": "declared",
+      "line": 80,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.export_tenant_mismatch",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrExportTenantMismatch",
+      "kind": "declared",
+      "line": 121,
+      "module": "compliance",
+      "status": 400
+    },
+    {
+      "code": "compliance.queue_required",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrQueueRequired",
+      "kind": "declared",
+      "line": 18,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.sharing_required",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrSharingRequired",
+      "kind": "declared",
+      "line": 92,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.sweep_partial_failure",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrSweepPartialFailure",
+      "kind": "declared",
+      "line": 69,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.tenant_lister_required",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrTenantListerRequired",
+      "kind": "declared",
+      "line": 25,
+      "module": "compliance",
+      "status": 500
+    },
+    {
+      "code": "compliance.unsupported_report_format",
+      "file": "go/compliance/errors.go",
+      "ident": "ErrUnsupportedReportFormat",
+      "kind": "declared",
+      "line": 98,
+      "module": "compliance",
+      "status": 400
+    },
+    {
+      "code": "config.actor_required",
+      "file": "go/config/errors.go",
+      "ident": "ErrActorRequired",
+      "kind": "declared",
+      "line": 63,
+      "module": "config",
+      "status": 400
+    },
+    {
+      "code": "config.already_attached",
+      "file": "go/config/errors.go",
+      "ident": "ErrAlreadyAttached",
+      "kind": "declared",
+      "line": 116,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.audit_publish_failed",
+      "file": "go/config/errors.go",
+      "ident": "ErrAuditPublishFailed",
+      "kind": "declared",
+      "line": 103,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.cipher_required",
+      "file": "go/config/errors.go",
+      "ident": "ErrCipherRequired",
+      "kind": "declared",
+      "line": 94,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.feature_flag_dependency_cycle",
+      "file": "go/config/errors.go",
+      "ident": "ErrFeatureFlagDependencyCycle",
+      "kind": "declared",
+      "line": 88,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.invalid_scope",
+      "file": "go/config/errors.go",
+      "ident": "ErrInvalidScope",
+      "kind": "declared",
+      "line": 35,
+      "module": "config",
+      "status": 400
+    },
+    {
+      "code": "config.invalid_value",
+      "file": "go/config/errors.go",
+      "ident": "ErrInvalidValue",
+      "kind": "declared",
+      "line": 69,
+      "module": "config",
+      "status": 400
+    },
+    {
+      "code": "config.item_unset",
+      "file": "go/config/errors.go",
+      "ident": "ErrItemUnset",
+      "kind": "declared",
+      "line": 19,
+      "module": "config",
+      "status": 404
+    },
+    {
+      "code": "config.schema_conflict",
+      "file": "go/config/errors.go",
+      "ident": "ErrSchemaConflict",
+      "kind": "declared",
+      "line": 81,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.service_not_attached",
+      "file": "go/config/errors.go",
+      "ident": "ErrServiceNotAttached",
+      "kind": "declared",
+      "line": 110,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.storage_error",
+      "file": "go/config/errors.go",
+      "ident": "ErrStorage",
+      "kind": "declared",
+      "line": 122,
+      "module": "config",
+      "status": 500
+    },
+    {
+      "code": "config.system_scope_requires_system_context",
+      "file": "go/config/errors.go",
+      "ident": "ErrSystemScopeRequiresSystemContext",
+      "kind": "declared",
+      "line": 58,
+      "module": "config",
+      "status": 403
+    },
+    {
+      "code": "config.tenant_scope_requires_tenant",
+      "file": "go/config/errors.go",
+      "ident": "ErrTenantScopeRequiresTenant",
+      "kind": "declared",
+      "line": 49,
+      "module": "config",
+      "status": 400
+    },
+    {
+      "code": "config.typed_value_mismatch",
+      "file": "go/config/errors.go",
+      "ident": "ErrTypedValueMismatch",
+      "kind": "declared",
+      "line": 75,
+      "module": "config",
+      "status": 400
+    },
+    {
+      "code": "config.unknown_flag",
+      "file": "go/config/errors.go",
+      "ident": "ErrUnknownFlag",
+      "kind": "declared",
+      "line": 31,
+      "module": "config",
+      "status": 404
+    },
+    {
+      "code": "config.unknown_key",
+      "file": "go/config/errors.go",
+      "ident": "ErrUnknownKey",
+      "kind": "declared",
+      "line": 24,
+      "module": "config",
+      "status": 404
+    },
+    {
+      "code": "config.user_scope_unavailable",
+      "file": "go/config/errors.go",
+      "ident": "ErrUserScopeUnavailable",
+      "kind": "declared",
+      "line": 41,
+      "module": "config",
+      "status": 400
+    },
+    {
+      "code": "consult.internal_error",
+      "file": "examples/reference-app/cmd/server/consult.go",
+      "ident": "consultErrInternal",
+      "kind": "declared",
+      "line": 35,
+      "module": "consult",
+      "status": 500
+    },
+    {
+      "code": "consult.invalid_request_body",
+      "file": "examples/reference-app/cmd/server/consult.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 57,
+      "module": "consult",
+      "status": 400
+    },
+    {
+      "code": "consult.note_id_required",
+      "file": "examples/reference-app/cmd/server/consult.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 61,
+      "module": "consult",
+      "status": 400
+    },
+    {
+      "code": "dbkit.audit_capture_plugin_failed",
+      "file": "go/dbkit/open.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 189,
+      "module": "dbkit",
+      "status": 500
+    },
+    {
+      "code": "dbkit.connect_failed",
+      "file": "go/dbkit/open.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 263,
+      "module": "dbkit",
+      "status": 500
+    },
+    {
+      "code": "dbkit.hard_delete_requires_system_context",
+      "file": "go/dbkit/hard_delete.go",
+      "ident": "ErrHardDeleteRequiresSystemContext",
+      "kind": "declared",
+      "line": 23,
+      "module": "dbkit",
+      "status": 400
+    },
+    {
+      "code": "dbkit.invalid_audit_model",
+      "file": "go/dbkit/audit_capture.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 168,
+      "module": "dbkit",
+      "status": 400
+    },
+    {
+      "code": "dbkit.invalid_dialect",
+      "file": "go/dbkit/open.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 242,
+      "module": "dbkit",
+      "status": 400
+    },
+    {
+      "code": "dbkit.missing_id",
+      "file": "go/dbkit/repository.go",
+      "ident": "ErrMissingID",
+      "kind": "declared",
+      "line": 89,
+      "module": "dbkit",
+      "status": 400
+    },
+    {
+      "code": "dbkit.not_soft_deletable",
+      "file": "go/dbkit/soft_delete.go",
+      "ident": "ErrNotSoftDeletable",
+      "kind": "declared",
+      "line": 31,
+      "module": "dbkit",
+      "status": 400
+    },
+    {
+      "code": "dbkit.record_not_found",
+      "file": "go/dbkit/repository.go",
+      "ident": "ErrRecordNotFound",
+      "kind": "declared",
+      "line": 83,
+      "module": "dbkit",
+      "status": 404
+    },
+    {
+      "code": "dbkit.soft_delete_scope_plugin_failed",
+      "file": "go/dbkit/open.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 178,
+      "module": "dbkit",
+      "status": 500
+    },
+    {
+      "code": "dbkit.tenant_context_required",
+      "file": "go/dbkit/tenant_scope.go",
+      "ident": "ErrMissingTenantContext",
+      "kind": "declared",
+      "line": 35,
+      "module": "dbkit",
+      "status": 500
+    },
+    {
+      "code": "dbkit.tenant_id_immutable",
+      "file": "go/dbkit/tenant_scope.go",
+      "ident": "ErrTenantIDImmutable",
+      "kind": "declared",
+      "line": 42,
+      "module": "dbkit",
+      "status": 400
+    },
+    {
+      "code": "dbkit.tenant_scope_plugin_failed",
+      "file": "go/dbkit/open.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 172,
+      "module": "dbkit",
+      "status": 500
+    },
+    {
+      "code": "integration.already_attached",
+      "file": "go/integration/module.go",
+      "ident": "ErrAlreadyAttached",
+      "kind": "declared",
+      "line": 135,
+      "module": "integration",
+      "status": 500
+    },
+    {
+      "code": "integration.authentication_failed",
+      "file": "go/integration/errors.go",
+      "ident": "ErrAuthenticationFailed",
+      "kind": "declared",
+      "line": 213,
+      "module": "integration",
+      "status": 401
+    },
+    {
+      "code": "integration.created_by_required",
+      "file": "go/integration/errors.go",
+      "ident": "ErrCreatedByRequired",
+      "kind": "declared",
+      "line": 46,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.duplicate_event_mapping",
+      "file": "go/integration/errors.go",
+      "ident": "ErrDuplicateEventMapping",
+      "kind": "declared",
+      "line": 165,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.event_types_required",
+      "file": "go/integration/errors.go",
+      "ident": "ErrEventTypesRequired",
+      "kind": "declared",
+      "line": 149,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.expiry_exceeds_maximum",
+      "file": "go/integration/errors.go",
+      "ident": "ErrExpiryExceedsMaximum",
+      "kind": "declared",
+      "line": 56,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.expiry_in_past",
+      "file": "go/integration/errors.go",
+      "ident": "ErrExpiryInPast",
+      "kind": "declared",
+      "line": 61,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.internal_error",
+      "file": "examples/reference-app/cmd/server/demo_subject.go",
+      "ident": "integrationErrInternal",
+      "kind": "declared",
+      "line": 715,
+      "module": "integration",
+      "status": 500
+    },
+    {
+      "code": "integration.invalid_event_mapping",
+      "file": "go/integration/errors.go",
+      "ident": "ErrInvalidEventMapping",
+      "kind": "declared",
+      "line": 160,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.invalid_request_body",
+      "file": "go/integration/errors.go",
+      "ident": "ErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 188,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.key_already_revoked",
+      "file": "go/integration/errors.go",
+      "ident": "ErrKeyAlreadyRevoked",
+      "kind": "declared",
+      "line": 40,
+      "module": "integration",
+      "status": 409
+    },
+    {
+      "code": "integration.key_not_found",
+      "file": "go/integration/errors.go",
+      "ident": "ErrKeyNotFound",
+      "kind": "declared",
+      "line": 33,
+      "module": "integration",
+      "status": 404
+    },
+    {
+      "code": "integration.permission_lister_unavailable",
+      "file": "go/integration/errors.go",
+      "ident": "ErrPermissionListerUnavailable",
+      "kind": "declared",
+      "line": 79,
+      "module": "integration",
+      "status": 500
+    },
+    {
+      "code": "integration.rate_limited",
+      "file": "go/integration/errors.go",
+      "ident": "ErrRateLimited",
+      "kind": "declared",
+      "line": 88,
+      "module": "integration",
+      "status": 429
+    },
+    {
+      "code": "integration.scope_not_held_by_creator",
+      "file": "go/integration/errors.go",
+      "ident": "ErrScopeNotHeldByCreator",
+      "kind": "declared",
+      "line": 68,
+      "module": "integration",
+      "status": 403
+    },
+    {
+      "code": "integration.subject_unresolved",
+      "file": "go/integration/errors.go",
+      "ident": "ErrSubjectUnresolved",
+      "kind": "declared",
+      "line": 198,
+      "module": "integration",
+      "status": 401
+    },
+    {
+      "code": "integration.webhook_event_type_unknown",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookEventTypeUnknown",
+      "kind": "declared",
+      "line": 155,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.webhook_subscription_not_found",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookSubscriptionNotFound",
+      "kind": "declared",
+      "line": 105,
+      "module": "integration",
+      "status": 404
+    },
+    {
+      "code": "integration.webhook_url_blocked",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookURLBlocked",
+      "kind": "declared",
+      "line": 144,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.webhook_url_invalid",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookURLInvalid",
+      "kind": "declared",
+      "line": 113,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.webhook_url_required",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookURLRequired",
+      "kind": "declared",
+      "line": 108,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "integration.webhook_url_unresolvable",
+      "file": "go/integration/errors.go",
+      "ident": "ErrWebhookURLUnresolvable",
+      "kind": "declared",
+      "line": 118,
+      "module": "integration",
+      "status": 400
+    },
+    {
+      "code": "jobs.asynq_task_missing_tenant",
+      "file": "go/jobs/queue/asynq/worker.go",
+      "ident": "errTaskMissingTenant",
+      "kind": "declared",
+      "line": 33,
+      "module": "jobs",
+      "status": 500
+    },
+    {
+      "code": "jobs.backoff_base_zero",
+      "file": "go/jobs/standalone_queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 185,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.backoff_max_zero",
+      "file": "go/jobs/standalone_queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 188,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.cancelled_retention_zero",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 293,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.completed_retention_zero",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 278,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.delayed_task_check_interval_negative",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 373,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.duplicate_handler_type",
+      "file": "go/jobs/standalone_queue.go",
+      "ident": "ErrDuplicateHandlerType",
+      "kind": "declared",
+      "line": 82,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.handler_not_registered",
+      "file": "go/jobs/worker.go",
+      "ident": "ErrHandlerNotRegistered",
+      "kind": "declared",
+      "line": 25,
+      "module": "jobs",
+      "status": 500
+    },
+    {
+      "code": "jobs.invalid_task",
+      "file": "go/jobs/task.go",
+      "ident": "ErrInvalidTask",
+      "kind": "declared",
+      "line": 105,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.job_not_found",
+      "file": "go/jobs/job.go",
+      "ident": "ErrJobNotFound",
+      "kind": "declared",
+      "line": 204,
+      "module": "jobs",
+      "status": 404
+    },
+    {
+      "code": "jobs.job_timeout_zero",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 261,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.poll_interval_zero",
+      "file": "go/jobs/standalone_queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 149,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.queue_weight_zero",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 231,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.queue_writer_active",
+      "file": "go/jobs/store.go",
+      "ident": "ErrQueueWriterActive",
+      "kind": "declared",
+      "line": 263,
+      "module": "jobs",
+      "status": 409
+    },
+    {
+      "code": "jobs.retry_delay_func_nil",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 329,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.standalone_handler_panicked",
+      "file": "go/jobs/worker.go",
+      "ident": "errStandaloneHandlerPanicked",
+      "kind": "declared",
+      "line": 54,
+      "module": "jobs",
+      "status": 500
+    },
+    {
+      "code": "jobs.standalone_job_missing_tenant",
+      "file": "go/jobs/worker.go",
+      "ident": "errStandaloneJobMissingTenant",
+      "kind": "declared",
+      "line": 47,
+      "module": "jobs",
+      "status": 500
+    },
+    {
+      "code": "jobs.task_check_interval_negative",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 350,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.tenant_concurrency_limit_zero",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 209,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.throttle_retry_delay_negative",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 305,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.worker_count_zero",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 194,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "metering.field_too_long",
+      "file": "go/metering/errors.go",
+      "ident": "ErrFieldTooLong",
+      "kind": "declared",
+      "line": 64,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.invalid_period_bucket",
+      "file": "go/metering/errors.go",
+      "ident": "ErrInvalidPeriodBucket",
+      "kind": "declared",
+      "line": 68,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.invalid_quantity",
+      "file": "go/metering/errors.go",
+      "ident": "ErrInvalidQuantity",
+      "kind": "declared",
+      "line": 45,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.metadata_encode_failed",
+      "file": "go/metering/errors.go",
+      "ident": "ErrMetadataEncodeFailed",
+      "kind": "declared",
+      "line": 79,
+      "module": "metering",
+      "status": 500
+    },
+    {
+      "code": "metering.metadata_too_large",
+      "file": "go/metering/errors.go",
+      "ident": "ErrMetadataTooLarge",
+      "kind": "declared",
+      "line": 50,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.missing_feature",
+      "file": "go/metering/errors.go",
+      "ident": "ErrMissingFeature",
+      "kind": "declared",
+      "line": 32,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.missing_idempotency_key",
+      "file": "go/metering/errors.go",
+      "ident": "ErrMissingIdempotencyKey",
+      "kind": "declared",
+      "line": 38,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.missing_tenant_id",
+      "file": "go/metering/errors.go",
+      "ident": "ErrMissingTenantID",
+      "kind": "declared",
+      "line": 29,
+      "module": "metering",
+      "status": 400
+    },
+    {
+      "code": "metering.usage_summaries_unconfigured",
+      "file": "go/metering/errors.go",
+      "ident": "ErrUsageSummariesUnconfigured",
+      "kind": "declared",
+      "line": 103,
+      "module": "metering",
+      "status": 500
+    },
+    {
+      "code": "notes.internal_error",
+      "file": "examples/reference-app/internal/notes/handler.go",
+      "ident": "errInternal",
+      "kind": "declared",
+      "line": 84,
+      "module": "notes",
+      "status": 500
+    },
+    {
+      "code": "notes.invalid_request_body",
+      "file": "examples/reference-app/internal/notes/handler.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 224,
+      "module": "notes",
+      "status": 400
+    },
+    {
+      "code": "notes.subject_unresolved",
+      "file": "examples/reference-app/internal/notes/handler.go",
+      "ident": "ErrSubjectUnresolved",
+      "kind": "declared",
+      "line": 99,
+      "module": "notes",
+      "status": 401
+    },
+    {
+      "code": "notes.text_required",
+      "file": "examples/reference-app/internal/notes/handler.go",
+      "ident": "ErrTextRequired",
+      "kind": "declared",
+      "line": 31,
+      "module": "notes",
+      "status": 400
+    },
+    {
+      "code": "notes.text_too_long",
+      "file": "examples/reference-app/internal/notes/handler.go",
+      "ident": "ErrTextTooLong",
+      "kind": "declared",
+      "line": 80,
+      "module": "notes",
+      "status": 400
+    },
+    {
+      "code": "notification.contact_bounced",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactBounced",
+      "kind": "declared",
+      "line": 131,
+      "module": "notification",
+      "status": 409
+    },
+    {
+      "code": "notification.contact_code_delivery_failed",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactCodeDeliveryFailed",
+      "kind": "declared",
+      "line": 117,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.contact_code_invalid",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactCodeInvalid",
+      "kind": "declared",
+      "line": 104,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.contact_email_indexer_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactEmailIndexerRequired",
+      "kind": "declared",
+      "line": 316,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.contact_invalid_address",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactInvalidAddress",
+      "kind": "declared",
+      "line": 97,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.contact_invalid_channel",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactInvalidChannel",
+      "kind": "declared",
+      "line": 90,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.contact_not_found",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactNotFound",
+      "kind": "declared",
+      "line": 84,
+      "module": "notification",
+      "status": 404
+    },
+    {
+      "code": "notification.contact_not_verified",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactNotVerified",
+      "kind": "declared",
+      "line": 142,
+      "module": "notification",
+      "status": 409
+    },
+    {
+      "code": "notification.contact_phone_indexer_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactPhoneIndexerRequired",
+      "kind": "declared",
+      "line": 321,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.contact_rate_limited",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactRateLimited",
+      "kind": "declared",
+      "line": 160,
+      "module": "notification",
+      "status": 429
+    },
+    {
+      "code": "notification.contact_unsubscribed",
+      "file": "go/notification/errors.go",
+      "ident": "ErrContactUnsubscribed",
+      "kind": "declared",
+      "line": 124,
+      "module": "notification",
+      "status": 409
+    },
+    {
+      "code": "notification.delivery_queue_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrDeliveryQueueRequired",
+      "kind": "declared",
+      "line": 328,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.dispatch_invalid",
+      "file": "go/notification/errors.go",
+      "ident": "ErrDispatchInvalid",
+      "kind": "declared",
+      "line": 176,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.dispatch_params_not_allowed",
+      "file": "go/notification/errors.go",
+      "ident": "ErrDispatchParamsNotAllowed",
+      "kind": "declared",
+      "line": 193,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.dispatch_params_unreferenced",
+      "file": "go/notification/errors.go",
+      "ident": "ErrDispatchParamsUnreferenced",
+      "kind": "declared",
+      "line": 211,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.internal_error",
+      "file": "go/notification/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 72,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.invalid_list_params",
+      "file": "go/notification/errors.go",
+      "ident": "ErrInvalidListParams",
+      "kind": "declared",
+      "line": 287,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.invalid_request_body",
+      "file": "go/notification/errors.go",
+      "ident": "ErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 267,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.mail_from_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrMailFromRequired",
+      "kind": "declared",
+      "line": 309,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.message_not_found",
+      "file": "go/notification/errors.go",
+      "ident": "ErrMessageNotFound",
+      "kind": "declared",
+      "line": 228,
+      "module": "notification",
+      "status": 404
+    },
+    {
+      "code": "notification.preference_invalid_channels",
+      "file": "go/notification/errors.go",
+      "ident": "ErrPreferenceInvalidChannels",
+      "kind": "declared",
+      "line": 57,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.preference_optout_not_allowed",
+      "file": "go/notification/errors.go",
+      "ident": "ErrPreferenceOptoutNotAllowed",
+      "kind": "declared",
+      "line": 66,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.recipient_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrRecipientRequired",
+      "kind": "declared",
+      "line": 40,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.send_record_filter_invalid",
+      "file": "go/notification/errors.go",
+      "ident": "ErrSendRecordFilterInvalid",
+      "kind": "declared",
+      "line": 253,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.send_record_tenant_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrSendRecordTenantRequired",
+      "kind": "declared",
+      "line": 242,
+      "module": "notification",
+      "status": 400
+    },
+    {
+      "code": "notification.sms_sender_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrSMSSenderRequired",
+      "kind": "declared",
+      "line": 303,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "notification.subject_unresolved",
+      "file": "go/notification/errors.go",
+      "ident": "ErrSubjectUnresolved",
+      "kind": "declared",
+      "line": 275,
+      "module": "notification",
+      "status": 401
+    },
+    {
+      "code": "notification.type_not_found",
+      "file": "go/notification/errors.go",
+      "ident": "ErrTypeNotFound",
+      "kind": "declared",
+      "line": 48,
+      "module": "notification",
+      "status": 404
+    },
+    {
+      "code": "notification.user_address_resolver_required",
+      "file": "go/notification/errors.go",
+      "ident": "ErrUserAddressResolverRequired",
+      "kind": "declared",
+      "line": 335,
+      "module": "notification",
+      "status": 500
+    },
+    {
+      "code": "org.concurrent_update",
+      "file": "go/org/errors.go",
+      "ident": "ErrConcurrentUpdate",
+      "kind": "declared",
+      "line": 134,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.cycle_not_allowed",
+      "file": "go/org/errors.go",
+      "ident": "ErrCycleNotAllowed",
+      "kind": "declared",
+      "line": 59,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.duplicate_sibling_name",
+      "file": "go/org/errors.go",
+      "ident": "ErrDuplicateSiblingName",
+      "kind": "declared",
+      "line": 93,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.email_indexer_required",
+      "file": "go/org/errors.go",
+      "ident": "ErrEmailIndexerRequired",
+      "kind": "declared",
+      "line": 237,
+      "module": "org",
+      "status": 500
+    },
+    {
+      "code": "org.internal_error",
+      "file": "go/org/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 121,
+      "module": "org",
+      "status": 500
+    },
+    {
+      "code": "org.invalid_email",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvalidEmail",
+      "kind": "declared",
+      "line": 222,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.invalid_node_id",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvalidNodeID",
+      "kind": "declared",
+      "line": 101,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.invalid_request_body",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 269,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.invitation_already_accepted",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationAlreadyAccepted",
+      "kind": "declared",
+      "line": 200,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.invitation_already_pending",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationAlreadyPending",
+      "kind": "declared",
+      "line": 246,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.invitation_expired",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationExpired",
+      "kind": "declared",
+      "line": 193,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.invitation_mail_required",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationMailRequired",
+      "kind": "declared",
+      "line": 258,
+      "module": "org",
+      "status": 500
+    },
+    {
+      "code": "org.invitation_not_found",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationNotFound",
+      "kind": "declared",
+      "line": 187,
+      "module": "org",
+      "status": 404
+    },
+    {
+      "code": "org.invitation_rate_limited",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationRateLimited",
+      "kind": "declared",
+      "line": 215,
+      "module": "org",
+      "status": 429
+    },
+    {
+      "code": "org.invitation_revoked",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationRevoked",
+      "kind": "declared",
+      "line": 204,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.invitations_disabled",
+      "file": "go/org/errors.go",
+      "ident": "ErrInvitationsDisabled",
+      "kind": "declared",
+      "line": 226,
+      "module": "org",
+      "status": 403
+    },
+    {
+      "code": "org.max_depth_exceeded",
+      "file": "go/org/errors.go",
+      "ident": "ErrMaxDepthExceeded",
+      "kind": "declared",
+      "line": 54,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.member_not_removable",
+      "file": "go/org/errors.go",
+      "ident": "ErrMemberNotRemovable",
+      "kind": "declared",
+      "line": 179,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.membership_exists",
+      "file": "go/org/errors.go",
+      "ident": "ErrMembershipExists",
+      "kind": "declared",
+      "line": 160,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.membership_not_found",
+      "file": "go/org/errors.go",
+      "ident": "ErrMembershipNotFound",
+      "kind": "declared",
+      "line": 152,
+      "module": "org",
+      "status": 404
+    },
+    {
+      "code": "org.node_has_children",
+      "file": "go/org/errors.go",
+      "ident": "ErrNodeHasChildren",
+      "kind": "declared",
+      "line": 66,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.node_has_members",
+      "file": "go/org/errors.go",
+      "ident": "ErrNodeHasMembers",
+      "kind": "declared",
+      "line": 73,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.node_name_required",
+      "file": "go/org/errors.go",
+      "ident": "ErrNodeNameRequired",
+      "kind": "declared",
+      "line": 38,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.node_name_too_long",
+      "file": "go/org/errors.go",
+      "ident": "ErrNodeNameTooLong",
+      "kind": "declared",
+      "line": 45,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "org.node_not_found",
+      "file": "go/org/errors.go",
+      "ident": "ErrNodeNotFound",
+      "kind": "declared",
+      "line": 33,
+      "module": "org",
+      "status": 404
+    },
+    {
+      "code": "org.parent_not_found",
+      "file": "go/org/errors.go",
+      "ident": "ErrParentNotFound",
+      "kind": "declared",
+      "line": 49,
+      "module": "org",
+      "status": 404
+    },
+    {
+      "code": "org.restore_parent_not_live",
+      "file": "go/org/errors.go",
+      "ident": "ErrRestoreParentNotLive",
+      "kind": "declared",
+      "line": 115,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.root_already_exists",
+      "file": "go/org/errors.go",
+      "ident": "ErrRootAlreadyExists",
+      "kind": "declared",
+      "line": 79,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.root_not_deletable",
+      "file": "go/org/errors.go",
+      "ident": "ErrRootNotDeletable",
+      "kind": "declared",
+      "line": 84,
+      "module": "org",
+      "status": 409
+    },
+    {
+      "code": "org.subject_unresolved",
+      "file": "go/org/errors.go",
+      "ident": "ErrSubjectUnresolved",
+      "kind": "declared",
+      "line": 276,
+      "module": "org",
+      "status": 401
+    },
+    {
+      "code": "org.system_context_required",
+      "file": "go/org/errors.go",
+      "ident": "ErrSystemContextRequired",
+      "kind": "declared",
+      "line": 172,
+      "module": "org",
+      "status": 400
+    },
+    {
+      "code": "pki.algorithm_unsupported_by_signer",
+      "file": "go/pki/errors.go",
+      "ident": "ErrAlgorithmUnsupportedBySigner",
+      "kind": "declared",
+      "line": 95,
+      "module": "pki",
+      "status": 400
+    },
+    {
+      "code": "pki.authority_not_found",
+      "file": "go/pki/errors.go",
+      "ident": "ErrAuthorityNotFound",
+      "kind": "declared",
+      "line": 70,
+      "module": "pki",
+      "status": 404
+    },
+    {
+      "code": "pki.authority_revoked",
+      "file": "go/pki/errors.go",
+      "ident": "ErrAuthorityRevoked",
+      "kind": "declared",
+      "line": 127,
+      "module": "pki",
+      "status": 409
+    },
+    {
+      "code": "pki.certificate_revoked",
+      "file": "go/pki/errors.go",
+      "ident": "ErrCertificateRevoked",
+      "kind": "declared",
+      "line": 111,
+      "module": "pki",
+      "status": 409
+    },
+    {
+      "code": "pki.crl_not_generated",
+      "file": "go/pki/errors.go",
+      "ident": "ErrCRLNotGenerated",
+      "kind": "declared",
+      "line": 153,
+      "module": "pki",
+      "status": 404
+    },
+    {
+      "code": "pki.internal_error",
+      "file": "go/pki/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 158,
+      "module": "pki",
+      "status": 500
+    },
+    {
+      "code": "pki.invalid_request_body",
+      "file": "go/pki/errors.go",
+      "ident": "ErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 162,
+      "module": "pki",
+      "status": 400
+    },
+    {
+      "code": "pki.key_not_found",
+      "file": "go/pki/errors.go",
+      "ident": "ErrKeyNotFound",
+      "kind": "declared",
+      "line": 74,
+      "module": "pki",
+      "status": 404
+    },
+    {
+      "code": "pki.no_active_key",
+      "file": "go/pki/errors.go",
+      "ident": "ErrNoActiveKey",
+      "kind": "declared",
+      "line": 86,
+      "module": "pki",
+      "status": 404
+    },
+    {
+      "code": "pki.propagation_window_not_elapsed",
+      "file": "go/pki/errors.go",
+      "ident": "ErrPropagationWindowNotElapsed",
+      "kind": "declared",
+      "line": 147,
+      "module": "pki",
+      "status": 409
+    },
+    {
+      "code": "pki.revocation_reason_required",
+      "file": "go/pki/errors.go",
+      "ident": "ErrRevocationReasonRequired",
+      "kind": "declared",
+      "line": 167,
+      "module": "pki",
+      "status": 400
+    },
+    {
+      "code": "pki.signer_unavailable",
+      "file": "go/pki/errors.go",
+      "ident": "ErrSignerUnavailable",
+      "kind": "declared",
+      "line": 139,
+      "module": "pki",
+      "status": 500
+    },
+    {
+      "code": "ratelimit.rate_one_unsupported",
+      "file": "go/ratelimit/limiter.go",
+      "ident": "ErrRateOneUnsupported",
+      "kind": "declared",
+      "line": 61,
+      "module": "ratelimit",
+      "status": 400
+    },
+    {
+      "code": "rbac.already_attached",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrAlreadyAttached",
+      "kind": "declared",
+      "line": 76,
+      "module": "rbac",
+      "status": 500
+    },
+    {
+      "code": "rbac.binding_not_found",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrBindingNotFound",
+      "kind": "declared",
+      "line": 42,
+      "module": "rbac",
+      "status": 404
+    },
+    {
+      "code": "rbac.duplicate_role",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrDuplicateRole",
+      "kind": "declared",
+      "line": 37,
+      "module": "rbac",
+      "status": 409
+    },
+    {
+      "code": "rbac.permission_denied",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrPermissionDenied",
+      "kind": "declared",
+      "line": 56,
+      "module": "rbac",
+      "status": 403
+    },
+    {
+      "code": "rbac.role_not_found",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrRoleNotFound",
+      "kind": "declared",
+      "line": 31,
+      "module": "rbac",
+      "status": 404
+    },
+    {
+      "code": "rbac.service_not_attached",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrServiceNotAttached",
+      "kind": "declared",
+      "line": 70,
+      "module": "rbac",
+      "status": 500
+    },
+    {
+      "code": "rbac.storage_error",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrStorage",
+      "kind": "declared",
+      "line": 82,
+      "module": "rbac",
+      "status": 500
+    },
+    {
+      "code": "rbac.subject_required",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrSubjectRequired",
+      "kind": "declared",
+      "line": 49,
+      "module": "rbac",
+      "status": 400
+    },
+    {
+      "code": "rbac.subtree_unresolved",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrSubtreeUnresolved",
+      "kind": "declared",
+      "line": 64,
+      "module": "rbac",
+      "status": 403
+    },
+    {
+      "code": "rbac.unknown_permission",
+      "file": "go/rbac/errors.go",
+      "ident": "ErrUnknownPermission",
+      "kind": "declared",
+      "line": 25,
+      "module": "rbac",
+      "status": 400
+    },
+    {
+      "code": "reference_app.internal_error",
+      "file": "examples/reference-app/cmd/server/team_members.go",
+      "ident": "teamMemberErrInternal",
+      "kind": "declared",
+      "line": 114,
+      "module": "reference_app",
+      "status": 500
+    },
+    {
+      "code": "reference_app.method_not_allowed",
+      "file": "examples/reference-app/cmd/server/clinic_name.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 76,
+      "module": "reference_app",
+      "status": 400
+    },
+    {
+      "code": "sharing.expiry_out_of_range",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrExpiryOutOfRange",
+      "kind": "declared",
+      "line": 43,
+      "module": "sharing",
+      "status": 400
+    },
+    {
+      "code": "sharing.expiry_required",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrExpiryRequired",
+      "kind": "declared",
+      "line": 30,
+      "module": "sharing",
+      "status": 400
+    },
+    {
+      "code": "sharing.internal_error",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 92,
+      "module": "sharing",
+      "status": 500
+    },
+    {
+      "code": "sharing.invalid_max_views",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrInvalidMaxViews",
+      "kind": "declared",
+      "line": 49,
+      "module": "sharing",
+      "status": 400
+    },
+    {
+      "code": "sharing.invalid_request",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrInvalidRequest",
+      "kind": "declared",
+      "line": 86,
+      "module": "sharing",
+      "status": 400
+    },
+    {
+      "code": "sharing.not_accessible",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrNotAccessible",
+      "kind": "declared",
+      "line": 60,
+      "module": "sharing",
+      "status": 404
+    },
+    {
+      "code": "sharing.rate_limited",
+      "file": "go/sharing/ratelimit.go",
+      "ident": "ErrRateLimited",
+      "kind": "declared",
+      "line": 99,
+      "module": "sharing",
+      "status": 429
+    },
+    {
+      "code": "sharing.resource_ref_required",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrResourceRefRequired",
+      "kind": "declared",
+      "line": 23,
+      "module": "sharing",
+      "status": 400
+    },
+    {
+      "code": "sharing.resource_unavailable",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrResourceUnavailable",
+      "kind": "declared",
+      "line": 111,
+      "module": "sharing",
+      "status": 429
+    },
+    {
+      "code": "sharing.share_not_found",
+      "file": "go/sharing/errors.go",
+      "ident": "ErrShareNotFound",
+      "kind": "declared",
+      "line": 68,
+      "module": "sharing",
+      "status": 404
+    },
+    {
+      "code": "smilesim.internal_error",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smileSimErrInternal",
+      "kind": "declared",
+      "line": 55,
+      "module": "smilesim",
+      "status": 500
+    },
+    {
+      "code": "smilesim.invalid_request_body",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smilesimErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 66,
+      "module": "smilesim",
+      "status": 400
+    },
+    {
+      "code": "smilesim.output_not_found",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smileSimErrOutputNotFound",
+      "kind": "declared",
+      "line": 91,
+      "module": "smilesim",
+      "status": 404
+    },
+    {
+      "code": "smilesim.output_not_ready",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smileSimErrOutputNotReady",
+      "kind": "declared",
+      "line": 86,
+      "module": "smilesim",
+      "status": 404
+    },
+    {
+      "code": "smilesim.photo_object_id_required",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smilesimErrPhotoObjectIDRequired",
+      "kind": "declared",
+      "line": 70,
+      "module": "smilesim",
+      "status": 400
+    },
+    {
+      "code": "smilesim.recipient_not_in_tenant",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smilesimErrRecipientNotInTenant",
+      "kind": "declared",
+      "line": 446,
+      "module": "smilesim",
+      "status": 400
+    },
+    {
+      "code": "smilesim.simulation_not_found",
+      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "ident": "smileSimErrSimulationNotFound",
+      "kind": "declared",
+      "line": 82,
+      "module": "smilesim",
+      "status": 404
+    },
+    {
+      "code": "smilesim.strength_out_of_range",
+      "file": "examples/reference-app/internal/smilesim/options.go",
+      "ident": "ErrStrengthOutOfRange",
+      "kind": "declared",
+      "line": 162,
+      "module": "smilesim",
+      "status": 400
+    },
+    {
+      "code": "smilesim.unsupported_smile_style",
+      "file": "examples/reference-app/internal/smilesim/options.go",
+      "ident": "ErrUnsupportedSmileStyle",
+      "kind": "declared",
+      "line": 154,
+      "module": "smilesim",
+      "status": 400
+    },
+    {
+      "code": "smilesim.unsupported_tooth_shade",
+      "file": "examples/reference-app/internal/smilesim/options.go",
+      "ident": "ErrUnsupportedToothShade",
+      "kind": "declared",
+      "line": 158,
+      "module": "smilesim",
+      "status": 400
+    },
+    {
+      "code": "storage.allowed_type_unsupported",
+      "file": "go/storage/errors.go",
+      "ident": "ErrAllowedTypeUnsupported",
+      "kind": "declared",
+      "line": 153,
+      "module": "storage",
+      "status": 500
+    },
+    {
+      "code": "storage.checksum_mismatch",
+      "file": "go/storage/errors.go",
+      "ident": "ErrChecksumMismatch",
+      "kind": "declared",
+      "line": 80,
+      "module": "storage",
+      "status": 409
+    },
+    {
+      "code": "storage.content_length_mismatch",
+      "file": "go/storage/errors.go",
+      "ident": "ErrContentLengthMismatch",
+      "kind": "declared",
+      "line": 90,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.content_missing",
+      "file": "go/storage/errors.go",
+      "ident": "ErrContentMissing",
+      "kind": "declared",
+      "line": 94,
+      "module": "storage",
+      "status": 409
+    },
+    {
+      "code": "storage.image_unreadable",
+      "file": "go/storage/errors.go",
+      "ident": "ErrImageUnreadable",
+      "kind": "declared",
+      "line": 116,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.internal_error",
+      "file": "go/storage/errors.go",
+      "ident": "ErrInternal",
+      "kind": "declared",
+      "line": 175,
+      "module": "storage",
+      "status": 500
+    },
+    {
+      "code": "storage.invalid_checksum",
+      "file": "go/storage/errors.go",
+      "ident": "ErrInvalidChecksum",
+      "kind": "declared",
+      "line": 75,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.invalid_expiry",
+      "file": "go/storage/errors.go",
+      "ident": "ErrInvalidExpiry",
+      "kind": "declared",
+      "line": 121,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.invalid_limit",
+      "file": "go/storage/errors.go",
+      "ident": "ErrInvalidLimit",
+      "kind": "declared",
+      "line": 207,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.invalid_request_body",
+      "file": "go/storage/errors.go",
+      "ident": "ErrInvalidRequestBody",
+      "kind": "declared",
+      "line": 201,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.invalid_size",
+      "file": "go/storage/errors.go",
+      "ident": "ErrInvalidSize",
+      "kind": "declared",
+      "line": 169,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.no_expiry_not_allowed",
+      "file": "go/storage/errors.go",
+      "ident": "ErrNoExpiryNotAllowed",
+      "kind": "declared",
+      "line": 130,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.object_not_found",
+      "file": "go/storage/errors.go",
+      "ident": "ErrObjectNotFound",
+      "kind": "declared",
+      "line": 46,
+      "module": "storage",
+      "status": 404
+    },
+    {
+      "code": "storage.object_not_uploading",
+      "file": "go/storage/errors.go",
+      "ident": "ErrObjectNotUploading",
+      "kind": "declared",
+      "line": 51,
+      "module": "storage",
+      "status": 409
+    },
+    {
+      "code": "storage.object_too_large",
+      "file": "go/storage/errors.go",
+      "ident": "ErrObjectTooLarge",
+      "kind": "declared",
+      "line": 69,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.object_uploading",
+      "file": "go/storage/errors.go",
+      "ident": "ErrObjectUploading",
+      "kind": "declared",
+      "line": 62,
+      "module": "storage",
+      "status": 409
+    },
+    {
+      "code": "storage.pixel_limit_exceeded",
+      "file": "go/storage/errors.go",
+      "ident": "ErrPixelLimitExceeded",
+      "kind": "declared",
+      "line": 111,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.queue_required",
+      "file": "go/storage/errors.go",
+      "ident": "ErrQueueRequired",
+      "kind": "declared",
+      "line": 185,
+      "module": "storage",
+      "status": 500
+    },
+    {
+      "code": "storage.size_mismatch",
+      "file": "go/storage/errors.go",
+      "ident": "ErrSizeMismatch",
+      "kind": "declared",
+      "line": 84,
+      "module": "storage",
+      "status": 409
+    },
+    {
+      "code": "storage.store_error",
+      "file": "go/storage/errors.go",
+      "ident": "ErrStoreError",
+      "kind": "declared",
+      "line": 165,
+      "module": "storage",
+      "status": 500
+    },
+    {
+      "code": "storage.store_unavailable",
+      "file": "go/storage/errors.go",
+      "ident": "ErrStoreUnavailable",
+      "kind": "declared",
+      "line": 160,
+      "module": "storage",
+      "status": 500
+    },
+    {
+      "code": "storage.sweep_partial_failure",
+      "file": "go/storage/errors.go",
+      "ident": "ErrSweepPartialFailure",
+      "kind": "declared",
+      "line": 139,
+      "module": "storage",
+      "status": 500
+    },
+    {
+      "code": "storage.type_mismatch",
+      "file": "go/storage/errors.go",
+      "ident": "ErrTypeMismatch",
+      "kind": "declared",
+      "line": 105,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "storage.type_not_allowed",
+      "file": "go/storage/errors.go",
+      "ident": "ErrTypeNotAllowed",
+      "kind": "declared",
+      "line": 100,
+      "module": "storage",
+      "status": 400
+    },
+    {
+      "code": "tenancy.system_context_audit_publish_failed",
+      "file": "go/tenancy/system_context.go",
+      "ident": "ErrAuditPublishFailed",
+      "kind": "declared",
+      "line": 57,
+      "module": "tenancy",
+      "status": 500
+    },
+    {
+      "code": "tenancy.tenant_status_unavailable",
+      "file": "go/tenancy/middleware.go",
+      "ident": "ErrTenantStatusUnavailable",
+      "kind": "declared",
+      "line": 45,
+      "module": "tenancy",
+      "status": 500
+    },
+    {
+      "code": "tenancy.tenant_suspended",
+      "file": "go/tenancy/middleware.go",
+      "ident": "ErrTenantSuspended",
+      "kind": "declared",
+      "line": 38,
+      "module": "tenancy",
+      "status": 403
+    },
+    {
+      "code": "tenancy.tenant_unresolved",
+      "file": "go/tenancy/middleware.go",
+      "ident": "ErrTenantUnresolved",
+      "kind": "declared",
+      "line": 25,
+      "module": "tenancy",
+      "status": 403
+    }
+  ]
+}
