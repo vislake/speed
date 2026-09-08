@@ -652,7 +652,23 @@ lives.
 
 | Gate | Waiting on | Kind |
 |---|---|---|
-| add-a-colleague (members list) | the Team surface identifies members by raw user id, on the surface whose own sentence promises to say who works in this clinic | defect |
+| add-a-colleague (self-registered practice) | a practice that signed itself up cannot send an invitation at all: `POST /api/v1/org/invitations` answers 500 for a self-registered tenant and 200 for a boot-configured one | defect |
+
+**The members-list finding closed** (`42a14614`): the app composes an
+authn lookup of its own and names every member from the users table, so
+it holds for a self-registered clinic's invited colleague too -- which is
+why that gate did not need widening to the paying population after all.
+
+**The row above is the fourth wrong-population finding in this suite**,
+and it arrived by walking the surface the round had just built. The
+clinic-naming gate asked only about boot-configured clinics; the four
+core-journey gates only about seeded accounts; the periodic scheduler's
+tenant universe was the configured list alone (`5873f64`); and now the
+invitation the Team surface exists to send works for the tenants a boot
+created and fails for the ones that sign up. Every time the question was
+right and the population was not -- which is why its gate spends a real
+registration against `limitRegisterByIP`'s ten-per-hour rather than
+reusing a seeded account.
 
 **Every unbuilt surface the brief names and this suite gated is now
 built.** `add-a-colleague` closed with `eeaabdff` -- a Team surface of

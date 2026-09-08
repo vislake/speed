@@ -56,10 +56,13 @@ import { expect, test, type Page } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
+  SIGN_IN_TEXT,
   expectSignedIn,
   openSurface,
   readCurrentTenant,
   signInAs,
+  submitPasswordSignIn,
+  visitSignIn,
 } from './test-utils/journeys.js'
 
 /**
@@ -237,9 +240,28 @@ test(
 const RAW_USER_ID =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
 
+// Closed by 42a14614, and by the route this gate hoped for rather than
+// the cheap one: the app composes an authn lookup of its own
+// (GET /api/reference-app/team-members) and enriches every row from the
+// users table, so the naming holds for EVERY member -- team_members.go
+// says so in as many words, and says it never knows which members the
+// boot seeded and which joined through an invitation. There is no
+// demo-layer-only leg, which is why this gate did not need widening to
+// the self-registered population after all.
+//
+// The naming ladder is You -> display name -> email -> a bilingual
+// "unknown member" fallback, and a raw id is never rendered as a name.
+//
+// Verified on three engines, then by hand: the roster reads
+// demo-acme-only@example.com / You / demo-reader@example.com. A dentist
+// can tell which colleague is which and decide whom to remove, which is
+// the question the surface exists to answer and the one the UUIDs left
+// unanswered.
+//
+// @budget rather than untagged: it signs in.
 test(
   'the members list names people, not user ids',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await expectSignedIn(page)
@@ -259,5 +281,91 @@ test(
       ids,
       `the members list identifies people by raw user id (${ids.join(' , ')}) on the surface whose own sentence promises to say who works in this clinic -- a reader cannot tell which colleague is which, whom to remove, or whether a row is a stranger. go/org carries only userId by module-boundary rule, so the name has to come from an authn-side lookup the app composes: a product decision, not a missing line in the view.`,
     ).toEqual([])
+  },
+)
+
+/** A password that satisfies authn's real policy (12 characters minimum). */
+const SIGNUP_PASSWORD = 'e2e-invite-population-2026'
+
+/**
+ * That a practice which signed ITSELF up can invite a colleague too.
+ *
+ * The gate above asks the same question of a SEEDED demo account, and
+ * passes. This one asks it of the population that actually buys the
+ * product, and it is here because that difference was a real defect:
+ * a self-registered clinic pressing "Send invitation" was answered
+ * "Sending the invitation failed. Try again later." while the identical
+ * click in a boot-configured demo tenant succeeded.
+ *
+ * Narrowed by hand before it was reported, because a symptom is not a
+ * finding: the browser's own span showed POST /api/v1/org/invitations
+ * answering 500 for the self-registered tenant and 200 for tenant-acme;
+ * called directly it answered `org.node_not_found` with an EMPTY
+ * node_id; the surface was then cleared of suspicion (team-view.tsx
+ * picks the root by `depth === 0` and sends its id, which is correct);
+ * and with the correct node id supplied the answer became
+ * `org.internal_error` -- a server-side failure, not a UI one. The
+ * control experiment is what made it a finding rather than a guess: the
+ * same call, same shape, new address, against the seeded tenant, minted
+ * a pending invitation.
+ *
+ * WHY THE GATE ABOVE COULD NOT HAVE CAUGHT IT
+ *
+ * Population. It signs in as a seeded account, and this failed only for
+ * a self-registered one -- the fourth time this suite has met that
+ * shape (the clinic-naming gate asked only about boot-configured
+ * clinics; the four core-journey gates only about seeded accounts; the
+ * periodic scheduler's tenant universe was the configured list alone,
+ * fixed in 5873f64). Every time the question was right and the
+ * population was not.
+ *
+ * WHAT IT COSTS, AND WHY IT IS WORTH IT
+ *
+ * One registration, against `limitRegisterByIP`'s ten per hour -- which
+ * is why it is @pending-and-then-@budget rather than in the default
+ * tier, and why the suite asks for one engine per invocation
+ * (e2e/README.md's budget table). A gate that spends a real
+ * registration to cover the paying population is the trade this suite
+ * has made three times before and not regretted.
+ */
+test(
+  'a self-registered practice can invite a colleague too',
+  { tag: '@pending' },
+  async ({ page }) => {
+    const email = `e2e-invite-pop-${Date.now()}@example.com`
+
+    await visitSignIn(page)
+    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
+    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
+    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
+    await page.getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel }).fill('Northgate Dental')
+    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
+    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+
+    await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
+    await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
+    await expectSignedIn(page)
+
+    await reachThePractisesPeople(page)
+
+    const colleague = `e2e-invited-${Date.now()}@example.com`
+    await page.getByRole('button', { name: TEAM_UI.invite }).first().click()
+    await page.getByRole('textbox', { name: TEAM_UI.address }).fill(colleague)
+    await page.getByRole('button', { name: TEAM_UI.send }).last().click()
+
+    // The invitation actually happened. Asserted on the address in the
+    // roster rather than on a success banner, and NOT on the absence of
+    // an error: a refusal banner and a forgotten invitation look the
+    // same from the outside, and only one of them is what this gate is
+    // about.
+    await expect(
+      page.getByText(colleague),
+      `a practice that registered itself pressed Send invitation and ${colleague} never appeared as invited -- the same click succeeds in a boot-configured demo tenant, so the product works for the population that was seeded and not for the one that signs up`,
+    ).toBeVisible({ timeout: 30_000 })
+
+    await expect(
+      page.getByRole('main'),
+      'the invitation is listed but nothing says it is still outstanding',
+    ).toContainText(OUTSTANDING)
   },
 )
