@@ -214,15 +214,18 @@ type Aggregator struct {
 // directly (same package, see module.go).
 //
 // summaries is the repository both ingest paths persist through and
-// RealtimeCount reconstructs an uncounted bucket from; the constructor's
-// contract is an Aggregator over summaries, and this documentation never
+// RealtimeCount reconstructs an uncounted bucket from. The constructor's
+// contract is an Aggregator over summaries (module.go's NewModule always
+// passes NewSummaryRepository(db)'s answer); this documentation never
 // claimed nil support -- it simply never refused it. A nil repository is
-// an unconfigured construction (the module path always passes
-// NewSummaryRepository's answer): RealtimeCount cannot answer a counter
-// miss without durable state to reconstruct from, and answering (0, nil)
-// would be a silent zero, an exactly-legal quota value for a reader that
-// cannot answer at all -- it therefore returns
-// ErrUsageSummariesUnconfigured instead (see that error's doc comment).
+// an unconfigured construction, and every operation that needs the
+// repository refuses it with the coded ErrUsageSummariesUnconfigured:
+// RealtimeCount on a counter miss (answering (0, nil) would be a silent
+// zero, an exactly-legal quota value -- zero usage means certainly within
+// quota -- for a reader that cannot answer at all), and both ingest paths
+// through ensureSeeded, whose refusal keeps their folds from ever
+// reaching the nil repository's connection (see that error's doc
+// comment).
 func NewAggregator(summaries *SummaryRepository) *Aggregator {
 	return &Aggregator{
 		summaries: summaries,
@@ -322,12 +325,29 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 // tenantCtx must carry the tenant the summary row lives under.
 //
 // A bucket with no summary row yet seeds to zero (record-not-found is not
-// an error); an Aggregator with no summaries repository (a pure-counter
-// construction) seeds to zero without reading. On a genuine read error
-// the entry is left unseeded and the error returned, so a later call
-// retries the reconstruction rather than silently running from zero past
-// a durable history.
+// an error). An Aggregator built with no summaries repository
+// (NewAggregator(nil)) is NOT a pure-counter construction: it has no
+// durable state to reconstruct from and no fold could persist anywhere,
+// so the seed refuses it with the coded ErrUsageSummariesUnconfigured
+// before any counter entry is created (module.go's NewModule always
+// passes NewSummaryRepository(db)'s answer -- see that error's doc
+// comment for why the nil form is unconfigured, not sanctioned). On a
+// genuine read error the entry is left unseeded and the error returned,
+// so a later call retries the reconstruction rather than silently
+// running from zero past a durable history.
 func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature string, start time.Time) (*counterEntry, error) {
+	// An Aggregator built with no summaries repository (NewAggregator(nil))
+	// cannot seed anything. The refusal must stand before the LoadOrStore
+	// below: seeding to zero -- or even merely inserting an unseeded entry
+	// -- would let the ingest paths' folds reach the nil repository's
+	// connection and crash on it (the P3-metering-4 crash points), and
+	// would leave a lingering entry a later read could misreport as a real
+	// zero. Refusing up front keeps every operation on the unconfigured
+	// object on the same coded error path (see
+	// ErrUsageSummariesUnconfigured's doc comment).
+	if a.summaries == nil {
+		return nil, ErrUsageSummariesUnconfigured
+	}
 	key := realtimeKey(tenantID, feature, start)
 	entryAny, _ := a.counters.LoadOrStore(key, &counterEntry{})
 	entry, ok := entryAny.(*counterEntry)
@@ -340,10 +360,6 @@ func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature s
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.seeded {
-		return entry, nil
-	}
-	if a.summaries == nil {
-		entry.seeded = true
 		return entry, nil
 	}
 	existing, err := a.summaries.FindByID(tenantCtx, summaryID(feature, start))
@@ -472,8 +488,12 @@ func (a *Aggregator) deliverOverageCrossing(ctx context.Context, entry *counterE
 // miss can only be answered by reconstructing from durable state, and
 // answering zero for a reader that cannot know is a silent zero, an
 // exactly-legal quota answer (zero usage means within quota) for a
-// configuration error (reviewer finding P3-metering-C). See that error's
-// doc comment for the alignment with go/billing's own refusal vocabulary.
+// configuration error (reviewer finding P3-metering-C). Both ingest paths
+// refuse the same construction with the same coded error through their
+// ensureSeeded seed, so no operation on the nil-summaries object
+// half-works: no fold ever reaches the nil repository's connection and no
+// read ever answers a value it cannot know. See that error's doc comment
+// for the alignment with go/billing's own refusal vocabulary.
 func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (float64, error) {
 	start, _, err := periodBounds(at, a.bucket)
 	if err != nil {

@@ -78,12 +78,16 @@ var (
 	// caller-error codes.
 	ErrMetadataEncodeFailed = apperr.Internal("metering.metadata_encode_failed")
 
-	// ErrUsageSummariesUnconfigured reports that RealtimeCount was asked
-	// to answer a counter miss on an Aggregator built with no summaries
-	// repository (NewAggregator(nil)) -- aggregator.go's RealtimeCount.
-	// A counter miss can only be answered by reconstructing the bucket
-	// from its durable UsageSummary row (ensureSeeded), and an Aggregator
-	// with no repository has no durable state to reconstruct from; the
+	// ErrUsageSummariesUnconfigured reports that an operation which needs
+	// the summaries repository ran on an Aggregator built without one
+	// (NewAggregator(nil)) -- aggregator.go. ensureSeeded refuses the
+	// unconfigured construction before creating any counter entry, which
+	// refuses both ingest paths too (their fold follows the seed only on
+	// its success, so no fold can ever reach the nil repository's
+	// connection), and RealtimeCount refuses a counter miss the same way,
+	// since a miss can only be answered by reconstructing the bucket from
+	// its durable UsageSummary row (ensureSeeded), and an Aggregator with
+	// no repository has no durable state to reconstruct from. The
 	// construction is unconfigured, never a sanctioned nil-supported
 	// variant (module.go's NewModule always passes
 	// NewSummaryRepository(db)'s answer; only a host bypassing NewModule

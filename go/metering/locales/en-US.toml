@@ -25,4 +25,4 @@
 
 "metering.metadata_encode_failed" = "Usage event metadata could not be encoded for storage."
 
-"metering.usage_summaries_unconfigured" = "This aggregator has no usage-summaries repository, so the real-time count cannot be answered."
+"metering.usage_summaries_unconfigured" = "This aggregator was built with no usage-summaries repository, so usage cannot be persisted or counted."
