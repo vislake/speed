@@ -186,3 +186,92 @@ func TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits(
 		t.Errorf("row count for w-1 = %d, want 0 (the nested Create never ran at all)", count)
 	}
 }
+
+// TestWithTenantSession_SQLite_CommitTimeFailure_RollbackAttemptClearsTheResidue
+// is the coverage test go/dbkit/AGENTS.md's "commit-time failure"
+// known-limitation entry recorded as missing, for the cell that entry
+// reproduces: a constraint genuinely deferred to commit time (PRAGMA
+// defer_foreign_keys = ON, real SQLite semantics) makes Commit() itself
+// fail, and Go's database/sql has already closed the *sql.Tx the instant
+// that Commit was attempted, so the rollback a Transaction wrapper defers
+// for this exact failure never reaches the driver -- which, on this
+// package's SQLite driver, leaves the connection holding the uncommitted
+// transaction, fn's write visible to any later statement on that
+// connection. WithTenantSession's explicit rollback attempt
+// (rollbackAfterFailedCommit) must clear that residue; the assertion below
+// -- the fn's write is NOT visible once WithTenantSession has returned its
+// commit error -- failed on the pre-fix implementation (which delegated
+// the lifecycle to gorm's Transaction wrapper) with the row still counted,
+// and passes after.
+func TestWithTenantSession_SQLite_CommitTimeFailure_RollbackAttemptClearsTheResidue(t *testing.T) {
+	dsn := fmt.Sprintf("file:tenant_session_commit_failure_%d?mode=memory&cache=shared", tenantSessionNestedTestDBSeq.Add(1))
+
+	db, err := Open(context.Background(), Options{Dialect: DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// One connection, so the statements below are deterministic about which
+	// connection they ride: the pool cannot hand a later statement a
+	// different, clean connection and make the residue invisible for the
+	// wrong reason.
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB(): %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+
+	// foreign_keys is a per-connection pragma; with one connection this
+	// Exec pins it for every later statement.
+	if err = db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	if err = db.Exec(`CREATE TABLE parents (id VARCHAR(26) PRIMARY KEY)`).Error; err != nil {
+		t.Fatalf("create parents: %v", err)
+	}
+	if err = db.Exec(`CREATE TABLE children (
+		id  VARCHAR(26) PRIMARY KEY,
+		pid VARCHAR(26) NOT NULL REFERENCES parents(id)
+	)`).Error; err != nil {
+		t.Fatalf("create children: %v", err)
+	}
+
+	ctx := ctxTenant("tenant-a")
+	err = WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		// Defer the FK check to commit time: the INSERT below references a
+		// parent that does not exist, which is legal inside the transaction
+		// and fails only when Commit() runs -- the commit-time failure cell.
+		if pragmaErr := tx.Exec("PRAGMA defer_foreign_keys = ON").Error; pragmaErr != nil {
+			return pragmaErr
+		}
+		return tx.Exec(`INSERT INTO children (id, pid) VALUES ('c-1', 'no-such-parent')`).Error
+	})
+	if err == nil {
+		t.Fatal("WithTenantSession() error = nil, want the deferred FK violation to fail the commit")
+	}
+
+	// The write fn attempted must not be visible once WithTenantSession has
+	// returned the commit failure: rollbackAfterFailedCommit's explicit
+	// rollback must have cleared the residue the failed commit left on the
+	// connection. This read rides the pool like any later caller statement
+	// would.
+	var count int64
+	if err := db.Raw(`SELECT count(*) FROM children WHERE id = ?`, "c-1").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("children row count after the failed commit = %d, want 0 (the commit-time-failure residue must be rolled back by WithTenantSession's own explicit rollback attempt, not left visible to later statements)", count)
+	}
+
+	// The connection must remain fully usable for a fresh session.
+	if err := WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		return tx.Exec(`INSERT INTO parents (id) VALUES ('p-1')`).Error
+	}); err != nil {
+		t.Fatalf("second WithTenantSession after the failed commit: %v", err)
+	}
+	if err := db.Raw(`SELECT count(*) FROM parents WHERE id = ?`, "p-1").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("parents row count after the second session = %d, want 1", count)
+	}
+}

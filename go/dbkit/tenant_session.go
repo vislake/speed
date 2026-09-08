@@ -61,18 +61,19 @@ const setTenantSessionGUCSQL = "SELECT set_config('" + tenantSessionGUCName + "'
 //
 // This is not merely a style objection to nesting. WithTenantSession's own
 // audit-publish step (see the type's doc comment on auditCapturePlugin in
-// audit_capture.go) treats its own db.Transaction call returning nil as
-// proof the real, outermost transaction has genuinely committed, and
-// publishes every event this call's writes buffered only on the strength of
-// that proof. GORM's db.Transaction (gorm.io/gorm@v1.31.2/finisher_api.go)
-// does not make that distinction itself: called against a *gorm.DB whose
-// Statement.ConnPool already is a gorm.TxCommitter, it issues a SAVEPOINT
-// instead of a real BEGIN, and returns nil the instant that inner savepoint
-// is released — regardless of whether the real, still-open outer
-// transaction goes on to commit or roll back. A nested WithTenantSession
-// call would read that nil exactly like a top-level one, and publish its
-// buffered events immediately: a real, reproduced phantom audit event
-// surviving a real rollback of the enclosing transaction (see
+// audit_capture.go) treats its own top-level transaction call returning
+// nil as proof the real, outermost transaction has genuinely committed,
+// and publishes every event this call's writes buffered only on the
+// strength of that proof. The wrapper it used to delegate that call to
+// (GORM's db.Transaction, gorm.io/gorm@v1.31.2/finisher_api.go) did not
+// make that distinction itself: called against a *gorm.DB whose
+// Statement.ConnPool already is a gorm.TxCommitter, it issued a SAVEPOINT
+// instead of a real BEGIN, and returned nil the instant that inner
+// savepoint was released — regardless of whether the real, still-open
+// outer transaction went on to commit or roll back. A nested
+// WithTenantSession call read that nil exactly like a top-level one, and
+// published its buffered events immediately: a real, reproduced phantom
+// audit event surviving a real rollback of the enclosing transaction (see
 // tenant_session_test.go's
 // TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits,
 // which fails with exactly that outcome against a version of this function
@@ -154,25 +155,30 @@ var ErrNestedTenantSession = errors.New("dbkit: WithTenantSession called with an
 // The return value carries one obligation every retrying caller of this
 // function must be able to read off this contract: a non-nil return does
 // NOT prove that nothing of fn's writes happened. On the commit-time
-// failure cell — a failure GORM's Transaction wrapper surfaces from
-// tx.Commit() itself (SQLite's deferred-constraint or commit-time lock
-// error among them) — database/sql marks the transaction done the instant
-// Commit is attempted, so the rollback GORM defers to is a same-call
-// no-op, and fn's writes can remain visible afterward on the very
-// connection that attempted them, neither durably committed nor rolled
-// back. AGENTS.md's "commit-time failure" known-limitation entry
-// reproduces and documents this cell, and records that no test in this
-// package covers it yet. A caller that retries on a non-nil return without
-// re-verifying what the failed attempt actually left behind can apply its
-// operation twice over what already stuck. The obligation is therefore the
-// caller's, and it is stated here because the contract is the only place
-// this package can hold it: an operation retried after a non-nil return
-// must be idempotent over its own residue, or must re-verify the row state
-// its earlier attempt may already have changed. go/sharing's guarded
-// view-recording write models the idempotency answer: its granted log row
-// doubles as the retried attempt's recognition key, so a retry that finds
-// its own committed residue reports the access as already recorded rather
-// than applying it again.
+// failure cell — a failure surfaced from tx.Commit() itself (SQLite's
+// deferred-constraint or commit-time lock error among them) — Go's
+// database/sql marks the *sql.Tx terminally done the instant Commit is
+// attempted, so no rollback through the transaction handle can reach the
+// driver afterward, and a driver that leaves the underlying connection
+// holding the uncommitted transaction (this package's SQLite driver does,
+// as rollbackAfterFailedCommit's own doc comment records) can keep fn's
+// writes visible on that very connection until the connection closes or
+// something rolls the transaction back at the connection level.
+// WithTenantSession's own answer to that cell is rollbackAfterFailedCommit
+// below — an explicit, best-effort rollback attempt issued when Commit
+// fails, instead of trusting the deferred no-op a Transaction wrapper
+// would make — and its reach is bounded by the pool, so the obligation
+// below is narrowed, never eliminated. A caller that retries on a non-nil
+// return without re-verifying what the failed attempt actually left behind
+// can still apply its operation twice over what already stuck. The
+// obligation is therefore the caller's, and it is stated here because the
+// contract is the only place this package can hold it: an operation
+// retried after a non-nil return must be idempotent over its own residue,
+// or must re-verify the row state its earlier attempt may already have
+// changed. go/sharing's guarded view-recording write models the
+// idempotency answer: its granted log row doubles as the retried attempt's
+// recognition key, so a retry that finds its own committed residue reports
+// the access as already recorded rather than applying it again.
 func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) error) error {
 	tid, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -202,20 +208,68 @@ func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) er
 		txCtx, buf = withAuditBuffer(ctx)
 	}
 
-	if err := db.WithContext(txCtx).Transaction(func(tx *gorm.DB) error {
-		if isPostgres {
-			if err := tx.Exec(setTenantSessionGUCSQL, string(tid)).Error; err != nil {
-				return fmt.Errorf("dbkit: set %s session GUC: %w", tenantSessionGUCName, err)
-			}
+	// WithTenantSession owns the transaction lifecycle explicitly — Begin,
+	// fn, Commit and the rollback paths below — rather than delegating to
+	// gorm's Transaction wrapper (finisher_api.go), for the reason
+	// rollbackAfterFailedCommit's doc comment develops: the wrapper's only
+	// rollback after a Commit failure is a deferred tx.Rollback() that
+	// database/sql has already made a same-call no-op, and the
+	// commit-failure cell needs a rollback attempt of this function's own.
+	// The explicit lifecycle also makes the fn-failure rollback below a
+	// real, observable statement instead of a deferred side effect.
+	tx := db.WithContext(txCtx).Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("dbkit: begin tenant session transaction: %w", tx.Error)
+	}
+
+	// A panic inside fn must roll the transaction back — never leave it
+	// open on its connection — and re-raise, the behavior gorm's own
+	// Transaction wrapper provides for its closure. The rollback here is
+	// through the still-open handle, so it is real; a panic after Commit
+	// succeeded (there should never be one, but the guarantee is cheap)
+	// lands on a done handle and no-ops before the re-raise.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = tx.Rollback()
+			panic(r)
 		}
-		return fn(tx)
-	}); err != nil {
+	}()
+
+	if isPostgres {
+		if err := tx.Exec(setTenantSessionGUCSQL, string(tid)).Error; err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("dbkit: set %s session GUC: %w", tenantSessionGUCName, err)
+		}
+	}
+
+	if err := fn(tx); err != nil {
+		// fn failed: the transaction must not commit. The transaction is
+		// still open here, so this explicit rollback is effective — not
+		// the commit-failure no-op rollbackAfterFailedCommit has to work
+		// around. The rollback's own error is deliberately not returned:
+		// the fn failure is the error this call reports, and a rollback
+		// failure on an open handle is not a state a caller can act on
+		// differently.
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		// Commit-time failure: the cell rollbackAfterFailedCommit's doc
+		// comment describes. Attempt that rollback, then report the
+		// commit error unchanged — the attempt must never mask the
+		// failure this call returns.
+		rollbackAfterFailedCommit(ctx, db)
 		return err
 	}
 
 	// The transaction above has now genuinely committed. Publish whatever
 	// this transaction's own writes buffered — never before this point,
 	// and never at all had the transaction returned a non-nil error above.
+	// (The audit-buffer mechanism's own contract — publish only after this
+	// call's transaction genuinely committed — is unaffected by the
+	// explicit lifecycle this function now runs: Commit returning nil is
+	// still the one event that opens the publish path below.)
 	//
 	// This is also the collection-to-persistence crash window this
 	// function's design leaves open — a process death between the commit
@@ -231,4 +285,57 @@ func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) er
 		plugin.publishBuffered(ctx, buf)
 	}
 	return nil
+}
+
+// rollbackAfterFailedCommit is WithTenantSession's explicit answer to the
+// commit-time failure cell its doc comment describes: Commit() itself
+// failed, and the transaction's writes are in a state only the connection
+// knows about.
+//
+// What makes an explicit attempt necessary at all: GORM's Transaction
+// wrapper would defer a tx.Rollback() for exactly this failure, but Go's
+// database/sql marks a *sql.Tx terminally done the instant Commit() is
+// attempted — even when the driver reports the commit failed — so that
+// rollback is a same-call no-op (sql.ErrTxDone) that never reaches the
+// driver. The driver matters because of what it does with the failed
+// commit: the SQLite driver this package uses (github.com/glebarez/sqlite,
+// the modernc.org/sqlite port) leaves the underlying connection holding
+// the uncommitted transaction when its COMMIT is refused — reproduced
+// against a real in-memory database with a genuine deferred foreign-key
+// violation at commit — and database/sql returns that connection to the
+// pool in that state, so fn's writes stay visible to any later statement
+// the pool runs on that connection until the connection closes or
+// something issues a connection-level ROLLBACK. PostgreSQL does not have
+// this residue problem — a failed COMMIT aborts the transaction server-
+// side — which is why this attempt is harmless there (a ROLLBACK with no
+// transaction in progress succeeds with a warning at most), not a fix it
+// needs.
+//
+// The attempt is therefore a raw ROLLBACK executed through db — the pool —
+// not through the dead transaction handle: the pool is the only channel
+// that can reach the connection the driver left transacting. It is
+// best-effort by construction, and its two possible answers are both
+// acceptable outcomes, which is why its error is deliberately ignored
+// rather than returned or logged:
+//
+//   - The statement reaches the connection still holding the failed
+//     transaction, and rolls it back: the residue is cleared, which is the
+//     point of the attempt.
+//   - The statement reaches a connection with nothing to roll back —
+//     SQLite answers "cannot rollback - no transaction is active", and a
+//     pooled connection that is not the one the driver left transacting
+//     always answers exactly that — meaning either the residue was already
+//     cleared some other way (the driver cleaned up, the connection was
+//     closed, another rollback got there first) or the tainted connection
+//     was checked out by a concurrent statement first, in which case the
+//     residue survives and the caller's idempotency obligation (this
+//     function's doc comment) still applies.
+//
+// The one outcome the attempt must never produce — rolling back a
+// DIFFERENT, live transaction — cannot occur: a connection holding a live
+// transaction is checked out of the pool, never free for this statement to
+// ride, so a free connection either holds this call's own failed
+// transaction or none at all.
+func rollbackAfterFailedCommit(ctx context.Context, db *gorm.DB) {
+	_ = db.WithContext(ctx).Exec("ROLLBACK").Error
 }
