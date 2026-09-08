@@ -65,7 +65,7 @@ replace github.com/vislake/speed/go/notification => ../../go/notification
 replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
 
 // go/sharing is imported directly by this app: buildServer wires it as the
-// round's mandatory-first-consumer proof (see server.go, sharing_resolver.go
+// module's mandatory-first-consumer proof (see server.go, sharing_resolver.go
 // and sharing_flow_test.go). Like every other workspace-local module it
 // carries no published version, so this app's own go.mod needs its own
 // replace for it too -- root CLAUDE.md's per-module standalone-build rule
@@ -74,7 +74,7 @@ replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
 replace github.com/vislake/speed/go/sharing => ../../go/sharing
 
 // go/compliance and go/admin are imported directly by this app: buildServer
-// wires them as go/admin round 1's mandatory-first-consumer proof (see
+// wires them as go/admin's mandatory-first-consumer proof (see
 // server.go, demo_admin.go and admin_flow_test.go). Like every other
 // workspace-local module they carry no published version, so this app's
 // own go.mod needs its own replace for them too -- root CLAUDE.md's

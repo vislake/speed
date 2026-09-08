@@ -8,8 +8,8 @@ description: >-
 #
 # VERSION SOURCE
 # This action reads go.work's `go` directive (currently `go 1.26.8`, raised
-# from 1.25.0 by the govulncheck-wiring round to clear a long tail of
-# stdlib CVEs -- see security.yml's own TOOLCHAIN comment for the detail)
+# from 1.25.0 to clear a long tail of stdlib CVEs -- see security.yml's
+# own TOOLCHAIN comment for the detail)
 # via actions/setup-go's go-version-file input. go.work is the repository's
 # single Go toolchain version source for CI -- the one file the action
 # resolves. Each module's go.mod also declares a `go` version, but that is
@@ -25,8 +25,7 @@ description: >-
 # -- so its packages are built and tested there, on full-ci-labeled PRs).
 # (Every one of the twenty-one implemented modules, plus
 # examples/reference-app, declares `go 1.26.0` today -- `go mod tidy`'s own
-# choice, converged during the govulncheck-wiring round's dependency
-# bumps, not a value this action or any script sets by hand. That is fine:
+# choice, not a value this action or any script sets by hand. That is fine:
 # the guard refuses a go.mod above go.work's line, never one below it.)
 # The root .mise.toml
 # mirrors this directive for local toolchain installs (the Taskfile setup

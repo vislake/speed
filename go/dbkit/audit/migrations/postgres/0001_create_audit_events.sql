@@ -50,8 +50,8 @@
 -- way, never as information about which background process ran --
 -- go/dbkit/audit/AGENTS.md's "Column inventory" section and model.go's
 -- IP field doc comment carry the standing account. model.go's field
--- comments were updated alongside this one in the same round, so all
--- three say the same thing.
+-- comments were updated alongside this one, so all three say the same
+-- thing.
 --
 -- No column here is ever updated or deleted by application code -- see
 -- go/dbkit/audit/repository.go's own doc comment on why Repository

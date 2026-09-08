@@ -732,7 +732,7 @@ jobs:
         # The compile-enforcement half: if a spec change (and with it the
         # generated interface) outgrew its Handler -- notes', org's,
         # storage's, notification's, sharing's, pki's, admin's,
-        # integration's, ai-gateway's -- or, for the app's own two P3a
+        # integration's, ai-gateway's -- or, for the app's own two
         # fragments, the cmd/server implementations of the cases and
         # smilesim interfaces (whose compile-time assertions live in
         # cmd/server/cases.go and cmd/server/smilesim.go rather than in
