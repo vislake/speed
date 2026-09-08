@@ -449,3 +449,36 @@ func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *
 		t.Errorf("compliance.export.request events = %d, want exactly 1 -- every queue retry re-runs the export and fires another", complianceEvents)
 	}
 }
+
+// TestHandler_AdminExportAuditEvents_MalformedBodyAndEmptyTenant_Refused
+// pins the export route's own boundary refusals: a syntactically broken
+// body is admin.request_body_invalid, and a well-formed body naming no
+// tenant is admin.tenant_id_required -- neither ever reaches
+// jobs.Queue.Enqueue, whose Enqueue-level validation the service tests
+// already pin separately.
+func TestHandler_AdminExportAuditEvents_MalformedBodyAndEmptyTenant_Refused(t *testing.T) {
+	env := buildTestAdminModule(t)
+	const operator = "operator-export-http"
+	req := func(body string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/admin/audit-events/export", strings.NewReader(body))
+		return r.WithContext(authn.WithPrincipal(r.Context(), authn.Principal{UserID: operator}))
+	}
+
+	w := httptest.NewRecorder()
+	env.Admin.handler.ServeHTTP(w, req(`{"tenantId": 42}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status = %d, body = %s, want 400", w.Code, w.Body.String())
+	}
+	if got := decodedErrorCode(t, w); got != ErrRequestBodyInvalid.Code {
+		t.Fatalf("malformed code = %q, want %q", got, ErrRequestBodyInvalid.Code)
+	}
+
+	w = httptest.NewRecorder()
+	env.Admin.handler.ServeHTTP(w, req(`{"tenantId":""}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty-tenant status = %d, body = %s, want 400", w.Code, w.Body.String())
+	}
+	if got := decodedErrorCode(t, w); got != ErrTenantIDRequired.Code {
+		t.Fatalf("empty-tenant code = %q, want %q", got, ErrTenantIDRequired.Code)
+	}
+}

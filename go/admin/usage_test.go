@@ -3,15 +3,20 @@ package admin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/admin/api"
 	"github.com/vislake/speed/go/admin/internal/testutil"
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/metering"
 	obs "github.com/vislake/speed/go/observability"
@@ -354,5 +359,91 @@ func TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTena
 		if !reflect.DeepEqual(firstRow.CreditBalance, secondRow.CreditBalance) {
 			t.Errorf("tenant %q: CreditBalance changed between summaries: %+v -> %+v", id, firstRow.CreditBalance, secondRow.CreditBalance)
 		}
+	}
+}
+
+// TestHandler_AdminGetUsageSummary_ComposedRowsOverHTTP is the usage
+// dashboard's composed-HTTP proof: GET /api/v1/admin/usage-summary
+// through the real handler renders one row per ledger tenant with
+// go/metering's and go/billing's data stitched in -- exercised through the
+// Module-level WithMetering/WithBilling wiring buildTestAdminModule now
+// applies (the identical options a real host's cmd/server/server.go
+// passes), not through a hand-built UsageService. A tenant with recorded
+// usage and a credit grant answers its metering summaries and balance on
+// the wire; a tenant that never touched either answers an empty
+// summaries list and a materialized zero balance -- and neither row
+// fabricates a subscription none exists.
+func TestHandler_AdminGetUsageSummary_ComposedRowsOverHTTP(t *testing.T) {
+	env := buildTestAdminModule(t)
+	ctx := context.Background()
+
+	const busyTenant = pkgcore.TenantID("tenant-usage-http-busy")
+	// The manual-registration path (Tenants().Create), not the
+	// event-driven lazy one: a manually registered row carries the display
+	// name this test asserts rides the dashboard row.
+	if err := env.Admin.Tenants().Create(ctx, &Tenant{TenantID: string(busyTenant), DisplayName: "Usage HTTP Busy Co"}); err != nil {
+		t.Fatalf("Tenants().Create() error = %v", err)
+	}
+	if err := env.Metering.Aggregator().Ingest(ctx, metering.UsageEvent{
+		TenantID: string(busyTenant), Feature: "ai.generation", Quantity: 3, IdempotencyKey: "usage-http-key-1",
+	}); err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if _, err := env.Billing.Credits().Grant(pkgcore.WithTenant(ctx, busyTenant), billing.GrantInput{Amount: 500, Reason: "usage-http-test"}); err != nil {
+		t.Fatalf("Grant() error = %v", err)
+	}
+
+	const idleTenant = pkgcore.TenantID("tenant-usage-http-idle")
+	if err := env.Admin.Tenants().Create(ctx, &Tenant{TenantID: string(idleTenant), DisplayName: "Usage HTTP Idle Co"}); err != nil {
+		t.Fatalf("Tenants().Create() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage-summary", nil)
+	req = req.WithContext(authn.WithPrincipal(req.Context(), authn.Principal{UserID: "operator-usage-http"}))
+	w := httptest.NewRecorder()
+	env.Admin.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", w.Code, w.Body.String())
+	}
+	var resp api.AdminUsageSummaryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	rows := make(map[string]api.AdminUsageSummaryRow, len(resp.Rows))
+	for _, row := range resp.Rows {
+		rows[row.TenantID] = row
+	}
+
+	busy, ok := rows[string(busyTenant)]
+	if !ok {
+		t.Fatalf("response rows = %+v, want a row for %q", resp.Rows, busyTenant)
+	}
+	if busy.DisplayName != "Usage HTTP Busy Co" {
+		t.Fatalf("busy row DisplayName = %q, want the ledger's display name", busy.DisplayName)
+	}
+	if busy.MeteringSummaries == nil || len(*busy.MeteringSummaries) != 1 || (*busy.MeteringSummaries)[0].Feature != "ai.generation" || (*busy.MeteringSummaries)[0].Quantity != 3 {
+		t.Fatalf("busy row MeteringSummaries = %+v, want the recorded ai.generation x3 summary", busy.MeteringSummaries)
+	}
+	if busy.CreditBalance == nil || busy.CreditBalance.Available != 500 {
+		t.Fatalf("busy row CreditBalance = %+v, want the granted 500", busy.CreditBalance)
+	}
+	if busy.ActiveSubscription != nil {
+		t.Fatalf("busy row ActiveSubscription = %+v, want nil -- no subscription was ever created", busy.ActiveSubscription)
+	}
+
+	idle, ok := rows[string(idleTenant)]
+	if !ok {
+		t.Fatalf("response rows = %+v, want a row for %q", resp.Rows, idleTenant)
+	}
+	if idle.MeteringSummaries == nil || len(*idle.MeteringSummaries) != 0 {
+		t.Fatalf("idle row MeteringSummaries = %+v, want a non-nil empty list -- go/metering is wired and this tenant has no usage", idle.MeteringSummaries)
+	}
+	if idle.CreditBalance == nil || idle.CreditBalance.Available != 0 {
+		t.Fatalf("idle row CreditBalance = %+v, want the materialized zero balance", idle.CreditBalance)
+	}
+	if idle.ActiveSubscription != nil {
+		t.Fatalf("idle row ActiveSubscription = %+v, want nil", idle.ActiveSubscription)
 	}
 }

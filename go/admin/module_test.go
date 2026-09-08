@@ -1,8 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"errors"
+	"io/fs"
 	"testing"
 	"time"
 
@@ -113,7 +116,14 @@ type testAdminEnv struct {
 
 	Org          *org.Module
 	Notification *notification.Module
-	Queue        *jobs.StandaloneQueue
+
+	// Compliance is the real *compliance.Module wired into adminModule
+	// through WithCompliance -- exposed so a Register-contract test can
+	// build a second admin.NewModule over the same db with one mandatory
+	// With* option omitted and assert the named refusal.
+	Compliance *compliance.Module
+
+	Queue *jobs.StandaloneQueue
 
 	// DB is the shared *gorm.DB every module above was opened against --
 	// useful for a test that needs to write a fixture row directly
@@ -133,12 +143,14 @@ type testAdminEnv struct {
 	// the audit exports through.
 	Sharing *sharing.Module
 
-	// Metering and Billing are real modules, NOT wired into adminModule
-	// by default (WithMetering/WithBilling are optional -- see Module's
-	// own doc comments): a usage test wires either or both itself via a
-	// second admin.NewModule call over the same db, mirroring how the
-	// role-management tests call AttachRBAC themselves rather than having
-	// this builder do it for them.
+	// Metering and Billing are real modules, WIRED into adminModule
+	// through the optional WithMetering/WithBilling options exactly as the
+	// reference app wires them (cmd/server/server.go): the usage tests
+	// exercise UsageService through the composed module's own Usage()
+	// surface, the wiring shape a real host boots -- the mirror of
+	// buildTestAdminModule calling nothing of AttachRBAC's own job and
+	// leaving the role-management/impersonation tests to call it
+	// themselves.
 	Metering *metering.Module
 	Billing  *billing.Module
 }
@@ -239,6 +251,10 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 	)
 
 	rbacModule := rbac.NewModule(db)
+
+	// metering and billing are constructed BEFORE adminModule so the
+	// optional WithMetering/WithBilling options below can wire them in,
+	// the identical ordering a real host's cmd/server/server.go follows.
 	meteringModule := metering.NewModule(db)
 	billingModule := billing.NewModule(db, meteringModule.Aggregator())
 
@@ -248,6 +264,8 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 		WithCompliance(complianceModule),
 		WithNotification(notificationModule),
 		WithQueue(queue),
+		WithMetering(meteringModule),
+		WithBilling(billingModule),
 	)
 
 	reg, err := pkgcore.NewKernel().Bootstrap(t.Context(),
@@ -270,6 +288,7 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 		Authn:        authnModule,
 		Org:          orgModule,
 		Notification: notificationModule,
+		Compliance:   complianceModule,
 		Queue:        queue,
 		DB:           db,
 		RBAC:         rbacService,
@@ -399,4 +418,118 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestModule_Register_MissingMandatoryOption_RefusesByName pins each
+// mandatory With* option's fail-closed gate by name: Register must answer
+// its own named error for whichever mandatory option the host forgot --
+// never a nil-panic on a seam read later, never a module that registers
+// half-wired. The authn row doubles as the proof that the second gate
+// (a *authn.Module whose Service() is nil because its OWN Register never
+// ran) keeps its own distinct refusal with the same code.
+func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
+	env := buildTestAdminModule(t)
+	// Every case below fails before Register touches the registry (the
+	// option checks precede any declaration), so one bare registry serves
+	// them all.
+	reg := newTestRegistry()
+
+	freshAuthn, err := authn.NewModule(env.DB,
+		authn.WithBlindIndexKey(testBlindIndexKey),
+		authn.WithKeySource(noopKeySource{}),
+	)
+	if err != nil {
+		t.Fatalf("authn.NewModule() error = %v", err)
+	}
+
+	cases := []struct {
+		name string
+		opts []Option
+		want string
+	}{
+		{
+			name: "no option at all",
+			want: ErrAuthnServiceRequired.Code,
+		},
+		{
+			name: "authn module whose own Register never ran",
+			opts: []Option{WithAuthn(freshAuthn)},
+			want: ErrAuthnServiceRequired.Code,
+		},
+		{
+			name: "org missing",
+			opts: []Option{WithAuthn(env.Authn)},
+			want: ErrOrgModuleRequired.Code,
+		},
+		{
+			name: "compliance missing",
+			opts: []Option{WithAuthn(env.Authn), WithOrg(env.Org)},
+			want: ErrComplianceModuleRequired.Code,
+		},
+		{
+			name: "notification missing",
+			opts: []Option{WithAuthn(env.Authn), WithOrg(env.Org), WithCompliance(env.Compliance)},
+			want: ErrNotificationModuleRequired.Code,
+		},
+		{
+			name: "queue missing",
+			opts: []Option{WithAuthn(env.Authn), WithOrg(env.Org), WithCompliance(env.Compliance), WithNotification(env.Notification)},
+			want: ErrQueueRequired.Code,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModule(env.DB, tc.opts...)
+			if err := m.Register(reg); !isCode(err, tc.want) {
+				t.Fatalf("Register() error = %v, want %s", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestModule_Register_TwiceOnOneRegistry_FailsClosed pins the
+// double-declaration refusal: Register's contract is "called exactly once"
+// (module.go), and a second call must fail at the duplicate-permission
+// gate rather than silently re-declaring admin's whole catalog -- the
+// host error of wiring the same module instance into one Bootstrap set
+// twice must not be able to go unnoticed.
+func TestModule_Register_TwiceOnOneRegistry_FailsClosed(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	err := env.Admin.Register(env.Registry)
+	if err == nil {
+		t.Fatal("second Register() succeeded, want a duplicate-declaration refusal")
+	}
+	if !errors.Is(err, pkgcore.ErrDuplicatePermission) {
+		t.Fatalf("second Register() error = %v, want pkgcore.ErrDuplicatePermission", err)
+	}
+}
+
+// TestModule_SelfDescription_UsageMigrationsAndSpecArePresent pins the
+// module-level packaging contract a Bootstrap host relies on without ever
+// calling itself: WithMetering/WithBilling wiring leaves Usage() a real,
+// fully wired UsageService (never nil, unlike Search() before Register);
+// Migrations() ships a non-empty migration tree; and OpenAPISpec()
+// carries the module's own fragment -- the three surfaces the
+// migration-registry, locale-merge and api-contract toolchains read from
+// the pkgcore.Module interface.
+func TestModule_SelfDescription_UsageMigrationsAndSpecArePresent(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	if env.Admin.Usage() == nil {
+		t.Fatal("Usage() is nil after a Bootstrap wired WithMetering/WithBilling, want the composed UsageService")
+	}
+
+	migrationEntries, err := fs.ReadDir(env.Admin.Migrations(), ".")
+	if err != nil {
+		t.Fatalf("Migrations().ReadDir() error = %v", err)
+	}
+	if len(migrationEntries) == 0 {
+		t.Fatal("Migrations() carries no migration files")
+	}
+
+	spec := env.Admin.OpenAPISpec()
+	if len(spec) == 0 || !bytes.Contains(spec, []byte("admin_listTenants")) {
+		t.Fatalf("OpenAPISpec() = %d bytes without the tenant-ledger operationId, want the module's own fragment", len(spec))
+	}
 }
