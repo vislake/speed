@@ -44,6 +44,27 @@
 // backend, changes what feeds Aggregator's ingest methods without touching
 // how any business module calls Record or Enqueue.
 //
+// # One feature belongs to exactly one reliability tier
+//
+// The shared pipeline makes this a prohibition, not a style suggestion:
+// both tiers fold into the same per-tenant, per-feature, per-period
+// counter entries and UsageSummary rows, and neither carries a tier
+// marker, so a feature recorded through both tiers -- AnalyticsRecorder's
+// fail-open Record on some call sites and the billing-grade Enqueue on
+// others -- is a blend no reader can attribute. The mixing cost is
+// concrete: the row's quantity then mixes data that may be dropped by
+// design (the analytics tier, whose retried Record is not deduplicated
+// either, so a retry can fold a second time into the same row) with data
+// that must neither drop nor double-count (the billing-grade tier), and a
+// billing figure read from that row silently contains quantities it was
+// allowed to lose. A feature whose records must not be lost is recorded
+// through the billing-grade path alone -- it already feeds the same
+// real-time counters and summary rows -- and the analytics tier is for
+// features that carry no billing weight. The prohibition is caller
+// discipline, not pipeline enforcement: nothing in Aggregator
+// distinguishes the tiers structurally. See UsageEvent.Feature's own doc
+// comment and AGENTS.md's "Reliability tiers" section.
+//
 // # Round 1 of an unbounded number
 //
 // This is a deliberately bounded foundation round. It ships the Recorder

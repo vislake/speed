@@ -64,6 +64,22 @@ type UsageEvent struct {
 	// bytes. It has no closed enumeration in this round -- see AGENTS.md's
 	// Known limitations for why there is no "unknown feature" validation
 	// yet.
+	//
+	// Feature is also the aggregation key the two reliability tiers share,
+	// which makes one feature belong to exactly one reliability tier: the
+	// same Feature must never be recorded through both the fail-open
+	// AnalyticsRecorder.Record and the billing-grade Enqueue path. Both
+	// tiers fold into the SAME per-tenant, per-feature, per-period counter
+	// entry and UsageSummary row, and neither carries a tier marker, so a
+	// feature measured through both tiers is a blend no reader can
+	// attribute -- billing-grade quantities silently seeded with data the
+	// analytics tier may drop by design, and a retried analytics-grade
+	// Record is not deduplicated either, so it can fold a second time into
+	// the same row. A feature whose records must not be lost is recorded
+	// through the billing-grade path alone, which already feeds the same
+	// counters and summary rows the analytics tier feeds. This is caller
+	// discipline, not something the pipeline enforces -- see AGENTS.md's
+	// "Reliability tiers" section for the full statement.
 	Feature string
 	// Quantity is how much of Feature this event measures. Zero is legal;
 	// negative, NaN and infinite are rejected.
