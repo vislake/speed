@@ -33,9 +33,14 @@
 //     event: event payloads carry the "[redacted]" marker instead.
 //
 //   - Every successful Set publishes a config.item.changed event on the
-//     shared bus (declared through pkgcore's event registrar, so a future
-//     audit-log consumer can record who changed what without any
-//     dependency on this module). Instances sharing the bus invalidate
+//     shared bus (declared through pkgcore's event registrar). Config
+//     itself never writes audit rows: a host that composes the optional
+//     compliance module gets one audit row per set, that module
+//     subscribing to the event to record who changed what. Subscribing
+//     and recording need this module's own API -- the event's name, its
+//     payload type and its audit action -- so the dependency runs one
+//     way, and that is the point: the Set write path never needs to
+//     know who keeps the ledger. Instances sharing the bus invalidate
 //     their caches on it; a background poller re-reads recently-updated
 //     rows as an anti-loss net for events that never arrived.
 //

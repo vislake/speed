@@ -221,7 +221,8 @@ func GetTyped[T any](svc *Service, ctx context.Context, key string) (T, error) {
 // system context, and ScopeUser is refused outright (ErrUserScopeUnavailable).
 //
 // by must be non-empty -- the actor is what the row's updated_by column,
-// the event and the future audit trail all attribute the write to.
+// the event and the audit row the compliance module persists for the
+// set (when a host composes it) all attribute the write to.
 func (s *Service) Set(ctx context.Context, scope Scope, key string, v Value, by Actor) error {
 	item, ok := s.schema.lookup(key)
 	if !ok {
