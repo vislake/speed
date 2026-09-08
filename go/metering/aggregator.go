@@ -527,12 +527,24 @@ func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (floa
 // -- retiring the map's expired-period entries at most once per boundary
 // crossed rather than on every call (sweptThrough remembers the last
 // sweep's boundary; only a strictly newer start triggers another walk).
-// Callers must hold a.mu, which both ingest paths do when they call it,
-// so no concurrent add for a swept key can be mid-flight against the
-// Delete; an add that committed before the sweep already landed in the
-// key's summary row, and a later touch of the expired period re-seeds
-// from that row, so eviction loses nothing (see the Aggregator type's own
-// "Expired periods are evicted" doc comment).
+// Callers must hold a.mu to call it (sweptThrough is a.mu-guarded), as
+// both ingest paths do -- but that exclusion does NOT cover an event's
+// counter add: the delta each event applies to its entry lands later,
+// in applyDelta OUTSIDE a.mu (see Ingest), so an applyDelta for a swept
+// key CAN be mid-flight against the Delete below. That is harmless, for
+// two independent reasons. First, entry.mu -- not a.mu -- is the lock
+// that serializes an entry's mutations: applyDelta and
+// deliverOverageCrossing always take it, so the Delete removing the
+// entry from the map races nothing they do to the object (any code that
+// reads or writes an entry while holding only a.mu would race them;
+// entry.mu is the rule for touching an entry). Second, eviction can
+// never strand a delta: applyDelta runs only after its event's own fold
+// committed, and folds and this sweep are mutually exclusive under a.mu,
+// so every delta whose applyDelta is still in flight when the sweep
+// deletes its key has already landed in the key's summary row -- a later
+// touch of the expired period re-seeds from that row, and eviction loses
+// nothing (see the Aggregator type's own "Expired periods are evicted"
+// doc comment).
 func (a *Aggregator) sweepExpiredCountersLocked(start time.Time) {
 	if !start.After(a.sweptThrough) {
 		return
