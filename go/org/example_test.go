@@ -166,10 +166,15 @@ func Example_membershipAndScope() {
 	}
 
 	// The invitation address is encrypted at rest and made queryable by an
-	// HMAC blind index. The key below is a literal only because this is an
-	// example; a host injects it from its own secret store, and it must be a
-	// DIFFERENT secret from the encryption key.
-	indexer, err := dbkit.NewBlindIndexer("email_index", []byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
+	// HMAC blind index. The indexer's column argument is the module's
+	// exported org.EmailIndexColumn -- the blind-index column's exact SQL
+	// name, carried as a referenced constant rather than a hand-typed string
+	// (see its doc comment for why dbkit cannot guard a wrong one). The key
+	// below is a literal only because this is an example; a host injects it
+	// from its own secret store, and it must be a DIFFERENT secret from the
+	// encryption key.
+	indexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn,
+		[]byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
 	if err != nil {
 		fmt.Println("blind indexer:", err)
 		return
@@ -310,7 +315,8 @@ func ExampleMemberService_TenantsOf() {
 	// invitation half needs; the example wires the same minimal set
 	// Example_membershipAndScope uses, with the invitation email disabled so
 	// nothing goes out through the console mailer.
-	indexer, err := dbkit.NewBlindIndexer("email_index", []byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
+	indexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn,
+		[]byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
 	if err != nil {
 		fmt.Println("blind indexer:", err)
 		return

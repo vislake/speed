@@ -301,8 +301,12 @@ type Option func(*Module)
 // deliberate imitation of config.Attach's ErrCipherRequired. An invitation
 // org could store but never find again is worse than a boot failure.
 //
-// Build it with dbkit.NewBlindIndexer("email_index", key, dbkit.NormalizeEmail),
-// and give it a key that is NOT the encryption key registered for
+// Build it with dbkit.NewBlindIndexer(EmailIndexColumn, key, dbkit.NormalizeEmail)
+// -- the column argument must be the module's exported EmailIndexColumn, the
+// blind-index column's exact SQL name: dbkit refuses an empty name, not a
+// non-empty wrong one, so the name travels as a referenced constant rather
+// than a hand-typed string (see EmailIndexColumn's own doc comment) -- and
+// give it a key that is NOT the encryption key registered for
 // EmailSerializerName: an AES key reused as an HMAC key weakens both.
 func WithEmailIndexer(indexer *dbkit.BlindIndexer) Option {
 	return func(m *Module) {

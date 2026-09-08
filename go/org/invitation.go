@@ -42,6 +42,22 @@ const tableInvitationTokenIndex = "org_invitation_token_index"
 // constructors rather than one.
 const EmailSerializerName = "org_email_enc"
 
+// EmailIndexColumn is the exact SQL column name of the blind-index column
+// Invitation.EmailIndex is indexed under -- the value of the `column:` gorm
+// tag on that field. It is exported for the same reason EmailSerializerName
+// is: the column name is host wiring, not module code. A host builds the
+// blind indexer WithEmailIndexer accepts through
+//
+//	dbkit.NewBlindIndexer(EmailIndexColumn, key, dbkit.NormalizeEmail)
+//
+// and dbkit's contract makes that column argument the column's exact SQL
+// name: it refuses an EMPTY name, but has no guard for a non-empty wrong one
+// (its doc comment says so), so the name must cross the package boundary as
+// a referenced constant rather than a hand-typed string that can drift from
+// the schema. The module's unit suite pins the constant against the model's
+// gorm tag and the migrated schema (email_index_column_test.go).
+const EmailIndexColumn = "email_index"
+
 // The lifecycle states an Invitation can be in. Closed set, kept in Go for
 // the same reason MembershipStatus* are: PostgreSQL has enum types and
 // SQLite does not, so the column is a plain VARCHAR on both engines.
