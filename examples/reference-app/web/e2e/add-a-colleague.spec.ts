@@ -285,7 +285,7 @@ test(
 )
 
 /** A password that satisfies authn's real policy (12 characters minimum). */
-const SIGNUP_PASSWORD = 'e2e-invite-population-2026'
+const SIGNUP_PASSWORD = 'e2e-invite-pass-2026'
 
 /**
  * That a practice which signed ITSELF up can invite a colleague too.
