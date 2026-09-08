@@ -141,7 +141,7 @@ func (g *Gateway) checkRateLimit(ctx context.Context, tenant string) error {
 		return ErrRateLimitCheckFailed.WithCause(err)
 	}
 	if !decision.Allowed {
-		return ErrRateLimited.WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
+		return ErrRateLimited.WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.ResetAfter))
 	}
 	return nil
 }

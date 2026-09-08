@@ -269,3 +269,49 @@ func TestGateway_GenerateImage_TenantlessContext_RefusedBeforeRateLimiter(t *tes
 		t.Fatalf("queue was called %d times with no tenant, want 0", queue.calls)
 	}
 }
+
+// TestGateway_Chat_SubSecondWindowTail_RetryAfterRoundsUp pins the
+// retry_after_seconds translation boundary at the per-tenant denial site
+// every gateway entry point funnels through (checkRateLimit): a denial
+// whose window still has a sub-second remainder -- the NORMAL tail of every
+// exhausted window -- must carry 1, never the 0 a truncating
+// int(Seconds()) conversion emits (Retry-After: 0 means "retry
+// immediately", inviting an immediate retry against a window that has not
+// reset). A negative remainder (a degenerate canned decision; the real
+// limiter's ResetAfter is always inside (0, Per]) must carry 0, never a
+// negative whole-second count.
+func TestGateway_Chat_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.T) {
+	provider := &fakeChatProvider{chatResp: ChatResponse{Message: ChatMessage{Role: RoleAssistant, Content: "ok"}}}
+	g := gatewayTestFixture(t, provider)
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+
+	g.limiter = scriptedLimiter{allowed: false, resetAfter: 900 * time.Millisecond}
+	if _, err := g.Chat(tenantCtx, chatReq()); err == nil {
+		t.Fatal("Chat succeeded against a denying limiter, want the rate-limit denial")
+	} else {
+		assertChatRetryAfter(t, err, 1)
+	}
+
+	g.limiter = scriptedLimiter{allowed: false, resetAfter: -3 * time.Second}
+	if _, err := g.Chat(tenantCtx, chatReq()); err == nil {
+		t.Fatal("Chat succeeded against a denying limiter, want the rate-limit denial")
+	} else {
+		assertChatRetryAfter(t, err, 0)
+	}
+	if provider.chatCalls != 0 {
+		t.Errorf("provider was called %d times while rate-limited, want 0", provider.chatCalls)
+	}
+}
+
+// assertChatRetryAfter fails t unless err is the gateway's rate-limit
+// denial carrying the given retry_after_seconds value.
+func assertChatRetryAfter(t *testing.T, err error, want int) {
+	t.Helper()
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrRateLimited.Code {
+		t.Fatalf("error = %v, want ErrRateLimited", err)
+	}
+	if got := appErr.Params["retry_after_seconds"]; got != want {
+		t.Errorf("retry_after_seconds param = %v, want %d", got, want)
+	}
+}
