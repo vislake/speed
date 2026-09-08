@@ -307,6 +307,25 @@ const (
 	// wiring comment for the three-way branch this drives.
 	smsGatewayURLEnv = "APP_SMS_GATEWAY_URL"
 
+	// publicOriginEnv names the environment variable holding this
+	// deployment's own public origin ("https://app.example.com" -- scheme,
+	// host and port, no path), the base URL the outbound mail links this
+	// app renders point recipients at when the recipient's tenant has no
+	// branded host of its own in cfg.HostTenants. The branded hosts
+	// cfg.HostTenants names are demo-only (demoHostTenants: the two
+	// configured tenants), while every other tenant this app serves is a
+	// self-registered clinic its own register route provisions at runtime
+	// (self_service.go's clinicTenantOf: "tenant-" + the registrant's user
+	// id, by construction never a cfg.HostTenants value) -- and org's
+	// invitation email is the one outbound message whose link needs a host
+	// (server.go's org.WithInvitationLinkBuilder wiring below). Unset --
+	// the default -- derives "http://localhost:" + the resolved PORT, the
+	// origin every zero-setup local demo is actually reached at; a real
+	// deployment whose mail must reach real recipients sets this variable
+	// to its own public origin, exactly as it would set any other
+	// outbound-facing value.
+	publicOriginEnv = "APP_PUBLIC_ORIGIN"
+
 	// disableQueueWorkerEnv names the environment variable that, when set to
 	// any non-empty value, makes buildServer skip standaloneQueue.Start
 	// entirely: the queue still accepts Enqueue calls (a plain row insert,
@@ -1075,6 +1094,20 @@ type serverConfig struct {
 	RedisAddr   string
 	HostTenants map[string]pkgcore.TenantID
 
+	// PublicOrigin is this deployment's own public origin (scheme://host,
+	// optional :port, no path), the fallback base URL org's invitation
+	// accept links point at for a tenant that has no branded host in
+	// HostTenants -- every self-registered clinic, whose tenant id
+	// self_service.go derives from its registrant and which no configured
+	// host can name (see publicOriginEnv's own doc comment above for the
+	// full population split). configFromEnv fills it from APP_PUBLIC_ORIGIN,
+	// defaulting to "http://localhost:" + the resolved PORT so a
+	// zero-setup local demo renders working links with no configuration;
+	// the field's zero value keeps the pre-field fail-loud behavior for a
+	// host that sets neither a branded host nor an origin, and the error
+	// such a link build produces names this variable.
+	PublicOrigin string
+
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
 	// compose a real S3-compatible ObjectStore for the "objectstore" seam
 	// (objectstore/s3.NewObjectStore) when S3Endpoint is non-empty --
@@ -1661,6 +1694,18 @@ func configFromEnv() (serverConfig, error) {
 		smtpPort = parsed
 	}
 
+	// publicOrigin is where outbound mail links point for a tenant that
+	// has no branded host in cfg.HostTenants (every self-registered
+	// clinic). APP_PUBLIC_ORIGIN when set, else the origin every
+	// zero-setup local demo is actually reached at -- "http://localhost:"
+	// + the same resolved PORT above; a real deployment whose mail must
+	// reach real recipients sets the variable (publicOriginEnv's own doc
+	// comment has the full split).
+	publicOrigin := os.Getenv(publicOriginEnv)
+	if publicOrigin == "" {
+		publicOrigin = "http://localhost:" + port
+	}
+
 	cfg := serverConfig{
 		DeploymentMode:        deploymentMode,
 		Port:                  port,
@@ -1690,6 +1735,7 @@ func configFromEnv() (serverConfig, error) {
 		ReadFlyClientIP:       readFlyClientIP,
 		WebDistDir:            os.Getenv(webDistEnv),
 		HostTenants:           demoHostTenants,
+		PublicOrigin:          publicOrigin,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it). The
 		// platform-staff seed is read from its OWN variable, never this one
@@ -2055,13 +2101,27 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// gives.
 	dbkit.RegisterEncryptedSerializer(integration.WebhookSecretSerializerName, cipher)
 
-	// hostByTenant is demoHostTenants' reverse index: which demo Host
-	// belongs to a given tenant, which is what an invitation's accept link
-	// must point at -- InviteService.Accept resolves strictly inside the
-	// tenant the REQUEST's own context already carries, never a tenant read
-	// out of the token (go/org/invite.go's own doc comment on Accept), so
-	// the link has to arrive at that tenant's own entry point to be
-	// acceptable at all.
+	// hostByTenant is cfg.HostTenants' reverse index: which configured
+	// host belongs to a given tenant, the first source an invitation's
+	// accept link draws its host from. The host is DISPLAY, never
+	// acceptance: InviteService.Accept resolves the invitation's tenant
+	// from the token itself, server-side, when the accepting request
+	// carries no tenant claim (go/org/invite.go's own doc comment on
+	// Accept), and this app's middleware chain lets the accept path
+	// through tenant resolution (the allowlist entry below), so a link to
+	// ANY host that serves this app's API is acceptable -- which is
+	// exactly what makes the fallback below safe. Only the two demo
+	// tenants have a configured host (demoHostTenants); every other
+	// tenant this app serves is a self-registered clinic whose tenant id
+	// self_service.go derives from its registrant (clinicTenantOf,
+	// "tenant-" + user id, by construction never a cfg.HostTenants value
+	// -- that derivation's own doc comment says so), so no configured
+	// host can name it and its links draw their host from the second
+	// source: this deployment's own public origin (cfg.PublicOrigin,
+	// APP_PUBLIC_ORIGIN). A clinic link pointing at a configured demo
+	// tenant's branded host would hand the invitee a link that brands
+	// someone else's tenant; a host wiring with neither source fails the
+	// link loudly, naming the missing knob, rather than guessing.
 	hostByTenant := make(map[pkgcore.TenantID]string, len(cfg.HostTenants))
 	for host, tenant := range cfg.HostTenants {
 		hostByTenant[tenant] = host
@@ -2093,9 +2153,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			if tenantErr != nil {
 				return "", tenantErr
 			}
-			host, ok := hostByTenant[tenant]
-			if !ok {
-				return "", fmt.Errorf("reference-app: no host configured for tenant %q", tenant)
+			linkBase := ""
+			if host, ok := hostByTenant[tenant]; ok {
+				linkBase = "https://" + host
+			} else if cfg.PublicOrigin != "" {
+				linkBase = strings.TrimRight(cfg.PublicOrigin, "/")
+			} else {
+				return "", fmt.Errorf("reference-app: no host configured for tenant %q and no %s to fall back to", tenant, publicOriginEnv)
 			}
 			// This app ships no frontend invitation-acceptance page: the
 			// consumer shell's team surface (examples/reference-app/web's
@@ -2109,7 +2173,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// would render its own page at this URL and POST the token
 			// from there, as the spec's org_acceptInvitation operation
 			// requires.
-			return fmt.Sprintf("https://%s/api/v1/org/invitations/accept?token=%s", host, url.QueryEscape(token)), nil
+			return fmt.Sprintf("%s/api/v1/org/invitations/accept?token=%s", linkBase, url.QueryEscape(token)), nil
 		}),
 	)
 

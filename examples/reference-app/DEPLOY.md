@@ -146,6 +146,8 @@ The same holds, under its OWN variable, for the platform-staff demo account: `AP
 
 Nothing else needs a secret for this deployment: standalone mode with no `APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*`/`APP_SMS_GATEWAY_URL` set leaves every other seam on its zero-external-dependency in-process implementation (console mailer, local-directory object store, in-process event bus and KV store) — real cost and complexity this first deployment deliberately does not take on.
 
+One non-secret `[env]` value only matters for a deployment that composes real mail: `APP_PUBLIC_ORIGIN`, this deployment's own public origin. Org's invitation email embeds the accept link the invitee clicks, and a tenant with no branded host in the demo `cfg.HostTenants` map — every self-registered clinic, whose tenant id `self_service.go` derives from its registrant (`clinicTenantOf`) — draws that link's base from this origin instead (server.go's org wiring). Unset — the default — derives `http://localhost:<PORT>`, exactly right for the local demo every browser reaches at localhost and useless in a real inbox; set `APP_PUBLIC_ORIGIN` to `https://<your-app-name>.fly.dev` in `fly.toml`'s `[env]` on any deployment whose invitations must reach real recipients. This deployment's console mailer prints rather than delivers, so the value is inert here.
+
 ## The free-tier facts, as verified today
 
 Verified directly against Fly's own current docs (`fly.io/docs/about/pricing/`, `fly.io/docs/about/free-trial/`, `fly.io/docs/about/billing/`) and `flyctl v0.4.99`'s own `platform vm-sizes` output, on the date this file was written. **Fly's terms have changed materially over its own history and will likely change again — re-verify before trusting this section blindly.**
