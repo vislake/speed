@@ -2,7 +2,6 @@ package authn
 
 import (
 	"context"
-	"math"
 	"strconv"
 	"time"
 
@@ -161,7 +160,7 @@ func (g *rateGuard) CheckLogin(ctx context.Context, account, ip string) error {
 			return ErrRateLimited
 		}
 		if locked {
-			return ErrAccountLocked.WithParam("retry_after_seconds", retryAfterSecondsFromDuration(retryAfter))
+			return ErrAccountLocked.WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(retryAfter))
 		}
 		if err := g.allow(ctx, "authn:login:account:"+account, limitLoginByAccount); err != nil {
 			return err
@@ -391,22 +390,9 @@ func (g *rateGuard) allow(ctx context.Context, key string, limit ratelimit.Limit
 		return ErrRateLimited
 	}
 	if !decision.Allowed {
-		return ErrRateLimited.WithParam("retry_after_seconds", retryAfterSecondsFromDuration(decision.ResetAfter))
+		return ErrRateLimited.WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.ResetAfter))
 	}
 	return nil
-}
-
-// retryAfterSecondsFromDuration converts a lockout or window remainder to
-// the whole seconds a Retry-After header is expressed in, rounding UP.
-// Retry-After counts whole delay-seconds (RFC 9110, §10.2.3), and the
-// truncating int(Seconds()) conversion this replaces would emit 0 for any
-// sub-second remainder -- legal per the RFC, but wrong here: 0 means
-// "retry immediately", telling a client the window has reset up to a
-// second before it actually has and inviting an immediate retry that is
-// still refused. Rounding up errs the other way, telling the client to
-// wait at most one second longer than it strictly needs.
-func retryAfterSecondsFromDuration(remaining time.Duration) int {
-	return int(math.Ceil(remaining.Seconds()))
 }
 
 // loginLocked reports whether account is currently inside its progressive

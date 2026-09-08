@@ -505,3 +505,33 @@ func TestRateGuard_CheckLogin_LockoutTail_RetryAfterRoundsUp(t *testing.T) {
 		t.Errorf("retry_after_seconds param = %v, want 1 -- a 900ms lockout remainder must round up, not truncate to 0", got)
 	}
 }
+
+// TestRateGuard_Allow_NegativeResetAfter_RetryAfterFloorsAtZero pins the
+// negative end of the same boundary at the sliding-window denial site: a
+// denial whose ResetAfter has already elapsed is a degenerate decision (the
+// real limiter's ResetAfter is always inside (0, Per]) that only a canned
+// double can produce, but the conversion must still answer 0 -- retry now
+// is the true hint once the window has reset -- never the negative whole
+// seconds an unclamped math.Ceil conversion would emit for a remainder
+// below -1s. A negative retry-after count is worse than the 0 the old
+// truncation produced: RFC 9110's delay-seconds grammar (1*DIGIT) cannot
+// express it at all.
+func TestRateGuard_Allow_NegativeResetAfter_RetryAfterFloorsAtZero(t *testing.T) {
+	t.Parallel()
+
+	guard := &rateGuard{
+		limiter: cannedLimiter{decision: ratelimit.Decision{Allowed: false, ResetAfter: -3 * time.Second}},
+		kv:      pkgcore.NewMemoryKVStore(),
+	}
+	err := guard.allow(t.Context(), "authn:test:negative-window", limitLoginByAccount)
+	if !hasCode(err, ErrRateLimited.Code) {
+		t.Fatalf("allow() error = %v, want ErrRateLimited", err)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("error %v is not an *apperr.Error", err)
+	}
+	if got := appErr.Params["retry_after_seconds"]; got != 0 {
+		t.Errorf("retry_after_seconds param = %v, want 0 -- a negative remainder must floor at zero, never go negative", got)
+	}
+}
