@@ -347,7 +347,7 @@
 | 108 | ROADMAP | `go/notification/handler.go` | 收件箱流无心跳机制 | 待排期:收件箱 SSE 流心跳(随 admin-shell(M3)之后通知轮) |
 | 138 | ROADMAP | `go/notification/AGENTS.md` | platform-blacklist 写入器与地址再证明未实现 | 待排期:platform_blacklist 写入器(complaint webhook+delivery hard-failure leg)与地址再证明 |
 | 139 | ROADMAP | `go/notification/AGENTS.md` | tenant-enforced preference tiers 未实现 | 待排期:租户强制偏好层级(形状已描述:tenant-scoped override 表+读时合并+写面) |
-| 141 | ROADMAP | `go/pki/internal/testutil/db.go` | pki PostgreSQL 集成腿仅覆盖单回归且不在 CI | 待排期:扩容 pki PostgreSQL 集成腿覆盖(矩阵接线已闭,见 2f760d14;仅 migration-dedupe 单回归) |
+| 141 | ROADMAP | `go/pki/internal/testutil/db.go` | pki PostgreSQL 集成腿仅覆盖单回归且不在 CI | 待排期:扩容 pki PostgreSQL 集成腿覆盖(矩阵接线已闭,见 a93af455;覆盖边界记录 2f760d14;仅 migration-dedupe 单回归) |
 | 144 | ROADMAP | `go/authn/AGENTS.md` | 企业 SSO 登录无审计行且 SSO 配置无 HTTP 面 | 待排期:SSO 控制面(配置写操作+Callback 漏斗;spec 20 操作无之) |
 | 146 | ROADMAP | `go/observability/redact.go` | PII/完整提示的声明机制未实现 | 待排期:PII/完整提示声明机制(apperr 半边已落地;日志侧消费面未建) |
 | 151 | ROADMAP | `go/billing/AGENTS.md` | audit.Emit 丢失写无补偿恢复 | 待排期:audit.Emit 补偿投递("log, never return" 契约已记录;异步审计耐久性) |
@@ -373,7 +373,7 @@
 | 171 | ROADMAP | `CLAUDE.md` | notes 模块删除/恢复 HTTP 端点 | 闭:2b2cd5da notes HTTP delete/restore 端点(spec 先行);8419861b 合并文档再生成 |
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
 
-**部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵并记录覆盖边界(`2f760d14`),加宽覆盖仍开,见 8.6)。
+**部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
 
 **维护规则**:任何行落地(实现、裁决、文本改述)后,把该行移入本章并记 sha 与闭因;本章行只增不减,直至调度记录使命结束。新 deferral 由审查产出直接补入对应类别表。
 
@@ -381,13 +381,13 @@
 
 TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程碑代号、finding 代号、悬空 deferral 指针等)。2026-09-08 注释规范清理轮已整体合入 main(记录时点 tip 即其收尾提交),多数条目随之中闭或已由各轮改写达标。三档对账:
 
-- **A 已闭于 main(42 项)**:记录已准确(记录即现状),或文本已由清理轮/落地轮达标;不需动作,若再被普查点名按新发现处理。
+- **A 已闭于 main(41 项)**:记录已准确(记录即现状),或文本已由清理轮/落地轮达标;不需动作,若再被普查点名按新发现处理。
 - **L 台账缓办(11 项)**:族属协调侧台账 COMMENT-NORMS-REMAINING.md 的缓办组(该台账于 2026-09-08 收尾工作流建立,EXCLUDED/DEFERRED/FIXED 三档分类,DEFERRED 共 9 组,每组有主台账文件位:CLAUDE.md census、spec 散文、工具注释、测试 finding 代号簇、整文件清理等)。台账在协调侧、不入仓;处理时按族核销,核销后移出。
-- **R 真剩余(18 项)**:记录时点仍在 main@1c279637 的文本(直接核读条目括注"抽查已核"),即未来文本修复轮的候选清单。
+- **R 真剩余(19 项)**:记录时点仍在 main@1c279637 的文本(直接核读条目括注"抽查已核"),即未来文本修复轮的候选清单。
 
-档位判定以普查逐条记录为底;直接核读 35 条(括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
+档位判定以普查逐条记录为底;直接核读 31 条(A 11、L 8、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
-### 10.1 已闭于 main(A,42 项)
+### 10.1 已闭于 main(A,41 项)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -402,7 +402,6 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 20 | `go/pki/module.go` | CA/证书有效期 config 键未接入发放决策 | pki module.go 配置键注释已为 "declare-but-do-not-read discipline" 现状纪律表述;抽查已核 |
 | 22 | `go/sharing/AGENTS.md` | 35 行 if a policy-driven, host-configurable share password writer ever matters, that is this module's own future work(...) | sharing AGENTS 条件式句已按规范改写+就地指针;仅余润色空间 |
 | 23 | `go/ai-gateway/image_job_store.go` | 代码注释内 Accepted residual risk:pending 卡死需 operator 手删行、崩溃窗口 | image_job_store "Accepted residual risk" 小节=现状接受式风险陈述;如需收紧属润色 |
-| 28 | `web/packages/i18n/src/create.test.ts` | it() 标题含 "(M1 extension point)" 里程碑代号,未改未声明 | i18n create.test.tsx "(M1 extension point)" 标题已清;抽查已核 |
 | 33 | `go/billing/AGENTS.md` | Alipay/WeChat 原生周期扣款(代扣)不实现 | Alipay/WeChat 周期扣款不实现=设计性排除结论已记录 |
 | 34 | `go/rbac/module.go` | rbac 不挂 HTTP 路由;RestoreRole 无 HTTP 表面 | rbac 不挂路由=固定设计姿态;角色管理由 go/admin 控制面承接 |
 | 35 | `go/rbac/assign.go` | RestoreRole 不重新校验 AssignRole 前置条件 | RestoreRole 不重验前置条件=已文档化设计选择(需重验者走 Revoke+重新 Assign) |
@@ -445,12 +444,12 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 26 | `web/packages/product-shell/AGENTS.md` | 整文件未清理:Deferrals (recorded, do not re-open silently) 节保留 reviewer P1-1/P2-2/P2-3、a11y finding、own round/later round/M4 等违禁形态 | 整文件清理组:product-shell AGENTS 仍含 P1-1/P2-2/P2-3 编号引用 4 处;抽查已核 |
 | 32 | `examples/reference-app/internal/smilesim/api/smilesim-server.gen.go:118` | 生成 doc 注释引 docs/internal/11-cross-cutting.md(smilesim openapi.yaml description 源头) | spec 散文组:smilesim gen:118 引 "backend coding standard §6.2; docs/internal/11";需源文+再生成 |
 | 43 | `web/packages/ui-kit/src/components/ConfirmDialog.test.tsx` | it()/describe() 标题与注释仍含 (P1)/(P2-9) 流程代号 | 测试 finding 代号簇:ConfirmDialog.test.tsx (P1)/(P2-9) 2 处仍在;抽查已核 |
-| 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串 16 处+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
+| 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 47 | `CLAUDE.md` | 行 8/12 内 8 处 "the roadmap's M1/M2 … cell" 里程碑坐标标签未清理 | CLAUDE.md census 组:roadmap M1/M2 cell 坐标标签仍散布(抽查 2 处命中);随 census 措辞轮 |
 | 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)/(D5)/(P2-2)/(P2-3) 5 处仍在;抽查已核 |
 | 71 | `CLAUDE.md` | 流程自指词 census 共 4 处(行 8×2"The census closes with…"/"this census's go/dbkit entry"、行 12"the auth-ui census entry below"、行 14"the auth-ui census defers to this shell"),均位于其改动行内,未清理亦未 deferral;低信号,可改可留但应显式说明 | CLAUDE.md census 自指措辞(抽查 3 处命中);低信号,随 census 措辞轮 |
 
-### 10.3 真剩余(R,18 项;未来文本修复候选)
+### 10.3 真剩余(R,19 项;未来文本修复候选)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -465,6 +464,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | storage openapi 22 行 "stays future work until the merge tooling lands" 过期句仍在(merge 工具已落地);抽查已核 |
 | 25 | `go/tenancy/system_context.go` | Repository[T] 无跨租户逃生口(逃生口仍未实现的 deferral) | tenancy system_context.go 前瞻句("Until Repository[T] deliberately implements...")核对;低信号 |
 | 27 | `go/admin/export_test.go` | 测试失败消息字符串保留过程措辞("on the unfixed code…" 等) | 测试失败消息字符串判为边界合法;残余=把字符串/注释边界判断写进规范文档(13 章) |
+| 28 | `web/packages/i18n/src/create.test.ts` | it() 标题含 "(M1 extension point)" 里程碑代号,未改未声明 | create.test.ts(非 .tsx)96 行 "(M1 extension point)" 标题仍在;抽查已核 |
 | 29 | `examples/reference-app/web/src/test-utils/matchMedia.ts` | 行 18 'recorded DEFERRED, as in real-client.ts' — 同族 deferral 语句 | matchMedia.ts:18 "recorded DEFERRED, as in real-client.ts" 仍在;抽查已核(需与 18 两处同步) |
 | 30 | `.github/workflows/release.yml` | Report 步 echo "Real publishing is scheduled for the v1.0 release at M4, by design of this M0 round"(运行时文本保留 M0/M4 承诺;job name 的 "(M0)" 反而删了,不一致) | release.yml:130 Report 步 "by design of this M0" 仍在而 job name 的 (M0) 已删;抽查已核 |
 | 31 | `.github/workflows/reusable-docker-build.yml` | header deferral 指针 "not wired (release.yml's own header)" 与 "trivy image scanning (security.yml's own DEFERRED note)" | reusable-docker-build 头注 "those three stay gated stubs" 句失真(release.yml 非 stub、e2e 套件已存在) |
