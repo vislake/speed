@@ -6,7 +6,7 @@
  * document is fine). color-contrast is disabled by default: jsdom does
  * no layout or color computation, so contrast results there are neither
  * trustworthy nor actionable -- contrast lives in the theme and is
- * verified visually/browser-side (see the package AGENTS.md). Tests
+ * verified visually/browser-side. Tests
  * that specifically probe contrast affordances (colors roles, text
  * colors on surfaces) assert the theme values instead.
  *

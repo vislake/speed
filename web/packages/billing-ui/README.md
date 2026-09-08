@@ -359,10 +359,9 @@ absent from the rule's one whitelist, `packages/api-client`); the
   re-reads the single document so a status settled after the list was
   fetched shows its current value, and the document renders fields the
   row does not (both cycle bounds, last-update time, the two ids).
-- **Storybook / browser-side visual verification**: no preview-harness
-  round exists yet, same deferral `ui-kit`, `layout-kit`, `auth-ui`
-  and `account-ui` carry; `color-contrast` stays axe-disabled for the
-  same jsdom reason and is verified browser-side in a later round.
+- **Storybook / browser-side visual verification**: same deferral
+  `ui-kit`, `layout-kit`, `auth-ui` and `account-ui` carry;
+  `color-contrast` stays axe-disabled for the same jsdom reason.
 
 ## Development
 

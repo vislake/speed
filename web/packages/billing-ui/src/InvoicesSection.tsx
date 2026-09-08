@@ -8,7 +8,7 @@
  * recent documents without scrolling machinery, and deliberately not
  * paginated: the billing read surface serves one newest-first window,
  * and a keyset-paginated read over a whole history is not part of the
- * spec (go/billing/AGENTS.md records the deferral). Each row shows the
+ * spec. Each row shows the
  * document's status through the lifecycle's typed status vocabulary --
  * open (awaiting payment), paid (settled in full), void (canceled
  * before payment) -- as a chip, the billing cycle it covers and the
