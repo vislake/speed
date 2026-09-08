@@ -122,9 +122,11 @@ func (s *Service) rateLimiter() (ratelimit.Limiter, error) {
 // shares tenant has created recently. Before Module.Register has attached a
 // registry (see Service's own doc comment on being "inert until Register"),
 // this reports the wiring error unmodified rather than silently skipping
-// the check -- Create's own caller sees ErrInternal either way, since a
-// rate limiter that cannot answer must never be treated as "allow" (the
-// same fail-closed rule go/ratelimit.Limiter's own doc comment states).
+// the check -- Create's own caller sees ErrInternal either way, because a
+// limiter that cannot answer is never treated as "allow" here: this module
+// fails closed on its own, since a check that silently passed while its
+// store was down would leave exactly the share-creation abuse this budget
+// bounds (a compromised or careless tenant minting links) unguarded.
 func (s *Service) checkCreateRateLimit(ctx context.Context, tenant string) error {
 	return s.allowRateLimit(ctx, "sharing:create:tenant:"+tenant, ratelimit.Limit{
 		Rate: createPerTenantRate, Per: createPerTenantWindow,
@@ -211,9 +213,11 @@ func (s *Service) checkAccessTokenWrongGuess(ctx context.Context, tokenHash stri
 // caller-visible dimension name is safe here but a caller-visible key is
 // not, see ErrRateLimited's own doc comment) and the window's recovery time
 // recorded, and an unavailable limiter or store failure as ErrInternal:
-// fail closed, never "allow" (the rule go/ratelimit.Limiter's own doc
-// comment leaves each call site to choose, and every endpoint this module
-// guards is abuse-facing enough that the choice is always closed).
+// fail closed, never "allow". That is this module's own choice, the same
+// for every dimension: each of the three checks above guards an
+// abuse-facing surface (share-creation volume, token guessing,
+// wrong-credential guessing) whose only throttle is the check itself, so
+// a store outage that read as "allow" would leave that abuse unthrottled.
 func (s *Service) allowRateLimit(ctx context.Context, key string, limit ratelimit.Limit, dimension string) error {
 	limiter, err := s.rateLimiter()
 	if err != nil {
