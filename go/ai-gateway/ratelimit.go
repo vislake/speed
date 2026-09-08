@@ -127,8 +127,11 @@ func (g *Gateway) rateLimiter() (ratelimit.Limiter, bool) {
 // without a host attached, so an unwired host there is itself an error).
 // A limiter that IS wired but fails to answer (a KVStore outage) fails
 // closed with ErrInternal-shaped apperr, never silently allowing the call
-// through -- the same fail-closed rule go/ratelimit.Limiter's own doc
-// comment states.
+// through: this module's own rule for a wired-but-failing limiter, chosen
+// because every call this gate guards spends real vendor capacity -- a
+// silent allow would lift the one throttle between a tenant's raw call
+// volume and the vendor credentials the gateway holds, and a call passed
+// during the outage has already spent capacity no later refusal can undo.
 func (g *Gateway) checkRateLimit(ctx context.Context, tenant string) error {
 	limiter, ok := g.rateLimiter()
 	if !ok {

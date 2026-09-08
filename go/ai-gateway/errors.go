@@ -45,8 +45,9 @@ var (
 	// check (ratelimit.go's checkRateLimit) could not get an answer from a
 	// wired Limiter -- a KVStore outage, never a genuine over-limit
 	// decision (see ErrRateLimited for that). Fails the call closed rather
-	// than silently allowing it through, per go/ratelimit.Limiter's own
-	// fail-closed contract.
+	// than silently allowing it through -- this module's own rule for a
+	// wired-but-failing limiter, for the reason checkRateLimit's doc
+	// comment (ratelimit.go) records.
 	ErrRateLimitCheckFailed = apperr.Internal("aigateway.rate_limit_check_failed")
 
 	// ErrCredentialNotFound reports that CredentialService.Resolve found
