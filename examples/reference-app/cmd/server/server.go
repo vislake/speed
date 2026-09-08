@@ -325,10 +325,17 @@ const (
 	// invitation email is the one outbound message whose link needs a host
 	// (server.go's org.WithInvitationLinkBuilder wiring below). Unset --
 	// the default -- derives "http://localhost:" + the resolved PORT, the
-	// origin every zero-setup local demo is actually reached at; a real
-	// deployment whose mail must reach real recipients sets this variable
-	// to its own public origin, exactly as it would set any other
-	// outbound-facing value.
+	// origin every zero-setup local demo is actually reached at. That
+	// default is silently wrong for a real deployment, not inert the way
+	// the unset SMTP and SMS variables above are: those leave their seams
+	// on console transports a local demo alone reads (a distributed boot
+	// refuses them outright), so nothing wrongly-shaped leaves the
+	// process, while an APP_PUBLIC_ORIGIN left unset does not stop the
+	// mail -- it goes out over whatever transport the deployment did
+	// compose, with every link pointing at http://localhost:PORT, a host
+	// no real recipient can reach. A deployment whose mail must reach
+	// real recipients therefore sets this variable to its own public
+	// origin; forgetting it ships mail whose links are unreachable.
 	publicOriginEnv = "APP_PUBLIC_ORIGIN"
 
 	// disableQueueWorkerEnv names the environment variable that, when set to
