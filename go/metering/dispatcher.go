@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm"
 
 	obs "github.com/vislake/speed/go/observability"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Defaults for Dispatcher's poll loop, overridden by Module's
@@ -161,6 +163,11 @@ type Dispatcher struct {
 	// the default's wall-clock meaning.
 	escalationAttempts int
 
+	// delivery carries metering.outbox.delivery (metrics.go),
+	// registered by NewDispatcher; nil for a bare struct literal, which
+	// the record sites guard.
+	delivery metric.Int64Counter
+
 	// mu guards every lifecycle field below, exactly as on
 	// AnalyticsRecorder. The poll goroutine reads stop/done only through
 	// the channel values Start passes it as arguments (see run), so no
@@ -184,6 +191,7 @@ func NewDispatcher(db *gorm.DB, aggregator *Aggregator) *Dispatcher {
 	return &Dispatcher{
 		db:                 db,
 		aggregator:         aggregator,
+		delivery:           registerOutboxDeliveryMetric(),
 		interval:           defaultDispatchInterval,
 		batchSize:          defaultDispatchBatchSize,
 		retryDelay:         defaultDispatchRetryDelay,
@@ -343,6 +351,16 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (delivered int, err error) {
 // for the next RunOnce cycle to reclaim and redeliver -- IngestBillingGrade
 // is what makes that redelivery a safe no-op instead of a silent double
 // count. See IngestReceipt's doc comment for the full argument.
+// recordDeliveryOutcome counts one delivery attempt onto
+// metering.outbox.delivery (metrics.go) under its outcome.
+func (d *Dispatcher) recordDeliveryOutcome(ctx context.Context, outcome string) {
+	if d.delivery == nil {
+		return
+	}
+	d.delivery.Add(ctx, 1,
+		metric.WithAttributes(attribute.String(outcomeAttr, outcome)))
+}
+
 func (d *Dispatcher) deliverOne(ctx context.Context, rec OutboxRecord) bool {
 	event := UsageEvent{
 		TenantID:       rec.TenantID,
@@ -384,6 +402,7 @@ func (d *Dispatcher) deliverOne(ctx context.Context, rec OutboxRecord) bool {
 				"feature", rec.Feature,
 			)
 		}
+		d.recordDeliveryOutcome(ctx, outcomeFailed)
 		return false
 	}
 
@@ -392,7 +411,9 @@ func (d *Dispatcher) deliverOne(ctx context.Context, rec OutboxRecord) bool {
 			"error", err,
 			"outbox_id", rec.ID,
 		)
+		d.recordDeliveryOutcome(ctx, outcomeFailed)
 		return false
 	}
+	d.recordDeliveryOutcome(ctx, outcomeSucceeded)
 	return true
 }

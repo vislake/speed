@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	obs "github.com/vislake/speed/go/observability"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // defaultAnalyticsBufferSize is AnalyticsRecorder's channel capacity when
@@ -55,6 +56,14 @@ type AnalyticsRecorder struct {
 	events     chan UsageEvent
 	dropped    atomic.Int64
 
+	// Metric instruments (metrics.go): metering.events.ingested and
+	// metering.events.dropped, registered by NewAnalyticsRecorder.
+	// Nil for a recorder built as a bare struct literal (tests), which
+	// the record sites guard the same way authn's recordAuthMetric
+	// guards its instruments.
+	ingestedCount metric.Int64Counter
+	droppedMetric metric.Int64Counter
+
 	// mu guards every lifecycle field below, and is held by Record around
 	// the stopped check and the buffer enqueue so that check is atomic with
 	// respect to Stop: an event either lands in the buffer before Stop
@@ -82,9 +91,12 @@ type AnalyticsRecorder struct {
 // a caller building one directly outside Module can do the same by setting
 // the events field before calling Start.
 func NewAnalyticsRecorder(aggregator *Aggregator) *AnalyticsRecorder {
+	ingested, dropped := registerIngestDropMetrics()
 	return &AnalyticsRecorder{
-		aggregator: aggregator,
-		events:     make(chan UsageEvent, defaultAnalyticsBufferSize),
+		aggregator:    aggregator,
+		events:        make(chan UsageEvent, defaultAnalyticsBufferSize),
+		ingestedCount: ingested,
+		droppedMetric: dropped,
 	}
 }
 
@@ -111,6 +123,11 @@ func (r *AnalyticsRecorder) Record(ctx context.Context, event UsageEvent) error 
 	select {
 	case r.events <- event:
 		r.mu.Unlock()
+		// metering.events.ingested -- the analytics channel's ingest
+		// rate (metrics.go's doc comment maps the row).
+		if r.ingestedCount != nil {
+			r.ingestedCount.Add(ctx, 1)
+		}
 		return nil
 	default:
 		r.mu.Unlock()
@@ -124,6 +141,12 @@ func (r *AnalyticsRecorder) Record(ctx context.Context, event UsageEvent) error 
 // buffer (Record's select default) and a stopped recorder.
 func (r *AnalyticsRecorder) drop(ctx context.Context, event UsageEvent) {
 	r.dropped.Add(1)
+	// metering.events.dropped -- the fail-open contract's counted-loss
+	// rate (metrics.go's doc comment maps the row); the internal
+	// counter above stays for the Dropped() accessor's API.
+	if r.droppedMetric != nil {
+		r.droppedMetric.Add(ctx, 1)
+	}
 	obs.FromContext(ctx).Warn("metering.analytics_event_dropped",
 		"tenant_id", event.TenantID,
 		"feature", event.Feature,

@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // counterEntry is one real-time quota counter: the running Quantity within
@@ -199,6 +200,10 @@ type Aggregator struct {
 
 	counters sync.Map // counterKey -> *counterEntry
 	mu       sync.Mutex
+
+	// aggDuration carries metering.aggregation.duration (metrics.go),
+	// registered by NewAggregator; nil for a bare struct literal.
+	aggDuration metric.Float64Histogram
 	// sweptThrough is the newest period start a sweep has run for, guarded
 	// by mu: a sweep runs only when an event's period start is newer, so
 	// the full-map walk happens at most once per period boundary crossed
@@ -227,8 +232,9 @@ type Aggregator struct {
 // comment).
 func NewAggregator(summaries *SummaryRepository) *Aggregator {
 	return &Aggregator{
-		summaries: summaries,
-		bucket:    defaultPeriodBucket,
+		summaries:   summaries,
+		bucket:      defaultPeriodBucket,
+		aggDuration: registerAggregationDurationMetric(),
 	}
 }
 
@@ -316,6 +322,10 @@ func realtimeKey(tenantID, feature string, periodStart time.Time) counterKey {
 // delivery -- a transient bus failure delays the overage signal, never
 // consumes it.
 func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
+	start := time.Now()
+	defer func() {
+		recordAggregationDuration(ctx, a.aggDuration, aggregationChannelAnalytics, start)
+	}()
 	if err := event.validate(); err != nil {
 		return err
 	}
@@ -755,6 +765,10 @@ func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta fl
 // deliverOverageCrossing settles it), so a failed publish leaves the
 // latch open for the next crossing fold to retry.
 func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) error {
+	start := time.Now()
+	defer func() {
+		recordAggregationDuration(ctx, a.aggDuration, aggregationChannelOutbox, start)
+	}()
 	if err := event.validate(); err != nil {
 		return err
 	}
