@@ -413,3 +413,40 @@ WB 20(白盒,Go 强制):kernel_shutdown、factory_vars、hub_http、address_inde
 2. `unittest/` 目录全部 `_test.go`,无 build tag;模块 CI `go test ./...` 自动覆盖,工作流不改。
 3. 有 target 的 `cmd/server` 集群路由属 2b 收尾,与 U 迁移分开提交更清晰;拆分边界回填本表。
 4. 白盒留包文件不改动;SELF 5 件列入 2a 式并入队列(并入既有 assert_conforms_test.go/assert_fails_closed_test.go),不属本迁移。
+
+## 批次 3 执行记录:U 清单 13 文件全部落地
+
+执行批次按上文 U 迁移清单逐文件迁移,每模块一个提交、按模块验证(普通 `go test ./...`、`go vet ./...`、`golangci-lint run ./...` 0 issues、gofmt 干净、覆盖率门 `tools/check_coverage_baseline.py --check` 通过)。`unittest/` 目录全部 `_test.go`、无 build tag,模块 CI 的 `go test ./...` 自动覆盖,工作流零改动(逐模块跑通确认,`go build ./...`/`go vet ./...` 对纯测试目录同样零干扰)。
+
+### 逐文件落地
+
+| 文件(迁移前 → 后) | 包 | 资格化/编辑 |
+|---|---|---|
+| go/pkgcore/{eventbus,kv,mailer,objectstore}_conformance_test.go → go/pkgcore/unittest/ | pkgcore_test → unittest | 引用本已全限定,原样保留;四文件头"外部测试包机械例外"叙述改写为 unittest 家叙述(成环理由保留为"为何必须黑盒"的一节);mailer 驱动的 smtpMailerFor 连同文件迁入,头注同步 |
+| go/pkgcore/standalone_build_test.go → go/pkgcore/unittest/ | pkgcore → unittest | 模块根锚定:自 runtime.Caller 上溯至含 go.mod 的模块根(原来就是 filepath.Dir(thisFile));模块根新增包级 helper moduleRootOf;go_work_use_block_test.go 的仓库根锚点 `..`/`..` 改为自模块根上溯至首个 go.work,无则 skip(语义与原来"固定两层上溯找不到即 skip"在 monorepo 检出与独立消费两种环境下等价,walk 上溯在共享 /tmp 之类环境有杂散 go.work 风险,已按模块根为起点、遇到即停,本仓库检出两跳即达) |
+| go/jobs/{queue_conformance,fail_closed_cancellation_state}_test.go → go/jobs/unittest/ | jobs_test → unittest | 引用已全限定,原样保留;头注改写 |
+| go/jobs/claim_window_test.go → go/jobs/unittest/ | jobs → unittest | 判为黑盒成立(自身只触导出面);加 `import jobs`,导出符号全量限定(NewHandlerFunc/Task/Job/JobID/Result/ProgressFn/StatusRunning/StatusSucceeded);四辅助换用本目录镜像(见下) |
+| go/authn/standalone_build_test.go → go/authn/unittest/ | authn → unittest | 同上溯锚定(moduleRootOf) |
+| go/tenancy/standalone_build_test.go → go/tenancy/unittest/ | tenancy → unittest | 同上溯锚定 |
+| go/ratelimit/no_cjk_characters_test.go → go/ratelimit/unittest/ | ratelimit → unittest | `WalkDir(".")` 改为自模块根 `WalkDir(moduleRoot)`(unittest 目录下 "." 只扫到自身);上溯 helper 入文件 |
+| go/observability/exporter/otlp/invalid_utf8_export_test.go → go/observability/unittest/ | otlp_test → unittest | 目的地按蓝图(模块 unittest/,非 exporter 目录);obs/otlp 引用全限定原样;与 exporter/prometheus 的 otlp_not_registered(SHAPE)互斥成立——两者分属不同测试二进制,SHAPE 钉的"本二进制不导入 exporter/otlp"不受影响;文件头注明其旧目录为何不能留 |
+
+每个测试函数与断言行为逐字节不变;留包套件与白盒登记文件零改动。
+
+### claim_window 的辅助迁移(蓝图偏差记录)
+
+蓝图设想把 newTestQueue/startQueue/pollJob/waitTerminal 迁入 `go/jobs/internal/testutil`。编译门否定了该去处:testutil(metrics 辅助的家)被留包的 package jobs 包内测试(metric_registration_failure_test.go 等)导入,而 testutil 一旦导入 jobs 根即成环("import cycle not allowed in test")。既不能改 production 面(ensureJobsSchema 不可导出),四辅助又不能原样搬(其 newTestQueue 触达未导出 ensureJobsSchema)。落地形态:unittest 目录自持镜像 `go/jobs/unittest/test_support_test.go`(2b 跨包镜像先例的同一模式),头部注明镜像关系、同步义务与一处刻意差异——包内版在构造期 eager 建 schema,镜像版延后到 Start(claim_window 流程恒先 Start 后 Enqueue,两版行为一致);包内原辅助与其 8 个留包消费方不动。
+
+### 验证记录
+
+- 逐模块普通单元运行全绿,新 `unittest/` 包被 `go test ./...` 覆盖(逐模块实测:pkgcore 4.98s、jobs 3.03s、authn 1.25s、tenancy 1.64s、ratelimit 0.24s、observability 1.78s);go vet、golangci-lint 0 issues、gofmt 干净。
+- go_work_use_block 测试在迁移后仍实跑并命中本仓库 go.work(monorepo 检出内两跳找到);各 standalone_build 测试以模块根为工作目录 GOWORK=off 实跑 `go build ./...`+`go vet ./...`。
+- 覆盖率门:五个模块通过(未及基线);`go/jobs` 越界一次(83.8415→83.4604,差 0.38pt > 0.15 容差),对照测量证实为迁移所致——同一断言从 unittest 测试二进制执行后不再归属 jobs 包自身 profile,测试并未减少,已按工具机制 `--update` 重录基线并在地提交信息写明理由(仍高于 80% 地板 3.5pt)。pkgcore 实测 81.50 高于其记录基线,无需重录。
+- `tools/scan_cjk.py` 全树干净;`go build github.com/vislake/speed/go/...`(workspace 上下文)通过。
+- 散文引用重定向:go/pkgcore/AGENTS.md 单元层段与 internal/testutil 段、go/jobs/AGENTS.md 单元层段、tools/README.md 的 CJK 扫描器引用随迁改写;SKILL §13 蓝图中已述目标布局,无需改;docs/internal/18/24 中相关行为是历史记录(过渡期手段与已闭 deferral 行),不改。
+
+### 提交
+
+按模块六笔提交(正文只述结论性 why,不引批次/轮次代号),全部 fast-forward 单线:
+`test(pkgcore)`(六文件+AGENTS)、`test(jobs)`(三文件+test_support 镜像+AGENTS+基线重录)、`test(authn)`、`test(tenancy)`、`test(ratelimit)`(+tools/README)、`test(observability)`。
+
