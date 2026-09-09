@@ -1,64 +1,95 @@
 name: release
-# The lockstep release pipeline: OFFLINE VERIFICATION ONLY.
+# The lockstep release pipeline: offline verification first, then -- for
+# a verified version -- the real release.
 #
 # Manually dispatched with a version number (the `version` input is the
-# contract). The job verifies, for that version, that the full lockstep
-# release plan is consistent -- the coordinator's default mode
+# contract). Job `verify` proves the full lockstep plan for that version
+# is consistent -- the coordinator's default mode
 # (tools/release/lockstep-release.py) derives the publishable set at
 # runtime (go.work use entries under go/ for the Go half, web/packages/*
 # for the npm half) and exits 0 only when: the version has release-version
 # form; no tag for it exists; the go/ tree is complete against go.work;
 # web/ package versions are uniform and the web/.changeset fixed group
 # covers exactly the packages that exist. The job then runs the
-# coordinator's own self-tests (fixture-based cleanup-engine tests and a
-# sandbox end-to-end tag proof against a scratch git repository). A valid
-# version with green checks passes; an invalid version or any failed check
-# fails the run.
+# coordinator's own self-tests. Job `publish` (needs: verify, and the
+# workflow's write permissions live there, not on `verify`) performs the
+# release the verified plan names.
 #
-# WHAT REAL PUBLISHING WOULD ADD -- each step of the full sequence, and
-# what is missing:
-#   1. preflight -- main branch green, clean workspace, changelog
-#      generated; the version-format and duplicate-tag preflights run
-#      here already (this job).
-#   2. full test matrix, any failure aborts -- full-check already runs
-#      the Docker-backed integration matrix on full-ci-labelled PRs; the
-#      same reusable workflows are not mounted here.
-#   3. Go release -- one tag per module directory, go/<module>/<version>
-#      form, MUST be scripted (hand-tagging always misses one). Tag
-#      creation exists in the coordinator as a HARD-GATED local-only mode
-#      (--apply requires --allow-local-tag-creation, refused otherwise).
-#      The first release additionally scans every module go.mod for
-#      transitional `replace ... => ../<module>` lines, rewrites them to
-#      the real versions and re-runs go mod tidy (a missed line breaks
-#      consumer `go get`). The cleanup engine ships as pure functions
-#      (first_release_replace_cleanup in tools/release/lockstep-release
-#      .py), exercised ONLY against the fixtures under tools/release/
-#      testdata/ -- the live tree keeps its pre-release transition state.
-#   4. npm release -- changesets fixed version group (bootstrap lives at
-#      web/.changeset/config.json), published with provenance --
-#      changesets is not installed in web/ and no publish credential
-#      exists in this repository.
-#   5. artifacts -- multi-arch (amd64/arm64) images, saasctl binaries
-#      (goreleaser), the merged OpenAPI spec speed.yaml (Release asset +
-#      @speed/api-sdk + docs-site version directory) -- no goreleaser
-#      config, image builder or release spec-merge tooling exists yet.
-#   6. post-release scaffold-verify on the just-released version -- not
-#      wired: nothing in this repository publishes, so there is no real
-#      post-release event to hook it onto.
-#   7. outputs -- GitHub Release + changelog + SBOM.
+# THE v0.0.1 DISPOSITION (mechanism landed 2026-09-10; the dispatch is
+# the first real end-to-end run): the first real release uses both
+# halves of the one-version plan.
+#   * Go modules release by pushing the 21 go/<module>/v0.0.1 tags -- the
+#     Go multi-module repository convention, under which the Go module
+#     proxy serves each module from the tag its path names. The tags are
+#     pushed BY THIS WORKFLOW, at the exact commit the run checked out
+#     and verified: one dispatch releases everything, the released
+#     content is the verified content, and the hand-tagging risk the
+#     original design called out ("MUST be scripted; hand-tagging always
+#     misses one") is gone. The coordinator script keeps its offline
+#     character -- its gated local-only apply mode exists to exercise
+#     tag creation against scratch repositories; pushing is a workflow
+#     concern, never a script one.
+#   * The twelve npm packages (the web/.changeset fixed group) publish at
+#     0.0.1 to the GitHub Packages npm registry
+#     (https://npm.pkg.github.com) under the @speed scope, each from its
+#     own directory with `npm publish --registry
+#     https://npm.pkg.github.com`, authenticated with the built-in
+#     GITHUB_TOKEN as the npm token (permissions: packages: write) --
+#     the .npmrc pair GitHub documents: the auth line
+#     `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}` in the
+#     runner's ~/.npmrc plus the scope mapping
+#     `@speed:registry=https://npm.pkg.github.com`, so no @speed request
+#     can route anywhere else. Publishing to npmjs.org is deferred to
+#     v1.0 (M4), with the rest of the deferred list below.
+#
+# WHAT JOB `publish` DOES, IN ORDER:
+#   1. Refuses to push tags while any publishable go/<module>/go.mod
+#      still carries a sibling replace (`X => ../X`). The first release
+#      must tag a commit whose go.mods name the real versions: consumers
+#      resolve sibling requires through the module proxy, where a
+#      dependency's own replace directives do not apply. The release
+#      commit that applies the cleanup engine -- shipped fixture-tested
+#      as pure functions in tools/release/lockstep-release.py -- is
+#      prepared before dispatch and pushed to main; this workflow tags
+#      whatever commit the run checked out, never a commit it rewrites.
+#   2. Creates and pushes the module tags go/<module>/<version>, the
+#      module set derived from go.work with the coordinator's own
+#      parser, so the tag set cannot drift from the verified plan.
+#   3. Publishes the npm half: pinned pnpm install --frozen-lockfile and
+#      a filtered workspace build (the same toolchain and shape the
+#      npm-package-ci workflow uses), then one `npm publish --registry
+#      https://npm.pkg.github.com` per package in dependency order. npm
+#      knows no workspace: protocol, so each manifest's @speed sibling
+#      specifiers (workspace:* in the committed tree; pnpm-lock.yaml
+#      records workspace members as links, never versions) are rewritten
+#      to the exact release version on the runner copy first -- the
+#      rewrite pnpm publish performs at pack time, made explicit -- and
+#      a pre-release version (v0.0.1-rc.1 form) publishes under the
+#      `next` dist-tag.
+#
+# STILL DEFERRED (this header is the authority): npmjs.org registry
+# publishing; changesets-driven versioning and npm provenance; SBOMs and
+# the GitHub Release object (changelog + assets); the artifact legs
+# (versioned multi-arch image publishing under the lockstep lifecycle --
+# the GHCR builds today carry CI tags only -- goreleaser binaries, the
+# merged speed.yaml as a Release asset and docs-site version directory);
+# oasdiff breaking-change baselining (the v0.0.1 tag set provides the
+# first baseline anchor; the wiring is not done); post-release
+# scaffold-verify triggers (a real release event exists from v0.0.1 on;
+# the trigger wiring is not done); trivy image scanning (the image build
+# stays workflow_dispatch-only); and license-scan transitive-dependency
+# extension. Each stays scheduled with v1.0 (M4) in
+# docs/internal/24-deferral-roadmap.md chapter 5.
+#
 # Pre-release channels ship v<version>-rc.N first (reference-app
 # validates, then the stable release). Rollback policy: released Go tags
 # cannot be recalled (module proxies cache), so rollback = patch release,
 # never tag deletion; npm packages are deprecated, not deleted.
 #
-# WHAT EXISTS: the offline verification above. No publish credential is
-# wired anywhere (permissions: contents: read), so this workflow cannot
-# create a release, push a tag or publish an npm package; no step here can
-# ever publish for real, by construction.
-#
-# GATE: one command releases every module under the same version --
-# proven OFFLINE by this job; an end-to-end run happens at the first real
-# release.
+# GATE: one dispatch releases every module under the same version --
+# verified offline by the coordinator and its self-tests, then pushed
+# and published by this workflow. The v0.0.1 dispatch is that gate's
+# first real end-to-end run.
 
 on:
   workflow_dispatch:
@@ -116,7 +147,7 @@ jobs:
           # go/<module>/<version> tag, every web/ package with the version
           # the changesets fixed group bumps it to) and exits 0 only when
           # the plan is consistent. Nothing is tagged, written or
-          # published.
+          # published by this job.
           python3 tools/release/lockstep-release.py "$VERSION"
       - name: Run the coordinator self-tests
         run: |
@@ -125,7 +156,149 @@ jobs:
           python3 tools/release/lockstep-release.py --self-test
       - name: Report
         run: |
-          echo "offline verification green for ${{ inputs.version }} -- the"
-          echo "lockstep release machinery is proven. Real publishing is"
-          echo "scheduled for the v1.0 release at M4, by design of this M0"
-          echo "round; this workflow wires no publish credential."
+          echo "offline verification green for ${{ inputs.version }}."
+          echo "The publish job of this run performs the real release for"
+          echo "that version: Go module tags pushed, the twelve @speed npm"
+          echo "packages published to the GitHub Packages registry."
+
+  publish:
+    name: Publish ${{ inputs.version }} (Go tags and npm packages)
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 40
+    # The write permissions live here, on the job that writes -- verify
+    # keeps contents: read. contents: write pushes the module tags (and
+    # is the credential actions/checkout stored for the push); packages:
+    # write publishes the npm packages to the GitHub Packages registry
+    # as the built-in GITHUB_TOKEN.
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Validate the version input format
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "error: version '$VERSION' is not a release-version form."
+            exit 1
+          fi
+          echo "version input '$VERSION' has release-version form"
+      - name: Push the Go module tags for this version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # First-release guard: a publishable go.mod that still carries a
+          # sibling replace (X => ../X) cannot be the released artifact --
+          # consumers resolve sibling requires through the Go module proxy,
+          # where a dependency's replace directives do not apply. The
+          # release commit that applies the fixture-tested cleanup engine
+          # (first_release_replace_cleanup in tools/release/lockstep-
+          # release.py) is prepared before dispatch; refuse to tag while
+          # any module is still in the transition state.
+          if grep -lEq '=> \.\./' go/*/go.mod; then
+            echo "error: refusing to tag while publishable go.mods still"
+            echo "       carry a sibling replace (the transition state a"
+            echo "       release must have cleaned before dispatch):"
+            grep -lE '=> \.\./' go/*/go.mod | sed 's/^/         /'
+            exit 1
+          fi
+          # Derive the module set from go.work with the coordinator's own
+          # parser, so the tag set cannot drift from the verified plan.
+          python3 - "$VERSION" > /tmp/module-tags.txt <<'PYEOF'
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location(
+              "lockstep_release", "tools/release/lockstep-release.py"
+          )
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          text = open("go.work", encoding="utf-8").read()
+          for entry in m.parse_gowork_uses(text):
+              if entry.startswith("go/") and entry.count("/") == 1:
+                  print(f"go/{entry[3:]}/{sys.argv[1]}")
+          PYEOF
+          mapfile -t tags < /tmp/module-tags.txt
+          echo "Tagging $(wc -l < /tmp/module-tags.txt) modules at the verified checkout:"
+          for t in "${tags[@]}"; do
+            git tag "$t"
+            echo "  tag $t"
+          done
+          git push origin "${tags[@]/#/refs/tags/}"
+          echo "pushed $(wc -l < /tmp/module-tags.txt) module tags"
+      - name: Set up pinned Node.js, pnpm and the pnpm store cache
+        # The same reusable setup npm-package-ci uses: Node from
+        # web/.nvmrc, pnpm from web/package.json's packageManager field.
+        uses: ./.github/actions/setup-node-env
+      - name: Install workspace dependencies (frozen lockfile)
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Build the twelve packages
+        working-directory: web
+        run: |
+          # dist/ is gitignored and built per package; each package's
+          # build script pulls its @speed dependencies' builds through
+          # its own --filter legs. A workspace-filtered recursive build
+          # emits every export map the publish packs.
+          pnpm -r --filter "@speed/*" build
+      - name: Publish the twelve @speed packages to the GitHub Packages registry
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION_NO_V="${VERSION#v}"
+          # The .npmrc pair GitHub documents for package-scoped registry
+          # use: the auth line for the GitHub Packages npm host in the
+          # runner's own ~/.npmrc (npm expands ${NODE_AUTH_TOKEN} from the
+          # environment when it reads the file), plus the @speed scope
+          # mapping so no @speed request can route anywhere else. Both
+          # lines also make an accidental npmjs.org publish impossible:
+          # that registry has no credential and no mapping here.
+          printf '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n@speed:registry=https://npm.pkg.github.com\n' > "${HOME}/.npmrc"
+          # Dependency-first order: every package publishes before any
+          # package that depends on it (the manifest rewrite below names
+          # real versions, so an in-order publish also leaves no window
+          # in which a consumer could resolve a not-yet-published half).
+          packages="tokens i18n api-client ui-kit api-sdk auth-core layout-kit billing-ui tenancy-ui auth-ui account-ui product-shell"
+          for p in $packages; do
+            pkg_json="web/packages/$p/package.json"
+            # npm knows no workspace: protocol -- rewrite the @speed
+            # sibling specifiers (workspace:* in the committed tree) to
+            # the exact release version on this runner copy, mirroring
+            # what pnpm publish does at pack time. Committed manifests
+            # keep workspace:*; only the published copy is rewritten.
+            python3 - "$pkg_json" "$VERSION_NO_V" <<'PYEOF'
+          import json, sys
+          path, version = sys.argv[1], sys.argv[2]
+          data = json.load(open(path, encoding="utf-8"))
+          changed = False
+          for field in ("dependencies", "devDependencies", "optionalDependencies"):
+              for name, spec in (data.get(field) or {}).items():
+                  if name.startswith("@speed/") and spec == "workspace:*":
+                      data[field][name] = version
+                      changed = True
+          if changed:
+              with open(path, "w", encoding="utf-8") as fh:
+                  json.dump(data, fh, indent=2)
+                  fh.write("\n")
+          PYEOF
+            dist_tag=""
+            if [[ "$VERSION" == *-* ]]; then
+              # A pre-release version publishes under the `next`
+              # dist-tag, never `latest` (the header's pre-release
+              # channel policy).
+              dist_tag="--tag next"
+            fi
+            echo "publishing @speed/$p at $VERSION_NO_V"
+            (cd "web/packages/$p" && npm publish --registry https://npm.pkg.github.com $dist_tag)
+          done
+      - name: Report
+        run: |
+          echo "released ${{ inputs.version }}: Go module tags pushed and the"
+          echo "twelve @speed packages published to the GitHub Packages"
+          echo "registry (https://npm.pkg.github.com/@speed)."
