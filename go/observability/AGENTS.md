@@ -7,9 +7,8 @@ context-aware structured logger, and generic HTTP instrumentation. See
 the per-domain "must-instrument metrics" table (queue depth, metering
 outbox lag, notification delivery rate, payment callback success, ...),
 which belongs to the modules that own those domains (`jobs`, `metering`,
-`notification`, `ai-gateway`), not to this package. All of those
-modules are real, tested implementations today (root `CLAUDE.md`'s
-Repository Status), and each has since instrumented its own row via
+`notification`, `ai-gateway`), not to this package. Each of those
+modules instruments its own row via
 `otel.Meter` on its own package path, with this package supplying only
 the global MeterProvider wiring: `go/jobs` (`standalone_queue.go`'s
 queue-depth async gauge plus job-duration histogram, attempts and

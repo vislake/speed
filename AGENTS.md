@@ -116,12 +116,11 @@ the root) — a bare `./...` at the repo root does not resolve as expected.
 1. **This file** — orientation, load-bearing rules, where everything else is.
 2. **The target module's own `go/<name>/AGENTS.md` or `web/packages/<name>/AGENTS.md`**
    — module-specific discipline, file layout, known limitations, testing setup.
-3. **Root `CLAUDE.md`** — the exhaustive architecture, full discipline list,
-   and a dense per-module "Repository Status" census of what is actually
-   implemented and CI-enforced today. Deliberately **not duplicated here**:
-   that census changes with nearly every round of work, and a second copy in
-   this file would only drift out of sync with it — read `CLAUDE.md` for the
-   current, authoritative answer to "is module X real yet."
+3. **Root `CLAUDE.md`** — the architecture, the full discipline list and the
+   repository's traps. It is a guide, not a status report: whether a module
+   is real and CI-enforced is answered from the code — the module's own
+   `AGENTS.md` (Testing section) and its row in the workflows under
+   `.github/workflows/`."
 4. **`docs/internal/**`** — the design rationale behind the rules above,
    including alternatives that were tried and rejected. Chinese-language;
    start at `docs/internal/00-overview.md` for the navigation table.

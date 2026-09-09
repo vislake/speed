@@ -4,50 +4,42 @@ A reusable SaaS foundation for Go and React.
 
 New SaaS projects pull in the capabilities they need via `go get` / `npm install`, generate a minimal starter skeleton with a CLI, and start with multi-tenant isolation, authentication and permissions, organizations and members, subscription billing and metering, an AI gateway, background jobs, media storage, notifications, observability and an operations console already in place.
 
-## Status
+## Getting started
 
-The [roadmap](docs/internal/15-roadmap.md) tracks the plan; this section states what is real. **21 Go modules** have real, tested implementations — `go build`, `go vet`, `golangci-lint run ./...` and `go test -race` all pass for every one of them, and CI proves it on every pull request: the infrastructure floor (`pkgcore`, `dbkit`, `tenancy`, `observability`, `config`, `jobs`, `ratelimit`, `pki`), identity and access (`authn`, `rbac`, `org`), media and monetization (`storage`, `notification`, `billing`, `metering`), growth and integration (`sharing`, `integration`, `ai-gateway`), governance (`compliance`, `admin`), and the consumer-facing scaffolding CLI (`saasctl`) — every module the root `go.work` file lists, with none left as an unimplemented stub. On the web side, **eleven `@speed/*` npm packages** — `tokens`, `i18n`, `ui-kit`, `api-client`, `api-sdk`, `layout-kit`, `auth-core`, `auth-ui`, `tenancy-ui`, `product-shell` and `account-ui` — are implemented, tested, and lint/typecheck/build clean under the `web/` pnpm workspace, alongside the reference app's own web host (`examples/reference-app/web`), which rides that same workspace as an unversioned twelfth member and proves the whole frontend stack composed together.
+The documentation site — [User guides](https://speed.vislake.com/docs/user-guide/) for building a product on speed and [Developer docs](https://speed.vislake.com/docs/developer-docs/) for working on speed itself — starts with a [quickstart](https://speed.vislake.com/docs/user-guide/quickstart/) that takes a starter project from clone to running.
 
-Module OpenAPI fragments drive the spec-first loop end to end, and CI enforces it across live pipelines. `fast-check` runs on every pull request and on every push to `main` — most commits land on `main` by a direct push rather than a merged pull request, so the push trigger is the normal path, not a fallback for an edge case: lint, vet and race-tested unit tests for all 21 Go modules, the matching lint/typecheck/test/build pass for all eleven npm packages plus the reference app's web host, and repository-wide checks (a CJK-outside-`docs/internal` scan, a workspace-wide build, a `go.work` drift gate). `full-check` adds the Docker-backed PostgreSQL/Redis/RustFS integration tiers and the reference app's own composed-HTTP flow tests, gated behind a `full-ci` label on pull requests — and, like `fast-check`, it also runs on every push to `main`. `docs-check` runs the i18n key-parity and docs-structure checks on PRs touching documentation or i18n resources. `api-contract` regenerates each fragment's backend interface from its spec and rebuilds the reference app, so a spec change nobody implemented cannot compile; the merged OpenAPI document and the generated `@speed/api-sdk` frontend are gated the same way. `security` runs a dependency audit, a secret scan, CodeQL and a license check on every PR plus a daily schedule. `release` is dispatched manually and verifies a lockstep, one-version release plan entirely offline; no publish credential is wired, so nothing in `release` can publish. The `e2e` and `nightly` workflow files are gated stubs, dispatch-only by design; `scaffold-verify` runs a consumer selection's full generate/tidy/build/migrate/boot cycle on a daily schedule.
+Nothing is published to a package registry yet: there is no `go get github.com/vislake/speed/...` and no `npm install @speed/...`. The current way to use speed is a local checkout — clone this repository, materialize a starter project with `saasctl new` (run from the checkout), and consume the modules through `replace` directives until the first release.
 
-What is not shipped is recorded per module in each module's own `AGENTS.md` and tracked on the roadmap. Standing gaps the shipped tree states plainly: real release publishing (no publish credential is wired anywhere in this repository), browser-level end-to-end automation over the served reference-app page, the platform-staff admin shell, the `e2e` and `nightly` pipelines, and the combined dual-deployment-mode × dual-dialect CI run. The pki X.509/CA layer's HTTP surface (revocation, CRL, JWKS export) is genuinely consumed: the reference app's AI-output attestation layer drives issuance, signing and the chain-verified public-share gates through the certificate-revoke and CRL-fetch operations, leaving the JWKS reads the one unconsumed operation pair. `compliance`'s genuinely deferred pieces are the narrower set of immutable database-level enforcement, an optional hash chain, formatted report export, and partitioned archival.
-
-- 📐 [Design overview](docs/internal/00-overview.md) ← **start here**
-- 🗺️ [Roadmap and milestones](docs/internal/15-roadmap.md)
-- ⚠️ [Risk register](docs/internal/17-risks.md)
-
-> Design documents under `docs/internal/` are written in Chinese for internal design discussion. Everything else in this repository — code comments, module docs, public documentation — is English.
-
-## Core Design Choices
+## Core design choices
 
 | Choice | What it means |
 |---|---|
 | **Import modules, don't fork** | Capabilities ship as independently released Go modules and npm packages; only the minimal starter skeleton is generated by a CLI and freely editable |
 | **Modular monolith** | Modules are released independently but compiled into a single binary and called in-process — no service mesh, no Kubernetes-shaped infrastructure |
-| **Two deployment modes** | The standalone deployment mode runs as a single process with zero external dependencies and starts in seconds; the distributed deployment mode adds PostgreSQL, Redis and the observability stack |
+| **Two deployment modes** | The standalone deployment mode runs as a single process with zero external dependencies; the distributed deployment mode adds PostgreSQL, Redis and the observability stack. The mode constrains which implementations may compose — it never selects them |
 | **Lockstep versioning** | Every module shares one version number; only same-version combinations are supported, so there is no compatibility matrix |
 | **Contract first** | Every REST API has OpenAPI as its single source of truth, and all frontend call code is generated — front/back drift is caught by the compiler |
 | **Bilingual by default** | Chinese and English from day one, never retrofitted |
 | **Validated against real requirements** | A built-in `reference-app` is the mandatory first consumer of every module |
 
-## Layout
+## Repository layout
 
 ```
 speed/
   go/          21 Go modules (pkgcore / tenancy / authn / rbac / billing / jobs / ...)
-  web/         11 npm packages (ui-kit / auth-core / api-sdk / layout-kit / ...), a pnpm workspace
+  web/         12 npm packages (ui-kit / auth-core / api-sdk / layout-kit / ...), a pnpm workspace
   examples/    reference-app: the AI smile simulation platform, backend and its own web host
   contracts/   the platform contract home (the merged OpenAPI document)
   tools/       repo-wide tooling: the release coordinator, CI lint and drift-check scripts
   docs/
-    internal/  design documents (Chinese)
+    internal/  internal design documents (Chinese)
     adr/       architecture decision records
-    site/      public documentation for consuming teams
+    site/      the public documentation site (Hugo)
 ```
 
-A consumer project's starter skeleton comes from `go/saasctl`'s own embedded template tree (`saasctl new`), not a separate top-level directory; layered docker-compose files for local distributed-mode development are not shipped. The full layout and release strategy live in [02 Repository and Release](docs/internal/02-repo-and-release.md).
+A consumer project's starter skeleton comes from `go/saasctl`'s own embedded template tree (`saasctl new`), not a separate top-level directory.
 
-## Coding Standards
+## Coding standards
 
 | Standard | Applies to |
 |---|---|
@@ -57,6 +49,13 @@ A consumer project's starter skeleton comes from `go/saasctl`'s own embedded tem
 
 In Claude Code these three load automatically as skills; otherwise read the files directly.
 
-## For AI Coding Assistants
+## Documentation
 
-Read [CLAUDE.md](CLAUDE.md) first — it carries the architecture overview, the full discipline list, and pointers to everything else. Then follow the three standards above when writing code.
+- **The documentation site** (`docs/site/`, published at speed.vislake.com) is the user-facing reference: user guides with per-module usage and runnable examples, developer docs with architecture and per-module design rationale, the interactive API reference, and an error-code index.
+- **Each module ships its own `AGENTS.md`** inside the module, so documentation travels with the code — per-module discipline, wiring requirements and testing setup for anyone (human or AI tool) working with it.
+- **Design documents under `docs/internal/`** are written in Chinese for internal design discussion — rationale, decision records and progress narrative. Everything else in this repository — code comments, module docs, public documentation — is English.
+- **Architecture decision records** live in `docs/adr/`.
+
+## For AI coding assistants
+
+Read [CLAUDE.md](CLAUDE.md) first — it carries the architecture overview, the full discipline list, the repository's traps, and pointers to everything else. Then follow the three standards above when writing code. CLAUDE.md is a guide, not a status report: what is implemented and what CI runs are answered by the code itself (`go.work`, the workflows under `.github/workflows/`, each module's `AGENTS.md`).

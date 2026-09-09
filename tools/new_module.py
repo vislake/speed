@@ -383,8 +383,7 @@ def npm_registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "or built in CI.",
         "  4. Roadmap and design doc: register the package in the milestone "
         "that plans it (docs/internal/15-roadmap.md) and, once it ships a "
-        "surface, in the web-package enumeration of the root CLAUDE.md "
-        "Repository Status and web/README.md.",
+        "surface, in the web-package enumeration of web/README.md.",
     ]
     return lines
 
