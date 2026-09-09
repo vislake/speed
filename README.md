@@ -57,10 +57,12 @@ each capability with runnable examples and a complete API reference,
 and the [quickstart](https://speed.vislake.com/docs/user-guide/quickstart/)
 takes a starter project from clone to running.
 
-Nothing is published to a package registry yet — the current way to
-try speed is a local checkout, materializing a starter project with
-`saasctl new` from the repository. The first release lands on the
-registry.
+Speed is consumed by version: the Go modules from their
+`go/<module>/<version>` tags, served by the Go module proxy, and the
+npm packages from the GitHub Packages registry. The first of those
+releases is v0.0.1 (mechanism landed 2026-09-10); until it is
+dispatched, the way to try speed is a local checkout, materializing a
+starter project with `saasctl new` from the repository.
 
 ## Project layout
 
