@@ -137,7 +137,7 @@ flowchart LR
     Pub --> Sub["own subscription: invalidate by exact row triple"]
     Pub -.->|"best-effort bus"| Peer
     subgraph Peer[Another replica]
-        Peer["cache invalidation"] --> Read["next read falls through to the store"]
+        PeerCache["cache invalidation"] --> Read["next read falls through to the store"]
     end
     Row -.->|"backstop: watermark poll"| Poller["anti-loss poller<br/>rows changed since watermark"]
     Poller --> Peer

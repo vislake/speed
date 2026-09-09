@@ -46,7 +46,7 @@ flowchart LR
     Pub --> Sub["自有订阅:按精确行三元组失效"]
     Pub -.->|"尽力而为的总线"| Peer
     subgraph Peer[另一副本]
-        Peer["缓存失效"] --> Read["下次读取落到存储"]
+        PeerCache["缓存失效"] --> Read["下次读取落到存储"]
     end
     Row -.->|"兜底:水位线轮询"| Poller["防丢轮询<br/>自水位线以来变更的行"]
     Poller --> Peer
