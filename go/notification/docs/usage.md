@@ -238,9 +238,9 @@ job settles a `send_records` row with status `skipped` and a short reason,
 which `AGENTS.md`'s "Delivery pipeline" section documents in full.
 
 **How do I add a new channel (e.g. push notifications)?**
-Not supported. `AGENTS.md`'s "Not implemented" section names "a
-pkgcore-level SMS seam" and "the platform-staff push consumer" as
-explicit, recorded gaps, not silent omissions.
+Not supported. `AGENTS.md`'s "Not implemented" section names "the
+platform-staff push consumer" as an explicit, recorded gap, not a
+silent omission.
 
 **Does this module know who a "user" is?**
 No. Its tables hold zero identity data on purpose -- `UserAddressResolver`
