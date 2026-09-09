@@ -15,7 +15,10 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
     plus the guard against rounding: a profile whose true total sits
     between two 0.1 display steps must come out exact, not rounded.
     Generated-file exclusion is proven the same way: a .gen.go block's
-    statements leave the census whether covered or not.
+    statements leave the census whether covered or not. Merged
+    multi-binary fragments (a -coverpkg run lists each block once per
+    test binary) are deduplicated: each block counts once, covered
+    when any fragment executed it.
   * comparison_failures -- the two-bounds decision rule (the 80.0%
     floor and the recorded baseline, both under the same tolerance),
     including which bound a measurement breaches when both do.
@@ -120,6 +123,26 @@ class CoverageMath(unittest.TestCase):
             ]
         )
         self.assertEqual(m.coverage_from_profile(profile), 100.0)
+
+    def test_profile_merged_fragments_count_each_block_once(self):
+        # A go test run over many packages writes one profile fragment
+        # per test binary, and under -coverpkg every fragment carries
+        # the whole module's blocks, so the merged profile lists the
+        # same block once per binary that ran. The census counts each
+        # block once, covered when any fragment's count is above zero:
+        # 8 statements executed by one binary of two still measure
+        # 8/12, and a 4-statement block neither binary executed stays
+        # uncovered even though both fragments list it.
+        profile = "\n".join(
+            [
+                "mode: set",
+                "go/jobs/worker.go:10.2,20.14 8 1",
+                "go/jobs/worker.go:10.2,20.14 8 0",
+                "go/jobs/store.go:21.2,30.14 4 0",
+                "go/jobs/store.go:21.2,30.14 4 0",
+            ]
+        )
+        self.assertAlmostEqual(m.coverage_from_profile(profile), 8 / 12 * 100)
 
 
 class Comparisons(unittest.TestCase):
