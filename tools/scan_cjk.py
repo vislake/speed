@@ -8,7 +8,7 @@ docs/site/ public documentation site -- English-first, with zh-CN
 localization directories added by need -- are the exceptions). This
 script is the local-run discipline check; CI runs the same check.
 
-Scan semantics, mirroring go/ratelimit/language_test.go (the module-level
+Scan semantics, mirroring go/ratelimit/no_cjk_characters_test.go (the module-level
 precedent):
 
 * Go files (.go): comments only. A single-pass lexer extracts comment text
@@ -65,7 +65,7 @@ contiguous comment run are exempt, so a CJK comment anywhere else in the
 same file is still a violation.
 
 CJK means Han script, classified by the same rune ranges Go's unicode.Han
-covers (unicode.Is(unicode.Han, r) in the language_test.go precedent); the
+covers (unicode.Is(unicode.Han, r) in the no_cjk_characters_test.go precedent); the
 table below transcribes the Go 1.26.1 toolchain's unicode/tables.go _Han
 RangeTable (its stride-2 entry {0x3005, 0x3007, 2} becomes two singleton
 ranges here) and was verified code point for code point against
@@ -114,7 +114,7 @@ NON_SCANNED_DIR_NAMES = frozenset({".git", ".idea", ".vscode", "node_modules", "
 CARVED_SUBTREES = frozenset({"docs/internal", "docs/site"})
 
 # Han-script rune ranges, byte-for-byte what Go's unicode.Han classifies
-# (go/ratelimit/language_test.go calls unicode.Is(unicode.Han, r)),
+# (go/ratelimit/no_cjk_characters_test.go calls unicode.Is(unicode.Han, r)),
 # transcribed from the Go 1.26.1 toolchain's unicode/tables.go _Han table
 # and verified code point for code point against unicode.Is: CJK radicals
 # and Kangxi radicals; the Han members of the CJK Symbols and Punctuation

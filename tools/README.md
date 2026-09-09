@@ -25,7 +25,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 
 Scans a repository tree for CJK (Han-script) characters and fails on any hit
 outside the carved-out areas. This is the repo-wide generalization of the
-module-level regression guard `go/ratelimit/language_test.go`, which uses
+module-level regression guard `go/ratelimit/no_cjk_characters_test.go`, which uses
 `go/parser` + `unicode.Is(unicode.Han, r)`; this script reproduces both
 behaviors exactly.
 
