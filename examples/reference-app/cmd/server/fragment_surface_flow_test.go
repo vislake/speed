@@ -1,6 +1,6 @@
 package main
 
-// p3_fragment_surface_flow_test.go drives the case-domain fragment
+// fragment_surface_flow_test.go drives the case-domain fragment
 // (internal/cases/api) and
 // the smile-simulation fragment (internal/smilesim/api) -- through the
 // real composed HTTP stack buildTestServer builds, in exactly the
@@ -28,16 +28,16 @@ import (
 	"time"
 )
 
-// TestP3FragmentSurface_CaseToSimulation_Journey is the end-to-end
+// TestFragmentSurface_CaseToSimulation_Journey is the end-to-end
 // journey over the two fragments: one clinic
 // staff member, one tenant, one photo, one case and one finished
 // simulation, every step answered by a handler implementing a generated
 // ServerInterface.
-func TestP3FragmentSurface_CaseToSimulation_Journey(t *testing.T) {
+func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "p3-fragments")
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "fragment-surface")
 
 	// A patient photo, uploaded and completed through storage's own real
 	// HTTP surface -- the case's photo attachments reference such
@@ -54,7 +54,7 @@ func TestP3FragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	// the detail route (cases_getCase) -- the three cases operations the
 	// case web UI will call.
 	created := createCaseAs(t, srv, token, demoOwnerUserID, caseCreateBody{
-		PatientName:    "P3 Journey Patient",
+		PatientName:    "Fragment Journey Patient",
 		PatientRef:     "JRN-001",
 		PhotoObjectIDs: []string{completedPhoto.ID},
 	})
