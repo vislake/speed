@@ -1,4 +1,9 @@
-package authn
+// This suite lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier checks with no single source file as their target
+// (the backend coding standard's testing-layout rule); a module-shape check
+// is such a suite. It tests the module black-box, from outside package
+// authn: it is a build-shape guard, not a test of authn's own symbols.
+package unittest
 
 import (
 	"os"
@@ -25,6 +30,11 @@ import (
 // module's own directory. This test runs under plain `go test ./...`,
 // workspace or not, so the shape cannot wait for a manual GOWORK=off
 // check to be thought of.
+//
+// The build/vet must run against the whole module, not against this file's
+// own directory: the check lives in go/authn/unittest/, whose go.mod the
+// module root above it carries, so moduleDir is anchored by walking up from
+// this file to the directory holding go.mod.
 func TestModuleBuildsStandaloneOutsideWorkspace(t *testing.T) {
 	if testing.Short() {
 		t.Skip("shells out to `go build`/`go vet` against the module's full standalone dependency graph; skipped in -short")
@@ -34,10 +44,7 @@ func TestModuleBuildsStandaloneOutsideWorkspace(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime.Caller(0) did not report this file's own path")
 	}
-	moduleDir, err := filepath.Abs(filepath.Dir(thisFile))
-	if err != nil {
-		t.Fatalf("resolve this module's directory: %v", err)
-	}
+	moduleDir := moduleRootOf(t, thisFile)
 
 	for _, args := range [][]string{
 		{"build", "./..."},
@@ -58,5 +65,30 @@ func TestModuleBuildsStandaloneOutsideWorkspace(t *testing.T) {
 					"Run `go mod tidy` inside this module's directory and commit the result.\n\nOutput:\n%s",
 				strings.Join(args, " "), moduleDir, out)
 		}
+	}
+}
+
+// moduleRootOf walks upward from the directory containing thisFile -- the
+// compiled location of this very test file -- until it finds the directory
+// holding the module's go.mod. The suite lives in the module's unittest/
+// directory, one level below the module root, so the file's own directory
+// is not where the module's go.mod sits.
+func moduleRootOf(t *testing.T, thisFile string) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Dir(thisFile))
+	if err != nil {
+		t.Fatalf("resolve directory of %s: %v", thisFile, err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", filepath.Join(dir, "go.mod"), err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("no go.mod found above %s: this test file must live inside a Go module", thisFile)
+		}
+		dir = parent
 	}
 }
