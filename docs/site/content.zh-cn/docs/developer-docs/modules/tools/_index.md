@@ -2,6 +2,7 @@
 title: 工具组
 weight: 0
 description: "模块设计区最末的一组:saasctl——面向业务方的 CLI。它是唯一永不组装进运行内核的交付物,以及它为什么仍然随库发布。"
+bookCollapseSection: true
 ---
 
 # 工具组

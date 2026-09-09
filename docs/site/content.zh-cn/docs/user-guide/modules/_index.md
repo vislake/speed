@@ -3,6 +3,7 @@ title: 模块参考
 weight: 0
 description: "用户指南的按模块读法——每个 Go 模块一页:做什么、何时选用、怎么接线、核心概念与边界。"
 aliases: ["/docs/modules"]
+bookCollapseSection: true
 ---
 
 # 模块参考

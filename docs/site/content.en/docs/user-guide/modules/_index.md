@@ -3,6 +3,7 @@ title: Module reference
 weight: 0
 description: "The by-module reading of the user guides — one page per Go module: what it is for, when to choose it, how to wire it, its core concepts and its boundaries."
 aliases: ["/docs/modules"]
+bookCollapseSection: true
 ---
 
 # Module reference

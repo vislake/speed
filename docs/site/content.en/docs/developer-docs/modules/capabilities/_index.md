@@ -2,6 +2,7 @@
 title: Capability modules design
 weight: 0
 description: "Design pages for the five capability modules at the top of the dependency graph — billing, ai-gateway, sharing, compliance, admin — why each is shaped the way it is, and the design story that runs through the group."
+bookCollapseSection: true
 ---
 
 # Capability modules design

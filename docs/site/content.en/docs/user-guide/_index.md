@@ -1,6 +1,7 @@
 ---
 title: User guides
 weight: 10
+bookCollapseSection: true
 ---
 
 # User guides

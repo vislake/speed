@@ -1,6 +1,7 @@
 ---
 title: 开发者文档
 weight: 20
+bookCollapseSection: true
 ---
 
 # 开发者文档

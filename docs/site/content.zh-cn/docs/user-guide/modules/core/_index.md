@@ -2,6 +2,7 @@
 title: core 组模块
 weight: 0
 description: "依赖底座——pkgcore、dbkit、tenancy、observability、config、jobs 与 ratelimit,每个 speed 二进制都要组装的七个模块,按依赖序排列。"
+bookCollapseSection: true
 ---
 
 # core 组模块

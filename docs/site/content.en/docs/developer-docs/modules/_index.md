@@ -2,6 +2,7 @@
 title: Module designs
 weight: 0
 description: "The per-module design section of Developer docs — one page per Go module and npm package on why it is shaped the way it is: responsibility and boundary, design reasoning, trade-offs, key mechanisms, and the frozen public surface."
+bookCollapseSection: true
 ---
 
 # Module designs

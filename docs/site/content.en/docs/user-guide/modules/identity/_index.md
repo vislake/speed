@@ -2,6 +2,7 @@
 title: Identity modules
 weight: 0
 description: "Who your users are and what they may do — authn, rbac and org: authentication, authorization, and the organization tree that gives authorization its scope."
+bookCollapseSection: true
 ---
 
 # Identity modules

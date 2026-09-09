@@ -2,6 +2,7 @@
 title: 平台服务
 description: "能力面组:storage、notification、pki、integration 与 metering——消费者在产品要存媒体、发消息、管密钥、开 API 或计量用量时直接接线的五个 Go 模块。"
 weight: 0
+bookCollapseSection: true
 ---
 
 # 平台服务

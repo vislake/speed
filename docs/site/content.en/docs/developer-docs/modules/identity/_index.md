@@ -2,6 +2,7 @@
 title: Identity group design
 weight: 0
 description: "The identity and access trio — authn authenticates, rbac authorizes, org gives grants their scope — and why none of the three imports another."
+bookCollapseSection: true
 ---
 
 # Identity group design

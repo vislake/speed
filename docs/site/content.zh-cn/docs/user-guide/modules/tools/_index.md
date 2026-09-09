@@ -2,6 +2,7 @@
 title: 工具组
 weight: 0
 description: "面向开发者的分组:saasctl——业务方 CLI,负责生成起始项目、把项目的模块 require 重写到同一发布版本、应用各模块的 SQL 迁移并预览启动配置的解析。"
+bookCollapseSection: true
 ---
 
 # 工具组

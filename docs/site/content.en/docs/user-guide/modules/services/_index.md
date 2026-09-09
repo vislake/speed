@@ -2,6 +2,7 @@
 title: Platform services
 description: "The capability-face group: storage, notification, pki, integration and metering — the five Go modules a consumer wires directly when its product stores media, sends messages, manages key material, exposes an API or meters usage."
 weight: 0
+bookCollapseSection: true
 ---
 
 # Platform services

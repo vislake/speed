@@ -1,6 +1,7 @@
 ---
 title: Developer docs
 weight: 20
+bookCollapseSection: true
 ---
 
 # Developer docs

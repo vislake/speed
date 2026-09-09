@@ -2,6 +2,7 @@
 title: core 组——设计
 weight: 0
 description: "core 组设计导览——pkgcore、dbkit、tenancy、observability、config、jobs、ratelimit:每个模块一句话职责、组内依赖链,以及 core 模块的两种形态。"
+bookCollapseSection: true
 ---
 
 # core 组——设计

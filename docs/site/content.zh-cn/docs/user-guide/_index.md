@@ -1,6 +1,7 @@
 ---
 title: 用户指南
 weight: 10
+bookCollapseSection: true
 ---
 
 # 用户指南

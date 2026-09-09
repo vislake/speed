@@ -2,6 +2,7 @@
 title: Web packages — design
 weight: 0
 description: "The design guide for the web group — the twelve @speed packages in five layers: what each owns in one sentence, how the frontend consumes the backend's contracts, and the two design threads that run through every package."
+bookCollapseSection: true
 ---
 
 # Web packages — design

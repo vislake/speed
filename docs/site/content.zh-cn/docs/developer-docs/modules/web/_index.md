@@ -2,6 +2,7 @@
 title: web 组——设计
 weight: 0
 description: "web 组设计导览——十二个 @speed 包分五层:每包一句话职责、前端如何消费后端契约,以及贯穿每个包的两条设计线索。"
+bookCollapseSection: true
 ---
 
 # web 组——设计

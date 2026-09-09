@@ -2,6 +2,7 @@
 title: Capability modules
 weight: 0
 description: "The product-facing capability modules at the top of the dependency graph — billing, ai-gateway, sharing, compliance and admin — optional by design, chosen by what the product sells rather than by what every binary needs."
+bookCollapseSection: true
 ---
 
 # Capability modules

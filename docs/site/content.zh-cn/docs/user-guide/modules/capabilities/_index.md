@@ -2,6 +2,7 @@
 title: 能力模块组
 weight: 0
 description: "依赖图顶层的产品面能力模块——billing、ai-gateway、sharing、compliance 与 admin——按设计皆可选用,按产品卖什么来挑,而非按每个二进制需要什么。"
+bookCollapseSection: true
 ---
 
 # 能力模块组

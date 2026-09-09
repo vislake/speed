@@ -2,6 +2,7 @@
 title: 模块设计
 weight: 0
 description: "开发者文档的逐模块设计区——每个 Go 模块与 npm 包一页,讲它为什么长成这样:职责与边界、设计思路、取舍、关键机制与冻结的公开面。"
+bookCollapseSection: true
 ---
 
 # 模块设计

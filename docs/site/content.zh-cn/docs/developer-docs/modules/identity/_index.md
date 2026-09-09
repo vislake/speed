@@ -2,6 +2,7 @@
 title: identity 组设计
 weight: 0
 description: "身份与访问三模块——authn 认证、rbac 授权、org 给授权划边界——以及三者为何互不 import。"
+bookCollapseSection: true
 ---
 
 # identity 组设计

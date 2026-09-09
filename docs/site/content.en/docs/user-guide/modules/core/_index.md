@@ -2,6 +2,7 @@
 title: Core modules
 weight: 0
 description: "The dependency floor — pkgcore, dbkit, tenancy, observability, config, jobs and ratelimit, the modules every speed-based binary composes, in dependency order."
+bookCollapseSection: true
 ---
 
 # Core modules

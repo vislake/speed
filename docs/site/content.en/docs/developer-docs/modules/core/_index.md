@@ -2,6 +2,7 @@
 title: Core modules — design
 weight: 0
 description: "The design guide for the core group — pkgcore, dbkit, tenancy, observability, config, jobs and ratelimit: what each owns in one sentence, the dependency chain between them, and the two shapes of core module."
+bookCollapseSection: true
 ---
 
 # Core modules — design

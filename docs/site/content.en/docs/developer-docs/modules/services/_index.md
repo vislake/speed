@@ -2,6 +2,7 @@
 title: Platform services
 weight: 0
 description: "Design overview of the services group: storage, notification, pki, integration and metering — the five capability modules a product assembles for media, messages, key material, an outward API and usage measurement, and where their boundary with the core floor sits."
+bookCollapseSection: true
 ---
 
 # Platform services
