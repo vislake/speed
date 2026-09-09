@@ -216,8 +216,11 @@
       "license": "Apache-2.0",
       "name": "go.opentelemetry.io/otel",
       "used_by": [
+        "go/ai-gateway",
         "go/authn",
+        "go/billing",
         "go/jobs",
+        "go/metering",
         "go/notification",
         "go/observability"
       ],
@@ -279,8 +282,11 @@
       "license": "Apache-2.0",
       "name": "go.opentelemetry.io/otel/metric",
       "used_by": [
+        "go/ai-gateway",
         "go/authn",
+        "go/billing",
         "go/jobs",
+        "go/metering",
         "go/notification",
         "go/observability"
       ],
@@ -302,8 +308,11 @@
       "license": "Apache-2.0",
       "name": "go.opentelemetry.io/otel/sdk/metric",
       "used_by": [
+        "go/ai-gateway",
         "go/authn",
+        "go/billing",
         "go/jobs",
+        "go/metering",
         "go/notification",
         "go/observability"
       ],
@@ -711,6 +720,26 @@
         "go/pkgcore"
       ],
       "version": "v0.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/alicebob/miniredis/v2@v2.39.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/alicebob/miniredis/v2",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v2.39.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/pashagolub/pgxmock/v3@v3.4.0/LICENSE",
+      "license": "BSD-3-Clause",
+      "name": "github.com/pashagolub/pgxmock/v3",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v3.4.0"
     }
   ],
   "schema": 1,
