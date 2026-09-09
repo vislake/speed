@@ -94,13 +94,16 @@ err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject、有效期 */ })
   宿主自己盯有效期,再调 `IssueCertificate`。残余未消费面(JWKS 导
   出、CRLDP 嵌入、周期 CRL 再生成、权威撤销写入方)在 `AGENTS.md`
   里精确列出。
-- Vault 与 AWS KMS 都还没有集成层,但两者处境不同。AWS KMS 按设计
-  排除:LocalStack 的 KMS 与真实服务有偏差,在它之上做 Docker 背书的
-  证明,确立的只会是与 LocalStack 的符合性,永远不会是与 AWS KMS 的
-  符合性——看似覆盖,实则证明不了任何东西。Vault 没有被排除,只是
-  集成层尚未建成:一个 Docker 背书的 Vault 开发模式集成层,同时演练
-  信封与直签两种模式,就是这种集成会采取的形状。在集成层出现之前,
-  两个提供商包都只对桩客户端证明过。
+- Vault 与 AWS KMS 的接入实现都已落地:vault 经官方 Vault API 客户
+  端调用 Transit,kmsaws 经 AWS SDK 调用 KMS,两个提供商包都是真实
+  的客户端实现;两者只是都还没有对真实后端的集成测试路径,且处境
+  不同。AWS KMS 按设计排除:LocalStack 的 KMS 与真实服务有偏差,在
+  它之上做 Docker 背书的证明,确立的只会是与 LocalStack 的符合性,
+  永远不会是与 AWS KMS 的符合性——看似覆盖,实则证明不了任何东
+  西。Vault 没有被排除,只是它的集成测试路径尚未建成:一条 Docker
+  背书的 Vault 开发模式集成测试路径,同时演练信封与直签两种模式,
+  就是这种测试会采取的形状。在这条路径出现之前,两个提供商包都只
+  对桩客户端证明过。
 - `EnsurePurpose` 以「撤销+同调用补造」自愈过期键;对重复调用的算
   法不匹配不做检测(今日安全,已记录)。
 - `LocalSigner` 每次 `Sign` 都把密钥解密进进程内存——零依赖实现
