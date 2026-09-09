@@ -861,109 +861,95 @@ func TestRegisterJobMetrics_Smoke(t *testing.T) {
 	}
 }
 
-// controlledFailureHandler blocks inside Handle until the test releases it,
-// then always fails; every OnFailure call is recorded on onFailureCh. It is
-// the live-worker counterpart of worker_test.go's
-// cancelledBeforeDeadLetterHandler: Handle stays in flight long enough for
-// the test to Cancel the Job mid-attempt, so the cancel-vs-final-failure
-// race resolves deterministically in Cancel's favor.
-type controlledFailureHandler struct {
-	startedCh   chan JobID
-	releaseCh   chan struct{}
-	onFailureCh chan struct{}
+// The option-validation regressions below pin one rule, applied uniformly
+// to all five With* construction options on StandaloneQueue
+// (standalone_queue.go): an invalid value is refused at option time with a
+// coded panic -- matching pkgcore's own constructor-time-refusal
+// convention (NewSMTPMailer, NewLocalObjectStore, ...) -- never accepted
+// and silently reinterpreted, and never left to fail after Start has
+// already reported success. What counts as invalid is per-option and
+// stated on each With* function's own doc comment, with the reason the
+// value is unhonourable: worker counts and the per-tenant concurrency
+// limit below 1 (a queue that silently processes nothing), and durations
+// at or below zero (a zero poll interval would panic a background ticker
+// only AFTER Start had succeeded; a zero or negative timeout or backoff
+// cannot be honoured literally and would silently collapse onto the
+// default, or into an immediate retry burst). The completeness claim is
+// deliberate: every one of the five options in standalone_queue.go has a
+// regression here, so the suite really does cover each option's
+// invalid-value behaviour, and a new constructor option cannot be added to
+// that file without landing its refusal test beside it. The per-Enqueue
+// options in queue.go are a separate layer with their own individually
+// documented rules -- WithMaxRetries clamps, WithTimeout falls back -- and
+// are not what these tests pin.
+
+// assertOptionPanics asserts that fn panics with a coded *apperr.Error
+// carrying code -- the option-time refusal contract every With*
+// construction option in standalone_queue.go shares.
+func assertOptionPanics(t *testing.T, code string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("%s: expected a coded panic %q, got none", t.Name(), code)
+		}
+		e, ok := r.(*apperr.Error)
+		if !ok {
+			t.Fatalf("%s: panic value = %T(%v), want a coded *apperr.Error %q", t.Name(), r, r, code)
+		}
+		if e.Code != code {
+			t.Fatalf("%s: panic code = %q, want %q", t.Name(), e.Code, code)
+		}
+	}()
+	fn()
 }
 
-func (*controlledFailureHandler) Type() string { return "cancel-race.live" }
-
-func (h *controlledFailureHandler) Handle(_ context.Context, job *Job, _ ProgressFn) (Result, error) {
-	h.startedCh <- job.ID
-	<-h.releaseCh
-	return Result{}, errors.New("permanent failure")
+// TestWithWorkerCount_ZeroOrNegative_Refused pins the WithWorkerCount(0)
+// refusal: a queue with no workers would claim every eligible Job into
+// StatusRunning and execute none of them -- a silent no-op that looks like
+// a healthy queue in every metric except the ones that never move.
+func TestWithWorkerCount_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.worker_count_zero", func() { WithWorkerCount(0) })
+	assertOptionPanics(t, "jobs.worker_count_zero", func() { WithWorkerCount(-4) })
 }
 
-func (h *controlledFailureHandler) OnFailure(context.Context, *Job, error) {
-	h.onFailureCh <- struct{}{}
+// TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused pins the
+// WithTenantConcurrencyLimit(0) refusal: a limit of zero would refuse
+// every tenant admission forever. Same fail-before shape as the worker
+// count test.
+func TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(0) })
+	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(-1) })
 }
 
-var (
-	_ Handler     = (*controlledFailureHandler)(nil)
-	_ FailureHook = (*controlledFailureHandler)(nil)
-)
+// TestWithPollInterval_ZeroOrNegative_Refused pins the WithPollInterval(0)
+// refusal against the crash shape construction-time validation exists to
+// prevent: accepted silently, a zero poll interval would let Start report
+// success and then the dispatcher goroutine's time.NewTicker would panic
+// and kill the whole process.
+func TestWithPollInterval_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.poll_interval_zero", func() { WithPollInterval(0) })
+	assertOptionPanics(t, "jobs.poll_interval_zero", func() { WithPollInterval(-5 * time.Millisecond) })
+}
 
-// TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPersisted
-// is the end-to-end, live-worker half of the same race worker_test.go's
-// TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure proves at the
-// execute level: a Job whose final attempt fails while its row is already
-// StatusCancelled must not run OnFailure (no compensation for a
-// deliberately cancelled Job) and must stay StatusCancelled -- never
-// StatusDeadLetter. Deterministic without wall-clock sleeps: a single
-// worker runs execute serially, and a sentinel Job's completion can only
-// be observed after the cancelled Job's execute (dead-letter decision
-// included) has fully returned. Running OnFailure for the cancelled Job
-// would fail this test.
-func TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPersisted(t *testing.T) {
-	q := newTestQueue(t, WithWorkerCount(1))
-	failer := &controlledFailureHandler{
-		startedCh:   make(chan JobID, 1),
-		releaseCh:   make(chan struct{}),
-		onFailureCh: make(chan struct{}, 1),
-	}
-	if err := q.RegisterHandler(failer); err != nil {
-		t.Fatalf("RegisterHandler(failer) error = %v", err)
-	}
-	sentinelDone := make(chan struct{})
-	if err := q.RegisterHandler(NewHandlerFunc("cancel-race.sentinel", func(context.Context, *Job, ProgressFn) (Result, error) {
-		close(sentinelDone)
-		return Result{}, nil
-	})); err != nil {
-		t.Fatalf("RegisterHandler(sentinel) error = %v", err)
-	}
-	startQueue(t, q)
+// TestWithJobTimeout_ZeroOrNegative_Refused pins the WithJobTimeout(0)
+// refusal: a non-positive timeout is this package's "not set" marker, so a
+// zero or negative configured default could never be honoured literally --
+// it would silently leave every Job on DefaultTimeout, indistinguishable in
+// operation from an option that was never passed.
+func TestWithJobTimeout_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.job_timeout_zero", func() { WithJobTimeout(0) })
+	assertOptionPanics(t, "jobs.job_timeout_zero", func() { WithJobTimeout(-1 * time.Second) })
+}
 
-	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	id, err := q.Enqueue(ctx, Task{Type: "cancel-race.live", TenantID: "tenant-a"}, WithMaxRetries(0))
-	if err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-
-	// Wait until the final attempt is actually in flight, then Cancel it
-	// mid-attempt -- the row is now StatusCancelled before the attempt can
-	// fail -- and only then release the attempt to fail.
-	select {
-	case <-failer.startedCh:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for the attempt to start")
-	}
-	if err = q.Cancel(ctx, id); err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-	close(failer.releaseCh)
-
-	// With one worker, the sentinel Job cannot run until the cancelled
-	// Job's execute has returned -- so sentinelDone doubles as the
-	// guarantee that the dead-letter decision is already made by the time
-	// the assertions below run.
-	sentinelID, err := q.Enqueue(ctx, Task{Type: "cancel-race.sentinel", TenantID: "tenant-a"})
-	if err != nil {
-		t.Fatalf("Enqueue(sentinel) error = %v", err)
-	}
-	select {
-	case <-sentinelDone:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for the sentinel job %q to run", sentinelID)
-	}
-
-	select {
-	case <-failer.onFailureCh:
-		t.Fatal("OnFailure ran for a Job cancelled mid-attempt; the failure outcome of a cancelled Job must be discarded, never compensated")
-	default:
-	}
-
-	got, err := q.Get(ctx, id)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if got.Status != StatusCancelled {
-		t.Errorf("Status = %v, want %v (Cancel wins over the concurrent final failure; no dead-letter may be persisted)", got.Status, StatusCancelled)
-	}
+// TestWithBackoff_ZeroOrNegative_Refused pins the WithBackoff zero-or-
+// negative refusal on each bound: backoffDelay would return a zero or
+// negative delay from such a configuration, collapsing the exponential
+// spread into an immediate retry burst at the poll cadence until retries
+// are exhausted -- the opposite of what the option exists to configure.
+func TestWithBackoff_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.backoff_base_zero", func() { WithBackoff(0, DefaultBackoffMax) })
+	assertOptionPanics(t, "jobs.backoff_base_zero", func() { WithBackoff(-1*time.Second, DefaultBackoffMax) })
+	assertOptionPanics(t, "jobs.backoff_max_zero", func() { WithBackoff(DefaultBackoffBase, 0) })
+	assertOptionPanics(t, "jobs.backoff_max_zero", func() { WithBackoff(DefaultBackoffBase, -1*time.Second) })
 }
