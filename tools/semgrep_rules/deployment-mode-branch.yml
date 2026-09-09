@@ -28,10 +28,10 @@
 #     RequiredCapabilities() dispatch (the one place library code consults
 #     the mode value, deciding which capabilities assembly must demand of
 #     the resolved implementations)
-#   * examples/reference-app/cmd/server/server.go -- the command entry
-#     reads APP_DEPLOYMENT_MODE, parses it and passes the result to
-#     Kernel.Bootstrap via WithDeploymentMode (kernel assembly is the
-#     consumer binary's job, not a library module's)
+#   * examples/reference-app/internal/app/server.go -- the assembly reads
+#     APP_DEPLOYMENT_MODE in ConfigFromEnv, parses it and passes the result
+#     to Kernel.Bootstrap via WithDeploymentMode in BuildServer (kernel
+#     assembly is the consumer binary's job, not a library module's)
 #   * go/authn/module.go -- the newOptions check refusing a distributed
 #     composition that wired no explicit WithSMSSender
 #     (ErrMissingDistributedSMSSender) instead of silently defaulting to
@@ -118,7 +118,7 @@ rules:
       kernel-wiring allowlist. The retrofit confined the mode to wiring:
       the RequiredCapabilities() dispatch (go/pkgcore/deployment_mode.go)
       and consumer command entries reading APP_DEPLOYMENT_MODE (the
-      reference-app cmd/server/server.go and the saasctl CLI's embedded
+      reference-app internal/app/server.go and the saasctl CLI's embedded
       generated-app config.go and authn-containing server.go files) are
       the only allowlisted
       sites; business code receives already-resolved,
@@ -175,7 +175,7 @@ rules:
         - "**/integration_test/**"
         # Kernel-wiring allowlist (see header).
         - "**/go/pkgcore/deployment_mode.go"
-        - "**/examples/reference-app/cmd/server/server.go"
+        - "**/examples/reference-app/internal/app/server.go"
         - "**/go/authn/module.go"
         # Consumer-command-entry sites (see header).
         - "**/go/saasctl/internal/template/project/cmd/server/config.go"
