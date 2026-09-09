@@ -142,9 +142,10 @@ type smilesimHandler struct {
 	// every surface below that observes a succeeded simulation output --
 	// the job-status poll, the per-photo enumeration and the
 	// simulation-content read -- registers and attests that output through
-	// it (ensureAttestedOutput's own doc comment), making the output
-	// shareable through the chain-verified sharing gate. Nil skips the
-	// hook (the handler's pre-consumer shape).
+	// it (ensureAttestedOutput's own doc comment), so an output that is
+	// later shared carries the attestation row the sharing gate's
+	// chain-verified check reads at serve time. Nil skips the hook (the
+	// handler's pre-consumer shape).
 	attest *attestation.Service
 }
 
@@ -295,12 +296,13 @@ func (h *smilesimHandler) SmilesimGetJob(w http.ResponseWriter, r *http.Request,
 			ResolutionTier: result.Usage.ResolutionTier,
 		}
 		// This poll is an observation of a succeeded output: register and
-		// attest it (internal/attestation), so the output can be shared
-		// through the chain-verified gate. The hook is a side channel --
-		// a failure is logged and the status read still answers, exactly
-		// like NotifyOnCompletion's own swallow rule above; an unattested
-		// output is then refused by the sharing gate until a later
-		// observation retries.
+		// attest it (internal/attestation), so an output that is later
+		// shared carries an attestation row the sharing gate's chain-
+		// verified check reads at serve time. The hook is a side channel
+		// -- a failure is logged and the status read still answers,
+		// exactly like NotifyOnCompletion's own swallow rule above;
+		// attestation is best-effort and a later observation of the
+		// output retries it.
 		h.ensureAttestedOutput(r.Context(), result.OutputObjectID, nil)
 	case jobs.StatusDeadLetter, jobs.StatusCancelled, jobs.StatusRetrying:
 		resp.Error = &job.Error
@@ -346,10 +348,12 @@ func (h *smilesimHandler) SmilesimListPhotoSimulations(w http.ResponseWriter, r 
 			entry.Error = &outcome.Error
 		}
 		// A succeeded enumeration entry is an observation of the output it
-		// names: attest it (internal/attestation) so the output is
-		// shareable -- and, once a revoked certificate made it
-		// unshareable, re-attestable the next time the gallery re-opens
-		// this photo. The same swallow rule as the poll route's own hook.
+		// names: attest it (internal/attestation), so an output that is
+		// later shared carries an attestation row -- and one whose row
+		// names a revoked certificate, refused at the sharing gate until
+		// re-attested, becomes shareable again the next time the gallery
+		// re-opens this photo. The same swallow rule as the poll route's
+		// own hook.
 		if outcome.Status == jobs.StatusSucceeded && outcome.OutputObjectID != "" {
 			h.ensureAttestedOutput(r.Context(), outcome.OutputObjectID, nil)
 		}
@@ -433,8 +437,8 @@ func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r 
 	// Serving a succeeded output is an observation of it: attest it
 	// (internal/attestation), reusing the bytes already read so the
 	// digest needs no second storage open. The same swallow rule as the
-	// poll and enumeration hooks -- an unattested output is refused by
-	// the sharing gate until a later observation retries.
+	// poll and enumeration hooks -- attestation is best-effort and a
+	// later observation of the output retries it.
 	h.ensureAttestedOutput(r.Context(), match.OutputObjectID, raw)
 
 	mediaType := "application/octet-stream"
@@ -519,11 +523,14 @@ func validateSimulateRecipient(ctx context.Context, memberships *signInMembershi
 // context.WithoutCancel boundary NotifyOnCompletion draws -- and its
 // failure is logged and swallowed: the status/content/enumeration read
 // that drove the observation must never turn into an error response over
-// this side channel. A failed attestation leaves the output refused by
-// the sharing gate (an unattested output is not shareable), and the very
-// next observation of the output retries it -- the same retry-by-later-
-// observation shape NotifyOnCompletion's rollback latch provides for
-// completion notifications.
+// this side channel. Attestation is best-effort: a failed attestation
+// leaves the output with no attestation row, and the sharing gate then
+// treats the output exactly like any ordinary object (an uploaded
+// photo, a non-AI object) -- nothing in the object model marks an AI
+// output as such, so the gate cannot refuse a row-less object. The
+// protection an attestation confers applies from the moment a row
+// exists; a later observation of the same output retries the failed
+// attestation.
 func (h *smilesimHandler) ensureAttestedOutput(ctx context.Context, outputObjectID string, content []byte) {
 	if h.attest == nil || outputObjectID == "" {
 		return
@@ -536,7 +543,7 @@ func (h *smilesimHandler) ensureAttestedOutput(ctx context.Context, outputObject
 		err = h.attest.EnsureAttested(persistCtx, outputObjectID)
 	}
 	if err != nil {
-		observability.FromContext(ctx).Error("smilesim: attesting a succeeded simulation output failed -- the output is not shareable until a later observation attests it",
+		observability.FromContext(ctx).Error("smilesim: attesting a succeeded simulation output failed -- the output has no attestation row until a later observation retries the attestation",
 			"output_object_id", outputObjectID,
 			"error", err,
 		)
