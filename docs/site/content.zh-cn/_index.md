@@ -37,7 +37,3 @@ title: speed
 [/llms.txt](/llms.txt) 提供全部页面的机器可读索引。仓库自己的
 [根 `AGENTS.md`](https://github.com/vislake/speed/blob/main/AGENTS.md)
 仍是仓库工作的权威向导。
-
-本站由 [Hugo](https://gohugo.io) 与
-[hugo-book](https://github.com/alex-shpak/hugo-book) 主题构建。每页
-头部都有语言切换器(English / 中文)。

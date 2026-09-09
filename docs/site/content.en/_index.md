@@ -43,7 +43,3 @@ Reading this site as a coding agent? Start at
 index of every page. The repository's own
 [root `AGENTS.md`](https://github.com/vislake/speed/blob/main/AGENTS.md)
 remains the authoritative orientation for repository work.
-
-This site is built with [Hugo](https://gohugo.io) and the
-[hugo-book](https://github.com/alex-shpak/hugo-book) theme. A language
-switcher (English / 中文) sits in the header of every page.

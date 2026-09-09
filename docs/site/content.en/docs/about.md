@@ -33,8 +33,5 @@ speed) and the [developer docs](/docs/developer-docs/) (develop speed
 itself), each with a per-module reading. Module pages link the
 module's own `AGENTS.md` for the authoritative description.
 
-The site is built with [Hugo](https://gohugo.io) and the
-[hugo-book](https://github.com/alex-shpak/hugo-book) theme. A language
-switcher (English / 中文) sits in the header of every page, and
 [/llms.txt](/llms.txt) at the site root carries the machine-readable
 index of everything for agents and crawlers.

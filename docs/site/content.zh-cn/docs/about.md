@@ -29,7 +29,4 @@ speed 是以库分发的模块化单体:独立发布的 Go 模块与 npm 包,业
 (开发 speed 本身),各带逐模块读法。模块页链接该模块自己的
 `AGENTS.md` 作为权威描述。
 
-本站由 [Hugo](https://gohugo.io) 与
-[hugo-book](https://github.com/alex-shpak/hugo-book) 主题构建。每页
-头部都有语言切换器(English / 中文);站根 [/llms.txt](/llms.txt)
-为 agent 与爬虫携带全部内容的机器可读索引。
+站根 [/llms.txt](/llms.txt) 携带全部内容的机器可读索引。
