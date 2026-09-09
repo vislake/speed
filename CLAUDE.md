@@ -168,9 +168,9 @@ Every rule below is enforced by code review, and by CI where the tooling for it 
 
 ### Testing
 
-- **Unit test files are named after the file they test** (`registry.go` → `registry_test.go`; `PlanCard.tsx` → `PlanCard.test.tsx`). A test file that doesn't map 1:1 to one source file is named for the behaviour it verifies, never a generic word like `misc` or `extra`.
+- **Unit tests are defined by tier, not by a 1:1 file mapping**: a unit test is the same-package, no-external-dependency test a plain unit run executes. Unit tests alone sit next to the code they test — one file per target (`registry_test.go` beside `registry.go`; `PlanCard.test.tsx` beside `PlanCard.tsx`) — including in-package behaviour suites that span sources, named for the behaviour they verify, never a generic word like `misc` or `extra`.
+- **Every non-unit test class lives in a purpose-named dedicated directory, never a source directory**: real-backend integration in `integration_test/` per Go package; browser end-to-end in `e2e/` (Playwright); an application's composed HTTP/assembly flows in a dedicated app-level test directory; cross-implementation contract suites in their own support package (the `queuetest`/`eventbustest` model); migration suites beside the migration set they exercise. A non-unit test that fits no existing directory gets a new purpose-named one. The in-package exceptions Go's own package rules force are explicit and named: godoc `Example*` functions (`example_test.go`) and white-box benchmarks reaching unexported symbols (`<target>_bench_test.go`).
 - **Do not scatter shared test helpers across test files.** Put them in a dedicated `internal/testutil` package (Go) or `test-utils/` directory (frontend) — never duplicated, never inline in a file another package's tests need to import.
-- **Do not mix integration tests into the unit test set.** They live in a physically separate directory (`integration_test/` per Go package, `e2e/` for Playwright), so a plain `go test ./...` or unit test run never touches them.
 - Full detail and examples: `.claude/skills/backend-coding-standards/SKILL.md` §13, `.claude/skills/frontend-coding-standards/SKILL.md` §12.
 
 ### Documentation
