@@ -4,12 +4,31 @@
   assets), so it lands last in the concatenated book.css and its rules
   win. Keep overrides here, never in the theme submodule.
 
-  Wide-screen layout: the theme's default --container-max-width of
-  90rem leaves the reading column at roughly 57ch once the fixed menu
-  and table-of-contents columns are taken out. Raising the container
-  to 110rem widens the reading column to a comfortable ~78ch on large
-  displays, keeping the whole frame centered with even margins.
+  Fluid layout: the theme's fixed --container-max-width (90rem by
+  default) centers a capped frame, which on wide monitors leaves large
+  empty bands on both sides regardless of its value -- the wider the
+  screen, the wider the bands. The layout is made fully fluid instead:
+  the container takes the full viewport width, and the menu and
+  table-of-contents columns (already fixed-positioned on wide
+  screens) anchor the edges, so the reading column always stretches
+  to use the available width. The page column also fills the viewport
+  height and pins its footer to the bottom, so short pages no longer
+  end in a large empty band below the content.
 */
 :root {
-  --container-max-width: 110rem;
+  --container-max-width: none;
+}
+
+.container {
+  min-height: 100vh;
+}
+
+.book-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 2 * var(--space-16));
+}
+
+.book-footer {
+  margin-top: auto;
 }
