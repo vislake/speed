@@ -207,6 +207,16 @@ func TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession(t *testing.T)
 // security property held. What is pinned instead is everything that
 // matters: exactly one winner, every loser refused with one of the two
 // dead-token answers, and the session revoked at the end.
+//
+// Every racer's token-row read is held behind gateTableReads until all
+// racers have read the token active, so the losers' reads always land
+// before the winner's consume and commitRotation's loser branch -- the
+// read-then-lose interleaving that is a replay by the safe reading -- is
+// exercised on every run while the database still arbitrates exactly one
+// winner. A runner that serialized the goroutines would otherwise let the
+// winner's whole rotate commit before the later racers even read, turning
+// every loser into an ordinary already-rotated refusal at resolveRotation
+// that never reaches commitRotation at all.
 func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +224,7 @@ func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *test
 	session, first := f.start(t)
 
 	const racers = 8
+	gateTableReads(t, f.db, "refresh_tokens", racers)
 	var (
 		wg         sync.WaitGroup
 		mu         sync.Mutex

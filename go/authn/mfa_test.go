@@ -866,7 +866,8 @@ func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testi
 // before the later racers even read -- leaving the interleaving the test
 // exists to pin unexercised for that round. It is shared with
 // service_test.go's duplicate-registration races, which have the same
-// read-then-write shape.
+// read-then-write shape, and with session_test.go's rotation race, which
+// gates the same way.
 //
 // want must equal the number of gated reads the test's racers will perform
 // in the window: the gate opens only when the want-th read arrives, so a

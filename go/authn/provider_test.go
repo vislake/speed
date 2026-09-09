@@ -274,20 +274,113 @@ func TestStateStore_ConsumeIsSingleUse(t *testing.T) {
 	assertErrorCode(t, err, ErrOAuthStateInvalid.Code)
 }
 
+// gateKVGets wraps kv so every Get parks after the underlying read has
+// returned until want Gets have completed, then releases all of them at
+// once: a caller whose read finished early parks in the wrapper until the
+// want-th read has finished too, and the want-th arrival opens the gate
+// for everyone. Reads arriving after the gate has opened pass straight
+// through, and every other method passes through untouched.
+//
+// The effect is a deterministic read barrier over the KVStore seam, the
+// counterpart of mfa_test.go's gateTableReads for database tables: while a
+// read is parked in the wrapper it holds no store lock (its operation has
+// already run to completion), so the wait cannot deadlock anything, and no
+// caller can start its next store call before every gated read has
+// completed. A concurrency test whose dangerous interleaving requires some
+// racers to READ old state while none has WRITTEN yet uses this to make
+// that interleaving occur on every run: on a runner with few cores, a
+// round that launches racing goroutines can otherwise come out fully
+// serialized -- the first racer's whole call, write included, completes
+// before the later racers even read -- leaving the interleaving the test
+// exists to pin unexercised for that round.
+//
+// want must equal the number of Gets the test's racers will perform in the
+// window, exactly as gateTableReads demands of its own callers: the gate
+// opens only when the want-th read arrives, so a racer that exits before
+// its read would leave the earlier readers parked forever.
+func gateKVGets(t *testing.T, kv pkgcore.KVStore, want int) pkgcore.KVStore {
+	t.Helper()
+	var (
+		mu      sync.Mutex
+		arrived int
+		release = make(chan struct{})
+		opened  sync.Once
+	)
+	return &kvGetGate{kv: kv, arrive: func() {
+		mu.Lock()
+		arrived++
+		n := arrived
+		mu.Unlock()
+		if n >= want {
+			opened.Do(func() { close(release) })
+			return
+		}
+		<-release
+	}}
+}
+
+// kvGetGate is the wrapper gateKVGets installs: Get runs the underlying
+// read and then the arrive callback before returning, and every other
+// method delegates to the wrapped store untouched.
+type kvGetGate struct {
+	kv     pkgcore.KVStore
+	arrive func()
+}
+
+var _ pkgcore.KVStore = (*kvGetGate)(nil)
+
+func (g *kvGetGate) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	value, found, err := g.kv.Get(ctx, key)
+	g.arrive()
+	return value, found, err
+}
+
+func (g *kvGetGate) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	return g.kv.Set(ctx, key, value, ttl)
+}
+
+func (g *kvGetGate) Delete(ctx context.Context, key string) error {
+	return g.kv.Delete(ctx, key)
+}
+
+func (g *kvGetGate) IncrByFloat(ctx context.Context, key string, delta float64) (float64, error) {
+	return g.kv.IncrByFloat(ctx, key, delta)
+}
+
+func (g *kvGetGate) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	return g.kv.IncrByFloatWithTTL(ctx, key, delta, ttl)
+}
+
+func (g *kvGetGate) CompareAndSwap(ctx context.Context, key string, old, newVal []byte) (bool, error) {
+	return g.kv.CompareAndSwap(ctx, key, old, newVal)
+}
+
 // TestStateStore_ConsumeHasExactlyOneWinnerUnderConcurrency proves the
 // single-use guarantee is arbitrated by the store rather than by a read the
 // caller performed a moment earlier. It matters under -race, which is where
 // the CI matrix runs this.
+//
+// Every racer's pre-write read is held behind gateKVGets until all racers
+// have read the stored state, so the losers' reads always land before the
+// winner's swap and the single-use loser branch -- Consume's !swapped
+// answer to a read-then-swap race it lost -- is exercised on every run
+// while the store still arbitrates exactly one winner. A runner that
+// serialized the goroutines would otherwise let the winner's whole consume
+// finish before the later racers even read, turning every loser into the
+// already-consumed refusal at the read itself that never reaches the swap.
 func TestStateStore_ConsumeHasExactlyOneWinnerUnderConcurrency(t *testing.T) {
 	t.Parallel()
 
-	store, _ := newStateStore(t, time.Minute)
+	const racers = 8
+	kv := pkgcore.NewMemoryKVStore()
+	store, err := NewStateStore(gateKVGets(t, kv, racers), time.Minute)
+	if err != nil {
+		t.Fatalf("NewStateStore() error = %v", err)
+	}
 	state, err := store.Issue(t.Context(), StateBinding{Provider: ProviderGoogle})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-
-	const racers = 8
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
