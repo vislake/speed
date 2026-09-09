@@ -42,7 +42,7 @@ name: go-module-ci
 #                                coverage, excluding generated files
 #                                (.gen.go -- the census is hand-written
 #                                code only), and fails when the measured
-#                                total sits more than the 0.05-point
+#                                total sits more than the 0.15-point
 #                                tolerance below either bound -- the 80%
 #                                floor (the 2026-09 product decision) or
 #                                the committed tools/coverage-baselines.json

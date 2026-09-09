@@ -52,18 +52,27 @@ module
     below the 80.0% floor fails, and one more than EPSILON_PP below
     the recorded baseline fails. The statement census is fixed for a
     fixed tree, but which blocks a suite executes is not perfectly
-    stable under machine load (a timing-sensitive test reaches a
-    different block set when the box is busy -- observed run-to-run
-    swings of up to ~0.03 percentage points in this repository's own
-    suites). EPSILON_PP is sized one notch above the observed jitter:
-    0.05 points is a few dozen statements in these modules' suite
-    sizes, far below any decline that adding code without tests
-    produces, while keeping the gate stable on a loaded runner. One
-    tolerance, two comparisons, one rule. The recorded TOOLCHAIN (the
-    short `go version` form) is part of the baseline: a check run under
-    a different Go than the baselines were recorded with fails with an
-    update instruction -- a Go upgrade legitimately moves coverage
-    totals, and the honest response is re-measuring, not guessing.
+    stable between runs: timing-sensitive tests reach different block
+    sets when scheduling shifts. The six foundation suites that
+    predated the 2026-09 extension showed swings up to ~0.03 points,
+    which sized the original 0.05 tolerance; the extension to every
+    module measured a wider edge, ~0.12 points, in go/authn's own MFA
+    confirm-race suite -- eight goroutines confirming one pending TOTP
+    factor over SQLite, where a losing confirm either hits the
+    database's write-lock error or lands a clean zero-row update
+    depending on scheduler luck, so the loser-branch statements are
+    covered or not by scheduling alone. EPSILON_PP is now 0.15 points,
+    one notch above that measured edge. The cost of the wider band is
+    bounded: 0.15 points is a handful of statements in these modules'
+    suite sizes (about five in authn's 3232-statement census), while a
+    single untested function of thirty statements costs authn a whole
+    point -- far below any decline that adding code without tests
+    produces. One tolerance, two comparisons, one rule. The
+    recorded TOOLCHAIN (the short `go version` form) is part of the
+    baseline: a check run under a different Go than the baselines were
+    recorded with fails with an update instruction -- a Go upgrade
+    legitimately moves coverage totals, and the honest response is
+    re-measuring, not guessing.
 
 What a breach means and how to respond
 
@@ -165,10 +174,10 @@ LOWER_BOUND_PP = 80.0
 # The tolerance band for both comparisons, in percentage points. A
 # measured total more than this far below the floor -- or below the
 # recorded baseline -- fails; a smaller dip is measurement jitter
-# (timing-sensitive tests reach different block sets under load;
-# observed swings up to ~0.03 points in this repository's own suites).
-# See the module docstring.
-EPSILON_PP = 0.05
+# (timing-sensitive tests reach different block sets between runs; the
+# observed upper edge is ~0.12 points, from go/authn's MFA confirm-race
+# suite -- see the module docstring). See the module docstring.
+EPSILON_PP = 0.15
 
 # The profile format line for one function block:
 #   go/pkgcore/kernel.go:12.17,18.2 3 2

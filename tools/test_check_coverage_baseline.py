@@ -66,7 +66,8 @@ class CoverageMath(unittest.TestCase):
         # block and one unexecuted 4-statement block therefore measure
         # 8/12 = 66.666...% -- a value go tool cover -func would print
         # rounded to 66.7, which would blind a baseline comparison to a
-        # 0.05-point decline. The parser must return the exact total.
+        # decline inside the 0.15-point tolerance band. The parser must
+        # return the exact total.
         profile = "\n".join(
             [
                 "mode: set",
@@ -130,10 +131,10 @@ class Comparisons(unittest.TestCase):
         self.assertEqual(m.comparison_failures(84.0, baseline=83.0), [])
 
     def test_pass_within_tolerance_of_the_floor(self):
-        # 79.96 + 0.05 clears 80.0: a sub-floor dip inside the jitter
+        # 79.86 + 0.15 clears 80.0: a sub-floor dip inside the jitter
         # band passes, exactly as a dip inside the band passes the
         # baseline comparison.
-        self.assertEqual(m.comparison_failures(79.96, baseline=None), [])
+        self.assertEqual(m.comparison_failures(79.86, baseline=None), [])
 
     def test_floor_breach_fails_even_above_a_low_baseline(self):
         # A measured total below the floor fails no matter what the
@@ -158,11 +159,11 @@ class Comparisons(unittest.TestCase):
         self.assertIn("baseline", reasons[1])
 
     def test_floor_edge_is_exact_not_rounded(self):
-        # 79.95 + 0.05 == 80.0 exactly: the band edge passes. The
+        # 79.85 + 0.15 == 80.0 exactly: the band edge passes. The
         # comparisons run on unrounded totals, so a floor crossing
         # cannot hide behind display rounding.
-        self.assertEqual(m.comparison_failures(79.95, baseline=None), [])
-        self.assertEqual(len(m.comparison_failures(79.94, baseline=None)), 1)
+        self.assertEqual(m.comparison_failures(79.85, baseline=None), [])
+        self.assertEqual(len(m.comparison_failures(79.84, baseline=None)), 1)
 
 
 class Toolchain(unittest.TestCase):
