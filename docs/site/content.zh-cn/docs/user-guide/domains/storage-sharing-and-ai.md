@@ -63,6 +63,206 @@ OpenAI 兼容的,大多数厂商根本不需要适配器。对话默认同步。
 base URL 在拨号时受 SSRF 防护。用量记录与权益检查是可选的
 结构化接缝,宿主可接到 `metering` 与 `billing`。
 
+## 完整示例:一张患者照片的旅程——上传、派生、分享
+
+诊所把患者的微笑模拟结果图(一张 PNG)传上 `storage`;三步上传协议完
+成后,`storage` 把「生成缩略图」任务入队,队列 worker(按参考应用的
+组装,从 `reg.Jobs.Handlers()` 倒进队列)写出派生行。诊所随后为这张
+已完成的图给患者铸一条分享链接,患者在无任何认证的情况下打开它,
+之后一次撤销让紧接着的下一次访问立即被拒。演练在单进程里、用内存
+SQLite 数据库和真实内核 Bootstrap 跑完全部流程——独立部署模式的寻
+常形态。
+
+前置条件:你的消费模块在 `go.mod` 里用 `replace` 把各 speed 模块指
+到本地 checkout(`go mod tidy` 之后即可);把代码粘进你自己 `main` 包
+的文件里运行。结尾的 AI 半段是宿主代码,只为展示真实调用形态——
+它需要已配置的 BYOK 凭据,不在这段演练里运行。
+
+```go
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"time"
+
+	"github.com/vislake/speed/go/dbkit"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
+	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/sharing"
+	"github.com/vislake/speed/go/storage"
+)
+
+// must keeps the walk readable; a real host returns coded errors instead.
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func uploadDeriveAndShare() {
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("acme-dental"))
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:media-walk?mode=memory&cache=shared"})
+	must(err)
+
+	// storage completes onto this queue; the host drains reg.Jobs's
+	// handlers onto it so a real worker derives the thumbnail.
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	media := storage.NewModule(db, storage.WithQueue(queue))
+	links := sharing.NewModule(db)
+	registry := dbkit.NewMigrationRegistry()
+	must(registry.Register(media))
+	must(registry.Register(links))
+	must(registry.Apply(ctx, db, dbkit.DialectSQLite))
+	// A real kernel: Bootstrap runs both modules' Register, attaching
+	// the object store, event bus and registry seats their services read
+	// at call time — the same path a host takes.
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, media, links)
+	must(err)
+	for _, handler := range reg.Jobs.Handlers() {
+		must(queue.RegisterHandler(handler.(jobs.Handler)))
+	}
+	must(queue.Start(ctx))
+	// An 8x8 PNG stands in for the simulation result image.
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.SetRGBA(x, y, color.RGBA{uint8(16 * x), uint8(16 * y), 128, 255})
+		}
+	}
+	must(png.Encode(&buf, img))
+	content := buf.Bytes()
+	svc := media.ObjectService()
+	// Transfer step 1: declare the upload (row is uploading; the store
+	// key is derived by the module itself, never caller-supplied).
+	row, err := svc.Create(ctx, storage.CreateParams{
+		DeclaredSize: int64(len(content)),
+		DeclaredType: "image/png",
+	})
+	must(err)
+	fmt.Println("upload declared:", row.State)
+	// Transfer step 2: stream the bytes into the object store.
+	must(svc.Upload(ctx, row.ID, nil, bytes.NewReader(content)))
+	// Transfer step 3: Complete revalidates what actually arrived (size,
+	// MIME, the structural metadata strip) and enqueues the
+	// thumbnail-derive task.
+	completed, err := svc.Complete(ctx, row.ID)
+	must(err)
+	fmt.Println("object completed:", *completed.MIME)
+	// The queue's worker derives the thumbnail; wait for the row.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		derivatives, err := media.Derivatives().List(ctx)
+		must(err)
+		if len(derivatives) > 0 {
+			fmt.Println("thumbnail derived:", derivatives[0].Kind)
+			break
+		}
+		if time.Now().After(deadline) {
+			fmt.Println("timed out waiting for the thumbnail")
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Mint the patient's link. ResourceRef is opaque to sharing; your
+	// ResourceResolver maps the "storage:" form back to bytes on serve.
+	created, err := links.Service().Create(ctx, sharing.CreateParams{
+		ResourceRef: "storage:" + row.ID,
+	})
+	must(err)
+	fmt.Println("share created (token returned exactly once)")
+	// The patient opens the link — unauthenticated, exactly like the
+	// public access route's handler.
+	_, err = links.Service().AccessPublic(context.Background(), created.Token, sharing.AccessParams{
+		IP: "203.0.113.7",
+	})
+	must(err)
+	fmt.Println("patient access granted (access logged)")
+	// Revocation takes effect on the very next access check: no cache
+	// anywhere in the module to invalidate.
+	must(links.Service().Revoke(ctx, created.Share.ID))
+	_, err = links.Service().AccessPublic(context.Background(), created.Token, sharing.AccessParams{})
+	fmt.Println("access after revoke:", err)
+}
+```
+
+同一产品的 AI 半段——网关模块用 `WithModelRoute` 键 Bootstrap(图像
+还需要 `WithImageGeneration(queue, objects)`),BYOK 凭据配置在平台或
+租户层,业务代码只碰两个入口:
+
+```go
+import aigateway "github.com/vislake/speed/go/ai-gateway"
+
+gateway := aiModule.Gateway() // aiModule: aigateway.NewModule(db, opts...)
+
+// Chat is synchronous by default: one round trip, then the reply.
+reply, err := gateway.Chat(tenantCtx, aigateway.ChatRequest{
+	Model: "chat:default", // a WithModelRoute key, resolved at NewModule time
+	Messages: []aigateway.ChatMessage{
+		{Role: aigateway.RoleUser, Content: "Summarize this case in one sentence."},
+	},
+})
+if err != nil {
+	fmt.Println("chat:", err)
+	return
+}
+fmt.Println("ai summary:", reply.Message.Content)
+
+// Image generation is async-only: GenerateImage enqueues exactly one
+// job and returns its JobID — image work never runs inside an HTTP
+// request; the result is a go/storage object id read back via Queue.Get.
+imageJobID, err := gateway.GenerateImage(tenantCtx, aigateway.ImageRequest{
+	Model:        "image:default",
+	Operation:    aigateway.ImageOperationImageToImage,
+	Prompt:       "Make the smile more natural",
+	InputObjectID: row.ID, // the object completed in the walk above
+})
+if err != nil {
+	fmt.Println("generate image:", err)
+	return
+}
+fmt.Println("image job enqueued:", imageJobID)
+```
+
+这段演练演示的契约事实:三步协议让*已存的字节*成为权威——`Complete`
+复验尺寸、MIME 与结构,而不是相信上传者的声明,只有通过后才变成可
+读对象并发出派生任务;sharing 的五条规则没有例外——token 只铸一次,
+撤销拒绝紧接着的下一次检查;AI 图像工作天生异步,字节跨模块边界只
+以 `go/storage` 对象 id 的形式流动。
+
+运行步骤:
+
+1. 在你的消费 `go.mod` 里为 `go/dbkit`、`go/pkgcore`、`go/jobs`、
+   `go/storage`、`go/sharing` 加 `replace` 行,然后 `go mod tidy`。
+2. 把第一个代码块放进你自己 `main` 包的文件,运行 `go run .`。
+3. 演练会从零迁移两个模块、Bootstrap 真实内核、经真实队列 worker
+   派生缩略图然后退出——不需要 Docker。
+
+预期输出:
+
+```text
+upload declared: uploading
+object completed: image/png
+thumbnail derived: thumbnail
+share created (token returned exactly once)
+patient access granted (access logged)
+access after revoke: sharing.not_accessible
+```
+
+在参考应用中看到它:
+
+- [examples/reference-app/flowtests/storage_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/storage_flow_test.go)
+  与 [examples/reference-app/flowtests/sharing_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/sharing_flow_test.go)
+  ——同样的旅程(上传、净化、派生、下载、删除;创建、访问、撤销)在
+  真实 HTTP 上、经组合栈驱动;异步图像生成那一腿见
+  [examples/reference-app/flowtests/smilesim_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/smilesim_flow_test.go)。
+- [go/storage/example_test.go](https://github.com/vislake/speed/blob/main/go/storage/example_test.go)
+  ——本演练的传输生命周期,由模块自己的单元套件编译并执行。
+
 ## 下一步
 
 - `storage`、`sharing` 与 `ai-gateway` 的完整逐模块页(选项、示例)将

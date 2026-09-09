@@ -78,6 +78,203 @@ defer q.Close(ctx)
 - **收件箱投递**——行提交后才发 `notification.inbox.created`,SSE
   流(`GET /api/v1/notifications/stream`)按"先行后事件"的顺序宣告。
 
+## 完整示例:后台导出笔记,完成后通知用户
+
+用户在浏览器里点了「导出我的笔记」。HTTP 请求只做一件事——把
+`notes.export` 任务入队并立刻返回它的 `JobID`——worker 几分钟后跑完
+导出,沿途报告进度;一次瞬时失败会被重试,耗尽重试的任务进入死信并
+触发业务补偿钩子(这里:撤销请求时做的信用点预留,即参考应用微笑模
+拟路径的形态)。导出成功后,handler 向请求者派发一条「导出已就绪」
+通知,收件人通道由 notification 模块在发送时按偏好矩阵重新解析。下
+面的演练就是该契约的生产侧与消费侧一对;它在内存 SQLite 数据库上独
+立运行。
+
+前置条件:你的消费模块在 `go.mod` 里用 `replace` 把各 speed 模块指
+到本地 checkout(`go mod tidy` 之后即可);把代码粘进你自己 `main`
+包的文件里运行。第二个代码块展示通知那一半——它需要 notification
+模块接线并 Bootstrap(下方六个必选选项),且类型文案在你的双语
+locale 包里——所以以宿主代码形式给出,不在这段演练里运行。
+
+```go
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/vislake/speed/go/dbkit"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
+	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/pkgcore"
+)
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+// exportPayload is the HTTP layer's Task.Payload — the queue never interprets it.
+type exportPayload struct {
+
+	RequesterID string `json:"requester_id"`
+	NoteCount   int    `json:"note_count"`
+	AlwaysFail  bool   `json:"always_fail,omitempty"`
+}
+
+// The consumer: one Handler per task Type, registered before Start;
+// Handle's ctx already carries job.TenantID, rebuilt from the job record.
+type notesExportHandler struct{}
+
+func (notesExportHandler) Type() string { return "notes.export" }
+
+func (notesExportHandler) Handle(ctx context.Context, job *jobs.Job, progress jobs.ProgressFn) (jobs.Result, error) {
+	var p exportPayload
+	if err := json.Unmarshal(job.Payload, &p); err != nil {
+		return jobs.Result{}, err
+	}
+	fmt.Printf("[export] attempt %d: exporting %d notes\n", job.Attempts, p.NoteCount)
+	if p.AlwaysFail { // every attempt fails: retries, then dead-letter
+		return jobs.Result{}, errors.New("notes provider unreachable")
+	}
+	if job.Attempts == 1 {
+		return jobs.Result{}, errors.New("transient provider timeout") // attempt 2 succeeds
+	}
+	progress(40, "writing rows")
+	progress(100, "done")
+	return jobs.Result{Data: []byte("id,title\n1,Caries 101\n")}, nil
+}
+
+// OnFailure compensates at most once, after the final attempt — refund here
+// the reservation made with billing.CreditService.PreDeduct.
+func (notesExportHandler) OnFailure(ctx context.Context, job *jobs.Job, cause error) {
+	fmt.Printf("[export] job %s dead-lettered: %v — refunding the reservation\n", job.ID, cause)
+}
+
+// waitForTerminal polls tenant-scoped Queue.Get until the job is terminal.
+func waitForTerminal(ctx context.Context, queue jobs.Queue, id jobs.JobID) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		job, err := queue.Get(ctx, id)
+		if err == nil && job.Status.Terminal() {
+			fmt.Printf("[queue] %s: %s after %d attempts\n", job.ID, job.Status, job.Attempts)
+			return
+		}
+		if time.Now().After(deadline) {
+			fmt.Println("[queue] timed out waiting for", id)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func runExportWalk() {
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:export-walk?mode=memory&cache=shared"})
+	must(err)
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	must(queue.RegisterHandler(notesExportHandler{}))
+	must(queue.Start(ctx)) // before any Enqueue
+
+	// The producer — what an HTTP handler body boils down to.
+	enqueue := func(key string, alwaysFail bool) {
+		payload, _ := json.Marshal(exportPayload{
+			RequesterID: "user-7", NoteCount: 3, AlwaysFail: alwaysFail,
+		})
+		id, err := queue.Enqueue(ctx, jobs.Task{
+			Type:           "notes.export",
+			TenantID:       pkgcore.TenantID("tenant-acme"),
+			Payload:        payload,
+			IdempotencyKey: "notes.export:" + key, // replay dedupes onto the first job
+		}, jobs.WithMaxRetries(2)) // 2 retries beyond the first attempt
+		must(err)
+		fmt.Println("enqueued", id, "(the HTTP response returns this JobID immediately)")
+		waitForTerminal(pkgcore.WithTenant(ctx, "tenant-acme"), queue, id)
+	}
+
+	enqueue("2026-09-09-001", false) // succeeds on attempt 2
+	enqueue("2026-09-09-002", true)  // dead-letters, compensation runs
+}
+```
+
+同一故事的 notification 那一半——你的模块在 Register 时声明类型,导出
+handler 在成功路径上派发:
+
+```go
+// In your module's Register: the type lands in the preference matrix;
+// its copy lives in your bilingual locale bundle under
+// <type_key>.<channel>.<part> ids, rendered in the recipient's locale.
+if err := reg.Notifications.Add(pkgcore.NotificationType{
+	Key:                   "reports.export_ready",
+	Group:                 "reports",
+	DefaultChannels:       []string{"in_app", "email"},
+	RecipientVisibleParams: []string{"export_id"},
+	Unsubscribable:        true, // the recipient may silence this type
+}); err != nil {
+	return err
+}
+
+// In the export handler's success path. deliveries is the host module's
+// DeliveryService (module.Deliveries()), wired with its six required
+// options and bootstrapped, as the reference app does.
+notifCtx := pkgcore.WithTenant(context.WithoutCancel(ctx), job.TenantID)
+_, err := deliveries.Dispatch(notifCtx, notification.Dispatch{
+	TypeKey: "reports.export_ready",
+	Recipient: notification.DispatchRecipient{
+		Class:  notification.RecipientClassUser,
+		UserID: requesterID, // from the export payload
+	},
+	Locale: recipientLocale, // e.g. i18n.LocaleZHCN — never guessed by the module
+	Params: map[string]any{"export_id": exportID},
+})
+```
+
+演练展示了两个契约事实:重试、调度与死信归队列,而*补偿*(OnFailure
+里的退款)留在你的业务 handler 里——另外,一次通知派发绝不冻结投递
+决策:类型的 `DefaultChannels` 只在收件人没有存储偏好时生效,投递
+job 在发送时重查偏好、地址与同意。
+
+运行步骤:
+
+1. 在你的消费 `go.mod` 里为 `go/dbkit`、`go/pkgcore`、`go/jobs` 加
+   `replace` 行,然后 `go mod tidy`。
+2. 把第一个代码块放进你自己 `main` 包的文件,运行 `go run .`。
+3. 第二个代码块是已接好 notification 模块的应用的宿主代码——要看
+   完整可运行组合,启动参考应用跑它的通知流(链接见下)。
+
+预期输出(`dead-lettered` 与 `dead_letter` 两行可能先后互换——
+`OnFailure` 在死信写库后紧接着执行):
+
+```text
+enqueued <job id> (the HTTP response returns this JobID immediately)
+[export] attempt 1: exporting 3 notes
+[export] attempt 2: exporting 3 notes
+[queue] <job id>: succeeded after 2 attempts
+enqueued <job id> (the HTTP response returns this JobID immediately)
+[export] attempt 1: exporting 3 notes
+[export] attempt 2: exporting 3 notes
+[export] attempt 3: exporting 3 notes
+[export] job <job id> dead-lettered: notes provider unreachable — refunding the reservation
+[queue] <job id>: dead_letter after 3 attempts
+```
+
+`<job id>` 是 `Enqueue` 返回的 id——自己打印它,或像 `waitForTerminal`
+那样用 `Queue.Get` 读任务记录。
+
+在参考应用中看到它:
+
+- [examples/reference-app/internal/app/server.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/server.go)
+  ——`Bootstrap` 之后,应用把 `reg.Jobs.Handlers()` 倒到它的独立队列
+  并启动;每个模块的 handler(storage 派生、notification 投递,以及本
+  模式的各种变体)都骑在同一个队列上。
+- [examples/reference-app/internal/app/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_notification.go)
+  ——notes.note.created 事件被转成真实的 `Deliveries().Dispatch` 调
+  用;[examples/reference-app/flowtests/notification_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/notification_flow_test.go)
+  在组合好的 HTTP 栈上驱动整条投递。
+- [go/jobs/example_test.go](https://github.com/vislake/speed/blob/main/go/jobs/example_test.go)
+  ——本演练的队列一半,由模块自己的单元套件编译并执行。
+
 ## 下一步
 
 - `jobs` 与 `notification` 的完整逐模块页(用法、选项、示例)将落在
