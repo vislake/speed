@@ -39,7 +39,7 @@ verification); two take no props at all.
   never hand-written query keys.
 - **Every built-in string is bilingual and bundled.** All text renders
   from the `account-ui` namespace (`ACCOUNT_UI_NAMESPACE`, one
-  `zh-CN.json` and one `en-US.json` under `src/locales/`, 107 identical
+  `zh-CN.json` and one `en-US.json` under `src/locales/`, 111 identical
   leaf keys per language), registered by the host exactly once through
   `@speed/i18n` alongside the `ui-kit` namespace — the confirm-again
   label of the armed danger dialog and the `EmptyState` texts are
@@ -131,7 +131,7 @@ verification); two take no props at all.
    package's own definitions, copied to match auth-ui's and kept in
    sync with them — the authn spec is the shared source of truth for
    the provider set, and a channel added to the spec lands in both
-   copies in the same round. The social callback endpoints are
+   copies together. The social callback endpoints are
    per-provider path segments of the authn spec, not an auth-ui type;
    a host composes both families over one session without either
    package knowing the other exists.

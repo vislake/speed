@@ -39,8 +39,8 @@ below this layer.
   paths as strings, no response types of our own.
 - **The session never writes storage, and the refresh token never
   enters the store.** The access token is a memory credential by
-  design; the refresh token is closure-only. A future persistence
-  round layers on top of this API; it does not reach into it.
+  design; the refresh token is closure-only. Any persistence a host
+  adds layers on top of this API; it does not reach into it.
 - **User operations reject raw and change nothing on failure.** Do not
   wrap, translate or pre-commit. `ApiError` from `@speed/api-client`
   is the one error type a caller must tell apart (`isApiError`), and
@@ -168,7 +168,8 @@ stays unexported until a consumer proves it needs to be public.
 ## Known limitations
 
 - No persistence across page loads and no `restore`: reloading starts
-  anonymous. Planned for a later round.
+  anonymous, by design -- nothing in this package writes storage (see
+  the session-storage rule above).
 - Token-issuing responses are validated structurally (presence and
   types of `access_token`, `refresh_token`, `principal`) — the access
   token's signature and claims are the server's domain, out of scope

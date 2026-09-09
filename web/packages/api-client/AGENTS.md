@@ -114,8 +114,11 @@ HTTP through it.
 pre-auth endpoints (`PathPublic` / `PathSystemFeatures`), built on the
 `RequestFn` seam above. Both path constants are hand-kept in sync with
 the Go side (no OpenAPI fragment exists for these endpoints). Neither
-function accepts a tenant argument -- both endpoints resolve tenant
-server-side from the request host.
+function accepts a tenant argument -- the endpoints carry no tenant on the
+wire: which tenant (if any) the request maps to is the server host's own
+wiring, through go/config's host-injected request-to-tenant resolver (the
+reference app satisfies it with `tenancy.NewDomainResolver` over its host
+map), with platform defaults when nothing matches.
 
 `usePublicConfig` / `useFeature` live in `src/react.ts`, exported from
 the isolated `./react` subpath. The manifest declares `react` as a

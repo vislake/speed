@@ -15,7 +15,7 @@ style.
 `internal/` plumbing: the code-to-text error resolver, the failure
 banner, the translation hook. They exist to be tested, never to be
 imported by a consumer; adding an export is a breaking change under
-lockstep versioning and needs a round of its own. `TenantOption` is
+lockstep versioning. `TenantOption` is
 `{ id, name }` with both fields readonly -- extending the shape, or
 making the props' `session`/`tenants`/`currentTenantId` optional,
 breaks delivered projects.
@@ -95,8 +95,8 @@ product.
 ## i18n
 
 Every built-in string lives in the bilingual `tenancy-ui` namespace,
-sixteen leaves per language (`tenantSwitcher` two, `errors` fourteen:
-ten `authn`, three `client`, `unknown`). Keep
+seventeen leaves per language (`tenantSwitcher` three, `errors`
+fourteen: ten `authn`, three `client`, `unknown`). Keep
 the leaf key sets of `zh-CN.json` and `en-US.json` identical --
 `registerNamespace` refuses to register a namespace whose languages'
 leaf key sets differ, so the failure surfaces at registration, before

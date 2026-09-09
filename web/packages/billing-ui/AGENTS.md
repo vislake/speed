@@ -35,9 +35,10 @@ navigates or touches HTTP.
 - **The error surface is a code whitelist.** Every failure path
   resolves to one error code rendered in one `role="alert"` banner;
   codes outside the whitelist render `errors.unknown`, never a raw
-  key. The whitelist is the reachable set of the two reads: the
-  billing document read's own 404 (`billing.invoice_not_found`), the
-  session-lifecycle family every protected speed surface whitelists,
+  key. The whitelist is the reachable set of the two invoice reads
+  this package performs: the billing document read's own 404
+  (`billing.invoice_not_found`), the session-lifecycle family every
+  protected speed surface whitelists,
   and the three `client.*` transport codes. The 400 pair and 500
   envelopes of the billing fragment are deliberately outside it --
   unreachable by construction from the fixed-parameter reads, or
@@ -47,7 +48,9 @@ navigates or touches HTTP.
 ## Rules that are load-bearing here
 
 1. **The package renders exactly the operations that exist.** The
-   billing fragment ships two reads and no writes; nothing here
+   billing fragment ships four reads and no writes — the two credit
+   reads (`billing_getCreditBalance`, `billing_listCreditTransactions`)
+   and the two invoice reads this package renders — and nothing here
    pretends to settle, void or create an invoice, and no payment
    surface exists anywhere in this package. A row and its document are
    the same `BillingInvoice` shape -- the detail read exists because
@@ -175,5 +178,5 @@ frozen newest-first window of 50 (no keyset cursor exists in the
 spec); document dates render in the UTC calendar; the status and error
 vocabularies render only through their whitelists; and the runtime
 consumer proof is discharged in form at the package level -- no
-reference-app consumer shell renders this family, and the browser +
-real-server leg does not exist for it yet.
+reference-app consumer shell renders this family, and no browser +
+real-server leg exists for it.

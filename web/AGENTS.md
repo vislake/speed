@@ -29,8 +29,8 @@ this file adds what is specific to the npm side.
 4. New runtime/peer dependencies need justification in the pull request:
    they land in every consuming project's bundle or `package.json` peer set.
 5. Public API is frozen by convention like Go module APIs (lockstep
-   versioning is repo-wide): a breaking change ships deliberately, with the
-   round that owns it.
+   versioning is repo-wide): a breaking change ships deliberately or not
+   at all.
 
 ## Test placement and hygiene
 
@@ -80,9 +80,10 @@ suite picks them up): locally via
 from `web/`, and in CI by fast-check's `repo-checks` job, which runs that
 same command once per PR.
 
-Still deferred, tracked in the CI workflow headers with their owning
-rounds -- do not half-enable: the `react-hooks` plugin awaits a
-stateful-components round.
+Still deferred, tracked in the CI workflow headers -- do not
+half-enable: the `react-hooks` plugin is not adopted, keeping
+`eslint.config.mjs` free of plugin dependencies (see that file's own
+header).
 
 ## CJK scanner exemption
 
