@@ -233,3 +233,14 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 - `go vet ./...`、`golangci-lint run ./...` 0 issues、gofmt 干净(与 CI 形态一致)。
 - 应用二进制 `go build ./cmd/server` 通过;`tools/scan_cjk.py` 全树干净;reference-app web 侧未触及。
 - 装配流套件仍属无外部依赖的普通单元运行,留在单元套件内(CI 的 `go test ./...` 自动覆盖新目录,工作流无需改动)。
+
+## 迁移后的引用重定向记录
+
+2b 只移动了文件本身;仓库散文对这批套件的旧 `cmd/server/<文件>_test.go` 归属的引用仍残留约 68 处,分布在根 CLAUDE.md 普查、模块 AGENTS/README、`docs/internal` 各实现对照、reference-app 内部包注释与 web 侧测试工具注释里。本记录逐项重定向到 `flowtests/`(全仓库 `cmd/server/<47 个迁走文件>` 前缀引用为零命中):
+
+- **形态随句子原有路径保留**:原 `examples/reference-app/cmd/server/X_test.go` 改为 `examples/reference-app/flowtests/X_test.go`,原短式 `cmd/server/X_test.go` 改为 `flowtests/X_test.go`;裸文件名引用(前文已点名 reference-app 的句子)补 `flowtests/` 前缀。
+- **按行为重定向拆分文件**:引用 `server_test.go` 时若所指行为随机械拆分到了 `server_config_test.go`(ConfigFromEnv/根密钥/特征开关族)或 `server_guards_test.go`(healthz/metrics allowlist、分布式装配拒绝族),则指向分片所在文件;web 侧对 `server_test.go:443-445`(notes 写门 403 钉)等行号引用同步到新家 `flowtests/server_test.go:438-440` 的实际行。`periodic_scheduler_flow_test.go` 的两 boot 过期清扫/保留腿仍在同名文件,引用保持不变式地指向 `flowtests/` 同名文件。
+- **留包文件的引用不动**:`main_test.go`、demo_* 与 clinic_name/self_service/kill-switch 套件仍居 `cmd/server`,指向它们的引用(如 demo_users_test.go 的行号钉)原样保留;两镜像 `test_support_test.go` 各自头部已述镜像关系。
+- **error-codes.md 随源再生成**:索引文档内嵌错误常量处注释,其中两处仍述旧路径;同时该生成产物在装配代码迁入 internal/app(导出改名)后即已漂移,本次一并 `tools/gen_error_code_index.py` 再生成归位。
+
+验证:全仓库对 47 个迁走文件名的 `cmd/server/<文件>` 形式引用零命中;裸文件名引用除 flowtests/cmd-server 目录内互引与本文档自身的迁移清单外全部带 `flowtests/` 前缀;reference-app `go build ./...` 通过。根 CLAUDE.md 普查句此前部分改写的宣告(随 2b 提交消息)按本记录修正:当时只重定向了少数文件,残余引用由本记录闭合。
