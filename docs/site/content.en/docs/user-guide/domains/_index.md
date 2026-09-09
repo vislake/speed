@@ -1,6 +1,7 @@
 ---
 title: Domain guides
 weight: 0
+bookCollapseSection: true
 ---
 
 # Domain guides

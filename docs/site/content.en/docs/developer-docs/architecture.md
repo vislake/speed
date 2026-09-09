@@ -291,6 +291,6 @@ section tells you *why*. The
 is this page's companion: the discipline list every module obeys,
 each rule with its reason and where it is enforced.
 
-## Source
+## Related pages
 
 - [Developer docs](/docs/developer-docs/) hub, [user guide](/docs/user-guide/)

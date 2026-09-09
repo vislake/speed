@@ -93,6 +93,6 @@ API 契约只有一个真源——每个模块自己的 OpenAPI 片段——工�
 
 这里的每条原则都曾是带被否决方案的决策;为什么不用 ent、为什么不用 Casbin、为什么不用微服务,都留有成文的推理。
 
-## Source
+## 相关页面
 
 - [总体架构](/zh-cn/docs/developer-docs/architecture/)、[开发者文档](/zh-cn/docs/developer-docs/) hub

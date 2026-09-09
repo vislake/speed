@@ -109,7 +109,7 @@ attachSession(session) // 宿主的 @speed/auth-core 会话,渲染之前
 - **会话状态活不过页面加载** —— auth-core 的既有局限:重载即匿名,
   壳重新显示登录分支(应用曾到达的记忆随页面重置)。
 
-## Source
+## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 相关包页:[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)(登录家族与默认结束屏)、[tenancy-ui](/zh-cn/docs/user-guide/modules/web/tenancy-ui/)(`userMenu` 切换器)

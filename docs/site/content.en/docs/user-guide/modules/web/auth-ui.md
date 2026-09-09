@@ -144,7 +144,7 @@ machine packages it.
 - **Components signal nothing into the host's router** — the gate
   observes the snapshot and decides.
 
-## Source
+## Related pages
 
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [authn](/docs/user-guide/modules/identity/authn/) module page; error codes under [authn](/docs/user-guide/error-codes/#authn)

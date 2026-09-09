@@ -203,6 +203,6 @@ section.
   against both SQL dialects. The unit tier needs no containers — the
   in-process implementations double as test doubles.
 
-## Source
+## Related pages
 
 - [Architecture](/docs/developer-docs/architecture/), [Developer docs](/docs/developer-docs/) hub

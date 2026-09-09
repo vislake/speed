@@ -139,7 +139,7 @@ committed switch, never for a failed one). Behaviour worth knowing:
 - **Session state does not survive a page load** — auth-core's
   inherited limitation: reloading starts anonymous.
 
-## Source
+## Related pages
 
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [authn](/docs/user-guide/modules/identity/authn/) module page (the switch operation lives there); error codes under [authn](/docs/user-guide/error-codes/#authn)

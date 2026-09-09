@@ -143,7 +143,7 @@ matches the sign-in surface reuse the auth-ui bundle's text verbatim.
   spec ships no change-password or profile operations, so no section
   covers them.
 
-## Source
+## Related pages
 
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [authn](/docs/user-guide/modules/identity/authn/) module page; error codes under [authn](/docs/user-guide/error-codes/#authn)

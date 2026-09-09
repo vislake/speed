@@ -134,7 +134,7 @@ auth-ui bundle's text.
 - **Whitelisted error text only** — a host that wants its own copy for
   a code registers its own bundle pair under the namespace.
 
-## Source
+## Related pages
 
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [billing](/docs/user-guide/modules/capabilities/billing/) module page and the domain guide [Billing and metering](/docs/user-guide/domains/billing-metering/); error codes under [billing](/docs/user-guide/error-codes/#billing)

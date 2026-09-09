@@ -133,7 +133,7 @@ the quick start cannot drift from the API.
   shows the sign-in branch again (the app-reached memory resets with
   the page).
 
-## Source
+## Related pages
 
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - Related package pages: [auth-ui](/docs/user-guide/modules/web/auth-ui/) (the sign-in family and default ended screen), [tenancy-ui](/docs/user-guide/modules/web/tenancy-ui/) (the `userMenu` switcher)

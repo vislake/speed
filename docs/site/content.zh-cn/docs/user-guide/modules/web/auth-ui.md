@@ -116,7 +116,7 @@ attachSession(session) // hooks 读取已挂接的会话
   企业 SSO 的发现是按租户的服务端配置,没有区块渲染它。
 - **组件不向宿主路由器发信号** —— 门观察快照并做决定。
 
-## Source
+## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)

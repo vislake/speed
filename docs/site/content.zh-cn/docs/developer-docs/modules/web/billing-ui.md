@@ -87,7 +87,7 @@ authorization 头——是读面的 in-form 消费证明;尚无工作区消费�
 染本家族,因此该面只在包级被证明、没有浏览器加真实服务器腿,照实
 记录。
 
-## Source
+## 相关页面
 
 - [billing 模块设计](/zh-cn/docs/developer-docs/modules/capabilities/billing/)——表面背后的 Invoice 模型与只读片段
 

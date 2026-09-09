@@ -1,6 +1,7 @@
 ---
 title: 领域指南
 weight: 0
+bookCollapseSection: true
 ---
 
 # 领域指南

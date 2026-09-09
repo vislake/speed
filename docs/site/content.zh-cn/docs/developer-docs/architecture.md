@@ -162,6 +162,6 @@ HTTP 中间件链有一个固定、不可随意调整的顺序:`recover → requ
 
 用户指南讲*怎么做*:装模块、接 Kernel、搭组织树、运维生成的项目。本栏(Developer docs)讲*为什么*。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。
 
-## Source
+## 相关页面
 
 - [开发者文档](/zh-cn/docs/developer-docs/) hub、[用户指南](/zh-cn/docs/user-guide/)

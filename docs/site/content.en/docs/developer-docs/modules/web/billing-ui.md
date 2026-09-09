@@ -114,7 +114,7 @@ consumer proof; no in-workspace consumer shell renders this family
 yet, so the surface is proven at the package level, with no
 browser-and-real-server leg, recorded as such.
 
-## Source
+## Related pages
 
 - The [billing module design](/docs/developer-docs/modules/capabilities/billing/) — the Invoice model and read-only fragment behind the surface
 

@@ -114,7 +114,7 @@ const tenants: TenantOption[] = [
 - **没有包内租户名册** —— 列表按契约是宿主数据。
 - **会话状态活不过页面加载** —— auth-core 的既有局限:重载即匿名。
 
-## Source
+## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页(切换操作住在那里);错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)

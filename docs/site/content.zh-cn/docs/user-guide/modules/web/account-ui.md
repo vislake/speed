@@ -111,7 +111,7 @@ react-query 的重试与缓存策略是宿主自己的,绑定回合也是:添加
 - **账号页的其它一半是宿主内容** —— authn 规范没有改密或资料操作,
   没有区块覆盖它们。
 
-## Source
+## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)

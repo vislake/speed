@@ -106,7 +106,7 @@ react-query 的重试与缓存策略是宿主自己的。套件编译并运行�
 - **只有白名单错误文案** —— 想为某个码定制文案的宿主在命名空间下
   注册自己的资源对。
 
-## Source
+## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/) 模块页与域指南[计费与计量](/zh-cn/docs/user-guide/domains/billing-metering/);错误码见 [billing](/zh-cn/docs/user-guide/error-codes/#billing)
