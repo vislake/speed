@@ -96,5 +96,13 @@ export default defineConfig({
     // it ran. Vitest's own defaults (node_modules, dist) are restated here
     // because naming `exclude` replaces them rather than extending them.
     exclude: ['e2e/**', '**/node_modules/**', '**/dist/**'],
+    // Coverage: v8 over the host src/** only, so aliased sibling sources
+    // never count toward this app's numbers; text-summary for local
+    // runs, json-summary for the per-package coverage gate.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      reporter: ['text-summary', 'json-summary'],
+    },
   },
 })

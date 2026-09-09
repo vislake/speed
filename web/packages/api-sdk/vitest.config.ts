@@ -11,5 +11,17 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'jsdom',
+    // Coverage: v8 over src/** only, so aliased sibling sources never
+    // count toward this package's numbers; text-summary for local runs,
+    // json-summary for the per-package coverage gate. The one file left
+    // out of src/** is src/index.ts, the orval-generated output (its
+    // DO-NOT-EDIT header); the hand-written src/runtime.ts seam stays
+    // measured.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      exclude: ['src/index.ts'],
+      reporter: ['text-summary', 'json-summary'],
+    },
   },
 })

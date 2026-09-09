@@ -33,4 +33,14 @@ export default defineConfig({
       },
     ],
   },
+  test: {
+    // Coverage: v8 over src/** only, so aliased sibling sources never
+    // count toward this package's numbers; text-summary for local runs,
+    // json-summary for the per-package coverage gate.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      reporter: ['text-summary', 'json-summary'],
+    },
+  },
 })
