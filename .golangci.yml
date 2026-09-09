@@ -164,11 +164,22 @@ linters:
           # go/jobs/ (outside that subpackage) that reached for go-redis
           # again would now be a regression this rule catches, exactly as
           # it always has for go/pkgcore.
+          #
+          # One pkgcore test-support exemption, narrower than a package:
+          # eventbustest's own *_test.go driver of the shared suite over a
+          # miniredis-backed pair of real eventbus/redis instances
+          # (assert_conforms_redis_pair_test.go) must construct those
+          # instances, and NewEventBus takes the concrete client, so the
+          # driver needs go-redis exactly as the implementations' own test
+          # files do -- but only that package's test files get it, since
+          # the suite's shipped code (assert_conforms.go) may never import
+          # the client and the package is not an implementation.
           files:
             - "**/go/**"
             - "!**/go/pkgcore/eventbus/redis/**"
             - "!**/go/pkgcore/kv/redis/**"
             - "!**/go/jobs/queue/asynq/**"
+            - "!**/go/pkgcore/eventbustest/*_test.go"
           list-mode: lax
           deny:
             - pkg: github.com/redis/go-redis
