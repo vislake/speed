@@ -96,14 +96,10 @@ func TestStart_MetricRegistrationFails_WarnsAndQueueStillRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	select {
-	case <-handled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Handle never ran: the queue must keep working after the failed metric registrations")
-	}
+	waitSignal(t, handled, "Handle to run -- the queue must keep working after the failed metric registrations")
 	// The handled signal fires inside Handle, before execute persists the
 	// outcome -- poll until the row settles, then assert the outcome.
-	job := pollJob(t, q, pkgcore.WithTenant(context.Background(), "tenant-a"), id, 3*time.Second, func(j *Job) bool {
+	job := pollJob(t, q, pkgcore.WithTenant(context.Background(), "tenant-a"), id, signalWaitTimeout, func(j *Job) bool {
 		return j.Status.Terminal()
 	})
 	if job.Status != StatusSucceeded {

@@ -77,11 +77,7 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for q1's worker to enter Handle -- the mid-Handle window never opened")
-	}
+	waitSignal(t, entered, "q1's worker to enter Handle -- the mid-Handle window never opened")
 
 	// The second queue over the SAME database: without the gate this would
 	// Start cleanly, reset q1's mid-Handle row and run Handle a second

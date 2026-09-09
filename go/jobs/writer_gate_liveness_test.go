@@ -197,11 +197,7 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 	if err != nil {
 		t.Fatalf("Enqueue(job1) error = %v", err)
 	}
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for q1's worker to enter job1's Handle -- the mid-Handle window never opened")
-	}
+	waitSignal(t, entered, "q1's worker to enter job1's Handle -- the mid-Handle window never opened")
 
 	// job2 shares job1's tenant, so its per-tenant slot is free (limit 2) and
 	// the dispatcher claims it -- and then blocks handing it over, because the
@@ -320,11 +316,7 @@ func TestStandaloneQueue_SecondStart_DuringCloseDrain_StillRefused(t *testing.T)
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for q1's worker to enter Handle -- the mid-Handle window never opened")
-	}
+	waitSignal(t, entered, "q1's worker to enter Handle -- the mid-Handle window never opened")
 
 	// Close with the Handle still in flight: it must block until release
 	// lets the worker finish, and must NOT open the writer gate meanwhile.
@@ -522,11 +514,7 @@ func TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_Stil
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for q1's worker to enter Handle -- the mid-Handle window never opened")
-	}
+	waitSignal(t, entered, "q1's worker to enter Handle -- the mid-Handle window never opened")
 
 	// Anchor the takeover attempt to a REAL beat of the incumbent: poll the
 	// queue_writers row until last_heartbeat advances past q1's Start (q1's

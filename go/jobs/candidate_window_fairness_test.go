@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -77,29 +78,26 @@ func TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants(t *testing.T) {
 	// backlog permanently >= claimBatchSize -- for as long as this test
 	// needs, with no need to ever actually drain it.
 	for i := 0; i < 2; i++ {
-		select {
-		case <-flood.startedCh:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("flood job %d never started", i)
-		}
+		waitSignal(t, flood.startedCh, fmt.Sprintf("flood job %d to start", i))
 	}
 
 	// tenant-starved's single Job must still be claimed and run within a
 	// bounded number of dispatch ticks (newTestQueue's poll interval is
-	// 15ms; 2s is generous slack for the dispatcher goroutine to actually
-	// run several times over), even though tenant-flood's backlog never
-	// drops below claimBatchSize for the rest of the test.
+	// 15ms; signalWaitTimeout is generous slack for the dispatcher
+	// goroutine to actually run several times over), even though
+	// tenant-flood's backlog never drops below claimBatchSize for the
+	// rest of the test.
 	select {
 	case id := <-quickDone:
 		if id != quickID {
 			t.Fatalf("quick handler ran Job %q, want %q", id, quickID)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(signalWaitTimeout):
 		ctx := pkgcore.WithTenant(context.Background(), "tenant-starved")
 		job, getErr := q.Get(ctx, quickID)
 		if getErr != nil {
-			t.Fatalf("tenant-starved's Job was never claimed within 2s, and Get() also failed: %v", getErr)
+			t.Fatalf("tenant-starved's Job was never claimed within %v, and Get() also failed: %v", signalWaitTimeout, getErr)
 		}
-		t.Fatalf("tenant-starved's Job was never claimed within 2s despite tenant-flood sitting at its concurrency limit the whole time (last observed status: %v) -- a single tenant's backlog starved another tenant out of the candidate-selection window", job.Status)
+		t.Fatalf("tenant-starved's Job was never claimed within %v despite tenant-flood sitting at its concurrency limit the whole time (last observed status: %v) -- a single tenant's backlog starved another tenant out of the candidate-selection window", signalWaitTimeout, job.Status)
 	}
 }

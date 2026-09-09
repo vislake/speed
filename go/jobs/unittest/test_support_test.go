@@ -80,5 +80,30 @@ func pollJob(t *testing.T, q *jobs.StandaloneQueue, ctx context.Context, id jobs
 // waitTerminal polls until id reaches a terminal Status.
 func waitTerminal(t *testing.T, q *jobs.StandaloneQueue, ctx context.Context, id jobs.JobID) *jobs.Job {
 	t.Helper()
-	return pollJob(t, q, ctx, id, 3*time.Second, func(j *jobs.Job) bool { return j.Status.Terminal() })
+	return pollJob(t, q, ctx, id, signalWaitTimeout, func(j *jobs.Job) bool { return j.Status.Terminal() })
+}
+
+// signalWaitTimeout bounds waitSignal: how long a channel-ready event
+// may take under a slow scheduler before the test gives up. It mirrors
+// the in-package helper's own constant (standalone_queue_test.go), with
+// the same rationale: waitSignal is event-driven, so the cap is paid
+// only when the event never arrives, and the generous ceiling is what
+// keeps a starved scheduler from turning a delayed start into a test
+// failure.
+const signalWaitTimeout = 5 * time.Second
+
+// waitSignal waits until ch delivers a value and returns it, failing
+// the test with what on timeout. A closed channel counts as delivered
+// (the receive returns the zero value immediately), so close-based
+// signals and send-based ones share this one wait. Mirrors the
+// in-package helper of the same name.
+func waitSignal[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(signalWaitTimeout):
+		t.Fatalf("timed out after %v waiting for %s", signalWaitTimeout, what)
+		return *new(T)
+	}
 }

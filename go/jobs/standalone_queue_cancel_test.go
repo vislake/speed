@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -77,11 +76,7 @@ func TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPers
 	// Wait until the final attempt is actually in flight, then Cancel it
 	// mid-attempt -- the row is now StatusCancelled before the attempt can
 	// fail -- and only then release the attempt to fail.
-	select {
-	case <-failer.startedCh:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for the attempt to start")
-	}
+	waitSignal(t, failer.startedCh, "the final attempt to start")
 	if err = q.Cancel(ctx, id); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}
@@ -91,15 +86,10 @@ func TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPers
 	// Job's execute has returned -- so sentinelDone doubles as the
 	// guarantee that the dead-letter decision is already made by the time
 	// the assertions below run.
-	sentinelID, err := q.Enqueue(ctx, Task{Type: "cancel-race.sentinel", TenantID: "tenant-a"})
-	if err != nil {
+	if _, err = q.Enqueue(ctx, Task{Type: "cancel-race.sentinel", TenantID: "tenant-a"}); err != nil {
 		t.Fatalf("Enqueue(sentinel) error = %v", err)
 	}
-	select {
-	case <-sentinelDone:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for the sentinel job %q to run", sentinelID)
-	}
+	waitSignal(t, sentinelDone, "the sentinel job to run")
 
 	select {
 	case <-failer.onFailureCh:

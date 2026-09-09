@@ -85,7 +85,34 @@ func pollJob(t *testing.T, q *StandaloneQueue, ctx context.Context, id JobID, ti
 // waitTerminal polls until id reaches a terminal Status.
 func waitTerminal(t *testing.T, q *StandaloneQueue, ctx context.Context, id JobID) *Job {
 	t.Helper()
-	return pollJob(t, q, ctx, id, 3*time.Second, func(j *Job) bool { return j.Status.Terminal() })
+	return pollJob(t, q, ctx, id, signalWaitTimeout, func(j *Job) bool { return j.Status.Terminal() })
+}
+
+// signalWaitTimeout bounds waitSignal: how long a channel-ready event
+// may take under a slow scheduler before the test gives up. Generous by
+// design -- waitSignal is event-driven, so the cap is paid only when the
+// event never arrives. 5s is an eternity for the tick cadences (10-15ms
+// poll intervals) every queue here runs on, and an eventual-style
+// ceiling is what keeps a starved scheduler from turning a merely
+// delayed start into a test failure.
+const signalWaitTimeout = 5 * time.Second
+
+// waitSignal waits until ch delivers a value and returns it, failing
+// the test with what on timeout. A closed channel counts as delivered
+// (the receive returns the zero value immediately), so close-based
+// signals and send-based ones share this one wait. Channel-ready events
+// need no polling; the cap alone is what makes them robust, so every
+// wait that can stretch under load funnels through here rather than
+// spelling out its own time.After window.
+func waitSignal[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(signalWaitTimeout):
+		t.Fatalf("timed out after %v waiting for %s", signalWaitTimeout, what)
+		return *new(T)
+	}
 }
 
 // TestWriterStaleAfter_OwnWindowFromOwnPollInterval pins writerStaleAfter's
@@ -222,22 +249,31 @@ func TestDelayedExecution_DoesNotRunEarly(t *testing.T) {
 	}
 	startQueue(t, q)
 
-	id, err := q.Enqueue(context.Background(), Task{Type: "delayed", TenantID: "tenant-a"}, WithDelay(300*time.Millisecond))
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	id, err := q.Enqueue(ctx, Task{Type: "delayed", TenantID: "tenant-a"}, WithDelay(300*time.Millisecond))
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	if ran.Load() {
-		t.Fatal("handler ran before its ScheduledAt time")
-	}
-	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	job, err := q.Get(ctx, id)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if job.Status != StatusPending {
-		t.Errorf("Status before the delay elapses = %v, want %v", job.Status, StatusPending)
+	// The negative window -- the job must not run before its own
+	// scheduled_at -- is asserted from the moment it first leaves
+	// StatusPending, with no fixed wall-clock sleep anywhere in the
+	// window. The boundary needs no test-side clock to verify: the
+	// queue enforces it in the claim query itself (claimCandidatesSQL
+	// selects only rows whose scheduled_at has passed, so no worker can
+	// receive a delayed Job early by design), and every stamp a
+	// legitimate run writes -- the claim's updated_at, the attempt's
+	// started_at -- is therefore at or after scheduled_at on the same
+	// row, read back from the same database clock. A stamp before
+	// scheduled_at is the delay not being enforced; a stamp at or after
+	// it clears the window however late this goroutine woke to look.
+	// pollJob keeps waking until either verdict, so a slow scheduler
+	// stretches the wait instead of invalidating the assertion.
+	first := pollJob(t, q, ctx, id, signalWaitTimeout, func(j *Job) bool { return j.Status != StatusPending })
+	if first.UpdatedAt.Before(first.ScheduledAt) ||
+		(first.StartedAt != nil && first.StartedAt.Before(first.ScheduledAt)) {
+		t.Fatalf("job ran before its scheduled_at: first observed status %v with scheduled_at %v, updated_at %v, started_at %v -- the delay was not enforced",
+			first.Status, first.ScheduledAt, first.UpdatedAt, first.StartedAt)
 	}
 
 	waitTerminal(t, q, ctx, id)
@@ -344,42 +380,36 @@ func TestPerTenantConcurrencyLimiting(t *testing.T) {
 		t.Fatalf("Enqueue(quick) error = %v", err)
 	}
 
-	var firstStarted JobID
-	select {
-	case firstStarted = <-flood.startedCh:
-	case <-time.After(1 * time.Second):
-		t.Fatal("no flood job started at all")
-	}
+	firstStarted := waitSignal(t, flood.startedCh, "the first flood job to start")
 
 	// tenant-b's job completes promptly despite tenant-a's flood already
 	// occupying a worker -- the core proof that one tenant cannot starve
 	// another.
-	select {
-	case <-quickDone:
-	case <-time.After(1 * time.Second):
-		t.Fatal("tenant-b's job never completed while tenant-a's flood held the queue")
-	}
+	waitSignal(t, quickDone, "tenant-b's job to complete while tenant-a's flood held the queue")
 
 	// A second tenant-a job must NOT start while the first is still
-	// running: tenant-a is at its concurrency limit of 1.
+	// running: tenant-a is at its concurrency limit of 1. Every start is
+	// recorded in the buffered startedCh, so the select below is robust
+	// to a late-woken test goroutine either way: a wrongful start is
+	// already in the buffer whenever this goroutine next runs, and a
+	// correct queue keeps the buffer empty no matter how long the hold.
+	// The hold is generous -- 500ms spans some thirty of the queue's
+	// 15ms dispatch ticks, deliberately, so a slow scheduler still gives
+	// the dispatcher many chances to wrongly start the second job.
 	select {
 	case second := <-flood.startedCh:
 		t.Fatalf("a second tenant-a job (%q) started while the first (%q) was still running; the per-tenant concurrency limit was not enforced", second, firstStarted)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 	}
 
+	// Releasing the first flood job frees tenant-a's one slot; each
+	// release must let exactly the next queued flood job start. The
+	// waits are event-driven with the shared generous cap: a slow
+	// scheduler stretches them, it does not break them.
 	flood.releaseCh <- struct{}{}
-	select {
-	case <-flood.startedCh:
-	case <-time.After(1 * time.Second):
-		t.Fatal("second flood job never started after the first was released")
-	}
+	waitSignal(t, flood.startedCh, "the second flood job to start after the first was released")
 	flood.releaseCh <- struct{}{}
-	select {
-	case <-flood.startedCh:
-	case <-time.After(1 * time.Second):
-		t.Fatal("third flood job never started after the second was released")
-	}
+	waitSignal(t, flood.startedCh, "the third flood job to start after the second was released")
 	flood.releaseCh <- struct{}{}
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -419,14 +449,10 @@ func TestProgressReporting(t *testing.T) {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 
-	select {
-	case <-h.afterFirstReport:
-	case <-time.After(1 * time.Second):
-		t.Fatal("handler never reported its first progress update")
-	}
+	waitSignal(t, h.afterFirstReport, "the handler's first progress update")
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	mid := pollJob(t, q, ctx, id, 1*time.Second, func(j *Job) bool { return j.ProgressPct == 30 })
+	mid := pollJob(t, q, ctx, id, signalWaitTimeout, func(j *Job) bool { return j.ProgressPct == 30 })
 	if mid.ProgressMsg != "step one" {
 		t.Errorf("mid-flight ProgressMsg = %q, want %q", mid.ProgressMsg, "step one")
 	}

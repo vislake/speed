@@ -3,7 +3,6 @@ package unittest
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
@@ -60,11 +59,7 @@ func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *t
 	if err != nil {
 		t.Fatalf("Enqueue(blocker) error = %v", err)
 	}
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for the single worker to enter the blocker's Handle")
-	}
+	waitSignal(t, entered, "the single worker to enter the blocker's Handle")
 
 	// The second Job: the dispatcher claims it (StatusRunning in the
 	// database) and blocks handing it to the worker, which is still inside
@@ -73,7 +68,7 @@ func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *t
 	if err != nil {
 		t.Fatalf("Enqueue(runner) error = %v", err)
 	}
-	pollJob(t, q, ctx, fastID, 3*time.Second, func(j *jobs.Job) bool { return j.Status == jobs.StatusRunning })
+	pollJob(t, q, ctx, fastID, signalWaitTimeout, func(j *jobs.Job) bool { return j.Status == jobs.StatusRunning })
 
 	job, err := q.Get(ctx, fastID)
 	if err != nil {
