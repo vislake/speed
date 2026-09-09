@@ -764,9 +764,15 @@ func TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses(t *te
 // second enrollment over one code.
 //
 // Deliberately not t.Parallel() and run over several fresh fixtures: the
-// losers' reads only beat the winner's commit under genuine concurrency,
-// and a single round of a wall-clock race can come out the safe way even
-// on a shape that lets losers regenerate. The loop exists because every
+// losers' reads only beat the winner's commit under genuine concurrency.
+// Every round additionally holds the racers behind gateTableReads until
+// ALL racers have completed their pending-factor read, so the
+// read-then-lose interleaving this test exists to pin is exercised no
+// matter how few cores the runner has: a runner that serializes the
+// goroutines would otherwise let the winner's whole ConfirmTOTP commit
+// before the losers even read, turning every loser into the ordinary
+// no-pending-factor refusal and leaving the dangerous interleaving
+// unexercised for that whole round. The loop still exists because every
 // round must be deterministic -- the database arbitrates exactly one
 // winner.
 func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testing.T) {
@@ -786,6 +792,10 @@ func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testi
 			if err != nil {
 				t.Fatalf("totp.Code() error = %v", err)
 			}
+
+			// See the test's doc comment: no racer's confirm write may begin
+			// before every racer's pending-factor read has completed.
+			gateTableReads(t, f.db, "user_mfa_factors", racers)
 
 			var (
 				wg       sync.WaitGroup
@@ -834,6 +844,63 @@ func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testi
 			}
 		})
 	}
+}
+
+// gateTableReads blocks every SELECT against table on db until want reads
+// have COMPLETED, then releases all of them at once, by way of a GORM
+// after-query hook: a caller whose read finished early parks its goroutine
+// in the hook until the want-th read has finished too, and the want-th
+// arrival opens the gate for everyone. Reads on other tables pass
+// untouched, and reads arriving after the gate has opened pass straight
+// through. The hook is removed on cleanup.
+//
+// The effect is a deterministic read barrier, not a timing hope: while a
+// read is parked in the hook it holds no database lock (its statement has
+// already run to completion), so the wait cannot deadlock anything, and no
+// caller can start its next statement before every gated read has
+// completed. A concurrency test whose dangerous interleaving requires some
+// racers to READ old state while none has WRITTEN yet uses this to make
+// that interleaving occur on every run: on a runner with few cores, a
+// round that launches racing goroutines can otherwise come out fully
+// serialized -- the first racer's whole call, write included, commits
+// before the later racers even read -- leaving the interleaving the test
+// exists to pin unexercised for that round. It is shared with
+// service_test.go's duplicate-registration races, which have the same
+// read-then-write shape.
+//
+// want must equal the number of gated reads the test's racers will perform
+// in the window: the gate opens only when the want-th read arrives, so a
+// racer that exits before its read would leave the earlier readers parked
+// forever (the same hang a racer that never terminates already gives the
+// test's own WaitGroup).
+func gateTableReads(t *testing.T, db *gorm.DB, table string, want int) {
+	t.Helper()
+	hookName := "authn_test_gate_table_reads_" + table
+	var (
+		mu      sync.Mutex
+		arrived int
+		release = make(chan struct{})
+		opened  sync.Once
+	)
+	if err := db.Callback().Query().After("gorm:query").Register(hookName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Table != table {
+			return
+		}
+		mu.Lock()
+		arrived++
+		n := arrived
+		mu.Unlock()
+		if n >= want {
+			opened.Do(func() { close(release) })
+			return
+		}
+		<-release
+	}); err != nil {
+		t.Fatalf("register the %s read gate: %v", table, err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove(hookName)
+	})
 }
 
 // failRecoveryCodeCreatesWhile makes every user_recovery_codes insert on db

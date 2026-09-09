@@ -1512,9 +1512,13 @@ func TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn(t *testing.T
 //
 // Deliberately not t.Parallel and run over fresh fixtures per round: the
 // losers' inserts only lose when their pre-checks overlap (both read "no
-// such account" before either inserts), a wall-clock race -- the loop
-// exists because every round must be deterministic: the database arbitrates
-// exactly one winner.
+// such account" before either inserts), so every round holds the racers
+// behind gateTableReads until ALL of them have completed their
+// pre-check read -- the read-then-insert overlap this test exists to pin is
+// then exercised no matter how few cores the runner has, instead of
+// depending on the goroutine scheduler serializing or overlapping the
+// racers by luck. The loop still exists because every round must be
+// deterministic: the database arbitrates exactly one winner.
 func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.T) {
 	const (
 		rounds = 8
@@ -1524,6 +1528,10 @@ func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.
 		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
 			f := newServiceFixture(t)
 			email := fmt.Sprintf("register-race-%d@example.com", round)
+
+			// See the test's doc comment: no racer's insert may begin before
+			// every racer's pre-check read has completed.
+			gateTableReads(t, f.db, "users", racers)
 
 			start := make(chan struct{})
 			results := make([]error, racers)
@@ -1558,6 +1566,51 @@ func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.
 				t.Fatalf("%d of %d racing registrations succeeded, want exactly 1", successes, racers)
 			}
 		})
+	}
+}
+
+// TestService_Register_InsertConflictProbeAnswersTheCodedConflicts pins the
+// insert-conflict translator mapRegisterCreateConflict deterministically.
+// The translator only ever runs when a registration's INSERT was refused by
+// the database's unique index -- a state that, end to end, only a
+// concurrent duplicate registration produces (Register's pre-checks answer
+// the sequential duplicate before any insert), which is why the concurrent
+// race tests above exercise it. This test calls the translator directly on
+// the post-race states it was written for -- a committed account answering
+// the identifier probe -- so the probe's answers are pinned by every run,
+// not by whether a wall-clock race happened to overlap that run.
+func TestService_Register_InsertConflictProbeAnswersTheCodedConflicts(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	emailUser := f.registerUser(t, "mapper-email@example.com", testTenantA)
+	phoneUser, err := f.svc.Register(t.Context(), RegisterInput{Phone: "+8613912345678", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Register(phone) error = %v", err)
+	}
+	ctx := t.Context()
+
+	// A refusal that is not a duplicate passes through untouched: the
+	// translator never turns an unrelated insert failure into a coded
+	// conflict.
+	other := errors.New("injected: users insert refused")
+	if got := f.svc.mapRegisterCreateConflict(ctx, &User{Email: emailUser.Email}, other); !errors.Is(got, other) {
+		t.Fatalf("mapRegisterCreateConflict(non-duplicate) = %v, want the input error passed through", got)
+	}
+
+	// The email probe: an insert of an email-only account refused as a
+	// duplicate, with the racing account's commit already visible -- the
+	// state every loser of an email registration race is in.
+	if got := f.svc.mapRegisterCreateConflict(ctx, &User{Email: emailUser.Email}, gorm.ErrDuplicatedKey); !errors.Is(got, ErrEmailAlreadyRegistered) {
+		t.Fatalf("mapRegisterCreateConflict(email duplicate) = %v, want ErrEmailAlreadyRegistered", got)
+	}
+
+	// The phone probe (with a free email so the email probe misses first,
+	// mirroring Register's own probe order): a duplicate phone insert whose
+	// racing account's commit is already visible answers
+	// ErrPhoneAlreadyRegistered, never a bare internal error.
+	if got := f.svc.mapRegisterCreateConflict(ctx, &User{Email: "fresh@example.com", Phone: phoneUser.Phone}, gorm.ErrDuplicatedKey); !errors.Is(got, ErrPhoneAlreadyRegistered) {
+		t.Fatalf("mapRegisterCreateConflict(phone duplicate) = %v, want ErrPhoneAlreadyRegistered", got)
 	}
 }
 
@@ -1737,7 +1790,9 @@ func TestService_Refresh_RefusesWhenTheAccountIsGone(t *testing.T) {
 // the same phone number both pass the sequential pre-checks, the database's
 // unique phone index admits exactly one insert and the loser must receive
 // the same coded conflict the sequential duplicate answers -- never a bare
-// internal error.
+// internal error. Like its email twin, every round gates the racers'
+// pre-check reads behind gateTableReads so the read-then-insert
+// overlap is exercised on every run rather than by scheduler luck.
 func TestService_Register_ConcurrentDuplicatePhoneAnswersTheCodedConflict(t *testing.T) {
 	const (
 		rounds = 8
@@ -1747,6 +1802,10 @@ func TestService_Register_ConcurrentDuplicatePhoneAnswersTheCodedConflict(t *tes
 		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
 			f := newServiceFixture(t)
 			phone := fmt.Sprintf("+861390000%04d", round)
+
+			// See the email twin's doc comment: no racer's insert may begin
+			// before every racer's pre-check read has completed.
+			gateTableReads(t, f.db, "users", racers)
 
 			start := make(chan struct{})
 			results := make([]error, racers)
