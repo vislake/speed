@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // roundTripFunc adapts a function to http.RoundTripper so a test (or an
@@ -111,7 +111,7 @@ func TestSend_PostsAuthenticatedMessageToMessagesResource(t *testing.T) {
 	})
 
 	s := newSenderForTest(t, testConfig(), rt)
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestSend_MessagingServiceSid_IsUsedInsteadOfFrom(t *testing.T) {
 	cfg.From = ""
 	cfg.MessagingServiceSID = "MG11111111111111111111111111111111"
 	s := newSenderForTest(t, cfg, rt)
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err != nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if !strings.Contains(gotBody, "MessagingServiceSid=MG11111111111111111111111111111111") {
@@ -179,7 +179,7 @@ func TestSend_RefusedSend_SurfacesTwiliosOwnError(t *testing.T) {
 	})
 
 	s := newSenderForTest(t, testConfig(), rt)
-	err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"})
+	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
 	if err == nil {
 		t.Fatalf("Send() error = nil, want Twilio's refusal")
 	}
@@ -203,7 +203,7 @@ func TestSend_RefusedWithoutParsableBody_StillReturnsError(t *testing.T) {
 	})
 
 	s := newSenderForTest(t, testConfig(), rt)
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want an error for the 502 gateway response")
 	}
 }
@@ -216,7 +216,7 @@ func TestSend_TransportFailure_ReturnsError(t *testing.T) {
 	s := newSenderForTest(t, testConfig(), func(_ *http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	})
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want the transport failure")
 	}
 }

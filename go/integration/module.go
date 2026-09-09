@@ -387,9 +387,9 @@ func WithWebhookQueue(queue jobs.Queue) Option {
 // either way. Relaxing this one
 // check for one Module instance a test or demo process builds for itself
 // is the only way to get a real round trip against a receiver that process
-// controls -- mirroring the identical shape go/authn's own
-// WithHTTPSMSSenderClient (go/authn/sms.go) already established for its own
-// SSRF-guarded SMS gateway client, for the same reason.
+// controls -- mirroring the identical shape pkgcore's own
+// WithHTTPSMSSenderClient (pkgcore/http_sms_sender.go) already established
+// for its SSRF-guarded SMS gateway client, for the same reason.
 //
 // This override MUST be wired together with WithWebhookHTTPClient, never
 // alone: overriding only this creation-time check while leaving

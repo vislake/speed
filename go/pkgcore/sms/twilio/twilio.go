@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/internal/safehttp"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/safehttp"
 )
 
 // gatewayBaseURL is Twilio's REST API base, the fixed endpoint of the
@@ -23,7 +23,7 @@ const gatewayBaseURL = "https://api.twilio.com/2010-04-01"
 
 // maxResponseBytes bounds how much of Twilio's response body this adapter
 // reads, so a misbehaving or hostile gateway cannot hold a request goroutine
-// reading an unbounded body (the same bound go/authn's own gateway sender
+// reading an unbounded body (the same bound pkgcore's own gateway sender
 // applies).
 const maxResponseBytes = 64 * 1024
 
@@ -55,7 +55,7 @@ type Config struct {
 type Option func(*sender)
 
 // WithClient replaces the HTTP client a sender talks to Twilio's API with.
-// The default is the SSRF-guarded client (authn/internal/safehttp), which
+// The default is the SSRF-guarded client (pkgcore/safehttp), which
 // cannot connect to a private address -- so a test pointing a sender at an
 // httptest server on loopback MUST inject a plain client (the test server's
 // own), and does. A deployment has no reason to replace it.
@@ -77,13 +77,13 @@ type sender struct {
 	client              *http.Client
 }
 
-// NewSender returns a sender that delivers go/authn's SMS messages through
+// NewSender returns a sender that delivers pkgcore's SMS messages through
 // Twilio's Messages API, or an error naming the Config field that is missing
 // or the sender-selection conflict. Constructing fails closed: Twilio
 // refuses an invalid send with a 4xx error envelope, so an adapter built
 // with a typo'd configuration must fail before the first send, not after a
 // phone number already paid for the attempt.
-func NewSender(cfg Config, opts ...Option) (authn.SMSSender, error) {
+func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.AccountSID == "" {
 		return nil, errors.New("twilio: config: AccountSID is required")
 	}
@@ -121,13 +121,13 @@ type twilioErrorEnvelope struct {
 	MoreInfo string `json:"more_info"`
 }
 
-// Send implements authn.SMSSender: one POST to this account's Messages
+// Send implements pkgcore.SMSSender: one POST to this account's Messages
 // resource, Basic-authenticated with AccountSID and AuthToken, whose form
 // body carries To, the message text as Body, and the configured sender
 // (From or MessagingServiceSid). The message text rides free-form -- Twilio
 // is the one vendor among this module's adapters with a free-text send -- and
 // everything travels over TLS inside the request.
-func (s *sender) Send(ctx context.Context, msg authn.SMS) error {
+func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 	form := url.Values{
 		"To":   {msg.To},
 		"Body": {msg.Text},
@@ -169,4 +169,4 @@ func (s *sender) Send(ctx context.Context, msg authn.SMS) error {
 }
 
 // compile-time check that sender satisfies the seam.
-var _ authn.SMSSender = (*sender)(nil)
+var _ pkgcore.SMSSender = (*sender)(nil)

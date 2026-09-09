@@ -513,7 +513,7 @@ func TestHandler_LoginWithPassword_Locked_Returns429WithRetryAfter(t *testing.T)
 func TestHandler_RequestSMSCode_KnownAndUnknownPhone_BothReturn202(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	h, f := newTestHandler(t, WithSMSSender(NewConsoleSMSSender(&out)))
+	h, f := newTestHandler(t, WithSMSSender(pkgcore.NewConsoleSMSSender(&out)))
 	f.registerUser(t, "smsuser@example.com", testTenantA)
 	if err := f.svc.Users().Save(t.Context(), mustSetPhone(t, f, "smsuser@example.com", "+15550000001")); err != nil {
 		t.Fatalf("save the registered phone: %v", err)
@@ -588,7 +588,7 @@ func mustSetPhone(t *testing.T, f *serviceFixture, email, phone string) *User {
 func TestHandler_LoginWithSMSCode_ValidCode_ReturnsTokenPair(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	h, f, recorder := newAuditTestHandler(t, WithSMSSender(NewConsoleSMSSender(&out)))
+	h, f, recorder := newAuditTestHandler(t, WithSMSSender(pkgcore.NewConsoleSMSSender(&out)))
 	f.registerUser(t, "smslogin@example.com", testTenantA)
 	if err := f.svc.Users().Save(t.Context(), mustSetPhone(t, f, "smslogin@example.com", "+15550000002")); err != nil {
 		t.Fatalf("save the registered phone: %v", err)
@@ -622,9 +622,9 @@ func TestHandler_LoginWithSMSCode_ValidCode_ReturnsTokenPair(t *testing.T) {
 
 // smsCodeRunPattern matches a maximal run of ASCII digits, so
 // extractSMSCode can find the one run that is EXACTLY smsCodeDigits long --
-// the code itself -- rather than the first digit it sees, which
-// consoleSMSSender's "SMS to <phone>: <text>" framing (sms.go) puts a
-// PHONE NUMBER'S digits before the code.
+// the code itself -- rather than the first digit it sees, which the console
+// sender's "SMS to <phone>: <text>" record framing (pkgcore's sms.go) puts
+// a PHONE NUMBER'S digits before the code.
 var smsCodeRunPattern = regexp.MustCompile(`\d+`)
 
 // extractSMSCode pulls the numeric code out of a rendered SMS body -- a
@@ -1985,21 +1985,21 @@ func TestHandler_ListLoginHistory_ScopedToCallingUser(t *testing.T) {
 // mandatory deployment-mode consistency suite: the SAME sequence of HTTP
 // calls, exercised against two handlers wired with the two different
 // concrete implementations of the one seam this module actually varies by
-// deployment mode -- SMSSender (sms.go's NewConsoleSMSSender for the
-// standalone deployment mode, NewHTTPSMSSender for the distributed one,
-// see module.go's WithDeploymentMode and ErrMissingDistributedSMSSender)
-// -- must produce identical outcomes: the same status codes and the same
-// error codes at every step. Token values themselves are never compared --
-// they are randomly generated on both wirings by design -- only the
-// observable behaviour a caller sees.
+// deployment mode -- the SMS sender (pkgcore.NewConsoleSMSSender for the
+// standalone deployment mode, pkgcore.NewHTTPSMSSender for the distributed
+// one, see module.go's WithDeploymentMode and
+// ErrMissingDistributedSMSSender) -- must produce identical outcomes: the
+// same status codes and the same error codes at every step. Token values
+// themselves are never compared -- they are randomly generated on both
+// wirings by design -- only the observable behaviour a caller sees.
 func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 	t.Parallel()
 
 	var consoleOut bytes.Buffer
-	standalone, standaloneFixture := newTestHandler(t, WithSMSSender(NewConsoleSMSSender(&consoleOut)))
+	standalone, standaloneFixture := newTestHandler(t, WithSMSSender(pkgcore.NewConsoleSMSSender(&consoleOut)))
 
 	// TLS, not plaintext: the HTTP SMS sender refuses a plaintext gateway
-	// endpoint before any request (see sms_test.go's
+	// endpoint before any request (see pkgcore's own sms_test.go,
 	// TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest), so the
 	// distributed leg's gateway must be a TLS test server for the flow to
 	// exercise a real delivery.
@@ -2008,14 +2008,14 @@ func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 	}))
 	t.Cleanup(gateway.Close)
 	distributed, distributedFixture := newTestHandler(t,
-		// The default client is SSRF-guarded (internal/safehttp), which
+		// The default client is SSRF-guarded (pkgcore/safehttp), which
 		// correctly refuses this httptest server's loopback address; a
 		// real deployment's gateway is a public endpoint, so this
 		// override -- like WithFederationHTTPClient's identical test-only
 		// use elsewhere in this package -- is test-only. Replacing the
 		// client replaces only that dial-time address guard, never the
-		// endpoint's https requirement (see NewHTTPSMSSender).
-		WithSMSSender(NewHTTPSMSSender(gateway.URL, WithHTTPSMSSenderClient(gateway.Client()))),
+		// endpoint's https requirement (see pkgcore.NewHTTPSMSSender).
+		WithSMSSender(pkgcore.NewHTTPSMSSender(gateway.URL, pkgcore.WithHTTPSMSSenderClient(gateway.Client()))),
 		WithDeploymentMode(pkgcore.DeploymentModeDistributed),
 	)
 

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // roundTripFunc adapts a function to http.RoundTripper so a test (or an
@@ -141,7 +141,7 @@ func TestSend_PostsSignedSendSmsRequest(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestSend_ConfiguredRegion_ReachesTheRegionHeader(t *testing.T) {
 	cfg := testConfig()
 	cfg.Region = "ap-hongkong"
 	s := fixedSender(rt, cfg)
-	if err := s.Send(context.Background(), authn.SMS{To: "+85290000000", Text: "x"}); err != nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+85290000000", Text: "x"}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if gotRegion != "ap-hongkong" {
@@ -216,7 +216,7 @@ func TestSend_EnvelopeError_ReturnsRefusal(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"})
+	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the envelope's refusal")
 	}
@@ -241,7 +241,7 @@ func TestSend_StatusRowRefusal_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"})
+	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the status row's refusal")
 	}
@@ -265,7 +265,7 @@ func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want an error for a 503 gateway response")
 	}
 }
@@ -287,7 +287,7 @@ func TestSend_EnvelopeErrorOnNon200_StillReturnsTheEnvelopeRefusal(t *testing.T)
 	})
 
 	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"})
+	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the envelope's refusal")
 	}
@@ -310,7 +310,7 @@ func TestSend_EmptyStatusSet_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want an error for an envelope without a send status")
 	}
 }
@@ -323,7 +323,7 @@ func TestSend_TransportFailure_ReturnsError(t *testing.T) {
 	s := fixedSender(func(_ *http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	}, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want the transport failure")
 	}
 }

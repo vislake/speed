@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package twilio_test holds go/authn/sms/twilio's integration tier: a single
+// Package twilio_test holds go/pkgcore/sms/twilio's integration tier: a single
 // env-gated leg that drives the adapter's real HTTP dialogue with Twilio's
 // REST API against Twilio's genuine gateway. It is physically separate from
 // the package's unit tests and carries the "integration" build tag: a plain
@@ -43,8 +43,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/sms/twilio"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/sms/twilio"
 )
 
 // twilioSMSEnv names the environment variables this leg reads.
@@ -108,7 +108,7 @@ func TestSender_LiveTwilioGateway_SendsOneMessage(t *testing.T) {
 		t.Fatalf("NewSender: %v (a config error here means the %s/%s/%s/%s values do not satisfy the documented Config shape)", err, envAccountSID, envFrom, envMsgSvcSID, envTo)
 	}
 
-	err = sender.Send(context.Background(), authn.SMS{
+	err = sender.Send(context.Background(), pkgcore.SMS{
 		To:   os.Getenv(envTo),
 		Text: "[speed authn] twilio live-leg message; your code is 123456",
 	})

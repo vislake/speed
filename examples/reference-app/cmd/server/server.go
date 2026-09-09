@@ -324,7 +324,7 @@ const (
 	smtpPasswordEnv = "APP_SMTP_PASSWORD"
 
 	// smsGatewayURLEnv names the environment variable holding the endpoint
-	// authn's real SMS transport (authn.NewHTTPSMSSender) posts delivery
+	// the real HTTP SMS transport (pkgcore.NewHTTPSMSSender) posts delivery
 	// requests to. Empty under the standalone deployment mode leaves
 	// authn's "SMS sender" seam on its console default; empty under the
 	// distributed deployment mode leaves that seam deliberately UNWIRED, so
@@ -1173,10 +1173,10 @@ type serverConfig struct {
 	SMTPUsername string
 	SMTPPassword string
 
-	// SMSGatewayURL composes authn's real SMS transport
-	// (authn.NewHTTPSMSSender) for its "SMS sender" seam when non-empty.
-	// See smsGatewayURLEnv's own doc comment above for what an empty value
-	// means under each deployment mode.
+	// SMSGatewayURL composes the real HTTP SMS transport
+	// (pkgcore.NewHTTPSMSSender) for authn's "SMS sender" seam when
+	// non-empty. See smsGatewayURLEnv's own doc comment above for what an
+	// empty value means under each deployment mode.
 	SMSGatewayURL string
 
 	// DisableQueueWorker, when true, makes buildServer skip
@@ -1344,9 +1344,9 @@ type serverConfig struct {
 	// APP_DEMO_PLATFORM_STAFF_PASSWORD; the empty default skips the seed.
 	DemoPlatformStaffPassword string
 
-	// SMSOutput is where authn's console SMS sender (the standalone
-	// deployment mode's transport, go/authn/sms.go) writes delivered
-	// messages. Nil defaults to os.Stdout.
+	// SMSOutput is where the console SMS sender (the standalone deployment
+	// mode's transport, pkgcore's sms.go) writes delivered messages. Nil
+	// defaults to os.Stdout.
 	SMSOutput io.Writer
 
 	// SocialProviders, RedirectAllowlist and TrustedProviders wire authn's
@@ -2350,8 +2350,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 	// The "SMS sender" seam, following the same conditional-injection shape
 	// as every other seam this file wires: a configured gateway URL always
-	// wins, under either deployment mode, and composes authn's real HTTP
-	// transport (authn.NewHTTPSMSSender); absent that, the standalone
+	// wins, under either deployment mode, and composes the real HTTP SMS
+	// transport (pkgcore.NewHTTPSMSSender); absent that, the standalone
 	// deployment mode falls back to the console transport, while the
 	// distributed deployment mode is left deliberately UNWIRED --
 	// authn.NewModule's own newOptions then
@@ -2362,9 +2362,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// for the proof).
 	switch {
 	case cfg.SMSGatewayURL != "":
-		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewHTTPSMSSender(cfg.SMSGatewayURL)))
+		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewHTTPSMSSender(cfg.SMSGatewayURL)))
 	case cfg.DeploymentMode != pkgcore.DeploymentModeDistributed:
-		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewConsoleSMSSender(smsOutput)))
+		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)))
 	}
 	authnModule, err := authn.NewModule(db, authnOpts...)
 	if err != nil {

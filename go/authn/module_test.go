@@ -471,3 +471,62 @@ func TestWithVendorClientIPHeaders_RequiresKnownHeaders(t *testing.T) {
 		})
 	}
 }
+
+// TestNewOptions_DistributedModeWithoutSMSSender_Fails proves a distributed
+// bootstrap that never wired an SMSSender fails closed with the named
+// sentinel: the console sender prints to a writer nobody in a distributed
+// replica pool is reading, so a distributed composition must not be allowed
+// to settle for it silently (see ErrMissingDistributedSMSSender).
+func TestNewOptions_DistributedModeWithoutSMSSender_Fails(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	_, err := newOptions([]Option{
+		WithKeySource(keys),
+		WithBlindIndexKey(testutil.BlindIndexKey()),
+		WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+	})
+	if !errors.Is(err, ErrMissingDistributedSMSSender) {
+		t.Errorf("newOptions() error = %v, want it to wrap ErrMissingDistributedSMSSender", err)
+	}
+}
+
+// TestNewOptions_DistributedModeWithSMSSender_Succeeds proves the same
+// bootstrap succeeds once an SMSSender is wired.
+func TestNewOptions_DistributedModeWithSMSSender_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	cfg, err := newOptions([]Option{
+		WithKeySource(keys),
+		WithBlindIndexKey(testutil.BlindIndexKey()),
+		WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(&bytes.Buffer{})),
+	})
+	if err != nil {
+		t.Fatalf("newOptions() error = %v, want nil once an SMSSender is wired", err)
+	}
+	if cfg.smsSender == nil {
+		t.Fatalf("newOptions() smsSender = nil, want the wired sender")
+	}
+}
+
+// TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole proves
+// the standalone deployment mode, and the zero-value (unset) deployment
+// mode used by the option-validation tests in this file, both get a
+// working default sender rather than failing to construct.
+func TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	cfg, err := newOptions([]Option{
+		WithKeySource(keys),
+		WithBlindIndexKey(testutil.BlindIndexKey()),
+	})
+	if err != nil {
+		t.Fatalf("newOptions() error = %v, want nil", err)
+	}
+	if cfg.smsSender == nil {
+		t.Fatalf("newOptions() smsSender = nil, want a default console sender")
+	}
+}

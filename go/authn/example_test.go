@@ -354,26 +354,6 @@ func (exampleMemberships) TenantsOf(context.Context, string) ([]pkgcore.TenantID
 // compile-time check that the example's stand-in satisfies the real seam.
 var _ authn.MembershipReader = exampleMemberships{}
 
-// ExampleNewConsoleSMSSender delivers a verification code to the standalone
-// deployment mode's transport, which -- unlike a real gateway -- writes to
-// whatever io.Writer it is given, which is what makes it usable here.
-func ExampleNewConsoleSMSSender() {
-	var out bytes.Buffer
-	sender := authn.NewConsoleSMSSender(&out)
-
-	err := sender.Send(context.Background(), authn.SMS{
-		To:   "+8613800000000",
-		Text: "your verification code is 123456",
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Print(out.String())
-	// Output:
-	// SMS to +8613800000000: your verification code is 123456
-}
-
 // exampleModule builds a fully registered Module over a fresh in-memory
 // database, for the examples below that need a working Service rather than
 // just NewModule's own return value.
@@ -398,7 +378,7 @@ func exampleModule(ctx context.Context) (*authn.Module, *pkgcore.Registry) {
 		authn.WithBlindIndexKey(exampleBlindIndexKey()),
 		authn.WithMembershipReader(exampleMemberships{}),
 		authn.WithPasswordParams(exampleParams),
-		authn.WithSMSSender(authn.NewConsoleSMSSender(&sms)),
+		authn.WithSMSSender(pkgcore.NewConsoleSMSSender(&sms)),
 	)
 	if err != nil {
 		panic(err)

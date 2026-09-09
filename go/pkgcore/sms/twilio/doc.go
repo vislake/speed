@@ -1,4 +1,4 @@
-// Package twilio is the Twilio SMS adapter for go/authn's SMSSender seam.
+// Package twilio is the Twilio SMS adapter for pkgcore's SMSSender seam.
 //
 // It delivers the seam's messages through Twilio's REST Messages resource
 // (API version 2010-04-01,
@@ -8,7 +8,7 @@
 // MessagingServiceSid) and Body, exactly the request shape Twilio's own
 // documentation fixes (twilio.com/docs/messaging/api/message-resource). No
 // SDK is used -- the no-SDK choice and its measured dependency cost are
-// recorded in go/authn/AGENTS.md's "SMS carrier adapters" section.
+// recorded in go/pkgcore/AGENTS.md's "SMS carrier adapters" section.
 //
 // # Free text
 //
@@ -18,7 +18,7 @@
 //
 // # Phone numbers and senders
 //
-// The seam passes SMS.To through unchanged (go/authn's own contract: SMSSender
+// The seam passes SMS.To through unchanged (pkgcore's own contract: SMSSender
 // implementations never normalize). Twilio requires the recipient's E.164
 // form with a leading "+" (e.g. "+8613800000000"); a number in any other
 // form is answered with Twilio's own 21211-class error, surfaced through
@@ -32,9 +32,9 @@
 // NewSender validates Config eagerly and returns an error naming the missing
 // field (never its value -- the AuthToken is a credential and must not echo)
 // or the From/MessagingServiceSID conflict. The default HTTP client is
-// authn/internal/safehttp's guarded client, the same SSRF-guarded,
-// timeout-bounded client the module's own NewHTTPSMSSender dials through;
-// WithClient replaces it (a test pointing a sender at an httptest loopback
+// pkgcore/safehttp's guarded client, the same SSRF-guarded, timeout-bounded
+// client pkgcore's own NewHTTPSMSSender dials through; WithClient replaces
+// it (a test pointing a sender at an httptest loopback
 // server must inject a plain client, exactly as NewHTTPSMSSender's own tests
 // do). The gateway base URL is a fixed constant of this package -- no
 // operator-chosen URL exists anywhere in this adapter, so no scheme check is

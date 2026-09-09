@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // errTestNonce is the failure fixedSender's injectable nonce source can be
@@ -148,7 +148,7 @@ func TestSend_PostsFullySignedSendSmsForm(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -206,7 +206,7 @@ func TestSend_ConfiguredTemplateParamName_IsUsed(t *testing.T) {
 	cfg := testConfig()
 	cfg.TemplateParamName = "code"
 	s := fixedSender(rt, cfg)
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "123456"}); err != nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "123456"}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	var decoded map[string]string
@@ -236,7 +236,7 @@ func TestSend_VendorBusinessRefusal_SurfacesCodeAndMessage(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"})
+	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the vendor's business refusal")
 	}
@@ -259,7 +259,7 @@ func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want an error for a 503 gateway response")
 	}
 }
@@ -279,7 +279,7 @@ func TestSend_UnparsableOKBody_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want an envelope decode error for a 200 with a non-envelope body")
 	}
 }
@@ -294,7 +294,7 @@ func TestSend_NonceFailure_ReturnsError(t *testing.T) {
 		return nil, nil
 	}, testConfig())
 	s.newNonce = func() (string, error) { return "", errTestNonce }
-	if err := s.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
 		t.Fatalf("Send() error = nil, want the nonce failure")
 	}
 }

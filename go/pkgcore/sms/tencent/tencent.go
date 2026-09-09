@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/internal/safehttp"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/safehttp"
 )
 
 // gatewayEndpoint is Tencent Cloud SMS's fixed API 3.0 endpoint for the
@@ -44,7 +44,7 @@ const defaultRegion = "ap-guangzhou"
 
 // maxResponseBytes bounds how much of Tencent's response body this adapter
 // reads, so a misbehaving or hostile gateway cannot hold a request goroutine
-// reading an unbounded body (the same bound go/authn's own gateway sender
+// reading an unbounded body (the same bound pkgcore's own gateway sender
 // applies).
 const maxResponseBytes = 64 * 1024
 
@@ -74,7 +74,7 @@ type Config struct {
 type Option func(*sender)
 
 // WithClient replaces the HTTP client a sender talks to Tencent's gateway
-// with. The default is the SSRF-guarded client (authn/internal/safehttp),
+// with. The default is the SSRF-guarded client (pkgcore/safehttp),
 // which cannot connect to a private address -- so a test pointing a sender at
 // an httptest server on loopback MUST inject a plain client (the test
 // server's own), and does. A deployment has no reason to replace it.
@@ -103,13 +103,13 @@ type sender struct {
 	now func() time.Time
 }
 
-// NewSender returns a sender that delivers go/authn's SMS messages through
+// NewSender returns a sender that delivers pkgcore's SMS messages through
 // Tencent Cloud SMS, or an error naming the Config field that is missing
 // (never its value -- SecretKey is a credential). Constructing fails closed:
 // Tencent refuses a send with an error envelope rather than an HTTP error,
 // so an adapter built with a typo'd configuration must fail before the first
 // send, not after a phone number already paid for the attempt.
-func NewSender(cfg Config, opts ...Option) (authn.SMSSender, error) {
+func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.SecretID == "" {
 		return nil, errors.New("tencent: config: SecretID is required")
 	}
@@ -179,12 +179,12 @@ type tencentResponse struct {
 	} `json:"Response"`
 }
 
-// Send implements authn.SMSSender: a TC3-signed SendSms POST to the fixed
+// Send implements pkgcore.SMSSender: a TC3-signed SendSms POST to the fixed
 // gateway. The message text travels as the template's FIRST (and only)
 // positional parameter -- Tencent's templates declare positional variables
 // substituted by TemplateParamSet -- so the registered template must declare
 // exactly one variable, which receives the whole rendered message.
-func (s *sender) Send(ctx context.Context, msg authn.SMS) error {
+func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 	payload, err := json.Marshal(sendSmsRequest{
 		PhoneNumberSet:   []string{msg.To},
 		SmsSdkAppID:      s.sdkAppID,
@@ -253,4 +253,4 @@ func (s *sender) Send(ctx context.Context, msg authn.SMS) error {
 }
 
 // compile-time check that sender satisfies the seam.
-var _ authn.SMSSender = (*sender)(nil)
+var _ pkgcore.SMSSender = (*sender)(nil)

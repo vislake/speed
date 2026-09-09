@@ -1,5 +1,5 @@
-// Package aliyun is the Aliyun SMS (Dysmsapi) adapter for go/authn's
-// SMSSender seam.
+// Package aliyun is the Aliyun SMS (Dysmsapi) adapter for pkgcore's SMSSender
+// seam.
 //
 // It delivers the seam's messages through Aliyun's SendSms action of the
 // Dysmsapi product (API version 2017-05-25, gateway
@@ -13,7 +13,7 @@
 //
 // implemented directly over the standard library (crypto/hmac, crypto/sha1).
 // The no-SDK choice and its measured dependency cost are recorded in
-// go/authn/AGENTS.md's "SMS carrier adapters" section.
+// go/pkgcore/AGENTS.md's "SMS carrier adapters" section.
 //
 // # The template boundary
 //
@@ -30,26 +30,26 @@
 //
 // # Phone numbers
 //
-// The seam passes SMS.To through unchanged (go/authn's own contract: SMSSender
+// The seam passes SMS.To through unchanged (pkgcore's own contract: SMSSender
 // implementations never normalize). Aliyun's published SendSms documentation
 // accepts a domestic number with "+", "+86", "0086", "86" or no prefix, and
-// an international number as country code plus number, so the E.164 form
-// go/authn's phone flows produce is acceptable as-is; numbers in any other
-// form are the caller's to reconcile with Aliyun's rules. Aliyun answers a
-// malformed number with a business error envelope, never an HTTP error, which
-// surfaces through Send's error.
+// an international number as country code plus number, so an E.164 number
+// the sending module's flows produce is acceptable as-is; numbers in any
+// other form are the caller's to reconcile with Aliyun's rules. Aliyun
+// answers a malformed number with a business error envelope, never an HTTP
+// error, which surfaces through Send's error.
 //
 // # Construction and transport
 //
 // NewSender validates Config eagerly and returns an error naming the missing
 // field (never its value -- the secret is a credential and must not echo).
-// The default HTTP client is authn/internal/safehttp's guarded client, the
-// same SSRF-guarded, timeout-bounded client the module's own
-// NewHTTPSMSSender dials through; WithClient replaces it (a test pointing a
-// sender at an httptest loopback server must inject a plain client, exactly
-// as NewHTTPSMSSender's own tests do). The gateway endpoint is a fixed
-// constant of this package -- no operator-chosen URL exists anywhere in this
-// adapter, so no scheme check is needed before a send.
+// The default HTTP client is pkgcore/safehttp's guarded client, the same
+// SSRF-guarded, timeout-bounded client pkgcore's own NewHTTPSMSSender dials
+// through; WithClient replaces it (a test pointing a sender at an httptest
+// loopback server must inject a plain client, exactly as NewHTTPSMSSender's
+// own tests do). The gateway endpoint is a fixed constant of this package --
+// no operator-chosen URL exists anywhere in this adapter, so no scheme check
+// is needed before a send.
 //
 // # Secrets
 //

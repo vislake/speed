@@ -234,7 +234,7 @@ type options struct {
 	// SMS and MFA state: the transport a phone-login code is delivered
 	// through, the deployment mode NewModule enforces it against, and the
 	// code lifetime/attempt budget.
-	smsSender          SMSSender
+	smsSender          pkgcore.SMSSender
 	deploymentMode     pkgcore.DeploymentMode
 	smsCodeTTL         time.Duration
 	smsCodeMaxAttempts int
@@ -576,13 +576,33 @@ func WithFederationHTTPClient(client *http.Client) Option {
 	}
 }
 
+// ErrMissingDistributedSMSSender is returned by NewModule and NewService
+// when the module is being wired with WithDeploymentMode(pkgcore.
+// DeploymentModeDistributed) and no SMSSender was supplied with
+// WithSMSSender.
+//
+// It exists for exactly the reason pkgcore's own kernel refuses to resolve a
+// distributed composition onto an in-process seam: pkgcore.NewConsoleSMSSender
+// prints to a writer nobody in a distributed deployment's replica pool is
+// reading, so silently defaulting to it there would look like phone sign-in
+// works right up until the first person tries to use the code that was never
+// actually delivered. The SMS seam is pkgcore's, but it deliberately has no
+// kernel seat (see pkgcore.SMSSender's doc comment) -- the kernel resolves
+// no SMS sender for this module, which receives it through this option -- so
+// the enforcement happens here, at the same wiring-time moment newOptions
+// already validates WithKeySource and WithBlindIndexKey, against the
+// deployment mode WithDeploymentMode records.
+var ErrMissingDistributedSMSSender = errors.New("authn: distributed deployment mode requires an explicit SMS sender")
+
 // WithSMSSender wires the transport phone-login verification codes are
-// delivered through. See ErrMissingDistributedSMSSender for what happens
-// when it is omitted under WithDeploymentMode(pkgcore.
-// DeploymentModeDistributed); the standalone deployment mode, and a caller
-// that never calls WithDeploymentMode at all, default to
-// NewConsoleSMSSender.
-func WithSMSSender(sender SMSSender) Option {
+// delivered through -- any pkgcore.SMSSender: pkgcore.NewConsoleSMSSender
+// for the standalone deployment mode, pkgcore.NewHTTPSMSSender or one of
+// the pkgcore/sms carrier adapters for a deployment with a real transport.
+// See ErrMissingDistributedSMSSender for what happens when it is omitted
+// under WithDeploymentMode(pkgcore.DeploymentModeDistributed); the
+// standalone deployment mode, and a caller that never calls
+// WithDeploymentMode at all, default to pkgcore.NewConsoleSMSSender.
+func WithSMSSender(sender pkgcore.SMSSender) Option {
 	return func(o *options) { o.smsSender = sender }
 }
 
@@ -666,7 +686,7 @@ func newOptions(opts []Option) (options, error) {
 		if cfg.deploymentMode == pkgcore.DeploymentModeDistributed {
 			return options{}, fmt.Errorf("%w: wire one with WithSMSSender", ErrMissingDistributedSMSSender)
 		}
-		cfg.smsSender = NewConsoleSMSSender(os.Stdout)
+		cfg.smsSender = pkgcore.NewConsoleSMSSender(os.Stdout)
 	}
 	// Compile the host-declared trusted-proxy list. An entry that is
 	// neither an IP address nor a CIDR prefix cannot be a proxy peer, so

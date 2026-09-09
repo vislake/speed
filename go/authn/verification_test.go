@@ -38,7 +38,7 @@ func registerPhoneUser(t *testing.T, f *serviceFixture, phone string, tenants ..
 // can read the exact code that was sent.
 func newSMSServiceFixture(t *testing.T, buf *bytes.Buffer, extra ...Option) *serviceFixture {
 	t.Helper()
-	opts := append([]Option{WithSMSSender(NewConsoleSMSSender(buf))}, extra...)
+	opts := append([]Option{WithSMSSender(pkgcore.NewConsoleSMSSender(buf))}, extra...)
 	return newServiceFixture(t, opts...)
 }
 
@@ -681,7 +681,7 @@ func TestRequestSMSCode_GatewayFailure_AnswersLikeAnUnknownNumber(t *testing.T) 
 // delivery failure is logged and answered past, never surfaced.
 type failingSMSSender struct{}
 
-func (failingSMSSender) Send(context.Context, SMS) error {
+func (failingSMSSender) Send(context.Context, pkgcore.SMS) error {
 	return errSMSSendFailed
 }
 

@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/internal/safehttp"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/safehttp"
 )
 
 // gatewayEndpoint is Aliyun SMS's Dysmsapi gateway, the fixed China-site
@@ -36,7 +36,7 @@ const defaultTemplateParamName = "content"
 
 // maxResponseBytes bounds how much of Aliyun's response body this adapter
 // reads, so a misbehaving or hostile gateway cannot hold a request goroutine
-// reading an unbounded body (the same bound go/authn's own gateway sender
+// reading an unbounded body (the same bound pkgcore's own gateway sender
 // applies).
 const maxResponseBytes = 64 * 1024
 
@@ -66,7 +66,7 @@ type Config struct {
 type Option func(*sender)
 
 // WithClient replaces the HTTP client a sender talks to Aliyun's gateway
-// with. The default is the SSRF-guarded client (authn/internal/safehttp),
+// with. The default is the SSRF-guarded client (pkgcore/safehttp),
 // which cannot connect to a private address -- so a test pointing a sender at
 // an httptest server on loopback MUST inject a plain client (the test
 // server's own), and does. A deployment has no reason to replace it.
@@ -97,13 +97,13 @@ type sender struct {
 	newNonce func() (string, error)
 }
 
-// NewSender returns a sender that delivers go/authn's SMS messages through
+// NewSender returns a sender that delivers pkgcore's SMS messages through
 // Aliyun SMS, or an error naming the Config field that is missing (never its
 // value -- AccessKeySecret is a credential). Constructing fails closed:
 // Aliyun refuses a send with a business error envelope rather than an HTTP
 // error, so an adapter built with a typo'd configuration must fail before
 // the first send, not after a phone number already paid for the attempt.
-func NewSender(cfg Config, opts ...Option) (authn.SMSSender, error) {
+func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.AccessKeyID == "" {
 		return nil, errors.New("aliyun: config: AccessKeyID is required")
 	}
@@ -167,7 +167,7 @@ type dysmsapiResponse struct {
 	BizID     string `json:"BizId"`
 }
 
-// Send implements authn.SMSSender: a signed SendSms POST to the fixed
+// Send implements pkgcore.SMSSender: a signed SendSms POST to the fixed
 // gateway. The whole parameter set -- common RPC parameters plus the
 // SendSms-specific ones -- travels percent-encoded with Aliyun's own RFC
 // 3986 rule in the REQUEST LINE's query string with an empty body, the exact
@@ -179,7 +179,7 @@ type dysmsapiResponse struct {
 // Signature and appended to the set; nothing sensitive rides in any log a
 // request line could reach except over TLS, which every byte of the request
 // is.
-func (s *sender) Send(ctx context.Context, msg authn.SMS) error {
+func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 	nonce, err := s.newNonce()
 	if err != nil {
 		return err
@@ -241,4 +241,4 @@ func (s *sender) Send(ctx context.Context, msg authn.SMS) error {
 }
 
 // compile-time check that sender satisfies the seam.
-var _ authn.SMSSender = (*sender)(nil)
+var _ pkgcore.SMSSender = (*sender)(nil)

@@ -339,7 +339,7 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 		obs.FromContext(ctx).Error("sms verification code message could not be rendered", "error", err)
 		return ErrInternal.WithCause(err)
 	}
-	if err := s.sms.Send(ctx, SMS{To: in.Phone, Text: text}); err != nil {
+	if err := s.sms.Send(ctx, pkgcore.SMS{To: in.Phone, Text: text}); err != nil {
 		obs.FromContext(ctx).Error("sms verification code delivery failed", "error", err)
 		// A delivery failure must not answer differently from a request
 		// whose number has no account behind it. The registered branch's

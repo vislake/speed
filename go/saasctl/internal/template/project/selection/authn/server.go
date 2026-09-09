@@ -178,8 +178,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// authn's "SMS sender" seam follows the same conditional-injection shape
 	// as every other seam this file wires: a configured gateway URL always
-	// wins, under either deployment mode, and composes authn's real HTTP
-	// transport (authn.NewHTTPSMSSender); absent that, the standalone
+	// wins, under either deployment mode, and composes the real HTTP SMS
+	// transport (pkgcore.NewHTTPSMSSender); absent that, the standalone
 	// deployment mode falls back to the console transport, while the
 	// distributed deployment mode is left deliberately UNWIRED -- authn.NewModule's own newOptions then
 	// fails closed with authn.ErrMissingDistributedSMSSender rather than
@@ -194,9 +194,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 	switch {
 	case cfg.SMSGatewayURL != "":
-		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewHTTPSMSSender(cfg.SMSGatewayURL)))
+		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewHTTPSMSSender(cfg.SMSGatewayURL)))
 	case cfg.DeploymentMode != pkgcore.DeploymentModeDistributed:
-		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewConsoleSMSSender(os.Stdout)))
+		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewConsoleSMSSender(os.Stdout)))
 	}
 	authnModule, err := authn.NewModule(db, authnOpts...)
 	if err != nil {

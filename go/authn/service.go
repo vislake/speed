@@ -266,7 +266,7 @@ type Service struct {
 	// SMS phone-login and MFA state.
 	kv                 pkgcore.KVStore
 	guard              *rateGuard
-	sms                SMSSender
+	sms                pkgcore.SMSSender
 	smsCodeTTL         time.Duration
 	smsCodeMaxAttempts int
 	verificationCodes  *VerificationCodeRepository

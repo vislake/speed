@@ -128,7 +128,7 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 	// deliberately unreachable address -- authn's distributed-mode
 	// validation requires the "SMS sender" seam to be WIRED (a non-empty
 	// URL), never that it is reachable, and this test never drives the
-	// phone-login flow that would dial it (authn.NewHTTPSMSSender's own
+	// phone-login flow that would dial it (pkgcore.NewHTTPSMSSender's own
 	// construction dials nothing either) -- the identical convention
 	// distributed_mode_test.go's own comment on this exact value and
 	// docker-compose.distributed.yml both already use.

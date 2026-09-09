@@ -753,7 +753,7 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 		// Never dialed: this test never drives the phone-login flow, and
 		// authn's own wiring-time validation only checks that a sender is
 		// PRESENT under the distributed deployment mode, not that it is
-		// reachable (authn.NewHTTPSMSSender's own construction dials
+		// reachable (pkgcore.NewHTTPSMSSender's own construction dials
 		// nothing either).
 		"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms",
 		"APP_DEMO_USERS_PASSWORD="+demoUsersPassword,

@@ -152,7 +152,7 @@ services:
       # Deliberately unreachable -- the distributed deployment mode
       # requires authn's "SMS sender" seam to be WIRED (a non-empty URL),
       # never that it is reachable, and this demo never drives the
-      # phone-login flow that would dial it (authn.NewHTTPSMSSender's own
+      # phone-login flow that would dial it (pkgcore.NewHTTPSMSSender's own
       # construction dials nothing either). The unreachable-port fixture
       # is shared with
       # examples/reference-app/integration_test/distributed_mode_test.go,

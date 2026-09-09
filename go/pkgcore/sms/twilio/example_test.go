@@ -7,16 +7,17 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/sms/twilio"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/sms/twilio"
 )
 
 // ExampleNewSender shows the documented construction-and-send shape a host
 // wires: a Config holding the operator's account data -- the From-based
 // sender variant; a MessagingServiceSid-based config is the documented
-// alternative -- a sender implementing the module's SMSSender seam (so it
-// can be handed to authn's WithSMSSender), then one Send per message. The
-// transport is scripted (WithClient) so the example runs offline; a real
+// alternative -- a sender implementing pkgcore's SMSSender seam (so it can
+// be handed to go/authn's WithSMSSender or go/notification's), then one Send
+// per message. The transport is scripted (WithClient) so the example runs
+// offline; a real
 // host omits the option and the sender talks to Twilio's API through the
 // SSRF-guarded default client.
 func ExampleNewSender() {
@@ -36,7 +37,7 @@ func ExampleNewSender() {
 		return
 	}
 
-	if err := sender.Send(context.Background(), authn.SMS{To: "+8613800000000", Text: "your code is 123456"}); err != nil {
+	if err := sender.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "your code is 123456"}); err != nil {
 		fmt.Println(err)
 		return
 	}

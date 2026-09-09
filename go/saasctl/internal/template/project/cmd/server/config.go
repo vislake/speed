@@ -168,7 +168,7 @@ const (
 	smtpPasswordEnv = "APP_SMTP_PASSWORD"
 
 	// smsGatewayURLEnv names the environment variable holding the endpoint
-	// authn's real SMS transport (authn.NewHTTPSMSSender) posts delivery
+	// the real HTTP SMS transport (pkgcore.NewHTTPSMSSender) posts delivery
 	// requests to. This variable is parsed here, in the shared config.go,
 	// regardless of selection -- the same "the bootstrap contract never
 	// changes with the selection" reasoning orgIndexKeyEnv's own doc comment
@@ -325,8 +325,8 @@ type serverConfig struct {
 	SMTPUsername string
 	SMTPPassword string
 
-	// SMSGatewayURL composes authn's real SMS transport
-	// (authn.NewHTTPSMSSender) for its "SMS sender" seam when non-empty --
+	// SMSGatewayURL composes the real HTTP SMS transport
+	// (pkgcore.NewHTTPSMSSender) for authn's "SMS sender" seam when non-empty --
 	// see smsGatewayURLEnv's own doc comment above for what an empty value
 	// means under each deployment mode. Unused by a selection whose
 	// server.go wires no authn module.

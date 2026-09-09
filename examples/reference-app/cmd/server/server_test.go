@@ -815,9 +815,9 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 // distributed-mode test below that needs authn's own wiring-time "SMS
 // sender" validation to pass (so the Kernel-level assertion the test
 // actually pins is what runs) without touching a network:
-// authn.NewHTTPSMSSender's own construction never dials anything, and none
-// of these tests exercises the phone-login flow that would actually POST
-// to it.
+// pkgcore.NewHTTPSMSSender's own construction never dials anything, and
+// none of these tests exercises the phone-login flow that would actually
+// POST to it.
 const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 
 // TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation pins

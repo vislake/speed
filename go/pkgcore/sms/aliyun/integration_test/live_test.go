@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package aliyun_test holds go/authn/sms/aliyun's integration tier: a single
+// Package aliyun_test holds go/pkgcore/sms/aliyun's integration tier: a single
 // env-gated leg that drives the adapter's real signed HTTP dialogue with
 // Aliyun SMS against Aliyun's genuine gateway. It is physically separate
 // from the package's unit tests and carries the "integration" build tag: a
@@ -47,8 +47,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/sms/aliyun"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/sms/aliyun"
 )
 
 // aliyunSMSEnv names the environment variables this leg reads.
@@ -120,7 +120,7 @@ func TestSender_LiveAliyunGateway_SendsOneMessage(t *testing.T) {
 		t.Fatalf("NewSender: %v (a config error here means the %s/%s values do not satisfy the documented Config shape)", err, envAccessKeyID, envAccessKeySecret)
 	}
 
-	err = sender.Send(context.Background(), authn.SMS{
+	err = sender.Send(context.Background(), pkgcore.SMS{
 		To:   os.Getenv(envTo),
 		Text: "[speed authn] aliyun live-leg message; your code is 123456",
 	})

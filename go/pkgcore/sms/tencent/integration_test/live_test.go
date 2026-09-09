@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package tencent_test holds go/authn/sms/tencent's integration tier: a
+// Package tencent_test holds go/pkgcore/sms/tencent's integration tier: a
 // single env-gated leg that drives the adapter's real signed HTTP dialogue
 // with Tencent Cloud SMS against Tencent's genuine gateway. It is physically
 // separate from the package's unit tests and carries the "integration" build
@@ -46,8 +46,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vislake/speed/go/authn"
-	"github.com/vislake/speed/go/authn/sms/tencent"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/sms/tencent"
 )
 
 // tencentSMSEnv names the environment variables this leg reads.
@@ -121,7 +121,7 @@ func TestSender_LiveTencentGateway_SendsOneMessage(t *testing.T) {
 		t.Fatalf("NewSender: %v (a config error here means the %s/%s/%s values do not satisfy the documented Config shape)", err, envSecretID, envSdkAppID, envTemplateID)
 	}
 
-	err = sender.Send(context.Background(), authn.SMS{
+	err = sender.Send(context.Background(), pkgcore.SMS{
 		To:   os.Getenv(envTo),
 		Text: "[speed authn] tencent live-leg message; your code is 123456",
 	})
