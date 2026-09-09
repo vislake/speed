@@ -10,7 +10,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 )
 
-// TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
+// TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 // is the regression: an administrator removing a member or deleting
 // an org node through the real composed stack leaves an audit row carrying
 // the operator identity -- and, performed during an impersonation session,
@@ -55,7 +55,7 @@ import (
 // counts per action, so -count=1 runs are repeatable without any timing
 // element -- the in-process bus delivers captured events synchronously
 // before the triggering HTTP response returns.
-func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows(t *testing.T) {
+func TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows(t *testing.T) {
 	srv, cfg, _ := buildAdminTestServer(t)
 	staffToken := platformStaffToken(t, srv)
 	staffID := searchStaffID(t, srv, staffToken)
@@ -250,7 +250,7 @@ func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 	}
 }
 
-// TestOrgP1Audit_InvitationCreate_AuditRowCarriesNoAddressIndex extends the
+// TestOrgAuditCapture_InvitationCreate_AuditRowCarriesNoAddressIndex extends the
 // regression to the third opted-in model -- Invitation -- and to the
 // one org write whose captured diff carries the invitee's address-derived
 // values. The invitation create must leave exactly one
@@ -274,7 +274,7 @@ func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 // marker, never the digest; the plaintext address column is
 // serializer-redacted the same way and asserted here as the control.
 // Before this fix the create row carried the raw 64-hex index.
-func TestOrgP1Audit_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testing.T) {
+func TestOrgAuditCapture_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
 	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-invite-audit-owner")
 

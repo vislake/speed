@@ -1530,7 +1530,7 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 // apart from the wiring; Equal's returned column is never executed
 // against a database here, which is exactly why each module's own suite
 // pins its constant to the real migrated column
-// (go/org/email_index_column_test.go,
+// (go/org/email_index_column_drift_test.go,
 // go/notification/address_index_column_test.go)).
 // PKILocalKeyCipherKey, AuthnBlindIndexKey and
 // AuthnPIICipherKey are proven together by a real register-then-login
@@ -1768,7 +1768,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 // audit_events table back through a second dbkit.Open connection to the
 // same SQLite file -- the identical "buildServer hands out neither its
 // *gorm.DB nor a module's own service, so a second connection is the only
-// reach a test has into storage" pattern public_config_test.go's
+// reach a test has into storage" pattern config_public_endpoint_gates_test.go's
 // buildSeededTestServer/seedConfigRows already use for the config
 // module's own table -- and asserts on a real audit.Repository.ListByTenant
 // result, not a mock or an in-memory event assertion (handler_test.go's

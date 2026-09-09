@@ -53,7 +53,7 @@ const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
 // buildSeededUsersTestServer composes buildServer's real output the way
 // buildTestServer does, with the demo-user seed switched on: the boot runs
 // seedDemoUsers, which the plain testConfig's empty password never does.
-// (public_config_test.go's own buildSeededTestServer seeds config values
+// (config_public_endpoint_gates_test.go's own buildSeededTestServer seeds config values
 // instead; the two names keep the two different seeds apart.)
 func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server, serverConfig) {
 	t.Helper()

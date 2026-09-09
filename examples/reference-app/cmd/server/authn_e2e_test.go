@@ -2,7 +2,7 @@ package main
 
 // authn_e2e_test.go drives the
 // reference app's real, composed HTTP server (buildServer's actual output,
-// exactly like server_test.go and public_config_test.go do) through all
+// exactly like server_test.go and config_public_endpoint_gates_test.go do) through all
 // three sign-in entry points authn ships -- password, social (against a
 // local GitHub-shaped test server, never a live provider), and phone plus
 // an SMS code (the standalone deployment mode's console sender, captured
@@ -193,7 +193,7 @@ func buildAuthnE2EServer(t *testing.T, mutate ...func(*serverConfig)) (*httptest
 // (skipped when out is nil, e.g. a 204/202 with no body). It fails the test
 // outright on a transport error or a JSON-decode error, but leaves status-
 // code assertions to the caller, exactly like this package's other request
-// helpers (server_test.go's notesRequest, public_config_test.go's doAs).
+// helpers (server_test.go's notesRequest, config_public_endpoint_gates_test.go's doAs).
 func authnJSON(t *testing.T, client *http.Client, method, urlStr, token string, body, out any) *http.Response {
 	t.Helper()
 

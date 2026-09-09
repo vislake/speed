@@ -240,7 +240,7 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 // exercised, not merely declared: see org.FeatureGate's own wiring in
 // server.go (orgFeatureGate) for the parallel no-import technique used for
 // config, proven the same way by TestSystemFeatures_EnabledFlagChain_ResolvesDependencies
-// in public_config_test.go.
+// in config_public_endpoint_gates_test.go.
 func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
 

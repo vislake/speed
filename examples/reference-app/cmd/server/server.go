@@ -1879,7 +1879,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// alert. The scope list is this app's explicit answer to "which
 	// Auditable models on this connection does the automatic mechanism
 	// own": the ones org itself declares capturable, nothing else.
-	// cmd/server/org_p1_audit_test.go pins the composed outcome (member
+	// cmd/server/org_audit_capture_test.go pins the composed outcome (member
 	// removal and node delete during an impersonation session each leaving
 	// a dual-identity row, and an invitation create leaving a row whose
 	// diff carries no address-derived value).
@@ -2091,7 +2091,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// that drifted from the real column would fail only when someone
 	// called Equal on the indexer. The
 	// exported constant travels from the package that owns the schema,
-	// pinned by org's own suite (go/org/email_index_column_test.go).
+	// pinned by org's own suite (go/org/email_index_column_drift_test.go).
 	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		_ = cleanup()
@@ -2946,7 +2946,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// constructed above -- this app wires dbkit.Options.AuditBus for org's
 	// automatic write capture, which is why the construction happens
 	// before dbkit.Open, and why the SAME bus is injected here: see the
-	// Open call's own comment for the full reasoning, and org_p1_audit_test.go
+	// Open call's own comment for the full reasoning, and org_audit_capture_test.go
 	// for the composed proof.
 	//
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
