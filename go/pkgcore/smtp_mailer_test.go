@@ -27,9 +27,9 @@ import (
 // this one, which is package pkgcore itself, would be an import cycle
 // (pkgcore's own test binary -> testutil -> pkgcore). See
 // internal/testutil/fake_smtp_server.go's own doc comment for the fuller
-// version of this note, and mailer_conformance_test.go (package
-// pkgcore_test, which has no such restriction) for the parallel helper that
-// package needs for the same reason.
+// version of this note, and unittest/mailer_conformance_test.go (package
+// unittest, an external test package with no such restriction) for the
+// parallel helper that driver needs for the same reason.
 func mailerFor(t *testing.T, server *testutil.FakeSMTPServer, mode SMTPTLSMode, username, password string) Mailer {
 	t.Helper()
 	host, port, err := net.SplitHostPort(server.Addr())
