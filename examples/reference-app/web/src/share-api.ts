@@ -1,16 +1,14 @@
 /**
  * share-api.ts -- the app's hand-written half of go/sharing's HTTP
  * surface: the two paths and the one typed call the block-C surfaces
- * need. go/sharing's OpenAPI fragment ships a backend leg only -- it is
- * deliberately not part of the merged application document that drives
- * @speed/api-sdk, so no generated operation exists for either route and
- * the app reaches them through the api-client RequestFn the host bound,
+ * need. go/sharing's fragment joins the merged document and the
+ * generated @speed/api-sdk like every platform module's does; this app
+ * reaches both routes through the api-client RequestFn the host bound,
  * the same seam every generated call travels. The path literals are
- * hand-kept in step with
- * the module's own exported Go constants (sharing.PathShares and
- * sharing.PathAccess, go/sharing/module.go) exactly as @speed/api-client's
- * config fetchers hand-keep the two pre-auth config paths -- the
- * no-generated-surface mirror of that same discipline.
+ * hand-kept in step with the module's own exported Go constants
+ * (sharing.PathShares and sharing.PathAccess, go/sharing/module.go),
+ * exactly as @speed/api-client's config fetchers hand-keep the two
+ * pre-auth config paths.
  *
  * The wire shapes below mirror go/sharing/api/openapi.yaml's
  * SharingCreateShareRequest / SharingCreateShareResponse schemas,

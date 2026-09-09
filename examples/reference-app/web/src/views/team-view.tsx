@@ -15,12 +15,10 @@
  * /api/reference-app/team-members, the host composition
  * cmd/server/team_members.go mounts, which enriches org's membership
  * rows with each member's display identity from authn's users table,
- * because org's fragment ships a backend leg only AND its member rows
- * carry opaque user ids by its own module-boundary rule); the pending
- * invitations and the clinic's root node read org's own surface
- * (org-api.ts -- go/org's fragment ships a backend leg only, the same
- * status go/sharing's holds, so no generated operation exists for
- * either host).
+ * because org's membership rows carry opaque user ids by the module's
+ * own boundary rule); the pending invitations and the clinic's root
+ * node read org's own surface through the app's hand-written org
+ * accessor (org-api.ts).
  *
  * One snapshot query answers the whole surface -- members, pending
  * invitations and the clinic's root node -- so the surface has exactly

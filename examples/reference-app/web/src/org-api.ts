@@ -9,15 +9,13 @@
  * its own module-boundary rule), so no surface consumes org's raw
  * member list and ORG_MEMBERS_PATH's literal below stays unused.
  *
- * go/org's OpenAPI fragment ships a backend leg only -- it predates the
- * merge machinery and is deliberately not part of the merged application
- * document that drives @speed/api-sdk (the same status go/sharing's
- * fragment holds), so no generated operation exists for any org route
- * and the app reaches them through the api-client RequestFn the host
- * bound, the same seam every generated call travels -- exactly the
- * no-generated-surface mirror of the discipline that share-api.ts
- * already documents for go/sharing. The path literals are hand-kept in
- * step with the module's own mounted route (/api/v1/org --
+ * go/org's fragment joins the merged document and the generated
+ * @speed/api-sdk like every platform module's does; this app reaches
+ * org's routes through the api-client RequestFn the host bound, the
+ * same seam every generated call travels (the accessor's hand-written
+ * shape is this host's own -- see share-api.ts's header for the same
+ * relationship on go/sharing). The path literals are hand-kept in step
+ * with the module's own mounted route (/api/v1/org --
  * demo_subject.go's orgRoutePath), and the wire shapes mirror
  * go/org/api/openapi.yaml's schemas field-for-field, never the
  * generator's Go types.

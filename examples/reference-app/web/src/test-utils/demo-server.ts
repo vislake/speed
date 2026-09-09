@@ -110,7 +110,7 @@
  * job's terminal outcome settles the row in place (confirmed on
  * success, refunded when the simulateJobOutcome option scripts a
  * dead_letter generation -- see the two options' docs), plus the team
- * surface's calls mirroring go/org's backend-only fragment
+ * surface's calls through the app's hand-written org accessor
  * (org-api.ts) and the host composition that names its members:
  * GET /api/v1/org/invitations (200, the tenant's pending
  * invitations, newest first, stateful from a create),

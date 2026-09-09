@@ -3,11 +3,8 @@
  * go/admin's operator-facing fragment: the tenant ledger and the
  * usage/billing dashboard the platform operator's two reads use.
  *
- * Why hand-written: admin's fragment ships a backend leg only, exactly
- * like org's, storage's and sharing's (the merged document
- * build/openapi/speed.yaml joins the fragments the frontend generated
- * hooks are orval'd from, and admin's is not among them), so no
- * generated operation exists for this host to call. The web reaches
+ * go/admin's fragment joins the merged document and the generated
+ * @speed/api-sdk like every platform module's does; this host reaches
  * the mounted route through the app's own api-client RequestFn -- the
  * same transport every generated call rides, the app never calls HTTP
  * directly -- answered by the module's own handler behind this app's
