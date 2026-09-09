@@ -131,7 +131,7 @@ Advanced: setting one or more of the six individual keys directly, instead of (o
 
 | Secret | Why it is sensitive |
 |---|---|
-| `APP_CONFIG_KEY` | The master key `config.WithCipher` seals every Sensitive dynamic-configuration value with. The key that encrypts the `configs` table cannot live in that table, so it must come from the environment — and a real deployment must never fall back to the committed, documented-as-non-secret `devConfigKey` development default. |
+| `APP_CONFIG_KEY` | The master key `config.WithCipher` seals every Sensitive dynamic-configuration value with. The key that encrypts the `configs` table cannot live in that table, so it must come from the environment — and a real deployment must never fall back to the committed, documented-as-non-secret `DevConfigKey` development default. |
 | `APP_ORG_INDEX_KEY` | The HMAC key org's blind indexer normalizes and indexes invitation email addresses with. A dbkit rule (an AES key must never double as an HMAC key) is why this is a separate secret from `APP_CONFIG_KEY`, never the same value. |
 | `APP_NOTIFICATION_INDEX_KEY` | The HMAC key the notification module's blind indexers index encrypted contact email/phone addresses with. Same separate-secret rule as above, and separate again from `APP_ORG_INDEX_KEY`. |
 | `APP_PKI_LOCAL_KEY_CIPHER_KEY` | The AES key that seals go/pki's `LocalSigner` private-key column — the key authn's access tokens are ultimately signed with. Had no override path before this round; a deployment that never set this was running signing-key storage on a key committed to this repository. |

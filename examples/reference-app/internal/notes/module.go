@@ -190,7 +190,7 @@ func WithSubjectResolver(r SubjectResolver) Option {
 // renders the recipient-facing preference UI -- the notification module --
 // and marks it Unsubscribable: true, the "recipient may opt out of this
 // kind of notification" choice (contrast demo.patient_reminder, the
-// reference app's unsubscribable-false type; see cmd/server's wiring).
+// reference app's unsubscribable-false type; see internal/app's wiring).
 //
 // The channel strings are the notification module's own channel vocabulary
 // ("in_app", "email", "sms" -- notification.ChannelInApp and siblings):
@@ -213,7 +213,7 @@ var noteCreatedNotificationType = pkgcore.NotificationType{
 // expected to come from dbkit.Open; constructing a Module performs no I/O
 // of its own -- opening and migrating db is the caller's responsibility,
 // done once at startup before Bootstrap ever calls Register (see
-// cmd/server's wiring for the exact sequence, and Register's own doc
+// internal/app's wiring for the exact sequence, and Register's own doc
 // comment below for why Register itself still must not touch the
 // database).
 func NewModule(db *gorm.DB, opts ...Option) *Module {

@@ -22,7 +22,7 @@ import (
 //
 // The zero value is not ready to use; construct one with
 // NewAttestationStore. EnsureSchema must run once before first use
-// (cmd/server's wiring calls it at every boot).
+// (internal/app's wiring calls it at every boot).
 type AttestationStore struct {
 	*dbkit.Repository[attestationRecord]
 
@@ -45,7 +45,7 @@ func NewAttestationStore(db *gorm.DB) *AttestationStore {
 // createAttestationsTableSQL's own doc comment for why this is a plain,
 // idempotent CREATE rather than a versioned dbkit.MigrationRegistry
 // migration. Call it once, before any attestation read or write runs
-// (cmd/server's wiring does this at every boot).
+// (internal/app's wiring does this at every boot).
 func (s *AttestationStore) EnsureSchema(ctx context.Context) error {
 	if err := s.db.WithContext(ctx).Exec(createAttestationsTableSQL).Error; err != nil {
 		return err

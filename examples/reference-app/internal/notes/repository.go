@@ -32,7 +32,7 @@ type Repository struct {
 
 // NewRepository returns a Repository backed by db. db is expected to come
 // from dbkit.Open, already migrated with this module's own Migrations()
-// (see Module.Migrations and cmd/server's wiring for the exact sequence) --
+// (see Module.Migrations and internal/app's wiring for the exact sequence) --
 // see dbkit.Repository's own doc comment for why db is expected to come
 // from Open specifically.
 func NewRepository(db *gorm.DB) *Repository {

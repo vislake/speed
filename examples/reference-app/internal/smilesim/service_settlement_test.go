@@ -614,7 +614,7 @@ func TestService_Simulate_CanceledAfterEnqueue_PersistenceWritesStillLand(t *tes
 // pins that NotifyOnCompletion sets its
 // "already notified" latch only AFTER the publish is accepted: a refused
 // publish (a subscriber failure) must not leave the latch set -- this
-// method's only caller (cmd/server's job-status route) logs and swallows
+// method's only caller (internal/app's job-status route) logs and swallows
 // the error, so a latched refusal would drop the notification silently
 // and permanently: every later poll would read the latch and skip. The
 // latch records an ACCEPTED delivery only: a refused publish is rolled
@@ -853,7 +853,7 @@ func TestService_Simulate_CreditServiceWithoutReservationStore_DoesNotReserve(t 
 // status -- the context canceled, driven here before the call, the
 // deterministic shape of that disconnect -- would fail the settlement's
 // own store read (the transaction cannot begin on a done context) and
-// roll the Confirm back: cmd/server's job-status route logs and swallows
+// roll the Confirm back: internal/app's job-status route logs and swallows
 // NotifyOnCompletion's error, so the reservation would stay silently
 // Reserved, healed only if some later poll or the reconciliation sweep
 // happens to come by. The settlement runs on a cancel-free derivation of

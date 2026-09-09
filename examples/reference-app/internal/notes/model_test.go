@@ -140,7 +140,7 @@ var _ pkgcore.EventBus = (*notesCapturedBus)(nil)
 // because the protection under test is declared on the model itself: it
 // must hold on ANY connection whose capture scope admits Note, which is
 // precisely the shape this app's own host-side exclusion (Note left off
-// cmd/server's Options.AuditModels list) cannot vouch for -- the tag is
+// internal/app's Options.AuditModels list) cannot vouch for -- the tag is
 // the layer that survives that one host list line being dropped or
 // relaxed. It drives a real Note create through this package's real,
 // migrated Repository over a real migrated SQLite file (the
@@ -222,7 +222,7 @@ func TestNote_GetDeletedAt_ReturnsFieldValue(t *testing.T) {
 // TestNote_FieldCaptureClasses_CoverEveryColumn is the field-granularity
 // companion of org's TestModule_AuditableModels_CaptureClasses_CoverEveryField
 // (go/org/module_test.go), applied to this module's one Auditable
-// model. Note is deliberately outside cmd/server's Options.AuditModels
+// model. Note is deliberately outside internal/app's Options.AuditModels
 // scope -- this app's note trail runs through audit.Emit instead (see
 // Note.AuditResourceType's own doc comment) -- but the model keeps the
 // dbkit.Auditable marker precisely because host wiring is not the

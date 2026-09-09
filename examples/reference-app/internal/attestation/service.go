@@ -87,7 +87,7 @@ type Service struct {
 // certificates, opens output bytes through content and persists
 // attestations in store. Constructing one performs no I/O; call
 // EnsureSchema and EnsureAuthorityChain once each, before first use
-// (cmd/server's wiring does this at every boot).
+// (internal/app's wiring does this at every boot).
 func NewService(chain *pki.CAService, certificates *pki.CertificateRepository, content ContentOpener, store *AttestationStore, db *gorm.DB) *Service {
 	return &Service{
 		chain:        chain,
@@ -100,7 +100,7 @@ func NewService(chain *pki.CAService, certificates *pki.CertificateRepository, c
 
 // EnsureSchema creates the attestations table and its index if they do
 // not already exist -- see AttestationStore.EnsureSchema. Call it once,
-// before any attestation runs (cmd/server's wiring does this at every
+// before any attestation runs (internal/app's wiring does this at every
 // boot, immediately before EnsureAuthorityChain).
 func (s *Service) EnsureSchema(ctx context.Context) error {
 	return s.store.EnsureSchema(ctx)

@@ -156,7 +156,7 @@ func NewSimulationStore(db *gorm.DB) *SimulationStore {
 // createSimulationsTableSQL's own doc comment for why this is a plain,
 // idempotent CREATE rather than a versioned dbkit.MigrationRegistry
 // migration. Call it once, before Simulate or ListSimulationsByPhoto ever
-// run (cmd/server's own wiring does this alongside
+// run (internal/app's own wiring does this alongside
 // ReservationStore.EnsureSchema).
 func (s *SimulationStore) EnsureSchema(ctx context.Context) error {
 	if err := s.db.WithContext(ctx).Exec(createSimulationsTableSQL).Error; err != nil {

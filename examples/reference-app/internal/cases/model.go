@@ -67,7 +67,7 @@ type caseRecord struct {
 
 	// CreatorUserID is the user id of the clinic staff member who created
 	// the case, attributed by the host's SubjectResolver seam at create
-	// time (cmd/server's wireCasesRoutes resolves it before the body is
+	// time (internal/app's wireCasesRoutes resolves it before the body is
 	// even read) -- never by the request itself, and never written after
 	// Create. It is the row's recorded attribution: the case list is
 	// clinic-wide (Service.List enumerates every case of the tenant,

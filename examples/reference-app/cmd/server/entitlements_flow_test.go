@@ -18,7 +18,7 @@ package main
 //   - Check keys on "model:" + the logical model the route asks for
 //     ("model:chat:default" for every consult Suggest call,
 //     "model:image:smile-simulation" for every smile-simulation
-//     generation), which is exactly the grant set cmd/server's
+//     generation), which is exactly the grant set internal/app's
 //     seedDemoEntitlements stamps on the demo Plan every boot resolves
 //     (internal/app/demo_entitlements.go) -- so a demo tenant's requests pass, and a
 //     tenant whose Active subscription was canceled is refused.

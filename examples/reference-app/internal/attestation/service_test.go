@@ -621,7 +621,7 @@ func TestService_EnsureAttestedContent_Refusals(t *testing.T) {
 // TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes drives the
 // observation hook whole: EnsureAttested opens the output through the
 // ContentOpener seam, digests what it read and attests it -- the same
-// flow cmd/server's observation of a succeeded simulation job runs -- and
+// flow internal/app's observation of a succeeded simulation job runs -- and
 // surfaces each I/O failure of the seam as a wrapped error without
 // attesting anything.
 func TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes(t *testing.T) {

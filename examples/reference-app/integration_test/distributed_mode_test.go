@@ -220,7 +220,7 @@ const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 // dedicated module is run.
 const mailhogImage = "axllent/mailpit:v1.31"
 
-// distributedNoteCreatorUserID mirrors internal/app/demo_notification.go's
+// distributedNoteCreatorUserID mirrors internal/app/demo_subject.go's
 // DemoNotesCreatorUserID byte for byte. It is the user id notes' own
 // creator-subject resolver assigns when the X-Demo-User-Id header names
 // it, and the ONLY demo user DemoUserAddresses maps to a real address

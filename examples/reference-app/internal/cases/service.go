@@ -117,7 +117,7 @@ var (
 	// creator -- mirroring the identical rule notes' SubjectResolver seam
 	// documents. Only the create route resolves a subject: the list,
 	// detail, upload and photo-content routes need no creator and read
-	// no resolver. cmd/server's wireCasesRoutes is the only caller that
+	// no resolver. internal/app's wireCasesRoutes is the only caller that
 	// produces it.
 	ErrSubjectUnresolved = apperr.Unauthorized("cases.subject_unresolved")
 )
@@ -130,8 +130,8 @@ var (
 // other app-internal package (see the package doc comment's "Shape
 // decision" section -- the case layer is deliberately free of the
 // simulation layer and of notes' module machinery), so each independent
-// package declares the seam, and one host type (cmd/server's
-// demoNotesSubjectResolver) satisfies both -- compile-time-checked at the
+// package declares the seam, and one host type (internal/app/server.go's
+// DemoNotesSubjectResolver) satisfies both -- compile-time-checked at the
 // bottom of internal/app/cases.go. A resolver that returns ok=false -- or is
 // not wired at all -- fails every create and list request closed with
 // ErrSubjectUnresolved, never an invented or empty creator.
@@ -188,7 +188,7 @@ type Service struct {
 }
 
 // NewService returns a Service backed by repo (whose EnsureSchema the
-// caller must have run once -- cmd/server's wiring does this). Constructing
+// caller must have run once -- internal/app's wiring does this). Constructing
 // one performs no I/O.
 func NewService(repo *Repository) *Service {
 	return &Service{repo: repo}

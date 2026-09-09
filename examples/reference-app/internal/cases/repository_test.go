@@ -25,7 +25,7 @@ import (
 
 // newRepository returns a Repository backed by a fresh, per-test SQLite
 // database whose two tables and indexes were created by the real
-// EnsureSchema path -- the same path cmd/server's wiring runs at boot,
+// EnsureSchema path -- the same path internal/app's wiring runs at boot,
 // never a hand-written schema shortcut -- so a test failure here can never
 // be explained away as "the test fixture's schema diverged from the real
 // DDL".

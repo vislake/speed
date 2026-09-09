@@ -186,7 +186,7 @@ COPY --from=builder --chown=65532:65532 /data /data
 COPY --from=frontend --chown=65532:65532 /src/examples/reference-app/web/dist /app/web/dist
 ENV APP_WEB_DIST=/app/web/dist
 
-# PORT mirrors internal/app/server.go's own defaultPort ("8080", used when
+# PORT mirrors internal/app/server.go's own DefaultPort ("8080", used when
 # PORT is unset) -- setting it here is documentation as much as default;
 # docker-compose.yml also sets it explicitly for the same route.
 ENV PORT=8080

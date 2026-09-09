@@ -296,7 +296,7 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // audit.Emit -- the declarative collection mechanism go/dbkit/audit
 // documents, used here instead of dbkit's automatic AuditBus-driven write
 // capture, which this app's shared connection deliberately scopes off
-// Note: cmd/server's dbkit.Open call wires the bus but leaves Note off its
+// Note: internal/app's dbkit.Open call wires the bus but leaves Note off its
 // Options.AuditModels list, because this module records its own note trail
 // declaratively (see model.go's AuditResourceType doc comment for the
 // reason in full). Calling this AFTER h.repo.Create has already returned

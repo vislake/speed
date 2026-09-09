@@ -14,7 +14,7 @@ import (
 
 // newTestSimulationStore returns a SimulationStore backed by a fresh,
 // per-test SQLite database whose table and per-photo index were created by
-// the real EnsureSchema path -- the same path cmd/server's wiring runs at
+// the real EnsureSchema path -- the same path internal/app's wiring runs at
 // boot, never a hand-written schema shortcut -- so an isolation failure
 // here can never be explained away as "the test fixture's schema diverged
 // from the real DDL".

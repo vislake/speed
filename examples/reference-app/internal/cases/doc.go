@@ -59,7 +59,7 @@
 // # Surface decision: a spec fragment
 //
 // The case surface is a spec fragment, this package's api/ directory
-// (see the fragment's own header), implemented by cmd/server's handlers
+// (see the fragment's own header), implemented by internal/app's handlers
 // behind the generated ServerInterface with five operations: POST
 // /api/v1/cases (create: patient name, optional patient reference,
 // optional initial photo object ids), GET /api/v1/cases (the clinic-wide

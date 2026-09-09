@@ -131,7 +131,7 @@ func NewRepository(db *gorm.DB) *Repository {
 // do not already exist -- see the CREATE statements' own doc comments for
 // why this is a plain, idempotent CREATE rather than a versioned
 // dbkit.MigrationRegistry migration. Call it once, before any Service
-// method ever runs (cmd/server's own wiring does this alongside the
+// method ever runs (internal/app's own wiring does this alongside the
 // smilesim stores' EnsureSchema calls).
 func (r *Repository) EnsureSchema(ctx context.Context) error {
 	statements := []string{

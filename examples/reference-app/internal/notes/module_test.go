@@ -198,7 +198,7 @@ func TestModule_WithSubjectResolver_WiresTheSeam(t *testing.T) {
 // TestModule_Register_DeclaresConfigSchemaAndFeatureFlags pins the schema
 // this module registers for the config module to freeze at Attach
 // (go/config/module.go's Attach doc comment): two configuration items with
-// the exact Public/Sensitive shape cmd/server's public endpoint depends on
+// the exact Public/Sensitive shape internal/app's public endpoint depends on
 // (brand.site_name served unauthenticated, support.reply_email never), and
 // two feature flags whose DependsOn chain (premium_upsell on smile_preview)
 // exercises config's dependency resolution. The registrars validate on Add,

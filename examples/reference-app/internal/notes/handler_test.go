@@ -24,7 +24,7 @@ import (
 // stubSubjectResolver is a fixed-answer SubjectResolver for handler tests:
 // NotesCreateNote reads the creating user's id through the seam, and these
 // tests exercise Handler in isolation from any real authenticating layer
-// (cmd/server's demoOrgSubjectResolver is the composed-stack equivalent),
+// (internal/app's DemoOrgSubjectResolver is the composed-stack equivalent),
 // so the stub simply answers userID with ok=true -- the exact value
 // newTestHandler's callers pin CreatorUserID assertions against.
 type stubSubjectResolver struct {

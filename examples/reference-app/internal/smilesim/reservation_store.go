@@ -133,7 +133,7 @@ func NewReservationStore(db *gorm.DB) *ReservationStore {
 // exist -- see createCreditReservationsTableSQL's own doc comment for why
 // this is a plain, idempotent CREATE TABLE rather than a versioned
 // dbkit.MigrationRegistry migration. Call it once, before Simulate or
-// NotifyOnCompletion ever runs (cmd/server's own wiring does this
+// NotifyOnCompletion ever runs (internal/app's own wiring does this
 // immediately after opening the shared database, alongside the other
 // modules' migrationRegistry.Apply call).
 func (s *ReservationStore) EnsureSchema(ctx context.Context) error {
