@@ -17,7 +17,7 @@
 
 import { waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { CasesCase } from '@speed/api-sdk'
+import type { CasesCase } from '../app-api/index.js'
 import { describe, expect, it, vi } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }

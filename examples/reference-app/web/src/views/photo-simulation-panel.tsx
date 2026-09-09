@@ -41,13 +41,13 @@ import {
   useSmilesimGetSimulationContent,
   useSmilesimListPhotoSimulations,
   useSmilesimSimulate,
-} from '@speed/api-sdk'
+} from '../app-api/index.js'
 import type {
   CasesPhoto,
   SmilesimSimulation,
   SmilesimSimulationOptionsSmileStyle,
   SmilesimSimulationOptionsToothShade,
-} from '@speed/api-sdk'
+} from '../app-api/index.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'

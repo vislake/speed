@@ -44,7 +44,7 @@ import Typography from '@mui/material/Typography'
 import {
   getCasesListCasesQueryKey,
   useCasesListCases,
-} from '@speed/api-sdk'
+} from '../app-api/index.js'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'

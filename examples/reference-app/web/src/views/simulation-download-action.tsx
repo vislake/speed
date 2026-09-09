@@ -32,8 +32,8 @@ import Button from '@mui/material/Button'
 import {
   getSmilesimGetSimulationContentQueryKey,
   useSmilesimGetSimulationContent,
-} from '@speed/api-sdk'
-import type { SmilesimSimulation } from '@speed/api-sdk'
+} from '../app-api/index.js'
+import type { SmilesimSimulation } from '../app-api/index.js'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'

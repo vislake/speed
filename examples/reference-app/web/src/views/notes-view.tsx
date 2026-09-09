@@ -59,12 +59,12 @@ import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useQueryClient } from '@tanstack/react-query'
-import type { NotesNote } from '@speed/api-sdk'
+import type { NotesNote } from '../app-api/index.js'
 import {
   getNotesListNotesQueryKey,
   useNotesCreateNote,
   useNotesListNotes,
-} from '@speed/api-sdk'
+} from '../app-api/index.js'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'

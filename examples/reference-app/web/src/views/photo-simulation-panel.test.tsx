@@ -13,7 +13,7 @@
 
 import { waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { CasesCase } from '@speed/api-sdk'
+import type { CasesCase } from '../app-api/index.js'
 import { describe, expect, it, vi } from 'vitest'
 import { demoServer } from '../test-utils/demo-server.js'
 import { makeRealClientRig, signInWithPassword } from '../test-utils/real-client.js'

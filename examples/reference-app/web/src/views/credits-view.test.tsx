@@ -29,13 +29,16 @@
  */
 
 import { waitFor } from '@testing-library/react'
-import { smilesimGetJob, smilesimSimulate } from '@speed/api-sdk'
+import {
+  smilesimGetJob,
+  smilesimSimulate,
+} from '../app-api/index.js'
+import type { BillingCreditTransaction } from '@speed/api-sdk'
 import type {
-  BillingCreditTransaction,
   SmilesimJobRef,
   SmilesimSimulationOptionsSmileStyle,
   SmilesimSimulationOptionsToothShade,
-} from '@speed/api-sdk'
+} from '../app-api/index.js'
 import { describe, expect, it } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }

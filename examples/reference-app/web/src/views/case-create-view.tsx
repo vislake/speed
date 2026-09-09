@@ -36,7 +36,10 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
-import { useCasesCreateCase, useCasesUploadPhoto } from '@speed/api-sdk'
+import {
+  useCasesCreateCase,
+  useCasesUploadPhoto,
+} from '../app-api/index.js'
 import { useTranslation } from '@speed/i18n'
 import { FileUploader } from '@speed/ui-kit'
 import type { FileUploaderRow } from '@speed/ui-kit'

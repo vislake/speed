@@ -64,7 +64,7 @@
 import { act, configure, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import type { NotesNote } from '@speed/api-sdk'
+import type { NotesNote } from './app-api/index.js'
 import { switchLanguage } from '@speed/i18n'
 import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }

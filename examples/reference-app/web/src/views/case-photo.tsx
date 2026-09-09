@@ -15,8 +15,8 @@ import Typography from '@mui/material/Typography'
 import {
   getCasesGetPhotoContentQueryKey,
   useCasesGetPhotoContent,
-} from '@speed/api-sdk'
-import type { CasesPhoto } from '@speed/api-sdk'
+} from '../app-api/index.js'
+import type { CasesPhoto } from '../app-api/index.js'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import {

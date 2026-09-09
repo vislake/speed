@@ -35,7 +35,7 @@
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RequestFn } from '@speed/api-client'
-import type { NotesNote } from '@speed/api-sdk'
+import type { NotesNote } from '../app-api/index.js'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { describe, expect, it } from 'vitest'
 import layoutKitZhCN from '../../../../../web/packages/layout-kit/src/locales/zh-CN.json' with { type: 'json' }

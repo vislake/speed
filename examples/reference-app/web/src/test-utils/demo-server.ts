@@ -211,8 +211,7 @@
  * journey under test reached an endpoint the demo does not serve.
  */
 
-import type { CasesCase } from '@speed/api-sdk'
-import type { NotesNote } from '@speed/api-sdk'
+import type { CasesCase, NotesNote } from '../app-api/index.js'
 import type {
   AuthnIdentity,
   AuthnLoginAttempt,
