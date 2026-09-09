@@ -1,4 +1,4 @@
-package ratelimit
+package unittest
 
 import (
 	"go/parser"
@@ -6,11 +6,19 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode"
 )
 
+// This suite lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier checks with no single source file as their target
+// (the backend coding standard's testing-layout rule); a module-shape check
+// is such a suite. It tests the module black-box, from outside package
+// ratelimit: it guards the repository's Language Rule over this module's
+// own tree, not any ratelimit symbol.
+//
 // TestModuleFiles_ContainNoCJKCharacters is a regression guard for the
 // repository's Language Rule: docs/internal/** is written in Chinese, and
 // everything else -- code comments, godoc/TSDoc, module docs, per-module
@@ -26,8 +34,14 @@ import (
 // comments-and-docs-only CJK-language rule. A fixture needing that
 // exemption here would require the same carve-out added to this test
 // rather than a blanket loosening of it.
+//
+// The walk starts at the module root, not at this file's own directory:
+// this suite lives in go/ratelimit/unittest/, one level below the module
+// root, and the scan must cover the whole module tree. The root is found
+// by walking up from this file to the directory holding go.mod.
 func TestModuleFiles_ContainNoCJKCharacters(t *testing.T) {
-	walkErr := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	moduleRoot := moduleRootOf(t)
+	walkErr := filepath.WalkDir(moduleRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -43,7 +57,34 @@ func TestModuleFiles_ContainNoCJKCharacters(t *testing.T) {
 		return nil
 	})
 	if walkErr != nil {
-		t.Fatalf("filepath.WalkDir(\".\") error = %v", walkErr)
+		t.Fatalf("filepath.WalkDir(%q) error = %v", moduleRoot, walkErr)
+	}
+}
+
+// moduleRootOf walks upward from this test file's compiled location until
+// it finds the directory holding the module's go.mod -- the module root
+// whose tree the CJK scan must cover.
+func moduleRootOf(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) did not report this file's own path")
+	}
+	dir, err := filepath.Abs(filepath.Dir(thisFile))
+	if err != nil {
+		t.Fatalf("resolve directory of %s: %v", thisFile, err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", filepath.Join(dir, "go.mod"), err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("no go.mod found above %s: this test file must live inside a Go module", thisFile)
+		}
+		dir = parent
 	}
 }
 
