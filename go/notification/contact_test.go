@@ -218,7 +218,7 @@ func newContactEnv(t *testing.T) *contactEnv {
 	if err := reg.AuditActions.Add(contactAuditActionDecls...); err != nil {
 		t.Fatalf("register the contact audit actions: %v", err)
 	}
-	env.svc.sms = NewConsoleSMSSender(env.smsBuf)
+	env.svc.sms = pkgcore.NewConsoleSMSSender(env.smsBuf)
 	env.svc.mailFrom = testMailFrom
 	env.svc.emailIndexer = testEmailIndexer(t)
 	env.svc.phoneIndexer = testPhoneIndexer(t)
@@ -1564,7 +1564,7 @@ func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.
 		if errors.Is(err, ErrTransportPermanent) {
 			t.Errorf("a transient failure classified as the permanent refusal (errors.Is = true)")
 		}
-		env.svc.sms = NewConsoleSMSSender(env.smsBuf)
+		env.svc.sms = pkgcore.NewConsoleSMSSender(env.smsBuf)
 
 		if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: address}); err != nil {
 			t.Fatalf("retried CreateContact after the failure cleared: %v", err)

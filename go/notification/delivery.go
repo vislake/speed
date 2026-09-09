@@ -356,7 +356,7 @@ type DeliveryService struct {
 	// transports for the SMS and email channels; host is the registry
 	// slice attached during Register (see deliveryHost).
 	resolver UserAddressResolver
-	sms      SMSSender
+	sms      pkgcore.SMSSender
 	mailFrom string
 	host     deliveryHost
 
@@ -1212,7 +1212,7 @@ func (s *DeliveryService) sendSMS(ctx context.Context, parts map[string]string, 
 	if s.sms == nil {
 		return errors.New("notification: delivery has no SMS sender")
 	}
-	return s.sms.Send(ctx, SMS{To: to, Text: parts["text"]})
+	return s.sms.Send(ctx, pkgcore.SMS{To: to, Text: parts["text"]})
 }
 
 // The bounded outcome text a send record's Error column carries. The column

@@ -242,7 +242,7 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 		t.Fatalf("build contact phone indexer: %v", err)
 	}
 	notificationModule := notification.NewModule(db,
-		notification.WithSMSSender(notification.NewConsoleSMSSender(nil)),
+		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(nil)),
 		notification.WithMailFrom("notifications@admin-test.example"),
 		notification.WithContactEmailIndexer(contactEmailIndexer),
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),

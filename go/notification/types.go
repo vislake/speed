@@ -47,10 +47,11 @@ const (
 	ChannelEmail = "email"
 
 	// ChannelSMS is delivery to the recipient's phone number. The transport
-	// is the host's SMS seam (authn ships console and HTTP senders, see
-	// go/authn/sms.go); for users of a tenant the number is identity data
-	// too. Messaging an external contact on either channel is governed by
-	// the consent ledger.
+	// is the host's SMS seam (the pkgcore seam go/authn's phone-login flow
+	// and this module's sms channel share, its console and HTTP senders in
+	// pkgcore's own root package); for users of a tenant the number is
+	// identity data too. Messaging an external contact on either channel is
+	// governed by the consent ledger.
 	ChannelSMS = "sms"
 )
 

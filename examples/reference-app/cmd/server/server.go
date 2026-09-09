@@ -2566,7 +2566,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// resolves identity per operation and never reads it from the request
 	// otherwise.
 	notificationModule := notification.NewModule(db,
-		notification.WithSMSSender(notification.NewConsoleSMSSender(smsOutput)),
+		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)),
 		notification.WithMailFrom("notifications@reference-app.example"),
 		notification.WithContactEmailIndexer(contactEmailIndexer),
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),

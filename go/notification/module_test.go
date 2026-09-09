@@ -72,7 +72,7 @@ func newHostRegistry(t *testing.T) *pkgcore.Registry {
 func testModuleOptions(t *testing.T) []Option {
 	t.Helper()
 	return []Option{
-		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
@@ -110,7 +110,7 @@ func TestModule_Register_RequiresSMSSender(t *testing.T) {
 func TestModule_Register_RequiresMailFrom(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db,
-		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
 		WithDeliveryQueue(&stubQueue{}),
@@ -131,7 +131,7 @@ func TestModule_Register_RequiresMailFrom(t *testing.T) {
 func TestModule_Register_RequiresEmailIndexer(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db,
-		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
 		WithDeliveryQueue(&stubQueue{}),
@@ -151,7 +151,7 @@ func TestModule_Register_RequiresEmailIndexer(t *testing.T) {
 func TestModule_Register_RequiresPhoneIndexer(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db,
-		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithDeliveryQueue(&stubQueue{}),
@@ -173,7 +173,7 @@ func TestModule_Register_RequiresPhoneIndexer(t *testing.T) {
 func TestModule_Register_RequiresDeliveryQueue(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db,
-		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
@@ -195,7 +195,7 @@ func TestModule_Register_RequiresDeliveryQueue(t *testing.T) {
 func TestModule_Register_RequiresUserAddressResolver(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db,
-		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),

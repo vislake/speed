@@ -246,7 +246,7 @@ func ExamplePreferenceService() {
 
 	registry := dbkit.NewMigrationRegistry()
 	module := notification.NewModule(db,
-		notification.WithSMSSender(notification.NewConsoleSMSSender(io.Discard)),
+		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		notification.WithMailFrom("notifications@example.com"),
 		notification.WithContactEmailIndexer(emailIndexer),
 		notification.WithContactPhoneIndexer(phoneIndexer),

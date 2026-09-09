@@ -323,7 +323,7 @@ func bootModule(t *testing.T, ctx context.Context, db *gorm.DB) (*notification.M
 
 	smsBuf := new(bytes.Buffer)
 	module := notification.NewModule(db,
-		notification.WithSMSSender(notification.NewConsoleSMSSender(smsBuf)),
+		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(smsBuf)),
 		notification.WithMailFrom(testMailFrom),
 		notification.WithContactEmailIndexer(emailIndexer(t)),
 		notification.WithContactPhoneIndexer(phoneIndexer(t)),

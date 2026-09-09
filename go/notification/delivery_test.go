@@ -102,11 +102,11 @@ var billReadyFixtureFS = fstest.MapFS{
 // semantics are only reachable through a failing Send).
 type recordingSMSSender struct {
 	mu       sync.Mutex
-	sent     []SMS
+	sent     []pkgcore.SMS
 	failWith error
 }
 
-func (s *recordingSMSSender) Send(_ context.Context, sms SMS) error {
+func (s *recordingSMSSender) Send(_ context.Context, sms pkgcore.SMS) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failWith != nil {
@@ -116,10 +116,10 @@ func (s *recordingSMSSender) Send(_ context.Context, sms SMS) error {
 	return nil
 }
 
-func (s *recordingSMSSender) messages() []SMS {
+func (s *recordingSMSSender) messages() []pkgcore.SMS {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]SMS(nil), s.sent...)
+	return append([]pkgcore.SMS(nil), s.sent...)
 }
 
 // deliveryEnv is one fully seam-ful delivery service: a fresh migrated

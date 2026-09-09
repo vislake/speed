@@ -329,7 +329,7 @@ func (r *VerifiedContactRepository) ListForTenant(ctx context.Context) ([]Verifi
 // interface (see module.go).
 type ContactService struct {
 	repo         *VerifiedContactRepository
-	sms          SMSSender
+	sms          pkgcore.SMSSender
 	mailFrom     string
 	emailIndexer *dbkit.BlindIndexer
 	phoneIndexer *dbkit.BlindIndexer
@@ -874,7 +874,7 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact)
 	// wraps.
 	switch contact.Channel {
 	case ChannelSMS:
-		if err := s.sms.Send(ctx, SMS{To: contact.Address, Text: body}); err != nil {
+		if err := s.sms.Send(ctx, pkgcore.SMS{To: contact.Address, Text: body}); err != nil {
 			return ErrContactCodeDeliveryFailed.WithCause(classifyTransportCause(err))
 		}
 	case ChannelEmail:

@@ -128,7 +128,7 @@ func newHandlerEnv(t *testing.T) *handlerEnv {
 	env.prefs = NewPreferenceService(db)
 	env.prefs.attachTypes(fixtureRegistrar{types: fixtureTypes})
 	env.contacts = NewContactService(db)
-	env.contacts.sms = NewConsoleSMSSender(env.smsBuf)
+	env.contacts.sms = pkgcore.NewConsoleSMSSender(env.smsBuf)
 	env.contacts.mailFrom = testMailFrom
 	env.contacts.emailIndexer = testEmailIndexer(t)
 	env.contacts.phoneIndexer = testPhoneIndexer(t)

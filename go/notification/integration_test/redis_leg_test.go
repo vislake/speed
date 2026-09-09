@@ -199,7 +199,7 @@ func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *eventbusre
 
 	queue := &stubQueue{}
 	module := notification.NewModule(db,
-		notification.WithSMSSender(notification.NewConsoleSMSSender(io.Discard)),
+		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		notification.WithMailFrom(testMailFrom),
 		notification.WithContactEmailIndexer(emailIndexer(t)),
 		notification.WithContactPhoneIndexer(phoneIndexer(t)),

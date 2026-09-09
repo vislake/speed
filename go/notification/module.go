@@ -110,7 +110,7 @@ type Module struct {
 	// ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired,
 	// ErrDeliveryQueueRequired, ErrUserAddressResolverRequired),
 	// imitating org's Register-time validation of its own required seams.
-	sms          SMSSender
+	sms          pkgcore.SMSSender
 	mailFrom     string
 	emailIndexer *dbkit.BlindIndexer
 	phoneIndexer *dbkit.BlindIndexer
@@ -148,10 +148,12 @@ type Option func(*Module)
 // contact's channel is sms. It is REQUIRED: Register returns
 // ErrSMSSenderRequired without one, so a module with no sender fails at
 // boot rather than discover the gap on the first code a patient needs.
-// NewConsoleSMSSender is the zero-external-dependency implementation (see
-// sms.go); a distributed host may hand over any sender satisfying the
-// structural interface, the console sender's twin among authn's own.
-func WithSMSSender(sender SMSSender) Option {
+// pkgcore.NewConsoleSMSSender is the zero-external-dependency
+// implementation (pkgcore/sms.go); a distributed host may hand over any
+// sender satisfying the pkgcore seam -- pkgcore.NewHTTPSMSSender or one of
+// the pkgcore/sms carrier adapters -- which is exactly what go/authn's own
+// phone-login flow receives.
+func WithSMSSender(sender pkgcore.SMSSender) Option {
 	return func(m *Module) { m.sms = sender }
 }
 
