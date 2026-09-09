@@ -16,8 +16,8 @@ info:
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
-    one tenancy.Middleware already resolved from the request, per the
-    multi-tenant isolation rule.
+    one tenancy.Middleware already resolved from the request -- never a
+    caller-supplied value.
 
     Both halves live under ONE mount path (/api/v1/integration): /apikeys
     for the four API-key operations and /webhooks for the six webhook
@@ -30,8 +30,7 @@ info:
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section).
+    merged document and the generated @speed/api-sdk.
   version: 0.0.0
 paths:
   /api/v1/integration/apikeys:
@@ -719,9 +718,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text -- a client resolves code through
-        its own i18n catalog, populated from this module's Locales()
-        resources for the codes documented in its error index.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

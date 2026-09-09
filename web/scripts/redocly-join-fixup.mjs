@@ -47,7 +47,7 @@ const DESCRIPTION =
     '`task api:merge` and committed. Each ' +
     'module fragment stays authoritative for its own operations; this merged ' +
     "document is the frontend SDK's generation input and the linted " +
-    'whole-surface view (docs/internal/21-api-contract.md).'
+    'whole-surface view.'
 
 const defaultTarget = fileURLToPath(
   new URL('../../contracts/speed.yaml', import.meta.url),

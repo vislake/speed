@@ -2,21 +2,19 @@ openapi: 3.0.3
 info:
   title: admin
   description: >-
-    The operations-console backend. Round 1 of docs/internal/23-admin.md
-    shipped the tenant ledger (D3, record-only), the impersonation pipeline
-    (D5), cross-tenant user search (D6) and the audit-query HTTP shell (D7's
-    read side). Round 2 adds D4's enforcement half (PATCH .../tenants/{id}
-    now takes effect through tenancy.WithTenantStatusResolver, no new
-    route of its own), role management wrapping rbac.Service (D8: GET/POST
-    .../roles, POST .../roles/{id}/bindings), the cross-tenant usage/billing
-    dashboard (D9: GET .../usage-summary, stitched from metering's and
-    billing's own per-tenant methods, no new aggregate table), notification
-    send-record search (D10: GET .../notifications/send-records) and D7's
-    export leg (POST .../audit-events/export, asynchronous through go/jobs,
-    delivered through go/sharing via compliance.ExportService). This
-    fragment follows the operationId (admin_<action><Resource>) and
-    schema-name (Admin<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. Regenerating
+    The operations-console backend: the tenant ledger (list/create/get/
+    rename/suspend/resume -- record-only, whose suspension enforcement
+    takes effect through tenancy's status-resolution seam, never a route
+    of its own), the impersonation pipeline (list/start/end), cross-tenant
+    user search with membership listing, audit-event query with an
+    asynchronous export (a go/jobs task delivered as a short-lived
+    go/sharing link), role management wrapping rbac.Service (declared-
+    permission listing, role definition, role binding), a cross-tenant
+    usage/billing dashboard stitched from metering's and billing's own
+    per-tenant methods (no new aggregate table), and cross-tenant
+    notification send-record search. This fragment follows the operationId
+    (admin_<action><Resource>) and schema-name (Admin<Type>) naming
+    conventions. Regenerating
     admin-server.gen.go (in this directory) from this file with oapi-codegen
     pinned at v2.8.0 uses this directory's own oapi-codegen.yaml -- see that
     file for the exact command.
@@ -48,8 +46,7 @@ info:
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section).
+    merged document and the generated @speed/api-sdk.
   version: 0.0.0
 paths:
   /api/v1/admin/tenants:
@@ -388,8 +385,7 @@ paths:
         delivers it as a short-lived, single-view go/sharing link. This is
         necessarily asynchronous -- the handler enqueues one go/jobs task
         and returns immediately with its id, never running Export
-        synchronously inside the request (root CLAUDE.md's asynchronous-
-        work discipline).
+        synchronously inside the request.
       requestBody:
         required: true
         content:
@@ -925,8 +921,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md).
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

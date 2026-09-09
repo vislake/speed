@@ -4,25 +4,22 @@ info:
   description: >-
     Object metadata and its derivatives -- the rows that describe media
     bytes living in the host's ObjectStore under keys storage builds and
-    never exposes (see the module's own AGENTS.md). This fragment follows
-    the operationId (storage_<verb><Resource>) and schema-name
-    (Storage<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    never exposes. This fragment follows the operationId
+    (storage_<verb><Resource>) and schema-name (Storage<Type>) naming
+    conventions. task api:gen
     regenerates storage-server.gen.go (in this directory) from this file,
     with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
-    one tenancy.Middleware already resolved from the request
-    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
-    isolation rule).
+    one tenancy.Middleware already resolved from the request -- never a
+    caller-supplied value.
 
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section).
+    merged document and the generated @speed/api-sdk.
   version: 0.0.0
 paths:
   /api/v1/storage/objects:
@@ -469,11 +466,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog, populated from this module's
-        Locales() resources for the codes documented in AGENTS.md's error
-        index.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

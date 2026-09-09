@@ -6,29 +6,27 @@ info:
     notification module: the tenant's in-app message inbox, the
     notification-type directory it renders from, per-type channel
     preferences, and the verified contacts (email and SMS addresses a
-    tenant may send to -- the module's double opt-in consent flow, per the
-    root CLAUDE.md security rule that no message goes to an unverified
-    external address). This fragment follows the operationId
+    tenant may send to -- the module's double opt-in consent flow, under
+    which no message ever goes to an address whose consent is not
+    verified). This fragment follows the operationId
     (notification_<action><Resource>) and schema-name
-    (Notification<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    (Notification<Type>) naming conventions. task api:gen
     regenerates notification-server.gen.go (in this directory) from this
     file, with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
-    one tenancy.Middleware already resolved from the request
-    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
-    isolation rule). Recipients and addresses are likewise never named by
+    one tenancy.Middleware already resolved from the request -- never a
+    caller-supplied value. Recipients and addresses are likewise never named by
     the client: the caller's identity comes from the host-injected subject
     seam (handler.go's SubjectResolver, the org seam pattern), and every
     query is scoped through it. Inbox rows and preferences are the calling
     user's own -- a message id that belongs to another user answers 404,
     never another user's data -- while contacts are the tenant's
     external-recipient roster, shared by the tenant's identified users:
-    an external contact exists only inside the tenant that verified it
-    (docs/internal/07-platform-services.md), so the contact surface is
+    an external contact exists only inside the tenant that verified it,
+    so the contact surface is
     tenant-scoped like the rest of the module's tables, gated on an
     identified caller, never on per-user ownership.
 
@@ -746,10 +744,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog, populated from this module's
-        Locales() resources for the codes documented in its error index.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

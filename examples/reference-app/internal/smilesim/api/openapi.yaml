@@ -15,11 +15,10 @@ info:
     This fragment is the app's own API, not platform API: it serves the
     app-owned merged document examples/reference-app/web/app-openapi.yaml
     and the app-owned SDK the app's web host imports (src/app-api) --
-    never the platform merge contracts/speed.yaml or @speed/api-sdk (the
-    split is recorded in docs/internal/21-api-contract.md). This
+    never the platform merge contracts/speed.yaml or @speed/api-sdk. This
     fragment follows the operationId
     (<module>_<action><Resource>) and schema-name (<Module><Type>)
-    conventions from docs/internal/21-api-contract.md; task api:gen:app
+    naming conventions; task api:gen:app
     regenerates smilesim-server.gen.go (in this directory) from this
     file, with oapi-codegen pinned at v2.8.0.
   version: 0.0.0
@@ -42,7 +41,7 @@ paths:
         notification once the job reaches a terminal status. There is
         deliberately no tenant_id field anywhere on this request: the
         tenant is the one tenancy.Middleware already resolved into the
-        request context (root CLAUDE.md's multi-tenant isolation rule).
+        request context -- never a caller-supplied value.
       requestBody:
         required: true
         content:
@@ -455,9 +454,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

@@ -2,24 +2,22 @@ openapi: 3.0.3
 info:
   title: pki
   description: >-
-    Round 3 of go/pki's HTTP surface: revocation, CRL fetch and JWKS
-    export -- the operations docs/internal/22-pki.md's "revocation" and
-    "JWKS export" sections describe. Rounds 1/2's Go-only surface (CA/
-    certificate issuance, EnsurePurpose/ActiveSigner/VerificationKeys)
-    stays Go-only; this fragment covers only what round 3 adds. This
-    fragment follows the operationId (pki_<verb><Resource>) and
-    schema-name (Pki<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    go/pki's HTTP surface: signing-key and certificate revocation, CRL
+    fetch and the two JWKS exports. The module's issuance and key-lifecycle
+    operations (CA/certificate issuance, EnsurePurpose/ActiveSigner/
+    VerificationKeys) stay Go-only Service calls, not HTTP; this fragment
+    is the module's entire HTTP surface. This fragment follows the
+    operationId (pki_<verb><Resource>) and
+    schema-name (Pki<Type>) naming conventions. task api:gen
     regenerates pki-server.gen.go (in this directory) from this file, with
     oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
-    one tenancy.Middleware already resolved from the request
-    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
-    isolation rule) -- read only by the certificate-revoke operation, since
-    pki_certificates is this module's one tenant-scoped table. The
+    one tenancy.Middleware already resolved from the request -- never a
+    caller-supplied value -- read only by the certificate-revoke operation,
+    since pki_certificates is this module's one tenant-scoped table. The
     signing-key revoke, JWKS and CRL operations read platform data
     (pki_signing_keys, pki_authorities) that has no tenant at all; the
     caller's tenant, if any, plays no part in them.
@@ -27,8 +25,7 @@ info:
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section). The
+    merged document and the generated @speed/api-sdk. The
     revoke-certificate and CRL-fetch operations have an in-workspace HTTP
     caller (the reference app's AI-output attestation flow,
     flowtests/attestation_flow_test.go, drives both over the wire; the signing-key
@@ -323,11 +320,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog, populated from this module's
-        Locales() resources for the codes documented in AGENTS.md's error
-        index.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

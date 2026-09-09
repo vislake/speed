@@ -38,7 +38,7 @@ info:
     surface, ungated by this fragment itself -- Handler performs no
     authorization of its own, reading the tenant from request context
     (tenancy.Middleware) exactly like every other module's fragment in this
-    codebase (the multi-tenant isolation rule). A host is
+    codebase. A host is
     expected to run these five operations downstream of tenancy.Middleware
     (never allowlisted) and to gate them on this module's own
     sharing:read/sharing:create/sharing:revoke permissions through its
@@ -52,8 +52,7 @@ info:
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section).
+    merged document and the generated @speed/api-sdk.
   version: 0.0.0
 paths:
   /api/v1/sharing/access:
@@ -535,12 +534,19 @@ components:
             $ref: '#/components/schemas/SharingAccessLogEntry'
     SharingError:
       type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       required:
         - code
       properties:
         code:
           type: string
-          description: The structured error code, one of this module's error index entries.
+          description: The structured code naming this failure.
         params:
           type: object
           additionalProperties: true

@@ -5,15 +5,13 @@ info:
     Placeholder tenant-scoped resource module for examples/reference-app,
     demonstrating end-to-end usage of the speed module stack (pkgcore,
     dbkit, tenancy). Standing in for real reference-app business endpoints
-    that land in later milestones; see the module's own doc.go. This
+    that land in later milestones. This
     fragment follows the operationId (<module>_<action><Resource>) and
-    schema-name (<Module><Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. This fragment
+    schema-name (<Module><Type>) naming conventions. This fragment
     is the app's own API, not platform API: it serves the app-owned
     merged document examples/reference-app/web/app-openapi.yaml and the
     app-owned SDK the app's web host imports (src/app-api) -- never the
-    platform merge contracts/speed.yaml or @speed/api-sdk (the split is
-    recorded in docs/internal/21-api-contract.md). task api:gen:app
+    platform merge contracts/speed.yaml or @speed/api-sdk. task api:gen:app
     regenerates notes-server.gen.go (in this directory) from this file
     with oapi-codegen pinned at v2.8.0, and joins the app's three
     fragments with redocly pinned at 2.51.1.
@@ -27,7 +25,8 @@ paths:
       description: >-
         The tenant is always the one tenancy.Middleware already resolved
         from the request; there is no tenant_id field anywhere on this
-        request, by design (root CLAUDE.md's multi-tenant isolation rule).
+        request -- the tenant comes from the resolved request context,
+        never from anything the caller sends.
       requestBody:
         required: true
         content:
@@ -68,8 +67,9 @@ paths:
       description: >-
         The tenant is always the one tenancy.Middleware already resolved
         from the request, and the note id names a note belonging to that
-        tenant alone -- never a tenant_id request field, by design (root
-        CLAUDE.md's multi-tenant isolation rule). The delete is a
+        tenant alone -- never a tenant_id request field: the tenant comes
+        from the resolved request context, never from anything the caller
+        sends. The delete is a
         mark-delete (dbkit.SoftDeletable): the row stays in place with
         deleted_at/deleted_by set, hidden from the list operation, and
         restorable through notes_restoreNote until a retention sweep
@@ -180,10 +180,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog, populated from this module's
-        Locales() resources for the codes documented in its error index.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

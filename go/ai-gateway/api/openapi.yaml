@@ -43,8 +43,7 @@ info:
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section).
+    merged document and the generated @speed/api-sdk.
   version: 0.0.0
 paths:
   /api/v1/ai-gateway/credentials/{provider}:
@@ -214,12 +213,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2)
-        -- a client resolves code through its own i18n catalog. This module
-        renders no user-facing text of its own (go/ai-gateway/module.go's
-        Locales doc comment), so a client resolves these codes through its
-        own catalog exactly as it does for every other structured error
-        this module returns from its non-HTTP surface.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

@@ -5,16 +5,16 @@ info:
     authn's HTTP surface: registration, password and phone-SMS sign-in,
     token refresh and sign-out, social and enterprise single sign-on,
     two-factor enrollment and step-up, and the self-service
-    device/session/login-history endpoints (docs/internal/05-identity-and-access.md).
+    device/session/login-history endpoints.
     This fragment follows the operationId (<module>_<action><Resource>) and
-    schema-name (<Module><Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    schema-name (<Module><Type>) naming conventions. task api:gen
     regenerates authn-server.gen.go (in this directory) from this file, with
     oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml.
 
     There is deliberately no tenant_id field anywhere on any request in this
-    file (root CLAUDE.md's multi-tenant isolation rule): where a request
+    file -- the tenant always comes from the caller's verified identity,
+    resolved server-side, never from a request field: where a request
     NAMES a tenant at all (login, phone-SMS login, social callback, tenant
     switch) it is a REQUEST for that tenant's first access token, never a
     grant -- go/authn/service.go's resolveTenant re-verifies membership
@@ -850,10 +850,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2) --
-        a client resolves code through its own i18n catalog, populated
-        from this module's Locales() resources for the codes documented on
-        each operation above.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string

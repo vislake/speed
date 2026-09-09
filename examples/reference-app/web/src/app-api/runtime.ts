@@ -13,9 +13,8 @@
  * operations -- travel through that one binding. A second module-level
  * slot would have to be kept in sync at every bind site (the bootstrap
  * and every test rig), a split with no payoff in this single-process
- * host. When the app-owned flow is productized (saasctl openapi
- * generate, recorded in docs/internal/24-deferral-roadmap.md), the
- * seam decision is re-made for the generated project's shape.
+ * host. When the app-owned flow is productized, the seam decision is
+ * re-made for the generated project's shape.
  *
  * Nothing here may be edited by regeneration: orval's output paths
  * cover only src/app-api/index.ts, never this file. The nodenext fixup

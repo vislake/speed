@@ -12,16 +12,14 @@ info:
     ledger row carrying its reserve/confirm/refund classification --
     never a silent balance change. This fragment follows the
     operationId (billing_<verb><Resource>) and schema-name
-    (Billing<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    (Billing<Type>) naming conventions. task api:gen
     regenerates billing-server.gen.go (in this directory) from this
     file, with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
-    one tenancy.Middleware already resolved from the request
-    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
-    isolation rule).
+    one tenancy.Middleware already resolved from the request -- never a
+    caller-supplied value.
 
     READ-ONLY BY DESIGN THIS ROUND: every operation below is a GET, and
     that is the whole surface. Credit consumption in this codebase happens
@@ -38,7 +36,7 @@ info:
     invoice half is read-only for the same reason, in the same shape:
     Invoice rows are written only by the module's plain-Go lifecycle --
     invoice.go's CreateInvoice/MarkPaid/Void, which as of this round
-    still has no caller at all, recorded in go/billing/AGENTS.md -- never
+    still has no caller at all -- never
     over HTTP, so there is no invoice write journey whose endpoint this
     surface must carry, and what a tenant-facing invoice page genuinely
     needs is the read side this round adds. A later round that builds a
@@ -50,8 +48,7 @@ info:
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
-    merged document and the generated @speed/api-sdk (docs/internal/
-    21-api-contract.md's spec-organization and merging section).
+    merged document and the generated @speed/api-sdk.
   version: 0.0.0
 paths:
   /api/v1/billing/credits/balance:
@@ -102,8 +99,7 @@ paths:
         row that silently disappears or a balance-only change with no
         ledger trace. The window is served from the module's full
         newest-first listing; a keyset-paginated read over the whole
-        ledger is future work (see go/billing/AGENTS.md's Known
-        limitations) -- a credit view needs the recent rows, and the
+        ledger is future work -- a credit view needs the recent rows, and the
         ledger itself is reconstructable in full service-side today.
       parameters:
         - name: limit
@@ -155,8 +151,7 @@ paths:
         the invoice page renders an empty state rather than a
         missing-resource refusal. The window is served from the
         module's full newest-first listing; a keyset-paginated read
-        over a whole history is future work (see go/billing/AGENTS.md's
-        Known limitations) -- an invoice page needs the recent
+        over a whole history is future work -- an invoice page needs the recent
         documents, and the full history stays reconstructable
         service-side today.
       parameters:
@@ -425,11 +420,11 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog, populated from this module's
-        Locales() resources for the codes documented in AGENTS.md's error
-        index.
+        returns instead of localized text: code is a stable
+        machine-readable identifier naming exactly one failure, and
+        params carries the structured per-code details when the failure
+        has any. The server never renders a message -- a client maps
+        each code to its own locale's text.
       properties:
         code:
           type: string
