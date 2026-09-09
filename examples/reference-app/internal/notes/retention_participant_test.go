@@ -124,9 +124,9 @@ func TestRetentionParticipant_Sweep_HardDeletesSoftDeletedNotesPastTheCutoff(t *
 	// (only its older sibling was reaped) -- the raw row count confirms
 	// which row actually went.
 	var rawCount int64
-	if err := repo.db.WithContext(context.Background()).
-		Raw(`SELECT COUNT(*) FROM notes`).Scan(&rawCount).Error; err != nil {
-		t.Fatalf("raw notes count after Sweep: %v", err)
+	if countErr := repo.db.WithContext(context.Background()).
+		Raw(`SELECT COUNT(*) FROM notes`).Scan(&rawCount).Error; countErr != nil {
+		t.Fatalf("raw notes count after Sweep: %v", countErr)
 	}
 	if rawCount != 2 {
 		t.Fatalf("raw notes count after Sweep = %d, want 2 -- live + recently deleted, the aged note physically gone", rawCount)
@@ -204,9 +204,9 @@ func TestRetentionParticipant_Erase_RemovesEveryNoteOneCreatorOwns(t *testing.T)
 	}
 
 	var rawCount int64
-	if err := repo.db.WithContext(context.Background()).
-		Raw(`SELECT COUNT(*) FROM notes`).Scan(&rawCount).Error; err != nil {
-		t.Fatalf("raw notes count after Erase: %v", err)
+	if countErr := repo.db.WithContext(context.Background()).
+		Raw(`SELECT COUNT(*) FROM notes`).Scan(&rawCount).Error; countErr != nil {
+		t.Fatalf("raw notes count after Erase: %v", countErr)
 	}
 	if rawCount != 0 {
 		t.Fatalf("raw notes count after Erase = %d, want 0 -- the rows must be physically gone, not marked", rawCount)
@@ -298,8 +298,8 @@ func TestRetentionParticipant_Export_ReturnsTheTenantsLiveNotes(t *testing.T) {
 	// Another tenant's rows stay out of this tenant's export.
 	otherTenant := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("retention-test-other"))
 	other := &Note{ID: uuid.NewString(), Text: "another tenant's note", CreatorUserID: retentionTestCreator}
-	if err := repo.Create(otherTenant, other); err != nil {
-		t.Fatalf("Create(other tenant): %v", err)
+	if createErr := repo.Create(otherTenant, other); createErr != nil {
+		t.Fatalf("Create(other tenant): %v", createErr)
 	}
 	exported, err = participant.Export(ctx, pkgcore.TenantID(retentionTestTenant))
 	if err != nil {

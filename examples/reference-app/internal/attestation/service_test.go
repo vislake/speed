@@ -380,8 +380,8 @@ func TestService_EnsureAuthorityChain_BootstrapsOnceAndIsIdempotent(t *testing.T
 	}
 
 	// A second boot must find both rows by subject and change nothing.
-	if err := fx.svc.EnsureAuthorityChain(context.Background()); err != nil {
-		t.Fatalf("second EnsureAuthorityChain: %v", err)
+	if bootErr := fx.svc.EnsureAuthorityChain(context.Background()); bootErr != nil {
+		t.Fatalf("second EnsureAuthorityChain: %v", bootErr)
 	}
 	all, err = fx.authorities.ListAll(context.Background())
 	if err != nil {
@@ -455,14 +455,14 @@ func TestService_EnsureAttestedContent_FirstAttestationIssuesSignsAndStores(t *t
 
 	// The gate over the same bytes passes: leaf chain verified, signature
 	// over the stored message verified, live digest matches.
-	if err := fx.svc.CheckContent(ctx, "obj-1", content); err != nil {
-		t.Fatalf("CheckContent over the attested content: %v", err)
+	if checkErr := fx.svc.CheckContent(ctx, "obj-1", content); checkErr != nil {
+		t.Fatalf("CheckContent over the attested content: %v", checkErr)
 	}
 
 	// A repeated observation must not mint a second certificate or replace
 	// the row.
-	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {
-		t.Fatalf("second EnsureAttestedContent: %v", err)
+	if repeatErr := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); repeatErr != nil {
+		t.Fatalf("second EnsureAttestedContent: %v", repeatErr)
 	}
 	row2, ok, err := fx.store.getByObject(ctx, "obj-1")
 	if err != nil || !ok {
@@ -559,16 +559,16 @@ func TestService_EnsureAttestedContent_RevokedCertificate_ReattestsUnderAFreshOn
 	}
 	originalCertificate := row.CertificateID
 
-	if revoked, err := fx.chain.RevokeCertificate(ctx, originalCertificate, "test revocation"); err != nil || !revoked {
-		t.Fatalf("RevokeCertificate = (revoked %v, err %v), want (true, nil)", revoked, err)
+	if revoked, revokeErr := fx.chain.RevokeCertificate(ctx, originalCertificate, "test revocation"); revokeErr != nil || !revoked {
+		t.Fatalf("RevokeCertificate = (revoked %v, err %v), want (true, nil)", revoked, revokeErr)
 	}
 	// The gate now refuses: chain verification fails for a revoked leaf.
-	if err := fx.svc.CheckContent(ctx, "obj-1", content); err == nil {
+	if checkErr := fx.svc.CheckContent(ctx, "obj-1", content); checkErr == nil {
 		t.Fatal("CheckContent after revocation succeeded, want the revoked certificate's output refused")
 	}
 
-	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {
-		t.Fatalf("EnsureAttestedContent after revocation: %v", err)
+	if reattestErr := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); reattestErr != nil {
+		t.Fatalf("EnsureAttestedContent after revocation: %v", reattestErr)
 	}
 	row, _, err = fx.store.getByObject(ctx, "obj-1")
 	if err != nil {
@@ -752,8 +752,8 @@ func TestService_CertificateUsable_Decisions(t *testing.T) {
 	}
 
 	content := []byte("attested bytes")
-	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {
-		t.Fatalf("EnsureAttestedContent: %v", err)
+	if attestErr := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); attestErr != nil {
+		t.Fatalf("EnsureAttestedContent: %v", attestErr)
 	}
 	row, _, err := fx.store.getByObject(ctx, "obj-1")
 	if err != nil {
@@ -768,8 +768,8 @@ func TestService_CertificateUsable_Decisions(t *testing.T) {
 		t.Error("certificateUsable(active) = false, want true")
 	}
 
-	if _, err := fx.chain.RevokeCertificate(ctx, row.CertificateID, "test revocation"); err != nil {
-		t.Fatalf("RevokeCertificate: %v", err)
+	if _, revokeErr := fx.chain.RevokeCertificate(ctx, row.CertificateID, "test revocation"); revokeErr != nil {
+		t.Fatalf("RevokeCertificate: %v", revokeErr)
 	}
 	usable, err = fx.svc.certificateUsable(ctx, row.CertificateID)
 	if err != nil {
@@ -805,9 +805,9 @@ func TestService_EnsureAttestedContent_MissingCertificateRow_RepairsUnderAFreshO
 	}
 	originalCertificate := row.CertificateID
 
-	if err := fx.store.db.WithContext(context.Background()).
-		Exec("DELETE FROM pki_certificates WHERE id = ?", originalCertificate).Error; err != nil {
-		t.Fatalf("raw delete of the certificate row: %v", err)
+	if deleteErr := fx.store.db.WithContext(context.Background()).
+		Exec("DELETE FROM pki_certificates WHERE id = ?", originalCertificate).Error; deleteErr != nil {
+		t.Fatalf("raw delete of the certificate row: %v", deleteErr)
 	}
 
 	// The decision read must answer "unusable" -- not an error -- and the
@@ -820,8 +820,8 @@ func TestService_EnsureAttestedContent_MissingCertificateRow_RepairsUnderAFreshO
 		t.Fatal("certificateUsable(missing row) = true, want false")
 	}
 
-	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {
-		t.Fatalf("EnsureAttestedContent with the certificate row gone: %v", err)
+	if reattestErr := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); reattestErr != nil {
+		t.Fatalf("EnsureAttestedContent with the certificate row gone: %v", reattestErr)
 	}
 	row, _, err = fx.store.getByObject(ctx, "obj-1")
 	if err != nil {
