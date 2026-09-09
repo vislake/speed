@@ -264,30 +264,26 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, billing, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, all thirteen fragments -- the ten platform-module fragments admin, ai-gateway, authn, billing, integration, notification, org, pki, sharing and storage plus the reference app's own notes, cases and smilesim).
+    desc: Regenerate the generated API surface of every platform module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for org, storage, authn, notification, billing, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK from the merged document (orval -> @speed/api-sdk, the ten platform-module fragments admin, ai-gateway, authn, billing, integration, notification, org, pki, sharing and storage). The reference app's own notes, cases and smilesim fragments regenerate through their own app-owned leg -- task api:gen:app below, the consumer-shaped twin of this pipeline (docs/internal/21-api-contract.md records the split).
     # The backend half of the contract-change flow (edit the spec,
     # regenerate, compile failures reveal every handler to fix) is real
     # for the surfaces that ship a fragment: this task runs oapi-codegen,
-    # pinned at v2.8.0, over each module's own api/openapi.yaml with that
-    # directory's own oapi-codegen.yaml -- rewriting the reference app's
-    # notes, cases and smilesim generated artifacts
-    # (examples/reference-app/internal/{notes,cases,smilesim}/api, the
-    # latter two being the app's own case-domain and smile-simulation
-    # surfaces, whose interfaces the cmd/server handlers implement -- see
-    # cmd/server/cases.go and cmd/server/smilesim.go's compile-time
-    # assertions), then the module artifacts go/org, go/storage, go/authn,
-    # go/notification, go/billing, go/sharing, go/pki, go/admin,
-    # go/integration and go/ai-gateway (each under its own api/
-    # directory). Each generated ServerInterface's growth is what makes an
-    # un-updated handler stop compiling (the compile-time assertions live
-    # in the handlers, listed in .github/workflows/api-contract.yml's own
-    # header).
+    # pinned at v2.8.0, over each platform module's own api/openapi.yaml
+    # with that directory's own oapi-codegen.yaml -- go/org, go/storage,
+    # go/authn, go/notification, go/billing, go/sharing, go/pki,
+    # go/admin, go/integration and go/ai-gateway (each under its own
+    # api/ directory). Each generated ServerInterface's growth is what
+    # makes an un-updated handler stop compiling (the compile-time
+    # assertions live in the handlers, listed in
+    # .github/workflows/api-contract.yml's own header). The reference
+    # app's own notes, cases and smilesim fragments are not here: the
+    # app owns those three backend surfaces, and task api:gen:app
+    # regenerates them alongside the app-owned merged document and SDK.
     #
     # The frontend half of the api:gen promise is live for every fragment
     # in the merged document: the api:merge dependency below joins every
     # platform module's fragment -- admin, ai-gateway, authn, billing,
-    # integration, notification, org, pki, sharing and storage -- plus the
-    # reference app's own notes, cases and smilesim fragments into
+    # integration, notification, org, pki, sharing and storage -- into
     # contracts/speed.yaml, and the orval leg below regenerates the
     # @speed/api-sdk package from that merged document -- orval
     # pinned at 8.17.0 and run from web/ via pnpm dlx (orval is never a
@@ -299,9 +295,7 @@ tasks:
     # not rot from being uncalled, and whether a surface has an
     # in-workspace web consumer is a consumption-proof question, not a
     # merge-membership criterion (docs/internal/21-api-contract.md). The
-    # cases and smilesim fragments joined because they are the reference
-    # app's own case-domain and smile-simulation surfaces, the operations
-    # the P3 web UI calls. The redocly
+    # redocly
     # merge of the fragments into contracts/speed.yaml, and its spec
     # lint, live in the api:merge task below -- api:gen DEPENDS on
     # api:merge (deps above), because the merged document is the frontend
@@ -319,18 +313,6 @@ tasks:
     deps:
       - api:merge
     cmds:
-      - |
-        cd "{{.APP_DIR}}/internal/notes/api" && \
-        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
-          -config oapi-codegen.yaml openapi.yaml
-      - |
-        cd "{{.APP_DIR}}/internal/cases/api" && \
-        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
-          -config oapi-codegen.yaml openapi.yaml
-      - |
-        cd "{{.APP_DIR}}/internal/smilesim/api" && \
-        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
-          -config oapi-codegen.yaml openapi.yaml
       - |
         cd go/org/api && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
@@ -377,13 +359,16 @@ tasks:
           -config oapi-codegen.yaml openapi.yaml
 
   api:merge:
-    desc: Merge every module's OpenAPI fragment into contracts/speed.yaml, stamp its info block, and lint the result against redocly.yaml's naming-convention rules.
-    # Each module fragment still generates its own backend artifacts
-    # independently, but the MERGED document is a real release artifact
-    # (contracts/speed.yaml, committed) joining the ten platform-module
-    # fragments (admin, ai-gateway, authn,
-    # billing, integration, notification, org, pki, sharing and storage)
-    # plus the reference app's own three (notes, cases and smilesim). It
+    desc: Merge every platform module's OpenAPI fragment into contracts/speed.yaml, stamp its info block, and lint the result against redocly.yaml's naming-convention rules.
+    # Each platform module fragment still generates its own backend
+    # artifacts independently, but the MERGED document is a real release
+    # artifact (contracts/speed.yaml, committed) joining the ten
+    # platform-module fragments (admin, ai-gateway, authn, billing,
+    # integration, notification, org, pki, sharing and storage). The
+    # reference app's own notes, cases and smilesim fragments are not
+    # members: they join the app's own merged document through task
+    # api:gen:app below (the app-owned flow; docs/internal/
+    # 21-api-contract.md records the split). The merged document
     # is also the frontend leg's input: api:gen depends
     # on this task (see above), so a fragment edit regenerates through a
     # fresh merge rather than a stale committed speed.yaml. The merge
@@ -399,16 +384,13 @@ tasks:
     # lint the deterministic stamp web/scripts/redocly-join-fixup.mjs
     # rewrites title and description to the application level -- without
     # it the merged document, and the generated SDK's "Source:" header,
-    # would carry notes' title and a description claiming the merge is
+    # would carry authn's title and a description claiming the merge is
     # still future work. Keep the commands here in lockstep with
     # .github/workflows/api-contract.yml's merge steps.
     cmds:
       - mkdir -p contracts
       - >-
         pnpm --package=@redocly/cli@2.51.1 dlx redocly join
-        examples/reference-app/internal/notes/api/openapi.yaml
-        examples/reference-app/internal/cases/api/openapi.yaml
-        examples/reference-app/internal/smilesim/api/openapi.yaml
         go/authn/api/openapi.yaml
         go/notification/api/openapi.yaml
         go/billing/api/openapi.yaml
@@ -422,6 +404,68 @@ tasks:
         -o contracts/speed.yaml
       - node web/scripts/redocly-join-fixup.mjs
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint contracts/speed.yaml --config redocly.yaml
+
+  api:gen:app:
+    desc: Regenerate the reference app's OWN API surface -- its three backend fragments (oapi-codegen), the app-owned merged document (redocly join of notes/cases/smilesim into the app's app-openapi.yaml) and the app-owned frontend SDK (orval into examples/reference-app/web/src/app-api).
+    # The reference app is the consumer-shaped template this repository
+    # ships: its three fragments (examples/reference-app/internal/
+    # {notes,cases,smilesim}/api) are the app's own API, not platform
+    # API, and they regenerate through this app-owned leg -- the twin of
+    # the platform pipeline above, run for the app's own merged document
+    # and SDK (docs/internal/21-api-contract.md's app-owned flow
+    # section). A delivered consumer project owns a leg of this shape
+    # for its own fragments; this task is its in-repo seed.
+    #
+    # The leg regenerates, in order:
+    #   1. the three backend fragments' committed <name>-server.gen.go
+    #      artifacts (pinned oapi-codegen v2.8.0, run from each
+    #      fragment's own directory exactly like the platform legs);
+    #   2. the app-owned merged document (examples/reference-app/web/
+    #      app-openapi.yaml) -- the pinned redocly 2.51.1 `join` of the
+    #      three fragments, the deterministic
+    #      web/scripts/redocly-join-fixup.mjs info stamp (title and
+    #      description passed explicitly; without the stamp the joined
+    #      document would carry the notes fragment's own title), and the
+    #      naming-convention lint under redocly.yaml;
+    #   3. the app-owned SDK -- pinned orval 8.17.0 from the app's own
+    #      orval.config.ts (examples/reference-app/web/orval.config.ts),
+    #      followed by the shared nodenext fixup
+    #      web/scripts/orval-nodenext-fixup.mjs over the app's generated
+    #      entry and seam.
+    #
+    # The generated SDK entry (examples/reference-app/web/src/app-api/
+    # index.ts) is committed and consistency-gated by the porcelain gate
+    # of full-check.yml's reference-app job, which runs these same
+    # commands -- keep the two in lockstep. The app web host imports
+    # this app-local SDK for its own operations, and the platform
+    # @speed/api-sdk for platform operations, both riding the same
+    # @speed/api-sdk/runtime binding seam (the app SDK's seam re-exports
+    # it).
+    cmds:
+      - |
+        cd "{{.APP_DIR}}/internal/notes/api" && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd "{{.APP_DIR}}/internal/cases/api" && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd "{{.APP_DIR}}/internal/smilesim/api" && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - >-
+        pnpm --package=@redocly/cli@2.51.1 dlx redocly join
+        "{{.APP_DIR}}/internal/notes/api/openapi.yaml"
+        "{{.APP_DIR}}/internal/cases/api/openapi.yaml"
+        "{{.APP_DIR}}/internal/smilesim/api/openapi.yaml"
+        -o "{{.APP_DIR}}/web/app-openapi.yaml"
+      - node web/scripts/redocly-join-fixup.mjs "{{.APP_DIR}}/web/app-openapi.yaml" 'reference-app' 'The reference-app application OpenAPI document: the redocly join of the application own three fragments (notes, cases and smilesim), regenerated by `task api:gen:app` and committed. Each fragment stays authoritative for its own operations; this merged document is the app-owned SDK generation input and the linted whole-surface view (docs/internal/21-api-contract.md).'
+      - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint "{{.APP_DIR}}/web/app-openapi.yaml" --config redocly.yaml
+      - |
+        cd "{{.APP_DIR}}/web" && \
+        pnpm dlx orval@8.17.0 --config orval.config.ts
+      - node web/scripts/orval-nodenext-fixup.mjs "{{.APP_DIR}}/web/src/app-api/index.ts" "{{.APP_DIR}}/web/src/app-api/runtime.ts"
 
   docs:serve:
     desc: Preview the docs site (docs/site/) locally with Hugo's live-reload server.
