@@ -50,13 +50,16 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
   **实施状态注记（本轮核实）：** `publint` 尚未接线——`.github/workflows/reusable-npm-package-ci.yml` 自己的 header 把"publint publish-shape validation and changesets wiring"列为明确未接线项，理由是目前还没有任何 `@speed/*` 包真正发布过，等 web 侧发布机制轮次落地再一并接入。`tsc --noEmit` 是真实落地的（每包 lint/typecheck leg 的一部分）。
 
 ### 覆盖率
-不设一刀切的百分比门槛（容易催生无意义的测试），而是：
-- 地基模块（`pkgcore`、`dbkit`、`tenancy`、`rbac`、`billing`、`jobs`）要求较高覆盖，且**覆盖率不允许下降**（与基线比对）
+每个已发布模块（go.work 的全部 22 个模块：21 个 `go/*` 模块加 `examples/reference-app`）都要过两道自动化的线：
+- **80% 下限**：单元套件语句覆盖率不得低于 80%，度量排除生成文件（`.gen.go`——pinned oapi-codegen 的输出是生成器写的，不是测试标的）。旧版此处"不设一刀切的百分比门槛（容易催生无意义的测试）"的论证被 2026-09 的产品决策取代，决策变更记录见下方实施状态注记
+- **覆盖率不允许下降**：与入库基线比对（容差 0.05 个百分点，按实测负载敏感抖动上沿设定）——先于下限存在的地基模块规则，保留至今：测得的覆盖即使仍高于 80%，只要比基线低得超过容差同样失败，防止覆盖率在高位缓慢滑落
 - 安全相关路径（租户隔离、权限判定、支付回调、令牌校验）要求分支覆盖完整
 
 > **实施状态注记（本轮核实）：** "覆盖率不允许下降（与基线比对）"是设计意图，尚未落地——通读所有 workflow 文件，没有任何覆盖率采集、基线存储或 diff 比对的机制；地基模块要求较高覆盖、安全路径要求分支覆盖完整目前都只靠 code review 把关，没有自动化数字门槛。
 >
 > **实施状态注记（2026-09，tooling 批次）：** 上一条注记记录的空白已由 `tools/check_coverage_baseline.py` 关闭一半：六个地基模块的"覆盖率不允许下降"现在是真实机制——每个地基模块跑 `go test -coverprofile` 后把精确语句覆盖率与入库的 `tools/coverage-baselines.json` 行比较（容差 0.05 个百分点，按实测的负载敏感抖动上沿设定），下降即失败；`--update` 重新记录基线（蓄意下调必须与记录基线在同一改动里、理由写进提交信息），`--selfcheck` 保证基线文件自身完整（每个行都是一个活的地基模块、每个地基模块都有一行）。CI 接线：reusable-go-module-ci 新增第 3b 腿（每模块 job 都跑比较，门外的模块打印说明后通过），fast-check 的 repo-checks 跑 selfcheck。尚未自动化的另一半是"安全相关路径要求分支覆盖完整"——那需要 `-coverpkg` 级的分支覆盖度量与逐路径清单，仍靠 code review 把关，本批次不虚报。
+>
+> **实施状态注记（2026-09，全量门禁批次）：** 门禁扩到全部 22 个已发布模块（go.work 的 21 个 `go/*` 模块加 reference-app），并在"不下降"之上加了 **80% 下限**——本段正文原句"不设一刀切的百分比门槛"对下限不再成立：产品决策取代了它，对"不允许下降"的论证保留，下限与基线两道比较都过才绿。度量口径同步新增规则：普查排除 `.gen.go`（oapi-codegen 提交产物，生成器写的代码不是测试标的），`--update` 与 `--check` 同口径；口径变了数字就变，基线文件在同一次改动里全部重新实测记录（基线记录与定义该量的改动同行）。下限不可重基线化：`--update` 拒绝记录低于下限的实测值——下限是产品决策而不是可记录的基线，跌破它只能加测试，或与脚本里 `LOWER_BOUND_PP` 及本段一起改决策。CI 接线：reusable-go-module-ci 第 3b 腿对每个 go/ 矩阵行跑双比较（21 个 go/ 模块，每个 PR 和每次 push 到 main 都测）；reference-app 不是 go-module-ci 矩阵行（它在 go/ 之外，fast-check 只构建它、其单元套件只在 full-check 跑），它的覆盖门禁作为独立步骤接在 full-check 的 reference-app job 单元套件之后——fast-check 不 gate 应用的覆盖率：应用套件本就不在 fast-check 跑，每个 PR 再加一次完整测量只是重复一个不存在于那里的运行，每次 push 到 main 的 full-check 才是它的执行点。fast-check 的 repo-checks 继续跑 `--selfcheck`（行集合随之扩到 22）。"安全相关路径要求分支覆盖完整"仍未自动化，同上一条注记，本批次不虚报。
 
 ### 警告治理
 **警告视为一等问题**，与团队既定规范一致：编译警告、lint 警告、废弃 API 警告、React 控制台警告、a11y 警告、竞态检测警告，全部不得静默忽略或抑制。CI 中新增警告即失败；确需保留的必须有显式豁免注释并说明原因与跟踪项。
