@@ -28,8 +28,80 @@ package main
 import (
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
+
+// --- noteCreatedFieldsFromPayload -------------------------------------
+//
+// The note-created probe's own dedicated suite, mirroring the
+// simulationCompleted suite above shape for shape: a concrete
+// notes.NoteCreatedPayload value (the in-process EventBus shape), a
+// map[string]any shaped like what the Redis bus's JSON round-trip hands
+// a subscriber, and the unreadable shapes that must warn-and-drop. The
+// probe's two required fields are the note id and the creator's user id
+// -- the note-created event is undeliverable without the creator (the
+// notification module routes on it), and a note id the dispatch cannot
+// name renders no template.
+
+func TestNoteCreatedFieldsFromPayload_ConcreteStruct(t *testing.T) {
+	payload := notes.NoteCreatedPayload{NoteID: "note-1", TenantID: "tenant-a", CreatorUserID: "user-7"}
+	noteID, creator, ok := noteCreatedFieldsFromPayload(payload)
+	if !ok {
+		t.Fatal("probe rejected a concrete notes.NoteCreatedPayload, want extraction")
+	}
+	if noteID != "note-1" || creator != "user-7" {
+		t.Fatalf("probe = (note %q, creator %q), want (note-1, user-7)", noteID, creator)
+	}
+}
+
+func TestNoteCreatedFieldsFromPayload_DecodedMap(t *testing.T) {
+	payload := map[string]any{"note_id": "note-2", "tenant_id": "tenant-a", "creator_user_id": "user-8"}
+	noteID, creator, ok := noteCreatedFieldsFromPayload(payload)
+	if !ok {
+		t.Fatal("probe rejected a decoded-map payload, want extraction")
+	}
+	if noteID != "note-2" || creator != "user-8" {
+		t.Fatalf("probe = (note %q, creator %q), want (note-2, user-8)", noteID, creator)
+	}
+}
+
+func TestNoteCreatedFieldsFromPayload_SurvivesTheAlternativeSpellings(t *testing.T) {
+	// The struct-spelling keys are accepted from a map too: the map a
+	// Redis-bus round-trip produces carries the struct field names as its
+	// keys, and the probe's contract is to read whichever shape arrived.
+	payload := map[string]any{"NoteID": "note-3", "CreatorUserID": "user-9"}
+	noteID, creator, ok := noteCreatedFieldsFromPayload(payload)
+	if !ok {
+		t.Fatal("probe rejected the struct-spelling keys on a map payload")
+	}
+	if noteID != "note-3" || creator != "user-9" {
+		t.Fatalf("probe = (note %q, creator %q), want (note-3, user-9)", noteID, creator)
+	}
+}
+
+func TestNoteCreatedFieldsFromPayload_Unreadable(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload any
+	}{
+		{"nil payload", nil},
+		{"missing creator", map[string]any{"note_id": "note-1"}},
+		{"missing note id", map[string]any{"creator_user_id": "user-1"}},
+		{"empty note id", map[string]any{"note_id": "", "creator_user_id": "user-1"}},
+		{"empty creator", map[string]any{"note_id": "note-1", "creator_user_id": ""}},
+		{"wrong-typed fields", map[string]any{"note_id": 42, "creator_user_id": true}},
+		{"non-map json value", "just a string"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			noteID, creator, ok := noteCreatedFieldsFromPayload(tc.payload)
+			if ok {
+				t.Errorf("unreadable payload must return ok=false, got (note %q, creator %q)", noteID, creator)
+			}
+		})
+	}
+}
 
 // TestSimulationCompletedFieldsFromPayload_ConcreteStruct proves the probe
 // extracts correctly from the exact shape the in-process EventBus

@@ -174,6 +174,27 @@ func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testi
 // file's own test surface.
 var _ pkgcore.Module = (*Module)(nil)
 
+// TestModule_WithSubjectResolver_WiresTheSeam pins the one constructor
+// option: a Module built with WithSubjectResolver carries the resolver
+// into Register, where NewHandler receives it as the seam every create
+// request's creator attribution reads (module.go's own doc comment) -- an
+// option silently dropped would leave every create request failing closed
+// with ErrSubjectUnresolved no matter what the host wired.
+func TestModule_WithSubjectResolver_WiresTheSeam(t *testing.T) {
+	var resolver SubjectResolver = stubSubjectResolver{userID: "module-test-creator"}
+	m := NewModule(nil, WithSubjectResolver(resolver))
+	if m.subject != resolver {
+		t.Fatalf("Module.subject = %v after WithSubjectResolver, want the wired resolver", m.subject)
+	}
+
+	// The unwired default stays nil: NewModule without the option must not
+	// invent a resolver, or the fail-closed shape the handler tests pin
+	// would silently change meaning.
+	if m := NewModule(nil); m.subject != nil {
+		t.Fatalf("Module.subject = %v without WithSubjectResolver, want nil (fail closed)", m.subject)
+	}
+}
+
 // TestModule_Register_DeclaresConfigSchemaAndFeatureFlags pins the schema
 // this module registers for the config module to freeze at Attach
 // (go/config/module.go's Attach doc comment): two configuration items with

@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -161,4 +165,171 @@ func startLoopbackServer(t *testing.T, handler http.Handler) string {
 		t.Fatalf("httptest server URL %q is not on 127.0.0.1", srv.URL)
 	}
 	return port
+}
+
+// TestRun_BootsServesHealthzAndShutsDownCleanly drives main.go's ordinary
+// boot path end to end, the one behavior this file's other tests reach
+// only in parts: configFromEnv resolves the zero-environment standalone
+// defaults, run boots the whole composed server on the chosen port, the
+// server answers its own healthzPath -- the same probe this example's
+// Dockerfile HEALTHCHECK runs -- and a cancelled base context takes it
+// down through the graceful-shutdown path, run returning nil. Every
+// configuration variable configFromEnv reads is explicitly cleared (the
+// same discipline TestConfigFromEnv_Defaults documents), so the boot's
+// outcome never depends on the ambient environment; PORT and APP_DB_PATH
+// are then pinned to a free port and a fresh per-test database file, so
+// the boot cannot collide with a real developer database or a parallel
+// listener.
+func TestRun_BootsServesHealthzAndShutsDownCleanly(t *testing.T) {
+	for _, key := range []string{
+		"APP_DEPLOYMENT_MODE",
+		"APP_REDIS_ADDR",
+		"APP_OTLP_ENDPOINT",
+		"APP_DEMO_USERS_PASSWORD",
+		"APP_DEMO_PLATFORM_STAFF_PASSWORD",
+		"APP_OBJECT_STORE_ROOT",
+		"APP_DISABLE_DEMO_USER_HEADER",
+		"APP_DISABLE_QUEUE_WORKER",
+		"APP_TRUSTED_PROXIES",
+		"APP_READ_FLY_CLIENT_IP",
+		"APP_FAIL_SELF_SERVICE_PROVISION",
+		"APP_PUBLIC_ORIGIN",
+		"APP_WEB_DIST",
+		"APP_AI_GATEWAY_IMAGE_BASE_URL",
+		"APP_AI_GATEWAY_IMAGE_API_KEY",
+		"APP_ROOT_KEY",
+		"APP_CONFIG_KEY",
+		"APP_ORG_INDEX_KEY",
+		"APP_NOTIFICATION_INDEX_KEY",
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY",
+		"APP_AUTHN_BLIND_INDEX_KEY",
+		"APP_AUTHN_PII_CIPHER_KEY",
+		"APP_S3_ENDPOINT",
+		"APP_S3_BUCKET",
+		"APP_S3_ACCESS_KEY",
+		"APP_S3_SECRET_KEY",
+		"APP_S3_REGION",
+		"APP_S3_USE_SSL",
+		"APP_SMTP_HOST",
+		"APP_SMTP_PORT",
+		"APP_SMTP_USERNAME",
+		"APP_SMTP_PASSWORD",
+		"APP_SMS_GATEWAY_URL",
+	} {
+		t.Setenv(key, "")
+	}
+
+	port := freeTCPPort(t)
+	t.Setenv("PORT", port)
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "run-test.sqlite"))
+
+	// The boot's own logger, discarded: this test asserts process-lifecycle
+	// behavior, not log output (main attaches a JSON logger to baseCtx in
+	// production; an io.Discard sink is the equivalent context shape here).
+	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+
+	// The server is healthy when its own healthz answers 200 -- polled with
+	// the very probe the Dockerfile HEALTHCHECK uses.
+	deadline := time.Now().Add(120 * time.Second)
+	healthy := false
+	for time.Now().Before(deadline) {
+		if err := runHealthcheck(context.Background(), port); err == nil {
+			healthy = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !healthy {
+		t.Fatal("run() booted no server answering healthz within 120s")
+	}
+
+	// A cancelled base context is the shutdown signal: run must return nil
+	// through the graceful-shutdown path, not hang and not error.
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() after cancel error = %v, want nil (a clean shutdown)", err)
+		}
+	case <-time.After(120 * time.Second):
+		t.Fatal("run() did not return within 120s of the cancel")
+	}
+}
+
+// TestRun_PortAlreadyTaken_ReturnsTheServeError drives run's serve-failure
+// exit: with the configured port already bound by another listener,
+// ListenAndServe answers immediately with the bind refusal, the serve
+// channel carries it back, and run returns the serve error -- the
+// process-lifecycle failure shape an operator sees when two instances
+// race for one port, distinct from a clean shutdown.
+func TestRun_PortAlreadyTaken_ReturnsTheServeError(t *testing.T) {
+	for _, key := range []string{
+		"APP_DEPLOYMENT_MODE", "PORT", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
+		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
+		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
+		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
+		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
+		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
+		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
+		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
+		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
+	} {
+		t.Setenv(key, "")
+	}
+
+	// Hold the port on the wildcard address -- the exact address the boot's
+	// own ":port" listener binds -- so the second bind is genuinely
+	// refused. (A loopback-only hold would not conflict: on macOS a
+	// wildcard bind coexists with a loopback-specific one on the same port
+	// number, which is why the hold must be wildcard-shaped.)
+	held, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+	port := strconv.Itoa(held.Addr().(*net.TCPAddr).Port)
+	t.Setenv("PORT", port)
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "run-port-taken.sqlite"))
+
+	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("run() with the port already taken returned nil, want the serve error")
+		}
+		if !strings.Contains(err.Error(), "serve") {
+			t.Fatalf("run() error = %q, want the serve error naming the bind refusal", err)
+		}
+	case <-time.After(120 * time.Second):
+		t.Fatal("run() with the port already taken did not return within 120s")
+	}
+}
+
+// freeTCPPort returns a currently-free TCP port number, for tests that
+// must hand a concrete PORT to code binding its own listener. The
+// reservation lasts only until the listener is closed -- a small
+// reallocation race, acceptable where the alternative (no other way to
+// name a port a boot binds itself) is worse.
+func freeTCPPort(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate a free port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release the probe listener: %v", err)
+	}
+	return strconv.Itoa(port)
 }

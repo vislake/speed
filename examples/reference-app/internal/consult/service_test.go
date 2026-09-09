@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -62,11 +63,17 @@ const testSystemPurpose pkgcore.SystemPurpose = "consult.test.credential_write"
 type fakeChatProvider struct {
 	lastReq aigateway.ChatRequest
 	reply   string
+	// err, when non-nil, is returned from every Chat call instead of the
+	// reply -- the failure shape the provider-failure test below needs.
+	err error
 }
 
 // Chat implements aigateway.ChatProvider.
 func (f *fakeChatProvider) Chat(_ context.Context, req aigateway.ChatRequest) (aigateway.ChatResponse, error) {
 	f.lastReq = req
+	if f.err != nil {
+		return aigateway.ChatResponse{}, f.err
+	}
 	return aigateway.ChatResponse{
 		Message: aigateway.ChatMessage{Role: aigateway.RoleAssistant, Content: f.reply},
 		Usage:   aigateway.Usage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12},
@@ -190,5 +197,25 @@ func TestService_Suggest_NoteFromAnotherTenant_NotVisible(t *testing.T) {
 	otherCtx := pkgcore.WithTenant(context.Background(), "tenant-globex")
 	if _, err := svc.Suggest(otherCtx, note.ID); err == nil {
 		t.Fatal("Suggest reached a note belonging to another tenant, want an error")
+	}
+}
+
+// TestService_Suggest_ProviderFailure_SurfacesTheError pins the
+// gateway-failure path: a provider answering an error (a vendor outage,
+// an unrouted model, an expired credential -- whatever the gateway wraps)
+// surfaces as Suggest's error rather than being swallowed or replaced
+// with an empty suggestion.
+func TestService_Suggest_ProviderFailure_SurfacesTheError(t *testing.T) {
+	provider := &fakeChatProvider{err: errors.New("vendor outage")}
+	svc, notesRepo := newTestService(t, provider)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	note := &notes.Note{ID: uuid.NewString(), Text: "Patient asks about veneers."}
+	if err := notesRepo.Create(ctx, note); err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+
+	if _, err := svc.Suggest(ctx, note.ID); err == nil {
+		t.Fatal("Suggest with a failing provider succeeded, want the provider's error surfaced")
 	}
 }

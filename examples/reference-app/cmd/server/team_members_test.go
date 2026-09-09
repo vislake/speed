@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // team_members_test.go is the consumer proof of the reference-app's own
@@ -337,4 +338,57 @@ func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName
 	}
 	expectEveryRowNamed(t, answer)
 	expectNoRawIDAsIdentity(t, answer)
+}
+
+// TestWriteTeamMembersJSON_NilSliceAnswersTheEmptyArray pins the 200
+// answer's wire shape for a tenant with no members: the members field is
+// [] -- never null -- the promise org's own list answers make and the
+// roster reader's `?? []` relies on (team_members.go's own doc comment).
+func TestWriteTeamMembersJSON_NilSliceAnswersTheEmptyArray(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeTeamMembersJSON(rec, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp teamMembersResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
+	}
+	if resp.Members == nil {
+		t.Fatal("Members = nil on the wire, want []")
+	}
+	if len(resp.Members) != 0 {
+		t.Fatalf("Members = %+v, want an empty array", resp.Members)
+	}
+}
+
+// TestWriteTeamMemberError_PreservesACodedErrorAndFoldsARawOne pins
+// writeTeamMemberError's classification directly: an *apperr.Error keeps
+// its own code and status on the wire (org's coded storage errors pass
+// through as themselves), and a raw error collapses to the
+// reference_app.internal_error fallback -- a caller never sees raw Go
+// error text.
+func TestWriteTeamMemberError_PreservesACodedErrorAndFoldsARawOne(t *testing.T) {
+	coded := apperr.Invalid("test.team_member_error")
+	rec := httptest.NewRecorder()
+	writeTeamMemberError(rec, coded)
+	var envelope teamMemberError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if envelope.Code != "test.team_member_error" {
+		t.Fatalf("coded error code = %q, want the error's own code", envelope.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	writeTeamMemberError(rec, context.DeadlineExceeded)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("raw error status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if envelope.Code != "reference_app.internal_error" {
+		t.Fatalf("raw error code = %q, want the internal fallback", envelope.Code)
+	}
 }

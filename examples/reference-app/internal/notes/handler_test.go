@@ -688,3 +688,181 @@ func TestHandler_List_LogsWithTenantID(t *testing.T) {
 		t.Errorf("log line missing %q for an empty tenant; got: %s", want, out)
 	}
 }
+
+// createNoteViaHandler drives a create request through the handler and
+// returns the created note's id -- the shared first step of the
+// delete/restore lifecycle tests below (each of which needs a real,
+// persisted note to mutate).
+func createNoteViaHandler(t *testing.T, h *Handler, tenant pkgcore.TenantID, text string) string {
+	t.Helper()
+	body := strings.NewReader(`{"text":"` + text + `"}`)
+	req := httptest.NewRequest(http.MethodPost, apiPath, body)
+	rec := doRequest(h, req, tenant)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp api.NotesNote
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if resp.ID == nil {
+		t.Fatal("create response ID is missing")
+	}
+	return *resp.ID
+}
+
+// assertNotesError decodes rec's body as the error envelope and asserts
+// its code -- and, when wantParams names a key, that the envelope carries
+// that key in its params.
+func assertNotesError(t *testing.T, rec *httptest.ResponseRecorder, wantCode string, wantParamKey string) {
+	t.Helper()
+	var envelope api.NotesError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode error body: %v; body = %s", err, rec.Body.String())
+	}
+	if envelope.Code == nil || *envelope.Code != wantCode {
+		t.Fatalf("error code = %v, want %q; body = %s", envelope.Code, wantCode, rec.Body.String())
+	}
+	if wantParamKey != "" {
+		if envelope.Params == nil {
+			t.Fatalf("error params = nil, want a %q key; body = %s", wantParamKey, rec.Body.String())
+		}
+		if _, ok := (*envelope.Params)[wantParamKey]; !ok {
+			t.Fatalf("error params = %v, want a %q key", envelope.Params, wantParamKey)
+		}
+	}
+}
+
+// TestHandler_DeleteAndRestore_Lifecycle drives the mark-delete pair over
+// the wire: delete hides the note from the list, restore brings it back
+// with its text intact, and both mutations report 204.
+func TestHandler_DeleteAndRestore_Lifecycle(t *testing.T) {
+	h, _ := newTestHandler(t)
+	noteID := createNoteViaHandler(t, h, "tenant-acme", "to delete and restore")
+
+	delReq := httptest.NewRequest(http.MethodDelete, apiPath+"/"+noteID, nil)
+	rec := doRequest(h, delReq, "tenant-acme")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	// The deleted note is hidden from the list operation.
+	listReq := httptest.NewRequest(http.MethodGet, apiPath, nil)
+	rec = doRequest(h, listReq, "tenant-acme")
+	var list api.NotesListNotesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+	if list.Notes == nil || len(*list.Notes) != 0 {
+		t.Fatalf("list after delete = %+v, want an empty array -- the mark-deleted note must be hidden", list.Notes)
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, apiPath+"/"+noteID+"/restore", nil)
+	rec = doRequest(h, restoreReq, "tenant-acme")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("restore status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	rec = doRequest(h, listReq, "tenant-acme")
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list body after restore: %v", err)
+	}
+	if list.Notes == nil || len(*list.Notes) != 1 || (*list.Notes)[0].ID == nil || *(*list.Notes)[0].ID != noteID {
+		t.Fatalf("list after restore = %+v, want the restored note %q back", list.Notes, noteID)
+	}
+}
+
+// TestHandler_DeleteAndRestore_UniformNotFound pins the mutation pair's
+// uniform 404: deleting a note that is already deleted, restoring a note
+// that is not deleted, and mutating an id no tenant note exists under all
+// answer the same notes.note_not_found code carrying the id the caller
+// named -- the collapse noteMutationError performs on dbkit's
+// record-not-found answer (the fragment documents the uniform-refusal
+// property).
+func TestHandler_DeleteAndRestore_UniformNotFound(t *testing.T) {
+	h, _ := newTestHandler(t)
+	noteID := createNoteViaHandler(t, h, "tenant-acme", "uniform 404 target")
+
+	delReq := httptest.NewRequest(http.MethodDelete, apiPath+"/"+noteID, nil)
+	if rec := doRequest(h, delReq, "tenant-acme"); rec.Code != http.StatusNoContent {
+		t.Fatalf("first delete status = %d, want 204", rec.Code)
+	}
+	// Deleting the already-deleted note answers the same uniform 404.
+	rec := doRequest(h, delReq, "tenant-acme")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("second delete status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	assertNotesError(t, rec, ErrNoteNotFound.Code, "note_id")
+
+	restoreReq := httptest.NewRequest(http.MethodPost, apiPath+"/"+noteID+"/restore", nil)
+	rec = doRequest(h, restoreReq, "tenant-acme")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("restore status = %d, want 204", rec.Code)
+	}
+	// Restoring the now-live note answers the same uniform 404.
+	rec = doRequest(h, restoreReq, "tenant-acme")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("second restore status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	assertNotesError(t, rec, ErrNoteNotFound.Code, "note_id")
+
+	// An id no note of the caller's tenant exists under (unknown, and a
+	// deleted one alike) is the same refusal.
+	rec = doRequest(h, httptest.NewRequest(http.MethodDelete, apiPath+"/no-such-note", nil), "tenant-acme")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete of an unknown id status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	assertNotesError(t, rec, ErrNoteNotFound.Code, "note_id")
+}
+
+// TestHandler_Delete_OtherTenantsNote_Refused pins the mutation pair's
+// tenant boundary over the wire: deleting another tenant's note -- an id
+// that exists, but not under the caller's tenant -- answers the same
+// uniform 404 and leaves the note intact and visible to its owning
+// tenant.
+func TestHandler_Delete_OtherTenantsNote_Refused(t *testing.T) {
+	h, _ := newTestHandler(t)
+	noteID := createNoteViaHandler(t, h, "tenant-globex", "globex's note")
+
+	rec := doRequest(h, httptest.NewRequest(http.MethodDelete, apiPath+"/"+noteID, nil), "tenant-acme")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant delete status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	assertNotesError(t, rec, ErrNoteNotFound.Code, "note_id")
+
+	// The owning tenant still sees its note.
+	listReq := httptest.NewRequest(http.MethodGet, apiPath, nil)
+	rec = doRequest(h, listReq, "tenant-globex")
+	var list api.NotesListNotesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+	if list.Notes == nil || len(*list.Notes) != 1 {
+		t.Fatalf("owner's list after the refused delete = %+v, want its note intact", list.Notes)
+	}
+}
+
+// TestHandler_DeleteAndRestore_UnresolvedSubject_Refused pins the
+// mutation pair's fail-closed behaviour on the creator-resolver seam: an
+// unattributable request is refused with 401 notes.subject_unresolved
+// before anything is deleted or restored -- never a mutation with an
+// empty deleted_by attribution (handler.go's NotesDeleteNote doc
+// comment). The 401 refusal happens before any repository call, so the
+// nil-seam handler's own empty database is enough: the mutation must not
+// even be attempted without a resolvable actor.
+func TestHandler_DeleteAndRestore_UnresolvedSubject_Refused(t *testing.T) {
+	noteID := "any-id"
+	unwired, _ := newTestHandlerWithSubject(t, nil)
+
+	rec := doRequest(unwired, httptest.NewRequest(http.MethodDelete, apiPath+"/"+noteID, nil), "tenant-acme")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("delete without a subject status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	assertNotesError(t, rec, ErrSubjectUnresolved.Code, "")
+
+	rec = doRequest(unwired, httptest.NewRequest(http.MethodPost, apiPath+"/"+noteID+"/restore", nil), "tenant-acme")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("restore without a subject status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	assertNotesError(t, rec, ErrSubjectUnresolved.Code, "")
+}

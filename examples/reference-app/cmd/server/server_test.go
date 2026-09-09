@@ -1896,3 +1896,193 @@ func auditEventsWithAction(events []audit.AuditEvent, action string) []audit.Aud
 	}
 	return out
 }
+
+// TestSocialChannelFlagKey_MapsEveryGatedProvider pins the host-side
+// mirror of authn's channel-flag mapping (server.go's
+// socialChannelFlagKey doc comment): every provider authn gates maps to
+// that provider's own feature-flag key -- the very key
+// openConfiguredAuthnChannels writes true at boot -- and a provider
+// authn does not gate maps to "", so the boot-time channel-opening loop
+// skips it instead of writing an unknown config key.
+func TestSocialChannelFlagKey_MapsEveryGatedProvider(t *testing.T) {
+	cases := map[string]string{
+		authn.ProviderGoogle:       authn.FeatureFlagSocialGoogle,
+		authn.ProviderGitHub:       authn.FeatureFlagSocialGitHub,
+		authn.ProviderWeChat:       authn.FeatureFlagSocialWeChat,
+		authn.ProviderDingTalk:     authn.FeatureFlagSocialDingTalk,
+		authn.ProviderFeishu:       authn.FeatureFlagSocialFeishu,
+		"authn.provider.not_gated": "",
+		"":                         "",
+	}
+	for name, want := range cases {
+		if got := socialChannelFlagKey(name); got != want {
+			t.Errorf("socialChannelFlagKey(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestOrgFeatureGate_NotAttachedYet_FailsClosed pins orgFeatureGate's
+// ordering safety net directly: before buildServer's configModule.Attach
+// has filled the service pointer (or when the gate outlives the variable
+// it points at), IsEnabled answers a coded error rather than panicking on
+// a nil *config.Service -- the failure mode the **service-pointer
+// indirection exists to avoid (server.go's own doc comment).
+func TestOrgFeatureGate_NotAttachedYet_FailsClosed(t *testing.T) {
+	var svc *config.Service
+	gate := orgFeatureGate{service: &svc}
+	enabled, err := gate.IsEnabled(context.Background(), "any.key")
+	if err == nil {
+		t.Fatal("IsEnabled before attach error = nil, want the not-attached-yet error")
+	}
+	if enabled {
+		t.Fatal("IsEnabled before attach = true, want false")
+	}
+}
+
+// TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused pins the
+// partial-composition refusals of the optional mail/S3/object-store
+// wiring: an SMTP composition with only one of its two variables set, an
+// S3 composition with some but not all of its four variables set, and
+// non-parseable boolean/port values each refuse boot naming the variable
+// -- never a half-composed seam silently falling back to the in-process
+// default, which would hide the misconfiguration until first use.
+func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T) {
+	for _, key := range []string{
+		"APP_DEPLOYMENT_MODE", "PORT", "APP_DB_PATH", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
+		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
+		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
+		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
+		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
+		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
+		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
+		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
+		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cases := []struct {
+		name   string
+		env    map[string]string
+		wantIn string
+	}{
+		{
+			name:   "smtp_host_without_port",
+			env:    map[string]string{"APP_SMTP_HOST": "smtp.example.com"},
+			wantIn: "APP_SMTP_PORT",
+		},
+		{
+			name:   "smtp_port_without_host",
+			env:    map[string]string{"APP_SMTP_PORT": "25"},
+			wantIn: "APP_SMTP_HOST",
+		},
+		{
+			name:   "smtp_port_not_a_number",
+			env:    map[string]string{"APP_SMTP_HOST": "smtp.example.com", "APP_SMTP_PORT": "not-a-port"},
+			wantIn: "APP_SMTP_PORT",
+		},
+		{
+			name:   "s3_partial_set",
+			env:    map[string]string{"APP_S3_ENDPOINT": "http://s3.example.com"},
+			wantIn: "APP_S3_BUCKET",
+		},
+		{
+			name: "s3_use_ssl_not_a_bool",
+			env: map[string]string{
+				"APP_S3_ENDPOINT": "http://s3.example.com", "APP_S3_BUCKET": "b",
+				"APP_S3_ACCESS_KEY": "k", "APP_S3_SECRET_KEY": "s", "APP_S3_USE_SSL": "sometimes",
+			},
+			wantIn: "APP_S3_USE_SSL",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			_, err := configFromEnv()
+			if err == nil {
+				t.Fatal("configFromEnv succeeded, want the partial-composition refusal")
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Errorf("error = %q, want it to name %q", err, tc.wantIn)
+			}
+		})
+	}
+}
+
+// TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer pins the
+// success half of the SMTP wiring: with both variables set and a
+// parseable port, configFromEnv resolves a real SMTP Mailer carrying the
+// host and the credentials -- the composition the config's Mailer field
+// and MailerCapabilities hand to Kernel.Bootstrap.
+func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
+	for _, key := range []string{
+		"APP_DEPLOYMENT_MODE", "PORT", "APP_DB_PATH", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
+		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
+		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
+		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
+		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
+		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
+		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
+		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
+		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("APP_SMTP_HOST", "smtp.example.com")
+	t.Setenv("APP_SMTP_PORT", "587")
+	t.Setenv("APP_SMTP_USERNAME", "mailer@example.com")
+	t.Setenv("APP_SMTP_PASSWORD", "smtp-secret")
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatalf("configFromEnv: %v", err)
+	}
+	if cfg.Mailer == nil {
+		t.Fatal("Mailer = nil, want the resolved SMTP mailer")
+	}
+	if cfg.MailerCapabilities&pkgcore.SurvivesRestart == 0 {
+		t.Error("MailerCapabilities lacks SurvivesRestart, want the capability-honest SMTP declaration")
+	}
+}
+
+// TestConfigFromEnv_MalformedIndividualKeysAreRefused pins the
+// individual-override parse for the five key materials beyond
+// APP_CONFIG_KEY (whose malformed values TestConfigFromEnv_ConfigKeyRejectsMalformedValues
+// already covers): a malformed individual variable must refuse boot
+// naming the variable, never fall through to the dev default silently.
+func TestConfigFromEnv_MalformedIndividualKeysAreRefused(t *testing.T) {
+	for _, key := range []string{
+		"APP_DEPLOYMENT_MODE", "PORT", "APP_DB_PATH", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
+		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
+		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
+		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
+		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
+		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
+		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
+		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
+		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
+	} {
+		t.Setenv(key, "")
+	}
+
+	for _, key := range []string{
+		"APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY", "APP_PKI_LOCAL_KEY_CIPHER_KEY",
+		"APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "not-64-hex-chars")
+			_, err := configFromEnv()
+			if err == nil {
+				t.Fatalf("configFromEnv with a malformed %s succeeded, want the refusal", key)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Errorf("error = %q, want it to name %q", err, key)
+			}
+		})
+	}
+}

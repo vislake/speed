@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/go/storage"
 )
 
 // This file drives the case surface's two photo operations
@@ -212,4 +216,28 @@ func TestCasesPhotos_UploadOversize_Refused(t *testing.T) {
 	resp := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
 		strings.NewReader(`{"content_base64":"`+oversize+`"}`))
 	assertCasesError(t, resp, http.StatusBadRequest, "cases.photo_content_too_large", "upload beyond the photo byte bound")
+}
+
+// TestCasesPhotoReadError_MapsTheObjectNotFoundCodeToThePhotoAnswer pins
+// casesPhotoReadError's classification directly: a content read whose
+// object no longer exists -- a deleted or reclaimed object, which the
+// storage module answers with the decorated storage.object_not_found
+// code (matched by Code, never identity, exactly as hasCasesPhotoCode
+// documents) -- maps onto the same cases.photo_not_found a case that
+// never referenced the object answers, and any other failure maps onto
+// the internal fallback carrying the original cause.
+func TestCasesPhotoReadError_MapsTheObjectNotFoundCodeToThePhotoAnswer(t *testing.T) {
+	missing := storage.ErrObjectNotFound.WithParam("id", "reclaimed-object")
+	got := casesPhotoReadError(missing)
+	if got.Code != ErrPhotoNotFound.Code {
+		t.Fatalf("casesPhotoReadError(object-not-found) code = %q, want %q", got.Code, ErrPhotoNotFound.Code)
+	}
+
+	other := casesPhotoReadError(context.DeadlineExceeded)
+	if other.Code != "cases.internal_error" {
+		t.Fatalf("casesPhotoReadError(raw failure) code = %q, want the internal fallback", other.Code)
+	}
+	if !errors.Is(other, context.DeadlineExceeded) {
+		t.Error("casesPhotoReadError(raw failure) dropped the original cause, want it preserved")
+	}
 }

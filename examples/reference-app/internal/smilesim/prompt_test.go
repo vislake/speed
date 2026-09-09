@@ -43,6 +43,21 @@ const preservationSentenceLegacy = "Keep the rest of the face, lighting and back
 // names the product vision's preservation dimensions.
 const identitySentenceP2a = "Preserve the patient's facial identity, proportions, skin tone, lip color and pose."
 
+// TestPromptSentenceHelpers_UnknownValues_AnswerTheLoudEmptyString pins
+// the two vocabulary-switch guards directly: a style or shade value no
+// validated option set can produce answers the deliberately loud empty
+// clause (never a silent substitution of another value's sentence), so a
+// missing case in either switch shows up as a gap in the rendered prompt
+// rather than as a wrong instruction shipped to the model.
+func TestPromptSentenceHelpers_UnknownValues_AnswerTheLoudEmptyString(t *testing.T) {
+	if got := smileStylePromptSentence(SmileStyle("no-such-style")); got != "" {
+		t.Fatalf("smileStylePromptSentence(unknown) = %q, want the loud empty string", got)
+	}
+	if got := toothShadePromptSentence(ToothShade("no-such-shade")); got != "" {
+		t.Fatalf("toothShadePromptSentence(unknown) = %q, want the loud empty string", got)
+	}
+}
+
 func TestRenderSimulationPrompt_EveryStyleShadeCombination_SpeaksOnlyItsOwnVocabulary(t *testing.T) {
 	for style, styleClause := range styleClauses {
 		for shade, shadeClause := range shadeClauses {
