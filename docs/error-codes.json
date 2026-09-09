@@ -3237,7 +3237,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smilesimErrRecipientNotInTenant",
       "kind": "declared",
-      "line": 475,
+      "line": 479,
       "module": "smilesim",
       "status": 400
     },
