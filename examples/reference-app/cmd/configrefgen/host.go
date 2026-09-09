@@ -8,22 +8,24 @@ package main
 // source form to scan, since every module's ConfigItem/FeatureFlag
 // declarations only become one merged schema at Attach time. This host is
 // that real host, built for the one job of snapshotting the schema: it
-// registers the five platform modules that declare configuration items
-// (authn, metering, compliance, sharing and pki -- the census of
-// reg.Config.Add declaration sites in this repository) plus the config
-// module itself, freezes the schema with Attach, and hands the resulting
-// *config.Service to the caller for Describe.
+// registers the six platform modules whose Register folds items or feature
+// flags into the schema (authn, metering, compliance, sharing and pki
+// declaring configuration items, org declaring its two feature flags and no
+// items -- together the census of reg.Config.Add and reg.Features.Add
+// declaration sites in this repository) plus the config module itself,
+// freezes the schema with Attach, and hands the resulting *config.Service
+// to the caller for Describe.
 //
-// The composition deliberately stops at the five declaring modules. The
-// reference app's own notes module registers its own app-owned items
-// (brand.site_name and support.reply_email plus its two feature flags); a
-// config reference committed at the repository's docs/ root documents the
-// PLATFORM configuration surface a speed-based application receives from the
-// modules it imports, not one example app's demo items, so notes stays out
-// of the composition and its items out of the reference. A host that wants
-// its own complete reference (own items included) runs the same two calls
-// against its own composition -- go/config's RenderMarkdown doc comment
-// shows the shape.
+// The composition deliberately stops at the six schema-declaring platform
+// modules. The reference app's own notes module registers its own app-owned
+// items (brand.site_name and support.reply_email plus its two feature
+// flags); a config reference committed at the repository's docs/ root
+// documents the PLATFORM configuration surface a speed-based application
+// receives from the modules it imports, not one example app's demo items,
+// so notes stays out of the composition and its items out of the reference.
+// A host that wants its own complete reference (own items included) runs
+// the same two calls against its own composition -- go/config's
+// RenderMarkdown doc comment shows the shape.
 //
 // The database is a throwaway in-memory SQLite: every module's Register
 // performs no I/O by contract, config's Attach only wires its Service (the
@@ -50,6 +52,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/sharing"
@@ -140,8 +143,32 @@ func schemaHost(ctx context.Context) (*config.Service, error) {
 		return nil, err
 	}
 
+	// orgModule carries the three options org's Register validates even
+	// though a schema snapshot neither indexes a real address nor sends
+	// mail: the mandatory invitation-address blind indexer
+	// (ErrEmailIndexerRequired without one) and -- with the
+	// org.invitation_email flag at its declared default of on -- a sender
+	// address and a link builder (ErrInvitationMailRequired without both).
+	// The indexer key is the same fixed snapshotKey the cipher and authn's
+	// indexer reuse: a real host derives a separate APP_ORG_INDEX_KEY
+	// material, but nothing here encrypts or indexes real rows and Describe
+	// never renders a key, so the reuse leaks nothing (the package comment
+	// above states the fixed-literal reasoning).
+	orgEmailIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, snapshotKey, dbkit.NormalizeEmail)
+	if err != nil {
+		return nil, err
+	}
+	orgModule := org.NewModule(db,
+		org.WithEmailIndexer(orgEmailIndexer),
+		org.WithMailFrom("invitations@configrefgen.invalid"),
+		org.WithInvitationLinkBuilder(func(_ context.Context, token string) (string, error) {
+			return "https://configrefgen.invalid/invitations/accept?token=" + token, nil
+		}),
+	)
+
 	modules := []pkgcore.Module{
 		authnModule,
+		orgModule,
 		pki.NewModule(db),
 		metering.NewModule(db),
 		sharing.NewModule(db),

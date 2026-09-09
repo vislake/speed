@@ -52,7 +52,7 @@
 - 每个模块的 `AGENTS.md` 存在性检查；仓库根 `CLAUDE.md` 的纪律条目与 CI 检查表一一对应
 - 人工验收：用一个未接触过本项目的 AI Agent，仅凭文档完成"接入认证模块并加一个受权限保护的接口"，记录卡点并回补文档
 
-> **实施状态注记：** 第一条的"Storybook 构建"从未存在，真实机制同第 6 节注记。第二条已落地：配置清单生成入口的历史阻塞——`go/config/schema.go` 的 schema 类型未导出、没有工具能读出配置项清单——由两侧闭合：schema 侧导出只读视图（`config.ConfigItemDescriptor` + `Service.Describe`，`go/config/describe.go`），生成侧由 `examples/reference-app/cmd/configrefgen` 以真实宿主组合（声明配置项的五个平台模块 authn/metering/compliance/sharing/pki + config 模块，内存 SQLite，`Attach` 冻结 schema）枚举并渲染 `docs/config-reference.md`/`docs/config-reference.json` 与根 `.env.example`；`docs-check.yml` 的 Config reference drift check 步运行 `go run ./cmd/configrefgen --check`，生成器自带加载验证（`config.example.yaml` 过真实 loader）、清单覆盖门与字节确定性单测。第三、四条（API 文档覆盖率检查和 `AGENTS.md` 存在性检查）仍不在任何 workflow 里，通读 `.github/workflows/*.yml` 无一处提及，仍只算设计意图。
+> **实施状态注记：** 第一条的"Storybook 构建"从未存在，真实机制同第 6 节注记。第二条已落地：配置清单生成入口的历史阻塞——`go/config/schema.go` 的 schema 类型未导出、没有工具能读出配置项清单——由两侧闭合：schema 侧导出只读视图（`config.ConfigItemDescriptor` + `Service.Describe`，`go/config/describe.go`），生成侧由 `examples/reference-app/cmd/configrefgen` 以真实宿主组合（声明配置项或功能开关的六个平台模块 authn/metering/compliance/sharing/pki/org，org 只声明功能开关，+ config 模块，内存 SQLite，`Attach` 冻结 schema）枚举并渲染 `docs/config-reference.md`/`docs/config-reference.json` 与根 `.env.example`；`docs-check.yml` 的 Config reference drift check 步运行 `go run ./cmd/configrefgen --check`，生成器自带加载验证（`config.example.yaml` 过真实 loader）、清单覆盖门与字节确定性单测。第三、四条（API 文档覆盖率检查和 `AGENTS.md` 存在性检查）仍不在任何 workflow 里，通读 `.github/workflows/*.yml` 无一处提及，仍只算设计意图。
 
 **9. 第三方登录与功能开关**
 - 账号关联安全用例（最高优先级）：构造"第三方返回未验证邮箱且与已有用户邮箱相同"的场景，断言**不会**自动合并账号；`state` 缺失或不匹配时回调必须被拒绝；回调地址不在白名单时拒绝

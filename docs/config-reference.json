@@ -139,7 +139,7 @@
       "sensitive": true,
       "default": "individual development defaults",
       "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Single root secret from which all six key materials below are derived (HKDF-SHA256, one purpose string per key); an explicitly-set individual key always wins over its derivation."
+      "description": "Single root secret from which the other six keys of this group are derived (HKDF-SHA256, one purpose string per key); an explicitly-set individual key always wins over its derivation."
     },
     {
       "layer": "bootstrap",
@@ -1037,6 +1037,43 @@
       "default": "monthly",
       "consumers": "metering (the owning module reads the value at runtime)",
       "description": "The calendar bucket real-time usage counters and usage-summary rows reset on: \"daily\" or \"monthly\"."
+    },
+    {
+      "layer": "dynamic",
+      "key": "org.invitation_email",
+      "module": "org",
+      "type": "bool",
+      "source": "configs table (system scope row, tenant scope row; reads resolve tenant -\u003e system -\u003e default)",
+      "scope": [
+        "system",
+        "tenant"
+      ],
+      "sensitive": false,
+      "has_default": true,
+      "default": "true",
+      "is_feature_flag": true,
+      "flag_depends_on": [
+        "org.invitations"
+      ],
+      "consumers": "org (the owning module reads the value at runtime)",
+      "description": "Let org deliver the invitation email itself, rather than leaving delivery to a notification module."
+    },
+    {
+      "layer": "dynamic",
+      "key": "org.invitations",
+      "module": "org",
+      "type": "bool",
+      "source": "configs table (system scope row, tenant scope row; reads resolve tenant -\u003e system -\u003e default)",
+      "scope": [
+        "system",
+        "tenant"
+      ],
+      "sensitive": false,
+      "has_default": true,
+      "default": "true",
+      "is_feature_flag": true,
+      "consumers": "org (the owning module reads the value at runtime)",
+      "description": "Allow members of this tenant to invite people into its organization."
     },
     {
       "layer": "dynamic",

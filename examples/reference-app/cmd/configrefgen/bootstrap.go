@@ -81,7 +81,7 @@ var bootstrapTable = map[string]bootstrapVar{
 	},
 	"APP_ROOT_KEY": {
 		kind: "hexkey", fallback: "individual development defaults", secret: true, group: "keys",
-		summary: "Single root secret from which all six key materials below are derived (HKDF-SHA256, one purpose string per key); an explicitly-set individual key always wins over its derivation.",
+		summary: "Single root secret from which the other six keys of this group are derived (HKDF-SHA256, one purpose string per key); an explicitly-set individual key always wins over its derivation.",
 		example: "REPLACE_WITH_64_HEX_CHARS",
 	},
 	"APP_CONFIG_KEY": {

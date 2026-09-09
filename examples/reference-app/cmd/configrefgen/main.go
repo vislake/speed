@@ -9,17 +9,15 @@
 //     configuration an operator edits at runtime. The source of truth is
 //     the frozen runtime schema of a real host, enumerated through
 //     go/config's exported Describe() surface (config.Service.Describe and
-//     config.ConfigItemDescriptor in go/config/describe.go, built exactly
-//     for "an external tool (a Markdown configuration-reference generator,
-//     an admin console)"). The recorded blocker that "no tool can read the
-//     list today" was that the schema type was unexported and nothing could
-//     enumerate the folded schema; go/config resolved it by exporting the
-//     descriptor view, and this command resolves the remaining half -- a
-//     real host to run -- by composing one (host.go): the five platform
-//     modules that declare configuration items (authn, metering,
-//     compliance, sharing, pki) plus the config module itself, bootstrapped
-//     on a throwaway in-memory database, schema frozen by Attach. The
-//     module composition is the cost of this mechanism: it must import the
+//     config.ConfigItemDescriptor in go/config/describe.go, built for
+//     "an external tool (a Markdown configuration-reference generator, an
+//     admin console)"). A live schema only exists once a real host has
+//     bootstrapped and frozen it, so this command composes that host
+//     itself (host.go): the six platform modules whose Register folds items
+//     or feature flags into the schema (authn, metering, compliance,
+//     sharing, pki and org) plus the config module, bootstrapped on a
+//     throwaway in-memory database, schema frozen by Attach. The module
+//     composition is the cost of this mechanism: it must import the
 //     declaring modules, which only a top-of-graph host module can do
 //     without inflating a low-tier module's dependency floor, so this
 //     command lives in the reference-app module (the one module whose go.mod

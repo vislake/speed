@@ -85,9 +85,10 @@ name: docs-check
 #     check). The reference -- docs/config-reference.md, its
 #     machine-readable twin docs/config-reference.json, and the root
 #     .env.example -- is generated from the live configuration schema:
-#     the generator composes a schema-only host (the five platform
-#     modules that declare configuration items plus go/config, on a
-#     throwaway in-memory database), freezes the schema with
+#     the generator composes a schema-only host (the six platform
+#     modules that declare configuration items or feature flags plus
+#     go/config, on a throwaway in-memory database), freezes the schema
+#     with
 #     config.Module.Attach, and renders `config.Service.Describe`'s
 #     snapshot plus the reference app's walked-out environment-variable
 #     inventory. A stale committed reference (a module that added,
@@ -191,12 +192,12 @@ name: docs-check
 #   go/config/**                 the dynamic-config schema machinery
 #                                (item canonicalization and descriptor
 #                                semantics) the reference renders
-#   go/authn/module.go           the five ConfigItem/FeatureFlag
+#   go/authn/module.go           the six ConfigItem/FeatureFlag
 #   go/metering/module.go          declaration sites the composed schema
 #   go/compliance/module.go        snapshot folds -- an item or flag
 #   go/sharing/module.go           added, changed or removed here changes
 #   go/pki/module.go               the reference, so the gate runs on the
-#                                declaring side, the api-contract pattern
+#   go/org/module.go               declaring side, the api-contract pattern
 #   config.example.yaml          the load-verified bootstrap file-format
 #                                example (self-test on change)
 #   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
@@ -238,6 +239,7 @@ on:
       - go/compliance/module.go
       - go/sharing/module.go
       - go/pki/module.go
+      - go/org/module.go
       - config.example.yaml
       - .github/actions/setup-hugo-env/**
       - .github/actions/setup-go-env/**
