@@ -141,18 +141,16 @@
 
 ## 6. 真实消费方类
 
-待办动作明确(建端、接线、并入合并文档、建公共读回 API、开注册),等真实消费方/宿主/前端包出现;按反投机纪律不做无消费方的泛化。
+待办动作明确(建端、接线、建公共读回 API、开注册),等真实消费方/宿主/前端包出现;按反投机纪律不做无消费方的泛化。片段并入合并文档不属此类:凡带 HTTP 片段的平台模块一律进合并文档与 SDK(模块驱动策略,docs/internal/21-api-contract.md 的"模块驱动的合并策略"),无工作区消费者的业务面照常进合并,本类只承载消费证明层面的等待。
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
 | 2 | ROADMAP | `go/ai-gateway/AGENTS.md` | 逻辑键路由与接线发现表面未实现 | 等:运营控制台(admin-shell 类)web 消费方;现无逻辑键路由/接线发现面 |
-| 5 | ROADMAP | `go/sharing/AGENTS.md` | HTTP fragment 未并入 build/openapi/speed.yaml 合并文档 | 等:go/sharing 前端消费方;并入将生成无人调用的 orval 代码 |
 | 9 | ROADMAP | `go/pki/signer/vault/doc.go` | vault Docker-backed 集成腿未实现 | 等:signer/vault 真实装配宿主;kmsaws 腿按设计排除(LocalStack 分歧)已记录 |
 | 14 | ROADMAP | `go/storage/AGENTS.md` | 审计行发射未接线 | 等:需要审计行的宿主接线(三动作已声明,服务只记结构化日志) |
 | 17 | ROADMAP | `go/metering/overage.go` | EventOverageThresholdCrossed 无订阅者 | 等:宿主产品决策(overage 事件无订阅方,全仓无订阅代码) |
 | 22 | ROADMAP | `go/org/tree.go` | org 无查询列出 mark-deleted 后代 | 等:恢复运维/控制台面(admin-shell 类);Restore 逐节点不级联为设计 |
 | 46 | ROADMAP | `CLAUDE.md` | pki Vault/AWS-KMS 签名器集成腿 | 等:signer/vault 真实装配宿主;kmsaws 腿按设计排除(LocalStack 分歧)已记录 |
-| 56 | ROADMAP | `go/ai-gateway/api/openapi.yaml` | ai-gateway fragment 未并入 merged build/openapi/speed.yaml | 等:平台侧/运营台 web 消费方;ai-gateway 片段入 merged 随其后 |
 | 59 | ROADMAP | `go/sharing/AGENTS.md` | PathShares 无 owner-facing 前端面 | 等:sharing 前端包(PathShares owner-facing 面);现由应用直接 HTTP 驱动 |
 | 60 | ROADMAP | `go/integration/AGENTS.md` | 非 demo 生产级入站 API 网关未做 | 等:宿主/产品拉动(生产级入站网关,"if" 条件行) |
 | 69 | ROADMAP | `go/metering/AGENTS.md` | HTTP 表面与 OpenAPI 片段未实现 | 等:拉动 HTTP 面的消费者(metering 片段;admin 进程内读已闭环) |
@@ -219,12 +217,8 @@
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
 | 28 | ROADMAP | `go/saasctl/internal/upgrade/upgrade.go` | upgrade 不重写 web/package.json | 锚:create-saas-app 轮(现骨架不含 web 前端);upgrade 不重写 web/package.json |
-| 36 | ROADMAP | `docs/internal/21-api-contract.md` | org 片段进入合并文档待前端消费者 | 锚:org-web 轮(M1 具名;首个扩展 merged 文档的轮);org fragment 及 storage 随行再生成、其余共享前端腿 |
-| 76 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | storage frontend leg (generated storage operations in api-sdk) | 锚:org-web 轮(M1 具名;首个扩展 merged 文档的轮);org fragment 及 storage 随行再生成、其余共享前端腿 |
 | 79 | ROADMAP | `go/saasctl/AGENTS.md` | create-saas-app 与 web 侧模板未建;openapi generate 未实现 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
-| 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 锚:org-web 轮(M1 具名;首个扩展 merged 文档的轮);org fragment 及 storage 随行再生成、其余共享前端腿 |
 | 118 | ROADMAP | `docs/internal/16-verification.md` | create-saas-app 与前端脚手架未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
-| 153 | ROADMAP | `go/org/AGENTS.md` | org fragment 未并入 merged openapi/speed.yaml | 锚:org-web 轮(M1 具名;首个扩展 merged 文档的轮);org fragment 及 storage 随行再生成、其余共享前端腿 |
 | 200 | ROADMAP | `docs/internal/17-risks.md` | saasctl upgrade npm 侧改写与自检未落地 | 锚:create-saas-app;upgrade 的 web/package.json 改写随 web 模板 |
 | 205 | ROADMAP | `docs/internal/02-repo-and-release.md` | create-saas-app 与前端模板未实现 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 | 213 | ROADMAP | `.github/workflows/scaffold-verify.yml` | create-saas-app 与 web 侧模板未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
@@ -284,7 +278,7 @@
 | 67 | ROADMAP | `go/dbkit/repository.go` | Restore 无保留期窗口强制 | 锚:M4 compliance 保留策略;dbkit Restore 不强制保留窗口 |
 | 68 | ROADMAP | `go/dbkit/audit/AGENTS.md` | 审计表无 hash 链、无查询/报表 API、无保留/归档 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 78 | ROADMAP | `web/packages/account-ui/README.md` | 消费者壳无真实 callback 路由,binding 完成腿从不被行使 | 锚:M4 浏览器 leg;社交绑定回调路径→binding 片段桥(壳不服务 callback 路由) |
-| 90 | ROADMAP | `docs/internal/07-platform-services.md` | storage 按租户保留策略与 compliance 联动未实现;片段未入合并文档 | 锚:M4 保留联动(compliance)+org-web(M1)片段半;按租户保留策略无 compliance 联动,merged 无 /api/v1/storage |
+| 90 | ROADMAP | `docs/internal/07-platform-services.md` | storage 按租户保留策略与 compliance 联动未实现 | 锚:M4 保留联动(compliance);片段入合并文档的半随模块驱动合并策略落地(1f3257ba),storage 路径已在 merged 文档 |
 | 92 | ROADMAP | `docs/internal/12-frontend.md` | 浏览器自动化(M4 e2e)未落地 | 锚:M4 e2e 行;浏览器自动化/html-runner/e2e.yml gated stub(serving 半已落地;本地可跑套件已存在) |
 | 98 | ROADMAP | `.github/workflows/docs-check.yml` | docs/site/ 按版本分目录发布未做 | 锚:M4 文档站完整化(自动生成配置清单/按版本分目录发布);生成入口需真实宿主 schema |
 | 100 | ROADMAP | `.github/workflows/reusable-npm-package-ci.yml` | Storybook 组件预览 harness 不存在 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
@@ -363,12 +357,18 @@
 
 ## 9. 闭于 main 的普查行(记录时点 2026-09-09)
 
-以下 5 行在普查(2026-09-08)与记录时点之间由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行)。
+以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地。
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
+| 5 | ROADMAP | `go/sharing/AGENTS.md` | HTTP fragment 未并入 build/openapi/speed.yaml 合并文档 | 闭:1f3257ba 模块驱动合并策略落地——sharing 片段并入合并文档与 @speed/api-sdk(并入不再等前端消费方) |
+| 36 | ROADMAP | `docs/internal/21-api-contract.md` | org 片段进入合并文档待前端消费者 | 闭:1f3257ba org 片段已并入合并文档与 SDK(模块驱动策略;org-web 轮锚作废) |
+| 56 | ROADMAP | `go/ai-gateway/api/openapi.yaml` | ai-gateway fragment 未并入 merged build/openapi/speed.yaml | 闭:1f3257ba ai-gateway 片段已并入合并文档与 @speed/api-sdk |
+| 76 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | storage frontend leg (generated storage operations in api-sdk) | 闭:1f3257ba storage 操作已由 orval 生成进 @speed/api-sdk(合并文档现覆盖 storage 片段) |
+| 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 闭:1f3257ba Taskfile api:merge/api:gen 与 api-contract.yml 的 merge+orval 腿现覆盖全部十三片段(含 org、storage、sharing、pki、integration、ai-gateway) |
 | 109 | BLOCKED | `go/dbkit/soft_delete.go` | Update 不尊重 deleted_at 的未修复缺陷 | 闭:907e864a 修软删模型 Update 清标;d7c9a8b3 错误码索引再生成 |
 | 143 | BLOCKED | `go/authn/sms.go` | SMS 厂商适配器(Aliyun/Tencent/Twilio)未实现 | 闭:e10d3d49 阿里云/腾讯云/Twilio 短信适配器;3e1933f6 行文随行;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
+| 153 | ROADMAP | `go/org/AGENTS.md` | org fragment 未并入 merged openapi/speed.yaml | 闭:1f3257ba org 片段已并入 merged speed.yaml(AGENTS.md 同步改写) |
 | 166 | BLOCKED | `docs/internal/03-deployment-modes.md` | 运营商短信适配器(阿里云/腾讯云/Twilio)未接入 | 闭:e10d3d49 适配器落地(docs/03 已同步现文);3e1933f6 行文随行;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
 | 171 | ROADMAP | `CLAUDE.md` | notes 模块删除/恢复 HTTP 端点 | 闭:2b2cd5da notes HTTP delete/restore 端点(spec 先行);8419861b 合并文档再生成 |
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
