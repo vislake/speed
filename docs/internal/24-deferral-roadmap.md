@@ -36,7 +36,7 @@
 |---|---|---|
 | 1. dbkit 软删模型 Update 清标缺陷 | 实现(不等真实调用方) | 普查行 109 闭。`907e864a`(fix(dbkit): keep a stale model's Update from clearing a row's soft-delete mark),错误码索引随行 `d7c9a8b3` |
 | 2. GeoIP 许可证审查(MaxMind GeoLite2 条款) | ★加排 | 未实现;触发行=异常登录检测(新设备/新地区/不可能位移)整族。见第 4.1 节 |
-| 3. SMS 厂商适配器 | 实现 | 普查行 143、166 闭。`e10d3d49`(feat(authn): add Aliyun, Tencent Cloud and Twilio SMS provider adapters),行文修复随行 `3e1933f6`。真网关验收残余:三适配器对真实账号的验收以 `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` 环境变量门控的集成 leg 形式存在(缺凭据自跳过),见 go/authn/AGENTS.md "The three carrier adapters" |
+| 3. SMS 厂商适配器 | 实现 | 普查行 143、166 闭。`e10d3d49`(feat(authn): add Aliyun, Tencent Cloud and Twilio SMS provider adapters),行文修复随行 `3e1933f6`。真网关验收残余:三适配器对真实账号的验收以 `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` 环境变量门控的集成 leg 形式存在(缺凭据自跳过),见 go/pkgcore/AGENTS.md "SMS carrier adapters"(适配器已随 SMS seam 升格自 go/authn/sms 移入 pkgcore/sms,`87364ed4`;authn 侧记录见其 "The SMS seam is pkgcore's" 节) |
 | 4. X.509 层真实消费方 | 实现 | 普查行 174 闭。`66c81ee9`(CAService.SignCertificate 签发)+ `e0f4e691`(reference-app 对 AI 输出做链验证公证并门控公开分享),残余记录 `65cd4362`、`d2e991ee`。到期驱动续期机制本身仍开,见第 7 章普查行 8、121 |
 | 5. 基准套件 | 实现 | 普查行 86、179 的 benchmark 半边闭。`f09dc0db`(jobs)、`c88a26ab`(authn)、`0c8d858f`(notification)、`f89c4e20`(rbac),nightly GATE 文本随行 `78dbe0e7`、doc 20 记录 `cde7c11d`。千级组织树压测仍缺(普查行 74、88,归属 org 侧) |
 
@@ -183,7 +183,7 @@
 | 40 | ROADMAP | `docs/internal/07-platform-services.md` | storage 病毒扫描钩子与 WebP/水印派生未实现 | 病毒扫描需外部杀毒引擎;WebP/水印属新派生种类+产品语义 |
 | 54 | ROADMAP | `examples/reference-app/web/src/useHashRoute.ts` | 正式路由库决策从未做出 | 正式路由库决策延后记录;导航现行为 hash 片段,随壳/平台面增长再定 |
 | 55 | ROADMAP | `cmd/server/server.go` | authn social per-provider credential 的动态 config 读渠道未实现 | 读回绑定等有活值消费端才接(反投机;flag 可见性已由宿主 FeatureGate 生效) |
-| 61 | ROADMAP | `go/notification/sms.go` | SMS 未成为 pkgcore seam | SMS 缝升格 pkgcore=破坏性公共面整合(authn+notification+内核);无计划 |
+| 61 | 实现 | `go/notification/sms.go` | SMS 未成为 pkgcore seam | 闭:`3f06333f`(feat(pkgcore): add the shared SMS seam)。SMS 现为 pkgcore 共享 seam(根包 `SMS`/`SMSSender` 契约 + console/http-gateway 发送器);carrier 适配器移入 `pkgcore/sms/`,authn 与 notification 消费方切换随 `87364ed4`/`7be42b46`。刻意无内核座位(无 registry/preset/capability 条目):两消费方均经各自 WithSMSSender 注入并自带接线期约束,`pkgcore.SMSSender` doc 记录该形状 |
 | 63 | ROADMAP | `go/authn/mfa.go` | RequireStepUp 无 MFA 账户无密码重输回退 | RequireStepUp 无密码回退需安全设计决策(证明有效期/与 MFA 组合) |
 | 82 | ROADMAP | `docs/internal/17-risks.md` | 数据分域表第五类取舍未定 | 数据分域表第五类取舍 wait-for-trigger 开放裁决 |
 | 87 | ROADMAP | `docs/internal/03-deployment-modes.md` | preset 参数通道与配置文件逐项覆盖层未落地 | preset per-implementation 参数通道+config-file override 层;无调用方,设计未动 |
@@ -367,9 +367,9 @@
 | 76 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | storage frontend leg (generated storage operations in api-sdk) | 闭:1f3257ba storage 操作已由 orval 生成进 @speed/api-sdk(合并文档现覆盖 storage 片段) |
 | 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 闭:1f3257ba Taskfile api:merge/api:gen 与 api-contract.yml 的 merge+orval 腿现覆盖全部十三片段(含 org、storage、sharing、pki、integration、ai-gateway) |
 | 109 | BLOCKED | `go/dbkit/soft_delete.go` | Update 不尊重 deleted_at 的未修复缺陷 | 闭:907e864a 修软删模型 Update 清标;d7c9a8b3 错误码索引再生成 |
-| 143 | BLOCKED | `go/authn/sms.go` | SMS 厂商适配器(Aliyun/Tencent/Twilio)未实现 | 闭:e10d3d49 阿里云/腾讯云/Twilio 短信适配器;3e1933f6 行文随行;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
+| 143 | BLOCKED | `go/authn/sms.go` | SMS 厂商适配器(Aliyun/Tencent/Twilio)未实现 | 闭:e10d3d49 阿里云/腾讯云/Twilio 短信适配器;3e1933f6 行文随行;SMS seam 升格后适配器随 87364ed4 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
 | 153 | ROADMAP | `go/org/AGENTS.md` | org fragment 未并入 merged openapi/speed.yaml | 闭:1f3257ba org 片段已并入 merged speed.yaml(AGENTS.md 同步改写) |
-| 166 | BLOCKED | `docs/internal/03-deployment-modes.md` | 运营商短信适配器(阿里云/腾讯云/Twilio)未接入 | 闭:e10d3d49 适配器落地(docs/03 已同步现文);3e1933f6 行文随行;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
+| 166 | BLOCKED | `docs/internal/03-deployment-modes.md` | 运营商短信适配器(阿里云/腾讯云/Twilio)未接入 | 闭:e10d3d49 适配器落地(docs/03 已同步现文);3e1933f6 行文随行;适配器随 87364ed4 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
 | 171 | ROADMAP | `CLAUDE.md` | notes 模块删除/恢复 HTTP 端点 | 闭:2b2cd5da notes HTTP delete/restore 端点(spec 先行);8419861b 合并文档再生成 |
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
 
@@ -427,7 +427,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 58 | `docs/internal/17-risks.md` | SystemContextEnteredEvent 缺影响记录数字段 | docs/17 SystemContextEnteredEvent 行=文档声明已重述 |
 | 59 | `docs/internal/19-dev-workflow.md` | 数据库初始化与 lefthook 预提交钩子未实现 | docs/19 db 初始化+lefthook=记录即现状(启动 Apply 承担迁移;CI 全量门已覆盖) |
 | 60 | `docs/internal/03-deployment-modes.md` | saasctl 生成项目模板未 blank-import exporter/prometheus | docs/03 exporter 已按现状重述(生成模板 blank-import 缺口记录于 observability AGENTS);抽查已核 |
-| 61 | `CLAUDE.md` | notification: pkgcore 级 SMS 缝 | CLAUDE.md SMS 缝记录准确(无 pkgcore 级 SMS seam=现状;收敛为破坏性整合无计划) |
+| 61 | `CLAUDE.md` | notification: pkgcore 级 SMS 缝 | 原前提已随普查行 61 闭合而变:SMS seam 已升格 pkgcore(3f06333f/87364ed4/7be42b46),CLAUDE.md 相应措辞已改写为共享 seam 现文(pkgcore/authn/notification 三条目+notification 延付清单去项) |
 | 62 | `CLAUDE.md` | Trivy 每 PR 容器镜像扫描 | CLAUDE.md Trivy DEFERRED 条目已随 docker-image 轮更新为具体缺前置的现文 |
 | 63 | `.github/workflows/docs-check.yml` | docs/ 整树 markdown 链接检查未做 | docs-check 整树链接检查=记于 workflow 的刻意决定(DELIBERATELY NOT WIRED) |
 | 64 | `go/integration/AGENTS.md` | Deliberately not in scope 表 + Known limitations 段(8 条)在轮次史改写中保留的 deferral 记录(无手动重投、无 API-key expiry sweep、Rotate 非原子、Payload 冻结、无每租户量限等) | integration 范围表+Known limitations 保持最新(两条已标 DISCHARGED) |
