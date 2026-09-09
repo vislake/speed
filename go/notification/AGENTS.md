@@ -117,11 +117,12 @@ module must import.
   `DeliveryService.Dispatch`, the single registered queue handler
   (`jobTypeDeliver` = `"notification.deliver"`), send-time rechecks,
   rendering, per-channel attempt and record settling.
-- `sms.go` -- the in-package SMS seam: the `SMS` message shape and the
-  `SMSSender` interface (structurally identical to authn's own sender, so a
-  host wires one implementation to both modules), with
-  `NewConsoleSMSSender` as the zero-external-dependency implementation that
-  doubles as the module's test double (see "SMS stays an in-package seam").
+- No SMS file of its own: the SMS transport is the pkgcore seam, consumed
+  not declared -- the delivery pipeline and the contact service send
+  `pkgcore.SMS` values through the host-wired `pkgcore.SMSSender`
+  (`WithSMSSender`), with `pkgcore.NewConsoleSMSSender` as the
+  zero-external-dependency implementation that doubles as the module's
+  test double (see "The SMS seam is pkgcore's").
 - `render.go` -- the template-render seam: per-channel part shapes and the
   `<type_key>.<channel>.<part>` id convention.
 - `hub.go`, `handler.go` -- the per-replica realtime fan-out and the HTTP
@@ -257,7 +258,7 @@ consumer reads the catalog from the registry at call time, never earlier.
 Six host-supplied options are REQUIRED -- `Register` returns the matching
 `Err*Required` (all Internal) without any of them:
 
-- `WithSMSSender` -- the SMS transport (see "SMS stays an in-package seam").
+- `WithSMSSender` -- the SMS transport (see "The SMS seam is pkgcore's").
 - `WithMailFrom` -- the from-address the contact-email path sends as.
 - `WithContactEmailIndexer`, `WithContactPhoneIndexer` -- the blind indexers
   that make an encrypted contact address queryable (see "Separate index keys
@@ -591,17 +592,34 @@ unauthenticated surface or placed on a pre-auth allowlist makes the
 mechanism identical to sharing's, and it must then be fixed the way
 sharing fixed it -- not re-ruled here.
 
-### SMS stays an in-package seam
+### The SMS seam is pkgcore's
 
-The module declares its own `SMSSender` interface rather than consuming a
-pkgcore seam, because pkgcore ships no SMS seam. The interface is
-structurally identical to authn's own sender, so a host's wiring can hand
-the same implementation to both modules without either importing the other
-(the console sender and any HTTP sender a host implements satisfy both).
-SMS has no pkgcore-level seam alongside `Mailer` -- no registry entries,
-preset entries or capability declarations for it (see "Not implemented");
-the interface lives here and the host's implementation is all the module
-ever calls.
+The SMS transport this module sends verification codes and sms-channel
+deliveries through is pkgcore's own seam -- `pkgcore.SMS` and
+`pkgcore.SMSSender` -- shared with go/authn's phone-login flow, so a host
+wires ONE implementation to both modules' sender options
+(`authn.WithSMSSender` here and `WithSMSSender` there) with neither module
+importing the other. The implementations are pkgcore's too, all reachable
+below this module: `pkgcore.NewConsoleSMSSender` (the
+zero-external-dependency console transport, which doubles as this module's
+test double), `pkgcore.NewHTTPSMSSender` (an operator-run JSON gateway, the
+distributed-mode transport the reference app wires), and the three real
+carrier adapters `pkgcore/sms/aliyun`, `pkgcore/sms/tencent` and
+`pkgcore/sms/twilio` (each a host-constructed `NewSender`). The seam has no
+pkgcore registry, preset or capability seat -- `pkgcore.SMSSender`'s own
+doc comment records why: no consumer resolves its SMS transport from the
+kernel, host injection through module options is the whole wiring, and each
+consumer keeps its own wiring-time requirement on the sender. This module's
+requirement is the strictest of the two: `Register` refuses to boot without
+a wired sender (`ErrSMSSenderRequired`), where authn's refusal applies only
+under the distributed deployment mode.
+
+The promotion was a deliberate breaking change under lockstep versioning:
+`WithSMSSender`'s parameter type is now `pkgcore.SMSSender`, and this
+module's former `SMS` type, `SMSSender` interface and
+`NewConsoleSMSSender` constructor are gone -- a host that wired this
+module's own console constructor names `pkgcore.NewConsoleSMSSender`
+instead.
 
 ### External contacts render in the platform default locale
 
@@ -648,12 +666,6 @@ is NOT listed is not absent: if it is not in this section and not in
   platform default locale (see Adjudications); a contact has no negotiated
   locale of its own -- no `locale` column, no negotiation path, and no
   reconciliation of copy already rendered under the default.
-- **SMS as a pkgcore seam.** The in-package `SMSSender` interface (see
-  Adjudications) has no pkgcore-level home alongside `Mailer`: there is no
-  seam registry entry, preset entry, capability declaration or host option
-  for it, so authn's HTTP sender and this module's console sender cannot
-  register anywhere and every host wires the same implementation to both
-  modules by hand.
 - **The platform-staff push consumer.** No platform-staff push consumer
   exists for the hub's per-connection `Subscribe` connections (such a
   consumer would subscribe unscoped and do its own recipient routing,
