@@ -1,14 +1,13 @@
-// This file lives in package pkgcore_test — the external test package,
-// distinct from eventbus_test.go's internal package pkgcore — because it
-// must import go/pkgcore/eventbustest, which itself imports go/pkgcore: an
+// This file lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier suites with no single source file as their target
+// (the backend coding standard's testing-layout rule). A seam-contract
+// driver of the module root's own built-ins is such a suite, and it must be
+// black-box against package pkgcore: the driver imports go/pkgcore's
+// eventbustest support package, which itself imports go/pkgcore, and an
 // internal test file (package pkgcore) importing a package that imports
 // pkgcore back is an import cycle Go's toolchain refuses ("import cycle not
-// allowed in test"), while an external test file compiles as a separate
-// package and carries no such restriction. This is the mechanical
-// exception the backend coding standard's testing-layout rule names for
-// exactly this situation (package x vs. package x_test cases cannot share
-// a file), not a new test-organization convention.
-package pkgcore_test
+// allowed in test"). An external test package carries no such restriction.
+package unittest
 
 import (
 	"testing"
@@ -29,9 +28,9 @@ import (
 // eventbustest's package doc comment). The in-memory bus's own
 // error-returning behavior — the "additional property" its synchronous
 // same-goroutine delivery gives it, which no broker-backed bus can provide
-// for a handler delivered on another replica — is pinned right here in
-// this package instead, by eventbus_test.go's TestMemoryEventBusPublish,
-// whose failing-handler cases assert the joined error Publish returns.
+// for a handler delivered on another replica — is pinned instead by
+// eventbus_test.go's TestMemoryEventBusPublish, the package-pkgcore suite
+// that stays in the source package next to the code it tests.
 //
 // The in-memory bus is single-process, so the factory returns the same
 // instance twice: the faithful two-instance model of a one-replica

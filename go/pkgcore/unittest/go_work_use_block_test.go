@@ -1,4 +1,9 @@
-package pkgcore
+// This suite lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier checks with no single source file as their target
+// (the backend coding standard's testing-layout rule); a repo-shape check is
+// such a suite. It tests the repository's workspace wiring, not pkgcore's
+// own symbols, so it runs black-box from outside package pkgcore.
+package unittest
 
 import (
 	"encoding/json"
@@ -46,19 +51,17 @@ func TestGoWorkUseBlock_ListsEveryModuleDirectory(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime.Caller(0) did not report this file's own path")
 	}
-	// go/pkgcore/<this file> -- the repo root is two levels up.
-	repoRoot, err := filepath.Abs(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-	if err != nil {
-		t.Fatalf("resolve repo root from %s: %v", thisFile, err)
+	// The check lives in go/pkgcore/unittest/. The monorepo checkout's
+	// go.work anchors at the repo root, which is found by walking up from
+	// this module's root until a go.work appears (see repoRootAboveGoWork);
+	// walking rather than counting fixed levels keeps the anchor correct
+	// wherever the unittest directory sits inside the module.
+	moduleRoot := moduleRootOf(t, thisFile)
+	repoRoot, found := repoRootAboveGoWork(t, moduleRoot)
+	if !found {
+		t.Skipf("no go.work above %s -- not running inside the speed monorepo checkout", moduleRoot)
 	}
-
 	goWorkPath := filepath.Join(repoRoot, "go.work")
-	if _, statErr := os.Stat(goWorkPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			t.Skipf("no go.work at %s -- not running inside the speed monorepo checkout", goWorkPath)
-		}
-		t.Fatalf("stat %s: %v", goWorkPath, statErr)
-	}
 
 	// Shelling out to `go work edit -json` (mirroring standalone_build_test.go's
 	// own use of os/exec against the go tool) parses go.work exactly the way
@@ -115,5 +118,28 @@ func TestGoWorkUseBlock_ListsEveryModuleDirectory(t *testing.T) {
 				"repo-root wildcard build stays green by silently never resolving into it",
 			strings.Join(missing, ", "),
 		)
+	}
+}
+
+// repoRootAboveGoWork walks upward from dir -- the module root the check
+// anchors on -- until it finds a directory containing go.work, and returns
+// that directory. The second result reports whether a go.work was found
+// before the filesystem root: false means this test is not running inside
+// the speed monorepo checkout (e.g. a standalone `go get` of this module
+// alone), and the caller skips, exactly as this test always did when no
+// go.work sat where the repo root should be.
+func repoRootAboveGoWork(t *testing.T, dir string) (string, bool) {
+	t.Helper()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return dir, true
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", filepath.Join(dir, "go.work"), err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
 	}
 }

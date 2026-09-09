@@ -1,15 +1,14 @@
-// This file lives in package pkgcore_test — the external test package,
-// distinct from mailer_test.go's and smtp_mailer_test.go's internal package
-// pkgcore — because it must import go/pkgcore/mailertest, which itself
-// imports go/pkgcore: an internal test file (package pkgcore) importing a
-// package that imports pkgcore back is an import cycle Go's toolchain
-// refuses ("import cycle not allowed in test"), while an external test file
-// compiles as a separate package and carries no such restriction. This is
-// the mechanical exception the backend coding standard's testing-layout
-// rule names for exactly this situation (package x vs. package x_test cases
-// cannot share a file), not a new test-organization convention — see
-// eventbus_conformance_test.go's identical note.
-package pkgcore_test
+// This file lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier suites with no single source file as their target
+// (the backend coding standard's testing-layout rule). A seam-contract
+// driver of the module root's own built-ins is such a suite, and it must be
+// black-box against package pkgcore: the driver imports go/pkgcore's
+// mailertest support package, which itself imports go/pkgcore, and an
+// internal test file (package pkgcore) importing a package that imports
+// pkgcore back is an import cycle Go's toolchain refuses ("import cycle not
+// allowed in test"). An external test package carries no such restriction —
+// see eventbus_conformance_test.go's identical note.
+package unittest
 
 import (
 	"fmt"
@@ -48,8 +47,8 @@ func TestSMTPMailer_ConformsToMailerContract(t *testing.T) {
 // different packages for the import-cycle reason this file's own doc
 // comment explains (mailerFor's would-be shared home, internal/testutil,
 // cannot import pkgcore at all — see fake_smtp_server.go's doc comment) —
-// each side of the cycle needs its own thin pkgcore.Mailer wrapper around
-// FakeSMTPServer.Addr().
+// each side of the package boundary needs its own thin pkgcore.Mailer
+// wrapper around FakeSMTPServer.Addr().
 func smtpMailerFor(t *testing.T, server *testutil.FakeSMTPServer) pkgcore.Mailer {
 	t.Helper()
 	host, port, err := net.SplitHostPort(server.Addr())
