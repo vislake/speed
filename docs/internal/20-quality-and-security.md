@@ -79,7 +79,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 | @speed/tenancy-ui | 92.3%（60/65） | 92.18%（59/64） | 91.66%（11/12） | 86.11%（31/36） |
 | @speed/i18n | 89.12%（213/239） | 89.51%（205/229） | 87.8%（36/41） | 85.53%（136/159） |
 
-全部 13 个测量对象首测即高于 80% 线（最低 @speed/i18n 89.1%）。尚未接线：npm-package-ci 的每包 test 腿不带 coverage，也没有任何基线/下限比对机制；web 侧是否复制 Go 门禁的"不允许下降"基线比较、CI 以什么形态落地，留待补测试轮次完成后定夺，本注记只记录已定下的口径与数字。边界情况已探明并记录：api-sdk 排除生成文件后只剩 runtime.ts 一条可测源，其数字单独标注；测量会在各包目录留下 `coverage/` 产物目录，仓库 .gitignore 尚无对应条目，属后续清理项。
+全部 13 个测量对象首测即高于 80% 线（最低 @speed/i18n 89.1%）。CI 强制已落地（2026-09-09）：npm-package-ci 的每包 test 腿现以 `pnpm test -- --coverage` 运行，13 份 vitest 配置的 `coverage.thresholds` 全局下限为 **statements 80 + branches 80**，任一低于下限即 vitest 非零退出、该包 job 失败；下限即强制机制，未复制 Go 门禁的"不允许下降"基线比较。lines 与 functions 不设下限：13 个对象里 lines 与 statements 逐包差不超过 0.81pp（ui-kit 一行 lines 还高于 statements），近乎同一度量，不写两遍；functions 首测最低 87.8%（i18n），余量远大于 branches 的 3.51pp（reference-app web），且一个函数完全未被调用必然同时拉低 statements 与 branches，已被这两维抓住。接线后带阈值复测 i18n/ui-kit/reference-app web/api-sdk 四个代表包，全部通过且数值与下表逐位一致。边界情况已探明并记录：api-sdk 排除生成文件后只剩 runtime.ts 一条可测源，其数字单独标注；测量会在各包目录留下 `coverage/` 产物目录，仓库 .gitignore 尚无对应条目，属后续清理项。
 
 ### 警告治理
 **警告视为一等问题**，与团队既定规范一致：编译警告、lint 警告、废弃 API 警告、React 控制台警告、a11y 警告、竞态检测警告，全部不得静默忽略或抑制。CI 中新增警告即失败；确需保留的必须有显式豁免注释并说明原因与跟踪项。
