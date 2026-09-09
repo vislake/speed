@@ -55,7 +55,7 @@ const EmailSerializerName = "org_email_enc"
 // (its doc comment says so), so the name must cross the package boundary as
 // a referenced constant rather than a hand-typed string that can drift from
 // the schema. The module's unit suite pins the constant against the model's
-// gorm tag and the migrated schema (email_index_column_test.go).
+// gorm tag and the migrated schema (email_index_column_drift_test.go).
 const EmailIndexColumn = "email_index"
 
 // The lifecycle states an Invitation can be in. Closed set, kept in Go for
