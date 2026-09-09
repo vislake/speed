@@ -142,8 +142,6 @@ server as an ordinary three-step protocol, fully expressible.
 
 ## Source
 
-- [API-contract design notes (internal)](https://github.com/vislake/speed/blob/main/docs/internal/21-api-contract.md) —
-  the internal design document this page distills.
 - [Taskfile api:gen/api:merge tasks](https://github.com/vislake/speed/blob/main/Taskfile.yml) —
   the pinned generation commands.
 - [api-contract.yml](https://github.com/vislake/speed/blob/main/.github/workflows/api-contract.yml) —

@@ -69,7 +69,7 @@ stub——所以上面的命令才是真正跑起应用的方式;前端工作在
 | Type | 何时使用 |
 |---|---|
 | `feat` / `fix` | 新功能 / 缺陷修复 |
-| `docs` | 仅文档(`docs/internal/`、ADR、AGENTS.md) |
+| `docs` | 仅文档(设计文档、ADR、AGENTS.md) |
 | `test` | 新增或更新测试 |
 | `api` | OpenAPI spec 变更,连同重新生成的产物一起提交 |
 | `i18n` | 新增或更新 zh-CN / en-US 资源 |
@@ -79,15 +79,16 @@ stub——所以上面的命令才是真正跑起应用的方式;前端工作在
 scope 指明被改动的单元:Go module 或 npm 包名(`pkgcore`、`billing`、
 `auth-ui`)皆可,另有横切的 `reference-app`、`openapi`、`deps`、
 `ci`、`compose`、`templates`、`adr`、`release`,以及仓库级
-`internal`(`docs/internal/`)、`repo`(根规范)与 `site`(本站)。
+`internal`(设计文档)、`repo`(根规范)与 `site`(本站)。
 破坏性变更——对交付库而言,任何导出签名变更都是——在 scope 后加
 `!`,并带 `BREAKING CHANGE:` footer。摘要与正文写为什么,绝不叙述
 流程产物(内部代号、轮次名)。
 
 ## 质量门
 
-下面的清单是每个 pull request 合入前必须通过的——它镜像了仓库根
-CLAUDE.md 的纪律清单,由 code review 执行,凡有工具处由 CI 执行。
+下面的清单是每个 pull request 合入前必须通过的——即本站
+[设计原则](/zh-cn/docs/developer-docs/design-principles/)一页的纪
+律清单,由 code review 执行,凡有工具处由 CI 执行。
 
 - **缺陷修复必须带复现测试**——在修复前失败的那种。若确实无法
   添加,PR 里说明原因并指名后续动作;由 reviewer 确认。
@@ -115,10 +116,9 @@ CLAUDE.md 的纪律清单,由 code review 执行,凡有工具处由 CI 执行。
 文档与代码同 PR 一起走:新的公共 API 同 PR 带使用文档、可编译示例
 与所属模块 AGENTS.md 的条目——Go 的 `Example` 函数与每个包自带
 的 usage-example 测试都由 CI 编译并运行。语言遵循仓库规则:代码
-与面向模块的文档是英文,`docs/internal/` 设计文档是中文,本站是
-双语——新页面要带真实的 zh-CN 译文。本栏页面都带 Source 小节,
-链回它们提炼自的 `docs/internal/` 文档或 AGENTS.md,每个论断都可
-回溯核验。
+与面向模块的文档是英文,内部设计文档是中文,本站是双语——新页
+面要带真实的 zh-CN 译文。本栏页面都带 Source 小节,指向相关材料,
+每个论断都能回到底层核验。
 
 ## CI 何时跑什么
 
@@ -152,7 +152,4 @@ flowchart LR
 
 ## Source
 
-- [docs/internal/19-dev-workflow.md](https://github.com/vislake/speed/blob/main/docs/internal/19-dev-workflow.md)
-- [docs/internal/20-quality-and-security.md](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md)
-- [仓库根 CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md)
 - [提交规范 skill](https://github.com/vislake/speed/blob/main/.claude/skills/commit-convention/SKILL.md)

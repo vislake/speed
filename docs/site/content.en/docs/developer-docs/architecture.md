@@ -8,8 +8,7 @@ description: "The shape of a speed-based service: the modular monolith distribut
 
 Building on speed? Start with the [user guide](/docs/user-guide/);
 this page answers the questions it raises — what the modules are, how
-they fit, and what the framework does and does not decide. Every
-claim traces to the internal design document named in Source.
+they fit, and what the framework does and does not decide.
 
 ## One shape: a modular monolith, distributed as libraries
 
@@ -211,10 +210,7 @@ Business code never sees either axis — no `if mode == "standalone"`
 in module logic, because module logic never holds the mode; mode and
 implementation live only in kernel wiring. (The in-process
 implementations double as test doubles, so most unit tests need no
-containers.) The
-[deployment-modes design
-document](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)
-is the authority for this section.
+containers.)
 
 ## The module wiring contract
 
@@ -252,8 +248,7 @@ tenancy → rbac.RequirePermission → handler`. Authentication precedes
 tenant resolution because the tenant resolver returns a tenant but no
 context — it must read a verified principal to resolve. The
 [identity and access domain page](/docs/user-guide/domains/identity-access/)
-walks the chain operationally; the reasoning lives in the
-[architecture document](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md).
+walks the chain operationally.
 
 ## Multi-tenancy: isolation is a platform property
 
@@ -291,17 +286,11 @@ ID references, since modules release and migrate independently.
 
 The user guide tells you *how* — install modules, wire the kernel,
 shape the org tree, operate a generated project. This Developer docs
-section tells you *why*, distilled from the repository's internal
-design documents, every page's Source linking back to the originals.
-The [design principles](/docs/developer-docs/design-principles/) page
+section tells you *why*. The
+[design principles](/docs/developer-docs/design-principles/) page
 is this page's companion: the discipline list every module obeys,
-each rule with its reason and where it is enforced. Later pages — the
-API-contract design and per-module design pages — will land in this
-section as the site's content batches complete; this page is the map
-they hang off.
+each rule with its reason and where it is enforced.
 
 ## Source
 
-- Design: [docs/internal/01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md), [03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md), [04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md), [00-overview.md](https://github.com/vislake/speed/blob/main/docs/internal/00-overview.md)
-- Repository root [CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md) — the Architecture and Architecture Discipline sections are the authoritative source this page distills
 - [Developer docs](/docs/developer-docs/) hub, [user guide](/docs/user-guide/)

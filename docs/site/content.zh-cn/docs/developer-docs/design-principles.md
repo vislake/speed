@@ -6,8 +6,7 @@ description: "每个 speed 模块都遵守的纪律——模块边界、多租�
 
 # 设计原则
 
-[总体架构](/zh-cn/docs/developer-docs/architecture/)讲 speed 的形态;本页讲让形态不散架的规则:每条禁什么或要求什么、为什么、在哪里执行——code review、CI,或两者。权威出处是仓库根
-[CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md) 的 Architecture Discipline 一节;完整推理在 Source 点名的内部文档里。这些不是风格建议——违反它们的代码不应合入。执行处按类别如实标注(semgrep 规则、ESLint 规则、契约套件);Repository Status 一节记录每条 CI 流水线当下实际跑什么。
+[总体架构](/zh-cn/docs/developer-docs/architecture/)讲 speed 的形态;本页讲让形态不散架的规则:每条禁什么或要求什么、为什么、在哪里执行——code review、CI,或两者。这些不是风格建议——违反它们的代码不应合入。执行处按类别如实标注(semgrep 规则、ESLint 规则、契约套件);每条流水线当下实际跑什么见[仓库与发布](/zh-cn/docs/developer-docs/repo-and-release/)。
 
 ```mermaid
 flowchart LR
@@ -88,14 +87,12 @@ API 契约只有一个真源——每个模块自己的 OpenAPI 片段——工�
 - **每个 bug fix 必须带复现该 bug 的测试**——修复前失败、修复后通过。在未修复代码上也会通过的测试不算数;确实无法添加时,必须说明理由与后续安排。
 - **CI 跑双矩阵**:每个接缝的契约套件 × 它的每套实现,以及每个模块的迁移与仓库 × 两种 SQL 方言。单测层不需要容器——进程内实现同时充当测试替身。
 
-完整的分层定义与布局规则在前后端编码规范 skill 与[质量与安全工程设计文档](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md)里。
+完整的分层定义与布局规则在前后端编码规范 skill 里。
 
 ## 设计决策自带理由
 
-这里的每条原则都曾是带被否决方案的决策;推理被写了下来——内部文档回答"为什么不用 ent""为什么不用 Casbin""为什么不用微服务"。
+这里的每条原则都曾是带被否决方案的决策;为什么不用 ent、为什么不用 Casbin、为什么不用微服务,都留有成文的推理。
 
 ## Source
 
-- 仓库根 [CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md)——本页提炼的权威源是其中的 Architecture Discipline 一节
-- 设计:[docs/internal/13-documentation-standards.md](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md)、[16-verification.md](https://github.com/vislake/speed/blob/main/docs/internal/16-verification.md)、[20-quality-and-security.md](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md)、[04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)、[03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)
 - [总体架构](/zh-cn/docs/developer-docs/architecture/)、[开发者文档](/zh-cn/docs/developer-docs/) hub

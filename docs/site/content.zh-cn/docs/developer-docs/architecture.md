@@ -6,7 +6,7 @@ description: "speed 服务的总体形态——以库分发的模块化单体、
 
 # 总体架构
 
-在 speed 之上构建服务?从[用户指南](/zh-cn/docs/user-guide/)开始。本页回答用户指南引出的问题:模块是什么、它们如何组合、框架替你决定什么、不决定什么。每一条论断都能回溯到 Source 小节点名的内部设计文档。
+在 speed 之上构建服务?从[用户指南](/zh-cn/docs/user-guide/)开始。本页回答用户指南引出的问题:模块是什么、它们如何组合、框架替你决定什么、不决定什么。
 
 ## 一种形态:以库分发的模块化单体
 
@@ -129,7 +129,7 @@ flowchart TD
 
 由于 Go 按**包**而非按符号解析依赖,同一立场延伸到打包:**二进制包含哪些实现,由应用组装者决定。** 每套实现住在自己的子包里(`go/pkgcore/kv/redis`、`go/jobs/queue/asynq`……),在自己的 `init()` 中自我注册;确定只用 SQLite 的应用只 import 一个方言包、只承担一套方言的依赖——`database/sql` 就是模型。要接受的代价也是 `database/sql` 的:没人 import 的实现会以启动错误现身,报错信息点名修复它所需的 import。
 
-业务代码永远看不到这两条轴——模块逻辑里没有 `if mode == "standalone"`,因为模块逻辑根本不持有模式;模式与实现只活在 Kernel 的装配代码里。进程内那批实现的附带收益是它们同时充当测试替身,多数单元测试因此不需要容器。[部署模式与实现组装设计文档](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)是本节权威。
+业务代码永远看不到这两条轴——模块逻辑里没有 `if mode == "standalone"`,因为模块逻辑根本不持有模式;模式与实现只活在 Kernel 的装配代码里。进程内那批实现的附带收益是它们同时充当测试替身,多数单元测试因此不需要容器。
 
 ## 模块接线契约
 
@@ -141,7 +141,7 @@ flowchart TD
 
 Kernel 由选项组装,而不是由模式参数组装——`NewKernel(opts...)` 加 `WithDeploymentMode`、`WithPreset` 与逐接缝注入。`Bootstrap` 遍历模块图、解析并校验每个接缝、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
 
-HTTP 中间件链有一个固定、不可随意调整的顺序:`recover → request-id/日志上下文 → 可观测性 → authn → tenancy → rbac.RequirePermission → handler`。认证必须先于租户解析,因为租户解析器只返回租户而不返回 context——它必须读到一个已验证的 Principal 才能解析。[身份与访问领域页](/zh-cn/docs/user-guide/domains/identity-access/)按操作讲解这条链;推理见[架构设计文档](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)。
+HTTP 中间件链有一个固定、不可随意调整的顺序:`recover → request-id/日志上下文 → 可观测性 → authn → tenancy → rbac.RequirePermission → handler`。认证必须先于租户解析,因为租户解析器只返回租户而不返回 context——它必须读到一个已验证的 Principal 才能解析。[身份与访问领域页](/zh-cn/docs/user-guide/domains/identity-access/)按操作讲解这条链。
 
 ## 多租户:隔离是平台属性
 
@@ -160,10 +160,8 @@ HTTP 中间件链有一个固定、不可随意调整的顺序:`recover → requ
 
 ## 设计详情所在
 
-用户指南讲*怎么做*:装模块、接 Kernel、搭组织树、运维生成的项目。本栏(Developer docs)讲*为什么*,从仓库内部设计文档提炼而来,每页 Source 都链回原文。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。后续总述页——API 契约设计、以及按模块依赖顺序展开的逐模块设计页——将随站点内容批次陆续落地;本页是它们悬挂的地图。
+用户指南讲*怎么做*:装模块、接 Kernel、搭组织树、运维生成的项目。本栏(Developer docs)讲*为什么*。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。
 
 ## Source
 
-- 设计:[docs/internal/01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)、[03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)、[04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)、[00-overview.md](https://github.com/vislake/speed/blob/main/docs/internal/00-overview.md)
-- 仓库根 [CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md)——本页提炼的权威源是其中的 Architecture 与 Architecture Discipline 两节
 - [开发者文档](/zh-cn/docs/developer-docs/) hub、[用户指南](/zh-cn/docs/user-guide/)

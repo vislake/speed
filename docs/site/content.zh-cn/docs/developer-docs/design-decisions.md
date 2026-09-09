@@ -6,18 +6,17 @@ description: "仓库的决策记录:架构决策记录(ADR)与本栏设计页的
 
 # 设计决策档案
 
-本栏的逐模块设计页从仓库内部设计文档(`docs/internal/`)与各模块
-`AGENTS.md` 提炼而来,并经各自的 Source 小节链回原文。本页覆盖
-的是另一类记录:**架构决策记录(ADR)**——把设计文档变成代码的
-过程中,设计撞上现实、必须有取舍时作出的决策。
+本栏的逐模块设计页从仓库设计文档与各模块 `AGENTS.md` 提炼而来。
+本页覆盖的是另一类记录:**架构决策记录(ADR)**——把设计文档变成
+代码的过程中,设计撞上现实、必须有取舍时作出的决策。
 
 ## ADR 在这里怎么运作
 
 每条 ADR 一个文件、一个决策,按 Context → Decision → Consequences
-写成英文,放在 `docs/adr/` 下——刻意放在 `docs/internal/` 之外,
-因为 ADR 记录的是仓库的公开形态,不只被人读,也被工具读:许可证
-扫描器就拒绝放行弱版权(copyleft)依赖,直到依赖清单指名一条对它
-做出裁定的 ADR。
+写成英文,放在 `docs/adr/` 下——刻意与设计文档语料分开,因为
+ADR 记录的是仓库的公开形态,不只被人读,也被工具读:许可证扫描
+器就拒绝放行弱版权(copyleft)依赖,直到依赖清单指名一条对它做出
+裁定的 ADR。
 
 产生 ADR 的典型情形有三种:
 
@@ -91,5 +90,3 @@ ADR 写明背景、陈述决策、列出后果——并与体现该决策的代�
 - [docs/adr/0001-module-migrations-return-embed-fs.md](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)
 - [docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 - [docs/adr/0003-accept-mpl2-for-pki-signer-vault.md](https://github.com/vislake/speed/blob/main/docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
-- [docs/internal/13-documentation-standards.md](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md)
-- [docs/internal/20-quality-and-security.md](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md)

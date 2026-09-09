@@ -163,13 +163,6 @@ HttpOnly 存储也没有可依赖的对象。
 
 ## Source
 
-- [前端设计文档(内部)](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)——
-  本页提炼的内部设计原文。
-- [web/README.md](https://github.com/vislake/speed/blob/main/web/README.md)——
-  工作区布局与双根理由。
-- [api-client README](https://github.com/vislake/speed/blob/main/web/packages/api-client/README.md)
-  与 [auth-core README](https://github.com/vislake/speed/blob/main/web/packages/auth-core/README.md)——
-  运行时与会话契约。
 - [web/eslint-rules](https://github.com/vislake/speed/blob/main/web/eslint-rules/)——
   `no-direct-http` 与 `no-literal-text` 规则及其测试。
 - [reference-app web 引导](https://github.com/vislake/speed/blob/main/examples/reference-app/web/src/main.tsx)——

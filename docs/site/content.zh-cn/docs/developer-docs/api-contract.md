@@ -108,8 +108,6 @@ events 不是 OpenAPI 3.0 媒体类型,通知流端点因此手挂载、省略�
 
 ## Source
 
-- [API 契约设计文档(内部)](https://github.com/vislake/speed/blob/main/docs/internal/21-api-contract.md)——
-  本页提炼的内部设计原文。
 - [Taskfile 的 api:gen/api:merge 任务](https://github.com/vislake/speed/blob/main/Taskfile.yml)——
   钉定的生成命令。
 - [api-contract.yml](https://github.com/vislake/speed/blob/main/.github/workflows/api-contract.yml)——

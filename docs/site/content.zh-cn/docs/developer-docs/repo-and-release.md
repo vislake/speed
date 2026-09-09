@@ -68,8 +68,7 @@ upgrade` 一步把消费方 `go.mod` 里的 speed requires 改写到目标版
 
 ## CI 矩阵
 
-守护仓库的 CI 全貌见仓库根 CLAUDE.md 的 Repository Status 一节
-(权威、始终最新的记录);简而言之的形状:
+守护仓库的 CI,简而言之的形状:
 
 - **fast-check** 跑在每个 PR 与每次对 main 的直接推送上:模块与包
   矩阵的逐项腿(lint、vet、race 下的单元测试、工作区与独立构建),
@@ -83,28 +82,21 @@ upgrade` 一步把消费方 `go.mod` 里的 speed requires 改写到目标版
   porcelain 门),安全扫描每个 PR 加每日计划,scaffold-verify 每
   日物化一个生成项目,在两种部署模式下 tidy、构建、迁移并启动。
 
-两条规则给矩阵以牙齿:每个已实现模块与包都真实通过自己的腿
-(CLAUDE.md 状态节逐个点名);而 mandatory-first-consumer 规则意味
-着没有真实使用者的模块 API 不算完成——reference app 端到端地行使
-每个模块,消费方形态的证明经 scaffold-verify 流水线跑在真实生成
-项目上。
+两条规则给矩阵以牙齿:每个已实现模块与包都真实通过自己的腿;而
+mandatory-first-consumer 规则意味着没有真实使用者的模块 API 不算
+完成——reference app 端到端地行使每个模块,消费方形态的证明经
+scaffold-verify 流水线跑在真实生成项目上。
 
 ## 文档随代码分发
 
 文档跟着代码到同一个版本。每个模块与包把自己的权威文档带在身
 上——随模块分发的 `AGENTS.md`(把 AI agent 当一等读者来写:边界、
-公开 API、以祈使句写的禁止事项)加使用材料,npm 包还有进发布包的
-README。设计理由住在与实现代码同仓的 `docs/internal/` 里,本站各
-页——本页在内——从那些文档提炼并链回原文,任何论断都能回到底层
-文档核验。站点页面以英文与中文双语撰写,每页的 Source 小节指向原
-文。
+公开 API、以祈使句写的禁止事项)加面向使用者的材料。设计理由与实
+现代码同仓记录,本站各页——本页在内——从那些记录提炼,任何论断
+都能回到底层核验。站点页面以英文与中文双语撰写。
 
 ## Source
 
-- [仓库与发布设计文档(内部)](https://github.com/vislake/speed/blob/main/docs/internal/02-repo-and-release.md)——
-  本页提炼的内部设计原文。
-- [web/README.md](https://github.com/vislake/speed/blob/main/web/README.md)——
-  `web/` 为什么是自己的工作区根。
 - [Taskfile.yml](https://github.com/vislake/speed/blob/main/Taskfile.yml)——
   计划内命令,含 `release:plan`。
 - [发布协调器](https://github.com/vislake/speed/blob/main/tools/release/lockstep-release.py)——

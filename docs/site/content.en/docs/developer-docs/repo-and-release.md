@@ -90,9 +90,7 @@ Locally, `task release:plan VERSION=vX.Y.Z` runs the same check.
 
 ## The CI matrix
 
-The CI that guards the repository is described in full in the root
-CLAUDE.md's Repository Status section (the authoritative, always
-current account); the shape, in brief:
+The CI that guards the repository, in brief:
 
 - **fast-check** runs on every pull request and every direct push to
   main: per-module legs (lint, vet, unit tests under the race
@@ -113,11 +111,10 @@ current account); the shape, in brief:
   modes.
 
 Two rules give the matrix its teeth. Every implemented module and
-package genuinely passes its own legs (the CLAUDE.md status section
-names each one). And the mandatory-first-consumer rule means a module
-API nothing real uses is not done: the reference app exercises every
-module end to end, and consumer-shaped proof runs through the
-scaffold-verify pipeline on real generated projects.
+package genuinely passes its own legs. And the mandatory-first-consumer
+rule means a module API nothing real uses is not done: the reference
+app exercises every module end to end, and consumer-shaped proof runs
+through the scaffold-verify pipeline on real generated projects.
 
 ## Documentation ships with the code
 
@@ -125,20 +122,14 @@ Docs follow the code to the same version. Each module and package
 carries its authoritative documentation inside itself — the
 `AGENTS.md` that ships in the module (written for AI agents as first-
 class readers: boundaries, public API, prohibitions in imperative
-form) plus usage material and, for npm packages, the README in the
-published package. Design rationale lives in `docs/internal/`
-alongside the code that implements it, and the pages of this site —
-this one included — distill those documents and link back to them, so
-any claim can be verified against its source. Site pages are written
-in both English and Chinese, and every page's Source section points at
-the originals.
+form) plus usage material for consumers. Design rationale is recorded
+in the repository alongside the code it explains, and the pages of
+this site — this one included — distill it, so any claim can be
+verified against its source. Site pages are written in both English
+and Chinese.
 
 ## Source
 
-- [Repository-and-release design notes (internal)](https://github.com/vislake/speed/blob/main/docs/internal/02-repo-and-release.md) —
-  the internal design document this page distills.
-- [web/README.md](https://github.com/vislake/speed/blob/main/web/README.md) —
-  why `web/` is its own workspace root.
 - [Taskfile.yml](https://github.com/vislake/speed/blob/main/Taskfile.yml) —
   the planned commands, including `release:plan`.
 - [Release coordinator](https://github.com/vislake/speed/blob/main/tools/release/lockstep-release.py) —

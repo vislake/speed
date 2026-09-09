@@ -8,14 +8,12 @@ description: "The discipline every speed module obeys — module boundaries, mul
 
 The [architecture page](/docs/developer-docs/architecture/) explains
 the shape of speed; this page explains the rules that keep it intact:
-what each forbids or requires, why, and where it is enforced. The
-authoritative source is the repository root
-[CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md)'s
-Architecture Discipline section; the internal documents in Source
-carry the full reasoning. These are not style suggestions — code that
-violates them should not be merged. Enforcement is named at the class
-level — a semgrep rule, an ESLint rule, a conformance suite — and the
-Repository Status section records what each pipeline runs today.
+what each forbids or requires, why, and where it is enforced. These
+are not style suggestions — code that violates them should not be
+merged. Enforcement is named at the class level — a semgrep rule, an
+ESLint rule, a conformance suite — and the
+[repo and release page](/docs/developer-docs/repo-and-release/)
+records what each pipeline runs today.
 
 ```mermaid
 flowchart LR
@@ -207,6 +205,4 @@ section.
 
 ## Source
 
-- Repository root [CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md) — the Architecture Discipline section is the authoritative source this page distills
-- Design: [docs/internal/13-documentation-standards.md](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md), [16-verification.md](https://github.com/vislake/speed/blob/main/docs/internal/16-verification.md), [20-quality-and-security.md](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md), [04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md), [03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)
 - [Architecture](/docs/developer-docs/architecture/), [Developer docs](/docs/developer-docs/) hub

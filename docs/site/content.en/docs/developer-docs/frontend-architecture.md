@@ -191,13 +191,6 @@ the app's suites pin the result.
 
 ## Source
 
-- [Frontend design notes (internal)](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) —
-  the internal design document this page distills.
-- [web/README.md](https://github.com/vislake/speed/blob/main/web/README.md) —
-  the workspace layout and the two-roots rationale.
-- [api-client README](https://github.com/vislake/speed/blob/main/web/packages/api-client/README.md)
-  and [auth-core README](https://github.com/vislake/speed/blob/main/web/packages/auth-core/README.md) —
-  the runtime and session contracts.
 - [web/eslint-rules](https://github.com/vislake/speed/blob/main/web/eslint-rules/) —
   the `no-direct-http` and `no-literal-text` rules and their tests.
 - [reference-app web bootstrap](https://github.com/vislake/speed/blob/main/examples/reference-app/web/src/main.tsx) —

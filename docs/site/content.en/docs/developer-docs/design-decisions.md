@@ -7,20 +7,19 @@ description: "The repository's decision records: how architecture-decision recor
 # Design decisions
 
 This column's per-module design pages are distilled from the
-repository's internal design documents (`docs/internal/`) and each
-module's `AGENTS.md`, and link back to them through their Source
-sections. This page covers a different record: **architecture decision
-records (ADRs)** — decisions taken while turning the design documents
-into code, when the design met reality and something had to give.
+repository's design documents and each module's `AGENTS.md`. This
+page covers a different record: **architecture decision records
+(ADRs)** — decisions taken while turning the design documents into
+code, when the design met reality and something had to give.
 
 ## How ADRs work here
 
 Each ADR is one decision, one file, written as Context → Decision →
-Consequences, in English, under `docs/adr/` — outside `docs/internal/`
-deliberately, because ADRs document the repository's public shape and
-are read by tooling as well as people: the license scanner, for
-instance, refuses a weak-copyleft dependency until the dependency
-manifest names an ADR that adjudicates it.
+Consequences, in English, under `docs/adr/` — deliberately separate
+from the design-document corpus, because ADRs document the
+repository's public shape and are read by tooling as well as people:
+the license scanner, for instance, refuses a weak-copyleft dependency
+until the dependency manifest names an ADR that adjudicates it.
 
 Three patterns produce an ADR:
 
@@ -110,5 +109,3 @@ the same change as the code that embodies it.
 - [docs/adr/0001-module-migrations-return-embed-fs.md](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)
 - [docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 - [docs/adr/0003-accept-mpl2-for-pki-signer-vault.md](https://github.com/vislake/speed/blob/main/docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
-- [docs/internal/13-documentation-standards.md](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md)
-- [docs/internal/20-quality-and-security.md](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md)

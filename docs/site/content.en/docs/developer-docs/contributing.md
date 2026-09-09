@@ -76,7 +76,7 @@ passes its own tests.
 | Type | When to use |
 |---|---|
 | `feat` / `fix` | New functionality / bug fix |
-| `docs` | Documentation only (`docs/internal/`, ADRs, AGENTS.md) |
+| `docs` | Documentation only (design docs, ADRs, AGENTS.md) |
 | `test` | Adding or updating tests |
 | `api` | OpenAPI spec change with regenerated artifacts |
 | `i18n` | Adding or updating zh-CN / en-US resources |
@@ -86,7 +86,7 @@ passes its own tests.
 The scope names the touched unit: a Go module or npm package name
 (`pkgcore`, `billing`, `auth-ui`), the cross-cutting `reference-app`,
 `openapi`, `deps`, `ci`, `compose`, `templates`, `adr`, `release`, or
-repository-level `internal` (`docs/internal/`), `repo` (root guidance)
+repository-level `internal` (the design docs), `repo` (root guidance)
 and `site` (this site). A breaking change — for delivered libraries,
 any exported-signature change — adds `!` after the scope and a
 `BREAKING CHANGE:` footer. Summaries and bodies say why, never
@@ -94,9 +94,9 @@ narrating process artifacts.
 
 ## Quality gates
 
-A pull request clears the checklist before merging — the root
-CLAUDE.md discipline list, enforced by code review and, where tooling
-exists, by CI.
+A pull request clears the checklist before merging — the
+[design principles](/docs/developer-docs/design-principles/) list,
+enforced by code review and, where tooling exists, by CI.
 
 - **A bug fix ships with a reproduction test** — failing before the
   fix. If one cannot be added, the PR says why and names the follow-up,
@@ -132,11 +132,10 @@ Documentation travels with code in the same PR: a new public
 API ships usage docs, a compilable example and an AGENTS.md entry — Go
 `Example`s and each package's usage-example test are compiled and run
 by CI. Language follows the repository rule: code and module-facing
-docs are English, `docs/internal/` is Chinese, and this site is
-bilingual — a new page ships a real zh-CN translation. Pages in this
-column carry a Source section linking the
-`docs/internal/` document or AGENTS.md they were distilled from, so
-every claim is verifiable.
+docs are English, the internal design docs are Chinese, and this site
+is bilingual — a new page ships a real zh-CN translation. Pages in
+this column carry a Source section pointing at related material, so
+every claim can be checked against its origin.
 
 ## What CI runs when
 
@@ -169,7 +168,4 @@ flowchart LR
 
 ## Source
 
-- [docs/internal/19-dev-workflow.md](https://github.com/vislake/speed/blob/main/docs/internal/19-dev-workflow.md)
-- [docs/internal/20-quality-and-security.md](https://github.com/vislake/speed/blob/main/docs/internal/20-quality-and-security.md)
-- [Root CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md)
 - [Commit-convention skill](https://github.com/vislake/speed/blob/main/.claude/skills/commit-convention/SKILL.md)
