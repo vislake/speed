@@ -447,6 +447,6 @@ WB 20(白盒,Go 强制):kernel_shutdown、factory_vars、hub_http、address_inde
 
 ### 提交
 
-按模块六笔提交(正文只述结论性 why,不引批次/轮次代号),全部 fast-forward 单线:
-`test(pkgcore)`(六文件+AGENTS)、`test(jobs)`(三文件+test_support 镜像+AGENTS+基线重录)、`test(authn)`、`test(tenancy)`、`test(ratelimit)`(+tools/README)、`test(observability)`。
+按模块八笔提交(正文只述结论性 why,不引批次/轮次代号),全部 fast-forward 单线:
+`test(pkgcore)`(六文件+AGENTS)、`test(jobs)`(三文件+test_support 镜像+AGENTS+基线重录)、`test(authn)`、`test(tenancy)`、`test(ratelimit)`(+tools/README)、`test(observability)`,后随两笔包内注释重定向(`test(pkgcore)`/`test(jobs)`:smtp_mailer_test.go、fake_smtp_server.go、standalone_queue_test.go、queuetest/assert_conforms_test.go 中指向迁移文件旧归属/旧包名的注释改为现状)。
 
