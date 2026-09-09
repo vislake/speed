@@ -26,7 +26,7 @@ package admin_test
 // notification and audit wired for real, are pinned by the module's own
 // in-package suites (impersonation_service_test.go's
 // TestImpersonationService_Start_BeforeAttachRBAC_Refused, plus the
-// impersonation_service_locale_test.go and module_test.go lifecycles)
+// impersonation_service_start_dispatch_test.go and module_test.go lifecycles)
 // rather than reconstructed here, exactly as ExampleNewExportService
 // defers its real path to export_test.go. ExampleModule_AttachRBAC below
 // demonstrates the same post-Bootstrap AttachRBAC seam from the role

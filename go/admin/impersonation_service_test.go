@@ -70,7 +70,7 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	// *org.MemberService instances is pinned separately, against real
 	// authn/org/notification modules together, by the
 	// TestImpersonationService_Start_* tests in
-	// impersonation_service_locale_test.go.
+	// impersonation_service_start_dispatch_test.go.
 	svc.attach(reg.EventBus(), reg.AuditActions, notifier, nil, nil)
 	// rbacSvc is deliberately NOT left nil the way authnSvc and members
 	// are: Start refuses while it is nil (its own doc comment), and nearly

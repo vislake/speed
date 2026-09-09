@@ -110,7 +110,7 @@ type testAdminEnv struct {
 	// Authn is the real, Register()-ed *authn.Module wired into adminModule
 	// through WithAuthn -- exposed so a test can register a real user
 	// (authnModule.Service().Register) and drive Start's real locale
-	// resolution (impersonation_service_locale_test.go) rather than
+	// resolution (impersonation_service_start_dispatch_test.go) rather than
 	// standing up a second, parallel authn.Module of its own.
 	Authn *authn.Module
 
