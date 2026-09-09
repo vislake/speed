@@ -95,6 +95,8 @@
 
 此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布 v0.0.1 的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/v0.0.1` tag 由 Go module proxy 服务;npm 十二包 0.0.1 发布至 GitHub Packages registry 的 @speed 作用域;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212),类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
 
+补记(2026-09-10):上述跟踪清单之外另有两条同族行文残留,不在普查行内,已随文改述并在此补记——scaffold-verify.yml 触发注释(该文件 :36-39)原称 "release.yml carries no publish credential"、仓内无发布,与 5.4 行 51/52/80 已重述的 "release.yml dispatch 即发布" 前提相悖;web/.changeset/README.md 的版本现状句(该文件 :15-18)原称十二包全在 0.0.0、与 Go 半同处过渡态,与 5.3 行 85/130 记的直接 bump 落地相悖。
+
 ### 5.1 真实发布序列、发布凭据与发布衍生
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
