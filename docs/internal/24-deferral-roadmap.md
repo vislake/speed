@@ -26,7 +26,7 @@
 两项用户裁决标记(2026-09-08 裁决,记录于协调侧):
 
 - **★加排**:**GeoIP 类(GeoIP 许可证审查)与其余凭据类**一律记录待排期,不设里程碑;解除依赖外部前提达成(许可证过 license scanner、真实账户/凭据到位或政策变化)。
-- **◆M4-forward**:**真实发布类**随 v1.0(M4)版本冻结与真实发布落地——发布前这些机制没有可作用的对象(零 tag 无基线、无发布事件可挂、无制品可扫)。
+- **◆M4-forward**:**真实发布类**原随 v1.0(M4)版本冻结与真实发布落地——发布前这些机制没有可作用的对象(零 tag 无基线、无发布事件可挂、无制品可扫)。首个真实发布 v0.0.1(2026-09-10)已提前落地该类的发布执行腿(21 个 Go tag + 十二个 npm 包 → GitHub Packages,见第 5 章),类内其余机制仍随 v1.0(M4)。
 
 ## 3. 用户裁决与闭合记录
 
@@ -93,51 +93,49 @@
 
 ## 5. 真实发布类(◆M4-forward)
 
-此类事项以 v1.0(M4)版本冻结与真实发布为共同前置;发布前接线即死配置。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
+此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布 v0.0.1 的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/v0.0.1` tag 由 Go module proxy 服务;npm 十二包 0.0.1 发布至 GitHub Packages registry 的 @speed 作用域;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212),类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
 
 ### 5.1 真实发布序列、发布凭据与发布衍生
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | M4-forward:lockstep 真实发布序列;release.yml 只读无凭据,发布定于 v1.0(M4) |
-| 165 | BLOCKED | `docs/internal/02-repo-and-release.md` | lockstep 真实发布未实现 | M4-forward:lockstep 真实发布序列;release.yml 只读无凭据,发布定于 v1.0(M4) |
-| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | M4-forward:lockstep 真实发布序列;release.yml 只读无凭据,发布定于 v1.0(M4) |
-| 33 | BLOCKED | `docs/internal/18-cicd.md` | release 流水线第 2/4/6/7 步接线未完成 | M4-forward:release 流水线 2/4/6/7 步;npm 无凭据+changesets 未装 |
-| 162 | BLOCKED | `docs/internal/18-cicd.md` | 真实 registry 发布与 goreleaser 未落地 | M4-forward:registry 发布/版本 tag/goreleaser |
-| 160 | ROADMAP | `go/saasctl/AGENTS.md` | upgrade 无版本发现 | M4-forward:upgrade 版本发现随 M4 首次发布落地 |
-| 201 | ROADMAP | `docs/internal/20-quality-and-security.md` | SBOM 与 npm provenance 未接线 | M4-forward:SBOM/provenance 随真实发布产出 |
-| 97 | ROADMAP | `tools/license_scan.py` | 传递(非直接)依赖与 reference-app 自身依赖的许可扫描未覆盖 | M4-forward:license 扫描传递依赖+reference-app 自身依赖扩展(发布准备) |
+| 165 | BLOCKED | `docs/internal/02-repo-and-release.md` | lockstep 真实发布未实现 | 部分落地:00e24732 v0.0.1 发布机制(Go tag 推送 + npm 发布至 GitHub Packages);docs/02 自身的"只读/未实现"行文未随动,文本残余 |
+| 33 | BLOCKED | `docs/internal/18-cicd.md` | release 流水线第 2/4/6/7 步接线未完成 | 部分落地:00e24732 接第 3 步(Go tag 推送)与第 4 步 npm 半程(直接 bump + npm publish 至 GitHub Packages);changesets 流程、2/5/6/7 步仍随 v1.0(M4);docs/18 注记文本未随动 |
+| 162 | BLOCKED | `docs/internal/18-cicd.md` | 真实 registry 发布与 goreleaser 未落地 | 部分落地:v0.0.1 起 Go 21 tag 经代理服务、npm 十二包发布至 GitHub Packages;npmjs.org registry 与 goreleaser 仍随 v1.0(M4) |
+| 160 | ROADMAP | `go/saasctl/AGENTS.md` | upgrade 无版本发现 | upgrade 版本发现未随 v0.0.1 首次发布落地,仍待后续发布配套 |
+| 201 | ROADMAP | `docs/internal/20-quality-and-security.md` | SBOM 与 npm provenance 未接线 | v0.0.1 发布不含 SBOM 与 provenance(npm 发布无 provenance 属性),仍随 v1.0(M4) |
+| 97 | ROADMAP | `tools/license_scan.py` | 传递(非直接)依赖与 reference-app 自身依赖的许可扫描未覆盖 | v0.0.1 发布未扩展传递依赖扫描,仍随发布准备(v1.0) |
 
 ### 5.2 oasdiff 破坏性变更基线
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | M4-forward:oasdiff 破坏性变更闸;需首个发布基线(仓库零 tag) |
-| 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | M4-forward:oasdiff 破坏性变更闸;需首个发布基线(仓库零 tag) |
-| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | M4-forward:oasdiff 破坏性变更闸;需首个发布基线(仓库零 tag) |
-| 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | M4-forward:api-sdk 发布期打包+基线门;浏览器半属 M4 e2e |
+| 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个 tag(dispatch 落地)构成首个可对基线;oasdiff 接线仍未做,随 v1.0(M4) |
+| 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个 tag(dispatch 落地)构成首个可对基线;oasdiff 接线仍未做,随 v1.0(M4) |
+| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个 tag(dispatch 落地)构成首个可对基线;oasdiff 接线仍未做,随 v1.0(M4) |
+| 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | 部分:api-sdk 发布期打包随 v0.0.1 直接 bump 发布落地(不经 changesets/发布期再生成——生成物已提交);oasdiff 基线门与浏览器腿仍随 v1.0(M4) |
 
 ### 5.3 发布机制装配(publint 与 changesets)
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 85 | BLOCKED | `docs/internal/20-quality-and-security.md` | publint 与 changesets wiring 未接线 | M4-forward:publint/changesets 接线归 web release-machinery 轮 |
-| 130 | ROADMAP | `.github/workflows/reusable-npm-package-ci.yml` | publint 发布形态校验与 changesets 发布接线未做 | M4-forward:publint/changesets 接线归 web release-machinery 轮 |
+| 85 | BLOCKED | `docs/internal/20-quality-and-security.md` | publint 与 changesets wiring 未接线 | v0.0.1 npm 发布走直接 bump + release.yml 发布腿,不经 changesets 流程;publint/changesets 接线仍随 v1.0(M4) |
+| 130 | ROADMAP | `.github/workflows/reusable-npm-package-ci.yml` | publint 发布形态校验与 changesets 发布接线未做 | v0.0.1 npm 发布走直接 bump + release.yml 发布腿,不经 changesets 流程;publint/changesets 接线仍随 v1.0(M4) |
 
 ### 5.4 post-release 触发
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 51 | BLOCKED | `.github/workflows/release.yml` | post-release scaffold-verify 触发未接线 | M4-forward:post-release 触发;无发布事件可挂 |
-| 52 | BLOCKED | `.github/workflows/scaffold-verify.yml` | post-release 触发未接线 | M4-forward:post-release 触发;无发布事件可挂 |
-| 80 | BLOCKED | `docs/internal/16-verification.md` | scaffold-verify 发布后触发未接线 | M4-forward:post-release 触发;无发布事件可挂 |
+| 51 | BLOCKED | `.github/workflows/release.yml` | post-release scaffold-verify 触发未接线 | v0.0.1 起发布事件真实存在(release.yml dispatch 即发布);触发接线仍未做,随 v1.0(M4) |
+| 52 | BLOCKED | `.github/workflows/scaffold-verify.yml` | post-release 触发未接线 | v0.0.1 起发布事件真实存在(release.yml dispatch 即发布);触发接线仍未做,随 v1.0(M4) |
+| 80 | BLOCKED | `docs/internal/16-verification.md` | scaffold-verify 发布后触发未接线 | v0.0.1 起发布事件真实存在(release.yml dispatch 即发布);触发接线仍未做,随 v1.0(M4) |
 
 ### 5.5 镜像扫描(trivy)
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 32 | BLOCKED | `docs/internal/18-cicd.md` | trivy 镜像扫描未接线 | M4-forward:trivy 扫描;镜像构建 workflow_dispatch-only,无 standing 制品 |
-| 99 | BLOCKED | `.github/workflows/security.yml` | trivy 容器镜像扫描未接线 | M4-forward:trivy 扫描;镜像构建 workflow_dispatch-only,无 standing 制品 |
+| 32 | BLOCKED | `docs/internal/18-cicd.md` | trivy 镜像扫描未接线 | v0.0.1 发布不产镜像,前提未变;仍随 v1.0(M4) |
+| 99 | BLOCKED | `.github/workflows/security.yml` | trivy 容器镜像扫描未接线 | v0.0.1 发布不产镜像,前提未变;仍随 v1.0(M4) |
 
 ## 6. 真实消费方类
 
@@ -355,7 +353,7 @@
 
 ## 9. 闭于 main 的普查行(记录时点 2026-09-09)
 
-以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地。
+以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地;2026-09-10 另闭 2 行(127、212,真实发布类)随 v0.0.1 发布机制落地。
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
@@ -372,6 +370,8 @@
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
 | 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:02831bf3 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
 | 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:02831bf3 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;残余:站点版式与按版本发布随 M4 文档站完整化 |
+| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job,Go 21 tag 推送 + npm 十二包发布至 GitHub Packages;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
+| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;首轮真实运行随 v0.0.1 dispatch(web 十二包 0.0.1 随 bd0399b8 先落) |
 
 **部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
 
@@ -387,7 +387,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 
 档位判定以普查逐条记录为底;直接核读 31 条(A 13、L 6、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
-### 10.1 已闭于 main(A,45 项)
+### 10.1 已闭于 main(A,46 项)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -436,6 +436,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 67 | `go/pkgcore/AGENTS.md` | broker 后端(eventbus/redis\|nats\|postgres)同实例本地 fan-out 的 panic 防护不延伸(原 future-work 改写为 deliberately-not-extended) | pkgcore broker 本地 fan-out panic 防护已实际落地(31246d14)+AGENTS 记录闭合(19a4456b/33b70db5) |
 | 71 | `CLAUDE.md` | census 自指措辞 4 处(行 8×2 "this census's `go/dbkit` entry records" 与 "this census's `go/dbkit` entry has the detail";行 11 "the auth-ui census entry below";行 13 "the auth-ui census defers to this shell";原记行 12/14 锚已校为行 11/13) | 4 处实测均在(抽查已核);按"可改可留"全部保留并记因——四句均为 census 条目间互指(指向 go/dbkit、auth-ui 条目),属导航措辞而非流程措辞;原记引语 "The census closes with…" 经 CLAUDE.md 全史检索不存在,已从记录删除 |
 | 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | 闭:1f3257ba 随片段并入合并文档改写为现状(future-work 句由 merge 成员段落取代;另见第 9 章普查行 153 同批闭) |
+| 30 | `.github/workflows/release.yml` | Report 步 echo "Real publishing is scheduled for the v1.0 release at M4, by design of this M0 round"(运行时文本保留 M0/M4 承诺;job name 的 "(M0)" 反而删了,不一致) | 闭:00e24732(2026-09-10)随 v0.0.1 发布机制改写——Report 步与头注现述验证+发布现状(M0/M4 承诺句已删);由 10.3 移档于此 |
 
 ### 10.2 台账缓办(L,9 项)
 
@@ -451,7 +452,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)x1/(D5)x1/(P2-2)x3/(P2-3)x1 共 6 处仍在(P2-6@184、D5@223、P2-2@279/335/373、P2-3@946);抽查已核 |
 
-### 10.3 真剩余(R,17 项;未来文本修复候选)
+### 10.3 真剩余(R,16 项;未来文本修复候选)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -466,7 +467,6 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 27 | `go/admin/export_test.go` | 测试失败消息字符串保留过程措辞("on the unfixed code…" 等) | 测试失败消息字符串判为边界合法;残余=把字符串/注释边界判断写进规范文档(13 章) |
 | 28 | `web/packages/i18n/src/create.test.ts` | it() 标题含 "(M1 extension point)" 里程碑代号,未改未声明 | create.test.ts(非 .tsx)96 行 "(M1 extension point)" 标题仍在;抽查已核 |
 | 29 | `examples/reference-app/web/src/test-utils/matchMedia.ts` | 行 18 'recorded DEFERRED, as in real-client.ts' — 同族 deferral 语句 | matchMedia.ts:18 "recorded DEFERRED, as in real-client.ts" 仍在;抽查已核(需与 18 两处同步) |
-| 30 | `.github/workflows/release.yml` | Report 步 echo "Real publishing is scheduled for the v1.0 release at M4, by design of this M0 round"(运行时文本保留 M0/M4 承诺;job name 的 "(M0)" 反而删了,不一致) | release.yml:130 Report 步 "by design of this M0" 仍在而 job name 的 (M0) 已删;抽查已核 |
 | 31 | `.github/workflows/reusable-docker-build.yml` | header deferral 指针 "not wired (release.yml's own header)" 与 "trivy image scanning (security.yml's own DEFERRED note)" | reusable-docker-build 头注 "those three stay gated stubs" 句失真(release.yml 非 stub、e2e 套件已存在) |
 | 40 | `.github/workflows/fast-check.yml` | react-hooks ESLint 插件不存在 | fast-check 头注 react-hooks "无阻塞声明"前提已过时,声明在配置头内 |
 | 42 | `web/packages/auth-core/AGENTS.md` | 整文件未清理:两条 C 类 deferral 语句残留 | auth-core AGENTS:171 "Planned for a later round." 仍在;抽查已核 |
