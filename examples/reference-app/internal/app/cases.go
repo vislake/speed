@@ -9,7 +9,7 @@
 // API: it feeds the app-owned merged document and the app-owned SDK
 // (examples/reference-app/web/src/app-api) the case web UI calls --
 // never the platform merge contracts/speed.yaml (docs/internal/
-// 21-api-contract.md records the split). cmd/server/cases_flow_test.go drives:examples/reference-app/internal/app/cases.go
+// 21-api-contract.md records the split). flowtests/cases_flow_test.go drives:examples/reference-app/internal/app/cases.go
 // them through the composed HTTP stack.
 //
 // The five operations the case web UI renders from: upload a patient

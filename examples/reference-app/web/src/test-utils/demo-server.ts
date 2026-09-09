@@ -32,7 +32,7 @@
  * reader's list as served, demo_users_test.go:143-153), and a note
  * create from that principal answers the 403 the write gate gives a
  * caller without notes:write (rbac.permission_denied, asserted at
- * server_test.go:443-445). The platform-staff shape is the configured
+ * flowtests/server_test.go:438-440). The platform-staff shape is the configured
  * account itself signed into the system pseudo-tenant -- the fixture's
  * tenantId option set to SYSTEM_PSEUDO_TENANT_ID ('system', the value
  * the Go seed grants demo-platform-staff@example.com its sole
@@ -204,7 +204,7 @@
  * lives: the list served like any member's, a create refused with
  * the rbac write gate's 403 -- the answers the Go suite pins for the
  * read-only member (its list served, demo_users_test.go:143-153, its
- * create refused, server_test.go:443-445). The read-denied refusal of a
+ * create refused, flowtests/server_test.go:438-440). The read-denied refusal of a
  * caller without notes:read is the denyNotesRead switch's answer, a
  * shape no seeded account carries.
  *

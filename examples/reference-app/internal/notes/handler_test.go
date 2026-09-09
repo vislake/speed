@@ -71,7 +71,7 @@ func newTestHandlerWithSubject(t *testing.T, subject SubjectResolver) (*Handler,
 // tenant is non-empty, it is injected into the request context exactly the
 // way tenancy.Middleware would (pkgcore.WithTenant) -- this test exercises
 // Handler in isolation, downstream of where Middleware would normally run;
-// cmd/server's own end-to-end test exercises the real Middleware too.
+// flowtests' end-to-end suite exercises the real Middleware too.
 func doRequest(h *Handler, req *http.Request, tenant pkgcore.TenantID) *httptest.ResponseRecorder {
 	if tenant != "" {
 		req = req.WithContext(pkgcore.WithTenant(req.Context(), tenant))
@@ -209,7 +209,7 @@ func TestHandler_Create_UnresolvedSubject_ReturnsUnauthorized(t *testing.T) {
 // validation would fail this test. The full, end-to-end proof that this
 // event is actually persisted as a queryable go/dbkit/audit.AuditEvent row
 // -- through the real composed HTTP server and a real audit.Repository --
-// is cmd/server/server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent.
+// is flowtests/server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent.
 func TestHandler_Create_ValidText_RecordsAuditEvent(t *testing.T) {
 	h, bus := newTestHandler(t)
 

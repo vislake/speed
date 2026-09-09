@@ -74,7 +74,7 @@ func TestNote_ImplementsTenantScoped(t *testing.T) {
 // Options.AuditModels scope, so no automatic capture happens here -- the
 // note trail runs through the declarative audit.Emit path instead (see
 // model.go's AuditResourceType doc comment for the full shape, and
-// server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent for the
+// flowtests/server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent for the
 // end-to-end proof of that path).
 func TestNote_AuditResourceType_ReturnsNote(t *testing.T) {
 	var n Note
@@ -136,7 +136,7 @@ var _ pkgcore.EventBus = (*notesCapturedBus)(nil)
 // (the exact payload the go/dbkit/audit persister serializes into
 // audit_events.changes).
 //
-// The test lives in this model's own test file, not in cmd/server's,
+// The test lives in this model's own test file, not in flowtests',
 // because the protection under test is declared on the model itself: it
 // must hold on ANY connection whose capture scope admits Note, which is
 // precisely the shape this app's own host-side exclusion (Note left off

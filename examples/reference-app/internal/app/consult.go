@@ -1,6 +1,6 @@
 // The reference app's demo glue for go/ai-gateway: the one hand-written
 // route that demonstrates the module's Gateway.Chat end to end.
-// cmd/server/consult_flow_test.go drives it through the composed HTTP stack against an
+// flowtests/consult_flow_test.go drives it through the composed HTTP stack against an
 // httptest.Server standing in for the OpenAI-compatible endpoint.
 //
 // ai-gateway itself ships no HTTP surface for chat, so there is no spec

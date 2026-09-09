@@ -707,7 +707,7 @@ var (
 // examples/reference-app is the mandatory first consumer: its BuildServer
 // calls this with the module table reg.Routes.Routes() holds plus the two
 // host-level routes (/healthz and /metrics) it mounts on the mux
-// directly, and its obs_route_seed_test.go drives the real composed
+// directly, and its flowtests/obs_route_seed_test.go drives the real composed
 // stack through the garbage-flood scenario. The mechanism's behavioral
 // proof inside this module is middleware_test.go's
 // TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded, and the

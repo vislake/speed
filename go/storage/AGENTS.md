@@ -17,7 +17,7 @@ HTTP surface (`api/openapi.yaml`, the generated `api.ServerInterface`,
 `integration_test/` tier (a PostgreSQL leg and a RustFS/S3 leg, see
 "Testing"); and the reference app wired as the module's mandatory first
 consumer end to end (`examples/reference-app/internal/app/server.go`,
-`cmd/server/storage_flow_test.go`). See "Deferred and not shipped" for what
+`flowtests/storage_flow_test.go`). See "Deferred and not shipped" for what
 is deliberately absent. All gates run green: `go build ./...`,
 `go vet ./...`, `golangci-lint run ./...`, `go test ./... -race` (from this
 directory), `go test -race -tags=integration ./...` (Docker required for
@@ -523,7 +523,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   alone removes nothing), boot 2 starting the normal gate so the sweep its
   first tick enqueues removes the expired object's row and bytes — is
   `TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject`
-  (`examples/reference-app/cmd/server/periodic_scheduler_flow_test.go`),
+  (`examples/reference-app/flowtests/periodic_scheduler_flow_test.go`),
   observed through the host's HTTP surface, a second-connection repository
   read and the filesystem, with the survivor untouched. That proof holds
   unchanged under the windowed key (boot 2's first tick is in a fresh

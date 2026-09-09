@@ -67,7 +67,7 @@ replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
 
 // go/sharing is imported directly by this app: BuildServer wires it as
 // the module's mandatory-first-consumer proof (see internal/app/server.go,
-// internal/app/sharing_resolver.go and cmd/server/sharing_flow_test.go). Like every other workspace-local module it
+// internal/app/sharing_resolver.go and flowtests/sharing_flow_test.go). Like every other workspace-local module it
 // carries no published version, so this app's own go.mod needs its own
 // replace for it too -- root CLAUDE.md's per-module standalone-build rule
 // (`GOWORK=off go build`) means `go mod tidy` must resolve every
@@ -77,7 +77,7 @@ replace github.com/vislake/speed/go/sharing => ../../go/sharing
 // go/compliance and go/admin are imported directly by this app:
 // BuildServer wires them as go/admin's mandatory-first-consumer proof
 // (see internal/app/server.go, internal/app/demo_admin.go and
-// cmd/server/admin_flow_test.go). Like every other
+// flowtests/admin_flow_test.go). Like every other
 // workspace-local module they carry no published version, so this app's
 // own go.mod needs its own replace for them too -- root CLAUDE.md's
 // per-module standalone-build rule (`GOWORK=off go build`) means

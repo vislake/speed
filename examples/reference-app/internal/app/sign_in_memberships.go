@@ -81,7 +81,7 @@ func orgCodeIs(err error, code string) bool {
 // registers and grants (demo_admin.go) -- and that seed re-asserts the
 // grant on every boot, so the staff account's sign-in survives a restart
 // like everyone else's. Everything else ever granted here is test-only
-// shortcut (cmd/server/server_test.go's registerAndAuthenticate and friends), which
+// shortcut (flowtests/server_test.go's registerAndAuthenticate and friends), which
 // is also what makes a customer-tenant entry in this roster mean: a test
 // rig has declared "this account may act in this tenant" without going
 // through org, and authn honors it only because org itself has no row for

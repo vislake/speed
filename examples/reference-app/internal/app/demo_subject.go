@@ -292,7 +292,7 @@ const BillingRoutePath = "/api/v1/billing"
 // leaves their enforcement to the host's authorization layer, and this
 // router gate is where the example enforces them. The demo grants seed
 // storage's permissions into no role but the built-in owner -- the demo
-// reader holds notes:read and nothing else -- which cmd/server/storage_flow_test.go
+// reader holds notes:read and nothing else -- which flowtests/storage_flow_test.go
 // relies on to prove the gate closes on a user who holds another module's
 // permissions: a per-module permission is not a blanket role.
 //

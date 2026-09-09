@@ -12,7 +12,7 @@
  * The browser-decode half of the acceptance shape (naturalWidth over a
  * real answer) cannot run in jsdom -- images never load here -- so it
  * is pinned at the two layers that can: the wire journey in the Go
- * suite (cmd/server/share_journey_flow_test.go decodes the access
+ * suite (flowtests/share_journey_flow_test.go decodes the access
  * route's real bytes for both halves) and the e2e gate that opens the
  * real page in a real browser (web/e2e/core-journey.pending.spec.ts).
  * What this suite pins is the page's own contract: two image elements,

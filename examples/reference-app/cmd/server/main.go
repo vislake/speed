@@ -60,7 +60,7 @@ func observabilityOptions(cfg app.ServerConfig) []obs.Option {
 
 // main is deliberately thin process-lifecycle glue (signal handling,
 // http.Server start/stop) with two independently testable seams beyond
-// BuildServer (internal/app/server.go, covered by server_test.go): observabilityOptions
+// BuildServer (internal/app/server.go, covered by flowtests/server_test.go): observabilityOptions
 // above and runHealthcheck below, both covered directly by main_test.go.
 // This file's own end-to-end behavior is additionally proven by literally
 // running it and curling it (see this example's README.md), which is why
@@ -156,7 +156,7 @@ func run(baseCtx context.Context) error {
 	// nothing starts listening until after both calls below succeed,
 	// deferring obs.Init to second costs nothing.
 	// BuildServer's fourth return value, the wired *compliance.Module, is
-	// the reach compliance_flow_test.go needs into the retention/erasure/
+	// the reach flowtests/compliance_flow_test.go needs into the retention/erasure/
 	// export services; the real process has nothing to do with it -- the
 	// compliance module's own registered jobs handler drives its sweep on
 	// the queue this app starts below.

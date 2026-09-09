@@ -1,7 +1,7 @@
 // The reference app's demo glue for go/integration's outbound-
 // webhook DELIVERY surface: the EventMapping that turns org's real
 // "org.member.joined" domain event into a versioned public webhook payload.
-// cmd/server/webhook_flow_test.go drives delivery through the composed HTTP stack
+// flowtests/webhook_flow_test.go drives delivery through the composed HTTP stack
 // against a real receiver process this app's own test controls.
 //
 // This file keeps the EventMapping machinery only -- the subscription-

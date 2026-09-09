@@ -18,7 +18,7 @@
 // entitlement gate (go/ai-gateway's checkEntitlement, key
 // "model:"+logicalModel), while a tenant with no Active subscription is
 // refused with ErrEntitlementDenied before any provider is reached --
-// cmd/server/entitlements_flow_test.go drives both directions through the
+// flowtests/entitlements_flow_test.go drives both directions through the
 // real composed HTTP stack. The pay-and-confirm leg itself stays out of
 // this demo's scope.
 
@@ -126,7 +126,7 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 //
 // The idempotence is bounded to one process's lifetime, stated honestly
 // rather than as an absolute: a subscription canceled during that
-// lifetime (cmd/server/entitlements_flow_test.go's refusal leg does exactly that,
+// lifetime (flowtests/entitlements_flow_test.go's refusal leg does exactly that,
 // through a real Cancel call) is terminal and is never re-ensured while
 // the process lives -- the boot-time seed never re-runs, and a clinic's
 // provisioning never re-runs once its registration completed.
@@ -140,7 +140,7 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 // therefore true per boot, never per database file; what this app
 // guarantees for a running process is that it cannot silently
 // resubscribe a tenant an operator just took offline mid-session -- and
-// the refusal story cmd/server/entitlements_flow_test.go drives is exactly that
+// the refusal story flowtests/entitlements_flow_test.go drives is exactly that
 // in-process one.
 func ensureDemoSubscription(ctx context.Context, subs *billing.SubscriptionService, plan *billing.Plan, tenantID pkgcore.TenantID) error {
 	tenantCtx := pkgcore.WithTenant(ctx, tenantID)

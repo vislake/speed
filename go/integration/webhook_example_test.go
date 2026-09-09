@@ -40,7 +40,7 @@ package integration_test
 // (WithWebhookURLValidator/WithWebhookHTTPClient, module.go) that a
 // production composition must never call, so it has no place in
 // documentation code meant to be copied.
-// examples/reference-app/cmd/server/webhook_flow_test.go is that real
+// examples/reference-app/flowtests/webhook_flow_test.go is that real
 // host: it drives this exact org.member.joined mapping through a real,
 // composed application, against a real receiver process it controls, with
 // an independently re-verified HMAC signature and a real

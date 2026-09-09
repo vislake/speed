@@ -31,8 +31,8 @@ info:
     21-api-contract.md's spec-organization and merging section). The
     revoke-certificate and CRL-fetch operations have an in-workspace HTTP
     caller (the reference app's AI-output attestation flow,
-    attestation_flow_test.go, drives both over the wire; the signing-key
-    revoke is driven by pki_revoke_gate_flow_test.go), while the two JWKS
+    flowtests/attestation_flow_test.go, drives both over the wire; the signing-key
+    revoke is driven by flowtests/pki_revoke_gate_flow_test.go), while the two JWKS
     read operations -- key-lifecycle and authority-chain -- have no HTTP
     caller.
   version: 0.0.0

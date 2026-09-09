@@ -9,7 +9,7 @@ package sharing_test
 // unauthenticated viewer would, revoke it, and observe the very next
 // access refused -- so this shape is known to compile and run under an
 // external caller's own import. (The reference app additionally drives the
-// module over real HTTP; see its sharing_flow_test.go.)
+// module over real HTTP; see its flowtests/sharing_flow_test.go.)
 
 import (
 	"context"

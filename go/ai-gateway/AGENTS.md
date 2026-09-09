@@ -361,7 +361,7 @@ tenantless calls explicitly.
   apiKey is never echoed; `handler_example_test.go`'s `ExampleHandler`
   compiles AND runs a composed walk of the whole surface -- 404 with no
   credential, platform write, tenant BYOK override, and `Resolve`
-  answering the tenant's row; and the reference app's `ai_gateway_flow_test.go`
+  answering the tenant's row; and the reference app's `flowtests/ai_gateway_flow_test.go`
   is the mandatory first consumer's end-to-end proof (see "Reference-app
   consumer").
 
@@ -462,7 +462,7 @@ tenantless calls explicitly.
   the non-refusal of public addresses) plus resolve/resolveImage wiring
   proofs that a tenant-tier credential's provider carries the guarded
   client and a platform-tier one does not; `credential_test.go`,
-  `handler_test.go` and the reference app's `ai_gateway_flow_test.go`
+  `handler_test.go` and the reference app's `flowtests/ai_gateway_flow_test.go`
   pin the refusals through the service, the HTTP envelope and the
   composed stack; `ratelimit_test.go` pins that tenantless calls never
   consult the limiter; `openai_compatible_test.go` and
@@ -479,7 +479,7 @@ text, asks `gateway.Chat()` for a short AI-generated consultation-suggestion
 summary under the logical model key `"chat:default"`. It is mounted as a
 hand-written route (`POST /api/v1/consult/suggest`), outside the OpenAPI
 machinery -- the same pattern the demo module's own hand-written patient-
-message route already establishes in this app. `cmd/server/consult_flow_test.go`
+message route already establishes in this app. `flowtests/consult_flow_test.go`
 drives it through the composed HTTP stack against an `httptest.Server`
 standing in for the OpenAI-compatible endpoint -- scripted, deterministic
 responses, no live API key required or used.
@@ -498,7 +498,7 @@ its id, and `GET /api/v1/smile-simulation/jobs/{id}` polls the app's own
 notification's delivery task share) and, once succeeded, decodes
 `Job.Result.Data` into `ImageJobResult` to answer with the generated
 image's object id and its real usage dimensions.
-`cmd/server/smilesim_flow_test.go` drives the whole chain through the
+`flowtests/smilesim_flow_test.go` drives the whole chain through the
 composed HTTP stack -- storage's real upload lifecycle for the input photo,
 the async job, and the poll to completion -- against an `httptest.Server`
 scripting the OpenAI-compatible images-edits endpoint, asserting the
@@ -518,7 +518,7 @@ aigateway:write in every demo tenant, deliberately NOT
 aigateway:manage_platform) proves on the composed stack that a
 tenant-scoped principal really is refused the platform-wide write while
 the demo owner (BuiltinRoleOwner) is not.
-`cmd/server/ai_gateway_flow_test.go` proves the SSRF guard's
+`flowtests/ai_gateway_flow_test.go` proves the SSRF guard's
 write-then-resolve shape with real calls: a tenant BYOK write naming a
 loopback endpoint (literal, and through a hostname whose DNS answer is
 blocked) is refused on the composed stack with aigateway.base_url_blocked
@@ -636,7 +636,7 @@ proofs.
   not mean the race is gone. `go/jobs`' own retry/backoff is the working
   convergence mechanism: the losing attempt logs "job attempt failed,
   scheduling retry" and succeeds on its immediate next attempt, so
-  `cmd/server/smilesim_flow_test.go`'s own assertions still pass
+  `flowtests/smilesim_flow_test.go`'s own assertions still pass
   deterministically. Removing the WARN line itself requires
   `go/storage`-module work on the gate's own transaction shape -- taking
   the write lock first (e.g. `BEGIN IMMEDIATE`) instead of reading then

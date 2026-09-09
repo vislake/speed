@@ -78,7 +78,7 @@ import (
 // access (src/team-api.ts) and the demo server that stands in for this
 // whole composed stack in web suites (test-utils/demo-server.ts) -- the
 // same parity relationship clinic_name.go and tenant-name.ts hold, kept
-// honest by the flow test in cmd/server/team_members_test.go that drives this route
+// honest by the flow test in flowtests/team_members_test.go that drives this route
 // through the real composed stack and by the web suites that drive the
 // surface over it.
 

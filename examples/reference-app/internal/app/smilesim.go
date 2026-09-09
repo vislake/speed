@@ -13,7 +13,7 @@
 // 21-api-contract.md records the split).
 //
 // The surface demonstrates go/ai-gateway's Gateway.GenerateImage
-// end to end: cmd/server/smilesim_flow_test.go drives it through the composed HTTP
+// end to end: flowtests/smilesim_flow_test.go drives it through the composed HTTP
 // stack against an httptest.Server standing in for the OpenAI-compatible
 // images endpoint.
 //

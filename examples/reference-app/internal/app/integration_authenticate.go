@@ -15,7 +15,7 @@
 // (the "rate limit BEFORE authentication" layering argument lives in
 // go/integration/middleware.go's own doc comment).
 //
-// cmd/server/apikey_authenticate_flow_test.go drives this route through the composed
+// flowtests/apikey_authenticate_flow_test.go drives this route through the composed
 // HTTP stack: create, authenticate, rotate, authenticate with the old key
 // (refused) and the new one (succeeds), revoke, authenticate again
 // (refused), and the forged-flood proof above.
@@ -41,7 +41,7 @@ const IntegrationWhoamiRateLimitWindow = time.Minute
 // IntegrationWhoamiPath is this app's one demo route gated by
 // integration.AuthMiddleware. GET it with an X-API-Key header naming a raw
 // key this tenant issued through the ordinary integration_createAPIKey
-// operation (cmd/server/apikey_flow_test.go's own surface), and the response names the
+// operation (flowtests/apikey_flow_test.go's own surface), and the response names the
 // tenant and key Authenticate resolved -- never anything the request itself
 // claimed.
 const IntegrationWhoamiPath = "/api/v1/demo/integration/whoami"
@@ -49,7 +49,7 @@ const IntegrationWhoamiPath = "/api/v1/demo/integration/whoami"
 // IntegrationWhoamiLimits is this demo route's own pre-auth attempt budget:
 // a real, non-zero global bound over every request the guard sees -- forged
 // X-API-Key floods included -- generous enough that
-// cmd/server/apikey_authenticate_flow_test.go's handful of requests never trips it.
+// flowtests/apikey_authenticate_flow_test.go's handful of requests never trips it.
 // Only the global layer is set, and deliberately: the guard evaluates
 // BEFORE any Authenticate call (it is wired through
 // integration.WithAuthenticationGuard in wireIntegrationAuthenticated
@@ -60,7 +60,7 @@ const IntegrationWhoamiPath = "/api/v1/demo/integration/whoami"
 // WithAuthenticationGuard doc comment explains why empty pre-auth
 // identifiers charging the global layer is "the usual answer for anonymous
 // floods". A var rather than a const so a test can bound the budget:
-// cmd/server/apikey_authenticate_flow_test.go's forged-flood regression overrides it
+// flowtests/apikey_authenticate_flow_test.go's forged-flood regression overrides it
 // to two hits per window for the duration of that test.
 var IntegrationWhoamiLimits = integration.LayeredLimits{
 	Global: ratelimit.Limit{Rate: 1000, Per: IntegrationWhoamiRateLimitWindow},

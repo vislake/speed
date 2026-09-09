@@ -7,7 +7,7 @@ package billing
 // request context the way tenancy.Middleware would have resolved it in a
 // composed host. It is the unit half of the proof; the
 // composed-stack half lives in
-// examples/reference-app/cmd/server/billing_http_flow_test.go.
+// examples/reference-app/flowtests/billing_http_flow_test.go.
 //
 // The assertions bind to the wire contract the spec promises -- status
 // codes, the {code, params} envelope, camelCase JSON field names -- never

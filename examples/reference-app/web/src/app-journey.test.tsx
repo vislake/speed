@@ -45,7 +45,7 @@
  * other account shapes: the reader day (the rig's reader option --
  * its list served like any member's, its create refused with the
  * rbac write gate's 403 and the draft kept, the answer the Go suite
- * pins at demo_users_test.go:143-153 and server_test.go:443-445) and the
+ * pins at demo_users_test.go:143-153 and flowtests/server_test.go:438-440) and the
  * read-denied day (a list read answering the read gate's 403 -- the
  * gate fails closed to the no-permission empty state, no form and no
  * list surface below the heading).

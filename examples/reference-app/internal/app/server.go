@@ -411,9 +411,10 @@ const (
 	// while DemoUserHeader alone stays disabled. Left unset (the default),
 	// every demo journey and every test keeps driving demo actors through
 	// the headers, which is deliberate: flipping the default would break
-	// them at once (cmd/server/demo_subject_test.go, notesRequestAs and friends in
-	// cmd/server/server_test.go, and the flow tests across this package that drive a
-	// demo actor through a header). An operator deploying this reference
+	// them at once (cmd/server/demo_subject_test.go, the notesRequestAs-family
+	// helpers in flowtests/server_test.go and cmd/server/test_support_test.go, and
+	// the flowtests suite that drives a demo actor through a header). An operator
+	// deploying this reference
 	// app somewhere a real, non-demo user might reach it is the one case
 	// this variable exists for: setting it closes the hole with no code
 	// change. See DEPLOY.md's own section on these headers for the operator-
@@ -641,7 +642,7 @@ var DemoHostTenants = map[string]pkgcore.TenantID{
 //     rather than allows, and the org rows are that answer now).
 //   - Tests grant membership explicitly after registering an account
 //     through the real HTTP surface (registerAndAuthenticate in
-//     cmd/server/server_test.go, cmd/server/authn_e2e_test.go), keeping a reference to the same
+//     flowtests/server_test.go, flowtests/authn_e2e_test.go), keeping a reference to the same
 //     store BuildServer itself wires.
 
 // DemoOrgUserHeader is the header DemoOrgSubjectResolver reads to identify the
@@ -668,7 +669,7 @@ const DemoOrgUserHeader = "X-Demo-User-Id"
 // module's own per-operation 401 (notification.subject_unresolved,
 // integration.subject_unresolved, org's sibling), never a fabricated user
 // id. That header-only refusal is pinned behaviour of this app's rig
-// (cmd/server/notification_flow_test.go's subject-less leg; demoRouteGuards names the
+// (flowtests/notification_flow_test.go's subject-less leg; demoRouteGuards names the
 // path routePublic for the same reason) -- for notification's and
 // integration's surfaces it stays exactly that, because no browser-shaped
 // flow reaches them.
@@ -1173,7 +1174,7 @@ type ServerConfig struct {
 	// replica-safe. The field exists because a host that needs its objects
 	// to outlive one process must name the directory itself -- the Preset
 	// default is a throwaway MkdirTemp -- which is exactly what the
-	// two-boot expiry-sweep flow test (cmd/server/periodic_scheduler_flow_test.go)
+	// two-boot expiry-sweep flow test (flowtests/periodic_scheduler_flow_test.go)
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
 	ObjectStoreRoot string
 
@@ -1307,9 +1308,11 @@ type ServerConfig struct {
 	// for the "mailer" seam when set. ConfigFromEnv sets it to a real
 	// pkgcore.NewSMTPMailer composition when SMTPHost is configured (see
 	// SMTPHost's doc comment above); it is otherwise nil in production, so
-	// this field also exists for cmd/server/server_test.go's org invitation flow
-	// test, which needs the rendered mail back in-process to extract the
-	// invitation token rather than parsing it out of console output.
+	// this field also exists for the org invitation-accept flows
+	// (flowtests/org_flow_test.go, flowtests/org_clinic_invitation_test.go,
+	// flowtests/org_invitation_signin_test.go), which need the rendered mail back
+	// in-process to extract the invitation token rather than parsing it out
+	// of console output.
 	// BuildServer injects Mailer with MailerCapabilities below, defaulting
 	// to pkgcore.Stateless when that field is left at its zero value --
 	// the honest capability for a throwaway test double.
@@ -1369,7 +1372,7 @@ type ServerConfig struct {
 	// credentials are configured for this example, and the per-provider
 	// credential items authn registers are never read through dynamic
 	// configuration (that read-through is unimplemented), so credentials
-	// reach authn only through this field. cmd/server/authn_e2e_test.go
+	// reach authn only through this field. flowtests/authn_e2e_test.go
 	// supplies a channel pointed at a local httptest server here, to prove
 	// the social sign-in flow end to end without a live provider.
 	SocialProviders   []authn.SocialProvider
@@ -1386,7 +1389,7 @@ type ServerConfig struct {
 	// own doc comment above describes -- so the zero-setup `go run
 	// ./cmd/server` experience leaves the consult route permanently
 	// answering aigateway.ErrCredentialNotFound until an operator wires a
-	// real key. cmd/server/consult_flow_test.go is what sets both: AIGatewayBaseURL to
+	// real key. flowtests/consult_flow_test.go is what sets both: AIGatewayBaseURL to
 	// an httptest.Server standing in for the OpenAI-compatible endpoint,
 	// and AIGatewayAPIKey to a fixed test value, exactly the way cfg.Mailer
 	// is a test-only override of a seam production leaves on its real
@@ -1408,7 +1411,7 @@ type ServerConfig struct {
 	// API key variable is set (their doc comment carries the reasoning
 	// and the non-secret shape of the e2e value); when both are unset, no
 	// credential row is written, exactly like the chat pair above, and
-	// cmd/server/smilesim_flow_test.go is the other caller that sets both.
+	// flowtests/smilesim_flow_test.go is the other caller that sets both.
 	AIGatewayImageBaseURL string
 	AIGatewayImageAPIKey  string
 
@@ -1419,7 +1422,7 @@ type ServerConfig struct {
 	// composes -- never a production weakening, since ConfigFromEnv never
 	// sets either and BuildServer leaves both options unset (the module's
 	// own strict default) whenever WebhookURLValidator is nil. This exists
-	// for cmd/server/webhook_flow_test.go alone: it is this app's only way to prove a
+	// for flowtests/webhook_flow_test.go alone: it is this app's only way to prove a
 	// genuine signed HTTP delivery against a receiver it controls, since
 	// neither an httptest.Server (loopback) nor a sibling Docker container
 	// (RFC 1918 private space, exactly like every other Docker-backed
@@ -1437,7 +1440,7 @@ type ServerConfig struct {
 	// tenant's built-in roles and demo grants. It exists purely for a test
 	// that needs to grant a role scoped to an organization node CREATED
 	// AFTER the server starts serving HTTP -- the subtree-scoped grant
-	// test (cmd/server/org_route_guards_test.go), which cannot
+	// test (flowtests/org_route_guards_test.go), which cannot
 	// know a node's id at boot time, since org builds its tree through real
 	// HTTP calls the test itself drives once the server is up. Nil in every
 	// production boot and every other test is a complete no-op, mirroring
@@ -1449,7 +1452,7 @@ type ServerConfig struct {
 	// BuildServer attaches, immediately after openConfiguredAuthnChannels
 	// opens the assembled social channels' system-tier flag rows. It exists
 	// purely for a test that must write a configuration row through the
-	// module's real Set path (cmd/server/authn_e2e_test.go's
+	// module's real Set path (flowtests/authn_e2e_test.go's
 	// TestAuthnE2E_PasswordChannelDisabled...), which
 	// disables authn.password_login through the same system-tier write an
 	// operator's admin-console write would land (under
@@ -1801,7 +1804,7 @@ func ConfigFromEnv() (ServerConfig, error) {
 		// "mailer.smtp" builtin registration itself declares
 		// (mailer_builtins.go), so this app's own env-driven
 		// SMTP wiring is capability-honest rather than borrowing the
-		// Stateless declaration cmd/server/server_test.go's in-process double uses
+		// Stateless declaration flowtests/server_test.go's in-process double uses
 		// (Mailer's own doc comment above explains the split).
 		cfg.Mailer = pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
 			Host:     smtpHost,
@@ -1821,15 +1824,15 @@ func ConfigFromEnv() (ServerConfig, error) {
 // consult glue (consult.go, go/ai-gateway's mandatory first
 // consumer), and the authn+tenancy middleware chain into a single
 // http.Handler. It is the one place that wiring logic lives -- main() and
-// the end-to-end tests (cmd/server/server_test.go, cmd/server/authn_e2e_test.go,
-// cmd/server/org_flow_test.go, cmd/server/storage_flow_test.go, cmd/server/notification_flow_test.go and
-// cmd/server/consult_flow_test.go) all call it, so the two can never drift into
+// the end-to-end tests (flowtests/server_test.go, flowtests/authn_e2e_test.go,
+// flowtests/org_flow_test.go, flowtests/storage_flow_test.go, flowtests/notification_flow_test.go and
+// flowtests/consult_flow_test.go) all call it, so the two can never drift into
 // testing a different wiring than the one that actually runs.
 //
 // It returns the composed handler, a cleanup function that closes
 // everything BuildServer opened (the services, the injected Redis bus and
 // its client when one was built, and the underlying database connection),
-// and the wired *compliance.Module -- the cmd/server/compliance_flow_test.go's one
+// and the wired *compliance.Module -- the flowtests/compliance_flow_test.go's one
 // reach into the retention/erasure/export services this app bootstraps,
 // since BuildServer exposes no module itself otherwise. The caller must
 // call cleanup once done with the handler.
@@ -1893,7 +1896,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// alert. The scope list is this app's explicit answer to "which
 	// Auditable models on this connection does the automatic mechanism
 	// own": the ones org itself declares capturable, nothing else.
-	// cmd/server/org_audit_capture_test.go pins the composed outcome (member
+	// flowtests/org_audit_capture_test.go pins the composed outcome (member
 	// removal and node delete during an impersonation session each leaving
 	// a dual-identity row, and an invitation create leaving a row whose
 	// diff carries no address-derived value).
@@ -2227,7 +2230,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			// email link. The link names org's real
 			// POST /api/v1/org/invitations/accept endpoint and carries the
 			// token as a query parameter purely so it is one recognizable
-			// string a person (or, in cmd/server/server_test.go's end-to-end suite, a
+			// string a person (or, in flowtests/server_test.go's end-to-end suite, a
 			// test) can extract the token back out of.
 			return fmt.Sprintf("%s/api/v1/org/invitations/accept?token=%s", linkBase, url.QueryEscape(token)), nil
 		}),
@@ -2443,7 +2446,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// once, in Attach, after Bootstrap. WithSubtreeResolver IS wired, onto
 	// orgModule's own Scope (OrgSubtreeResolver below, an adapter over the
 	// two seams' slightly different signatures -- see its own doc comment):
-	// this app's organization tree is real (cmd/server/org_flow_test.go's multi-level
+	// this app's organization tree is real (flowtests/org_flow_test.go's multi-level
 	// DSO tree, and the subtree-scoped grant test),
 	// so a node-scoped rbac binding must actually resolve against it rather
 	// than deny for want of a resolver. Every demo grant seedDemoGrants
@@ -2500,7 +2503,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	)
 
 	// sharingModule is the reference app's first real consumer of
-	// go/sharing end to end (cmd/server/sharing_flow_test.go): the host that wires a
+	// go/sharing end to end (flowtests/sharing_flow_test.go): the host that wires a
 	// real ResourceResolver behind the module's public access surface. Its
 	// one public route
 	// resolves a Share's ResourceRef through storageSharingResolver
@@ -2559,7 +2562,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// first-consumer proof (see demo_notification.go for the
 	// host-side glue that
 	// drives it -- the note-created subscription and the demo
-	// patient-message route -- and cmd/server/notification_flow_test.go for the
+	// patient-message route -- and flowtests/notification_flow_test.go for the
 	// end-to-end legs). Its six required seams are all host-supplied here:
 	// the console SMS sender writes to the same smsOutput the authn module's
 	// sender writes to (the standalone deployment mode's transport,
@@ -2654,7 +2657,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// model id ("gpt-4o-mini") is opaque to this app -- it is passed
 	// through to whatever OpenAI-compatible endpoint the resolved
 	// credential's base URL actually names (the real OpenAI API in a real
-	// deployment, an httptest.Server in cmd/server/consult_flow_test.go) -- and never
+	// deployment, an httptest.Server in flowtests/consult_flow_test.go) -- and never
 	// seen by consult's own code, per aigateway.ChatRequest.Model's own
 	// doc comment on why business code never hardcodes a vendor model id.
 	// aiGatewayModule additionally wires the image-generation
@@ -2798,7 +2801,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// ErrUsageModulesNotWired from UsageService.Summary, a host wiring
 	// one gets that dimension present and the other absent); this app
 	// wires both, so GET /api/v1/admin/usage-summary answers 200 with the
-	// real per-tenant dashboard -- see cmd/server/usage_summary_flow_test.go.
+	// real per-tenant dashboard -- see flowtests/usage_summary_flow_test.go.
 	// WithAuthn takes the *authn.Module itself, not its
 	// Service() -- see admin.Module.DependsOn()'s own doc comment for the
 	// resulting "authn" dependency Kernel.Bootstrap's sort honors below.
@@ -2960,7 +2963,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// constructed above -- this app wires dbkit.Options.AuditBus for org's
 	// automatic write capture, which is why the construction happens
 	// before dbkit.Open, and why the SAME bus is injected here: see the
-	// Open call's own comment for the full reasoning, and cmd/server/org_audit_capture_test.go
+	// Open call's own comment for the full reasoning, and flowtests/org_audit_capture_test.go
 	// for the composed proof.
 	//
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
@@ -3011,8 +3014,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	//
 	// The Mailer override -- cfg.Mailer, non-nil either because
 	// ConfigFromEnv composed a real pkgcore.NewSMTPMailer from the
-	// APP_SMTP_* variables, or because a test (cmd/server/server_test.go's org/
-	// notification flow tests) injected an in-process capture double --
+	// APP_SMTP_* variables, or because a flowtests org or notification
+	// suite injected an in-process capture double --
 	// rides along as a fourth conditional option. Its capability
 	// declaration is cfg.MailerCapabilities when set (MultiReplicaSafe|
 	// SurvivesRestart for the real SMTP composition, matching the
@@ -3154,7 +3157,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// scope here. It runs
 	// unconditionally, like seedDemoGrants just above,
 	// regardless of cfg.DemoUsersPassword: internal/smilesim's own tests
-	// (cmd/server/smilesim_flow_test.go) need a real, non-zero starting balance on
+	// (flowtests/smilesim_flow_test.go) need a real, non-zero starting balance on
 	// tenant-acme to exercise the successful-generation leg, exactly the
 	// way seedDemoGrants' own roles are needed by every test that gates a
 	// route on a permission, demo password or not.
@@ -3393,7 +3396,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// publishes on that bus -- and the notificationModule services are the
 	// module's own accessors, the same instances its Register validated and
 	// its HTTP handler drives (see demo_notification.go for the seam
-	// contracts, and cmd/server/notification_flow_test.go for the end-to-end legs).
+	// contracts, and flowtests/notification_flow_test.go for the end-to-end legs).
 	// The call cannot fail: nothing it does returns an error.
 	wireDemoNotification(mux, reg.EventBus(), notificationModule)
 
@@ -3569,7 +3572,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// the guard's limiter is built over this same resolved KVStore seam --
 	// so AuthMiddleware runs it BEFORE authentication and a forged-X-API-Key
 	// flood pays the guard's budget instead of reaching
-	// Service.Authenticate's lookups unbounded (cmd/server/apikey_authenticate_flow_test.go
+	// Service.Authenticate's lookups unbounded (flowtests/apikey_authenticate_flow_test.go
 	// pins the order). The call cannot fail: nothing
 	// it does returns an error.
 	wireIntegrationAuthenticated(mux, integrationModule, reg.KVStore())
@@ -3974,7 +3977,7 @@ func HealthzHandler(w http.ResponseWriter, r *http.Request) {
 // Init first (see main.go), but this indirection keeps that an
 // implementation detail of main.go rather than a hidden requirement on
 // BuildServer's caller: a test that calls BuildServer directly (as
-// cmd/server/server_test.go's TestBuildServer_Metrics_NoTenantRequired does) can mount
+// flowtests/server_guards_test.go's TestBuildServer_Metrics_NoTenantRequired does) can mount
 // the route and assert on it without needing to care whether obs.Init has
 // run yet in this process, or ever will -- see that test's own doc comment
 // for exactly which weaker property it falls back to proving as a result.

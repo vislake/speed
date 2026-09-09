@@ -70,9 +70,9 @@ func testConfig(t *testing.T) app.ServerConfig {
 // caller can reach cfg.Memberships to grant a demo account tenant
 // membership after registering it (registerAndAuthenticate does this), and
 // BuildServer's wired *compliance.Module -- the one reach a test has into
-// the retention/erasure/export services, which compliance_flow_test.go
-// drives (every other flow test in this package is HTTP-driven and discards
-// it, exactly as BuildServer's own doc comment describes main.go doing).
+// the retention/erasure/export services, which flowtests' compliance_flow_test.go
+// drives (every other flow test in the flowtests package is HTTP-driven and
+// discards it, exactly as BuildServer's own doc comment describes main.go doing).
 func buildTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *compliance.Module) {
 	t.Helper()
 

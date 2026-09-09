@@ -20,7 +20,7 @@ HTTP handler, the per-replica realtime hub behind the inbox stream, and the
 dual-dialect migration set. The reference app (`examples/reference-app`) is
 the mandatory first consumer: `internal/app/server.go` wires `notification.NewModule`
 through `Kernel.Bootstrap`, `internal/app/demo_notification.go` supplies the
-host-side demo seams, and `cmd/server/notification_flow_test.go` drives the
+host-side demo seams, and `flowtests/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 
 Nothing here is a stub. The "Not implemented" section below is the complete,
@@ -556,7 +556,7 @@ budgets (`checkCodeVerifyLimit`) before the typed code is compared: status
 gate, then the budget charge, then code shape, expiry and hash. The order
 is deliberate, and it is pinned at the HTTP surface by the reference app's
 acceptance test `TestNotificationFlow_VerifyCodeRateLimit_FailsClosed`
-(`examples/reference-app/cmd/server/notification_flow_test.go`): ten wrong
+(`examples/reference-app/flowtests/notification_flow_test.go`): ten wrong
 guesses are ten 400s that each spend one of the address's ten guesses per
 code lifetime (`contactCodeVerifyPerAddress`), and the eleventh attempt --
 carrying the correct code -- is refused 429 rather than honored. A resend
@@ -799,7 +799,7 @@ proving an inbox delivery announced on one replica's bus reaches the other
 replica's hub (the cross-replica shape the unit tier cannot compose). The
 same directory carries the `clinic` demo module, an in-tree consumer that
 declares its own notification type and exercises the module the way a
-business module would. The reference app's `notification_flow_test.go` is
+business module would. The reference app's `flowtests/notification_flow_test.go` is
 the end-to-end consumer proof through the composed HTTP stack. `go vet`,
 `golangci-lint run ./...` and `tools/scan_cjk.py` (no CJK outside
 `docs/internal/`) apply to this module like every other.

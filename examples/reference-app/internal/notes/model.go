@@ -176,7 +176,7 @@ func (n Note) GetDeletedAt() *time.Time { return n.DeletedAt }
 // declarative mechanism: handler.go's NotesCreateNote calls audit.Emit
 // explicitly, after h.repo.Create has already returned (so after that
 // write's own transaction has committed, which keeps Emit's write out of
-// Create's transaction) -- see server_test.go's
+// Create's transaction) -- see flowtests/server_test.go's
 // TestBuildServer_NoteCreate_PersistsAuditEvent for the end-to-end proof
 // that a real POST /api/v1/notes request produces a persisted
 // go/dbkit/audit.AuditEvent row with Action "notes.note.create", and

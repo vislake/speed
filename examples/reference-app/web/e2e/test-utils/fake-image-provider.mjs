@@ -7,8 +7,8 @@
  * answers every POST /images/edits with one fixed, deterministic
  * "simulated smile" -- a tiny red PNG served as a base64 data entry
  * plus a fixed usage block -- the exact wire shape go/ai-gateway's
- * OpenAICompatibleImageProvider parses and cmd/server's own Go flow
- * tests fake with the identical answer (smilesim_flow_test.go's
+ * OpenAICompatibleImageProvider parses and the flowtests suite fakes
+ * with the identical answer (flowtests/smilesim_flow_test.go's
  * fakeOpenAIImageServer): no live provider and no live key are
  * involved, only a real multipart request reaching a real server, so
  * the block-B gates run deterministically against a freshly booted

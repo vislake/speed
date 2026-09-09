@@ -216,7 +216,7 @@ type Membership struct {
 > - **第三方账号登录**：Google、GitHub、微信开放平台、钉钉、飞书五个渠道全部实现，且每一个都能在完全离线（`httptest`）下通过测试——不依赖真实网络请求。"只有 `EmailVerified=true` 且渠道在信任名单上才自动关联"的规则、微信必须用 `unionid` 而非 `openid`、解绑不能致账号无路可登，三条安全规则均已落地并有对应的负向测试。QQ/微博/支付宝（本文"二期按需补充"）与 SAML（本文"作为可选子包延后"）尚未实现。
 > - **组织模型**：`org` 模块已实现（见上文"组织模型"一节的实现落地更正）。`go/authn` 没有 `memberships` 表，也不 import `org`，而是声明了一个它自己的最小 `MembershipReader` 接口，由宿主注入；`resolveTenant` 在没有注入实现、或调用返回"不是成员"时一律拒绝（fail-closed），绝不放行——这条边界本身就是"业务模块之间禁止 import 对方的 struct"规则的直接应用。
 > - **MFA**：TOTP（RFC 6238，标准库自实现并用官方测试向量钉住，未引入 `pquerna/otp`）、十个一次性恢复码、`RequireStepUp` 对改密码/改 MFA 等敏感操作的二次校验均已实现。**尚未实现的**：登录时刻本身尚不强制第二因子——已启用 MFA 的账号仅凭密码或短信验证码仍可完成首次登录，第二因子只在 step-up 场景生效；WebAuthn/passkey 只预留了 `SecondFactor` 接口实现位。
-> - **会话/设备自助管理**：`examples/reference-app` 的 `authn_e2e_test.go` 通过真实 HTTP 端到端验证了本节描述的核心行为——列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响；前端页面由 `@speed/account-ui` 提供（见下文对照）。
+> - **会话/设备自助管理**：`examples/reference-app` 的 `flowtests/authn_e2e_test.go` 通过真实 HTTP 端到端验证了本节描述的核心行为——列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响；前端页面由 `@speed/account-ui` 提供（见下文对照）。
 >
 > **中间件顺序**：`authn.Middleware` 跑在 `tenancy.Middleware` **之前**，理由见 [01 架构](01-architecture.md) 的"中间件链固定顺序"一节。
 
@@ -226,7 +226,7 @@ type Membership struct {
 >
 > - 吊销模式在 `SessionManager` 构造时固定，并决定哪些吊销会被记入吊销表——因此不存在 `authn.session_revocation_immediate` 之类的动态配置项：请求期读到的值无法给 natural 模式的 manager 补装强制，一个"声明了却从未被读取"的悬空开关已被删除（`ConfigKeyImmediateRevocation` 常量同删）。模式的唯一真实选择器是构造期选项 `WithRevocationMode`。
 > - **立即模式的强制是默认接线。** `NewService` 把自己构造的 `*SessionManager` 挂为它交出的 `Verifier`（`Service.Verifier()`）的吊销源，`Middleware` 在每次验证成功的请求上默认查询该源（显式 `WithRevocationChecker` 覆盖它）。natural 模式（模块默认）下 `IsRevoked` 不碰存储、恒答 false，默认接线零成本；immediate 模式每次请求一次 KV 读，即该模式文档所写的代价。吊销检查不能只是可选 option——若参考应用与消费者骨架都没传，吊销表记了却无人查询，被吊销会话的未过期 access token 会一直用到自然过期，重放防盗响应对攻击者手里的**当前** token 无能为力。
-> - **参考应用以立即模式运行**（`authn.WithRevocationMode(authn.RevocationModeImmediate)`），作为强制机制的强制第一消费者：无论哪条吊销路径（用户登出、会话自助下线、重放检测撤销）都立即切断同一 access token——`authn_e2e_test.go` 的吊销腿断言"被吊销会话的同一未过期 access token 的下一请求被拒（`authn.session_revoked`）"。
+> - **参考应用以立即模式运行**（`authn.WithRevocationMode(authn.RevocationModeImmediate)`），作为强制机制的强制第一消费者：无论哪条吊销路径（用户登出、会话自助下线、重放检测撤销）都立即切断同一 access token——`flowtests/authn_e2e_test.go` 的吊销腿断言"被吊销会话的同一未过期 access token 的下一请求被拒（`authn.session_revoked`）"。
 >
 > 已作废 refresh token 被重放 ⇒ 撤销整个 token 族与 session、发布 `authn.session.replay_detected` 事件，继续准确。动态配置项整体"声明而尚未被读回"的读通缺口是平台级状态（`go/authn/AGENTS.md` 的 Known limitations 有记录），与上述结构性死开关的删除无关。
 
@@ -235,15 +235,15 @@ type Membership struct {
 > **auth-ui 对照**：落地的 `@speed/auth-ui`（登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）使上文两处设想以修正形状落地（机制记录见 [12 前端架构](12-frontend.md)）：
 >
 > - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。
-> - **账号管理页面不在 auth-ui 组件族内。** 该族交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等账号管理页面由 `@speed/account-ui` 提供（见下文对照）。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `authn_e2e_test.go` 真实 HTTP 端到端验证，不依赖这些页面存在。
+> - **账号管理页面不在 auth-ui 组件族内。** 该族交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等账号管理页面由 `@speed/account-ui` 提供（见下文对照）。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `flowtests/authn_e2e_test.go` 真实 HTTP 端到端验证，不依赖这些页面存在。
 
 ---
 
 > **account-ui 对照**：`@speed/account-ui`（账号管理组件家族：`SessionsSection`/`LoginHistorySection`/`SocialBindingsSection`/`BindingCallbackHandler`/`MfaSection`，宿主组合成账号页区块）使上文"用户可见的设备管理"设计段的大部分设想落地：
 >
-> - **设备列表与两种下线按本文形状交付。** 会话列表来自 authn 的 sessions 面，当前设备由服务端答的 `is_current` 明确标记（行内 badge，非客户端推断）；单设备下线走行内操作（被下线会话的 refresh 立即失败仍由服务端保证，`authn_e2e_test.go` 已端到端验证），一键下线其他设备走双确认的危险对话框，以服务端答的 `revoked_count` 播报结果。
+> - **设备列表与两种下线按本文形状交付。** 会话列表来自 authn 的 sessions 面，当前设备由服务端答的 `is_current` 明确标记（行内 badge，非客户端推断）；单设备下线走行内操作（被下线会话的 refresh 立即失败仍由服务端保证，`flowtests/authn_e2e_test.go` 已端到端验证），一键下线其他设备走双确认的危险对话框，以服务端答的 `revoked_count` 播报结果。
 > - **登录历史、社交绑定/解绑、TOTP 注册一并交付**：登录历史列表渲染服务端记录的 method/result/failure_reason（裸 token 走组件内已知清单，清单外渲染通用文案）；社交绑定走与登录同款的 authorize URL + 回调路由，回调按应答形状分派（绑定形→刷新绑定列表并通知宿主，登录形→渲染"已在别处登录"面板且不回调宿主——该交换把某个账号登了进来）；step-up 门控的 TOTP 更换与恢复码再生成走 `session.verifyStepUp`，"注册成功只活在单个 access token 寿命内"在组件层不承诺重问豁免。"解绑不能致账号无路可登"（`authn.last_login_method`，解绑 409 拒绝并留在页面上）是前端可见的服务端规则之一。
-> - **修改密码时询问"是否同时下线其他设备"尚未落地。** authn 的 spec 没有 change-password operation——登录面与账号面上没有任何一处能触发密码修改，联动下线因此无从发生；服务端"改密即撤销"的会话族行为已有 `authn_e2e_test.go` 同款端到端验证可对照。
+> - **修改密码时询问"是否同时下线其他设备"尚未落地。** authn 的 spec 没有 change-password operation——登录面与账号面上没有任何一处能触发密码修改，联动下线因此无从发生；服务端"改密即撤销"的会话族行为已有 `flowtests/authn_e2e_test.go` 同款端到端验证可对照。
 
 ---
 

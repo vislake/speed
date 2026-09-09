@@ -1,7 +1,7 @@
 // The reference app's demo glue for go/notification: the host-side seams a
 // real deployment of the module needs and this app has no real source for,
 // plus the hand-written routes and subscriptions that demonstrate the module
-// end to end. cmd/server/notification_flow_test.go drives everything here through the
+// end to end. flowtests/notification_flow_test.go drives everything here through the
 // composed HTTP stack.
 //
 // The glue is deliberately thin and deliberately demo-shaped:

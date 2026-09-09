@@ -4,7 +4,7 @@
 // and authority rows -- with only the content opener faked: the counting
 // opener proves an already-attested observation costs no content read,
 // and the scriptable opener fails each I/O stage EnsureAttested surfaces.
-// The composed wire-level journey stays in cmd/server/attestation_flow_test.go.
+// The composed wire-level journey stays in flowtests/attestation_flow_test.go.
 package attestation
 
 import (

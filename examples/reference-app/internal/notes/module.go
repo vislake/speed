@@ -31,7 +31,7 @@ const (
 	// generated inner router only serves the fragment's own paths, so
 	// apiPath and the fragment must name the same path -- changing one
 	// without the other leaves the endpoint dead, and only a test that
-	// exercises the composed stack (cmd/server's end-to-end suite) sees
+	// exercises the composed stack (flowtests' end-to-end suite) sees
 	// it.
 	apiPath = "/api/v1/notes"
 

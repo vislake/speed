@@ -329,7 +329,7 @@ func TestTenantService_Status_SuspendedTenant_ReportsSuspended(t *testing.T) {
 // resume read: a resumed tenant's next Status call flips back to active
 // immediately -- the "takes effect on the next request through the
 // resolver" behavior, at the TenantService layer (the reference app's
-// admin_flow_test.go covers the same behavior through a real
+// flowtests/admin_flow_test.go covers the same behavior through a real
 // tenancy.Middleware round trip).
 func TestTenantService_Status_ResumedTenant_ReportsActiveAgain(t *testing.T) {
 	db := testutil.NewDB(t)

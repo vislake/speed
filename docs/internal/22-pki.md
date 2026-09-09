@@ -57,7 +57,7 @@ X.509 层建立在密钥生命周期层之上：一张证书就是"一把有生�
 [15 里程碑](15-roadmap.md) 与仓库根 CLAUDE.md 都把「`examples/reference-app` 真实接入」列为模块完成的强制条件——模块 API 没有被真实消费者用起来，不算完成。**本模块的两层现在都满足这条。**
 
 - **密钥生命周期层有消费者**：`authn` 通过 `KeySource` 消费它，而 reference-app 装配 `authn`，因此是它的间接真实消费者。这条链是完整的。
-- **X.509 层有消费者（2026-09-08 的消费者轮关闭破例）**：reference-app 新增 `internal/attestation`（AI 输出真实性签章层，包文档有完整产品叙事）。参考应用是牙科 AI SaaS，本身仍然"不签发证书"给诊所——但它真实地签发自产 AI 输出并对其做链验证门控，这正是"平台代持密钥、私钥永不出模块"形态下唯一真正成立的消费形状。逐项消费面：启动时 `EnsureAuthorityChain` 经 `CreateRootCA` + `CreateIntermediateCA` 每库建一次应用 CA 链（固定 subject 名幂等寻回，重启不重复建链）；每个租户观察到的成功仿真输出经 `IssueCertificate`（purpose `simulation.attestation`，365 天）签发租户证书、`SignCertificate` 签名、落应用侧签章行；对外分享经 `VerifyCertificate` 链验证 + 叶公钥验签 + 实时摘要比对门控。`cmd/server/attestation_flow_test.go` 把吊销（`pki_revokeCertificate` HTTP 操作，首次真实驱动）与 CRL 拉取（`pki_getAuthorityCrl` HTTP 操作，首次真实驱动）也真实走通。
+- **X.509 层有消费者（2026-09-08 的消费者轮关闭破例）**：reference-app 新增 `internal/attestation`（AI 输出真实性签章层，包文档有完整产品叙事）。参考应用是牙科 AI SaaS，本身仍然"不签发证书"给诊所——但它真实地签发自产 AI 输出并对其做链验证门控，这正是"平台代持密钥、私钥永不出模块"形态下唯一真正成立的消费形状。逐项消费面：启动时 `EnsureAuthorityChain` 经 `CreateRootCA` + `CreateIntermediateCA` 每库建一次应用 CA 链（固定 subject 名幂等寻回，重启不重复建链）；每个租户观察到的成功仿真输出经 `IssueCertificate`（purpose `simulation.attestation`，365 天）签发租户证书、`SignCertificate` 签名、落应用侧签章行；对外分享经 `VerifyCertificate` 链验证 + 叶公钥验签 + 实时摘要比对门控。`flowtests/attestation_flow_test.go` 把吊销（`pki_revokeCertificate` HTTP 操作，首次真实驱动）与 CRL 拉取（`pki_getAuthorityCrl` HTTP 操作，首次真实驱动）也真实走通。
 
 **首次集成只发现一处真实 API 缺口**：签发出来的证书密钥无法被用于任何签名——"issue -> use -> verify"的 use 在模块层不存在。本轮以**纯增量**方式补上 `CAService.SignCertificate`（sign.go；守卫全部复用模块既有形态：`ErrCertificateRevoked` 走 `walkAuthorityChain` 同一条链遍历、有效窗外拒绝沿用"expiry 不编码"惯例、Signer 失败包装同 `GenerateCRL`），未破坏任何既有签名。
 

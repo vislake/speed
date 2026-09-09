@@ -166,7 +166,7 @@ required `Option`s wired. `AGENTS.md`'s "Delivery pipeline" section walks
 that path end to end; `examples/reference-app/internal/app/server.go`'s
 `notificationModule := notification.NewModule(db, ...)` call is the real,
 composed reference wiring every one of those six options together, and
-`cmd/server/notification_flow_test.go` drives it through a full
+`flowtests/notification_flow_test.go` drives it through a full
 create → dispatch → deliver → read cycle over the real composed HTTP
 stack.
 

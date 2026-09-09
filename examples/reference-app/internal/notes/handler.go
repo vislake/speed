@@ -185,7 +185,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // tenancy.Middleware already resolved and injected into the request
 // context, never a value the client supplies (encoding/json's default
 // decoder silently ignores any unknown field a client does send, such as
-// a forged tenant_id -- pinned by cmd/server's end-to-end test).
+// a forged tenant_id -- pinned by flowtests/server_test.go's tenant-hint test).
 func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

@@ -49,7 +49,7 @@ type Object struct {
 - **生命周期**：支持按租户配置保留期与自动清理（配合 `compliance` 的数据保留策略），删除时同步清理派生资源，避免孤儿文件。
 - 前端：`ui-kit` 提供 `FileUploader`（拖拽、进度、多文件、失败重试、预览），不再让每个项目重写一遍。
 
-**storage 实现对照**：本节是目标设计；`go/storage` 模块已落地，reference-app 端到端接入是第一个消费者（`cmd/server/storage_flow_test.go`）。逐项对照如下；能力边界、已知限制与延期项以 `go/storage/AGENTS.md` 为准：
+**storage 实现对照**：本节是目标设计；`go/storage` 模块已落地，reference-app 端到端接入是第一个消费者（`flowtests/storage_flow_test.go`）。逐项对照如下；能力边界、已知限制与延期项以 `go/storage/AGENTS.md` 为准：
 
 - **数据模型**：目标设计的 `Object` 拆为两张双方言迁移的 `TenantScoped` 表——`objects` 与 `object_derivatives`；`Derivatives []Derivative` 不是内嵌字段，而是按 `(tenant, object_id, kind)` 唯一索引的独立行（`kind` 当前仅 `thumbnail`）。存储路径即 `ObjectKey(tenant, objectID)` / `DerivativeKey(tenant, objectID, kind)`，由模块自身推导，永不暴露给客户端。
 - **上传链路**：已落地为**服务端中转流式上传**而非本节的预签名直传——`Create` 开启上传窗口（依声明的大小/类型/校验和，可附请求保留期，宿主以 `WithMaxObjectLifetime` 设上限），`Upload` 将请求体流式写入 `pkgcore.ObjectStore` seam（字节不进数据库），`Complete` 收口。**预签名直传未落地**：模块不引入任何 presigner，直传凭据与短时效预签名 URL 均未实现。
@@ -88,7 +88,7 @@ type Share struct {
 
 **与其他模块的关系**：分享的资源内容通过 `storage` 取得；访问统计经事件总线流入 `compliance` 审计；到期清理走 `jobs` 定时任务。
 
-**sharing 实现对照**：本节是目标设计；`go/sharing` 已落地，reference-app 端到端接入是第一个消费者（`examples/reference-app/cmd/server/sharing_flow_test.go`）。落地内容：`Share` 领域模型与访问日志（令牌从不存明文，真实模型只有 `TokenHash`，见上表注释——这是相对本节"令牌模型"代码示例的关键差异）、创建/访问/撤销的 `Service`、`jobs` 驱动的到期清理、`pkgcore.Module` 接线、未认证访问者的租户解析（`Service.AccessPublic`，从令牌哈希解析出拥有者租户后重新进入同一个访问判定，规则的强制点不因访客未认证而旁路）、公开访问路由（`Cache-Control: no-store`）与 `/api/v1/sharing/shares` 下的属主操作（创建/列表/查看/撤销/访问日志）、把 `ResourceRef` 解析成真实字节的 `ResourceResolver` seam、`Create`/`AccessPublic` 两处的 `go/ratelimit` 限流。逐项差异与已知限制以 `go/sharing/AGENTS.md` 为准。
+**sharing 实现对照**：本节是目标设计；`go/sharing` 已落地，reference-app 端到端接入是第一个消费者（`examples/reference-app/flowtests/sharing_flow_test.go`）。落地内容：`Share` 领域模型与访问日志（令牌从不存明文，真实模型只有 `TokenHash`，见上表注释——这是相对本节"令牌模型"代码示例的关键差异）、创建/访问/撤销的 `Service`、`jobs` 驱动的到期清理、`pkgcore.Module` 接线、未认证访问者的租户解析（`Service.AccessPublic`，从令牌哈希解析出拥有者租户后重新进入同一个访问判定，规则的强制点不因访客未认证而旁路）、公开访问路由（`Cache-Control: no-store`）与 `/api/v1/sharing/shares` 下的属主操作（创建/列表/查看/撤销/访问日志）、把 `ResourceRef` 解析成真实字节的 `ResourceResolver` seam、`Create`/`AccessPublic` 两处的 `go/ratelimit` 限流。逐项差异与已知限制以 `go/sharing/AGENTS.md` 为准。
 
 ## 通知系统（notification）：站内信 + 按类型选渠道
 
@@ -181,7 +181,7 @@ type VerifiedContact struct {
 - 同类通知的**聚合与限频**：短时间内的重复通知合并发送，避免把用户淹没（如批量导入失败不该发 500 封邮件）。
 - **每个发送通道各有多套实现**：邮件是 `ConsoleMailer` / SMTP，短信是控制台输出 / 各短信网关，推送同理。选哪套由装配决定，与部署成几个副本无关——单进程部署照样可以走真实 SMTP。站内信落库不依赖任何外部服务，在任何组装下都完全可用。
 
-**notification 实现对照**：本节是目标设计；`go/notification` 已落地，reference-app 端到端接入是第一个消费者（`cmd/server/notification_flow_test.go`）。逐项对照如下；能力边界、已知限制与延期项以 `go/notification/AGENTS.md` 为准：
+**notification 实现对照**：本节是目标设计；`go/notification` 已落地，reference-app 端到端接入是第一个消费者（`flowtests/notification_flow_test.go`）。逐项对照如下；能力边界、已知限制与延期项以 `go/notification/AGENTS.md` 为准：
 
 - **偏好矩阵**：核心机制已落地——`notification_preferences` 按类型 × 渠道存用户选择，`Set` 只接受活声明的类型与渠道（未知声明直接拒绝），`ResolveForDelivery` 对未设置的行缺省为类型默认值；安全类不可退订由声明的类型标记（声明不可退订的类型拒绝全关）保证。**"租户强制策略"中间层未落地**——偏好优先级实际是两级（用户行 → 类型默认值）。
 - **通知类型注册表**：声明方在 `Register` 时经 `reg.Notifications.Add`（key、默认渠道、是否可退订）声明，taxonomy 是**活的注册表**、解析时读取而非冻结快照——发送前的合法性校验与偏好设置的校验共用同一份声明。文案模板不经通知模块存储：类型 key `<module>.<entity>.<action>` 的文案由**声明模块自己的双语资源**按 `<type_key>.<channel>.<part>` 约定提供（站内信 title/body、邮件 subject/body_text、短信 text），投递时按收件人 locale 从 host 合并的 i18n 目录渲染——与本节"注册表驱动偏好页自动渲染 / 文档自动生成"对应的前端与文档生成未落地，运营后台模板编辑亦未落地。

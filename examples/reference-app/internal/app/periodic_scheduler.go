@@ -35,7 +35,7 @@ import (
 //     held forever, go/jobs) that means at most one sweep per tenant per
 //     window: an object whose retention deadline passes is reaped by the
 //     next window's sweep, and a sweep job that dead-letters poisons only
-//     its own window. What cmd/server/periodic_scheduler_flow_test.go's two-boot
+//     its own window. What flowtests/periodic_scheduler_flow_test.go's two-boot
 //     test proves
 //     end to end: boot 1 lets a completed object
 //     expire with the scheduler disabled, and boot 2's first sweep -- the
@@ -59,7 +59,7 @@ import (
 //     compliance's own stored export manifests alike -- so nothing else
 //     needs its own schedule point. The trigger-half proof is the same
 //     two-boot shape as the expiry sweep's:
-//     cmd/server/periodic_scheduler_flow_test.go's retention leg lets boot 1 leave a
+//     flowtests/periodic_scheduler_flow_test.go's retention leg lets boot 1 leave a
 //     soft-deleted note 45 days past the default window with the scheduler
 //     disabled, and boot 2's first sweep must then hard-delete that row
 //     through the real host wiring.
