@@ -1,6 +1,6 @@
 {
   "name": "@speed/product-shell",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed product shell: the tenant-facing assembly shell -- ProductShell composes layout-kit's AppShell frame, auth-ui's sign-in family and auth-core's session hooks into one three-branch view machine (sign-in view, authenticated app frame, session-ended screen), with every view host-suppliable and one polite announcement string of its own",
   "type": "module",
   "sideEffects": false,

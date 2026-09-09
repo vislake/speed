@@ -1,6 +1,6 @@
 {
   "name": "@speed/billing-ui",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed billing UI: the billing-documents component family (a newest-first invoice list over the generated billing read operations, with a per-row detail read), every built-in string in the bilingual billing-ui namespace",
   "type": "module",
   "sideEffects": false,

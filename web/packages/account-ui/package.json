@@ -1,6 +1,6 @@
 {
   "name": "@speed/account-ui",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed account UI: the signed-in account-management component family (session and login-history lists, social bindings, and step-up-gated two-factor setup) over an @speed/auth-core session and the generated authn operations, with every built-in string in the bilingual account-ui namespace",
   "type": "module",
   "sideEffects": false,

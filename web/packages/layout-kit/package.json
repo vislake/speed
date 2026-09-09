@@ -1,6 +1,6 @@
 {
   "name": "@speed/layout-kit",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed layout kit: shared app chrome (AppShell) and route guarding, controlled and props-driven, with no auth-mechanism opinion",
   "type": "module",
   "sideEffects": false,

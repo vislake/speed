@@ -1,6 +1,6 @@
 {
   "name": "@speed/tokens",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed design tokens: pure-data color, typography, spacing, shape, breakpoints, z-index and shadow defaults plus the deep-merge helper for project overrides",
   "type": "module",
   "sideEffects": false,

@@ -1,6 +1,6 @@
 {
   "name": "@speed/tenancy-ui",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed tenancy UI: the tenant-switch affordance (TenantSwitcher) over an @speed/auth-core session, with every built-in string in the bilingual tenancy-ui namespace",
   "type": "module",
   "sideEffects": false,

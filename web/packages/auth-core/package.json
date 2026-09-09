@@ -1,6 +1,6 @@
 {
   "name": "@speed/auth-core",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed auth core: the browser session lifecycle (password and SMS login, logout, tenant switch, step-up and silent refresh) as a memory-only state machine over the generated authn surface of @speed/api-sdk, with the in-memory access-token store as the bridge into @speed/api-client, plus React hooks (useAuthState, useCurrentTenant, usePermission) reading one host-attached session",
   "type": "module",
   "sideEffects": false,

@@ -1,6 +1,6 @@
 {
   "name": "@speed/api-sdk",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed API SDK: the orval-generated, spec-first typed surface for speed APIs -- TanStack Query hooks, operation functions and response models generated from each module's openapi fragment, calling the @speed/api-client runtime through the src/runtime.ts seam",
   "type": "module",
   "sideEffects": false,

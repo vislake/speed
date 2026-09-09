@@ -1,6 +1,6 @@
 {
   "name": "@speed/i18n",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed frontend i18n host: react-i18next instance creation with the documented language-negotiation chain, per-namespace resource registration with no-silent-cross-language-fallback guarantees, and the isolated MUI locale-linkage helper",
   "type": "module",
   "sideEffects": false,

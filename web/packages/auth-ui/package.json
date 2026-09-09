@@ -1,6 +1,6 @@
 {
   "name": "@speed/auth-ui",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Speed auth UI: the sign-in component family (password, SMS code, social channels, registration and the social callback handler) over an @speed/auth-core session, with every built-in string in the bilingual auth-ui namespace",
   "type": "module",
   "sideEffects": false,
