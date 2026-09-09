@@ -14,7 +14,6 @@ go/sharing implements public share links: a controlled entry point that lets an 
 |---|---|---|
 | A live consumer of `sharing.share.accessed` | A compliance audit trail | This module only publishes; the event announces every settled access, granted or denied, for a subscriber to consume |
 | A browser-facing password-entry page for a protected share | A host's own frontend | `handler.go`'s route accepts the password over `HeaderSharePassword`; rendering an actual HTML prompt that collects and resends it is presentation-layer work no module in this codebase ships |
-| `PathShares`' fragment in the merged `contracts/speed.yaml` document | A frontend consumer of the operations | See "Owner-facing HTTP routes" below |
 
 ## Data model
 
