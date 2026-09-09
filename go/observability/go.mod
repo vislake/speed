@@ -2,11 +2,9 @@ module github.com/vislake/speed/go/observability
 
 go 1.26.0
 
-replace github.com/vislake/speed/go/pkgcore => ../pkgcore
-
 require (
 	github.com/prometheus/client_golang v1.23.2
-	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/pkgcore v0.0.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.44.0

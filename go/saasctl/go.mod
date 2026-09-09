@@ -12,15 +12,15 @@ go 1.26.0
 // tidy put them: required by the direct speed modules above, not imported
 // here.
 require (
-	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000 // indirect
-	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000 // indirect
-	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/authn v0.0.1
+	github.com/vislake/speed/go/config v0.0.1
+	github.com/vislake/speed/go/dbkit v0.0.1
+	github.com/vislake/speed/go/observability v0.0.1 // indirect
+	github.com/vislake/speed/go/org v0.0.1
+	github.com/vislake/speed/go/pkgcore v0.0.1
+	github.com/vislake/speed/go/ratelimit v0.0.1 // indirect
+	github.com/vislake/speed/go/rbac v0.0.1
+	github.com/vislake/speed/go/tenancy v0.0.1
 )
 
 // golang.org/x/mod is one of the direct third-party dependencies, justified
@@ -84,7 +84,7 @@ require (
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000 // indirect
+	github.com/vislake/speed/go/jobs v0.0.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
@@ -115,7 +115,7 @@ require (
 	github.com/nicksnyder/go-i18n/v2 v2.6.1 // indirect
 	github.com/oapi-codegen/runtime v1.7.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/vislake/speed/go/pki v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/pki v0.0.1
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
@@ -134,28 +134,3 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 )
-
-// Every graph module resolves to its sibling directory in this repository
-// (the transition-state shape every consumer go.mod carries: speed modules
-// are never fetched remotely, so the require above only pins the version).
-replace github.com/vislake/speed/go/pkgcore => ../pkgcore
-
-replace github.com/vislake/speed/go/dbkit => ../dbkit
-
-replace github.com/vislake/speed/go/tenancy => ../tenancy
-
-replace github.com/vislake/speed/go/observability => ../observability
-
-replace github.com/vislake/speed/go/config => ../config
-
-replace github.com/vislake/speed/go/ratelimit => ../ratelimit
-
-replace github.com/vislake/speed/go/authn => ../authn
-
-replace github.com/vislake/speed/go/rbac => ../rbac
-
-replace github.com/vislake/speed/go/org => ../org
-
-replace github.com/vislake/speed/go/pki => ../pki
-
-replace github.com/vislake/speed/go/jobs => ../jobs

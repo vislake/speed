@@ -2,29 +2,17 @@ module github.com/vislake/speed/go/integration
 
 go 1.26.0
 
-replace github.com/vislake/speed/go/pkgcore => ../pkgcore
-
-replace github.com/vislake/speed/go/dbkit => ../dbkit
-
-replace github.com/vislake/speed/go/tenancy => ../tenancy
-
-replace github.com/vislake/speed/go/ratelimit => ../ratelimit
-
-replace github.com/vislake/speed/go/jobs => ../jobs
-
-replace github.com/vislake/speed/go/observability => ../observability
-
 require (
 	github.com/google/uuid v1.6.0
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
-	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/dbkit v0.0.1
+	github.com/vislake/speed/go/jobs v0.0.1
+	github.com/vislake/speed/go/observability v0.0.1
+	github.com/vislake/speed/go/pkgcore v0.0.1
+	github.com/vislake/speed/go/ratelimit v0.0.1
+	github.com/vislake/speed/go/tenancy v0.0.1
 	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2
 )

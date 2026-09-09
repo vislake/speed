@@ -2,52 +2,22 @@ module github.com/vislake/speed/go/admin
 
 go 1.26.0
 
-replace github.com/vislake/speed/go/pkgcore => ../pkgcore
-
-replace github.com/vislake/speed/go/dbkit => ../dbkit
-
-replace github.com/vislake/speed/go/tenancy => ../tenancy
-
-replace github.com/vislake/speed/go/observability => ../observability
-
-replace github.com/vislake/speed/go/ratelimit => ../ratelimit
-
-replace github.com/vislake/speed/go/jobs => ../jobs
-
-replace github.com/vislake/speed/go/config => ../config
-
-replace github.com/vislake/speed/go/sharing => ../sharing
-
-replace github.com/vislake/speed/go/authn => ../authn
-
-replace github.com/vislake/speed/go/org => ../org
-
-replace github.com/vislake/speed/go/compliance => ../compliance
-
-replace github.com/vislake/speed/go/notification => ../notification
-
-replace github.com/vislake/speed/go/rbac => ../rbac
-
-replace github.com/vislake/speed/go/metering => ../metering
-
-replace github.com/vislake/speed/go/billing => ../billing
-
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/oapi-codegen/runtime v1.7.0
-	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/billing v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/compliance v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/metering v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/notification v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/sharing v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/authn v0.0.1
+	github.com/vislake/speed/go/billing v0.0.1
+	github.com/vislake/speed/go/compliance v0.0.1
+	github.com/vislake/speed/go/dbkit v0.0.1
+	github.com/vislake/speed/go/jobs v0.0.1
+	github.com/vislake/speed/go/metering v0.0.1
+	github.com/vislake/speed/go/notification v0.0.1
+	github.com/vislake/speed/go/observability v0.0.1
+	github.com/vislake/speed/go/org v0.0.1
+	github.com/vislake/speed/go/pkgcore v0.0.1
+	github.com/vislake/speed/go/rbac v0.0.1
+	github.com/vislake/speed/go/sharing v0.0.1
+	github.com/vislake/speed/go/tenancy v0.0.1
 	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2
 )
@@ -114,8 +84,8 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000 // indirect
-	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000 // indirect
+	github.com/vislake/speed/go/config v0.0.1 // indirect
+	github.com/vislake/speed/go/ratelimit v0.0.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
