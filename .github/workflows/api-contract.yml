@@ -414,8 +414,8 @@ jobs:
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Pki's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
-        # gate's comment and the COVERAGE note above for why.
+        # Porcelain gate, not git diff --exit-code -- see the COVERAGE
+        # note above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
             git status --porcelain --untracked-files=all
