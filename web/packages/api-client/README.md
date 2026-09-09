@@ -291,7 +291,9 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 
 ## What is deliberately not here
 
-- **Uploads and SSE** -- not shipped.
+- **Uploads, SSE and raw-byte responses** -- not shipped (the
+  transport reads and writes JSON text only; a binary body or
+  response never travels this client).
 - **A consumer is not packaged here** -- `@speed/api-sdk`, the
   orval-generated typed surface, calls into this package through its
   `src/runtime.ts` seam, and `@speed/auth-core` compile-consumes both

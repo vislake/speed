@@ -18,15 +18,17 @@ info:
     (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
     isolation rule).
 
-    Merging this fragment into an application-wide build/openapi/speed.yaml
-    stays future work until the merge tooling lands (see
-    docs/internal/21-api-contract.md's implementation-status note) --
-    storage is the third module fragment, after notes and org.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/storage/objects:
     post:
       operationId: storage_createObject
+      tags: [storage]
       summary: Declare an upload in the caller's tenant.
       description: >-
         Create is the first step of the three-step upload lifecycle: it
@@ -66,6 +68,7 @@ paths:
                 $ref: '#/components/schemas/StorageError'
     get:
       operationId: storage_listObjects
+      tags: [storage]
       summary: List the caller's tenant's completed objects, newest first.
       description: >-
         Keyset-paginated: the page returns up to limit objects (1-200,
@@ -115,6 +118,7 @@ paths:
   /api/v1/storage/objects/{objectId}:
     get:
       operationId: storage_getObject
+      tags: [storage]
       summary: Get one completed object's metadata.
       description: >-
         The full metadata of a completed object of the caller's tenant,
@@ -140,6 +144,7 @@ paths:
                 $ref: '#/components/schemas/StorageError'
     delete:
       operationId: storage_deleteObject
+      tags: [storage]
       summary: Permanently delete an object of the caller's tenant.
       description: >-
         Deletion removes the object's bytes, every derivative's bytes and
@@ -176,6 +181,7 @@ paths:
   /api/v1/storage/objects/{objectId}/content:
     put:
       operationId: storage_uploadObjectContent
+      tags: [storage]
       summary: Upload one declared object's bytes.
       description: >-
         The second step of the upload lifecycle: the request body is the
@@ -225,6 +231,7 @@ paths:
                 $ref: '#/components/schemas/StorageError'
     get:
       operationId: storage_getObjectContent
+      tags: [storage]
       summary: Stream a completed object's bytes.
       description: >-
         The raw bytes of a completed object of the caller's tenant, served
@@ -251,6 +258,7 @@ paths:
   /api/v1/storage/objects/{objectId}/complete:
     post:
       operationId: storage_completeObject
+      tags: [storage]
       summary: Finalize a declared and uploaded object.
       description: >-
         The last step of the upload lifecycle. Complete revalidates the

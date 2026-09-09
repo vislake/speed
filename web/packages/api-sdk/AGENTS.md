@@ -78,7 +78,11 @@ and `src/` must keep passing it on every regeneration.
 
 The generated surface over the merged document (`src/index.ts` --
 orval input is `build/openapi/speed.yaml`, the redocly `join` of the
-frontend-feeding fragments), the runtime seam, the regeneration
+module fragments: the ten platform-module fragments (admin,
+ai-gateway, authn, billing, integration, notification, org, pki,
+sharing and storage) plus the reference app's own notes, cases and
+smilesim -- every platform module with an HTTP fragment is a merge
+member), the runtime seam, the regeneration
 tooling (config + fixup script) and the CI wiring that regenerates and
 diffs the artifact. `@speed/auth-core` compile-consumes the authn
 surface in-workspace: its unit suite binds a scripted request function
@@ -91,6 +95,15 @@ Deferred with reasons:
 - The oasdiff breaking-change gate -- not implemented: a
   breaking-change gate needs a release baseline to diff against, and
   no release baseline exists yet.
+- Raw-byte transport -- not shipped: the spec's byte-carrying
+  operations (sharing's access-content route, storage's
+  object-content read) generate typed operations with orval's
+  `responseType: 'blob'` shape, but the bound api-client transport
+  reads and writes JSON text only, so the seam reads that option
+  for type-completeness and never forwards it (runtime.ts's
+  forward()). A host that must move bytes uses its own mechanism --
+  browser navigation for a share link, a byte-capable client of its
+  own -- never this JSON seam.
 - Browser automation over the server-served page (a browser driving
   the real server) -- not shipped. The consumer shell drives the
   composed operations through the real client over a scripted

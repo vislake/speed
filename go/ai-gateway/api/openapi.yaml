@@ -40,15 +40,17 @@ info:
     from the request. setPlatformCredential writes no tenant row at all
     -- see its own description.
 
-    This fragment is not merged into the application-wide build/openapi/
-    speed.yaml: this module has no in-workspace web consumer, so joining
-    it into the merge and running it through orval would generate
-    frontend code nothing calls.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/ai-gateway/credentials/{provider}:
     get:
       operationId: aiGateway_getCredential
+      tags: [ai-gateway]
       summary: Report which scope currently answers for a provider.
       description: >-
         The exact CredentialService.Resolve answer for provider under the
@@ -79,6 +81,7 @@ paths:
   /api/v1/ai-gateway/credentials/{provider}/tenant:
     put:
       operationId: aiGateway_setTenantCredential
+      tags: [ai-gateway]
       summary: Set the caller's own tenant's BYOK credential.
       description: >-
         Writes or overwrites (upsert, keyed on provider and the caller's
@@ -115,6 +118,7 @@ paths:
   /api/v1/ai-gateway/credentials/{provider}/platform:
     put:
       operationId: aiGateway_setPlatformCredential
+      tags: [ai-gateway]
       summary: Set the platform-wide default credential.
       description: >-
         Writes or overwrites (upsert, keyed on provider alone -- there is

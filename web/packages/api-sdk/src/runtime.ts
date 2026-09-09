@@ -37,7 +37,8 @@ import type {
  * The call shape orval-generated functions pass to the configured
  * mutator: one options object, axios-flavoured -- always `url` and
  * `method`, plus `headers`/`params`/`data`/`signal` when the operation
- * has them. Structural only: orval emits plain literals against this
+ * has them, and `responseType: 'blob'` when the spec's response is raw
+ * bytes. Structural only: orval emits plain literals against this
  * shape, so no type is shared across the generation boundary.
  */
 interface OrvalCall {
@@ -48,6 +49,9 @@ interface OrvalCall {
     Record<string, string | number | boolean | null | undefined>
   >
   data?: unknown
+  /** Raw-byte responses (spec-level axios shape); the seam's
+   * JSON-text transport cannot carry them -- see forward() below. */
+  responseType?: 'blob'
   signal?: AbortSignal
 }
 
@@ -95,6 +99,15 @@ function forward<T>(call: OrvalCall, omitAccessToken: boolean): Promise<T> {
       '[speed-api-sdk] no request function bound: call bindRequestFn(createClient(...)) once at bootstrap before any generated hook runs.',
     )
   }
+  // `call.responseType` is deliberately not forwarded: RequestOptions
+  // has no responseType, because the api-client transport reads and
+  // writes JSON text only (binary bodies and responses are deferred
+  // there -- its README's "What is deliberately not here"). The
+  // generated operations for raw-byte endpoints keep the type orval
+  // emits from the spec (`responseType: 'blob'`, Blob-typed result);
+  // a host that must move bytes uses its own mechanism (browser
+  // navigation for share links, a byte-capable client of its own),
+  // never this JSON seam.
   const options: RequestOptions = {
     method: call.method,
     headers: call.headers,

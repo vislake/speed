@@ -26,8 +26,8 @@ info:
     this directory, with its own leg running the pinned oapi-codegen here
     exactly as for every other fragment. api-contract.yml's
     regenerate-then-diff gate carries the same single-fragment entry
-    (backend-only, mirroring org's and storage's own entries in that
-    workflow). Round 1's honest "neither Taskfile.yml's api:gen task nor
+    (the same single-fragment regeneration entry every fragment's step
+    carries). Round 1's honest "neither Taskfile.yml's api:gen task nor
     api-contract.yml includes this fragment yet" gap is closed on both
     sides, so a spec edit needs no hand regeneration and no hand diffing:
     the same gate that guards every other fragment guards this one.
@@ -45,14 +45,17 @@ info:
     (admin.ImpersonationMiddleware, pipeline.go) inserted ahead of
     tenancy.Middleware for those other routes, not for admin's own.
 
-    Merging this fragment into the application-wide build/openapi/speed.yaml
-    stays future work, following storage's own precedent of shipping a
-    backend-only fragment first.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/admin/tenants:
     get:
       operationId: admin_listTenants
+      tags: [admin]
       summary: List the operator-facing tenant ledger (D3).
       description: >-
         Record-only: this ledger is an operator convenience, never the
@@ -83,6 +86,7 @@ paths:
                 $ref: '#/components/schemas/AdminListTenantsResponse'
     post:
       operationId: admin_createTenant
+      tags: [admin]
       summary: Manually register a tenant ledger row (D3's second population path).
       description: >-
         For pre-registering a tenant's name before any business write has
@@ -116,6 +120,7 @@ paths:
   /api/v1/admin/tenants/{id}:
     get:
       operationId: admin_getTenant
+      tags: [admin]
       summary: Read one tenant ledger row.
       parameters:
         - name: id
@@ -138,6 +143,7 @@ paths:
                 $ref: '#/components/schemas/AdminError'
     patch:
       operationId: admin_updateTenant
+      tags: [admin]
       summary: Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
       description: >-
         Writing status=suspended here only records the ledger's opinion --
@@ -171,6 +177,7 @@ paths:
   /api/v1/admin/users:
     get:
       operationId: admin_searchUsers
+      tags: [admin]
       summary: Cross-tenant user search (D6).
       description: >-
         Exactly one of email, phone or displayNamePrefix must be given, in
@@ -213,6 +220,7 @@ paths:
   /api/v1/admin/users/{id}/memberships:
     get:
       operationId: admin_listUserMemberships
+      tags: [admin]
       summary: List every tenant a user currently has an active membership in (D6 + D2).
       parameters:
         - name: id
@@ -230,6 +238,7 @@ paths:
   /api/v1/admin/impersonation:
     get:
       operationId: admin_listImpersonationGrants
+      tags: [admin]
       summary: List currently-active impersonation grants (D5's self-audit listing).
       responses:
         '200':
@@ -240,6 +249,7 @@ paths:
                 $ref: '#/components/schemas/AdminListImpersonationGrantsResponse'
     post:
       operationId: admin_startImpersonation
+      tags: [admin]
       summary: Start an impersonation session (D5).
       requestBody:
         required: true
@@ -265,6 +275,7 @@ paths:
   /api/v1/admin/impersonation/{id}:
     delete:
       operationId: admin_endImpersonation
+      tags: [admin]
       summary: End an impersonation session early (D5).
       parameters:
         - name: id
@@ -294,6 +305,7 @@ paths:
   /api/v1/admin/audit-events:
     get:
       operationId: admin_listAuditEvents
+      tags: [admin]
       summary: Query the audit trail, single-tenant or cross-tenant (D7).
       description: >-
         A thin HTTP shell over compliance.AuditQuery -- see AuditService's
@@ -368,6 +380,7 @@ paths:
   /api/v1/admin/audit-events/export:
     post:
       operationId: admin_exportAuditEvents
+      tags: [admin]
       summary: Kick off an asynchronous audit-event export for one tenant (D7's export leg).
       description: >-
         Wraps compliance.ExportService.Export, which gathers every
@@ -399,6 +412,7 @@ paths:
   /api/v1/admin/roles:
     get:
       operationId: admin_listDeclaredPermissions
+      tags: [admin]
       summary: List every permission any module has declared (D8's role-editing checklist).
       description: >-
         Wraps rbac.Service.DeclaredPermissions -- the frozen catalog
@@ -413,6 +427,7 @@ paths:
                 $ref: '#/components/schemas/AdminListDeclaredPermissionsResponse'
     post:
       operationId: admin_defineRole
+      tags: [admin]
       summary: Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
       requestBody:
         required: true
@@ -436,6 +451,7 @@ paths:
   /api/v1/admin/roles/{id}/bindings:
     post:
       operationId: admin_createRoleBinding
+      tags: [admin]
       summary: >-
         Assign a role to a user, optionally scoped to one org node (D8),
         wrapping rbac.Service.AssignRole.
@@ -468,6 +484,7 @@ paths:
   /api/v1/admin/usage-summary:
     get:
       operationId: admin_getUsageSummary
+      tags: [admin]
       summary: Cross-tenant usage/billing dashboard (D9).
       description: >-
         Stitched from go/metering's and go/billing's already-real,
@@ -492,6 +509,7 @@ paths:
   /api/v1/admin/notifications/send-records:
     get:
       operationId: admin_listSendRecords
+      tags: [admin]
       summary: Cross-tenant notification send-record search (D10).
       description: >-
         Wraps notification.SendRecordRepository.ListByFilter. tenantId

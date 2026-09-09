@@ -12,16 +12,17 @@ info:
     regenerates notes-server.gen.go (in this directory) from this file,
     with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml. The merge is no longer future
-    work: this fragment joins the authn fragment into the committed
-    application-wide build/openapi/speed.yaml (task api:merge, redocly
-    pinned at 2.51.1), which is also the frontend SDK's generation
-    input (docs/internal/21-api-contract.md's spec-organization and
-    merging section).
+    work: this fragment joins the other twelve fragments into the
+    committed application-wide build/openapi/speed.yaml (task api:merge,
+    redocly pinned at 2.51.1), which is also the frontend SDK's
+    generation input (docs/internal/21-api-contract.md's
+    spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/notes:
     post:
       operationId: notes_createNote
+      tags: [notes]
       summary: Create a note for the caller's tenant.
       description: >-
         The tenant is always the one tenancy.Middleware already resolved
@@ -50,6 +51,7 @@ paths:
                 $ref: '#/components/schemas/NotesError'
     get:
       operationId: notes_listNotes
+      tags: [notes]
       summary: List every note belonging to the caller's tenant.
       responses:
         '200':
@@ -61,6 +63,7 @@ paths:
   /api/v1/notes/{noteId}:
     delete:
       operationId: notes_deleteNote
+      tags: [notes]
       summary: Mark a note as deleted for the caller's tenant.
       description: >-
         The tenant is always the one tenancy.Middleware already resolved
@@ -105,6 +108,7 @@ paths:
   /api/v1/notes/{noteId}/restore:
     post:
       operationId: notes_restoreNote
+      tags: [notes]
       summary: Restore a previously deleted note for the caller's tenant.
       description: >-
         The inverse of notes_deleteNote: clears the mark-delete's

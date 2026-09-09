@@ -67,14 +67,12 @@ rules:
   # plain "authn" to separate its public and protected operations in
   # generated documentation, which this pattern tolerates.
   #
-  # Severity is `warn`, not `error`, for one honest reason: notes' fragment
-  # (examples/reference-app/internal/notes/api/openapi.yaml, an earlier
-  # round) declares no `tags:` on either of its two operations, so `join`
-  # buckets them into a synthetic "openapi_other" tag that fails this
-  # pattern. Fixing notes' fragment is a real, low-risk change, but it also
-  # regenerates @speed/api-sdk (orval groups generated hooks by tag), which
-  # is out of scope for this round -- see go/authn/AGENTS.md's Known
-  # limitations. Promote this to `error` once notes' fragment is fixed.
+  # Error-level since every merged operation carries its module tag:
+  # redocly's `join` buckets an untagged operation into a synthetic
+  # "openapi_other" tag, and two documents both contributing that tag
+  # abort the join -- an untagged operation cannot merge at all -- so the
+  # tag convention is the merge's own precondition and this rule enforces
+  # it on the result.
   rule/speed-tag-format:
     subject:
       type: Tag
@@ -82,7 +80,7 @@ rules:
     assertions:
       pattern: "^[a-z][a-z0-9-]*(\\s\\([a-zA-Z ]+\\))?$"
     message: "tags should be the module name, optionally qualified in parentheses (docs/internal/21-api-contract.md)"
-    severity: warn
+    severity: error
 
 # NOT enforced here, and why: the path-prefix convention
 # ("/api/v1/<module>/...") has no redocly subject type that exposes a

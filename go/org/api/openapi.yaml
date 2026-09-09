@@ -21,15 +21,17 @@ info:
     itself, server-side, from the invitation token (see the operation's own
     description and go/org/AGENTS.md's "Acceptance is tenantless").
 
-    Merging this fragment into an application-wide build/openapi/speed.yaml
-    stays future work until the merge tooling lands (see
-    docs/internal/21-api-contract.md's implementation-status note) -- org
-    is the second module fragment, after notes.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/org/nodes:
     post:
       operationId: org_createNode
+      tags: [org]
       summary: Create a node in the caller's tenant's organization tree.
       description: >-
         parentId absent or empty creates the tenant's single root node
@@ -72,6 +74,7 @@ paths:
                 $ref: '#/components/schemas/OrgError'
     get:
       operationId: org_listNodes
+      tags: [org]
       summary: List nodes of the caller's tenant's organization tree.
       description: >-
         With parentId, returns that node's direct children
@@ -100,6 +103,7 @@ paths:
   /api/v1/org/nodes/{nodeId}:
     get:
       operationId: org_getNode
+      tags: [org]
       summary: Get one node of the caller's tenant's organization tree.
       parameters:
         - $ref: '#/components/parameters/NodeID'
@@ -118,6 +122,7 @@ paths:
                 $ref: '#/components/schemas/OrgError'
     patch:
       operationId: org_renameNode
+      tags: [org]
       summary: Rename a node.
       parameters:
         - $ref: '#/components/parameters/NodeID'
@@ -154,6 +159,7 @@ paths:
                 $ref: '#/components/schemas/OrgError'
     delete:
       operationId: org_deleteNode
+      tags: [org]
       summary: Delete a node.
       description: >-
         Deleting a node with children reports 409 unless cascade=true, in
@@ -190,6 +196,7 @@ paths:
   /api/v1/org/nodes/{nodeId}/move:
     post:
       operationId: org_moveNode
+      tags: [org]
       summary: Re-parent a node, carrying its whole subtree with it.
       parameters:
         - $ref: '#/components/parameters/NodeID'
@@ -229,6 +236,7 @@ paths:
   /api/v1/org/members:
     get:
       operationId: org_listMembers
+      tags: [org]
       summary: List the members bound to a node's subtree.
       description: >-
         With nodeId, returns the members bound to that node or to anything
@@ -259,6 +267,7 @@ paths:
   /api/v1/org/members/{userId}:
     delete:
       operationId: org_removeMember
+      tags: [org]
       summary: Remove a member from the caller's tenant.
       description: >-
         Refuses to remove the tenant's last active member (409): somebody
@@ -288,6 +297,7 @@ paths:
   /api/v1/org/invitations:
     post:
       operationId: org_createInvitation
+      tags: [org]
       summary: Invite a person into the caller's tenant, at a node.
       description: >-
         The invitee's address is normalized, indexed and rate-limited (per
@@ -343,6 +353,7 @@ paths:
                 $ref: '#/components/schemas/OrgError'
     get:
       operationId: org_listInvitations
+      tags: [org]
       summary: List the caller's tenant's pending invitations.
       description: >-
         Expiry is evaluated at acceptance time, not by a sweeper, so an
@@ -358,6 +369,7 @@ paths:
   /api/v1/org/invitations/accept:
     post:
       operationId: org_acceptInvitation
+      tags: [org]
       summary: Accept an invitation, joining the tenant that issued it.
       description: >-
         The tenant comes from the invitation token itself, resolved

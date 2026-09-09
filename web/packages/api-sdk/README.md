@@ -89,13 +89,16 @@ consumer-shell discipline.
 ## Generated surface (the merged document)
 
 orval input today is the merged `build/openapi/speed.yaml` -- the
-`task api:merge` leg (pinned redocly `join`) joining the notes and
-authn module fragments, linted against `redocly.yaml`'s naming rules.
-`task api:gen`'s frontend leg runs orval over that merged document, so
-a fragment only reaches this package by entering the merge; org's
-fragment predates the merge machinery and is regenerated and
-compile-checked but not part of the merged document. The notes group
-generates:
+`task api:merge` leg (pinned redocly `join`) joining all thirteen
+fragments: the ten platform-module fragments (admin, ai-gateway,
+authn, billing, integration, notification, org, pki, sharing and
+storage) plus the reference app's own notes, cases and smilesim --
+linted against `redocly.yaml`'s naming rules. `task api:gen`'s
+frontend leg runs orval over that merged document, so a fragment
+only reaches this package by entering the merge, and every platform
+module with an HTTP fragment is a merge member by the module-driven
+inclusion policy of docs/internal/21-api-contract.md. The notes
+group generates:
 
 - `useNotesListNotes` -- `useQuery` hook; `notesListNotes(signal)`; the
   `NotesListNotesResponse` type; query key `/api/v1/notes`.
@@ -117,7 +120,10 @@ function, request/response types and `AuthnError` envelopes. The group
 exists because `@speed/auth-core` consumes it (see Status below), which
 puts the same compile pressure on it as on the notes group: a spec
 change whose regenerated surface outgrows auth-core's calls fails that
-package's typecheck.
+package's typecheck. Every other fragment group follows the same
+per-operation shape -- cases, smilesim, notification, billing, org,
+storage, sharing, pki, admin, integration and ai-gateway each export
+their module's hooks, plain functions, types and error envelopes.
 
 The peer family (`react` + `@tanstack/react-query` v5) exists so hosts
 share one `QueryClient`/`QueryClientProvider`; the package itself never

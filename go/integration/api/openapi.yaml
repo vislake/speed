@@ -27,19 +27,17 @@ info:
     integration:webhook:read) dispatches on the request's sub-path, never
     on method alone -- see the reference app's guardIntegrationRoute.
 
-    This fragment stays out of the application-wide
-    build/openapi/speed.yaml merge, the identical carve-out org's,
-    storage's and sharing's own fragments already draw: this surface has
-    no in-workspace web (@speed/api-sdk / orval) consumer yet, only the
-    reference app's Go HTTP clients in apikey_flow_test.go and
-    webhook_crud_flow_test.go, so joining the merged document and
-    generating a frontend SDK for it would be generating code nothing
-    calls.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/integration/apikeys:
     post:
       operationId: integration_createAPIKey
+      tags: [integration]
       summary: Issue a new API key for the caller's tenant.
       description: >-
         The creator is the caller's own authenticated identity (resolved
@@ -100,6 +98,7 @@ paths:
                 $ref: '#/components/schemas/IntegrationError'
     get:
       operationId: integration_listAPIKeys
+      tags: [integration]
       summary: List the caller's tenant's API keys.
       description: >-
         Never exposes the raw key or its stored hash -- every summary row
@@ -116,6 +115,7 @@ paths:
   /api/v1/integration/apikeys/{keyId}:
     delete:
       operationId: integration_revokeAPIKey
+      tags: [integration]
       summary: Revoke an API key, permanently.
       description: >-
         Sets the key's RevokedAt mark; the key never authenticates again.
@@ -143,6 +143,7 @@ paths:
   /api/v1/integration/apikeys/{keyId}/rotate:
     post:
       operationId: integration_rotateAPIKey
+      tags: [integration]
       summary: Issue a replacement key and revoke the named key.
       description: >-
         Create-new-then-revoke-old, not an in-place swap (Service.Rotate's
@@ -196,6 +197,7 @@ paths:
   /api/v1/integration/webhooks:
     post:
       operationId: integration_createWebhookSubscription
+      tags: [integration]
       summary: Subscribe the caller's tenant to a set of public event types.
       description: >-
         The creator is the caller's own authenticated identity, resolved
@@ -253,6 +255,7 @@ paths:
                 $ref: '#/components/schemas/IntegrationError'
     get:
       operationId: integration_listWebhookSubscriptions
+      tags: [integration]
       summary: List the caller's tenant's webhook subscriptions.
       description: >-
         Secret-free: every row omits the signing secret, per
@@ -268,6 +271,7 @@ paths:
   /api/v1/integration/webhooks/{subscriptionId}:
     patch:
       operationId: integration_updateWebhookSubscription
+      tags: [integration]
       summary: Partially update one of the caller's tenant's subscriptions.
       description: >-
         Every request field is optional; one that is absent leaves the
@@ -311,6 +315,7 @@ paths:
                 $ref: '#/components/schemas/IntegrationError'
     delete:
       operationId: integration_deleteWebhookSubscription
+      tags: [integration]
       summary: Delete one of the caller's tenant's subscriptions.
       description: >-
         Mark-deletes the subscription (WebhookSubscription's
@@ -333,6 +338,7 @@ paths:
   /api/v1/integration/webhooks/{subscriptionId}/restore:
     post:
       operationId: integration_restoreWebhookSubscription
+      tags: [integration]
       summary: Undo a subscription's deletion.
       description: >-
         Undoes the mark-delete integration_deleteWebhookSubscription made.
@@ -362,6 +368,7 @@ paths:
   /api/v1/integration/webhooks/{subscriptionId}/deliveries:
     get:
       operationId: integration_listWebhookDeliveries
+      tags: [integration]
       summary: List one subscription's most recent delivery attempts.
       description: >-
         Newest first, at most limit rows; an absent or non-positive limit

@@ -39,6 +39,7 @@ paths:
   /api/v1/pki/signing-keys/{kid}/revoke:
     post:
       operationId: pki_revokeSigningKey
+      tags: [pki]
       summary: Revoke a signing key.
       description: >-
         Transitions the signing key to revoked, of any prior status
@@ -77,6 +78,7 @@ paths:
   /api/v1/pki/certificates/{certificateId}/revoke:
     post:
       operationId: pki_revokeCertificate
+      tags: [pki]
       summary: Revoke a certificate.
       description: >-
         Transitions the caller's tenant's certificate to revoked, records
@@ -114,6 +116,7 @@ paths:
   /api/v1/pki/jwks:
     get:
       operationId: pki_getKeyJwks
+      tags: [pki]
       summary: Fetch the key-lifecycle layer's JWKS for one purpose.
       description: >-
         The active and retiring public keys of purpose, as an RFC 7517
@@ -138,6 +141,7 @@ paths:
   /api/v1/pki/authorities/{authorityId}/jwks:
     get:
       operationId: pki_getAuthorityJwks
+      tags: [pki]
       summary: Fetch an authority's certificate-chain JWKS.
       description: >-
         authorityId's own public key plus every ancestor authority's, up
@@ -163,6 +167,7 @@ paths:
   /api/v1/pki/authorities/{authorityId}/crl:
     get:
       operationId: pki_getAuthorityCrl
+      tags: [pki]
       summary: Fetch an authority's current CRL.
       description: >-
         The most recently generated Certificate Revocation List for

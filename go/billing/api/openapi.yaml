@@ -48,15 +48,10 @@ info:
     stays read-only rather than shipping an endpoint nothing calls.
 
     This fragment is part of the application-wide build/openapi/speed.yaml
-    merged document: the round that built the credit view joined it there
-    (the tags this fragment's operations carry are the membership shape
-    every merged fragment uses, the same treatment notification's
-    recipient-facing fragment received when its surface shipped), so task
-    api:gen's frontend SDK leg generates this surface's operations into
-    @speed/api-sdk for the credit view that calls them and the invoice
-    page a later billing-ui round builds -- the reverse of the
-    backend-leg-only deferral go/storage's and go/sharing's own
-    fragments still carry.
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/billing/credits/balance:

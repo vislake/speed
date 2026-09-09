@@ -799,6 +799,759 @@ export interface BillingError {
   params?: BillingErrorParams;
 }
 
+export type AdminTenantStatus = typeof AdminTenantStatus[keyof typeof AdminTenantStatus];
+
+
+export const AdminTenantStatus = {
+  active: 'active',
+  suspended: 'suspended',
+} as const;
+
+export interface AdminTenant {
+  tenantId: string;
+  displayName: string;
+  status: AdminTenantStatus;
+  suspendedReason?: string;
+  /** @nullable */
+  suspendedAt?: string | null;
+  createdAt: string;
+  createdBy: string;
+  notes: string;
+}
+
+export interface AdminListTenantsResponse {
+  tenants: AdminTenant[];
+}
+
+export interface AdminCreateTenantRequest {
+  tenantId: string;
+  displayName?: string;
+  notes?: string;
+}
+
+export interface AdminUpdateTenantRequest {
+  displayName?: string;
+  status?: AdminTenantStatus;
+  suspendedReason?: string;
+  notes?: string;
+}
+
+export interface AdminUser {
+  id: string;
+  displayName: string;
+  email?: string;
+  phone?: string;
+}
+
+export interface AdminSearchUsersResponse {
+  users: AdminUser[];
+}
+
+export interface AdminListUserMembershipsResponse {
+  tenantIds: string[];
+}
+
+export interface AdminImpersonationGrant {
+  id: string;
+  adminUserId: string;
+  targetUserId: string;
+  targetTenantId: string;
+  reason: string;
+  createdAt: string;
+  expiresAt: string;
+  /** @nullable */
+  endedAt?: string | null;
+  endedBy?: string;
+}
+
+export interface AdminListImpersonationGrantsResponse {
+  grants: AdminImpersonationGrant[];
+}
+
+export interface AdminStartImpersonationRequest {
+  targetUserId: string;
+  targetTenantId: string;
+  reason: string;
+  locale?: string;
+}
+
+/**
+ * The resource's state before the audited action, when the action recorded one.
+ */
+export type AdminAuditChangesBefore = { [key: string]: unknown };
+
+/**
+ * The resource's state after the audited action, when the action recorded one.
+ */
+export type AdminAuditChangesAfter = { [key: string]: unknown };
+
+/**
+ * The before/after diff an audit event recorded, when its action had one to show. Each side is a free-form object whose keys are the audited module's own field names.
+ */
+export interface AdminAuditChanges {
+  /** The resource's state before the audited action, when the action recorded one. */
+  before?: AdminAuditChangesBefore;
+  /** The resource's state after the audited action, when the action recorded one. */
+  after?: AdminAuditChangesAfter;
+}
+
+/**
+ * One audit event, the six-element audit shape of the platform's append-only trail. changes is present only when the recorded action carried a before/after diff: for an impersonation start, after names the operator's own mandatory reason alongside the grant's shape, so the operator who wrote it can read it back once the grant has ended.
+ */
+export interface AdminAuditEvent {
+  id: string;
+  actorType: string;
+  actorId: string;
+  actorDisplayName?: string;
+  onBehalfOfType?: string;
+  onBehalfOfId?: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  success: boolean;
+  failureReason?: string;
+  tenantId?: string;
+  changes?: AdminAuditChanges;
+  occurredAt: string;
+}
+
+export interface AdminListAuditEventsResponse {
+  events: AdminAuditEvent[];
+}
+
+export interface AdminExportAuditEventsRequest {
+  tenantId: string;
+}
+
+export interface AdminExportAuditEventsResponse {
+  jobId: string;
+}
+
+export interface AdminListDeclaredPermissionsResponse {
+  permissions: string[];
+}
+
+export interface AdminDefineRoleRequest {
+  tenantId: string;
+  key: string;
+  descriptionKey?: string;
+  permissions: string[];
+}
+
+export interface AdminRole {
+  id: string;
+  tenantId: string;
+  key: string;
+  descriptionKey: string;
+  permissions: string[];
+}
+
+export interface AdminCreateRoleBindingRequest {
+  tenantId: string;
+  userId: string;
+  nodeId?: string;
+}
+
+export interface AdminRoleBinding {
+  tenantId: string;
+  userId: string;
+  role: string;
+  nodeId?: string;
+}
+
+export interface AdminUsageFeatureSummary {
+  feature: string;
+  periodStart: string;
+  periodEnd: string;
+  quantity: number;
+}
+
+export interface AdminCreditBalance {
+  available: number;
+  reserved: number;
+}
+
+export interface AdminSubscription {
+  id: string;
+  planId: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface AdminUsageSummaryRow {
+  tenantId: string;
+  displayName: string;
+  meteringSummaries?: AdminUsageFeatureSummary[];
+  creditBalance?: AdminCreditBalance;
+  activeSubscription?: AdminSubscription;
+}
+
+export interface AdminUsageSummaryResponse {
+  rows: AdminUsageSummaryRow[];
+}
+
+export interface AdminSendRecord {
+  id: string;
+  tenantId: string;
+  typeKey: string;
+  channel: string;
+  recipientClass: string;
+  recipientUserId?: string;
+  contactId?: string;
+  status: string;
+  error?: string;
+  idempotencyKey?: string;
+  createdAt: string;
+}
+
+export interface AdminListSendRecordsResponse {
+  records: AdminSendRecord[];
+}
+
+export type AdminErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md).
+ */
+export interface AdminError {
+  code?: string;
+  params?: AdminErrorParams;
+}
+
+/**
+ * A resolved or just-written credential's metadata. Never carries the api key.
+ */
+export interface AiGatewayCredential {
+  /** The ChatProviderRegistry or ImageProviderRegistry name. */
+  provider: string;
+  /** "system" or "tenant" -- which scope this metadata describes. On aiGateway_getCredential this is whichever scope actually answered (CredentialService.Resolve's own fallback order); on the two write operations it is always the scope that operation just wrote. */
+  scope: string;
+  /** The credential's configured base URL; empty when the provider's own constructor supplies a default and none was set here. */
+  baseUrl?: string;
+}
+
+export interface AiGatewaySetCredentialRequest {
+  /**
+     * The vendor API key. Never echoed back on any response.
+     * @minLength 1
+     */
+  apiKey: string;
+  /** The OpenAI-compatible endpoint's base URL for this credential. Omit to leave the provider's own default in effect. */
+  baseUrl?: string;
+}
+
+export type AiGatewayErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2) -- a client resolves code through its own i18n catalog. This module renders no user-facing text of its own (go/ai-gateway/module.go's Locales doc comment), so a client resolves these codes through its own catalog exactly as it does for every other structured error this module returns from its non-HTTP surface.
+ */
+export interface AiGatewayError {
+  code?: string;
+  params?: AiGatewayErrorParams;
+}
+
+export interface IntegrationCreateAPIKeyRequest {
+  /** A subset of the caller's own permissions right now. Omitted or empty issues a key that authenticates identity alone. */
+  scopes?: string[];
+  /** Omitted defaults to this deployment's forced expiry ceiling (MaxAPIKeyLifetime) from now. */
+  expiresAt?: string;
+}
+
+/**
+ * Service.Create's (and Service.Rotate's) result: the one and only place the raw key value is ever available. key is never logged and never returned again by any other operation.
+ */
+export interface IntegrationCreatedAPIKey {
+  /** Application-generated UUID. Pass this to rotate or revoke. */
+  id?: string;
+  /** The raw, plaintext credential the caller must record now. It authenticates as itself; nothing else this fragment returns ever reproduces it. */
+  key?: string;
+  /** The display-safe portion also visible later through list. */
+  prefix?: string;
+  scopes?: string[];
+  /** The authn user id of whoever issued this key. */
+  createdBy?: string;
+  expiresAt?: string;
+  /** True only when the key was created and is usable but this operation's own bookkeeping did not fully land: for integration_createAPIKey, the creation audit record was not written; for integration_rotateAPIKey, the predecessor's revocation (and the audit record of it) did not complete, so the caller must not assume the predecessor is revoked. Absent or false: every record was written normally. The gap is a platform bookkeeping failure, never a defect of the key. */
+  auditRecordMissing?: boolean;
+}
+
+/**
+ * One row of integration_listAPIKeys' response -- every field of the stored key except the raw value and its hash (Service.List's own "credential-material-free" contract).
+ */
+export interface IntegrationAPIKeySummary {
+  id?: string;
+  prefix?: string;
+  scopes?: string[];
+  createdBy?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  /**
+     * When this key last authenticated a request. Null until first use.
+     * @nullable
+     */
+  lastUsedAt?: string | null;
+  /** @nullable */
+  revokedAt?: string | null;
+  revoked?: boolean;
+  expired?: boolean;
+  /** Whether CreatedBy is no longer an active member of the tenant -- a display flag only, computed through the optional MembershipChecker seam; false when no seam is wired, exactly as if every creator were still active. */
+  creatorLeft?: boolean;
+}
+
+export interface IntegrationListAPIKeysResponse {
+  apiKeys?: IntegrationAPIKeySummary[];
+}
+
+/**
+ * One webhook subscription as every read of this fragment exposes it: every field of the stored subscription except the signing secret (Service.WebhookSubscriptionSummary). active=false means delivery is paused -- the subscription exists, but no domain event fans out to it until an update sets active=true.
+ */
+export interface IntegrationWebhookSubscriptionSummary {
+  /** Application-generated UUID. Pass this to update, delete, restore or the deliveries log. */
+  id?: string;
+  /** The receiving endpoint deliveries are POSTed to. */
+  url?: string;
+  /** The public event types this subscription wants delivered; every entry is some registered EventMapping's public type. */
+  eventTypes?: string[];
+  /** The subscription's delivery gate; false means paused. */
+  active?: boolean;
+  /** The authn user id of whoever configured this subscription. */
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Service.CreateWebhookSubscription's result: the one and only place the raw signing secret is ever available, mirroring IntegrationCreatedAPIKey's own "shown once" contract. secret is never logged and never returned again by any other operation.
+ */
+export interface IntegrationCreatedWebhookSubscription {
+  /** Application-generated UUID. Pass this to update, delete or restore. */
+  id?: string;
+  url?: string;
+  eventTypes?: string[];
+  /** The raw HMAC signing secret the caller must record now. A receiver verifies this subscription's signatures with it; nothing this fragment returns after this call ever reproduces it. */
+  secret?: string;
+  active?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  /** True only when the subscription was created and is delivering but the operation's audit record was not written -- a platform bookkeeping gap, never a defect of the subscription or its secret. Absent or false: the record was written normally. */
+  auditRecordMissing?: boolean;
+}
+
+export interface IntegrationListWebhookSubscriptionsResponse {
+  webhookSubscriptions?: IntegrationWebhookSubscriptionSummary[];
+}
+
+/**
+ * A new subscription's configuration. Both fields are mandatory; the empty eventTypes set is refused (a subscription that would never match anything is never created).
+ */
+export interface IntegrationCreateWebhookSubscriptionRequest {
+  /** The receiving endpoint. Validated before anything is persisted: must be a reachable http/https URL whose host is neither private, loopback nor otherwise blocked (go/integration's SSRF rules). */
+  url: string;
+  /** The non-empty set of public event types to deliver. Every entry must be some registered EventMapping's public type. */
+  eventTypes: string[];
+}
+
+/**
+ * A partial update: a field that is absent leaves the corresponding stored value unchanged (nil means no change, exactly as Service.UpdateWebhookSubscription's input treats it). A present but empty eventTypes is refused, identically to create.
+ */
+export interface IntegrationUpdateWebhookSubscriptionRequest {
+  /** Replaces the stored URL after the identical validation create applies. */
+  url?: string;
+  /** Replaces the stored selection after the identical non-empty / known-type validation create applies. */
+  eventTypes?: string[];
+  /** Flips the subscription's delivery gate. false pauses delivery; true resumes it -- the step a restored subscription needs to deliver again. */
+  active?: boolean;
+}
+
+/**
+ * One delivery attempt row of integration_listWebhookDeliveries -- every field of the stored delivery except the raw payload bytes (Service.WebhookDeliverySummary).
+ */
+export interface IntegrationWebhookDeliverySummary {
+  /** Application-generated delivery id. */
+  id?: string;
+  /** The subscription this attempt delivers for. */
+  subscriptionId?: string;
+  eventType?: string;
+  eventVersion?: string;
+  /** One of the delivery pipeline's status vocabulary: "pending", "failed", "delivered" or "dead_letter" (the terminal state after the bounded retry horizon; see Service.handleDeliveryJob's own doc comment). */
+  status?: string;
+  /** How many times this delivery has been attempted. */
+  attempts?: number;
+  /**
+     * The receiver's HTTP status on the last attempt. Null when no attempt has produced one yet.
+     * @nullable
+     */
+  lastStatusCode?: number | null;
+  /** The last attempt's failure reason, empty when none. */
+  lastError?: string;
+  /** @nullable */
+  lastAttemptAt?: string | null;
+  /**
+     * When a delivered attempt succeeded. Null until then.
+     * @nullable
+     */
+  deliveredAt?: string | null;
+  createdAt?: string;
+}
+
+export interface IntegrationListWebhookDeliveriesResponse {
+  deliveries?: IntegrationWebhookDeliverySummary[];
+}
+
+export type IntegrationErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
+ */
+export interface IntegrationError {
+  code?: string;
+  params?: IntegrationErrorParams;
+}
+
+/**
+ * One node of a tenant's organization tree.
+ */
+export interface OrgNode {
+  /** Application-generated UUID. */
+  id?: string;
+  /** The parent node's id, or "" on the tenant root. */
+  parentId?: string;
+  /** The materialized path from the tenant root down to and including this node (see go/org/path.go). Read-only. */
+  path?: string;
+  /** The number of ancestors; 0 on the tenant root. */
+  depth?: number;
+  name?: string;
+  /** The tenant's own business classification of the node (for example "group", "region", "store"); org does not enumerate legal values. */
+  kind?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface OrgCreateNodeRequest {
+  /** Absent or "" creates the tenant's root node instead of a child. */
+  parentId?: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  name: string;
+  kind?: string;
+}
+
+export interface OrgRenameNodeRequest {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  name: string;
+}
+
+export interface OrgMoveNodeRequest {
+  /** The new parent's id. */
+  parentId: string;
+}
+
+export interface OrgListNodesResponse {
+  nodes?: OrgNode[];
+}
+
+/**
+ * One person's binding to a node of a tenant's organization tree.
+ */
+export interface OrgMembership {
+  membershipId?: string;
+  /** An id in authn's users table, carried as an opaque string -- org stores no other identity data about the user (root CLAUDE.md's module-boundary rule). */
+  userId?: string;
+  nodeId?: string;
+  /** One of "active", "invited", "suspended". */
+  status?: string;
+  createdAt?: string;
+}
+
+export interface OrgListMembersResponse {
+  members?: OrgMembership[];
+}
+
+export interface OrgCreateInvitationRequest {
+  /** The invitee's address. */
+  email: string;
+  /** The node the invitee will be bound to on acceptance. */
+  nodeId: string;
+  /** The RECIPIENT's preferred language for the invitation email, an IETF tag such as "en-US" or "zh-CN" -- something the inviting operator, who knows the invitee, supplies explicitly, since the server has no request of the invitee's own to read a language preference from at invite-creation time. Omitted, or naming a language the platform carries no message catalog for, falls back to the platform default; it is NEVER inferred from the inviting operator's own browser or UI language. */
+  locale?: string;
+}
+
+export interface OrgAcceptInvitationRequest {
+  token: string;
+}
+
+/**
+ * A pending (or resolved) offer to join the tenant. The invitee's address is deliberately absent from this schema: it is PII, encrypted at rest, and org's own convention (see invite.go) is never to echo it into anything that leaves the process boundary. The address's blind index is absent for the same reason, stated more strongly: HMAC non-invertibility (go/dbkit/blind_index.go) resists offline dictionary attacks, never an online oracle. Invitation creation accepts a caller-chosen address, so a caller who can create invitations can collect (address, index) pairs under this deployment's key, and an index echoed in a response would turn that dictionary into a membership test for the address of every listed invitation. A listed row carries only identifiers that do not name the invitee: its invitation id, the node it binds to, its status, expiry and timestamps.
+ */
+export interface OrgInvitation {
+  id?: string;
+  nodeId?: string;
+  /** One of "pending", "accepted", "revoked". */
+  status?: string;
+  expiresAt?: string;
+  createdAt?: string;
+}
+
+export interface OrgListInvitationsResponse {
+  invitations?: OrgInvitation[];
+}
+
+export type OrgErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ */
+export interface OrgError {
+  code?: string;
+  params?: OrgErrorParams;
+}
+
+/**
+ * One pki_signing_keys row's public state -- never a private key or key reference.
+ */
+export interface PkiSigningKey {
+  kid?: string;
+  purpose?: string;
+  algorithm?: string;
+  /** "pending", "active", "retiring", "retired" or "revoked". */
+  status?: string;
+  notBefore?: string;
+  notAfter?: string;
+  activatedAt?: string;
+  retiringAt?: string;
+  retiredAt?: string;
+  revokedAt?: string;
+  revocationReason?: string;
+  createdAt?: string;
+}
+
+export interface PkiRevokeSigningKeyRequest {
+  /**
+     * Why this key is being revoked. Recorded on the row and in the audit trail.
+     * @minLength 1
+     */
+  reason: string;
+}
+
+/**
+ * One pki_certificates row's public state -- never a private key or key reference.
+ */
+export interface PkiCertificate {
+  id?: string;
+  authorityId?: string;
+  purpose?: string;
+  subject?: string;
+  sans?: string[];
+  serial?: string;
+  /** "active" or "revoked". */
+  status?: string;
+  keyDelivered?: boolean;
+  notBefore?: string;
+  notAfter?: string;
+  revokedAt?: string;
+  revocationReason?: string;
+  createdAt?: string;
+}
+
+export interface PkiRevokeCertificateRequest {
+  /**
+     * Why this certificate is being revoked. Recorded on the ledger and in the audit trail.
+     * @minLength 1
+     */
+  reason: string;
+}
+
+export type PkiJwksKeysItem = { [key: string]: unknown };
+
+/**
+ * An RFC 7517 JSON Web Key Set. Each entry's shape depends on its key type ("kty") per the JWK spec, so individual key fields are deliberately not enumerated here.
+ */
+export interface PkiJwks {
+  keys?: PkiJwksKeysItem[];
+}
+
+export type PkiErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ */
+export interface PkiError {
+  code?: string;
+  params?: PkiErrorParams;
+}
+
+/**
+ * One share's own metadata, as its owner sees it. Deliberately carries no token (see sharing_createShare's own description for why) and no password (Share.PasswordHash is never serialized anywhere on this surface -- only whether one is set).
+ */
+export interface SharingShare {
+  /** Application-generated UUID. */
+  id?: string;
+  /** The opaque reference to the resource this share exposes. */
+  resourceRef?: string;
+  /** When this share stops being accessible. Never absent -- every share carries an expiry. */
+  expiresAt?: string;
+  /** The view ceiling this share was created with; absent when unlimited. */
+  maxViews?: number;
+  /** How many accesses have been granted so far. */
+  viewCount?: number;
+  /** Whether an access password is required. Never the password or its hash. */
+  passwordProtected?: boolean;
+  /** Whether this share was created against a resource carrying sensitive personal information (the sensitive-resource confirmation). */
+  sensitive?: boolean;
+  /** When this share was revoked; absent for a live share. */
+  revokedAt?: string;
+  createdAt?: string;
+}
+
+export interface SharingCreateShareRequest {
+  /**
+     * The opaque reference to the resource being shared, typically another module's own key scheme (e.g. a go/storage object id). Never interpreted by this module.
+     * @minLength 1
+     */
+  resourceRef: string;
+  /** An explicit expiry, which must lie strictly in the future and no more than 30 days from now -- the platform's maximum share lifetime (the explicit-expiry ceiling); anything else is refused with sharing.expiry_out_of_range. Omit to use the tenant's configured default (falling back to a fixed default when none is configured). */
+  expiresAt?: string;
+  /** Requests a share that never expires. Always refused with sharing.expiry_required -- there is no way to make this surface create a never-expiring share; the field exists so a deliberate attempt to do so fails loudly and specifically. */
+  forever?: boolean;
+  /** Caps the number of granted accesses. Must be positive when given; omit for unlimited views. */
+  maxViews?: number;
+  /** An optional additional access password. Never stored or returned as given; see SharingShare's own passwordProtected field. */
+  password?: string;
+  /** Marks the shared resource as carrying sensitive personal information. A true value fires this module's one audit action. */
+  sensitive?: boolean;
+}
+
+export interface SharingCreateShareResponse {
+  share: SharingShare;
+  /** The share's bearer token, in the exact form /api/v1/sharing/access's token query parameter expects. Returned here exactly once -- see this operation's own description. */
+  token: string;
+}
+
+export interface SharingListSharesResponse {
+  /** Every share of the caller's tenant, newest first. */
+  shares?: SharingShare[];
+}
+
+/**
+ * One recorded access attempt against a share, granted or denied alike.
+ */
+export interface SharingAccessLogEntry {
+  /** Application-generated UUID. */
+  id?: string;
+  occurredAt?: string;
+  /** The viewer's address as the access request observed it. */
+  ip?: string;
+  /** The viewer's User-Agent header value, as given. */
+  userAgent?: string;
+  /** The viewer's Referer header value, as given. */
+  referrer?: string;
+  /** "granted" or "denied" -- deliberately never which of Access's five refusal reasons applied; see this operation's own description. */
+  outcome?: string;
+}
+
+export interface SharingListAccessLogResponse {
+  /** The share's access log, newest first. */
+  entries?: SharingAccessLogEntry[];
+}
+
+/**
+ * Structured parameters for the code, when any apply.
+ */
+export type SharingErrorParams = { [key: string]: unknown };
+
+export interface SharingError {
+  /** The structured error code, one of this module's error index entries. */
+  code: string;
+  /** Structured parameters for the code, when any apply. */
+  params?: SharingErrorParams;
+}
+
+/**
+ * A derived artifact of an object. Derivative bytes are produced from the sanitized original, and a derivative never carries the original's metadata.
+ */
+export interface StorageObjectDerivative {
+  /** Application-generated UUID. */
+  id?: string;
+  /** The derivation that produced it: currently "thumbnail". */
+  kind?: string;
+  /** The derivative's media type. */
+  mimeType?: string;
+  /** The derivative's byte count. */
+  size?: number;
+  /** The derivative's pixel width; images only. */
+  width?: number;
+  /** The derivative's pixel height; images only. */
+  height?: number;
+  createdAt?: string;
+}
+
+/**
+ * One object's metadata. Which fields are populated depends on the object's state: an uploading row (the create response) carries the declaration and the upload deadline; a completed row additionally carries the finalized size, media type, checksum and dimensions. The object's storage key never appears on this surface.
+ */
+export interface StorageObject {
+  /** Application-generated UUID. */
+  id?: string;
+  /** "uploading" or "completed". A deleting row is never visible on this surface. */
+  state?: string;
+  /** The size the uploader declared at create time, in bytes. */
+  declaredSize?: number;
+  /** The media type declared at create time. */
+  declaredType?: string;
+  /** The SHA-256 declared at create time, as 64 lowercase hex characters; absent when none was declared. */
+  declaredChecksum?: string;
+  /** The finalized byte count, verified against the declaration at complete time. */
+  size?: number;
+  /** The media type probed from the bytes at complete time. */
+  mimeType?: string;
+  /** The SHA-256 of the finalized (sanitized) bytes, as 64 lowercase hex characters. */
+  checksumSha256?: string;
+  /** The probed pixel width; images only. */
+  width?: number;
+  /** The probed pixel height; images only. */
+  height?: number;
+  /** The retention deadline after which the object is swept; absent when the object never expires. */
+  expiresAt?: string;
+  /** The deadline by which the content had to arrive. It binds only the upload lifecycle, and it stays present on completed rows as the record of when that window closed. */
+  uploadExpiresAt?: string;
+  createdAt?: string;
+  /** The object's derived artifacts, oldest first; empty when none exist yet. Only the single-object get carries this array: list responses are metadata only. */
+  derivatives?: StorageObjectDerivative[];
+}
+
+export interface StorageCreateObjectRequest {
+  /** The object's size in bytes. Must be positive and within the host's per-object ceiling. */
+  declaredSize: number;
+  /**
+     * The object's media type, such as "image/jpeg" or "image/png". The server canonicalizes it (parameters stripped, case-folded) and checks it against the host's allowlist.
+     * @minLength 1
+     */
+  declaredType: string;
+  /** The expected SHA-256 of the content, as 64 lowercase hex characters, verified at complete time. Omit to skip that check. */
+  declaredChecksum?: string;
+  /** An absolute retention deadline after which the object is swept. Must be in the future and within the host's lifetime ceiling. Omit to let the default apply: an upload that names no deadline lives exactly the host's configured maximum lifetime -- the ordinary upload is never silently permanent, and this surface offers no never-expiring spelling (a host whose product needs permanent objects requests them explicitly through ObjectService, behind the host's own WithNoExpiryAllowed configuration). */
+  expiresAt?: string;
+}
+
+export interface StorageListObjectsResponse {
+  /** One page of completed objects, newest first. */
+  objects?: StorageObject[];
+}
+
+export type StorageErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ */
+export interface StorageError {
+  code?: string;
+  params?: StorageErrorParams;
+}
+
 export type AuthnSocialAuthorizeParams = {
 redirect_uri: string;
 };
@@ -841,6 +1594,99 @@ export type BillingListInvoicesParams = {
  * The page size, from 1 through 100. Defaults to 50.
  */
 limit?: number;
+};
+
+export type AdminListTenantsParams = {
+status?: AdminTenantStatus;
+cursor?: string;
+limit?: number;
+};
+
+export type AdminSearchUsersParams = {
+email?: string;
+phone?: string;
+displayNamePrefix?: string;
+limit?: number;
+};
+
+export type AdminListAuditEventsParams = {
+tenantId?: string;
+actor?: string;
+onBehalfOf?: string;
+resource?: string;
+action?: string;
+from?: string;
+to?: string;
+success?: boolean;
+limit?: number;
+offset?: number;
+};
+
+export type AdminListSendRecordsParams = {
+tenantId?: string;
+channel?: string;
+status?: string;
+from?: string;
+to?: string;
+limit?: number;
+offset?: number;
+};
+
+export type IntegrationListWebhookDeliveriesParams = {
+/**
+ * Maximum rows to return. Absent or non-positive falls back to the module's default of 50; a value above 100 is clamped to 100.
+ * @maximum 100
+ */
+limit?: number;
+};
+
+export type OrgListNodesParams = {
+parentId?: string;
+};
+
+export type OrgDeleteNodeParams = {
+cascade?: boolean;
+};
+
+export type OrgListMembersParams = {
+nodeId?: string;
+};
+
+export type PkiGetKeyJwksParams = {
+/**
+ * The signing-key purpose to export, e.g. "authn.access_token".
+ */
+purpose: string;
+};
+
+export type SharingAccessShareParams = {
+/**
+ * The share's bearer token, exactly as returned once by the owner-facing Service.Create call. Never the share's own id, and never accepted from anywhere but this query parameter (the multi-tenant isolation rule's spirit extended to this module's own bearer credential: there is exactly one legitimate source for it).
+ * @minLength 1
+ */
+token: string;
+};
+
+export type SharingListSharesParams = {
+/**
+ * The page size, from 1 through 200. Defaults to 50.
+ */
+limit?: number;
+/**
+ * Return only shares ordered before the one with this id (the keyset cursor); the last page's final row id.
+ */
+beforeId?: string;
+};
+
+export type StorageListObjectsParams = {
+/**
+ * The page size, from 1 through 200. Defaults to 50.
+ */
+limit?: number;
+/**
+ * Return only objects ordered before the one with this id (the keyset cursor); the last page's final row id.
+ */
+beforeId?: string;
 };
 
 /**
@@ -4047,3 +4893,3918 @@ export function useBillingGetInvoice<TData = Awaited<ReturnType<typeof billingGe
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+
+
+
+
+
+
+/**
+ * Record-only: this ledger is an operator convenience, never the authoritative source of tenant existence (see D3's own doc comment in tenant_service.go).
+ * @summary List the operator-facing tenant ledger (D3).
+ */
+export const adminListTenants = (
+    params?: AdminListTenantsParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminListTenantsResponse>(
+      {url: `/api/v1/admin/tenants`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminListTenantsQueryKey = (params?: AdminListTenantsParams,) => {
+    return [
+    `/api/v1/admin/tenants`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAdminListTenantsQueryOptions = <TData = Awaited<ReturnType<typeof adminListTenants>>, TError = unknown>(params?: AdminListTenantsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListTenants>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListTenantsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListTenants>>> = ({ signal }) => adminListTenants(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListTenants>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListTenantsQueryResult = NonNullable<Awaited<ReturnType<typeof adminListTenants>>>
+export type AdminListTenantsQueryError = unknown
+
+
+/**
+ * @summary List the operator-facing tenant ledger (D3).
+ */
+
+export function useAdminListTenants<TData = Awaited<ReturnType<typeof adminListTenants>>, TError = unknown>(
+ params?: AdminListTenantsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListTenants>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListTenantsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * For pre-registering a tenant's name before any business write has happened (for example, before an operator opens an account for a new customer).
+ * @summary Manually register a tenant ledger row (D3's second population path).
+ */
+export const adminCreateTenant = (
+    adminCreateTenantRequest: AdminCreateTenantRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminTenant>(
+      {url: `/api/v1/admin/tenants`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminCreateTenantRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAdminCreateTenantMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminCreateTenant>>, TError,{data: AdminCreateTenantRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminCreateTenant>>, TError,{data: AdminCreateTenantRequest}, TContext> => {
+
+const mutationKey = ['adminCreateTenant'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminCreateTenant>>, {data: AdminCreateTenantRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  adminCreateTenant(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminCreateTenantMutationResult = NonNullable<Awaited<ReturnType<typeof adminCreateTenant>>>
+    export type AdminCreateTenantMutationBody = AdminCreateTenantRequest
+    export type AdminCreateTenantMutationError = AdminError
+
+    /**
+ * @summary Manually register a tenant ledger row (D3's second population path).
+ */
+export const useAdminCreateTenant = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminCreateTenant>>, TError,{data: AdminCreateTenantRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminCreateTenant>>,
+        TError,
+        {data: AdminCreateTenantRequest},
+        TContext
+      > => {
+      return useMutation(getAdminCreateTenantMutationOptions(options));
+    }
+
+/**
+ * @summary Read one tenant ledger row.
+ */
+export const adminGetTenant = (
+    id: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminTenant>(
+      {url: `/api/v1/admin/tenants/${id}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminGetTenantQueryKey = (id: string,) => {
+    return [
+    `/api/v1/admin/tenants/${id}`
+    ] as const;
+    }
+
+
+export const getAdminGetTenantQueryOptions = <TData = Awaited<ReturnType<typeof adminGetTenant>>, TError = AdminError>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminGetTenant>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminGetTenantQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminGetTenant>>> = ({ signal }) => adminGetTenant(id, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminGetTenant>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminGetTenantQueryResult = NonNullable<Awaited<ReturnType<typeof adminGetTenant>>>
+export type AdminGetTenantQueryError = AdminError
+
+
+/**
+ * @summary Read one tenant ledger row.
+ */
+
+export function useAdminGetTenant<TData = Awaited<ReturnType<typeof adminGetTenant>>, TError = AdminError>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminGetTenant>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminGetTenantQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Writing status=suspended here only records the ledger's opinion -- it does not, by itself, block a single request against the tenant. D4, the enforcement seam, is round 2's work.
+ * @summary Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+ */
+export const adminUpdateTenant = (
+    id: string,
+    adminUpdateTenantRequest: AdminUpdateTenantRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminTenant>(
+      {url: `/api/v1/admin/tenants/${id}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: adminUpdateTenantRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAdminUpdateTenantMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminUpdateTenant>>, TError,{id: string;data: AdminUpdateTenantRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminUpdateTenant>>, TError,{id: string;data: AdminUpdateTenantRequest}, TContext> => {
+
+const mutationKey = ['adminUpdateTenant'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminUpdateTenant>>, {id: string;data: AdminUpdateTenantRequest}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  adminUpdateTenant(id,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminUpdateTenantMutationResult = NonNullable<Awaited<ReturnType<typeof adminUpdateTenant>>>
+    export type AdminUpdateTenantMutationBody = AdminUpdateTenantRequest
+    export type AdminUpdateTenantMutationError = AdminError
+
+    /**
+ * @summary Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+ */
+export const useAdminUpdateTenant = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminUpdateTenant>>, TError,{id: string;data: AdminUpdateTenantRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminUpdateTenant>>,
+        TError,
+        {id: string;data: AdminUpdateTenantRequest},
+        TContext
+      > => {
+      return useMutation(getAdminUpdateTenantMutationOptions(options));
+    }
+
+/**
+ * Exactly one of email, phone or displayNamePrefix must be given, in that precedence order when more than one is present -- see authn.UserSearchQuery's own doc comment.
+ * @summary Cross-tenant user search (D6).
+ */
+export const adminSearchUsers = (
+    params?: AdminSearchUsersParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminSearchUsersResponse>(
+      {url: `/api/v1/admin/users`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminSearchUsersQueryKey = (params?: AdminSearchUsersParams,) => {
+    return [
+    `/api/v1/admin/users`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAdminSearchUsersQueryOptions = <TData = Awaited<ReturnType<typeof adminSearchUsers>>, TError = AdminError>(params?: AdminSearchUsersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminSearchUsers>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminSearchUsersQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminSearchUsers>>> = ({ signal }) => adminSearchUsers(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminSearchUsers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminSearchUsersQueryResult = NonNullable<Awaited<ReturnType<typeof adminSearchUsers>>>
+export type AdminSearchUsersQueryError = AdminError
+
+
+/**
+ * @summary Cross-tenant user search (D6).
+ */
+
+export function useAdminSearchUsers<TData = Awaited<ReturnType<typeof adminSearchUsers>>, TError = AdminError>(
+ params?: AdminSearchUsersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminSearchUsers>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminSearchUsersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary List every tenant a user currently has an active membership in (D6 + D2).
+ */
+export const adminListUserMemberships = (
+    id: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminListUserMembershipsResponse>(
+      {url: `/api/v1/admin/users/${id}/memberships`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminListUserMembershipsQueryKey = (id: string,) => {
+    return [
+    `/api/v1/admin/users/${id}/memberships`
+    ] as const;
+    }
+
+
+export const getAdminListUserMembershipsQueryOptions = <TData = Awaited<ReturnType<typeof adminListUserMemberships>>, TError = unknown>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListUserMemberships>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListUserMembershipsQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListUserMemberships>>> = ({ signal }) => adminListUserMemberships(id, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListUserMemberships>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListUserMembershipsQueryResult = NonNullable<Awaited<ReturnType<typeof adminListUserMemberships>>>
+export type AdminListUserMembershipsQueryError = unknown
+
+
+/**
+ * @summary List every tenant a user currently has an active membership in (D6 + D2).
+ */
+
+export function useAdminListUserMemberships<TData = Awaited<ReturnType<typeof adminListUserMemberships>>, TError = unknown>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListUserMemberships>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListUserMembershipsQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary List currently-active impersonation grants (D5's self-audit listing).
+ */
+export const adminListImpersonationGrants = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminListImpersonationGrantsResponse>(
+      {url: `/api/v1/admin/impersonation`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminListImpersonationGrantsQueryKey = () => {
+    return [
+    `/api/v1/admin/impersonation`
+    ] as const;
+    }
+
+
+export const getAdminListImpersonationGrantsQueryOptions = <TData = Awaited<ReturnType<typeof adminListImpersonationGrants>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListImpersonationGrants>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListImpersonationGrantsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListImpersonationGrants>>> = ({ signal }) => adminListImpersonationGrants(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListImpersonationGrants>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListImpersonationGrantsQueryResult = NonNullable<Awaited<ReturnType<typeof adminListImpersonationGrants>>>
+export type AdminListImpersonationGrantsQueryError = unknown
+
+
+/**
+ * @summary List currently-active impersonation grants (D5's self-audit listing).
+ */
+
+export function useAdminListImpersonationGrants<TData = Awaited<ReturnType<typeof adminListImpersonationGrants>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListImpersonationGrants>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListImpersonationGrantsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Start an impersonation session (D5).
+ */
+export const adminStartImpersonation = (
+    adminStartImpersonationRequest: AdminStartImpersonationRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminImpersonationGrant>(
+      {url: `/api/v1/admin/impersonation`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminStartImpersonationRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAdminStartImpersonationMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminStartImpersonation>>, TError,{data: AdminStartImpersonationRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminStartImpersonation>>, TError,{data: AdminStartImpersonationRequest}, TContext> => {
+
+const mutationKey = ['adminStartImpersonation'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminStartImpersonation>>, {data: AdminStartImpersonationRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  adminStartImpersonation(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminStartImpersonationMutationResult = NonNullable<Awaited<ReturnType<typeof adminStartImpersonation>>>
+    export type AdminStartImpersonationMutationBody = AdminStartImpersonationRequest
+    export type AdminStartImpersonationMutationError = AdminError
+
+    /**
+ * @summary Start an impersonation session (D5).
+ */
+export const useAdminStartImpersonation = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminStartImpersonation>>, TError,{data: AdminStartImpersonationRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminStartImpersonation>>,
+        TError,
+        {data: AdminStartImpersonationRequest},
+        TContext
+      > => {
+      return useMutation(getAdminStartImpersonationMutationOptions(options));
+    }
+
+/**
+ * @summary End an impersonation session early (D5).
+ */
+export const adminEndImpersonation = (
+    id: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminImpersonationGrant>(
+      {url: `/api/v1/admin/impersonation/${id}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getAdminEndImpersonationMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminEndImpersonation>>, TError,{id: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminEndImpersonation>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['adminEndImpersonation'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminEndImpersonation>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  adminEndImpersonation(id,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminEndImpersonationMutationResult = NonNullable<Awaited<ReturnType<typeof adminEndImpersonation>>>
+
+    export type AdminEndImpersonationMutationError = AdminError
+
+    /**
+ * @summary End an impersonation session early (D5).
+ */
+export const useAdminEndImpersonation = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminEndImpersonation>>, TError,{id: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminEndImpersonation>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getAdminEndImpersonationMutationOptions(options));
+    }
+
+/**
+ * A thin HTTP shell over compliance.AuditQuery -- see AuditService's own doc comment. tenantId absent means "every tenant this operator is entitled to see" (the cross-tenant, system-context-gated path); present means the single-tenant path. onBehalfOf narrows the result to rows written during an impersonation session whose real administrator (the row's on-behalf-of identity) is the given id -- the impersonation-accountability read dimension: an administrator never appears as the actor on such a row, so only this filter can answer "what did this administrator do through impersonation".
+ * @summary Query the audit trail, single-tenant or cross-tenant (D7).
+ */
+export const adminListAuditEvents = (
+    params?: AdminListAuditEventsParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminListAuditEventsResponse>(
+      {url: `/api/v1/admin/audit-events`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminListAuditEventsQueryKey = (params?: AdminListAuditEventsParams,) => {
+    return [
+    `/api/v1/admin/audit-events`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAdminListAuditEventsQueryOptions = <TData = Awaited<ReturnType<typeof adminListAuditEvents>>, TError = unknown>(params?: AdminListAuditEventsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListAuditEvents>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListAuditEventsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListAuditEvents>>> = ({ signal }) => adminListAuditEvents(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListAuditEvents>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListAuditEventsQueryResult = NonNullable<Awaited<ReturnType<typeof adminListAuditEvents>>>
+export type AdminListAuditEventsQueryError = unknown
+
+
+/**
+ * @summary Query the audit trail, single-tenant or cross-tenant (D7).
+ */
+
+export function useAdminListAuditEvents<TData = Awaited<ReturnType<typeof adminListAuditEvents>>, TError = unknown>(
+ params?: AdminListAuditEventsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListAuditEvents>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListAuditEventsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Wraps compliance.ExportService.Export, which gathers every registered participant's data for the tenant, stores it and delivers it as a short-lived, single-view go/sharing link. This is necessarily asynchronous -- the handler enqueues one go/jobs task and returns immediately with its id, never running Export synchronously inside the request (root CLAUDE.md's asynchronous- work discipline).
+ * @summary Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+ */
+export const adminExportAuditEvents = (
+    adminExportAuditEventsRequest: AdminExportAuditEventsRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminExportAuditEventsResponse>(
+      {url: `/api/v1/admin/audit-events/export`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminExportAuditEventsRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAdminExportAuditEventsMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminExportAuditEvents>>, TError,{data: AdminExportAuditEventsRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminExportAuditEvents>>, TError,{data: AdminExportAuditEventsRequest}, TContext> => {
+
+const mutationKey = ['adminExportAuditEvents'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminExportAuditEvents>>, {data: AdminExportAuditEventsRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  adminExportAuditEvents(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminExportAuditEventsMutationResult = NonNullable<Awaited<ReturnType<typeof adminExportAuditEvents>>>
+    export type AdminExportAuditEventsMutationBody = AdminExportAuditEventsRequest
+    export type AdminExportAuditEventsMutationError = AdminError
+
+    /**
+ * @summary Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+ */
+export const useAdminExportAuditEvents = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminExportAuditEvents>>, TError,{data: AdminExportAuditEventsRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminExportAuditEvents>>,
+        TError,
+        {data: AdminExportAuditEventsRequest},
+        TContext
+      > => {
+      return useMutation(getAdminExportAuditEventsMutationOptions(options));
+    }
+
+/**
+ * Wraps rbac.Service.DeclaredPermissions -- the frozen catalog snapshot, not any one subject's own granted permissions (ListPermissions answers that, and is not exposed here).
+ * @summary List every permission any module has declared (D8's role-editing checklist).
+ */
+export const adminListDeclaredPermissions = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminListDeclaredPermissionsResponse>(
+      {url: `/api/v1/admin/roles`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminListDeclaredPermissionsQueryKey = () => {
+    return [
+    `/api/v1/admin/roles`
+    ] as const;
+    }
+
+
+export const getAdminListDeclaredPermissionsQueryOptions = <TData = Awaited<ReturnType<typeof adminListDeclaredPermissions>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListDeclaredPermissions>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListDeclaredPermissionsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListDeclaredPermissions>>> = ({ signal }) => adminListDeclaredPermissions(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListDeclaredPermissions>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListDeclaredPermissionsQueryResult = NonNullable<Awaited<ReturnType<typeof adminListDeclaredPermissions>>>
+export type AdminListDeclaredPermissionsQueryError = unknown
+
+
+/**
+ * @summary List every permission any module has declared (D8's role-editing checklist).
+ */
+
+export function useAdminListDeclaredPermissions<TData = Awaited<ReturnType<typeof adminListDeclaredPermissions>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListDeclaredPermissions>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListDeclaredPermissionsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+ */
+export const adminDefineRole = (
+    adminDefineRoleRequest: AdminDefineRoleRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminRole>(
+      {url: `/api/v1/admin/roles`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminDefineRoleRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAdminDefineRoleMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminDefineRole>>, TError,{data: AdminDefineRoleRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminDefineRole>>, TError,{data: AdminDefineRoleRequest}, TContext> => {
+
+const mutationKey = ['adminDefineRole'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminDefineRole>>, {data: AdminDefineRoleRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  adminDefineRole(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminDefineRoleMutationResult = NonNullable<Awaited<ReturnType<typeof adminDefineRole>>>
+    export type AdminDefineRoleMutationBody = AdminDefineRoleRequest
+    export type AdminDefineRoleMutationError = AdminError
+
+    /**
+ * @summary Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+ */
+export const useAdminDefineRole = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminDefineRole>>, TError,{data: AdminDefineRoleRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminDefineRole>>,
+        TError,
+        {data: AdminDefineRoleRequest},
+        TContext
+      > => {
+      return useMutation(getAdminDefineRoleMutationOptions(options));
+    }
+
+/**
+ * @summary Assign a role to a user, optionally scoped to one org node (D8), wrapping rbac.Service.AssignRole.
+ */
+export const adminCreateRoleBinding = (
+    id: string,
+    adminCreateRoleBindingRequest: AdminCreateRoleBindingRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminRoleBinding>(
+      {url: `/api/v1/admin/roles/${id}/bindings`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminCreateRoleBindingRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAdminCreateRoleBindingMutationOptions = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminCreateRoleBinding>>, TError,{id: string;data: AdminCreateRoleBindingRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof adminCreateRoleBinding>>, TError,{id: string;data: AdminCreateRoleBindingRequest}, TContext> => {
+
+const mutationKey = ['adminCreateRoleBinding'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminCreateRoleBinding>>, {id: string;data: AdminCreateRoleBindingRequest}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  adminCreateRoleBinding(id,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminCreateRoleBindingMutationResult = NonNullable<Awaited<ReturnType<typeof adminCreateRoleBinding>>>
+    export type AdminCreateRoleBindingMutationBody = AdminCreateRoleBindingRequest
+    export type AdminCreateRoleBindingMutationError = AdminError
+
+    /**
+ * @summary Assign a role to a user, optionally scoped to one org node (D8), wrapping rbac.Service.AssignRole.
+ */
+export const useAdminCreateRoleBinding = <TError = AdminError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminCreateRoleBinding>>, TError,{id: string;data: AdminCreateRoleBindingRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminCreateRoleBinding>>,
+        TError,
+        {id: string;data: AdminCreateRoleBindingRequest},
+        TContext
+      > => {
+      return useMutation(getAdminCreateRoleBindingMutationOptions(options));
+    }
+
+/**
+ * Stitched from go/metering's and go/billing's already-real, per-tenant query methods, looped once per tenant in admin's own ledger under D2's tenancy.WithSystemContext mechanism -- no new database table. meteringSummaries/creditBalance/activeSubscription are absent from a row when the corresponding module was never wired through WithMetering/WithBilling.
+ * @summary Cross-tenant usage/billing dashboard (D9).
+ */
+export const adminGetUsageSummary = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminUsageSummaryResponse>(
+      {url: `/api/v1/admin/usage-summary`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminGetUsageSummaryQueryKey = () => {
+    return [
+    `/api/v1/admin/usage-summary`
+    ] as const;
+    }
+
+
+export const getAdminGetUsageSummaryQueryOptions = <TData = Awaited<ReturnType<typeof adminGetUsageSummary>>, TError = AdminError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminGetUsageSummary>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminGetUsageSummaryQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminGetUsageSummary>>> = ({ signal }) => adminGetUsageSummary(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminGetUsageSummary>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminGetUsageSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof adminGetUsageSummary>>>
+export type AdminGetUsageSummaryQueryError = AdminError
+
+
+/**
+ * @summary Cross-tenant usage/billing dashboard (D9).
+ */
+
+export function useAdminGetUsageSummary<TData = Awaited<ReturnType<typeof adminGetUsageSummary>>, TError = AdminError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminGetUsageSummary>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminGetUsageSummaryQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Wraps notification.SendRecordRepository.ListByFilter. tenantId absent means every tenant in admin's own ledger (D2's per-tenant loop under tenancy.WithSystemContext); present means the single-tenant path.
+ * @summary Cross-tenant notification send-record search (D10).
+ */
+export const adminListSendRecords = (
+    params?: AdminListSendRecordsParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AdminListSendRecordsResponse>(
+      {url: `/api/v1/admin/notifications/send-records`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getAdminListSendRecordsQueryKey = (params?: AdminListSendRecordsParams,) => {
+    return [
+    `/api/v1/admin/notifications/send-records`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAdminListSendRecordsQueryOptions = <TData = Awaited<ReturnType<typeof adminListSendRecords>>, TError = unknown>(params?: AdminListSendRecordsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListSendRecords>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListSendRecordsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListSendRecords>>> = ({ signal }) => adminListSendRecords(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListSendRecords>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListSendRecordsQueryResult = NonNullable<Awaited<ReturnType<typeof adminListSendRecords>>>
+export type AdminListSendRecordsQueryError = unknown
+
+
+/**
+ * @summary Cross-tenant notification send-record search (D10).
+ */
+
+export function useAdminListSendRecords<TData = Awaited<ReturnType<typeof adminListSendRecords>>, TError = unknown>(
+ params?: AdminListSendRecordsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListSendRecords>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListSendRecordsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The exact CredentialService.Resolve answer for provider under the caller's own tenant context: the caller's tenant BYOK row when one exists, the platform-wide row otherwise. Never returns the api key -- only which scope answered and the credential's base URL, so a caller can confirm what is configured without ever seeing the secret. A context carrying no tenant (a system-context caller) resolves straight to the platform-wide row, mirroring Resolve's own documented behavior.
+ * @summary Report which scope currently answers for a provider.
+ */
+export const aiGatewayGetCredential = (
+    provider: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AiGatewayCredential>(
+      {url: `/api/v1/ai-gateway/credentials/${provider}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAiGatewayGetCredentialQueryKey = (provider: string,) => {
+    return [
+    `/api/v1/ai-gateway/credentials/${provider}`
+    ] as const;
+    }
+
+
+export const getAiGatewayGetCredentialQueryOptions = <TData = Awaited<ReturnType<typeof aiGatewayGetCredential>>, TError = AiGatewayError>(provider: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof aiGatewayGetCredential>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAiGatewayGetCredentialQueryKey(provider);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof aiGatewayGetCredential>>> = ({ signal }) => aiGatewayGetCredential(provider, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: provider !== null && provider !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof aiGatewayGetCredential>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AiGatewayGetCredentialQueryResult = NonNullable<Awaited<ReturnType<typeof aiGatewayGetCredential>>>
+export type AiGatewayGetCredentialQueryError = AiGatewayError
+
+
+/**
+ * @summary Report which scope currently answers for a provider.
+ */
+
+export function useAiGatewayGetCredential<TData = Awaited<ReturnType<typeof aiGatewayGetCredential>>, TError = AiGatewayError>(
+ provider: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof aiGatewayGetCredential>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAiGatewayGetCredentialQueryOptions(provider,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Writes or overwrites (upsert, keyed on provider and the caller's own tenant) the calling tenant's bring-your-own-key credential for provider -- CredentialService.SetTenantCredential verbatim, with the owning tenant read from the request's already-resolved tenant context, never from a request parameter, header or body. Gated on PermissionWrite ("ai-gateway:write"), an ordinary tenant-scoped permission -- see this fragment's own header for the contrast with the platform write below.
+ * @summary Set the caller's own tenant's BYOK credential.
+ */
+export const aiGatewaySetTenantCredential = (
+    provider: string,
+    aiGatewaySetCredentialRequest: AiGatewaySetCredentialRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AiGatewayCredential>(
+      {url: `/api/v1/ai-gateway/credentials/${provider}/tenant`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: aiGatewaySetCredentialRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAiGatewaySetTenantCredentialMutationOptions = <TError = AiGatewayError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof aiGatewaySetTenantCredential>>, TError,{provider: string;data: AiGatewaySetCredentialRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof aiGatewaySetTenantCredential>>, TError,{provider: string;data: AiGatewaySetCredentialRequest}, TContext> => {
+
+const mutationKey = ['aiGatewaySetTenantCredential'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof aiGatewaySetTenantCredential>>, {provider: string;data: AiGatewaySetCredentialRequest}> = (props) => {
+          const {provider,data} = props ?? {};
+
+          return  aiGatewaySetTenantCredential(provider,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AiGatewaySetTenantCredentialMutationResult = NonNullable<Awaited<ReturnType<typeof aiGatewaySetTenantCredential>>>
+    export type AiGatewaySetTenantCredentialMutationBody = AiGatewaySetCredentialRequest
+    export type AiGatewaySetTenantCredentialMutationError = AiGatewayError
+
+    /**
+ * @summary Set the caller's own tenant's BYOK credential.
+ */
+export const useAiGatewaySetTenantCredential = <TError = AiGatewayError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof aiGatewaySetTenantCredential>>, TError,{provider: string;data: AiGatewaySetCredentialRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof aiGatewaySetTenantCredential>>,
+        TError,
+        {provider: string;data: AiGatewaySetCredentialRequest},
+        TContext
+      > => {
+      return useMutation(getAiGatewaySetTenantCredentialMutationOptions(options));
+    }
+
+/**
+ * Writes or overwrites (upsert, keyed on provider alone -- there is no owning tenant) the platform-wide default credential for provider that every tenant without its own BYOK row falls back to -- CredentialService.SetPlatformCredential verbatim. The Handler itself builds the audited system-context reason (pkgcore.WithSystemContext under SystemPurposeCredentialWrite) this write requires; the caller supplies only the credential. This is a MATERIALLY MORE PRIVILEGED operation than the tenant-scoped write above -- it changes the default every tenant on the platform without its own override resolves to -- and is gated on a DISTINCT, more restrictive permission, PermissionManagePlatform ("ai-gateway:manage_platform"), never PermissionWrite.
+ * @summary Set the platform-wide default credential.
+ */
+export const aiGatewaySetPlatformCredential = (
+    provider: string,
+    aiGatewaySetCredentialRequest: AiGatewaySetCredentialRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AiGatewayCredential>(
+      {url: `/api/v1/ai-gateway/credentials/${provider}/platform`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: aiGatewaySetCredentialRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAiGatewaySetPlatformCredentialMutationOptions = <TError = AiGatewayError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof aiGatewaySetPlatformCredential>>, TError,{provider: string;data: AiGatewaySetCredentialRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof aiGatewaySetPlatformCredential>>, TError,{provider: string;data: AiGatewaySetCredentialRequest}, TContext> => {
+
+const mutationKey = ['aiGatewaySetPlatformCredential'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof aiGatewaySetPlatformCredential>>, {provider: string;data: AiGatewaySetCredentialRequest}> = (props) => {
+          const {provider,data} = props ?? {};
+
+          return  aiGatewaySetPlatformCredential(provider,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AiGatewaySetPlatformCredentialMutationResult = NonNullable<Awaited<ReturnType<typeof aiGatewaySetPlatformCredential>>>
+    export type AiGatewaySetPlatformCredentialMutationBody = AiGatewaySetCredentialRequest
+    export type AiGatewaySetPlatformCredentialMutationError = AiGatewayError
+
+    /**
+ * @summary Set the platform-wide default credential.
+ */
+export const useAiGatewaySetPlatformCredential = <TError = AiGatewayError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof aiGatewaySetPlatformCredential>>, TError,{provider: string;data: AiGatewaySetCredentialRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof aiGatewaySetPlatformCredential>>,
+        TError,
+        {provider: string;data: AiGatewaySetCredentialRequest},
+        TContext
+      > => {
+      return useMutation(getAiGatewaySetPlatformCredentialMutationOptions(options));
+    }
+
+/**
+ * The creator is the caller's own authenticated identity (resolved server-side, never a request field) -- Service.Create's CreatedBy. scopes, when given, must each be one of the creator's own permissions right now; an empty or omitted scopes issues a key that authenticates identity alone. expiresAt, when given, must be strictly in the future and no further out than this deployment's MaxAPIKeyLifetime from now; omitted, it defaults to exactly that ceiling. The response's key field is the raw, plaintext credential -- the one and only time this API ever returns it; nothing else this fragment exposes, including integration_listAPIKeys, ever reproduces it.
+ * A failure recording the operation's audit event AFTER the key row committed is answered as this operation's ordinary 201 success, with the response's auditRecordMissing field true: the key exists and works either way, and key material is never shown twice, so the caller persists the credential from the success response and the field declares the audit gap (the identical partial-failure contract Service.Create's own doc comment documents). The credential deliberately never rides in an error envelope: a 5xx body carries no key material, because error responses flow into logs, tickets and bug reports that success bodies do not.
+ * @summary Issue a new API key for the caller's tenant.
+ */
+export const integrationCreateAPIKey = (
+    integrationCreateAPIKeyRequest?: IntegrationCreateAPIKeyRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationCreatedAPIKey>(
+      {url: `/api/v1/integration/apikeys`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: integrationCreateAPIKeyRequest, signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationCreateAPIKeyMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationCreateAPIKey>>, TError,{data?: IntegrationCreateAPIKeyRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationCreateAPIKey>>, TError,{data?: IntegrationCreateAPIKeyRequest}, TContext> => {
+
+const mutationKey = ['integrationCreateAPIKey'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationCreateAPIKey>>, {data?: IntegrationCreateAPIKeyRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  integrationCreateAPIKey(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationCreateAPIKeyMutationResult = NonNullable<Awaited<ReturnType<typeof integrationCreateAPIKey>>>
+    export type IntegrationCreateAPIKeyMutationBody = IntegrationCreateAPIKeyRequest | undefined
+    export type IntegrationCreateAPIKeyMutationError = IntegrationError
+
+    /**
+ * @summary Issue a new API key for the caller's tenant.
+ */
+export const useIntegrationCreateAPIKey = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationCreateAPIKey>>, TError,{data?: IntegrationCreateAPIKeyRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationCreateAPIKey>>,
+        TError,
+        {data?: IntegrationCreateAPIKeyRequest},
+        TContext
+      > => {
+      return useMutation(getIntegrationCreateAPIKeyMutationOptions(options));
+    }
+
+/**
+ * Never exposes the raw key or its stored hash -- every summary row omits both, per Service.List's own "credential-material-free" contract. Order is not guaranteed; a caller that needs one sorts the result itself.
+ * @summary List the caller's tenant's API keys.
+ */
+export const integrationListAPIKeys = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationListAPIKeysResponse>(
+      {url: `/api/v1/integration/apikeys`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getIntegrationListAPIKeysQueryKey = () => {
+    return [
+    `/api/v1/integration/apikeys`
+    ] as const;
+    }
+
+
+export const getIntegrationListAPIKeysQueryOptions = <TData = Awaited<ReturnType<typeof integrationListAPIKeys>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof integrationListAPIKeys>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getIntegrationListAPIKeysQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof integrationListAPIKeys>>> = ({ signal }) => integrationListAPIKeys(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof integrationListAPIKeys>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type IntegrationListAPIKeysQueryResult = NonNullable<Awaited<ReturnType<typeof integrationListAPIKeys>>>
+export type IntegrationListAPIKeysQueryError = unknown
+
+
+/**
+ * @summary List the caller's tenant's API keys.
+ */
+
+export function useIntegrationListAPIKeys<TData = Awaited<ReturnType<typeof integrationListAPIKeys>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof integrationListAPIKeys>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getIntegrationListAPIKeysQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Sets the key's RevokedAt mark; the key never authenticates again. This does not physically remove the row (Service.Revoke's own doc comment) -- it is refused, not silently no-op'd, against a key that is already revoked, since a caller revoking a key it believes is still live has a stale view of the world.
+ * @summary Revoke an API key, permanently.
+ */
+export const integrationRevokeAPIKey = (
+    keyId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/integration/apikeys/${keyId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationRevokeAPIKeyMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationRevokeAPIKey>>, TError,{keyId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationRevokeAPIKey>>, TError,{keyId: string}, TContext> => {
+
+const mutationKey = ['integrationRevokeAPIKey'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationRevokeAPIKey>>, {keyId: string}> = (props) => {
+          const {keyId} = props ?? {};
+
+          return  integrationRevokeAPIKey(keyId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationRevokeAPIKeyMutationResult = NonNullable<Awaited<ReturnType<typeof integrationRevokeAPIKey>>>
+
+    export type IntegrationRevokeAPIKeyMutationError = IntegrationError
+
+    /**
+ * @summary Revoke an API key, permanently.
+ */
+export const useIntegrationRevokeAPIKey = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationRevokeAPIKey>>, TError,{keyId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationRevokeAPIKey>>,
+        TError,
+        {keyId: string},
+        TContext
+      > => {
+      return useMutation(getIntegrationRevokeAPIKeyMutationOptions(options));
+    }
+
+/**
+ * Create-new-then-revoke-old, not an in-place swap (Service.Rotate's own doc comment): the response's id names a BRAND NEW key, never keyId itself. The new key carries the predecessor's Scopes and CreatedBy forward, re-validated against that creator's CURRENT permissions -- a creator whose permissions shrank since the predecessor was issued can have this fail with 403 on a scope it no longer holds. ExpiresAt is NOT carried forward: the new key gets a fresh full-lifetime expiry. The two writes are not one database transaction; a failure revoking the predecessor after the replacement was already created is answered as this operation's ordinary 200 success, with the response's auditRecordMissing field true: the replacement key still exists either way (a safe-direction surplus, never a lockout), key material is never shown twice, and the field declares that the rotation's own bookkeeping did not complete -- a caller seeing it true must not assume the predecessor is revoked. See Service.Rotate's own doc comment for the full argument.
+ * @summary Issue a replacement key and revoke the named key.
+ */
+export const integrationRotateAPIKey = (
+    keyId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationCreatedAPIKey>(
+      {url: `/api/v1/integration/apikeys/${keyId}/rotate`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationRotateAPIKeyMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationRotateAPIKey>>, TError,{keyId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationRotateAPIKey>>, TError,{keyId: string}, TContext> => {
+
+const mutationKey = ['integrationRotateAPIKey'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationRotateAPIKey>>, {keyId: string}> = (props) => {
+          const {keyId} = props ?? {};
+
+          return  integrationRotateAPIKey(keyId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationRotateAPIKeyMutationResult = NonNullable<Awaited<ReturnType<typeof integrationRotateAPIKey>>>
+
+    export type IntegrationRotateAPIKeyMutationError = IntegrationError
+
+    /**
+ * @summary Issue a replacement key and revoke the named key.
+ */
+export const useIntegrationRotateAPIKey = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationRotateAPIKey>>, TError,{keyId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationRotateAPIKey>>,
+        TError,
+        {keyId: string},
+        TContext
+      > => {
+      return useMutation(getIntegrationRotateAPIKeyMutationOptions(options));
+    }
+
+/**
+ * The creator is the caller's own authenticated identity, resolved server-side through the same SubjectResolver seam integration_createAPIKey uses -- never a request field. url is validated exactly as Service.CreateWebhookSubscription validates it, before anything is persisted: missing is 400, and a URL whose host is malformed, unresolvable, or blocked as private/loopback is refused outright (the module's two-time SSRF rules). Every eventTypes entry must be some registered EventMapping's public type (400 naming the first unknown one); the empty set is refused. The response's secret field is the raw HMAC signing secret a receiver verifies signatures with -- shown here exactly once, the identical contract integration_createAPIKey's own key field follows; nothing else this fragment exposes ever reproduces it.
+ * A failure recording the operation's audit event AFTER the subscription row committed is answered as this operation's ordinary 201 success, with the response's auditRecordMissing field true: the subscription exists and is already delivering either way, and its secret is never shown twice, so the caller persists it from the success response and the field declares the audit gap (the identical partial-failure contract Service.CreateWebhookSubscription's own doc comment documents). The secret deliberately never rides in an error envelope: a 5xx body carries no secret material, because error responses flow into logs, tickets and bug reports that success bodies do not.
+ * @summary Subscribe the caller's tenant to a set of public event types.
+ */
+export const integrationCreateWebhookSubscription = (
+    integrationCreateWebhookSubscriptionRequest: IntegrationCreateWebhookSubscriptionRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationCreatedWebhookSubscription>(
+      {url: `/api/v1/integration/webhooks`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: integrationCreateWebhookSubscriptionRequest, signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationCreateWebhookSubscriptionMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationCreateWebhookSubscription>>, TError,{data: IntegrationCreateWebhookSubscriptionRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationCreateWebhookSubscription>>, TError,{data: IntegrationCreateWebhookSubscriptionRequest}, TContext> => {
+
+const mutationKey = ['integrationCreateWebhookSubscription'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationCreateWebhookSubscription>>, {data: IntegrationCreateWebhookSubscriptionRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  integrationCreateWebhookSubscription(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationCreateWebhookSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof integrationCreateWebhookSubscription>>>
+    export type IntegrationCreateWebhookSubscriptionMutationBody = IntegrationCreateWebhookSubscriptionRequest
+    export type IntegrationCreateWebhookSubscriptionMutationError = IntegrationError
+
+    /**
+ * @summary Subscribe the caller's tenant to a set of public event types.
+ */
+export const useIntegrationCreateWebhookSubscription = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationCreateWebhookSubscription>>, TError,{data: IntegrationCreateWebhookSubscriptionRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationCreateWebhookSubscription>>,
+        TError,
+        {data: IntegrationCreateWebhookSubscriptionRequest},
+        TContext
+      > => {
+      return useMutation(getIntegrationCreateWebhookSubscriptionMutationOptions(options));
+    }
+
+/**
+ * Secret-free: every row omits the signing secret, per Service.ListWebhookSubscriptions' own contract. Order is not guaranteed; a caller that needs one sorts the result itself.
+ * @summary List the caller's tenant's webhook subscriptions.
+ */
+export const integrationListWebhookSubscriptions = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationListWebhookSubscriptionsResponse>(
+      {url: `/api/v1/integration/webhooks`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getIntegrationListWebhookSubscriptionsQueryKey = () => {
+    return [
+    `/api/v1/integration/webhooks`
+    ] as const;
+    }
+
+
+export const getIntegrationListWebhookSubscriptionsQueryOptions = <TData = Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getIntegrationListWebhookSubscriptionsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>> = ({ signal }) => integrationListWebhookSubscriptions(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type IntegrationListWebhookSubscriptionsQueryResult = NonNullable<Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>>
+export type IntegrationListWebhookSubscriptionsQueryError = unknown
+
+
+/**
+ * @summary List the caller's tenant's webhook subscriptions.
+ */
+
+export function useIntegrationListWebhookSubscriptions<TData = Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof integrationListWebhookSubscriptions>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getIntegrationListWebhookSubscriptionsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Every request field is optional; one that is absent leaves the corresponding stored value unchanged -- Service.UpdateWebhookSubscription's identical nil-means-no-change convention (a partial update, hence PATCH rather than PUT). A present but EMPTY eventTypes is refused with 400, exactly as create refuses it: there is no supported way to leave a subscription with zero event types short of deleting it. url, when present, is validated identically to create. Setting active=false is the supported way to pause delivery without deleting; setting it back to true is how a restored (always-paused) subscription resumes delivery.
+ * @summary Partially update one of the caller's tenant's subscriptions.
+ */
+export const integrationUpdateWebhookSubscription = (
+    subscriptionId: string,
+    integrationUpdateWebhookSubscriptionRequest: IntegrationUpdateWebhookSubscriptionRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationWebhookSubscriptionSummary>(
+      {url: `/api/v1/integration/webhooks/${subscriptionId}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: integrationUpdateWebhookSubscriptionRequest, signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationUpdateWebhookSubscriptionMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationUpdateWebhookSubscription>>, TError,{subscriptionId: string;data: IntegrationUpdateWebhookSubscriptionRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationUpdateWebhookSubscription>>, TError,{subscriptionId: string;data: IntegrationUpdateWebhookSubscriptionRequest}, TContext> => {
+
+const mutationKey = ['integrationUpdateWebhookSubscription'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationUpdateWebhookSubscription>>, {subscriptionId: string;data: IntegrationUpdateWebhookSubscriptionRequest}> = (props) => {
+          const {subscriptionId,data} = props ?? {};
+
+          return  integrationUpdateWebhookSubscription(subscriptionId,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationUpdateWebhookSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof integrationUpdateWebhookSubscription>>>
+    export type IntegrationUpdateWebhookSubscriptionMutationBody = IntegrationUpdateWebhookSubscriptionRequest
+    export type IntegrationUpdateWebhookSubscriptionMutationError = IntegrationError
+
+    /**
+ * @summary Partially update one of the caller's tenant's subscriptions.
+ */
+export const useIntegrationUpdateWebhookSubscription = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationUpdateWebhookSubscription>>, TError,{subscriptionId: string;data: IntegrationUpdateWebhookSubscriptionRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationUpdateWebhookSubscription>>,
+        TError,
+        {subscriptionId: string;data: IntegrationUpdateWebhookSubscriptionRequest},
+        TContext
+      > => {
+      return useMutation(getIntegrationUpdateWebhookSubscriptionMutationOptions(options));
+    }
+
+/**
+ * Mark-deletes the subscription (WebhookSubscription's dbkit.SoftDeletable adoption): its row stays in place -- hidden from every read this fragment performs -- and its past delivery rows are left as history. A delivery already enqueued settles exactly as it always did (Service.DeleteWebhookSubscription's own doc comment). Undo with POST /webhooks/{subscriptionId}/restore.
+ * @summary Delete one of the caller's tenant's subscriptions.
+ */
+export const integrationDeleteWebhookSubscription = (
+    subscriptionId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/integration/webhooks/${subscriptionId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationDeleteWebhookSubscriptionMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationDeleteWebhookSubscription>>, TError,{subscriptionId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationDeleteWebhookSubscription>>, TError,{subscriptionId: string}, TContext> => {
+
+const mutationKey = ['integrationDeleteWebhookSubscription'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationDeleteWebhookSubscription>>, {subscriptionId: string}> = (props) => {
+          const {subscriptionId} = props ?? {};
+
+          return  integrationDeleteWebhookSubscription(subscriptionId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationDeleteWebhookSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof integrationDeleteWebhookSubscription>>>
+
+    export type IntegrationDeleteWebhookSubscriptionMutationError = IntegrationError
+
+    /**
+ * @summary Delete one of the caller's tenant's subscriptions.
+ */
+export const useIntegrationDeleteWebhookSubscription = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationDeleteWebhookSubscription>>, TError,{subscriptionId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationDeleteWebhookSubscription>>,
+        TError,
+        {subscriptionId: string},
+        TContext
+      > => {
+      return useMutation(getIntegrationDeleteWebhookSubscriptionMutationOptions(options));
+    }
+
+/**
+ * Undoes the mark-delete integration_deleteWebhookSubscription made. The restored subscription is always PAUSED (active=false), whatever active held when it was deleted -- resuming automatic outbound delivery to a URL nobody has looked at since is never implicit, so delivery restarts only after an explicit integration_updateWebhookSubscription setting active=true (Service.RestoreWebhookSubscription's own doc comment). 404 answers both an unknown subscriptionId and one that exists but is not currently deleted -- the same collapsed not-found signal the Service-level Restore reports, so a caller cannot tell the cases apart.
+ * @summary Undo a subscription's deletion.
+ */
+export const integrationRestoreWebhookSubscription = (
+    subscriptionId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/integration/webhooks/${subscriptionId}/restore`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getIntegrationRestoreWebhookSubscriptionMutationOptions = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationRestoreWebhookSubscription>>, TError,{subscriptionId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof integrationRestoreWebhookSubscription>>, TError,{subscriptionId: string}, TContext> => {
+
+const mutationKey = ['integrationRestoreWebhookSubscription'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof integrationRestoreWebhookSubscription>>, {subscriptionId: string}> = (props) => {
+          const {subscriptionId} = props ?? {};
+
+          return  integrationRestoreWebhookSubscription(subscriptionId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IntegrationRestoreWebhookSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof integrationRestoreWebhookSubscription>>>
+
+    export type IntegrationRestoreWebhookSubscriptionMutationError = IntegrationError
+
+    /**
+ * @summary Undo a subscription's deletion.
+ */
+export const useIntegrationRestoreWebhookSubscription = <TError = IntegrationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof integrationRestoreWebhookSubscription>>, TError,{subscriptionId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof integrationRestoreWebhookSubscription>>,
+        TError,
+        {subscriptionId: string},
+        TContext
+      > => {
+      return useMutation(getIntegrationRestoreWebhookSubscriptionMutationOptions(options));
+    }
+
+/**
+ * Newest first, at most limit rows; an absent or non-positive limit falls back to the module's own default (defaultRecentDeliveriesLimit, 50 -- see Service.ListRecentWebhookDeliveries), and a limit above the declared maximum (100) is clamped to it. subscriptionId is NOT verified to exist: an id that names nothing, or a subscription of another tenant, returns an empty list exactly as a genuine subscription with zero deliveries would -- there is no observable difference, and telling the cases apart would let a caller enumerate another tenant's subscription ids (the same no-enumeration answer the 404s above give). Rows carry no payload: the raw event body is an implementation detail of the send pipeline, never exposed to subscription-management callers.
+ * @summary List one subscription's most recent delivery attempts.
+ */
+export const integrationListWebhookDeliveries = (
+    subscriptionId: string,
+    params?: IntegrationListWebhookDeliveriesParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<IntegrationListWebhookDeliveriesResponse>(
+      {url: `/api/v1/integration/webhooks/${subscriptionId}/deliveries`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getIntegrationListWebhookDeliveriesQueryKey = (subscriptionId: string,
+    params?: IntegrationListWebhookDeliveriesParams,) => {
+    return [
+    `/api/v1/integration/webhooks/${subscriptionId}/deliveries`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getIntegrationListWebhookDeliveriesQueryOptions = <TData = Awaited<ReturnType<typeof integrationListWebhookDeliveries>>, TError = IntegrationError>(subscriptionId: string,
+    params?: IntegrationListWebhookDeliveriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof integrationListWebhookDeliveries>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getIntegrationListWebhookDeliveriesQueryKey(subscriptionId,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof integrationListWebhookDeliveries>>> = ({ signal }) => integrationListWebhookDeliveries(subscriptionId,params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: subscriptionId !== null && subscriptionId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof integrationListWebhookDeliveries>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type IntegrationListWebhookDeliveriesQueryResult = NonNullable<Awaited<ReturnType<typeof integrationListWebhookDeliveries>>>
+export type IntegrationListWebhookDeliveriesQueryError = IntegrationError
+
+
+/**
+ * @summary List one subscription's most recent delivery attempts.
+ */
+
+export function useIntegrationListWebhookDeliveries<TData = Awaited<ReturnType<typeof integrationListWebhookDeliveries>>, TError = IntegrationError>(
+ subscriptionId: string,
+    params?: IntegrationListWebhookDeliveriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof integrationListWebhookDeliveries>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getIntegrationListWebhookDeliveriesQueryOptions(subscriptionId,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * parentId absent or empty creates the tenant's single root node (TreeService.CreateRoot); parentId present creates a child beneath it (TreeService.CreateChild). A tenant may have at most one root.
+ * @summary Create a node in the caller's tenant's organization tree.
+ */
+export const orgCreateNode = (
+    orgCreateNodeRequest: OrgCreateNodeRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgNode>(
+      {url: `/api/v1/org/nodes`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: orgCreateNodeRequest, signal
+    },
+      );
+    }
+
+
+
+export const getOrgCreateNodeMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgCreateNode>>, TError,{data: OrgCreateNodeRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgCreateNode>>, TError,{data: OrgCreateNodeRequest}, TContext> => {
+
+const mutationKey = ['orgCreateNode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgCreateNode>>, {data: OrgCreateNodeRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  orgCreateNode(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgCreateNodeMutationResult = NonNullable<Awaited<ReturnType<typeof orgCreateNode>>>
+    export type OrgCreateNodeMutationBody = OrgCreateNodeRequest
+    export type OrgCreateNodeMutationError = OrgError
+
+    /**
+ * @summary Create a node in the caller's tenant's organization tree.
+ */
+export const useOrgCreateNode = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgCreateNode>>, TError,{data: OrgCreateNodeRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgCreateNode>>,
+        TError,
+        {data: OrgCreateNodeRequest},
+        TContext
+      > => {
+      return useMutation(getOrgCreateNodeMutationOptions(options));
+    }
+
+/**
+ * With parentId, returns that node's direct children (TreeService.Children). Without it, returns the whole tree -- the root together with every node beneath it (TreeService.Subtree) -- or an empty list when the tenant has no root yet.
+ * @summary List nodes of the caller's tenant's organization tree.
+ */
+export const orgListNodes = (
+    params?: OrgListNodesParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgListNodesResponse>(
+      {url: `/api/v1/org/nodes`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getOrgListNodesQueryKey = (params?: OrgListNodesParams,) => {
+    return [
+    `/api/v1/org/nodes`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getOrgListNodesQueryOptions = <TData = Awaited<ReturnType<typeof orgListNodes>>, TError = OrgError>(params?: OrgListNodesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgListNodes>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getOrgListNodesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof orgListNodes>>> = ({ signal }) => orgListNodes(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof orgListNodes>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type OrgListNodesQueryResult = NonNullable<Awaited<ReturnType<typeof orgListNodes>>>
+export type OrgListNodesQueryError = OrgError
+
+
+/**
+ * @summary List nodes of the caller's tenant's organization tree.
+ */
+
+export function useOrgListNodes<TData = Awaited<ReturnType<typeof orgListNodes>>, TError = OrgError>(
+ params?: OrgListNodesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgListNodes>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getOrgListNodesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Get one node of the caller's tenant's organization tree.
+ */
+export const orgGetNode = (
+    nodeId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgNode>(
+      {url: `/api/v1/org/nodes/${nodeId}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getOrgGetNodeQueryKey = (nodeId: string,) => {
+    return [
+    `/api/v1/org/nodes/${nodeId}`
+    ] as const;
+    }
+
+
+export const getOrgGetNodeQueryOptions = <TData = Awaited<ReturnType<typeof orgGetNode>>, TError = OrgError>(nodeId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgGetNode>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getOrgGetNodeQueryKey(nodeId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof orgGetNode>>> = ({ signal }) => orgGetNode(nodeId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: nodeId !== null && nodeId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof orgGetNode>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type OrgGetNodeQueryResult = NonNullable<Awaited<ReturnType<typeof orgGetNode>>>
+export type OrgGetNodeQueryError = OrgError
+
+
+/**
+ * @summary Get one node of the caller's tenant's organization tree.
+ */
+
+export function useOrgGetNode<TData = Awaited<ReturnType<typeof orgGetNode>>, TError = OrgError>(
+ nodeId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgGetNode>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getOrgGetNodeQueryOptions(nodeId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Rename a node.
+ */
+export const orgRenameNode = (
+    nodeId: string,
+    orgRenameNodeRequest: OrgRenameNodeRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgNode>(
+      {url: `/api/v1/org/nodes/${nodeId}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: orgRenameNodeRequest, signal
+    },
+      );
+    }
+
+
+
+export const getOrgRenameNodeMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgRenameNode>>, TError,{nodeId: string;data: OrgRenameNodeRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgRenameNode>>, TError,{nodeId: string;data: OrgRenameNodeRequest}, TContext> => {
+
+const mutationKey = ['orgRenameNode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgRenameNode>>, {nodeId: string;data: OrgRenameNodeRequest}> = (props) => {
+          const {nodeId,data} = props ?? {};
+
+          return  orgRenameNode(nodeId,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgRenameNodeMutationResult = NonNullable<Awaited<ReturnType<typeof orgRenameNode>>>
+    export type OrgRenameNodeMutationBody = OrgRenameNodeRequest
+    export type OrgRenameNodeMutationError = OrgError
+
+    /**
+ * @summary Rename a node.
+ */
+export const useOrgRenameNode = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgRenameNode>>, TError,{nodeId: string;data: OrgRenameNodeRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgRenameNode>>,
+        TError,
+        {nodeId: string;data: OrgRenameNodeRequest},
+        TContext
+      > => {
+      return useMutation(getOrgRenameNodeMutationOptions(options));
+    }
+
+/**
+ * Deleting a node with children reports 409 unless cascade=true, in which case the whole subtree is removed in one statement. Re-parenting orphans to the grandparent is never done (it would silently widen every affected member's data scope). The tenant root can never be deleted, and neither can a node with members bound to it or beneath it -- move them first.
+ * @summary Delete a node.
+ */
+export const orgDeleteNode = (
+    nodeId: string,
+    params?: OrgDeleteNodeParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/org/nodes/${nodeId}`, method: 'DELETE',
+        params, signal
+    },
+      );
+    }
+
+
+
+export const getOrgDeleteNodeMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgDeleteNode>>, TError,{nodeId: string;params?: OrgDeleteNodeParams}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgDeleteNode>>, TError,{nodeId: string;params?: OrgDeleteNodeParams}, TContext> => {
+
+const mutationKey = ['orgDeleteNode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgDeleteNode>>, {nodeId: string;params?: OrgDeleteNodeParams}> = (props) => {
+          const {nodeId,params} = props ?? {};
+
+          return  orgDeleteNode(nodeId,params,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgDeleteNodeMutationResult = NonNullable<Awaited<ReturnType<typeof orgDeleteNode>>>
+
+    export type OrgDeleteNodeMutationError = OrgError
+
+    /**
+ * @summary Delete a node.
+ */
+export const useOrgDeleteNode = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgDeleteNode>>, TError,{nodeId: string;params?: OrgDeleteNodeParams}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgDeleteNode>>,
+        TError,
+        {nodeId: string;params?: OrgDeleteNodeParams},
+        TContext
+      > => {
+      return useMutation(getOrgDeleteNodeMutationOptions(options));
+    }
+
+/**
+ * @summary Re-parent a node, carrying its whole subtree with it.
+ */
+export const orgMoveNode = (
+    nodeId: string,
+    orgMoveNodeRequest: OrgMoveNodeRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgNode>(
+      {url: `/api/v1/org/nodes/${nodeId}/move`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: orgMoveNodeRequest, signal
+    },
+      );
+    }
+
+
+
+export const getOrgMoveNodeMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgMoveNode>>, TError,{nodeId: string;data: OrgMoveNodeRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgMoveNode>>, TError,{nodeId: string;data: OrgMoveNodeRequest}, TContext> => {
+
+const mutationKey = ['orgMoveNode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgMoveNode>>, {nodeId: string;data: OrgMoveNodeRequest}> = (props) => {
+          const {nodeId,data} = props ?? {};
+
+          return  orgMoveNode(nodeId,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgMoveNodeMutationResult = NonNullable<Awaited<ReturnType<typeof orgMoveNode>>>
+    export type OrgMoveNodeMutationBody = OrgMoveNodeRequest
+    export type OrgMoveNodeMutationError = OrgError
+
+    /**
+ * @summary Re-parent a node, carrying its whole subtree with it.
+ */
+export const useOrgMoveNode = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgMoveNode>>, TError,{nodeId: string;data: OrgMoveNodeRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgMoveNode>>,
+        TError,
+        {nodeId: string;data: OrgMoveNodeRequest},
+        TContext
+      > => {
+      return useMutation(getOrgMoveNodeMutationOptions(options));
+    }
+
+/**
+ * With nodeId, returns the members bound to that node or to anything beneath it (MemberService.List) -- standing at a group node returns every store's members beneath it, standing at one store returns that store's alone. Without nodeId, returns the whole tenant's roster (every member bound anywhere under the root), or an empty list when the tenant has no root yet.
+ * @summary List the members bound to a node's subtree.
+ */
+export const orgListMembers = (
+    params?: OrgListMembersParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgListMembersResponse>(
+      {url: `/api/v1/org/members`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getOrgListMembersQueryKey = (params?: OrgListMembersParams,) => {
+    return [
+    `/api/v1/org/members`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getOrgListMembersQueryOptions = <TData = Awaited<ReturnType<typeof orgListMembers>>, TError = OrgError>(params?: OrgListMembersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgListMembers>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getOrgListMembersQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof orgListMembers>>> = ({ signal }) => orgListMembers(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof orgListMembers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type OrgListMembersQueryResult = NonNullable<Awaited<ReturnType<typeof orgListMembers>>>
+export type OrgListMembersQueryError = OrgError
+
+
+/**
+ * @summary List the members bound to a node's subtree.
+ */
+
+export function useOrgListMembers<TData = Awaited<ReturnType<typeof orgListMembers>>, TError = OrgError>(
+ params?: OrgListMembersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgListMembers>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getOrgListMembersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Refuses to remove the tenant's last active member (409): somebody has to be able to invite the next person in, and there is no privileged path back into an emptied tenant.
+ * @summary Remove a member from the caller's tenant.
+ */
+export const orgRemoveMember = (
+    userId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/org/members/${userId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getOrgRemoveMemberMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgRemoveMember>>, TError,{userId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgRemoveMember>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['orgRemoveMember'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgRemoveMember>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  orgRemoveMember(userId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgRemoveMemberMutationResult = NonNullable<Awaited<ReturnType<typeof orgRemoveMember>>>
+
+    export type OrgRemoveMemberMutationError = OrgError
+
+    /**
+ * @summary Remove a member from the caller's tenant.
+ */
+export const useOrgRemoveMember = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgRemoveMember>>, TError,{userId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgRemoveMember>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getOrgRemoveMemberMutationOptions(options));
+    }
+
+/**
+ * The invitee's address is normalized, indexed and rate-limited (per tenant and, separately, per recipient) before anything is stored; an earlier pending invitation for the same address is revoked so only the newest link works. The invitation email renders in the RECIPIENT's locale, taken from the optional locale field below -- never from the inviting operator's own Accept-Language or UI language, since the invitee has made no request of their own yet for the server to read a header from. Omitting locale, or naming one the platform does not carry a message catalog for, falls back to the platform default. The response never carries the invitation token: it is a bearer credential handed to the invitee alone, through the message this endpoint sends.
+ * @summary Invite a person into the caller's tenant, at a node.
+ */
+export const orgCreateInvitation = (
+    orgCreateInvitationRequest: OrgCreateInvitationRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgInvitation>(
+      {url: `/api/v1/org/invitations`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: orgCreateInvitationRequest, signal
+    },
+      );
+    }
+
+
+
+export const getOrgCreateInvitationMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgCreateInvitation>>, TError,{data: OrgCreateInvitationRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgCreateInvitation>>, TError,{data: OrgCreateInvitationRequest}, TContext> => {
+
+const mutationKey = ['orgCreateInvitation'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgCreateInvitation>>, {data: OrgCreateInvitationRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  orgCreateInvitation(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgCreateInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof orgCreateInvitation>>>
+    export type OrgCreateInvitationMutationBody = OrgCreateInvitationRequest
+    export type OrgCreateInvitationMutationError = OrgError
+
+    /**
+ * @summary Invite a person into the caller's tenant, at a node.
+ */
+export const useOrgCreateInvitation = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgCreateInvitation>>, TError,{data: OrgCreateInvitationRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgCreateInvitation>>,
+        TError,
+        {data: OrgCreateInvitationRequest},
+        TContext
+      > => {
+      return useMutation(getOrgCreateInvitationMutationOptions(options));
+    }
+
+/**
+ * Expiry is evaluated at acceptance time, not by a sweeper, so an expired-but-unaccepted row is still listed here as pending; expiresAt tells the caller it is stale.
+ * @summary List the caller's tenant's pending invitations.
+ */
+export const orgListInvitations = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgListInvitationsResponse>(
+      {url: `/api/v1/org/invitations`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getOrgListInvitationsQueryKey = () => {
+    return [
+    `/api/v1/org/invitations`
+    ] as const;
+    }
+
+
+export const getOrgListInvitationsQueryOptions = <TData = Awaited<ReturnType<typeof orgListInvitations>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgListInvitations>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getOrgListInvitationsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof orgListInvitations>>> = ({ signal }) => orgListInvitations(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof orgListInvitations>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type OrgListInvitationsQueryResult = NonNullable<Awaited<ReturnType<typeof orgListInvitations>>>
+export type OrgListInvitationsQueryError = unknown
+
+
+/**
+ * @summary List the caller's tenant's pending invitations.
+ */
+
+export function useOrgListInvitations<TData = Awaited<ReturnType<typeof orgListInvitations>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof orgListInvitations>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getOrgListInvitationsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The tenant comes from the invitation token itself, resolved server-side -- never from the caller's access token, a parameter, a header or the body. The caller needs no membership in, and typically holds no token for, the inviting tenant: that is the entire situation a freshly invited person is in, which is also why an invitation link may point at any host that reaches this endpoint rather than only at the inviting tenant's own. The token is hashed and resolved through the module's narrow non-tenant-scoped token index (see invitation.go's invitationTokenIndex); every status check, the single-use claim and the membership creation then run strictly inside the tenant the index row names, exactly as they always have, and a caller whose request already carries that tenant is served unchanged. Who the membership binds is the caller identity the host's SubjectResolver attests (401 when it cannot), never a value the request body supplies -- the body carries the token only, and an unrecognized token reports 404 and reveals nothing.
+ * @summary Accept an invitation, joining the tenant that issued it.
+ */
+export const orgAcceptInvitation = (
+    orgAcceptInvitationRequest: OrgAcceptInvitationRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<OrgMembership>(
+      {url: `/api/v1/org/invitations/accept`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: orgAcceptInvitationRequest, signal
+    },
+      );
+    }
+
+
+
+export const getOrgAcceptInvitationMutationOptions = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgAcceptInvitation>>, TError,{data: OrgAcceptInvitationRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof orgAcceptInvitation>>, TError,{data: OrgAcceptInvitationRequest}, TContext> => {
+
+const mutationKey = ['orgAcceptInvitation'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof orgAcceptInvitation>>, {data: OrgAcceptInvitationRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  orgAcceptInvitation(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type OrgAcceptInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof orgAcceptInvitation>>>
+    export type OrgAcceptInvitationMutationBody = OrgAcceptInvitationRequest
+    export type OrgAcceptInvitationMutationError = OrgError
+
+    /**
+ * @summary Accept an invitation, joining the tenant that issued it.
+ */
+export const useOrgAcceptInvitation = <TError = OrgError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof orgAcceptInvitation>>, TError,{data: OrgAcceptInvitationRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof orgAcceptInvitation>>,
+        TError,
+        {data: OrgAcceptInvitationRequest},
+        TContext
+      > => {
+      return useMutation(getOrgAcceptInvitationMutationOptions(options));
+    }
+
+/**
+ * Transitions the signing key to revoked, of any prior status (pending, active or retiring), publishing pki.signing_key.revoked and immediately excluding the key from every future ActiveSigner and VerificationKeys answer. Idempotent: revoking an already-revoked key still answers 200 with its current (unchanged) state.
+ * @summary Revoke a signing key.
+ */
+export const pkiRevokeSigningKey = (
+    kid: string,
+    pkiRevokeSigningKeyRequest: PkiRevokeSigningKeyRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<PkiSigningKey>(
+      {url: `/api/v1/pki/signing-keys/${kid}/revoke`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: pkiRevokeSigningKeyRequest, signal
+    },
+      );
+    }
+
+
+
+export const getPkiRevokeSigningKeyMutationOptions = <TError = PkiError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pkiRevokeSigningKey>>, TError,{kid: string;data: PkiRevokeSigningKeyRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof pkiRevokeSigningKey>>, TError,{kid: string;data: PkiRevokeSigningKeyRequest}, TContext> => {
+
+const mutationKey = ['pkiRevokeSigningKey'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof pkiRevokeSigningKey>>, {kid: string;data: PkiRevokeSigningKeyRequest}> = (props) => {
+          const {kid,data} = props ?? {};
+
+          return  pkiRevokeSigningKey(kid,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PkiRevokeSigningKeyMutationResult = NonNullable<Awaited<ReturnType<typeof pkiRevokeSigningKey>>>
+    export type PkiRevokeSigningKeyMutationBody = PkiRevokeSigningKeyRequest
+    export type PkiRevokeSigningKeyMutationError = PkiError
+
+    /**
+ * @summary Revoke a signing key.
+ */
+export const usePkiRevokeSigningKey = <TError = PkiError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pkiRevokeSigningKey>>, TError,{kid: string;data: PkiRevokeSigningKeyRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof pkiRevokeSigningKey>>,
+        TError,
+        {kid: string;data: PkiRevokeSigningKeyRequest},
+        TContext
+      > => {
+      return useMutation(getPkiRevokeSigningKeyMutationOptions(options));
+    }
+
+/**
+ * Transitions the caller's tenant's certificate to revoked, records a revocation-ledger entry consumed by the issuing authority's next CRL generation, and publishes pki.certificate.revoked. Idempotent: revoking an already-revoked certificate still answers 200 with its current (unchanged) state.
+ * @summary Revoke a certificate.
+ */
+export const pkiRevokeCertificate = (
+    certificateId: string,
+    pkiRevokeCertificateRequest: PkiRevokeCertificateRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<PkiCertificate>(
+      {url: `/api/v1/pki/certificates/${certificateId}/revoke`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: pkiRevokeCertificateRequest, signal
+    },
+      );
+    }
+
+
+
+export const getPkiRevokeCertificateMutationOptions = <TError = PkiError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pkiRevokeCertificate>>, TError,{certificateId: string;data: PkiRevokeCertificateRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof pkiRevokeCertificate>>, TError,{certificateId: string;data: PkiRevokeCertificateRequest}, TContext> => {
+
+const mutationKey = ['pkiRevokeCertificate'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof pkiRevokeCertificate>>, {certificateId: string;data: PkiRevokeCertificateRequest}> = (props) => {
+          const {certificateId,data} = props ?? {};
+
+          return  pkiRevokeCertificate(certificateId,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PkiRevokeCertificateMutationResult = NonNullable<Awaited<ReturnType<typeof pkiRevokeCertificate>>>
+    export type PkiRevokeCertificateMutationBody = PkiRevokeCertificateRequest
+    export type PkiRevokeCertificateMutationError = PkiError
+
+    /**
+ * @summary Revoke a certificate.
+ */
+export const usePkiRevokeCertificate = <TError = PkiError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pkiRevokeCertificate>>, TError,{certificateId: string;data: PkiRevokeCertificateRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof pkiRevokeCertificate>>,
+        TError,
+        {certificateId: string;data: PkiRevokeCertificateRequest},
+        TContext
+      > => {
+      return useMutation(getPkiRevokeCertificateMutationOptions(options));
+    }
+
+/**
+ * The active and retiring public keys of purpose, as an RFC 7517 JSON Web Key Set, for an external verifier of tokens this deployment signs. Never includes a pending key, and never a private key or key reference. A purpose with no active or retiring key answers 200 with an empty key set, never an error.
+ * @summary Fetch the key-lifecycle layer's JWKS for one purpose.
+ */
+export const pkiGetKeyJwks = (
+    params: PkiGetKeyJwksParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<PkiJwks>(
+      {url: `/api/v1/pki/jwks`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getPkiGetKeyJwksQueryKey = (params?: PkiGetKeyJwksParams,) => {
+    return [
+    `/api/v1/pki/jwks`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getPkiGetKeyJwksQueryOptions = <TData = Awaited<ReturnType<typeof pkiGetKeyJwks>>, TError = unknown>(params: PkiGetKeyJwksParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof pkiGetKeyJwks>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getPkiGetKeyJwksQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof pkiGetKeyJwks>>> = ({ signal }) => pkiGetKeyJwks(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof pkiGetKeyJwks>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type PkiGetKeyJwksQueryResult = NonNullable<Awaited<ReturnType<typeof pkiGetKeyJwks>>>
+export type PkiGetKeyJwksQueryError = unknown
+
+
+/**
+ * @summary Fetch the key-lifecycle layer's JWKS for one purpose.
+ */
+
+export function usePkiGetKeyJwks<TData = Awaited<ReturnType<typeof pkiGetKeyJwks>>, TError = unknown>(
+ params: PkiGetKeyJwksParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof pkiGetKeyJwks>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getPkiGetKeyJwksQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * authorityId's own public key plus every ancestor authority's, up to and including the root, one JWK per authority keyed by its id, as an RFC 7517 JSON Web Key Set -- the X.509 layer's JWKS export, for pushing to an external system such as a data-plane cluster. Never a private key.
+ * @summary Fetch an authority's certificate-chain JWKS.
+ */
+export const pkiGetAuthorityJwks = (
+    authorityId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<PkiJwks>(
+      {url: `/api/v1/pki/authorities/${authorityId}/jwks`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getPkiGetAuthorityJwksQueryKey = (authorityId: string,) => {
+    return [
+    `/api/v1/pki/authorities/${authorityId}/jwks`
+    ] as const;
+    }
+
+
+export const getPkiGetAuthorityJwksQueryOptions = <TData = Awaited<ReturnType<typeof pkiGetAuthorityJwks>>, TError = PkiError>(authorityId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof pkiGetAuthorityJwks>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getPkiGetAuthorityJwksQueryKey(authorityId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof pkiGetAuthorityJwks>>> = ({ signal }) => pkiGetAuthorityJwks(authorityId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: authorityId !== null && authorityId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof pkiGetAuthorityJwks>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type PkiGetAuthorityJwksQueryResult = NonNullable<Awaited<ReturnType<typeof pkiGetAuthorityJwks>>>
+export type PkiGetAuthorityJwksQueryError = PkiError
+
+
+/**
+ * @summary Fetch an authority's certificate-chain JWKS.
+ */
+
+export function usePkiGetAuthorityJwks<TData = Awaited<ReturnType<typeof pkiGetAuthorityJwks>>, TError = PkiError>(
+ authorityId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof pkiGetAuthorityJwks>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getPkiGetAuthorityJwksQueryOptions(authorityId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The most recently generated Certificate Revocation List for authorityId, PEM encoded, exactly as CAService.GenerateCRL (or the periodic pki.crl_regenerate job) last wrote it -- this operation never generates one itself, it only serves the stored document.
+ * @summary Fetch an authority's current CRL.
+ */
+export const pkiGetAuthorityCrl = (
+    authorityId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<string>(
+      {url: `/api/v1/pki/authorities/${authorityId}/crl`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getPkiGetAuthorityCrlQueryKey = (authorityId: string,) => {
+    return [
+    `/api/v1/pki/authorities/${authorityId}/crl`
+    ] as const;
+    }
+
+
+export const getPkiGetAuthorityCrlQueryOptions = <TData = Awaited<ReturnType<typeof pkiGetAuthorityCrl>>, TError = PkiError>(authorityId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof pkiGetAuthorityCrl>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getPkiGetAuthorityCrlQueryKey(authorityId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof pkiGetAuthorityCrl>>> = ({ signal }) => pkiGetAuthorityCrl(authorityId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: authorityId !== null && authorityId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof pkiGetAuthorityCrl>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type PkiGetAuthorityCrlQueryResult = NonNullable<Awaited<ReturnType<typeof pkiGetAuthorityCrl>>>
+export type PkiGetAuthorityCrlQueryError = PkiError
+
+
+/**
+ * @summary Fetch an authority's current CRL.
+ */
+
+export function usePkiGetAuthorityCrl<TData = Awaited<ReturnType<typeof pkiGetAuthorityCrl>>, TError = PkiError>(
+ authorityId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof pkiGetAuthorityCrl>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getPkiGetAuthorityCrlQueryOptions(authorityId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Resolves token into the share it names -- through Service.AccessPublic, which resolves the request's tenant from the token itself before Service.Access's own ordinary rules ever run -- and, when access is granted, streams the resource behind the share's ResourceRef (resolved through the host's own sharing.ResourceResolver seam; see module.go's WithResourceResolver).
+ *
+ * Every refusal reason -- an unrecognized token, a revoked, expired or view-exhausted share, or a missing or wrong password -- answers with the exact same 404 body, per this module's outward-identical-answer rule: probing this endpoint teaches an outside caller nothing about which of those reasons actually applied. A resource that could not be opened AFTER access was already granted is a distinct, undisguised 502 -- see SharingError's own description and sharing.ErrResourceUnavailable's doc comment for why that case must not be folded into the same 404.
+ * @summary Access a share's content by bearer token.
+ */
+export const sharingAccessShare = (
+    params: SharingAccessShareParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<Blob>(
+      {url: `/api/v1/sharing/access`, method: 'GET',
+        params,
+        responseType: 'blob', signal
+    },
+      );
+    }
+
+
+
+
+export const getSharingAccessShareQueryKey = (params?: SharingAccessShareParams,) => {
+    return [
+    `/api/v1/sharing/access`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSharingAccessShareQueryOptions = <TData = Awaited<ReturnType<typeof sharingAccessShare>>, TError = SharingError>(params: SharingAccessShareParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingAccessShare>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSharingAccessShareQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof sharingAccessShare>>> = ({ signal }) => sharingAccessShare(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof sharingAccessShare>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SharingAccessShareQueryResult = NonNullable<Awaited<ReturnType<typeof sharingAccessShare>>>
+export type SharingAccessShareQueryError = SharingError
+
+
+/**
+ * @summary Access a share's content by bearer token.
+ */
+
+export function useSharingAccessShare<TData = Awaited<ReturnType<typeof sharingAccessShare>>, TError = SharingError>(
+ params: SharingAccessShareParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingAccessShare>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSharingAccessShareQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * A thin translation of Service.Create: resourceRef is required and must be non-empty (sharing.resource_ref_required), forever, when true, is always refused (sharing.expiry_required -- the module's this the most common source of data leaks, and this surface must never be able to bypass that refusal), maxViews, when given, must be positive (sharing.invalid_max_views), and expiresAt, when omitted, resolves through the tenant's configured default (falling back to a fixed default when none is configured). An expiresAt that IS given must lie strictly in the future and no more than 30 days from now -- the platform's maximum share lifetime, the same ceiling applies to the default -- or it is refused with sharing.expiry_out_of_range, so a far-future timestamp can never smuggle in the effectively-never-expiring link the module forbids. token is returned inside the response body exactly once and is never retrievable again by any other operation on this surface -- not even sharing_getShare, whose response carries no token field at all.
+ * @summary Create a new share link in the caller's tenant.
+ */
+export const sharingCreateShare = (
+    sharingCreateShareRequest: SharingCreateShareRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SharingCreateShareResponse>(
+      {url: `/api/v1/sharing/shares`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: sharingCreateShareRequest, signal
+    },
+      );
+    }
+
+
+
+export const getSharingCreateShareMutationOptions = <TError = SharingError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sharingCreateShare>>, TError,{data: SharingCreateShareRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof sharingCreateShare>>, TError,{data: SharingCreateShareRequest}, TContext> => {
+
+const mutationKey = ['sharingCreateShare'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof sharingCreateShare>>, {data: SharingCreateShareRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  sharingCreateShare(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SharingCreateShareMutationResult = NonNullable<Awaited<ReturnType<typeof sharingCreateShare>>>
+    export type SharingCreateShareMutationBody = SharingCreateShareRequest
+    export type SharingCreateShareMutationError = SharingError
+
+    /**
+ * @summary Create a new share link in the caller's tenant.
+ */
+export const useSharingCreateShare = <TError = SharingError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sharingCreateShare>>, TError,{data: SharingCreateShareRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof sharingCreateShare>>,
+        TError,
+        {data: SharingCreateShareRequest},
+        TContext
+      > => {
+      return useMutation(getSharingCreateShareMutationOptions(options));
+    }
+
+/**
+ * Metadata only, exactly like storage_listObjects' own listing promise: no access log, no token (a share's token is returned exactly once, by sharing_createShare, and is never derivable from any stored value this surface could serve).
+ * Keyset-paginated, following storage_listObjects' own keyset-cursor shape: the page returns up to limit shares (1-200, default 50) ordered newest first, and the caller echoes the last row's id as the next page's beforeId. A row inserted between two fetches shifts nothing. A beforeId naming no share of the caller's tenant -- a cursor that never existed, or another tenant's share -- reports 404, indistinguishable on purpose (a share has no deletion path, so a cursor names a row or nothing at all). Revoked and expired shares stay listed: an owner-facing listing must still show what happened to a share that is gone.
+ * @summary List the caller's tenant's shares, newest first.
+ */
+export const sharingListShares = (
+    params?: SharingListSharesParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SharingListSharesResponse>(
+      {url: `/api/v1/sharing/shares`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getSharingListSharesQueryKey = (params?: SharingListSharesParams,) => {
+    return [
+    `/api/v1/sharing/shares`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSharingListSharesQueryOptions = <TData = Awaited<ReturnType<typeof sharingListShares>>, TError = SharingError>(params?: SharingListSharesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingListShares>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSharingListSharesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof sharingListShares>>> = ({ signal }) => sharingListShares(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof sharingListShares>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SharingListSharesQueryResult = NonNullable<Awaited<ReturnType<typeof sharingListShares>>>
+export type SharingListSharesQueryError = SharingError
+
+
+/**
+ * @summary List the caller's tenant's shares, newest first.
+ */
+
+export function useSharingListShares<TData = Awaited<ReturnType<typeof sharingListShares>>, TError = SharingError>(
+ params?: SharingListSharesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingListShares>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSharingListSharesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * A thin translation of Service.Get. Carries no token (see sharing_createShare's own description) and no access log (see sharing_listShareAccessLog).
+ * @summary Get one share's own metadata.
+ */
+export const sharingGetShare = (
+    shareId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SharingShare>(
+      {url: `/api/v1/sharing/shares/${shareId}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getSharingGetShareQueryKey = (shareId: string,) => {
+    return [
+    `/api/v1/sharing/shares/${shareId}`
+    ] as const;
+    }
+
+
+export const getSharingGetShareQueryOptions = <TData = Awaited<ReturnType<typeof sharingGetShare>>, TError = SharingError>(shareId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingGetShare>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSharingGetShareQueryKey(shareId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof sharingGetShare>>> = ({ signal }) => sharingGetShare(shareId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: shareId !== null && shareId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof sharingGetShare>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SharingGetShareQueryResult = NonNullable<Awaited<ReturnType<typeof sharingGetShare>>>
+export type SharingGetShareQueryError = SharingError
+
+
+/**
+ * @summary Get one share's own metadata.
+ */
+
+export function useSharingGetShare<TData = Awaited<ReturnType<typeof sharingGetShare>>, TError = SharingError>(
+ shareId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingGetShare>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSharingGetShareQueryOptions(shareId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * A thin translation of Service.Revoke, followed by a Service.Get of the same row to return its now-revoked state -- Revoke itself returns no value. Idempotent, matching Service.Revoke's own contract: revoking an already-revoked share still answers 200 with its current (unchanged) state, never a 404 or a 409. Revocation takes effect on the very next check against /api/v1/sharing/access -- there is no cache anywhere in this module to invalidate, so revocation and a spent view take effect on the very next access check.
+ * @summary Revoke a share, with immediate effect.
+ */
+export const sharingRevokeShare = (
+    shareId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SharingShare>(
+      {url: `/api/v1/sharing/shares/${shareId}/revoke`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getSharingRevokeShareMutationOptions = <TError = SharingError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sharingRevokeShare>>, TError,{shareId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof sharingRevokeShare>>, TError,{shareId: string}, TContext> => {
+
+const mutationKey = ['sharingRevokeShare'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof sharingRevokeShare>>, {shareId: string}> = (props) => {
+          const {shareId} = props ?? {};
+
+          return  sharingRevokeShare(shareId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SharingRevokeShareMutationResult = NonNullable<Awaited<ReturnType<typeof sharingRevokeShare>>>
+
+    export type SharingRevokeShareMutationError = SharingError
+
+    /**
+ * @summary Revoke a share, with immediate effect.
+ */
+export const useSharingRevokeShare = <TError = SharingError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sharingRevokeShare>>, TError,{shareId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof sharingRevokeShare>>,
+        TError,
+        {shareId: string},
+        TContext
+      > => {
+      return useMutation(getSharingRevokeShareMutationOptions(options));
+    }
+
+/**
+ * A thin translation of Service.ListAccessLog: every access attempt recorded against the share, granted or denied alike, per the module's mandatory every-access-is-logged rule -- an owner-facing "who viewed this and how many times" answer. Denied attempts are recorded too, and deliberately without distinguishing which of Access's refusal reasons applied (outcome is only ever "granted" or "denied"), so this owner-facing report cannot itself be scraped to learn what the outward-identical-answer rule requires an outside prober never learn.
+ * @summary List every recorded access attempt against a share, newest first.
+ */
+export const sharingListShareAccessLog = (
+    shareId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SharingListAccessLogResponse>(
+      {url: `/api/v1/sharing/shares/${shareId}/access-log`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getSharingListShareAccessLogQueryKey = (shareId: string,) => {
+    return [
+    `/api/v1/sharing/shares/${shareId}/access-log`
+    ] as const;
+    }
+
+
+export const getSharingListShareAccessLogQueryOptions = <TData = Awaited<ReturnType<typeof sharingListShareAccessLog>>, TError = SharingError>(shareId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingListShareAccessLog>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSharingListShareAccessLogQueryKey(shareId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof sharingListShareAccessLog>>> = ({ signal }) => sharingListShareAccessLog(shareId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: shareId !== null && shareId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof sharingListShareAccessLog>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SharingListShareAccessLogQueryResult = NonNullable<Awaited<ReturnType<typeof sharingListShareAccessLog>>>
+export type SharingListShareAccessLogQueryError = SharingError
+
+
+/**
+ * @summary List every recorded access attempt against a share, newest first.
+ */
+
+export function useSharingListShareAccessLog<TData = Awaited<ReturnType<typeof sharingListShareAccessLog>>, TError = SharingError>(
+ shareId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof sharingListShareAccessLog>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSharingListShareAccessLogQueryOptions(shareId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Create is the first step of the three-step upload lifecycle: it validates the declaration and records an uploading object whose uploadExpiresAt bounds how long the caller has to PUT the content. The declaration carries a positive declaredSize within the host's per-object ceiling, a non-empty declaredType (the server canonicalizes it and checks it against the host's media-type allowlist), an optional declaredChecksum of 64 lowercase hex characters, and an optional absolute retention deadline in the future and within the host's lifetime ceiling. The response is the upload descriptor: object metadata plus the deadline. Content itself never travels on this endpoint -- the upload and download endpoints carry bytes.
+ * @summary Declare an upload in the caller's tenant.
+ */
+export const storageCreateObject = (
+    storageCreateObjectRequest: StorageCreateObjectRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<StorageObject>(
+      {url: `/api/v1/storage/objects`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: storageCreateObjectRequest, signal
+    },
+      );
+    }
+
+
+
+export const getStorageCreateObjectMutationOptions = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageCreateObject>>, TError,{data: StorageCreateObjectRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof storageCreateObject>>, TError,{data: StorageCreateObjectRequest}, TContext> => {
+
+const mutationKey = ['storageCreateObject'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof storageCreateObject>>, {data: StorageCreateObjectRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  storageCreateObject(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StorageCreateObjectMutationResult = NonNullable<Awaited<ReturnType<typeof storageCreateObject>>>
+    export type StorageCreateObjectMutationBody = StorageCreateObjectRequest
+    export type StorageCreateObjectMutationError = StorageError
+
+    /**
+ * @summary Declare an upload in the caller's tenant.
+ */
+export const useStorageCreateObject = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageCreateObject>>, TError,{data: StorageCreateObjectRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof storageCreateObject>>,
+        TError,
+        {data: StorageCreateObjectRequest},
+        TContext
+      > => {
+      return useMutation(getStorageCreateObjectMutationOptions(options));
+    }
+
+/**
+ * Keyset-paginated: the page returns up to limit objects (1-200, default 50) ordered newest first, and the caller echoes the last row's id as the next page's beforeId. A row inserted between two fetches shifts nothing. A beforeId naming no completed object of the caller's tenant -- a cursor that never existed, one deleted since, or another tenant's object -- reports 404, indistinguishable on purpose. List returns metadata only: no item carries derivatives, because a list must never fan out one query per row.
+ * @summary List the caller's tenant's completed objects, newest first.
+ */
+export const storageListObjects = (
+    params?: StorageListObjectsParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<StorageListObjectsResponse>(
+      {url: `/api/v1/storage/objects`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getStorageListObjectsQueryKey = (params?: StorageListObjectsParams,) => {
+    return [
+    `/api/v1/storage/objects`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getStorageListObjectsQueryOptions = <TData = Awaited<ReturnType<typeof storageListObjects>>, TError = StorageError>(params?: StorageListObjectsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof storageListObjects>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStorageListObjectsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof storageListObjects>>> = ({ signal }) => storageListObjects(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof storageListObjects>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StorageListObjectsQueryResult = NonNullable<Awaited<ReturnType<typeof storageListObjects>>>
+export type StorageListObjectsQueryError = StorageError
+
+
+/**
+ * @summary List the caller's tenant's completed objects, newest first.
+ */
+
+export function useStorageListObjects<TData = Awaited<ReturnType<typeof storageListObjects>>, TError = StorageError>(
+ params?: StorageListObjectsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof storageListObjects>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStorageListObjectsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The full metadata of a completed object of the caller's tenant, including its derivatives -- an empty array when none have been derived yet. Uploading rows are not visible here (their descriptor was the create response), and deleting rows are not visible anywhere on this surface: both answer 404 like ids that never existed.
+ * @summary Get one completed object's metadata.
+ */
+export const storageGetObject = (
+    objectId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<StorageObject>(
+      {url: `/api/v1/storage/objects/${objectId}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getStorageGetObjectQueryKey = (objectId: string,) => {
+    return [
+    `/api/v1/storage/objects/${objectId}`
+    ] as const;
+    }
+
+
+export const getStorageGetObjectQueryOptions = <TData = Awaited<ReturnType<typeof storageGetObject>>, TError = StorageError>(objectId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof storageGetObject>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStorageGetObjectQueryKey(objectId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof storageGetObject>>> = ({ signal }) => storageGetObject(objectId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: objectId !== null && objectId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof storageGetObject>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StorageGetObjectQueryResult = NonNullable<Awaited<ReturnType<typeof storageGetObject>>>
+export type StorageGetObjectQueryError = StorageError
+
+
+/**
+ * @summary Get one completed object's metadata.
+ */
+
+export function useStorageGetObject<TData = Awaited<ReturnType<typeof storageGetObject>>, TError = StorageError>(
+ objectId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof storageGetObject>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStorageGetObjectQueryOptions(objectId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Deletion removes the object's bytes, every derivative's bytes and all of its rows, and is irreversible. An object still uploading reports 409: only the expiry sweep reclaims uploads, once their window closes. An object already deleting -- an interrupted delete, which a mid-protocol store failure can leave behind -- is resumed to completion and answers 204. An id naming no completed or deleting object of the caller's tenant -- never created, already deleted, or another tenant's -- reports 404, indistinguishable on purpose, so a repeated delete answers 404 after the first 204.
+ * @summary Permanently delete an object of the caller's tenant.
+ */
+export const storageDeleteObject = (
+    objectId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/storage/objects/${objectId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getStorageDeleteObjectMutationOptions = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageDeleteObject>>, TError,{objectId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof storageDeleteObject>>, TError,{objectId: string}, TContext> => {
+
+const mutationKey = ['storageDeleteObject'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof storageDeleteObject>>, {objectId: string}> = (props) => {
+          const {objectId} = props ?? {};
+
+          return  storageDeleteObject(objectId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StorageDeleteObjectMutationResult = NonNullable<Awaited<ReturnType<typeof storageDeleteObject>>>
+
+    export type StorageDeleteObjectMutationError = StorageError
+
+    /**
+ * @summary Permanently delete an object of the caller's tenant.
+ */
+export const useStorageDeleteObject = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageDeleteObject>>, TError,{objectId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof storageDeleteObject>>,
+        TError,
+        {objectId: string},
+        TContext
+      > => {
+      return useMutation(getStorageDeleteObjectMutationOptions(options));
+    }
+
+/**
+ * The second step of the upload lifecycle: the request body is the object's raw bytes, streamed. The upload binds to the declaration: it is accepted only while the object is uploading and before its uploadExpiresAt, and the body's length must match the declared size exactly -- a Content-Length that disagrees with the declared size is a 400, and a stream that ends early or overruns is a 409 once the bytes are counted against the declaration. The content is deliberately NOT inspected here: the media type was declared at create and is probed from the stored bytes at complete, and the declared checksum is verified there too, so this endpoint stays a dumb byte pipe. A caller that skips it and completes directly gets content_missing.
+ * @summary Upload one declared object's bytes.
+ */
+export const storageUploadObjectContent = (
+    objectId: string,
+    storageUploadObjectContentBody: Blob,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/storage/objects/${objectId}/content`, method: 'PUT',
+      headers: {'Content-Type': 'application/octet-stream', },
+      data: storageUploadObjectContentBody, signal
+    },
+      );
+    }
+
+
+
+export const getStorageUploadObjectContentMutationOptions = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageUploadObjectContent>>, TError,{objectId: string;data: Blob}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof storageUploadObjectContent>>, TError,{objectId: string;data: Blob}, TContext> => {
+
+const mutationKey = ['storageUploadObjectContent'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof storageUploadObjectContent>>, {objectId: string;data: Blob}> = (props) => {
+          const {objectId,data} = props ?? {};
+
+          return  storageUploadObjectContent(objectId,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StorageUploadObjectContentMutationResult = NonNullable<Awaited<ReturnType<typeof storageUploadObjectContent>>>
+    export type StorageUploadObjectContentMutationBody = Blob
+    export type StorageUploadObjectContentMutationError = StorageError
+
+    /**
+ * @summary Upload one declared object's bytes.
+ */
+export const useStorageUploadObjectContent = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageUploadObjectContent>>, TError,{objectId: string;data: Blob}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof storageUploadObjectContent>>,
+        TError,
+        {objectId: string;data: Blob},
+        TContext
+      > => {
+      return useMutation(getStorageUploadObjectContentMutationOptions(options));
+    }
+
+/**
+ * The raw bytes of a completed object of the caller's tenant, served with the media type probed from the bytes at complete time (the sanitized, metadata-stripped form). Only completed objects are readable: uploading and deleting rows answer 404 like everything else this surface hides.
+ * @summary Stream a completed object's bytes.
+ */
+export const storageGetObjectContent = (
+    objectId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<Blob>(
+      {url: `/api/v1/storage/objects/${objectId}/content`, method: 'GET',
+        responseType: 'blob', signal
+    },
+      );
+    }
+
+
+
+
+export const getStorageGetObjectContentQueryKey = (objectId: string,) => {
+    return [
+    `/api/v1/storage/objects/${objectId}/content`
+    ] as const;
+    }
+
+
+export const getStorageGetObjectContentQueryOptions = <TData = Awaited<ReturnType<typeof storageGetObjectContent>>, TError = StorageError>(objectId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof storageGetObjectContent>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStorageGetObjectContentQueryKey(objectId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof storageGetObjectContent>>> = ({ signal }) => storageGetObjectContent(objectId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: objectId !== null && objectId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof storageGetObjectContent>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StorageGetObjectContentQueryResult = NonNullable<Awaited<ReturnType<typeof storageGetObjectContent>>>
+export type StorageGetObjectContentQueryError = StorageError
+
+
+/**
+ * @summary Stream a completed object's bytes.
+ */
+
+export function useStorageGetObjectContent<TData = Awaited<ReturnType<typeof storageGetObjectContent>>, TError = StorageError>(
+ objectId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof storageGetObjectContent>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStorageGetObjectContentQueryOptions(objectId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The last step of the upload lifecycle. Complete revalidates the stored bytes against the declaration -- their count against the declared size and their SHA-256 against the declared checksum when one was given -- and probes their real media type, which must be on the module's allowlist and, when a type was declared, agree with it. Images are decoded within the module's pixel ceiling and sanitized: metadata such as EXIF/GPS is stripped before the bytes are finalized, and the stored content is replaced with the sanitized form, so the checksum and type verified are the sanitized bytes'. Only a row still uploading with its window open can be finalized, so a completion racing the window's end or a concurrent reclaim cannot commit behind them. The response is the finalized object's metadata; thumbnail derivation is enqueued asynchronously, and its result shows up by polling getObject's derivatives array.
+ * @summary Finalize a declared and uploaded object.
+ */
+export const storageCompleteObject = (
+    objectId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<StorageObject>(
+      {url: `/api/v1/storage/objects/${objectId}/complete`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getStorageCompleteObjectMutationOptions = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageCompleteObject>>, TError,{objectId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof storageCompleteObject>>, TError,{objectId: string}, TContext> => {
+
+const mutationKey = ['storageCompleteObject'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof storageCompleteObject>>, {objectId: string}> = (props) => {
+          const {objectId} = props ?? {};
+
+          return  storageCompleteObject(objectId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StorageCompleteObjectMutationResult = NonNullable<Awaited<ReturnType<typeof storageCompleteObject>>>
+
+    export type StorageCompleteObjectMutationError = StorageError
+
+    /**
+ * @summary Finalize a declared and uploaded object.
+ */
+export const useStorageCompleteObject = <TError = StorageError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof storageCompleteObject>>, TError,{objectId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof storageCompleteObject>>,
+        TError,
+        {objectId: string},
+        TContext
+      > => {
+      return useMutation(getStorageCompleteObjectMutationOptions(options));
+    }

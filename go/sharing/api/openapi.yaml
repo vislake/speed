@@ -49,18 +49,17 @@ info:
     tenant-listing Service.List) -- no business rule lives in this fragment
     or its handler that Service does not already enforce.
 
-    This fragment stays out of the application-wide
-    build/openapi/speed.yaml merge, following the same precedent org's and
-    storage's fragments already set: the access route serves raw bytes,
-    and while the /shares operations ARE typed JSON, this module still has
-    no in-workspace frontend consumer, so joining the orval-driven merge
-    (as notes', authn's and notification's fragments have) would cost a
-    regeneration nothing exercises.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section).
   version: 0.0.0
 paths:
   /api/v1/sharing/access:
     get:
       operationId: sharing_accessShare
+      tags: [sharing]
       summary: Access a share's content by bearer token.
       description: >-
         Resolves token into the share it names -- through
@@ -182,6 +181,7 @@ paths:
   /api/v1/sharing/shares:
     post:
       operationId: sharing_createShare
+      tags: [sharing]
       summary: Create a new share link in the caller's tenant.
       description: >-
         A thin translation of Service.Create: resourceRef is required and
@@ -238,6 +238,7 @@ paths:
                 $ref: '#/components/schemas/SharingError'
     get:
       operationId: sharing_listShares
+      tags: [sharing]
       summary: List the caller's tenant's shares, newest first.
       description: >-
         Metadata only, exactly like storage_listObjects' own listing
@@ -296,6 +297,7 @@ paths:
   /api/v1/sharing/shares/{shareId}:
     get:
       operationId: sharing_getShare
+      tags: [sharing]
       summary: Get one share's own metadata.
       description: >-
         A thin translation of Service.Get. Carries no token (see
@@ -325,6 +327,7 @@ paths:
   /api/v1/sharing/shares/{shareId}/revoke:
     post:
       operationId: sharing_revokeShare
+      tags: [sharing]
       summary: Revoke a share, with immediate effect.
       description: >-
         A thin translation of Service.Revoke, followed by a Service.Get of
@@ -354,6 +357,7 @@ paths:
   /api/v1/sharing/shares/{shareId}/access-log:
     get:
       operationId: sharing_listShareAccessLog
+      tags: [sharing]
       summary: List every recorded access attempt against a share, newest first.
       description: >-
         A thin translation of Service.ListAccessLog: every access attempt

@@ -264,7 +264,7 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, billing, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + cases + smilesim + authn + notification + billing).
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, billing, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, all thirteen fragments -- the ten platform-module fragments admin, ai-gateway, authn, billing, integration, notification, org, pki, sharing and storage plus the reference app's own notes, cases and smilesim).
     # The backend half of the contract-change flow (edit the spec,
     # regenerate, compile failures reveal every handler to fix) is real
     # for the surfaces that ship a fragment: this task runs oapi-codegen,
@@ -284,31 +284,24 @@ tasks:
     # header).
     #
     # The frontend half of the api:gen promise is live for every fragment
-    # in the merged document: the api:merge dependency below joins the
-    # notes, cases, smilesim, authn, notification and billing fragments
-    # into build/openapi/speed.yaml, and the orval leg below regenerates
-    # the @speed/api-sdk package from that merged document -- orval
+    # in the merged document: the api:merge dependency below joins every
+    # platform module's fragment -- admin, ai-gateway, authn, billing,
+    # integration, notification, org, pki, sharing and storage -- plus the
+    # reference app's own notes, cases and smilesim fragments into
+    # build/openapi/speed.yaml, and the orval leg below regenerates the
+    # @speed/api-sdk package from that merged document -- orval
     # pinned at 8.17.0 and run from web/ via pnpm dlx (orval is never a
     # workspace dependency), followed by
     # web/scripts/orval-nodenext-fixup.mjs -- see that package's AGENTS.md
-    # for the seam and the fixup's why. notification's fragment feeds the
-    # merge and orval like authn's, because its operations are
-    # self-service surfaces a consumer shell's SDK calls; billing's joined
-    # because the credit view's balance and ledger reads are an
-    # in-workspace web caller of its two operations; the cases and
-    # smilesim fragments joined because they are the reference app's own
-    # case-domain and smile-simulation surfaces, the operations the P3
-    # web UI calls. org's, storage's, sharing's, pki's, integration's and
-    # ai-gateway's fragments feed neither the merge nor orval:
-    # backend-only, each without an in-workspace web consumer -- org's
-    # and storage's frontend legs are deferred in their own AGENTS.md
-    # deferral tables, sharing's Deferred list names the same reason (its
-    # public access route is a browser-navigated link, not a call a
-    # generated SDK hook would ever make), pki's Known limitations
-    # section names the identical shape, integration's one consumer is
-    # the reference app's own Go HTTP client (apikey_flow_test.go), and
-    # ai-gateway's consumers are host-side router gates and the reference
-    # app's own Go HTTP tests (ai_gateway_flow_test.go). The redocly
+    # for the seam and the fixup's why. Every platform module with an HTTP
+    # fragment belongs to the merged document and the generated SDK: the
+    # api-contract consistency gates pin the generated surface, which does
+    # not rot from being uncalled, and whether a surface has an
+    # in-workspace web consumer is a consumption-proof question, not a
+    # merge-membership criterion (docs/internal/21-api-contract.md). The
+    # cases and smilesim fragments joined because they are the reference
+    # app's own case-domain and smile-simulation surfaces, the operations
+    # the P3 web UI calls. The redocly
     # merge of the fragments into build/openapi/speed.yaml, and its spec
     # lint, live in the api:merge task below -- api:gen DEPENDS on
     # api:merge (deps above), because the merged document is the frontend
@@ -388,9 +381,10 @@ tasks:
     # Each module fragment still generates its own backend artifacts
     # independently, but the MERGED document is a real release artifact
     # (build/openapi/speed.yaml, committed -- see .gitignore's carve-out)
-    # joining the fragments whose operations the generated SDK or a
-    # consumer shell calls: notes, authn, notification, cases, smilesim
-    # and billing. It is also the frontend leg's input: api:gen depends
+    # joining the ten platform-module fragments (admin, ai-gateway, authn,
+    # billing, integration, notification, org, pki, sharing and storage)
+    # plus the reference app's own three (notes, cases and smilesim). It
+    # is also the frontend leg's input: api:gen depends
     # on this task (see above), so a fragment edit regenerates through a
     # fresh merge rather than a stale committed speed.yaml. The merge
     # itself stays independent -- api:merge never depends on api:gen.
@@ -418,6 +412,13 @@ tasks:
         go/authn/api/openapi.yaml
         go/notification/api/openapi.yaml
         go/billing/api/openapi.yaml
+        go/admin/api/openapi.yaml
+        go/ai-gateway/api/openapi.yaml
+        go/integration/api/openapi.yaml
+        go/org/api/openapi.yaml
+        go/pki/api/openapi.yaml
+        go/sharing/api/openapi.yaml
+        go/storage/api/openapi.yaml
         -o build/openapi/speed.yaml
       - node web/scripts/redocly-join-fixup.mjs
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
