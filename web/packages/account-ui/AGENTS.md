@@ -10,9 +10,10 @@ route that completes a binding), and `MfaSection` (the
 step-up-gated TOTP authenticator + recovery-codes setup). The package
 sits one step above `@speed/auth-ui`'s tier: reads go through the
 @tanstack/react-query hooks generated into `@speed/api-sdk` over the
-host's QueryClient (the shared-QueryClient contract of
-docs/internal/21), and writes through the generated mutations over the
-same `bindRequestFn` seam. Two surfaces take the `@speed/auth-core`
+host's QueryClient (the shared-QueryClient contract: one host-bound
+QueryClient, never package-constructed), and writes through the
+generated mutations over the same `bindRequestFn` seam. Two surfaces
+take the `@speed/auth-core`
 session as a required prop for exactly one session operation each (the
 add area's authorize-URL request; the step-up challenge dialog's
 verification); two take no props at all.
@@ -39,7 +40,7 @@ verification); two take no props at all.
   never hand-written query keys.
 - **Every built-in string is bilingual and bundled.** All text renders
   from the `account-ui` namespace (`ACCOUNT_UI_NAMESPACE`, one
-  `zh-CN.json` and one `en-US.json` under `src/locales/`, 111 identical
+  `zh-CN.json` and one `en-US.json` under `src/locales/`, identical
   leaf keys per language), registered by the host exactly once through
   `@speed/i18n` alongside the `ui-kit` namespace — the confirm-again
   label of the armed danger dialog and the `EmptyState` texts are

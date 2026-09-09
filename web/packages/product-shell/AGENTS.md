@@ -3,7 +3,7 @@
 ## What this package is
 
 The tenant-facing assembly shell — the top of the dependency graph on the
-web side (docs/internal/12-frontend.md's shell tier). It composes three
+web side. It composes three
 packages that must never import each other into one ready-to-copy front
 door: `@speed/layout-kit`'s `AppShell` (the authenticated frame),
 `@speed/auth-ui`'s `SignInScreen`/`SignOutButton`/`SessionEndedScreen`

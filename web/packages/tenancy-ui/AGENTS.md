@@ -130,8 +130,8 @@ Consumers wiring `TenantSwitcher` must (all documented in the README
 quick start): pass the current tenant from their own data source
 (`currentTenantId`), react to `onSwitched` by refetching the switched
 tenant's data and removing the previous tenant's query cache
-(`queryClient.removeQueries` under the tenant-namespaced key rule of
-docs/internal/12-frontend.md), and re-attach `/me`-derived permission
+(`queryClient.removeQueries` over the tenant-namespaced query keys),
+and re-attach `/me`-derived permission
 lists after a commit. None of that happens here, by design.
 
 One behavioural note for hosts that mount more than one `TenantSwitcher`
