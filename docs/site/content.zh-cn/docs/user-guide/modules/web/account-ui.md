@@ -113,8 +113,6 @@ react-query 的重试与缓存策略是宿主自己的,绑定回合也是:添加
 
 ## Source
 
-- 包 README:
-  [web/packages/account-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/account-ui/README.md) —— 权威文档(导出、props 表、错误码白名单、可访问性、测试装置)
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)
 - 相关包页:[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)、[tenancy-ui](/zh-cn/docs/user-guide/modules/web/tenancy-ui/)

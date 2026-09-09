@@ -128,8 +128,5 @@ functions, request/response types and per-module error envelopes:
 
 ## Source
 
-- [api-sdk README](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/README.md) —
-  the generated-surface membership, the regeneration commands and the
-  consumption status.
 - [api-sdk AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/AGENTS.md) —
   the package's authoritative contract.

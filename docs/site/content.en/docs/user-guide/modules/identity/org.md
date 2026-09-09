@@ -129,5 +129,4 @@ unwired.
 
 - [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md) — the authoritative document (tree shape, invitations, seams, concurrency, rules)
 - HTTP fragment: [go/org/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/org/api/openapi.yaml)
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)
 - Related: the domain guides [Identity and access](/docs/user-guide/domains/identity-access/) and [Tenancy and organizations](/docs/user-guide/domains/tenancy-and-org/), and the group pages [authn](/docs/user-guide/modules/identity/authn/) and [rbac](/docs/user-guide/modules/identity/rbac/)

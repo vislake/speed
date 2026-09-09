@@ -118,5 +118,4 @@ principal 变成租户上下文。authn 自己的子树直接从
 
 - [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md)——权威文档(规则、接缝、已知限制)
 - HTTP 片段:[go/authn/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/authn/api/openapi.yaml)
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)
 - 相关:域指南[身份与访问](/zh-cn/docs/user-guide/domains/identity-access/)、中间件的另一半[tenancy](/zh-cn/docs/user-guide/modules/core/tenancy/)、密钥源[pki](/zh-cn/docs/user-guide/modules/services/pki/),以及本组页面[rbac](/zh-cn/docs/user-guide/modules/identity/rbac/)与[org](/zh-cn/docs/user-guide/modules/identity/org/)

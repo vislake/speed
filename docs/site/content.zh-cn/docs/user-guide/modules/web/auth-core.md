@@ -128,5 +128,4 @@ attachSession(session)
 
 ## Source
 
-- [auth-core README](https://github.com/vislake/speed/blob/main/web/packages/auth-core/README.md)——会话契约、失败契约与已知局限。
 - [auth-core AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md)——包的权威契约。

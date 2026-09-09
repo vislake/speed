@@ -145,8 +145,6 @@ matches the sign-in surface reuse the auth-ui bundle's text verbatim.
 
 ## Source
 
-- Package README:
-  [web/packages/account-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/account-ui/README.md) — the authoritative document (exports, props tables, error whitelist, accessibility, test rig)
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [authn](/docs/user-guide/modules/identity/authn/) module page; error codes under [authn](/docs/user-guide/error-codes/#authn)
 - Related package pages: [auth-ui](/docs/user-guide/modules/web/auth-ui/), [tenancy-ui](/docs/user-guide/modules/web/tenancy-ui/)

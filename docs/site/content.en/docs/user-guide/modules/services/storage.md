@@ -137,5 +137,4 @@ own cadence.
 ### Source
 
 - [go/storage/AGENTS.md](https://github.com/vislake/speed/blob/main/go/storage/AGENTS.md) — the authoritative document (lifecycle, revalidation pipeline, key grammar, known limitations, deferred list)
-- Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
 - Related pages: [Platform services](../), [notification](../notification/), the domain guide [Storage, sharing and AI](../../../domains/storage-sharing-and-ai/)

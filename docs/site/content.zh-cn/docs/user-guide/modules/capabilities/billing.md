@@ -119,5 +119,4 @@ if _, err = b.Credits().Confirm(ctx, res.ID); err != nil { /* 改走 Refund */ }
 ### 出处
 
 - [go/billing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md)——权威文档(领域模型、账本语义、网关层、限制)
-- 设计依据:[docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
 - 相关页面:[metering](/zh-cn/docs/user-guide/modules/services/metering/)、[ai-gateway](/zh-cn/docs/user-guide/modules/capabilities/ai-gateway/)、域指南[计量与账单](/zh-cn/docs/user-guide/domains/billing-metering/)

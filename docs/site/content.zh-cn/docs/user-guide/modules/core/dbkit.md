@@ -126,4 +126,3 @@ if err := reg.Apply(ctx, db, dbkit.DialectPostgres); err != nil {
 - [dbkit AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/AGENTS.md)
 - [dbkit `example_test.go`](https://github.com/vislake/speed/blob/main/go/dbkit/example_test.go)
 - [dbkit/audit AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/audit/AGENTS.md)
-- 设计:[docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)

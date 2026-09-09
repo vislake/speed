@@ -125,5 +125,4 @@ bindRequestFn(
 
 ## Source
 
-- [api-client README](https://github.com/vislake/speed/blob/main/web/packages/api-client/README.md)——完整公开面、快速开始与"刻意不在这里"清单。
 - [api-client AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md)——包的权威契约,包括 config hooks 的缓存契约。

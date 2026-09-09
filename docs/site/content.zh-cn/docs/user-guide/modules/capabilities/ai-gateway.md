@@ -120,5 +120,4 @@ _ = json.Unmarshal(job.Result.Data, &res)
 ### 出处
 
 - [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md)——权威文档(provider 接缝、凭据库、异步管线、SSRF 姿态、限制)
-- 设计依据:[docs/internal/08-ai-gateway.md](https://github.com/vislake/speed/blob/main/docs/internal/08-ai-gateway.md)
 - 相关页面:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/)、[metering](/zh-cn/docs/user-guide/modules/services/metering/)、[storage](/zh-cn/docs/user-guide/modules/services/storage/)、域指南[存储、分享与 AI](/zh-cn/docs/user-guide/domains/storage-sharing-and-ai/)

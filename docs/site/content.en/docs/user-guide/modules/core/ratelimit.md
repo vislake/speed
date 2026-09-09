@@ -114,4 +114,3 @@ one protocol helper the package ships, `RetryAfterSeconds(remaining)`
 ## Source
 
 - [ratelimit AGENTS.md](https://github.com/vislake/speed/blob/main/go/ratelimit/AGENTS.md)
-- Design: [docs/internal/11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md) (rate-limiting section)

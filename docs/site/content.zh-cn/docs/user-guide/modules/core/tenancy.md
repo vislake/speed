@@ -117,4 +117,3 @@ if err != nil {
 ## Source
 
 - [tenancy AGENTS.md](https://github.com/vislake/speed/blob/main/go/tenancy/AGENTS.md)
-- 设计:[docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)

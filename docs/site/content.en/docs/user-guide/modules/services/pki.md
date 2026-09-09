@@ -131,5 +131,4 @@ provider subpackage first).
 ### Source
 
 - [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md) — the authoritative document (signer seam, lifecycle, X.509 layer, residuals, limitations)
-- Design rationale: [docs/internal/22-pki.md](https://github.com/vislake/speed/blob/main/docs/internal/22-pki.md)
 - Related pages: [Platform services](../), [storage](../storage/)

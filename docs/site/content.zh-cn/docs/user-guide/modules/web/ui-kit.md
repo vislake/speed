@@ -116,6 +116,5 @@ export function App() {
 
 ## Source
 
-- [web/packages/ui-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/README.md)——权威文档(逐组件契约、文案键表、无障碍说明)
 - [web/packages/ui-kit/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/AGENTS.md)——包规则与记录在案的决定
 - 相关:它映射的令牌树在 [tokens](/zh-cn/docs/user-guide/modules/web/tokens/);复用其 `EmptyState` 的骨架在 [layout-kit](/zh-cn/docs/user-guide/modules/web/layout-kit/);领域叙事见[构建前端](/zh-cn/docs/user-guide/domains/frontend-building/)

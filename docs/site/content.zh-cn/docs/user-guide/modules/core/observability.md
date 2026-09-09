@@ -92,4 +92,3 @@ mux.Handle("/", obs.Middleware(appHandler)) // 在 tenancy.Middleware 之外,按
 ## Source
 
 - [observability AGENTS.md](https://github.com/vislake/speed/blob/main/go/observability/AGENTS.md)
-- 设计:[docs/internal/09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md)

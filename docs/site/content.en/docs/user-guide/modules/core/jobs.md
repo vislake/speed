@@ -148,4 +148,3 @@ func (h *ImageGenHandler) OnFailure(ctx context.Context, job *jobs.Job, cause er
 
 - [jobs AGENTS.md](https://github.com/vislake/speed/blob/main/go/jobs/AGENTS.md)
 - [jobs `example_test.go`](https://github.com/vislake/speed/blob/main/go/jobs/example_test.go)
-- Design: [docs/internal/09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md) (must-instrument metrics)

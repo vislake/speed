@@ -111,8 +111,6 @@ attachSession(session) // 宿主的 @speed/auth-core 会话,渲染之前
 
 ## Source
 
-- 包 README:
-  [web/packages/product-shell/README.md](https://github.com/vislake/speed/blob/main/web/packages/product-shell/README.md) —— 权威文档(宿主清单、分支、i18n、测试套件)
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 相关包页:[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)(登录家族与默认结束屏)、[tenancy-ui](/zh-cn/docs/user-guide/modules/web/tenancy-ui/)(`userMenu` 切换器)
 - 同级包 `@speed/layout-kit`(`AppShell` 外框与 `RouteGuard`)、`@speed/auth-core`(会话 hooks)与 `@speed/ui-kit`(主题)各在本组的页面

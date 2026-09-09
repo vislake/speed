@@ -114,6 +114,5 @@ token is the same call; layers compose because later overrides win.
 
 ## Source
 
-- [web/packages/tokens/README.md](https://github.com/vislake/speed/blob/main/web/packages/tokens/README.md) — the authoritative document (tree sections, parity table, merge semantics)
 - [web/packages/tokens/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/tokens/AGENTS.md) — package rules and recorded decisions
 - Related: the theme factory and components that consume this tree, [ui-kit](/docs/user-guide/modules/web/ui-kit/), and the frontend narrative in [Building the frontend](/docs/user-guide/domains/frontend-building/)

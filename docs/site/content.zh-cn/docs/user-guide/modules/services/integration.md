@@ -108,5 +108,4 @@ HTTP 面——`/api/v1/integration` 下十个操作(apikey
 ### 出处
 
 - [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md)——权威文档(key 生命周期、接缝、webhook 流水线、裁定、限制)
-- 设计依据:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
 - 相关页面:[平台服务](../)、[pki](../pki/)、[notification](../notification/)

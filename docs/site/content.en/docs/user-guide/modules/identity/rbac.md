@@ -135,6 +135,5 @@ strict, and an empty `Scope` is tenant-wide.
 ## Source
 
 - [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md) — the authoritative document (decision surface, cache, seams, rules)
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)
 - Related: the domain guide [Identity and access](/docs/user-guide/domains/identity-access/), and the group pages [authn](/docs/user-guide/modules/identity/authn/) and [org](/docs/user-guide/modules/identity/org/)
 

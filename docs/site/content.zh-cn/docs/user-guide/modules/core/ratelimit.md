@@ -91,4 +91,3 @@ return byAccount.Allowed && byIP.Allowed, nil
 ## Source
 
 - [ratelimit AGENTS.md](https://github.com/vislake/speed/blob/main/go/ratelimit/AGENTS.md)
-- 设计:[docs/internal/11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md)(限流一节)

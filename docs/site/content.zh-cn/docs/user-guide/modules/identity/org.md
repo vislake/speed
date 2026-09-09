@@ -104,5 +104,4 @@ org.subject_unresolved`)。
 
 - [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md)——权威文档(树形、邀请、接缝、并发、规则)
 - HTTP 片段:[go/org/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/org/api/openapi.yaml)
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)
 - 相关:域指南[身份与访问](/zh-cn/docs/user-guide/domains/identity-access/)与[租户与组织](/zh-cn/docs/user-guide/domains/tenancy-and-org/),以及本组页面[authn](/zh-cn/docs/user-guide/modules/identity/authn/)与[rbac](/zh-cn/docs/user-guide/modules/identity/rbac/)

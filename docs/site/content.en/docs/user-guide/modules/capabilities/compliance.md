@@ -150,5 +150,4 @@ owners that register no participant yet.
 ### Source
 
 - [go/compliance/AGENTS.md](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md) — the authoritative document (participant contract, partial-failure semantics, export delivery, limitations)
-- Design rationale: [docs/internal/10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)
 - Related pages: [sharing](/docs/user-guide/modules/capabilities/sharing/), [admin](/docs/user-guide/modules/capabilities/admin/), [dbkit](/docs/user-guide/modules/core/dbkit/) (audit trail and hard delete)

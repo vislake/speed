@@ -129,5 +129,4 @@ create/verify/resend) plus the hand-mounted stream.
 ### Source
 
 - [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md) — the authoritative document (delivery pipeline, consent machine, host seams, rules, not-implemented list)
-- Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
 - Related pages: [Platform services](../), the domain guide [Jobs and notifications](../../../domains/jobs-and-notifications/)

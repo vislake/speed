@@ -132,5 +132,4 @@ is built later, in `Attach`, after `Bootstrap` returns.
 ### Source
 
 - [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md) — the authoritative document (key lifecycle, seams, webhook pipeline, adjudications, limitations)
-- Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
 - Related pages: [Platform services](../), [pki](../pki/), [notification](../notification/)

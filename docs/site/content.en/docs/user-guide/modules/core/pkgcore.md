@@ -152,4 +152,3 @@ client must not see.
 
 - [pkgcore AGENTS.md](https://github.com/vislake/speed/blob/main/go/pkgcore/AGENTS.md)
 - [pkgcore `example_test.go`](https://github.com/vislake/speed/blob/main/go/pkgcore/example_test.go)
-- Design: [docs/internal/01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md), [03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md), [04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)

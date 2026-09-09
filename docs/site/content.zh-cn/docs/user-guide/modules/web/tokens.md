@@ -96,6 +96,5 @@ const tokens = deepMerge(defaultTokens, override)
 
 ## Source
 
-- [web/packages/tokens/README.md](https://github.com/vislake/speed/blob/main/web/packages/tokens/README.md)——权威文档(树分节、对等表、合并语义)
 - [web/packages/tokens/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/tokens/AGENTS.md)——包规则与记录在案的决定
 - 相关:消费这棵树的主题工厂与组件在 [ui-kit](/zh-cn/docs/user-guide/modules/web/ui-kit/);前端整体叙事见[构建前端](/zh-cn/docs/user-guide/domains/frontend-building/)

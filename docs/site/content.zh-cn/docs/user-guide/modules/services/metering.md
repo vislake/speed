@@ -114,5 +114,4 @@ if _, err := metering.Enqueue(ctx, tx, metering.UsageEvent{
 ### 出处
 
 - [go/metering/AGENTS.md](https://github.com/vislake/speed/blob/main/go/metering/AGENTS.md)——权威文档(可靠性级、outbox 语义、聚合、已知限制)
-- 设计依据:[docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
 - 相关页面:[平台服务](../)、域指南[计量与账单](../../../domains/billing-metering/)

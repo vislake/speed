@@ -135,5 +135,4 @@ arms the polling fallback, `billing.WithGateways(map)` or the registry's
 ### Source
 
 - [go/billing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md) — the authoritative document (domain model, ledger semantics, gateway layer, limitations)
-- Design rationale: [docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
 - Related pages: [metering](/docs/user-guide/modules/services/metering/), [ai-gateway](/docs/user-guide/modules/capabilities/ai-gateway/), the domain guide [Billing and metering](/docs/user-guide/domains/billing-metering/)

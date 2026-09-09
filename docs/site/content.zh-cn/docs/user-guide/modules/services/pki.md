@@ -104,5 +104,4 @@ err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject、有效期 */ })
 ### 出处
 
 - [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md)——权威文档(Signer 接缝、生命周期、X.509 层、残余面、限制)
-- 设计依据:[docs/internal/22-pki.md](https://github.com/vislake/speed/blob/main/docs/internal/22-pki.md)
 - 相关页面:[平台服务](../)、[storage](../storage/)

@@ -148,4 +148,3 @@ tenant" — deliberately indistinguishable.
 - [dbkit AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/AGENTS.md)
 - [dbkit `example_test.go`](https://github.com/vislake/speed/blob/main/go/dbkit/example_test.go)
 - [dbkit/audit AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/audit/AGENTS.md)
-- Design: [docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)

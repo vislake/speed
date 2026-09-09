@@ -147,5 +147,4 @@ metadata only, never the key.
 ### Source
 
 - [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md) — the authoritative document (provider seams, credential store, async pipeline, SSRF posture, limitations)
-- Design rationale: [docs/internal/08-ai-gateway.md](https://github.com/vislake/speed/blob/main/docs/internal/08-ai-gateway.md)
 - Related pages: [billing](/docs/user-guide/modules/capabilities/billing/), [metering](/docs/user-guide/modules/services/metering/), [storage](/docs/user-guide/modules/services/storage/), the domain guide [Storage, sharing and AI](/docs/user-guide/domains/storage-sharing-and-ai/)

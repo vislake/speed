@@ -136,4 +136,3 @@ tenantless calls still fail closed with `pkgcore.ErrNoTenant`.
 ## Source
 
 - [tenancy AGENTS.md](https://github.com/vislake/speed/blob/main/go/tenancy/AGENTS.md)
-- Design: [docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)

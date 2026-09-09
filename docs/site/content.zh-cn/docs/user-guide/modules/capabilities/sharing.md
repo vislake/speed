@@ -114,5 +114,4 @@ res, err := svc.Create(ctx, sharing.CreateParams{
 ### 出处
 
 - [go/sharing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md)——权威文档(五条规则、服务协议、租户解析、限制)
-- 设计依据:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)(sharing 节)
 - 相关页面:[storage](/zh-cn/docs/user-guide/modules/services/storage/)、[compliance](/zh-cn/docs/user-guide/modules/capabilities/compliance/)、域指南[存储、分享与 AI](/zh-cn/docs/user-guide/domains/storage-sharing-and-ai/)

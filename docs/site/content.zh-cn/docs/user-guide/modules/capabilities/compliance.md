@@ -123,5 +123,4 @@ _, err := c.Erasure().Erase(ctx, pkgcore.SubjectRef{
 ### 出处
 
 - [go/compliance/AGENTS.md](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md)——权威文档(参与者契约、部分失败语义、导出投递、限制)
-- 设计依据:[docs/internal/10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)
 - 相关页面:[sharing](/zh-cn/docs/user-guide/modules/capabilities/sharing/)、[admin](/zh-cn/docs/user-guide/modules/capabilities/admin/)、[dbkit](/zh-cn/docs/user-guide/modules/core/dbkit/)(审计轨迹与硬删除)

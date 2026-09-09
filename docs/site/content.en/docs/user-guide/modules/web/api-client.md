@@ -139,9 +139,6 @@ and `bindRequestFn` is a last-bind-wins single binding.
 
 ## Source
 
-- [api-client README](https://github.com/vislake/speed/blob/main/web/packages/api-client/README.md) —
-  the full public surface, the quick start and the "what is
-  deliberately not here" list.
 - [api-client AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md) —
   the package's authoritative contract, including the config hooks'
   caching contract.

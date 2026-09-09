@@ -137,6 +137,5 @@ shipped default.
 
 ## Source
 
-- [web/packages/ui-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/README.md) — the authoritative document (contracts, text keys, accessibility)
 - [web/packages/ui-kit/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/AGENTS.md) — package rules and recorded decisions
 - Related: the token tree it maps ([tokens](/docs/user-guide/modules/web/tokens/)), the chrome that reuses its `EmptyState` ([layout-kit](/docs/user-guide/modules/web/layout-kit/)), and the [frontend-building](/docs/user-guide/domains/frontend-building/) domain guide

@@ -124,6 +124,5 @@ function AppContent() {
 
 ## Source
 
-- [web/packages/layout-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/README.md)——权威文档(prop 表、门行为、文案键)
 - [web/packages/layout-kit/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/AGENTS.md)——包规则与记录在案的决定
 - 相关:它踩着的主题与 `EmptyState` 在 [ui-kit](/zh-cn/docs/user-guide/modules/web/ui-kit/);两者渲染所经的 i18n 实例在 [i18n](/zh-cn/docs/user-guide/modules/web/i18n/);领域叙事见[构建前端](/zh-cn/docs/user-guide/domains/frontend-building/)

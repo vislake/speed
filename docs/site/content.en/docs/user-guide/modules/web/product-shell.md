@@ -135,8 +135,6 @@ the quick start cannot drift from the API.
 
 ## Source
 
-- Package README:
-  [web/packages/product-shell/README.md](https://github.com/vislake/speed/blob/main/web/packages/product-shell/README.md) — the authoritative document (host checklist, branches, i18n, test suites)
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - Related package pages: [auth-ui](/docs/user-guide/modules/web/auth-ui/) (the sign-in family and default ended screen), [tenancy-ui](/docs/user-guide/modules/web/tenancy-ui/) (the `userMenu` switcher)
 - Sibling packages `@speed/layout-kit` (the `AppShell` frame and `RouteGuard`), `@speed/auth-core` (the session hooks) and `@speed/ui-kit` (theme) have their own pages in this group

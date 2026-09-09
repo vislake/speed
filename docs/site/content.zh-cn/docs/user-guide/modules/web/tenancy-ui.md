@@ -116,8 +116,6 @@ const tenants: TenantOption[] = [
 
 ## Source
 
-- 包 README:
-  [web/packages/tenancy-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/tenancy-ui/README.md) —— 权威文档(props 表、行为、错误码白名单、可访问性、测试装置)
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页(切换操作住在那里);错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)
 - 相关包页:[product-shell](/zh-cn/docs/user-guide/modules/web/product-shell/)(本组件的 `userMenu` 之家)、[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)

@@ -107,5 +107,4 @@ mux.Handle("/api/v1/notes",
 ## Source
 
 - [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md)——权威文档(决策面、缓存、接缝、规则)
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)
 - 相关:域指南[身份与访问](/zh-cn/docs/user-guide/domains/identity-access/),以及本组页面[authn](/zh-cn/docs/user-guide/modules/identity/authn/)与[org](/zh-cn/docs/user-guide/modules/identity/org/)

@@ -108,8 +108,6 @@ react-query 的重试与缓存策略是宿主自己的。套件编译并运行�
 
 ## Source
 
-- 包 README:
-  [web/packages/billing-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/billing-ui/README.md) —— 权威文档(表面行为、错误码白名单、可访问性、测试装置)
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 后端表面:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/) 模块页与域指南[计费与计量](/zh-cn/docs/user-guide/domains/billing-metering/);错误码见 [billing](/zh-cn/docs/user-guide/error-codes/#billing)
 - 同级包 `@speed/api-sdk`(生成 hooks)、`@speed/ui-kit` 与 `@speed/i18n` 各在本组的页面

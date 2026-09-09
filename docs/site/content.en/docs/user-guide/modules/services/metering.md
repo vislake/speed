@@ -136,5 +136,4 @@ and the billing-grade ingest.
 ### Source
 
 - [go/metering/AGENTS.md](https://github.com/vislake/speed/blob/main/go/metering/AGENTS.md) — the authoritative document (tiers, outbox semantics, aggregation, known limitations)
-- Design rationale: [docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
 - Related pages: [Platform services](../), the domain guide [Billing and metering](../../../domains/billing-metering/)

@@ -143,6 +143,5 @@ bootstrap.
 
 ## Source
 
-- [web/packages/layout-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/README.md) — the authoritative document (prop tables, gate behaviour, text keys)
 - [web/packages/layout-kit/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/AGENTS.md) — package rules and recorded decisions
 - Related: the theme and `EmptyState` it builds on ([ui-kit](/docs/user-guide/modules/web/ui-kit/)), the i18n instance both render through ([i18n](/docs/user-guide/modules/web/i18n/)), and the [frontend-building](/docs/user-guide/domains/frontend-building/) domain guide

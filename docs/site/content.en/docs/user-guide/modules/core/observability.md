@@ -115,4 +115,3 @@ refused before any provider is built.
 ## Source
 
 - [observability AGENTS.md](https://github.com/vislake/speed/blob/main/go/observability/AGENTS.md)
-- Design: [docs/internal/09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md)

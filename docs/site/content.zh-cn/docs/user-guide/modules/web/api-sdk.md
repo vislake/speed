@@ -112,5 +112,4 @@ import 重写成 nodenext 构建要求的显式 `.js` 形式——它存在,正�
 
 ## Source
 
-- [api-sdk README](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/README.md)——生成面的成员构成、再生成命令与消费状态。
 - [api-sdk AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/AGENTS.md)——包的权威契约。

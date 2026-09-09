@@ -136,8 +136,6 @@ auth-ui bundle's text.
 
 ## Source
 
-- Package README:
-  [web/packages/billing-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/billing-ui/README.md) — the authoritative document (surface behaviour, error whitelist, accessibility, test rig)
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [billing](/docs/user-guide/modules/capabilities/billing/) module page and the domain guide [Billing and metering](/docs/user-guide/domains/billing-metering/); error codes under [billing](/docs/user-guide/error-codes/#billing)
 - Sibling packages `@speed/api-sdk` (the generated hooks), `@speed/ui-kit` and `@speed/i18n` have their own pages in this group

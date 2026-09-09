@@ -146,8 +146,6 @@ machine packages it.
 
 ## Source
 
-- Package README:
-  [web/packages/auth-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/auth-ui/README.md) — the authoritative document (exports, props tables, error whitelist, accessibility, test rig)
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [authn](/docs/user-guide/modules/identity/authn/) module page; error codes under [authn](/docs/user-guide/error-codes/#authn)
 - Related package pages: [account-ui](/docs/user-guide/modules/web/account-ui/), [product-shell](/docs/user-guide/modules/web/product-shell/)

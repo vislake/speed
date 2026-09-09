@@ -145,5 +145,4 @@ single-view share.
 ### Source
 
 - [go/sharing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md) — the authoritative document (the five rules, serving protocol, tenant resolution, limitations)
-- Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md) (sharing section)
 - Related pages: [storage](/docs/user-guide/modules/services/storage/), [compliance](/docs/user-guide/modules/capabilities/compliance/), the domain guide [Storage, sharing and AI](/docs/user-guide/domains/storage-sharing-and-ai/)

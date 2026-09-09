@@ -149,8 +149,5 @@ All three re-render on every session transition.
 
 ## Source
 
-- [auth-core README](https://github.com/vislake/speed/blob/main/web/packages/auth-core/README.md) —
-  the session contract, the failure contract and the known
-  limitations.
 - [auth-core AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md) —
   the package's authoritative contract.

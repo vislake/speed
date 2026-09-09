@@ -141,8 +141,6 @@ committed switch, never for a failed one). Behaviour worth knowing:
 
 ## Source
 
-- Package README:
-  [web/packages/tenancy-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/tenancy-ui/README.md) — the authoritative document (props table, behaviour, error whitelist, accessibility, test rig)
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - The backend surface: the [authn](/docs/user-guide/modules/identity/authn/) module page (the switch operation lives there); error codes under [authn](/docs/user-guide/error-codes/#authn)
 - Related package pages: [product-shell](/docs/user-guide/modules/web/product-shell/) (the `userMenu` home of this component), [auth-ui](/docs/user-guide/modules/web/auth-ui/)

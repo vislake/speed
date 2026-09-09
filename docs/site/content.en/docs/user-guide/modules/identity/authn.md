@@ -140,5 +140,4 @@ wrapper.
 
 - [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md) — the authoritative document (rules, seams, known limitations)
 - HTTP fragment: [go/authn/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/authn/api/openapi.yaml)
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)
 - Related: the domain guide [Identity and access](/docs/user-guide/domains/identity-access/), the middleware's other half [tenancy](/docs/user-guide/modules/core/tenancy/), the key source [pki](/docs/user-guide/modules/services/pki/), and the group pages [rbac](/docs/user-guide/modules/identity/rbac/) and [org](/docs/user-guide/modules/identity/org/)
