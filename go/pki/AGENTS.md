@@ -214,8 +214,10 @@ integration may still change freely, and the reason it stays out):
 this exception.** It has a real, if indirect, consumer: `authn` consumes
 it through `KeySource`, and the reference app assembles `authn`. Its public
 API is held to the ordinary frozen-API standard -- including
-`Service.RevokeSigningKey`, `PromoteNow`, `ReclaimRetired` and
-`ExportJWKS`, even though none of them has a real caller yet either: they
+`PromoteNow`, `ReclaimRetired` and `ExportJWKS`, even though none of
+the three has a real caller yet (RevokeSigningKey does: the HTTP
+`PkiRevokeSigningKey` handler calls it, driven over the wire by
+`examples/reference-app/flowtests/pki_revoke_gate_flow_test.go`): they
 extend an already-frozen type (`Service`), not a still-exempt one
 (`CAService`), so the same discipline that governs
 `EnsurePurpose`/`ActiveSigner`/`VerificationKeys` governs these too.
