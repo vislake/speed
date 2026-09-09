@@ -114,5 +114,6 @@ describe('the entry export surface', () => {
       missingAcrossModules,
       'names a consumer cannot import from the package entry:',
     ).toEqual([])
-  })
+    // Whole-tree type-checking under coverage instrumentation outruns vitest's 5s default.
+  }, 30000)
 })
