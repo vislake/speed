@@ -163,7 +163,8 @@ func TestEnqueue_InvalidTask_ReturnsError(t *testing.T) {
 }
 
 // TestEnqueue_Get_HappyPath, TestGet_TenantIsolation and
-// TestCancel_TenantIsolation_And_Idempotency live in queue_conformance_test.go's
+// TestCancel_TenantIsolation_And_Idempotency live in
+// unittest/queue_conformance_test.go's
 // TestStandaloneQueue_ConformsToQueueContract, which drives the shared
 // go/jobs/queuetest.AssertConforms suite (its own "enqueue_get_happy_path",
 // "get_tenant_isolation" and "cancel_tenant_isolation_and_idempotency"
@@ -270,8 +271,9 @@ func (h *flakyHandler) OnFailure(context.Context, *Job, error) {
 
 // TestRetry_SucceedsAfterTransientFailures and
 // TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook live in
-// queue_conformance_test.go's TestStandaloneQueue_ConformsToQueueContract,
-// which drives the shared go/jobs/queuetest.AssertConforms suite (its own
+// unittest/queue_conformance_test.go's
+// TestStandaloneQueue_ConformsToQueueContract, which drives the shared
+// go/jobs/queuetest.AssertConforms suite (its own
 // "retry_succeeds_after_transient_failures" and
 // "dead_letter_exhausts_retries_and_invokes_failure_hook" subtests).
 // flakyHandler and countingFailureHandler stay defined below/above: both

@@ -13,10 +13,11 @@ import (
 // exercised where they ship. The module's unit gate measures each package
 // only through its own test binary, and AssertConforms is a shipped
 // contract check no code in this package ever invoked on its own: its two
-// call sites live in the jobs root package's and integration tier's test
-// binaries (queue_conformance_test.go there), whose runs instrument their
-// own packages, not queuetest. The factory below mirrors the standalone
-// call site's (jobs' own queue_conformance_test.go) -- SQLite-backed
+// call sites live in the module unittest directory's and the integration
+// tier's test binaries (both named queue_conformance_test.go -- go/jobs's
+// unittest/ and its integration_test/), whose runs instrument their own
+// packages, not queuetest. The factory below mirrors the standalone call
+// site's -- unittest/queue_conformance_test.go's SQLite-backed
 // StandaloneQueue with fast poll/backoff -- so this run doubles as the
 // same-package acceptance pin the fault tier's own tests already play for
 // assert_fails_closed.go (assert_fails_closed_test.go), against the real
@@ -26,8 +27,8 @@ import (
 
 // TestAssertConforms_StandaloneQueue runs the full conformance suite
 // against a real StandaloneQueue -- the in-package run of the same suite
-// the jobs root package's own queue_conformance_test.go drives from its
-// external test binary.
+// the module's own unittest/queue_conformance_test.go drives from its
+// black-box test package.
 func TestAssertConforms_StandaloneQueue(t *testing.T) {
 	AssertConforms(t, func() Runnable {
 		db := dbtest.NewSQLite(t)
