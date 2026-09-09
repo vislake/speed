@@ -1,0 +1,179 @@
+package main
+
+// host.go composes the schema-only host whose frozen configuration schema is
+// what the generated reference documents. The configuration reference must be
+// generated from the live config schema, never hand-written (root CLAUDE.md's
+// documentation discipline), and a live schema only exists after a real host
+// has run Kernel.Bootstrap and config.Module.Attach -- there is no static
+// source form to scan, since every module's ConfigItem/FeatureFlag
+// declarations only become one merged schema at Attach time. This host is
+// that real host, built for the one job of snapshotting the schema: it
+// registers the five platform modules that declare configuration items
+// (authn, metering, compliance, sharing and pki -- the census of
+// reg.Config.Add declaration sites in this repository) plus the config
+// module itself, freezes the schema with Attach, and hands the resulting
+// *config.Service to the caller for Describe.
+//
+// The composition deliberately stops at the five declaring modules. The
+// reference app's own notes module registers its own app-owned items
+// (brand.site_name and support.reply_email plus its two feature flags); a
+// config reference committed at the repository's docs/ root documents the
+// PLATFORM configuration surface a speed-based application receives from the
+// modules it imports, not one example app's demo items, so notes stays out
+// of the composition and its items out of the reference. A host that wants
+// its own complete reference (own items included) runs the same two calls
+// against its own composition -- go/config's RenderMarkdown doc comment
+// shows the shape.
+//
+// The database is a throwaway in-memory SQLite: every module's Register
+// performs no I/O by contract, config's Attach only wires its Service (the
+// schema fold is pure), and the anti-loss poller is disabled with
+// WithPollInterval(0), so no table needs to exist for the snapshot to be
+// exact. The db handle exists because Module constructors and Attach require
+// one -- it is never queried. A cipher is mandatory because authn registers
+// Sensitive items and Attach refuses a cipher-less schema (ErrCipherRequired
+// in module.go); the key below is a fixed literal so the snapshot is
+// deterministic, and its value can never leak into any output because
+// Describe redacts a Sensitive item's default at the boundary (describe.go).
+
+import (
+	"context"
+	"crypto"
+	"fmt"
+	"time"
+
+	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/compliance"
+	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
+	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/metering"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pki"
+	"github.com/vislake/speed/go/sharing"
+)
+
+// snapshotKey is the 32-byte AES key the schema-only host seals its cipher
+// with, and the HMAC key it hands authn's blind indexer. See the package
+// comment for why a fixed literal is safe here.
+var snapshotKey = []byte{
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+}
+
+// dummyKeySource is an authn.KeySource that is never consulted: its methods
+// satisfy the interface structurally (stdlib types only, exactly as
+// go/authn/token.go's KeySource contract requires) and fail or no-op instead
+// of issuing. authn.NewModule validates the option's presence eagerly;
+// Register performs no I/O and never calls the source, so a source that
+// refuses every call is all a schema snapshot needs.
+type dummyKeySource struct{}
+
+// EnsurePurpose implements authn.KeySource.
+func (dummyKeySource) EnsurePurpose(context.Context, string, string, time.Duration) error { return nil }
+
+// ActiveSigner implements authn.KeySource.
+func (dummyKeySource) ActiveSigner(context.Context, string) (string, string, func(context.Context, []byte) ([]byte, error), error) {
+	return "", "", nil, nil
+}
+
+// VerificationKeys implements authn.KeySource, with the exact anonymous
+// struct element go/authn/token.go's interface declaration names (its
+// Public element is the stdlib crypto.PublicKey alias).
+func (dummyKeySource) VerificationKeys(context.Context, string) ([]struct {
+	KID       string
+	Algorithm string
+	Public    crypto.PublicKey
+}, error,
+) {
+	return nil, nil
+}
+
+// neverQueue is a jobs.Queue that is never called. compliance.Module.Register
+// refuses to proceed without a queue (ErrQueueRequired) even when nothing
+// this host does would ever enqueue; the stub exists to satisfy that
+// wiring-time requirement, and Register's no-I/O contract means its methods
+// are never reached during the snapshot.
+type neverQueue struct{}
+
+// Enqueue implements jobs.Queue.
+func (neverQueue) Enqueue(context.Context, jobs.Task, ...jobs.EnqueueOption) (jobs.JobID, error) {
+	panic("configrefgen: the schema snapshot never enqueues")
+}
+
+// Get implements jobs.Queue.
+func (neverQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) {
+	panic("configrefgen: the schema snapshot never reads a job")
+}
+
+// Cancel implements jobs.Queue.
+func (neverQueue) Cancel(context.Context, jobs.JobID) error {
+	panic("configrefgen: the schema snapshot never cancels a job")
+}
+
+// schemaHost composes the schema-only host and freezes its configuration
+// schema, returning the attached config Service whose Describe is the
+// reference's dynamic-layer source.
+func schemaHost(ctx context.Context) (*config.Service, error) {
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:configrefgen?mode=memory&cache=shared",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cipher, err := dbkit.NewCipher(snapshotKey)
+	if err != nil {
+		return nil, err
+	}
+
+	authnModule, err := authn.NewModule(db,
+		authn.WithKeySource(dummyKeySource{}),
+		authn.WithBlindIndexKey(snapshotKey),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	modules := []pkgcore.Module{
+		authnModule,
+		pki.NewModule(db),
+		metering.NewModule(db),
+		sharing.NewModule(db),
+		compliance.NewModule(audit.NewRepository(db), compliance.WithQueue(neverQueue{})),
+		config.NewModule(db,
+			config.WithCipher(cipher),
+			// The anti-loss poller would query a configs table this
+			// throwaway database never migrates; zero disables it, which is
+			// exactly what a snapshot needs (WithPollInterval's doc comment:
+			// "Zero disables the poller entirely").
+			config.WithPollInterval(0),
+		),
+	}
+
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, modules...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Attach freezes the schema snapshot from what every module registered
+	// during Bootstrap -- reg.Config.Items() and reg.Features.Flags() -- and
+	// returns the Service whose Describe is the reference's source. Exactly
+	// one module in the set is the config module (the last one passed in);
+	// the comma-ok assertion is deliberate so a reordering of the module
+	// list above fails here with a nameable error instead of panicking.
+	configModule, ok := modules[len(modules)-1].(*config.Module)
+	if !ok {
+		return nil, fmt.Errorf("configrefgen: last module in the bootstrap set is %T, want *config.Module", modules[len(modules)-1])
+	}
+	svc, err := configModule.Attach(reg)
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
+}

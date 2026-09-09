@@ -1,0 +1,74 @@
+# config.example.yaml -- the optional config-file source of go/pkgcore/config's
+# bootstrap loader, in its official file format (YAML or JSON; the loader's
+# package doc and ExampleWithConfigFile show both).
+#
+# The loader resolves every bootstrap key from four sources, highest priority
+# first:
+#
+#   1. command-line flags        --deploymentmode=distributed
+#   2. environment variables     SPEED_DEPLOYMENTMODE=distributed
+#   3. this config file          deploymentmode: distributed
+#   4. the defaults the host already set on its target struct
+#
+# An absent file is skipped silently (it is a local-development convenience,
+# never a requirement); a file that exists but cannot be parsed is a hard
+# error. Keys in any source that map onto no target-struct field are ignored,
+# and matching is case-insensitive in every source.
+#
+# The env spelling of a key replaces each "." level of nesting with a double
+# underscore and prefixes SPEED_: the key "database.dsn" is read from
+# SPEED_DATABASE__DSN, "smtp.port" from SPEED_SMTP__PORT. A single
+# underscore is never a nesting marker: SPEED_DATABASE_DSN does not resolve
+# to database.dsn. Field names map to keys lowercased and dotted, so the
+# target struct field Database.DSN is the key "database.dsn".
+#
+# IMPORTANT: this file is the FILE FORMAT'S example, not a file any process
+# in this repository currently reads. The hosts that boot here (the reference
+# app, the projects `saasctl new` generates) read their environment directly
+# with os.Getenv -- they do not drive the loader -- so copying this file next
+# to them changes nothing. A host that adopts the loader declares its own
+# target struct and points WithConfigFile at a file shaped like this one;
+# examples/reference-app/cmd/configrefgen's config_example.go carries the
+# struct this exact file loads against, and its unit test loads this file
+# through the real loader, so the format demonstrated here is load-verified,
+# never aspirational.
+#
+# The keys below mirror the reference app's own bootstrap item set
+# (docs/config-reference.md's bootstrap table), spelled the way a loader
+# target struct would declare them.
+
+# Deployment topology the process runs as. Required: no source may leave it
+# unset. Equivalent writings:
+#   env:  SPEED_DEPLOYMENTMODE=standalone
+#   flag: --deploymentmode=standalone
+deploymentmode: standalone
+
+# HTTP listen port the server binds. Defaults to 8080 when no source
+# supplies it (the target struct's own default).
+#   env:  SPEED_PORT=8080
+#   flag: --port=8080
+port: "8080"
+
+# SQLite database file the standalone deployment mode opens.
+#   env:  SPEED_DBPATH=reference-app.db
+#   flag: --dbpath=reference-app.db
+dbpath: reference-app.db
+
+# The infrastructure seams a process composes through real implementations.
+# A nested struct contributes its field names as further key segments, so
+# the block below maps to the keys redis.addr, smtp.host, smtp.port,
+# smtp.username and smtp.password, with env spellings SPEED_REDIS__ADDR,
+# SPEED_SMTP__HOST, SPEED_SMTP__PORT and so on (--redis.addr=...,
+# --smtp.host=... as flags). Unset, each seam stays on its in-process
+# default, exactly like the app's own unset fallbacks.
+redis:
+  addr: ""
+
+smtp:
+  host: ""
+  # A numeric value is decoded into the target field's type: this example
+  # file is genuinely loaded by the loader in cmd/configrefgen's unit test,
+  # which pins the flag > env > file > defaults precedence on it.
+  port: 0
+  username: ""
+  password: ""
