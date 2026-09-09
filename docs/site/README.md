@@ -24,10 +24,11 @@ grouped the same way under `modules/`, explaining the rationale). The
 site-level `ai-agents`/`about` pages and `static/llms.txt` serve the
 AI-agent audience; llms.txt stays a single root-level file
 hand-maintained to mirror the current page set. The former flat pages
-`docs/quickstart.md`, `docs/modules.md` and `docs/status.md` migrated
-into the sections; their old URLs are served by Hugo alias pages from
-the new homes (`/docs/user-guide/quickstart/`,
-`/docs/user-guide/modules/`, `/docs/developer-docs/status/`).
+`docs/quickstart.md` and `docs/modules.md` migrated into the user
+guides, their old URLs served by Hugo alias pages from the new homes
+(`/docs/user-guide/quickstart/`, `/docs/user-guide/modules/`);
+`docs/status.md` was removed -- the site carries no implementation
+progress or status pages, per its audience rules.
 `tools/check_docs_site.py`'s required-page list names the skeleton
 pages of the finished structure; every other page is covered by its
 full-link scan. This round (Hugo migration) made the
@@ -153,11 +154,10 @@ docs/site/
         _index.md
         ...                architecture / design principles / per-module
                            design pages land with the content batches
-      quickstart.md        (migrating into user-guide/)
-      modules.md           (migrating into user-guide/ modules reference)
+      quickstart.md        (migrated; served from user-guide/)
+      modules.md           (migrated; served from user-guide/ modules)
       ai-agents.md
       about.md
-      status.md            (migrating into developer-docs/)
   content.zh-cn/          Chinese content, identical structure, real translations
   i18n/
     zh-cn.yaml            Project-level override for the theme's own UI strings
@@ -229,11 +229,9 @@ Hugo's output directory (`docs/site/public`), not `docs/site/` itself.
   page per Go module and npm package under group directories
   (`core/`, `services/`, `identity/`, `capabilities/`, `tools/`,
   `web/`), each with responsibility/boundary, design rationale,
-  mechanisms, and a Source section back to `docs/internal/` and the
-  module's `AGENTS.md`.
+  mechanisms, and a Source section back to the module's `AGENTS.md`.
 - `docs/ai-agents.md` — an explicit AI-agent orientation: what to read
-  first, the architecture rules that most often matter, and where the
-  authoritative implementation status lives.
+  first, and the architecture rules that most often matter.
 - `docs/about.md` — what speed is, how its documentation is
   distributed.
 - `static/llms.txt` — the llms.txt convention's entry point for

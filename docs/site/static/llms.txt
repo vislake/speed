@@ -11,7 +11,7 @@
 
 The documentation is organized in two main sections — User guides (for teams using
 speed modules in their own product) and Developer docs (for developers working on
-speed itself) — plus site-level pages for AI agents, about and status. Pages below
+speed itself) — plus the site-level pages for AI agents and about. Pages below
 are English; every page has a Chinese (zh-cn) translation under the identical path
 with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 
@@ -19,14 +19,9 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 
 - [For AI Agents](https://speed.vislake.com/docs/ai-agents/): what to read first as a coding agent, the architecture
   rules that most often matter (module dependency direction, API-contract spec-first
-  order, the four data domains, deployment mode vs. implementation composition), and
-  where the authoritative implementation status lives.
+  order, the four data domains, deployment mode vs. implementation composition).
 - [Root AGENTS.md](https://github.com/vislake/speed/blob/main/AGENTS.md): the repository's own first-read orientation
   for any AI coding tool.
-- [Root CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md): the exhaustive architecture reference, the full
-  discipline list, and the single source of truth for which modules genuinely pass CI
-  today (its Repository Status section).
-
 ## User guides (using speed in your product)
 
 - [User guides](https://speed.vislake.com/docs/user-guide/): section index — the overall introduction, the
@@ -58,9 +53,6 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
   contract.
 - [Design principles](https://speed.vislake.com/docs/developer-docs/design-principles/): the discipline every module obeys and
   why, with where each rule is enforced.
-- [Status](https://speed.vislake.com/docs/developer-docs/status/): a coarse, verified-against-the-repository snapshot
-  of implementation status, pointing at CLAUDE.md for the authoritative detail.
-
 ## Site pages
 
 - [Home](https://speed.vislake.com/): landing page and site map.
@@ -148,26 +140,12 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 
 ## Reference application (mandatory first consumer of every module)
 
-- [Reference app overview](https://github.com/vislake/speed/blob/main/examples/reference-app/README.md):
-  the AI smile-simulation dental SaaS backend that every module must be exercised
-  against.
-- [Reference app web host](https://github.com/vislake/speed/blob/main/examples/reference-app/web/README.md):
-  the reference app's own frontend, composing every `@speed/*` package together.
+- [Reference app](https://github.com/vislake/speed/tree/main/examples/reference-app): the AI
+  smile-simulation dental SaaS that exercises every module, and its own web host
+  composing every `@speed/*` package together.
 
-## Design documents (background and rationale; Chinese-language, repository-only)
+## Repository assets
 
-- [00 Overview](https://github.com/vislake/speed/blob/main/docs/internal/00-overview.md):
-  navigation table for the full design-document set.
-- [01 Architecture](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md):
-  the authoritative module dependency graph.
-- [03 Deployment modes](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md):
-  deployment mode vs. implementation composition, in full.
-- [04 Data and tenancy](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md):
-  the four data domains and multi-tenant isolation mechanics.
-- [13 Documentation standards](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md):
-  the standard this site and llms.txt itself follow.
-- [15 Roadmap](https://github.com/vislake/speed/blob/main/docs/internal/15-roadmap.md):
-  milestones and what each one covers.
 - [Error-code machine twin](https://github.com/vislake/speed/blob/main/docs/error-codes.json):
   the row-for-row JSON twin of the site's error-code index (the site page above is the
   human-readable form).
@@ -176,5 +154,3 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 
 - [Coding standards](https://github.com/vislake/speed/tree/main/.claude/skills):
   backend, frontend and commit-message handbooks with templates and checklists.
-- [Risk register](https://github.com/vislake/speed/blob/main/docs/internal/17-risks.md):
-  known risks and mitigations.

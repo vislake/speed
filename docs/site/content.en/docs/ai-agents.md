@@ -5,49 +5,36 @@ weight: 4
 
 # For AI Agents
 
-If you are a coding agent helping someone integrate speed, or being
-pointed at this site as context, this page is for you. speed's own
-documentation standard treats agents and humans as first-class readers
-equally (see
-[docs/internal/13](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md),
-Chinese-language design rationale) — this page and
-[llms.txt](/llms.txt) at the site root are this site's own answer to
-that.
+If you are a coding agent helping someone integrate speed — or being
+pointed at this site as context — this page is for you. This
+documentation site treats agents and humans as first-class readers
+equally; this page and [/llms.txt](/llms.txt) at the site root are its
+answer to that.
 
-## Read this first, in this order
+## Read this first
 
 1. **[Root `AGENTS.md`](https://github.com/vislake/speed/blob/main/AGENTS.md)**
-   — orientation for any AI coding tool: top-level shape, the module
-   dependency direction, the rules that will burn you fastest, and
-   where everything else lives. Written to be read start to finish in a
+   — orientation for any AI coding tool: the top-level shape, the
+   module dependency direction, and the rules that most often burn
+   first-time integrations. Written to be read start to finish in a
    couple of minutes.
-2. **The target module's own `AGENTS.md`** (`go/<name>/AGENTS.md` or
-   `web/packages/<name>/AGENTS.md`) — module-specific discipline, file
-   layout, known limitations, testing setup. See the
-   [module index](../modules/) for the full list with direct links.
-3. **[Root `CLAUDE.md`](https://github.com/vislake/speed/blob/main/CLAUDE.md)'s
-   *Repository Status* section** — see below, this is the one you must
-   not let go stale in your own head.
-
-## The single source of truth for "is this actually implemented"
-
-> [!WARNING]
-> Root `CLAUDE.md`'s **Repository Status** section is the single,
-> authoritative, current answer to "what genuinely runs and passes in CI
-> today." It names, per module, exactly what is implemented, what CI
-> workflow proves it (and on what trigger — every PR, a
-> `full-ci`-labeled PR, a manual dispatch), and what is still a
-> placeholder stub. This static site cannot update itself as fast as that
-> section changes — **do not treat anything on this site as a substitute
-> for reading it**, and do not trust a status claim (including this
-> site's own [Status](../status/) page) that you have not cross-checked
-> against it or against the repository itself.
-
-The practical rule that section itself states and this page repeats: a
-module directory existing is not evidence it has real code behind it —
-some are still a `go.mod` plus a one-line `doc.go` plus an `AGENTS.md`
-pointing at a design doc. Check for more than a stub before relying on
-one.
+2. **Choose your side of this site, then read its section:**
+   - **Integrating speed into a product?** The
+     [user guides](/docs/user-guide/) walk each product domain end to
+     end; for the module you are wiring, read its page in the
+     [module reference](/docs/user-guide/modules/) — what it is for,
+     when to choose it, how to wire it, examples.
+   - **Extending or debugging speed itself?** The
+     [developer docs](/docs/developer-docs/) explain the architecture,
+     the design principles, and a per-module design deep dive (with
+     the rationale each module was shaped by). The
+     [architecture](/docs/developer-docs/architecture/) page carries
+     the module dependency graph.
+3. **The module's own `AGENTS.md`** (`go/<name>/AGENTS.md` or
+   `web/packages/<name>/AGENTS.md`) — module-specific discipline,
+   wiring requirements, known limitations, testing setup. Each module
+   page on this site links the module's `AGENTS.md` from its Source
+   section; treat it as the authoritative description of that module.
 
 ## Architecture rules that most often matter
 
@@ -61,27 +48,26 @@ pkgcore -> dbkit / observability / ratelimit -> tenancy -> config / jobs -> stor
         -> compliance -> admin
 ```
 
-This is a coarse ordering, not the full edge list —
-[docs/internal/01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)'s
-own diagram is the authority for exactly which module imports which.
-The two rules that catch most first-time mistakes: `rbac` must never
-import `authn` (authorization only ever sees
-`Subject{TenantID, UserID}`, assembled by the authenticating side), and
-a module must never import another business module's struct for a
-database relation — cross-module relations are ID references plus
-domain events (`org` subscribes to `authn`'s `user.created` event by
-name and JSON-shaped payload probe; it never imports `authn.User`).
+This is a coarse ordering — the [architecture](/docs/developer-docs/architecture/)
+page carries the full picture. The two rules that catch most
+first-time mistakes: `rbac` must never import `authn` (authorization
+only ever sees `Subject{TenantID, UserID}`, assembled by the
+authenticating side), and a module must never import another business
+module's struct for a database relation — cross-module relations are
+ID references plus domain events (`org` subscribes to `authn`'s
+`user.created` event by name and JSON-shaped payload probe; it never
+imports `authn.User`).
 
 ### API contract: spec-first, non-negotiable order
 
-Edit `api/openapi.yaml` → run `task api:gen` → the resulting compilation
-failures reveal every handler to fix → implement → update the frontend
-→ commit everything together. The generated Go server interface
-participates in compilation, so drift between spec and implementation
-cannot compile. The frontend side mirrors this: hand-written
-`fetch`/`axios` calls are permitted only inside `@speed/api-client`;
-every other package calls the generated `@speed/api-sdk` hooks, never
-HTTP directly.
+Edit `api/openapi.yaml` → run `task api:gen` → the resulting
+compilation failures reveal every handler to fix → implement → update
+the frontend → commit everything together. The generated Go server
+interface participates in compilation, so drift between spec and
+implementation cannot compile. The frontend side mirrors this:
+hand-written `fetch`/`axios` calls are permitted only inside
+`@speed/api-client`; every other package calls the generated
+`@speed/api-sdk` hooks, never HTTP directly.
 
 ### The four data domains
 
@@ -105,7 +91,7 @@ implementation gets stuck.
 ### Deployment mode vs. implementation composition
 
 Two orthogonal axes, and conflating them is the design error this
-codebase's own docs record as a mistake it used to make:
+codebase's own history records as a mistake it used to make:
 
 - **Deployment mode** — how many replicas this runs as, and therefore
   which implementations are *permissible*.
@@ -125,7 +111,7 @@ only. Business code must never branch on the mode
 (`if mode == "standalone"` is a code-review rejection, not a style nit)
 — mode differences belong exclusively to kernel wiring.
 
-## Other rules worth knowing before you write code
+## Rules worth knowing before you write code
 
 - Tenant-owned repositories must embed `dbkit.Repository[T]` — never
   hold a raw `*gorm.DB` and hand-write `WHERE tenant_id = ?`, and never
@@ -139,15 +125,14 @@ only. Business code must never branch on the mode
   verification codes. External (non-user) recipients require consent
   verification before anything is sent.
 - Every bug fix ships with a test that reproduces it (failing before
-  the fix, passing after) — this repository treats a missing regression
-  test as an incomplete fix, not an optional nicety.
+  the fix, passing after).
 
-The full, enforceable list — with which parts are code-review-only
-versus genuinely CI-enforced today — is root `CLAUDE.md`'s
-*Architecture Discipline* section.
+The enforceable discipline list lives in the
+[developer docs](/docs/developer-docs/design-principles/), and each
+module's `AGENTS.md` states the module-specific rules.
 
 ## Machine-readable entry point
 
-[/llms.txt](/llms.txt) at this site's root lists the same pages plus the
-repository files above in the [llms.txt](https://llmstxt.org/)
-convention, for a crawler or agent fetching this domain directly.
+[/llms.txt](/llms.txt) at this site's root lists every section and page
+in the [llms.txt](https://llmstxt.org/) convention, for a crawler or
+agent fetching this domain directly.

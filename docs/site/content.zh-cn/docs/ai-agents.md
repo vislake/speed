@@ -5,46 +5,33 @@ weight: 4
 
 # 面向 AI Agent
 
-如果你是一个正在帮某人接入 speed 的编码 Agent，或者被指向本站作为
-上下文，这一页就是写给你的。speed 自己的文档规范把 Agent 和人类同等
-视为一等读者（见
-[docs/internal/13](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md)，
-中文设计说明）——这一页与站点根部的 [llms.txt](/llms.txt) 就是本站对
-这条规范的回应。
+如果你是帮助别人集成 speed 的编码 agent——或者被指向本站作为上下文——
+本页就是为你准备的。本站把 agent 与人类视为同等的头等读者;本页与
+站根的 [/llms.txt](/llms.txt) 就是对此的回答。
 
-## 先按这个顺序读
+## 先读这些
 
-1. **[仓库根 `AGENTS.md`](https://github.com/vislake/speed/blob/main/AGENTS.md)**
-   —— 面向任何 AI 编码工具的入门：顶层架构形态、模块依赖方向、最容易
-   踩坑的规则，以及其余一切内容在哪里。写得可以在几分钟内从头读到尾。
-2. **目标模块自己的 `AGENTS.md`**（`go/<name>/AGENTS.md` 或
-   `web/packages/<name>/AGENTS.md`）—— 模块特定的纪律、文件布局、
-   已知限制、测试方式。完整清单和直达链接见[模块索引](../modules/)。
-3. **[仓库根 `CLAUDE.md`](https://github.com/vislake/speed/blob/main/CLAUDE.md)
-   的 Repository Status 一节** —— 见下文，这是你绝不能让它在自己的
-   认知里过期的那一份。
+1. **[根 `AGENTS.md`](https://github.com/vislake/speed/blob/main/AGENTS.md)**
+   ——给任何 AI 编码工具的向导:顶层形态、模块依赖方向,以及最容易在
+   首次集成时绊倒你的规则。写来可以在几分钟内从头读完。
+2. **先选定本站的一侧,再读那一侧:**
+   - **把 speed 集成进产品?**[用户指南](/zh-cn/docs/user-guide/)把每个
+     产品领域从头走到尾;对你正在接线的模块,读[模块参考](/zh-cn/docs/user-guide/modules/)
+     中它的页面——做什么、何时选用、怎么接线、示例。
+   - **扩展或调试 speed 本身?**[开发者文档](/zh-cn/docs/developer-docs/)
+     解释总体架构、设计原则,以及逐模块设计深入(每个模块被什么取舍塑
+     成今天的样子)。[总体架构](/zh-cn/docs/developer-docs/architecture/)
+     页载有模块依赖图。
+3. **该模块自己的 `AGENTS.md`**(`go/<name>/AGENTS.md` 或
+   `web/packages/<name>/AGENTS.md`)——模块级纪律、接线要求、已知限制、
+   测试设置。本站每个模块页的 Source 小节都链到该模块的 `AGENTS.md`;
+   把它当作该模块的权威描述。
 
-## "这东西到底有没有真正实现"的唯一权威来源
-
-> [!WARNING]
-> 仓库根 `CLAUDE.md` 的 **Repository Status** 一节，是"今天 CI 里到底
-> 真的能跑通并通过什么"这个问题唯一、权威、当前有效的答案。它逐模块
-> 指明：具体实现了什么、由哪个 CI 工作流验证（以及在什么触发条件下——
-> 每一个 PR、打了 `full-ci` 标签的 PR、还是手动触发），以及哪些还只是
-> 占位的桩代码。这个静态站点没办法跟上那一节变化的速度——**不要把本站
-> 上的任何内容当作阅读那一节的替代品**，任何状态断言（包括本站自己的
-> [实现状态](../status/)页面）在你没有对照它或对照仓库本身核实之前，
-> 都不要轻信。
-
-那一节自己陈述、这一页也重申的实用规则是：一个模块目录存在，不等于
-它背后有真正的代码——有些还只是一个 `go.mod` 加一行 `doc.go` 加一个
-指向设计文档的 `AGENTS.md`。在依赖某个模块之前，先确认它不止是个桩。
-
-## 最容易踩坑的架构规则
+## 最容易踩中的架构规则
 
 ### 模块依赖方向
 
-依赖关系严格自底向上：
+依赖严格自底向上:
 
 ```
 pkgcore -> dbkit / observability / ratelimit -> tenancy -> config / jobs -> storage / notification / pki
@@ -52,79 +39,69 @@ pkgcore -> dbkit / observability / ratelimit -> tenancy -> config / jobs -> stor
         -> compliance -> admin
 ```
 
-这只是一个粗略的顺序，不是完整的依赖边列表——具体哪个模块 import
-了哪个模块，权威说法是
-[docs/internal/01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)
-自己的依赖图。两条最容易在第一次接入时踩到的规则：`rbac` 绝不能
-import `authn`（鉴权只应该看到认证方组装好的
-`Subject{TenantID, UserID}`）；一个模块绝不能为了数据库关联去 import
-另一个业务模块的 struct——跨模块的关联只用 ID 引用加领域事件（`org`
-只按事件名和 JSON 形状的 payload 去订阅 `authn` 的 `user.created`
-事件，从不 import `authn.User`）。
+这是粗粒排序——[总体架构](/zh-cn/docs/developer-docs/architecture/)页
+有完整图景。最容易让首次集成者犯错的规则有两条:`rbac` 绝不 import
+`authn`(授权只认识 `Subject{TenantID, UserID}`,由认证侧组装),以及
+模块绝不因数据库关系 import 另一个业务模块的类型——跨模块关系是
+ID 引用加领域事件(`org` 按名称与 JSON 形载荷订阅 `authn` 的
+`user.created` 事件;它从不 import `authn.User`)。
 
-### API 契约：spec 先行，顺序不可协商
+### API 契约:先契约后代码,顺序不可逆
 
-编辑 `api/openapi.yaml` → 运行 `task api:gen` → 由此产生的编译失败会
-暴露出每一个需要修的 handler → 实现 → 更新前端 → 一起提交。生成出来
-的 Go server 接口会参与编译，所以 spec 和实现之间的漂移无法通过编译。
-前端这一侧是同样的逻辑：手写的 `fetch`/`axios` 调用只允许出现在
-`@speed/api-client` 内部；其余每一个包都只调用生成的 `@speed/api-sdk`
-hooks，从不直接发 HTTP 请求。
+改 `api/openapi.yaml` → 跑 `task api:gen` → 编译失败暴露每个待修的
+handler → 实现 → 更新前端 → 一起提交。生成的 Go server 接口参与编译,
+所以契约与实现之间的漂移无法编译通过。前端镜像同一纪律:手写
+`fetch`/`axios` 只允许出现在 `@speed/api-client` 内部;其它包一律调用
+生成的 `@speed/api-sdk` hooks,绝不直接 HTTP。
 
-### 四种数据域
+### 四数据域
 
-每一张表在被设计之前，先被归类：
+每张表在设计之前先分类,而不是之后:
 
-| 数据域 | 定义 | 是否 `TenantScoped` | 示例 |
+| 数据域 | 定义 | `TenantScoped`? | 例 |
 |---|---|---|---|
-| 租户数据 | 属于某一个租户，跨租户绝不可见 | 是 | 组织节点、成员关系、订阅、媒体、业务数据 |
-| 身份数据 | 属于一个自然人，此人可能属于多个租户 | 否 | `users`、`user_identities`、`sessions`、登录日志 |
-| 平台数据 | 全局共享，租户只读 | 否 | 平台级 Plan 定义、社交登录 provider 配置、系统配置 |
-| 关联数据 | 连接身份与租户 | 是（按 `tenant_id`） | `memberships` |
+| 租户数据 | 属于一个租户,绝不跨租户可见 | 是 | org 节点、成员关系、订阅、媒体、业务数据 |
+| 身份数据 | 属于自然人,可属于多个租户 | 否 | `users`、`user_identities`、`sessions`、登录日志 |
+| 平台数据 | 全局共享,租户只读 | 否 | 平台级 Plan 定义、社交登录提供商配置、系统配置 |
+| 关联数据 | 桥接身份与租户 | 是(按 `tenant_id`) | `memberships` |
 
-这张表存在的目的是强制执行这条规则：`users` 刻意**不**做租户级隔离
-（一个人可以属于多个租户，社交登录在任何租户存在之前就已经能成功），
-平台级的定义（比如一个计费 Plan）必须对每个租户的兜底查询保持可见。
-按这个仓库自己的经验，把这个分类搞错，是多租户实现最早卡住的地方。
+这张表存在的理由:`users` 故意**不**租户化(一个人可以属于多个租户,
+社交登录在任何租户存在之前就成功),平台级定义如计费 Plan 必须对每个
+租户的回退查找可见。按本代码库自己的经验,分类搞错是多租户实现最先
+卡住的地方。
 
-### 部署模式 vs 实现组合
+### 部署模式 × 实现组装
 
-这是两条正交的轴，把它们混为一谈正是这个代码库自己文档里记录过的
-曾经犯过的设计错误：
+两条正交轴,把二者混为一谈是这套代码库自己的历史记录里记下的
+错误:
 
-- **部署模式** —— 以多少副本运行，因此决定哪些实现是*被允许的*。
-- **实现组合** —— 每一个基础设施 seam（`EventBus`、`KVStore`、
-  `Mailer`、`ObjectStore`）实际用的是哪一个具体实现。
+- **部署模式**——以多少个副本运行,因此哪些实现是*允许的*。
+- **实现组装**——每条基础设施接缝(`EventBus`、`KVStore`、`Mailer`、
+  `ObjectStore`)实际用哪个实现。
 
-部署模式并不选择实现——它只是约束实现。每个实现声明自己的能力
-（`MultiReplicaSafe`、`SurvivesRestart`、`Stateless`）；每种部署模式
-声明自己需要什么；当某种组合无法满足声明的模式时，装配会在启动时
-失败，并指明具体是哪个 seam、哪个实现。单进程部署去连真实的
-PostgreSQL、真实的 Stripe、真实的 SMTP，是小客户生产环境的正常形态，
-不是误用——这个约束只朝一个方向生效。业务代码绝不能对模式分支判断
-（`if mode == "standalone"` 在代码评审里是会被打回的，不是风格建议）
-——模式差异只应该出现在 kernel 装配那一层。
+部署模式不选择实现——它只约束实现。每个实现声明能力
+(`MultiReplicaSafe`、`SurvivesRestart`、`Stateless`);每个部署模式声明
+它要求什么;当组装不能满足声明的模式时,启动失败并点名接缝与实现。
+单进程部署连真 PostgreSQL、真 Stripe、真 SMTP 是小客户生产安装的
+寻常形态,不是误用——约束只向一个方向。业务代码绝不按模式分支
+(`if mode == "standalone"` 是代码评审拒绝项,不是风格洁癖)——模式
+差异只属于内核接线。
 
-## 写代码前值得知道的其他规则
+## 写代码前值得知道的规则
 
-- 租户拥有的数据的 repository 必须内嵌 `dbkit.Repository[T]`——绝不
-  持有裸的 `*gorm.DB` 自己手写 `WHERE tenant_id = ?`，也绝不在 API
-  层接受调用方传入的 `tenant_id`（它只能来自访问令牌的 claims）。
-- worker 不会自动继承租户上下文——需要显式重建
-  （`pkgcore.WithTenant(ctx, job.TenantID)`），否则 Repository 会
-  失败关闭。
-- 通知是事件驱动的：业务模块发布领域事件，`notification` 订阅。
-  唯一的例外是同步的验证码。外部（非用户）收件人在任何东西发出之前
-  都必须先完成同意验证。
-- 每一个 bug 修复都要附带一个能复现该 bug 的测试（修复前失败、修复后
-  通过）——这个仓库把缺失的回归测试当作修复不完整，而不是可有可无的
-  加分项。
+- 租户数据仓库必须嵌入 `dbkit.Repository[T]`——绝不手握裸
+  `*gorm.DB` 手写 `WHERE tenant_id = ?`,绝不在 API 层接受调用方提供
+  的 `tenant_id`(它只来自访问令牌声明)。
+- worker 不继承租户上下文——显式重建
+  (`pkgcore.WithTenant(ctx, job.TenantID)`),否则 Repository 关闭失败。
+- 通知是事件驱动的:业务模块发布领域事件,`notification` 订阅。唯一
+  例外是同步验证码。外部(非用户)收件人必须先完成同意验证才发送。
+- 每个 bug 修复都带复现它的测试(修复前失败、修复后通过)。
 
-完整、可执行的清单——哪些只是代码评审约束、哪些今天真正由 CI
-强制执行——见仓库根 `CLAUDE.md` 的 Architecture Discipline 一节。
+可执行的纪律全表在[开发者文档](/zh-cn/docs/developer-docs/design-principles/),
+各模块的 `AGENTS.md` 陈述模块专属规则。
 
-## 机器可读的入口
+## 机器可读入口
 
-站点根部的 [/llms.txt](/llms.txt) 按照 [llms.txt](https://llmstxt.org/)
-约定，列出了本站的同一批页面，以及上面提到的仓库文件，供直接抓取本
-域名的爬虫或 Agent 使用。
+站根的 [/llms.txt](/llms.txt) 按 [llms.txt](https://llmstxt.org/)
+惯例列出每一节与每一页,供直接抓取本站域的爬虫或 agent 使用。

@@ -22,18 +22,13 @@ complete list of codes a speed-based API can answer with.
 For **developers working on speed**: the overall architecture, the
 design principles behind it, and per-module design deep dives that
 explain the design rationale — why each module is shaped the way it is —
-with diagrams where they help. Includes the implementation status
-snapshot.
+with diagrams where they help.
 
 ## Site-level pages
 
 - [For AI Agents](ai-agents/) — what to read first as a coding agent,
-  the architecture rules that most often matter, and where the
-  authoritative implementation status lives.
+  and the architecture rules that most often matter.
 - [About](about/) — what speed is, how its documentation is
   distributed.
-- [Status](status/) — a coarse implementation snapshot; the repository
-  root CLAUDE.md's Repository Status section is the authoritative
-  source of truth and always wins over any status claim on this site.
 
 A machine-readable index of every page lives at [/llms.txt](/llms.txt).

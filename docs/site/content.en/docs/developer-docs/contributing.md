@@ -164,7 +164,8 @@ flowchart LR
     CI -->|green| Review[Code review]
     Review -->|changes requested| Commit
     Review -->|approve| Rebase[Rebase onto main]
-    Rebase --> Merge[Fast-forward merge]```
+    Rebase --> Merge[Fast-forward merge]
+```
 
 ## Source
 

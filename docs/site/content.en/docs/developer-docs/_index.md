@@ -24,11 +24,6 @@ and why each module is designed the way it is.
   behind its shape, its key mechanisms, and what of it is a frozen
   public API. The section mirrors the module dependency order, so
   pages read top to bottom as the design story.
-- [**Status**](status/) — where implementation genuinely stands
-  today; the repository root CLAUDE.md's Repository Status section is
-  the authoritative source of truth.
-
-The design pages are distilled from the repository's internal design
-documents (`docs/internal/`) and each module's `AGENTS.md` — every page
-carries a Source section linking back to the originals, so you can
-always verify a claim against the underlying document.
+The design pages are distilled from each module's own `AGENTS.md` —
+every page carries a Source section linking back to it, so you can
+verify a claim against the module's shipped documentation.
