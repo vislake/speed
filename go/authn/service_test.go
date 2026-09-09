@@ -1722,7 +1722,8 @@ func TestService_Refresh_RefusesWhenTheAccountIsGone(t *testing.T) {
 		t.Fatalf("Login() error = %v", err)
 	}
 
-	if err := f.db.Where("id = ?", user.ID).Delete(&User{}).Error; err != nil {
+	err = f.db.Where("id = ?", user.ID).Delete(&User{}).Error
+	if err != nil {
 		t.Fatalf("delete user row: %v", err)
 	}
 	_, err = f.svc.Refresh(t.Context(), pair.RefreshToken)

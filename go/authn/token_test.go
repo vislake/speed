@@ -632,7 +632,8 @@ func (f *failingSignKeySource) VerificationKeys(ctx context.Context, purpose str
 	KID       string
 	Algorithm string
 	Public    crypto.PublicKey
-}, error) {
+}, error,
+) {
 	return f.keys.VerificationKeys(ctx, purpose)
 }
 
