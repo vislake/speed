@@ -324,7 +324,7 @@ in several coherent places at once: the trigger path filters (the
 fragment), the oapi-codegen regeneration steps (one `cd <dir>` + pinned
 oapi-codegen run per fragment, each followed by its porcelain
 artifact-vs-spec gate), and the redocly `join` input list (the fragments
-merged into `build/openapi/speed.yaml`, whose input order is
+merged into `contracts/speed.yaml`, whose input order is
 load-bearing: the merged document is committed and diff-gated, and the
 order is what join renders). The fragment set grew from six to thirteen
 over successive rounds with the sites' consistency held only by comments

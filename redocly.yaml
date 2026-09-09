@@ -1,5 +1,5 @@
 # Lint config for the merged, multi-module OpenAPI document
-# (build/openapi/speed.yaml), produced by `task api:merge` /
+# (contracts/speed.yaml), produced by `task api:merge` /
 # .github/workflows/api-contract.yml from every module's own api/openapi.yaml
 # fragment (docs/internal/21-api-contract.md's "spec organization and
 # merging" section). Each

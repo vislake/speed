@@ -347,7 +347,7 @@ and object deletion (`storage_deleteObject`). `api/oapi-codegen.yaml` pins
 the same generator version notes and org use (v2.8.0);
 `api/storage-server.gen.go` is generated and committed, never hand-edited —
 `task api:gen` regenerates it from the fragment and api-contract.yml's own
-diff gate re-checks it on every spec-touching PR. The fragment joins the merged `build/openapi/speed.yaml` document and
+diff gate re-checks it on every spec-touching PR. The fragment joins the merged `contracts/speed.yaml` document and
 through it the generated `@speed/api-sdk` -- the module-driven inclusion
 policy of docs/internal/21-api-contract.md: every platform module with
 an HTTP fragment is a merge member. The fragment is embedded

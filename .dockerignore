@@ -51,13 +51,10 @@ dist/
 .turbo/
 *.tsbuildinfo
 
-# Generated build artifacts (.gitignore's own /build/* plus its committed
-# openapi carve-out) -- the merged OpenAPI document is a real release
-# artifact worth keeping in the repository, but the Go build this
-# Dockerfile runs never reads it.
-build/*
-!build/openapi/
-
+# The merged OpenAPI document now lives at contracts/speed.yaml, a
+# committed file that needs no exclusion here -- a committed file can
+# never bloat the Docker build context the way an untracked build
+# artifact can, and the Go build this Dockerfile runs never reads it.
 /tmp/
 
 # Local SQLite data (.gitignore's own entries) -- a stray reference-app.db

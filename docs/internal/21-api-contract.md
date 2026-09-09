@@ -27,7 +27,7 @@
 go/billing/api/openapi.yaml     # 只描述 billing 自己的路径与 schema
 go/authn/api/openapi.yaml
 ...
-build/openapi/speed.yaml        # CI 合并产物，发布物之一
+contracts/speed.yaml            # CI 合并产物，发布物之一
 ```
 
 **避免合并冲突的命名规范**（CI 强制）：
@@ -49,7 +49,7 @@ operationId 直接决定生成的函数名与 hook 名，命名不规范会污�
 
 **notification 片段的形状。** `go/notification/api/openapi.yaml` 同目录携带生成配置（同一钉定 oapi-codegen v2.8.0）与生成物 `notification-server.gen.go`，`Handler` 在 `go/notification/handler.go` 底部以 `var _ api.ServerInterface` 编译期断言实现之；十一个操作全部在 `/api/v1/notifications` 下，`operationId` 为 `notification_<action><Resource>`：收件箱消息列表、未读数、标记已读两操作、类型目录、偏好读与单键更新、外部联系人花名册的 list/create/verify/resend。契约侧的例外不在操作而在媒体类型：`GET /api/v1/notifications/stream`（SSE 长连接）不是 OpenAPI 3.0 能表达的，由 `NewHandler` 手挂载、片段头部注释记录省略——设计行"站内信 SSE 实时推送"所预言的"单独文档化事件格式"即以此形态兑现。
 
-**合并与 lint。** `task api:merge`（`Taskfile.yml`）与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令把片段合并进 `build/openapi/speed.yaml` 并 lint——不是 `bundle`：各片段是对等的完整文档，不是一个根文档 `$ref` 到另一个。合并成员以 `tools/api_fragments.json` 的 merge_rank 为单一来源（join 输入顺序即 merge_rank 顺序，先列六个既有成员、再按字母序接上其余七个平台片段），现为十三个片段：十个平台模块片段（admin、ai-gateway、authn、billing、integration、notification、org、pki、sharing、storage）加上 reference-app 自有的 notes、cases、smilesim。`task api:gen` 的前端 leg 依赖 `api:merge`，钉定的 orval（8.17.0，经 `pnpm dlx` 运行、永不进入 lockfile）从合并后的 `build/openapi/speed.yaml` 生成 `@speed/api-sdk` 的 `src/index.ts`，即 api-sdk 覆盖全部十三个合并片段；前端 leg 与 api-contract.yml 的再生成步骤执行同一对命令。
+**合并与 lint。** `task api:merge`（`Taskfile.yml`）与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令把片段合并进 `contracts/speed.yaml` 并 lint——不是 `bundle`：各片段是对等的完整文档，不是一个根文档 `$ref` 到另一个。合并成员以 `tools/api_fragments.json` 的 merge_rank 为单一来源（join 输入顺序即 merge_rank 顺序，先列六个既有成员、再按字母序接上其余七个平台片段），现为十三个片段：十个平台模块片段（admin、ai-gateway、authn、billing、integration、notification、org、pki、sharing、storage）加上 reference-app 自有的 notes、cases、smilesim。`task api:gen` 的前端 leg 依赖 `api:merge`，钉定的 orval（8.17.0，经 `pnpm dlx` 运行、永不进入 lockfile）从合并后的 `contracts/speed.yaml` 生成 `@speed/api-sdk` 的 `src/index.ts`，即 api-sdk 覆盖全部十三个合并片段；前端 leg 与 api-contract.yml 的再生成步骤执行同一对命令。
 
 **模块驱动的合并策略（记录）。** 合并成员由模块归属决定，不由工作区里现成的 web 消费者决定：凡带 HTTP 片段的平台模块一律加入合并文档与 `@speed/api-sdk`。理由分两层。其一，speed 是库不是应用——对外发布的 SDK 必须覆盖整个平台面，不能只导出工作区 demo 应用（reference-app）碰巧消费的那部分；凡"等一个工作区消费者再进合并"的排除在模块片段上一律作废。其二，生成的类型覆盖面不会因无人调用而腐化：api-contract 流水线对每个片段做再生成 + 一致性闸门 + handler 编译兜底，无人调用的操作与有人调用的操作受同一组闸门钉住。因此"无消费者"纪律约束的对象是**业务 API 的消费证明**——哪个工作区页面真实调用哪些操作、由哪些 Go 测试驱动真实路由（reference-app 的 mandatory-first-consumer 规则）——而不是生成的 SDK 覆盖面；一个没有工作区消费者的平台片段照常进合并、照常被 orval 生成、照常被闸门钉住。org、storage 早期"不进合并"的排除记录、以及片段进合并文档需随前端消费面落地的旧表述，均随本策略关闭，`Taskfile.yml` 的 api:merge 注释与各模块 AGENTS.md 的片段段落已改写为现状。reference-app 自有的 notes、cases、smilesim 目前同样在合并文档内——它们属于应用而非平台，其是否留在合并文档由应用侧生成流另行决定，与本策略无关。
 

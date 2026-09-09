@@ -1,6 +1,6 @@
 /**
  * One deterministic rewrite over the redocly-joined merged document
- * (build/openapi/speed.yaml), run after every merge:
+ * (contracts/speed.yaml), run after every merge:
  *
  * redocly's `join` keeps the FIRST input document's `info` block, so
  * the merged application-wide document would inherit the notes
@@ -21,7 +21,7 @@
  *   node web/scripts/redocly-join-fixup.mjs
  *
  * An optional argv[2] overrides the default target
- * build/openapi/speed.yaml (resolved against the current directory).
+ * contracts/speed.yaml (resolved against the current directory).
  * Exits non-zero when the info block is not exactly the three keys
  * this stamp understands (title, description, version -- redocly or
  * fragment drift, or a fragment suddenly shipping info.license or
@@ -44,7 +44,7 @@ const DESCRIPTION =
   'whole-surface view (docs/internal/21-api-contract.md).'
 
 const defaultTarget = fileURLToPath(
-  new URL('../../build/openapi/speed.yaml', import.meta.url),
+  new URL('../../contracts/speed.yaml', import.meta.url),
 )
 const targetPath = process.argv[2]
   ? resolve(process.cwd(), process.argv[2])

@@ -88,7 +88,7 @@ consumer-shell discipline.
 
 ## Generated surface (the merged document)
 
-orval input today is the merged `build/openapi/speed.yaml` -- the
+orval input today is the merged `contracts/speed.yaml` -- the
 `task api:merge` leg (pinned redocly `join`) joining all thirteen
 fragments: the ten platform-module fragments (admin, ai-gateway,
 authn, billing, integration, notification, org, pki, sharing and

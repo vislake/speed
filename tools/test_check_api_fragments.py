@@ -91,7 +91,7 @@ def workflow_text(
     """Render a mini api-contract.yml in the real file's exact shapes."""
     frag_dirs = [f["dir"] for f in frags]
     fragment_rows = [f + "/**" for f in frag_dirs]
-    other_rows = ["redocly.yaml", "build/openapi/**"]
+    other_rows = ["redocly.yaml", "contracts/**"]
     if pr_paths is None:
         pr_paths = other_rows + fragment_rows + list(m.SELF_ROWS)
     if push_paths is None:
@@ -155,11 +155,11 @@ def workflow_text(
             "(pinned redocly 2.51.1)"
         )
         lines.append("        run: |")
-        lines.append("          mkdir -p build/openapi")
+        lines.append("          mkdir -p contracts")
         lines.append("          pnpm --package=@redocly/cli@2.51.1 dlx redocly join \\")
         for frag_dir in merge_inputs if merge_inputs is not None else MERGE_ORDER:
             lines.append(f"            {frag_dir}/openapi.yaml \\")
-        lines.append("            -o build/openapi/speed.yaml")
+        lines.append("            -o contracts/speed.yaml")
 
     lines += [
         "      - name: An unrelated setup step",
@@ -247,7 +247,7 @@ class CheckApiFragmentsTest(unittest.TestCase):
         )
 
     def test_fragment_missing_from_pull_request_paths_is_drift(self) -> None:
-        rows = ["redocly.yaml", "build/openapi/**"] + [
+        rows = ["redocly.yaml", "contracts/**"] + [
             f["dir"] + "/**" for f in FRAGS if f["dir"] != "go/beta/api"
         ] + list(m.SELF_ROWS)
         self._write_fixture(pr_paths=rows)
@@ -257,7 +257,7 @@ class CheckApiFragmentsTest(unittest.TestCase):
         )
 
     def test_fragment_missing_from_push_paths_is_drift(self) -> None:
-        rows = ["redocly.yaml", "build/openapi/**"] + [
+        rows = ["redocly.yaml", "contracts/**"] + [
             f["dir"] + "/**" for f in FRAGS if f["dir"] != "go/beta/api"
         ] + list(m.SELF_ROWS)
         self._write_fixture(push_paths=rows)
@@ -267,7 +267,7 @@ class CheckApiFragmentsTest(unittest.TestCase):
         )
 
     def test_extra_fragment_shaped_path_row_is_drift(self) -> None:
-        rows = ["redocly.yaml", "build/openapi/**"] + [
+        rows = ["redocly.yaml", "contracts/**"] + [
             f["dir"] + "/**" for f in FRAGS
         ] + ["go/zzz/api/**"] + list(m.SELF_ROWS)
         self._write_fixture(pr_paths=rows)
@@ -304,7 +304,7 @@ class CheckApiFragmentsTest(unittest.TestCase):
         )
 
     def test_self_wiring_row_missing_is_drift(self) -> None:
-        rows = ["redocly.yaml", "build/openapi/**"] + [
+        rows = ["redocly.yaml", "contracts/**"] + [
             f["dir"] + "/**" for f in FRAGS
         ] + ["tools/api_fragments.json"]
         self._write_fixture(pr_paths=rows)
@@ -372,7 +372,7 @@ class CheckApiFragmentsTest(unittest.TestCase):
             f"found {len(problems)} drift(s)",
         )
         self.assertEqual(n_frags, 13)
-        self.assertEqual(n_merged, 6)
+        self.assertEqual(n_merged, 13)
 
 
 if __name__ == "__main__":

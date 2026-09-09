@@ -37,7 +37,7 @@ speed/
   go/          21 Go modules (pkgcore / tenancy / authn / rbac / billing / jobs / ...)
   web/         11 npm packages (ui-kit / auth-core / api-sdk / layout-kit / ...), a pnpm workspace
   examples/    reference-app: the AI smile simulation platform, backend and its own web host
-  build/       generated artifacts (the merged OpenAPI document)
+  contracts/   the platform contract home (the merged OpenAPI document)
   tools/       repo-wide tooling: the release coordinator, CI lint and drift-check scripts
   docs/
     internal/  design documents (Chinese)

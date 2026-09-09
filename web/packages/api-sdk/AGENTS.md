@@ -77,7 +77,7 @@ and `src/` must keep passing it on every regeneration.
 ## What ships vs. what is deferred
 
 The generated surface over the merged document (`src/index.ts` --
-orval input is `build/openapi/speed.yaml`, the redocly `join` of the
+orval input is `contracts/speed.yaml`, the redocly `join` of the
 module fragments: the ten platform-module fragments (admin,
 ai-gateway, authn, billing, integration, notification, org, pki,
 sharing and storage) plus the reference app's own notes, cases and

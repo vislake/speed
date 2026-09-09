@@ -13,7 +13,7 @@
  * shows up as a diff in the regenerated header (which stamps the
  * version).
  *
- * Input is the committed merged document, build/openapi/speed.yaml,
+ * Input is the committed merged document, contracts/speed.yaml,
  * produced by redocly's `join` of the module fragments (Taskfile's
  * api:merge task -- `task api:gen` depends on it, so a fragment edit can
  * never regenerate from a stale committed merge). The merge joins the
@@ -61,7 +61,7 @@
 export default {
   speed: {
     input: {
-      target: '../build/openapi/speed.yaml',
+      target: '../contracts/speed.yaml',
     },
     output: {
       target: './packages/api-sdk/src/index.ts',

@@ -13,7 +13,7 @@ info:
     app's handlers now implement the generated interface below, so a
     spec change without a matching handler change cannot compile, and
     the fragment joins the merged application document
-    (build/openapi/speed.yaml), so the operations ship in the generated
+    (contracts/speed.yaml), so the operations ship in the generated
     @speed/api-sdk surface the P3 web UI calls. This fragment follows
     the operationId
     (<module>_<action><Resource>) and schema-name (<Module><Type>)

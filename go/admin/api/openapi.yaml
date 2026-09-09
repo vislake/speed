@@ -45,7 +45,7 @@ info:
     (admin.ImpersonationMiddleware, pipeline.go) inserted ahead of
     tenancy.Middleware for those other routes, not for admin's own.
 
-    This fragment is part of the application-wide build/openapi/speed.yaml
+    This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
     merged document and the generated @speed/api-sdk (docs/internal/

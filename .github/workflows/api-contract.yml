@@ -85,7 +85,7 @@ name: api-contract
 #     all thirteen fragments -- the ten platform-module fragments
 #     (admin, ai-gateway, authn, billing, integration, notification,
 #     org, pki, sharing and storage) plus the reference app's own
-#     notes, cases and smilesim -- into build/openapi/speed.yaml, then
+#     notes, cases and smilesim -- into contracts/speed.yaml, then
 #     web/scripts/redocly-join-fixup.mjs stamps the merged document's
 #     info block (join keeps the FIRST fragment's info; without the
 #     stamp the application-wide document -- and through orval's header
@@ -94,7 +94,7 @@ name: api-contract
 #     `lint`ed against redocly.yaml's naming rules (operationId,
 #     component schema-name and tag formats, the conventions that keep
 #     fragments from colliding under the merge), then the porcelain gate
-#     fails the job if the committed build/openapi/speed.yaml is not
+#     fails the job if the committed contracts/speed.yaml is not
 #     what the thirteen fragments merge -- plus the stamp -- to.
 #     These steps
 #     sit before the frontend regeneration because the merged document
@@ -103,7 +103,7 @@ name: api-contract
 #     pinned orval 8.17.0 (the same `pnpm dlx orval` + nodenext-fixup
 #     pair as Taskfile's api:gen frontend leg, run from web/)
 #     regenerates @speed/api-sdk's src/index.ts from
-#     build/openapi/speed.yaml, then its porcelain gate fails the job if
+#     contracts/speed.yaml, then its porcelain gate fails the job if
 #     the committed generated package is not what the spec generates.
 #     orval itself is never a workspace dependency (pnpm dlx, no
 #     lockfile entry); a version bump is visible in the regenerated
@@ -198,7 +198,7 @@ name: api-contract
 #   redocly.yaml                                     the merge/lint
 #                                                    naming-convention
 #                                                    rules
-#   build/openapi/**                                 the committed merged
+#   contracts/**                                     the committed merged
 #                                                    document (a
 #                                                    hand-edit triggers
 #                                                    the diff)
@@ -231,7 +231,7 @@ on:
       - tools/check_api_fragments.py
       - tools/test_check_api_fragments.py
       - redocly.yaml
-      - build/openapi/**
+      - contracts/**
       - Taskfile.yml
       - .github/workflows/api-contract.yml
   workflow_dispatch:
@@ -264,7 +264,7 @@ on:
       - tools/check_api_fragments.py
       - tools/test_check_api_fragments.py
       - redocly.yaml
-      - build/openapi/**
+      - contracts/**
       - Taskfile.yml
       - .github/workflows/api-contract.yml
 
@@ -628,16 +628,16 @@ jobs:
         # invocation needs no web/ workspace install) and the web install
         # + orval frontend leg that follows it.
         uses: ./.github/actions/setup-node-env
-      - name: Merge every fragment into build/openapi/speed.yaml (pinned redocly 2.51.1)
+      - name: Merge every fragment into contracts/speed.yaml (pinned redocly 2.51.1)
         # The same command as Taskfile.yml's api:merge task -- keep the two
         # in lockstep (both pin redocly at 2.51.1). `join`, not `bundle`:
         # these fragments are peers, each a complete document, not one root
         # with $refs into the others. This step runs before the frontend
-        # regeneration below because build/openapi/speed.yaml is that
+        # regeneration below because contracts/speed.yaml is that
         # leg's input: orval must consume the fresh merge, not a merged
         # document this job will overwrite later in the same run.
         run: |
-          mkdir -p build/openapi
+          mkdir -p contracts
           pnpm --package=@redocly/cli@2.51.1 dlx redocly join \
             examples/reference-app/internal/notes/api/openapi.yaml \
             examples/reference-app/internal/cases/api/openapi.yaml \
@@ -652,7 +652,7 @@ jobs:
             go/pki/api/openapi.yaml \
             go/sharing/api/openapi.yaml \
             go/storage/api/openapi.yaml \
-            -o build/openapi/speed.yaml
+            -o contracts/speed.yaml
       - name: Stamp the merged document's info block (deterministic post-join fixup)
         # redocly's join keeps the FIRST input's info block, so without
         # this stamp the merged application-wide document inherits the
@@ -669,7 +669,7 @@ jobs:
         # (operationId format, component schema-name format, tag format --
         # the naming conventions that keep fragments from colliding under
         # the merge) and what is deliberately not checked yet.
-        run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
+        run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint contracts/speed.yaml --config redocly.yaml
       - name: Generated merged document must match the committed spec
         # Porcelain gate, not git diff --exit-code -- see the notes
         # gate's comment above for why.
@@ -678,7 +678,7 @@ jobs:
             git status --porcelain --untracked-files=all
             echo "error: merging the thirteen fragments (plus the"
             echo "info-block stamp) left the tree dirty. The checked-in"
-            echo "build/openapi/speed.yaml is not what the fragments"
+            echo "contracts/speed.yaml is not what the fragments"
             echo "(the ten platform-module fragments admin, ai-gateway,"
             echo "authn, billing, integration, notification, org, pki,"
             echo "sharing and storage plus the reference app's own"

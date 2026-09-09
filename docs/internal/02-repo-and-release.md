@@ -41,7 +41,7 @@ speed/
     adr/                                      # 架构决策记录
     upgrade/                                  # 版本升级指南
     site/                                     # 面向业务方的公开文档站
-  build/openapi/speed.yaml                    # 各模块 spec 的合并产物，发布物之一
+  contracts/speed.yaml                        # 各模块 spec 的合并产物，发布物之一
   .github/workflows/                          # CI/CD 流水线
   CLAUDE.md                                   # 仓库级架构纪律与上手指引
 ```

@@ -23,7 +23,7 @@ info:
     here). The app's handlers implement the generated interface below,
     so a spec change without a matching handler change cannot compile,
     and the fragment joins the merged application document
-    (build/openapi/speed.yaml), so the operations ship in the generated
+    (contracts/speed.yaml), so the operations ship in the generated
     @speed/api-sdk surface the P3 web UI calls. A case detail's
     per-photo simulations deliberately stay on the smile-simulation
     surface (smilesim's own fragment), fetched per photo by the P3 view.

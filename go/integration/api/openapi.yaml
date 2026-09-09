@@ -27,7 +27,7 @@ info:
     integration:webhook:read) dispatches on the request's sub-path, never
     on method alone -- see the reference app's guardIntegrationRoute.
 
-    This fragment is part of the application-wide build/openapi/speed.yaml
+    This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
     merged document and the generated @speed/api-sdk (docs/internal/

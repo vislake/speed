@@ -13,7 +13,7 @@ info:
     with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml. The merge is no longer future
     work: this fragment joins the other twelve fragments into the
-    committed application-wide build/openapi/speed.yaml (task api:merge,
+    committed application-wide contracts/speed.yaml (task api:merge,
     redocly pinned at 2.51.1), which is also the frontend SDK's
     generation input (docs/internal/21-api-contract.md's
     spec-organization and merging section).

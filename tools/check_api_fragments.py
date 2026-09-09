@@ -6,7 +6,7 @@ places at once: the trigger path filters (the pull_request and push
 `paths` blocks name each fragment's api/ directory), the oapi-codegen
 regeneration steps (one `cd <dir>` + pinned oapi-codegen run per
 fragment), and the redocly `join` input list (the fragments merged into
-build/openapi/speed.yaml, whose order is load-bearing: the merged
+contracts/speed.yaml, whose order is load-bearing: the merged
 document is committed and diff-gated, and the input order is what join
 renders). Every one of those sites is enumerated by hand, with the
 sites' consistency held only by comments in that file saying "keep the

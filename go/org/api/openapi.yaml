@@ -21,7 +21,7 @@ info:
     itself, server-side, from the invitation token (see the operation's own
     description and go/org/AGENTS.md's "Acceptance is tenantless").
 
-    This fragment is part of the application-wide build/openapi/speed.yaml
+    This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
     generation input: every platform module with an HTTP fragment joins the
     merged document and the generated @speed/api-sdk (docs/internal/

@@ -24,7 +24,7 @@ downstream project, and a dependency added here lands in someone else's
 | `web/` | The pnpm workspace: the `@speed/*` npm packages (`web/packages/*`) plus its own root config. A separate workspace root from the repo root by design — see `web/README.md`. |
 | `examples/reference-app` | A demo dental-SaaS app that is the **mandatory first consumer** of every module (see Reference App below); its web half rides in `web/`'s pnpm workspace as an external member. |
 | `docs/` | `docs/internal/**` (Chinese-language design rationale and rejected alternatives), `docs/adr/` (decision records), `docs/site/` (the public docs site source). |
-| `build/` | Generated, committed build artifacts — currently the merged OpenAPI document (`build/openapi/`) that drives the frontend SDK generation. |
+| `contracts/` | The committed platform-contract home — currently the merged multi-module OpenAPI document (`speed.yaml`) that drives the frontend SDK generation. |
 | `tools/` | Repo-maintenance scripts: CI checks (`scan_cjk.py`, `check_i18n_keys.py`, `check_toolchain.py`, …), the semgrep architecture-discipline rules, the release coordinator. |
 
 ## The one fact to internalize before writing code
