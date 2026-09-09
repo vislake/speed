@@ -94,8 +94,13 @@ err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject、有效期 */ })
   宿主自己盯有效期,再调 `IssueCertificate`。残余未消费面(JWKS 导
   出、CRLDP 嵌入、周期 CRL 再生成、权威撤销写入方)在 `AGENTS.md`
   里精确列出。
-- 无 Vault 或 AWS-KMS 集成层:两个提供商包都只对桩客户端证明
-  (LocalStack 的 KMS 与真实服务有偏差,按设计排除 AWS 集成层)。
+- Vault 与 AWS KMS 都还没有集成层,但两者处境不同。AWS KMS 按设计
+  排除:LocalStack 的 KMS 与真实服务有偏差,在它之上做 Docker 背书的
+  证明,确立的只会是与 LocalStack 的符合性,永远不会是与 AWS KMS 的
+  符合性——看似覆盖,实则证明不了任何东西。Vault 没有被排除,只是
+  集成层尚未建成:一个 Docker 背书的 Vault 开发模式集成层,同时演练
+  信封与直签两种模式,就是这种集成会采取的形状。在集成层出现之前,
+  两个提供商包都只对桩客户端证明过。
 - `EnsurePurpose` 以「撤销+同调用补造」自愈过期键;对重复调用的算
   法不匹配不做检测(今日安全,已记录)。
 - `LocalSigner` 每次 `Sign` 都把密钥解密进进程内存——零依赖实现

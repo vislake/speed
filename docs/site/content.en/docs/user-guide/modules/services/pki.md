@@ -119,9 +119,15 @@ provider subpackage first).
   calls `IssueCertificate` again. The residual unconsumed surface
   (JWKS exports, CRLDP embedding, periodic CRL regeneration,
   authority-revocation writers) is listed precisely in the `AGENTS.md`.
-- No Vault or AWS-KMS integration leg exists: both provider packages
-  are proven against stubbed clients (LocalStack's KMS diverges from
-  the real service, which rules out an AWS leg by design).
+- Neither Vault nor AWS KMS has an integration leg yet, but the two
+  stand differently. AWS KMS is excluded by design: LocalStack's KMS
+  diverges from the real service, so a Docker-backed proof there
+  would establish conformance with LocalStack, never with AWS KMS —
+  coverage that looks real and proves nothing. Vault is not excluded;
+  its leg is simply not built yet. A Docker-backed Vault dev-mode leg
+  exercising both envelope and direct-sign modes is the shape such an
+  integration would take, and until one exists both provider packages
+  are proven against stubbed clients.
 - `EnsurePurpose` self-heals an expired key by revoking it and
   creating a replacement in the same call; it does not detect an
   algorithm mismatch on repeated calls (safe today, recorded).
