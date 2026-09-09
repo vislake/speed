@@ -1,0 +1,133 @@
+---
+title: config
+weight: 5
+description: "The schema-first, database-backed settings store — config items and feature flags declared by every module, system-to-tenant scope tiers, hot update through events plus an anti-loss poller, and two pre-auth endpoints."
+---
+
+# config
+
+speed's dynamic-configuration module: the schema-first,
+database-backed settings store whose values change at runtime and take
+effect hot — feature-flag enablement, tenant brand items, default
+limits, AI-model defaults. Values live in the `configs` table under
+two scope tiers, `system` (platform-wide) → `tenant` (per-tenant
+overrides), with reads falling back from the narrow tier to the wide
+one and then to the schema default. The bootstrap half of
+configuration — process-startup flags, env and files — is a different
+package, `pkgcore/config`, which this module never imports; the module
+is the *runtime* half, required for any multi-tenant host.
+
+Modules declare items and feature flags on the registry during
+`Register` (`reg.Config.Add(pkgcore.ConfigItem{Key, Type, Default,
+...})`, flags with their `DependsOn` chains); this module folds the
+declarations into one schema, resolves flag dependencies at runtime,
+and serves the effective values.
+
+## When to choose it
+
+Always — it is among the always-on modules with no off switch. Its
+wiring differs from a plain kernel module in one load-bearing way:
+registration alone is not enough. `Register` declares what never needs
+the assembled registry; `Attach` — called exactly once, **after**
+`Kernel.Bootstrap` returns — folds the registry's *combined* item and
+flag declarations into the schema, and demands what registration must
+not touch: a migrated `configs` table, a `dbkit.Cipher` whenever any
+registered item is `Sensitive` (`ErrCipherRequired` otherwise), and a
+poll interval. The `*Service` `Attach` returns is what the host keeps.
+
+## Wiring and minimal use
+
+```go
+db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+// handle err
+
+configModule := config.NewModule(db, config.WithPollInterval(30*time.Second))
+migrations := dbkit.NewMigrationRegistry()
+if err := migrations.Register(configModule); err != nil { /* handle err */ }
+if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
+
+reg, err := pkgcore.NewKernel().Bootstrap(ctx, &myModule{}, configModule)
+// handle err
+
+svc, err := configModule.Attach(reg)
+// handle err
+defer svc.Close() // stops the poller and watchers
+
+name, err := config.GetTyped[string](svc, ctx, "brand.site_name") // platform default
+// handle err
+
+tenantCtx := pkgcore.WithTenant(ctx, "acme")
+if err := svc.Set(tenantCtx, config.ScopeTenant, "brand.site_name",
+    config.Value{Data: "Acme Dental"}, "alice"); err != nil {
+    // handle err
+}
+enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
+// handle err
+```
+
+## Core concepts and API essentials
+
+- **Scope, fallback, entitlements** — a value is addressed by the
+  triple `(key, scope, tenant_id)`. The service — never the caller,
+  never the HTTP layer — enforces each tier's entitlement on `Set`: a
+  tenant write requires a tenant in the context and is attributed to
+  it; a system write requires an audited system context
+  (`ErrSystemScopeRequiresSystemContext` otherwise). The `user` tier
+  is reserved and refused (`ErrUserScopeUnavailable`).
+- **Canonical values and bounds** — every value is stored as its
+  canonical string per type (decimal for ints, `time.Duration.String()`
+  for durations); decode is the single choke point where a corrupt row
+  surfaces as an error, never as a wrong-typed value. `GetTyped`
+  supports `string`, `bool`, `int64` and `time.Duration`; bounds are
+  enforced at write time, and validation errors never echo the
+  offending value.
+- **Sensitive items** — a `Sensitive` item is AES-GCM-sealed under
+  the host's cipher before storage; plaintext exists only in the
+  service's cache and an entitled `Get`. The `[redacted]` marker
+  replaces it in change events, watcher deliveries, logs and errors;
+  `Public`/`Sensitive` are mutually exclusive by validation, so the
+  pre-auth endpoints cannot leak one by construction.
+- **Hot update** — `Set` advances the process's own cache *before*
+  publishing `config.item.changed` (carrying actor, old→new, redacted
+  for sensitive keys); the event doubles as the write's audit record
+  (persistent audit rows exist only through the optional `compliance`
+  module). A failed publish does not roll the write back —
+  `ErrAuditPublishFailed` is the host's signal when audit is
+  mandatory. Replicas converge through the event *plus* an anti-loss
+  poller on the host-chosen interval (default 30s; `0` disables it
+  for single-instance hosts), so one lost event never leaves a
+  replica serving stale configuration forever. `Watch` delivers each
+  change as the event saw it.
+- **Feature flags** — a flag is enabled only when it *and* every flag
+  it depends on (transitively) report enabled, so disabling a
+  dependency disables everything above it per tenant without a
+  migration; cycles are rejected at Attach
+  (`ErrFeatureFlagDependencyCycle`). `EnabledFlags` serves the
+  enablement list to the frontend. Consumption semantics are the
+  consuming modules' job — this module answers what is enabled.
+- **Endpoints** — two pre-auth GET/HEAD endpoints at the exported
+  `PathPublic` (`/api/config/public`) and `PathSystemFeatures`
+  (`/api/system/features`) constants, named by hosts in their
+  tenant-middleware allowlists. Both resolve the request's tenant
+  through the host-wired `tenancy.Resolver` and fall back to platform
+  defaults — never an error — because a login page that fails to
+  render is the worst failure mode. One unset or corrupt public item
+  is omitted from the snapshot, never allowed to take the endpoint
+  down with it.
+
+## Boundaries and pitfalls
+
+- Do not read the `configs` table directly from another module: scope
+  fallback, decryption, cache and flag semantics live in the
+  `Service`; anything reaching around it re-implements a wrong subset.
+- The `configs` table is platform data — deliberately not
+  `dbkit.TenantScoped` — so it is the documented exception to the
+  repository rules, not a pattern for tenant-owned data to copy.
+- No OpenAPI fragment exists for the two endpoints (their contract is
+  `http.go` plus tests); the frontend consumes them through
+  `@speed/api-client`'s typed wrappers. No config-*editing* UI ships.
+
+## Source
+
+- [config AGENTS.md](https://github.com/vislake/speed/blob/main/go/config/AGENTS.md)
+- [config `example_test.go`](https://github.com/vislake/speed/blob/main/go/config/example_test.go)
