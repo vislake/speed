@@ -18,8 +18,8 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 
-	"github.com/vislake/speed/go/authn/internal/safehttp"
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore/safehttp"
 )
 
 // PermissionSSOManage is the permission a tenant administrator needs to read

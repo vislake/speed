@@ -20,7 +20,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 
-	"github.com/vislake/speed/go/authn/internal/safehttp"
+	"github.com/vislake/speed/go/pkgcore/safehttp"
 )
 
 // Provider names for the channels this module ships. They are the values of
