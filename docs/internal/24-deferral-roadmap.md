@@ -268,11 +268,9 @@
 | 25 | ROADMAP | `web/packages/tenancy-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线(原指 M4 html-runner/e2e) | 锚:M4 e2e 行;浏览器自动化/html-runner/e2e.yml gated stub(serving 半已落地;本地可跑套件已存在) |
 | 26 | ROADMAP | `web/packages/account-ui/README.md` | 无 Storybook/预览 harness,真实浏览器对比度验证缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
 | 29 | ROADMAP | `docs/internal/16-verification.md` | 浏览器端到端(Playwright)未实现 | 锚:M4 e2e 行;浏览器自动化/html-runner/e2e.yml gated stub(serving 半已落地;本地可跑套件已存在) |
-| 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 锚:M4 文档站完整化(自动生成配置清单/按版本分目录发布);生成入口需真实宿主 schema |
 | 41 | ROADMAP | `docs/internal/10-compliance-and-audit.md` | compliance 哈希链、按分区归档、自身 HTTP 面未实现 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 47 | ROADMAP | `CLAUDE.md` | compliance 分时归档 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 48 | ROADMAP | `CLAUDE.md` | 对已伺服页面的浏览器自动化 | 锚:M4 e2e 行;浏览器自动化/html-runner/e2e.yml gated stub(serving 半已落地;本地可跑套件已存在) |
-| 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 锚:M4 文档站完整化(自动生成配置清单/按版本分目录发布);生成入口需真实宿主 schema |
 | 57 | ROADMAP | `go/compliance/AGENTS.md` | audit_events 可选 hash chain 未实现 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 58 | ROADMAP | `go/compliance/AGENTS.md` | tenant-scoped 模型所有者未注册 retention/erasure participant | 锚:M4 权务;tenant-scoped 模型 owner 注册 retention/erasure participant(边界只由注册闭合) |
 | 67 | ROADMAP | `go/dbkit/repository.go` | Restore 无保留期窗口强制 | 锚:M4 compliance 保留策略;dbkit Restore 不强制保留窗口 |
@@ -372,6 +370,8 @@
 | 166 | BLOCKED | `docs/internal/03-deployment-modes.md` | 运营商短信适配器(阿里云/腾讯云/Twilio)未接入 | 闭:e10d3d49 适配器落地(docs/03 已同步现文);3e1933f6 行文随行;适配器随 87364ed4 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
 | 171 | ROADMAP | `CLAUDE.md` | notes 模块删除/恢复 HTTP 端点 | 闭:2b2cd5da notes HTTP delete/restore 端点(spec 先行);8419861b 合并文档再生成 |
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
+| 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:02831bf3 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
+| 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:02831bf3 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;残余:站点版式与按版本发布随 M4 文档站完整化 |
 
 **部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
 
