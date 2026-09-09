@@ -17,7 +17,7 @@ flowchart TD
     Req[进入的请求] --> Res[tenancy 解析器\n自定义域名,再子域名,\n最后平台默认]
     Res -->|租户 id| MW[tenancy.Middleware]
     MW -->|租户上下文| H[你的处理器]
-    H --> R[dbkit.Repository[T] 查询\n过滤到 ctx 租户]
+    H --> R[Repository 查询\n过滤到 ctx 租户]
     Org[org 模块] -->|节点、成员、邀请| ODB[(租户级行)]
     MW -.->|白名单预认证路径跳过| Pub[登录页、公共配置]
 ```

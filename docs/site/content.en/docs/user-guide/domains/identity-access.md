@@ -20,7 +20,7 @@ flowchart LR
     A -->|Ed25519-signed access token| M[authn.Middleware\nverifies optionally]
     M -->|principal| T[tenancy.Middleware\nresolves tenant]
     T -->|tenant context| R[rbac gate\nRequirePermission]
-    R -->|Subject{TenantID, UserID}| B[Your handler]
+    R -->|authorized subject| B[Your handler]
     O[org] -.->|memberships & node paths| R
     P[pki] -.->|keys| A
 ```

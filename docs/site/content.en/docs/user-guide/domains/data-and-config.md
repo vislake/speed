@@ -15,7 +15,7 @@ to every layer of your product (`config`).
 
 ```mermaid
 flowchart LR
-    M[Tenant-scoped model\nID + TenantID fields] --> R[Your repository\nembeds dbkit.Repository[T]]
+    M[Tenant-scoped model\nID + TenantID fields] --> R[Your repository\nembeds the generic Repository]
     R -->|Create/Find/Update/Delete| DB[(SQLite or PostgreSQL\nsame code, both dialects)]
     MIG[Versioned SQL migrations\none set per dialect] --> DB
     R -.->|auto-injected tenant filter| DB

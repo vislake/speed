@@ -18,7 +18,7 @@ flowchart LR
     A -->|Ed25519 签名访问令牌| M[authn.Middleware\n可选校验]
     M -->|principal| T[tenancy.Middleware\n解析租户]
     T -->|租户上下文| R[rbac 权限门\nRequirePermission]
-    R -->|Subject{TenantID, UserID}| B[你的处理器]
+    R -->|已授权主体| B[你的处理器]
     O[org] -.->|成员关系与节点路径| R
     P[pki] -.->|密钥| A
 ```

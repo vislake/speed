@@ -19,7 +19,7 @@ flowchart TD
     Req[Incoming request] --> Res[tenancy resolver\ncustom domain, then subdomain,\nthen platform default]
     Res -->|tenant id| MW[tenancy.Middleware]
     MW -->|tenant context| H[Your handler]
-    H --> R[dbkit.Repository[T] queries\nfiltered to ctx tenant]
+    H --> R[Repository queries\nfiltered to ctx tenant]
     Org[org module] -->|nodes, memberships, invitations| ODB[(tenant-scoped rows)]
     MW -.->|allowlisted pre-auth paths skip| Pub[login page, public config]
 ```

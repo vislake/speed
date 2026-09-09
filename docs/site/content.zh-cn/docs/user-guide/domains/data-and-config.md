@@ -14,7 +14,7 @@ description: 在 dbkit 上声明租户级模型与仓库,并通过 config 模块
 
 ```mermaid
 flowchart LR
-    M[租户级模型\nID + TenantID 字段] --> R[你的仓库\n嵌入 dbkit.Repository[T]]
+    M[租户级模型\nID + TenantID 字段] --> R[你的仓库\n嵌入泛型 Repository]
     R -->|Create/Find/Update/Delete| DB[(SQLite 或 PostgreSQL\n同一套代码,双方言)]
     MIG[版本化 SQL 迁移\n每方言一套] --> DB
     R -.->|自动注入租户过滤| DB
