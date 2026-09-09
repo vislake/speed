@@ -244,3 +244,174 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 - **error-codes.md 随源再生成**:索引文档内嵌错误常量处注释,其中两处仍述旧路径;同时该生成产物在装配代码迁入 internal/app(导出改名)后即已漂移,本次一并 `tools/gen_error_code_index.py` 再生成归位。
 
 验证:全仓库对 47 个迁走文件名的 `cmd/server/<文件>` 形式引用零命中;裸文件名引用除 flowtests/cmd-server 目录内互引与本文档自身的迁移清单外全部带 `flowtests/` 前缀;reference-app `go build ./...` 通过。根 CLAUDE.md 普查句此前部分改写的宣告(随 2b 提交消息)按本记录修正:当时只重定向了少数文件,残余引用由本记录闭合。
+
+
+---
+
+# 批次 3 处置记录:无 target 单元测试迁入模块专有单元测试目录(规则细化、侦察与迁移蓝图)
+
+本记录由新用户规则驱动:单元层级、但没有针对的 target 源文件的测试文件(不是 `<源>_test.go`、也不是 1:1 映射)一律离开源码目录、进入单独的测试目录。它细化本文开头"批次 1"写入的布局规则:批次 1 允许"跨越多个源文件的包内行为套件留在包内、以行为命名",批次 2a 把"映射单一主导源"的套件并入该源既有测试文件;**残留(无单一 target 者)由本规则迁移出包**。2a/2b 部分"裁定保留"记录的效力随之更新:黑盒可迁者迁,白盒不可迁者按 Go 强制例外登记留包。本批次只侦察、定规则、出清单,不移动文件;移动由执行批次依清单进行。
+
+## 规则细化后的文本(落三处标准家 + 本文)
+
+三处措辞按各自语境写入(英文):根 `CLAUDE.md` Testing 小节、后端技能 §13、前端技能 §12;本文为中文记录。核心语句:
+
+- 有 target 的单元测试紧邻其 target:一个源一个文件;跨源套件若映射单一主导源,并入该源自己的测试文件;行数驱动的机械拆分保留目标名前缀。
+- **无单一 target 的单元层测试**——无主导源的行为套件、仓库/模块形态检查、模块根包自有内建的契约驱动——进入**模块的专有单元测试目录 `go/<module>/unittest/`(包名 `unittest`)**,对其包做黑盒外置测试,绝不散落在源码包里。
+- Go 自身包规则逼出的例外留在源码包内、逐一登记(逐文件清单与理由见本记录):必须触达未导出符号的白盒套件;`example_test.go`(godoc 示例);`<target>_bench_test.go`(白盒基准);紧邻 `go:embed` 迁移集的迁移套件;钉"本测试二进制不导入某包"的形态测试。
+- 前端 TS 无包边界机制,本规则不适用(前端 §12 明示):TS 行为套件继续就地共置。
+
+## 侦察三:残留清单与逐文件分档
+
+### 方法与范围
+
+对 `go/` 与 `examples/` 下全部 `*_test.go`(排除 `integration_test/`、`flowtests/`、`e2e/` 等既有专有目录)做机械扫描,共 485 个文件;其中 362 个为 `<源>_test.go` 且源在目录内(有 target,合规),123 个无同名源文件。123 个中 57 个为 `*example*` 命名文件(全部仅含 godoc `Example*` 函数,归入命名例外),余 **66 个为逐文件分档对象**。判据:包名(包内/外部);是否引用本包非测试文件的未导出声明(白盒,以词法探针初筛 + 人工复核,探针局限见"验证记录");钉什么;target 状态。带 `//go:build` 者(非单元层)另行记录。
+
+### 分档代码
+
+| 码 | 类 | 判定 |
+|---|---|---|
+| U | 无 target 黑盒可迁 | 迁入模块 `unittest/` 目录 |
+| WB | 白盒(引本包未导出生产符号) | 留包登记(Git 规则强制) |
+| S | `<源>` 前缀机械拆分片(目标名保留) | 留包(2a 拆分惯例) |
+| M | 迁移套件(钉迁移集/go:embed 固定) | 留包(既有类别) |
+| BENCH | 白盒基准 | 留包(命名例外) |
+| SHAPE | 钉"本测试二进制不导入某包" | 留包登记(Git 规则强制) |
+| OOS | 带 build tag 的非单元层文件 | 不属本规则 |
+| SELF | 契约支撑包自验套件 | 留包(映射支撑包单一源,2a 式并入队列) |
+| T | 支撑包双入口合测自述例外 | 留包登记 |
+| FIXT | 零测试函数夹具 | 随其消费方留包/随迁 |
+| G | cmd/server 集群(2b 收尾重裁定) | 按 target 旁置/应用级目录路由 |
+
+### 逐文件分档总表(66 文件)
+
+| 文件 | 包 | 盒 | 钉什么 | 分档 |
+|---|---|---|---|---|
+| go/pkgcore/eventbus_conformance_test.go | pkgcore_test | 黑(外) | `NewMemoryEventBus` 满足 `eventbustest.AssertConforms` | U(驱动) |
+| go/pkgcore/kv_conformance_test.go | pkgcore_test | 黑(外) | `NewMemoryKVStore` 满足 `kvstoretest.AssertConforms` | U(驱动) |
+| go/pkgcore/mailer_conformance_test.go | pkgcore_test | 黑(外) | `NewSMTPMailer` 满足 `mailertest.AssertConforms`(进程内假中继) | U(驱动) |
+| go/pkgcore/objectstore_conformance_test.go | pkgcore_test | 黑(外) | `NewLocalObjectStore` 满足 `objectstoretest.AssertConforms` | U(驱动) |
+| go/pkgcore/standalone_build_test.go | pkgcore | 自(无引用) | 模块 GOWORK=off 独立可建/可 vet(仓库形态) | U(需路径锚定编辑) |
+| go/pkgcore/go_work_use_block_test.go | pkgcore | 自(无引用) | go.work `use` 块覆盖全部模块(仓库形态) | U(需路径锚定编辑) |
+| go/pkgcore/kernel_shutdown_test.go | pkgcore | 白 | 关停顺序:preset 键、`seamCloserOf`、注册模块生命周期 | WB |
+| go/pkgcore/eventbus/postgres/wedged_local_publish_marks_bounded_test.go | postgres | 白 | 卡死本地 Publish 的 mark 有界(`go:build integration` 包内切片) | OOS |
+| go/pkgcore/eventbustest/accepts_buses_that_cannot_report_handler_errors_test.go | eventbustest | 黑(包内) | 套件验收侧不过度断言(支撑包自验,映射 assert_conforms.go) | SELF |
+| go/pkgcore/eventbustest/assert_conforms_redis_pair_test.go | eventbustest | 黑(包内) | 双实例检查经 miniredis 真跑(支撑包自验) | SELF |
+| go/pkgcore/eventbustest/assert_conforms_rejects_defective_buses_test.go | eventbustest | 白 | check\* 拒绝方向有牙(支撑包自验) | SELF |
+| go/jobs/queue_conformance_test.go | jobs_test | 黑(外) | `NewStandaloneQueue` 满足 `queuetest.AssertConforms` | U(驱动) |
+| go/jobs/fail_closed_cancellation_state_test.go | jobs_test | 黑(外) | `AssertFailsClosedOnUnreadableCancellationState` 经真表改名注入 | U(驱动族) |
+| go/jobs/claim_window_test.go | jobs | 黑(包内) | 认领未启动窗口 Attempts 诚实性(store.go+worker.go 双源) | U(需辅助迁出) |
+| go/jobs/candidate_window_fairness_test.go | jobs | 白 | 候选窗口公平(claimBatchSize) | WB |
+| go/jobs/database_fault_paths_test.go | jobs | 白 | store 层故障路径(jobRecord/createJobsTableSQL/写者注册门/reset 等 20 测) | WB |
+| go/jobs/metric_ordering_test.go | jobs | 白 | 成功/取消竞态下时长直方图顺序(jobDurationMetricName、markCancelled) | WB |
+| go/jobs/metric_registration_failure_test.go | jobs | 白 | 指标注册失败即建队失败(jobDurationMetricName) | WB |
+| go/jobs/retryable_start_test.go | jobs | 白 | 可重试启动(建表/丢表, jobsTable) | WB |
+| go/jobs/single_writer_test.go | jobs | 白 | 单写者注册(ensureJobsSchema) | WB |
+| go/jobs/writer_gate_liveness_test.go | jobs | 白 | 写者门活性(queueWritersTable、findByID) | WB |
+| go/jobs/standalone_queue_cancel_test.go | jobs | 黑(包内) | standalone_queue_test 取消竞态族(2a 行数拆分片) | S |
+| go/jobs/standalone_queue_bench_test.go | jobs | 白 | StandaloneQueue 基准 | BENCH |
+| go/jobs/queue/asynq/job_outcome_metrics_recording_test.go | asynq | 白 | handleErrorAttempt/wrapFailedAttempt 双源结果度量 | WB |
+| go/jobs/queue/asynq/marker_fail_closed_test.go | asynq | 白 | dispatchAfterMarkerRead/errCancelMarkerUnreadable | WB |
+| go/jobs/queuetest/assert_fails_closed_rejects_defective_queues_test.go | queuetest | 白 | 故障层中间态拒绝有牙(支撑包自验) | SELF |
+| go/jobs/queuetest/assert_fails_closed_rejects_swallowing_queues_test.go | queuetest | 白 | 吞读故障拒绝有牙(支撑包自验) | SELF |
+| go/dbkit/tenant_scope_tenantmodel_test.go | dbkit | 黑(包内) | TenantModel 三路测(tenant_scope.go 测试族行数拆分片,头注自述) | S |
+| go/dbkit/audit/migrations_test.go | audit | 黑(包内) | audit 迁移集 round-trip/列宽常量(迁移套件) | M |
+| go/dbkit/dbtest/dbtest_test.go | dbtest_test | 黑(外) | NewSQLite+NewPostgres 双入口合测(支撑包,头注自述例外) | T |
+| go/notification/address_index_column_test.go | notification | 白 | VerifiedContact+PlatformBlacklist 表名/列常量双模型 | WB |
+| go/notification/hub_http_test.go | notification | 白 | handleStream 经 hub 真 HTTP(apiPath) | WB |
+| go/notification/subscribe_test.go | notification | 黑(包内) | 订阅类型过滤与坏公告丢弃(module.go+hub.go 双源) | U(需辅助迁出) |
+| go/notification/delivery_bench_test.go | notification | 白 | 派生投递键基准 | BENCH |
+| go/notification/preference_service_bench_test.go | notification | 黑 | 偏好解析基准 | BENCH |
+| go/observability/factory_vars_test.go | observability | 白 | init.go 未导出 otlpFactory/metricsReaderFactory 并发替换 | WB |
+| go/observability/exporter/otlp/invalid_utf8_export_test.go | otlp_test | 黑(外) | 非法 UTF-8 请求导出批仍到达(跨包组合) | U |
+| go/observability/exporter/prometheus/otlp_not_registered_test.go | prometheus_test | 黑(外) | 未注册 otlp 工厂即失败;钉二进制不导入 exporter/otlp | SHAPE |
+| go/admin/impersonation_service_start_dispatch_test.go | admin | 白 | 冒名开始即派发安全通知(notificationGroupSecurity 生产常量) | WB |
+| go/compliance/retention_config_test.go | compliance | 黑(包内) | 保留配置接线族(retention_test 2a 行数拆分片) | S |
+| go/sharing/sweep_window_test.go | sharing | 白 | 过期清扫窗口/幂等键/恢复(expirySweepHandler 等) | WB |
+| go/pki/enqueue_window_test.go | pki | 白 | 过期扫描/CRL 再生窗口幂等键 | WB |
+| go/pki/key_ref_widening_test.go | pki | 白 | 引用加宽迁移(tableSigningKeys 等) | WB |
+| go/authn/signin_channel_feature_gates_test.go | authn | 白 | 渠道特征开关拒绝(service.go 生产 hasCode) | WB |
+| go/authn/password_bench_test.go | authn | 白 | 口令哈希基准 | BENCH |
+| go/authn/token_bench_test.go | authn | 白 | 令牌签发基准 | BENCH |
+| go/authn/standalone_build_test.go | authn | 自 | 模块 GOWORK=off 独立可建(仓库形态) | U(需路径锚定编辑) |
+| go/tenancy/standalone_build_test.go | tenancy | 自 | 模块 GOWORK=off 独立可建(仓库形态) | U(需路径锚定编辑) |
+| go/ratelimit/no_cjk_characters_test.go | ratelimit | 自 | 模块目录注释/Markdown 无 CJK(仓库形态) | U(需路径锚定编辑) |
+| go/integration/webhook_redelivery_test.go | integration | 白 | 重投递幂等键/载荷形状/重投递语义 | WB |
+| go/billing/gateway/alipay/testkeys_test.go | alipay | —(夹具) | RSA 键对夹具,零测试函数,消费方 gateway_test 等 | FIXT |
+| go/billing/gateway/wechat/testkeys_test.go | wechat | —(夹具) | 键/密文夹具,零测试函数,消费方 decrypt/notify/sign 测试 | FIXT |
+| go/org/migrations/upgrade_test.go | migrations | 黑(包内) | 0008 升级(0007 时代库,go:embed 子集) | M |
+| go/org/migrations/upgrade_postgres_test.go | migrations | 黑(包内) | 同上 PostgreSQL 腿(build tag) | M |
+| go/metering/migrations/upgrade_test.go | migrations | 黑(包内) | 0007 升级(0006 时代库,go:embed 子集) | M |
+| go/metering/migrations/upgrade_postgres_test.go | migrations | 黑(包内) | 同上 PostgreSQL 腿(build tag) | M |
+| go/rbac/service_bench_test.go | rbac | 白 | 服务基准(白盒触 svc.cache/grantKey) | BENCH |
+| examples/reference-app/cmd/server/demo_subject_test.go | main | 黑(app 面) | 解析器/守卫纯逻辑(target 现居 internal/app) | G→internal/app |
+| examples/reference-app/cmd/server/demo_notification_test.go | main | 黑(app 面) | payload 提取纯逻辑(target 现居 internal/app) | G→internal/app |
+| examples/reference-app/cmd/server/clinic_name_test.go | main | 黑(app 面) | 诊所名 4 路由 + 1 直测(混合) | G→拆分(路由半→flowtests,直测半→internal/app) |
+| examples/reference-app/cmd/server/demo_user_header_kill_switch_test.go | main | 黑(app 面) | kill-switch 解析器逻辑 + HTTP 双路径(混合) | G→拆分(逻辑半→internal/app,HTTP 半→flowtests) |
+| examples/reference-app/cmd/server/demo_admin_test.go | main | 黑(app 面) | seeded 装配消费证明(旅程) | G→flowtests |
+| examples/reference-app/cmd/server/demo_users_test.go | main | 黑(app 面) | 种子账号门/重启存续旅程 | G→flowtests |
+| examples/reference-app/cmd/server/self_service_test.go | main | 黑(app 面) | 自服务注册旅程 + 1 直测 | G→flowtests |
+| examples/reference-app/cmd/server/test_support_test.go | main | —(夹具) | 基座辅助镜像(2b 为留包套件所建) | G→随消费方分迁/清退 |
+| examples/reference-app/internal/smilesim/service_settlement_test.go | smilesim | 白 | 结算/孤儿退款前缀族(2a 拆分片 + 白盒) | S |
+
+计数:U 14;WB 19;S 4;M 5;BENCH 6;SHAPE 1;OOS 1;SELF 5;T 1;FIXT 2;G 8。= 66。
+
+不属于分档对象的说明:`*example*` 命名 57 文件(godoc 示例例外)与 `<target>_test.go` 362 文件合规;`cmd/server/main_test.go` 有 target(main.go,包内白盒单元),留包。
+
+## 设计决定:模块专有单元测试目录 `go/<module>/unittest/`
+
+Go 包规则的推演:测试文件移到另一个目录就成为不同包,只能经被测包的导出面黑盒测试;白盒文件按 Go 规则根本不能迁(例外登记见上)。专有目录必须仍在普通单元运行里被执行(无 build tag、无 `-tags` 门),否则 CI 覆盖与单元套件丢失它。三个候选形态对比:
+
+- **(a) 模块根旁的每模块测试目录**(如 `go/jobs/behaviortests/`):模块即发布单元,CI 按模块跑 `go test ./...`,目录天然被覆盖;同目录文件共享一个包,故各模块只需一个目录、一个包名。
+- (b) 逐包平级目录:粒度最细,但白盒文件反正不能迁,黑盒可迁文件多数位于模块根包;为每个子包开目录徒增目录数,与 (a) 等价收益。
+- (c) 每模块一个目录收纳其全部包的黑盒可迁套件:外部测试包可导入模块内任意包(含 `internal/`),(a) 的形态已天然支持,无需分层。
+
+选定 (a):目录名与包名取 **`unittest/`**、**`unittest`** —— 与 `integration_test/` 按层级命名的惯例平行,目录即用途;全 `_test.go` 文件目录只被 `go test` 编译、不进入 `go build`,对消费者零成本(flowtests 先例已验证:CI 的 `go test ./...` 自动覆盖新目录,工作流无需改动)。模块根包内建实现的契约驱动、仓库形态检查、无主导源行为套件全部可黑盒导入模块根包,迁入即满足。
+
+**明确不迁的例外及其 Go 理由**:白盒(WB 19,引未导出生产符号);迁移套件(M 5,`go:embed` 相对路径不可用 `..`,迁出即断;其中 dbkit/audit 一套钉迁移集 round-trip 与列宽常量,同属此类);`otlp_not_registered`(SHAPE,与任何导入 `exporter/otlp` 的文件同目录即毁掉被测形态);集成标签包内切片(OOS);契约支撑包自验套件(SELF 5,映射支撑包单一源 assert_conforms.go/assert_fails_closed.go,且 teeth 白盒;属 2a 式并入既有 `<源>_test.go` 的合并队列,不是迁移对象);支撑包双入口合测(T);拆分片(S 4,保留 `<源>` 前缀的既有测试族成员);夹具(FIXT 2,消费方留包即随留);基准与 example 按命名例外。
+
+## 迁移清单(执行批次蓝图)
+
+### U:迁入 `go/<module>/unittest/`(14 文件)
+
+| 文件 | 现包 | 迁移编辑要求 |
+|---|---|---|
+| go/pkgcore/{eventbus,kv,mailer,objectstore}_conformance_test.go | pkgcore_test | package 子句改 `unittest`,引用已限定,原样保留;文件头"外部测试包机械例外"叙述在搬迁后仍真(支撑包回导成环),需按新目录改写 |
+| go/pkgcore/standalone_build_test.go | pkgcore | package→`unittest`;路径锚定编辑:`filepath.Dir(thisFile)` 改为自 `runtime.Caller` 上溯至含 go.mod 的模块根 |
+| go/pkgcore/go_work_use_block_test.go | pkgcore | 同上;仓库根锚点 `..`,`..` 改自模块根上溯至 go.work 所在根 |
+| go/jobs/queue_conformance_test.go、go/jobs/fail_closed_cancellation_state_test.go | jobs_test | package→`unittest`,引用已限定 |
+| go/jobs/claim_window_test.go | jobs | 加 `import jobs` 并全量限定导出符号;其包内辅助 newTestQueue/startQueue/pollJob/waitTerminal(standalone_queue_test.go,留包)不可跨包,按共享辅助规则迁最小集入 `go/jobs/internal/testutil`(已有该包,加导出构造器) |
+| go/authn/standalone_build_test.go、go/tenancy/standalone_build_test.go | authn/tenancy | package→`unittest`;路径锚定编辑(上溯 go.mod) |
+| go/ratelimit/no_cjk_characters_test.go | ratelimit | package→`unittest`;路径锚定编辑:`WalkDir(".")` 改为自模块根上溯后 `WalkDir(moduleRoot)` |
+| go/observability/exporter/otlp/invalid_utf8_export_test.go | otlp_test | 迁入 go/observability/unittest/;package→`unittest`(引 otlp 空导入;注意与 otlp_not_registered 的 SHAPE 互斥——后者必须留在 prometheus 目录,二者永不同目录) |
+| go/notification/subscribe_test.go | notification | 加 import 并限定;包内辅助 newTestDB/testModuleOptions/newHostRegistry/assertMessage/assertNoMessage(module_test.go/hub_test.go/contact_test.go 等,留包)迁最小集入 `go/notification/internal/testutil`(已有该包) |
+
+### G:cmd/server 集群(8 文件,2b 收尾"待后续批次重新裁定"的兑现;非本规则迁移对象而是 target 旁置/应用级目录路由)
+
+| 文件 | 路由 | 编辑要求 |
+|---|---|---|
+| demo_subject_test.go、demo_notification_test.go | internal/app/(package app_test) | package 子句 main→app_test;引用已 `app.` 限定、保留;文件内自足辅助随迁 |
+| clinic_name_test.go、demo_user_header_kill_switch_test.go | 拆分:纯逻辑腿→internal/app(app_test);经 buildTestServer 的 HTTP 腿→flowtests | 拆分边界按各 Test 是否驱动组合服务器定,执行批次定并回填本表 |
+| demo_admin_test.go、demo_users_test.go、self_service_test.go | flowtests(旅程/装配类) | package→flowtests;所需 demo 身份/种子/自服务辅助 flowtests/test_support_test.go 镜像已含,按编译补缺 |
+| test_support_test.go | 随消费方清退 | 消费方全部离场后 cmd/server 无使用者(2b 镜像对侧 flowtests/server_test.go 与 flowtests/test_support_test.go 已含等值辅助);删除并在对侧头注同步镜像关系 |
+| (留) main_test.go | cmd/server | 有 target(main.go),不动 |
+
+路由完成后 cmd/server 只剩 main.go + main_test.go,2b 验收线"除登记外不再出现装配流测试"闭合。
+
+### 留包例外登记(44 文件)
+
+WB 19(白盒,Go 强制):kernel_shutdown、factory_vars、hub_http、address_index_column、sweep_window、webhook_redelivery、enqueue_window、key_ref_widening、signin_channel_feature_gates、impersonation_service_start_dispatch、jobs 7 件(database_fault_paths/candidate_window_fairness/metric_ordering/metric_registration_failure/retryable_start/single_writer/writer_gate_liveness)、asynq 2 件。S 4(拆分片):standalone_queue_cancel、retention_config、tenant_scope_tenantmodel、smilesim service_settlement。M 5(迁移套件):org/metering migrations 各 2、audit 1。BENCH 6。SHAPE 1。OOS 1。SELF 5。T 1。FIXT 2。逐文件理由见总表"分档"列;执行批次不改动这些文件(仅登记)。
+
+## 验证记录
+
+- **5 个可迁文件抽查(阅读确认只经导出面/公共 API)**:pkgcore/standalone_build_test.go(全文:零包引用,仅 stdlib+exec,路径锚定 filepath.Dir(thisFile));ratelimit/no_cjk_characters_test.go(全文:零包引用,`WalkDir(".")` 走模块目录);observability/exporter/otlp/invalid_utf8_export_test.go(外部包 otlp_test,obs/exporter 引用全限定);jobs/queue_conformance_test.go(外部包 jobs_test,imports dbtest/jobs/queuetest,引用全限定);notification/subscribe_test.go(包内,引用全为导出 API + 包内测试辅助,无生产未导出引用)。mailer/kv/eventbus/objectstore 四驱动与 queue_conformance 同形(文件头同注,引用全限定)。
+- **白盒判定确认(未导出引用实证)**:factory_vars_test.go L41-45 赋值 otlpFactory/metricsReaderFactory(init.go 包变量);kernel_shutdown_test.go L353 `seamCloserOf(...)`、L227 preset 键(map 键为包内常量);database_fault_paths_test.go L175/L330/L674 直呼 acquireWriterRegistration/insertRecord/completeDeadLetter 等 store.go 未导出函数;jobs metric_ordering L99 markCancelled、writer_gate L95 findByID(L544 queueWritersTable);sharing sweep_window L293 `expirySweepHandler{svc: svc}` 结构体字面量;admin impersonation L439 notificationGroupSecurity(module.go:124 生产常量);authn signin L90 hasCode(service.go:1328 生产函数);pki enqueue_window L385 crlRegenerateIdempotencyKey 直呼、L145 taskTypeExpiryScan;webhook_redelivery L41/L85 webhookDeliveryJobPayload/redeliveryIdempotencyKey;smilesim service_settlement L711 orphanRefundJobIDPrefix;hub_http L68 apiPath。jobs/claim_window_test.go 与 notification/subscribe_test.go 判为黑盒(词法探针零生产未导出命中 + 通读确认)。
+- **探针局限**:词法探针只捕非限定未导出标识符;选择器形态(obj.未导出方法/字段)与包内测试辅助网靠通读与抽查补;编译是最终权威——执行批次以迁移后 `go test ./...`(模块内)与 `-race` 全绿为门,任何清单误判在编译门暴露即按 WB 登记回填本表。
+- 本批次无文件移动,未跑迁移后测试;被改三处标准文件为纯文档,`tools/scan_cjk.py` 规则对 `docs/internal/` 豁免。
+
+## 执行批次注意
+
+1. 旧"conformance 驱动留根目录"样板(2a/2b 记录与多文件头注)被本规则取代为"迁模块 unittest/";相关文件头注中引旧规则文字处随迁改写(注释只述当前状态)。
+2. `unittest/` 目录全部 `_test.go`,无 build tag;模块 CI `go test ./...` 自动覆盖,工作流不改。
+3. 有 target 的 `cmd/server` 集群路由属 2b 收尾,与 U 迁移分开提交更清晰;拆分边界回填本表。
+4. 白盒留包文件不改动;SELF 5 件列入 2a 式并入队列(并入既有 assert_conforms_test.go/assert_fails_closed_test.go),不属本迁移。
