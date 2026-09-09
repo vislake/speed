@@ -36,6 +36,9 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 - [Module reference](https://speed.vislake.com/docs/user-guide/modules/): one usage page per Go module and npm package
   (21 + 12), grouped by dependency layer — what it is for, when to choose it, how to wire
   it, runnable examples, known limitations.
+- [API reference](https://speed.vislake.com/docs/user-guide/api-reference/): the complete platform HTTP API, rendered
+  from the merged OpenAPI contract of the ten platform modules — every operation,
+  parameter, schema and error (interactive).
 - [Error code index](https://speed.vislake.com/docs/user-guide/error-codes/): every structured error code a speed-based API
   can answer with — HTTP status, locale message, triggering condition and source,
   grouped by module.

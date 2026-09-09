@@ -583,6 +583,14 @@ jobs:
         # the naming conventions that keep fragments from colliding under
         # the merge) and what is deliberately not checked yet.
         run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint contracts/speed.yaml --config redocly.yaml
+      - name: Refresh the documentation site's copy of the merged document
+        # The site's interactive API reference (docs/site/content.*/docs/
+        # user-guide/api-reference.md) serves this merged document from
+        # docs/site/static/apidocs/speed.yaml. Same copy as Taskfile.yml's
+        # api:merge task -- keep the two in lockstep -- so the porcelain
+        # gate below covers the site copy too: a fragment change without
+        # the refreshed, committed copy fails here.
+        run: cp contracts/speed.yaml docs/site/static/apidocs/speed.yaml
       - name: Generated merged document must match the committed spec
         # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.

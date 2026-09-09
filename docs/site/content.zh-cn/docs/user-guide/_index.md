@@ -25,5 +25,7 @@ npm 包的团队。
 
 ## 参考页面
 
+- [API 参考](api-reference/)——平台完整 HTTP API,由合并 OpenAPI
+  契约渲染:每个操作、参数、schema 与错误,按模块分组。
 - [错误码索引](error-codes/)——speed 系 API 可能应答的每个结构化
   错误码,含状态、locale 消息、触发条件与出处。

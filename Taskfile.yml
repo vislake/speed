@@ -404,6 +404,15 @@ tasks:
         -o contracts/speed.yaml
       - node web/scripts/redocly-join-fixup.mjs
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint contracts/speed.yaml --config redocly.yaml
+      # The documentation site's interactive API reference serves this
+      # merged document, so the committed site copy must track it. The
+      # site copy is a plain file copy of the merge output (the
+      # reference page /docs/user-guide/api-reference/ loads it with
+      # Redoc); api-contract.yml's merge leg runs the same copy, and
+      # its porcelain gate covers the copy, so a fragment change not
+      # committed with the refreshed site copy fails there -- the same
+      # lockstep as every generated artifact in this pipeline.
+      - cp contracts/speed.yaml docs/site/static/apidocs/speed.yaml
 
   api:gen:app:
     desc: Regenerate the reference app's OWN API surface -- its three backend fragments (oapi-codegen), the app-owned merged document (redocly join of notes/cases/smilesim into the app's app-openapi.yaml) and the app-owned frontend SDK (orval into examples/reference-app/web/src/app-api).

@@ -29,6 +29,9 @@ then identity and organization, then the capability modules on top.
 
 ## Reference pages
 
+- [API reference](api-reference/) — the complete platform HTTP API,
+  rendered from the merged OpenAPI contract: every operation,
+  parameter, schema and error, grouped by module.
 - [Error code index](error-codes/) — every structured error code a
   speed-based API can answer with, with status, locale message,
   triggering condition and source.
