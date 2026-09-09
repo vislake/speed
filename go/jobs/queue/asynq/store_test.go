@@ -266,6 +266,63 @@ func TestJobFromTaskInfo_DeadLetter(t *testing.T) {
 	}
 }
 
+// TestJobFromTaskInfo_StartedAtFromEnvelope pins the StartedAt refinement:
+// a result envelope whose worker stamped StartedAt gives the Job its
+// started moment (the attempt's actual start, written by
+// processTaskUncancelled's first envelope write) -- absent from every
+// fixture above, whose zero-value envelopes leave StartedAt nil.
+func TestJobFromTaskInfo_StartedAtFromEnvelope(t *testing.T) {
+	startedAt := time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
+	env, err := encodeResultEnvelope(resultEnvelope{StartedAt: startedAt.UnixNano()})
+	if err != nil {
+		t.Fatalf("encodeResultEnvelope() error = %v", err)
+	}
+	info := &asynqlib.TaskInfo{
+		ID:      "job-started",
+		Queue:   queueDefault,
+		Type:    "long-running",
+		Headers: map[string]string{headerTenantID: "tenant-a"},
+		State:   asynqlib.TaskStateActive,
+		Result:  env,
+	}
+
+	job := jobFromTaskInfo(info, nil)
+
+	if job.StartedAt == nil || !job.StartedAt.Equal(startedAt) {
+		t.Errorf("StartedAt = %v, want %v (from the envelope's own StartedAt stamp)", job.StartedAt, startedAt)
+	}
+}
+
+// TestJobFromTaskInfo_RetryingRefinesUpdatedAtFromLastFailedAt pins the
+// retrying refinement: a Job sitting in asynq's retry state whose last
+// attempt has a recorded failure moment reports that moment as its
+// UpdatedAt -- the freshest write to the Job's record -- never the static
+// created-at fallback.
+func TestJobFromTaskInfo_RetryingRefinesUpdatedAtFromLastFailedAt(t *testing.T) {
+	lastFailedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	info := &asynqlib.TaskInfo{
+		ID:           "job-retrying",
+		Queue:        queueDefault,
+		Type:         "flaky",
+		Headers:      map[string]string{headerTenantID: "tenant-a"},
+		State:        asynqlib.TaskStateRetry,
+		LastErr:      "transient failure",
+		LastFailedAt: lastFailedAt,
+	}
+
+	job := jobFromTaskInfo(info, nil)
+
+	if job.Status != jobs.StatusRetrying {
+		t.Fatalf("Status = %v, want %v", job.Status, jobs.StatusRetrying)
+	}
+	if job.Error != "transient failure" {
+		t.Errorf("Error = %q, want %q", job.Error, "transient failure")
+	}
+	if !job.UpdatedAt.Equal(lastFailedAt) {
+		t.Errorf("UpdatedAt = %v, want %v (the last failure moment)", job.UpdatedAt, lastFailedAt)
+	}
+}
+
 func TestJobFromTaskInfo_CancelledOverridesUnderlyingState(t *testing.T) {
 	cancelledAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	info := &asynqlib.TaskInfo{
