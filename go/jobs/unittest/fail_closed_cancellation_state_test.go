@@ -1,10 +1,12 @@
-// This file lives in package jobs_test — the external test package,
-// distinct from the internal package jobs — for the identical mechanical
-// reason queue_conformance_test.go documents: it must import
-// go/jobs/queuetest, which itself imports go/jobs, and an internal test
-// file importing a package that imports jobs back is an import cycle Go's
+// This file lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier suites with no single source file as their target
+// (the backend coding standard's testing-layout rule). It must be
+// black-box against package jobs for the identical mechanical reason
+// queue_conformance_test.go documents: it imports go/jobs' queuetest
+// support package, which itself imports go/jobs, and an internal test file
+// importing a package that imports jobs back is an import cycle Go's
 // toolchain refuses.
-package jobs_test
+package unittest
 
 import (
 	"context"

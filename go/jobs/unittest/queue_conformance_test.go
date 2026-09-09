@@ -1,15 +1,13 @@
-// This file lives in package jobs_test -- the external test package,
-// distinct from standalone_queue_test.go's internal package jobs -- because
-// it must import go/jobs/queuetest, which itself imports go/jobs: an
-// internal test file (package jobs) importing a package that imports jobs
-// back is an import cycle Go's toolchain refuses ("import cycle not
-// allowed in test"), while an external test file compiles as a separate
-// package and carries no such restriction. This is the mechanical exception
-// the testing-layout rule names for exactly this
-// situation (package x vs. package x_test cases cannot share a file), the
-// same one go/pkgcore/kv_conformance_test.go's own doc comment documents
-// for kvstoretest.
-package jobs_test
+// This file lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier suites with no single source file as their target
+// (the backend coding standard's testing-layout rule). A seam-contract
+// driver of the module root's own built-ins is such a suite, and it must be
+// black-box against package jobs: the driver imports go/jobs' queuetest
+// support package, which itself imports go/jobs, and an internal test file
+// (package jobs) importing a package that imports jobs back is an import
+// cycle Go's toolchain refuses ("import cycle not allowed in test"). An
+// external test package carries no such restriction.
+package unittest
 
 import (
 	"testing"

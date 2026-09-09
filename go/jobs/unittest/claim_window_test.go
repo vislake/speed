@@ -1,10 +1,11 @@
-package jobs
+package unittest
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -14,7 +15,12 @@ import (
 // actually starts it (the handoff, worker.go's runAttempt), never when the
 // dispatcher claims the row. Named for the behaviour it verifies, since it
 // spans store.go's claimOne/markAttemptStarted and worker.go's
-// dispatch/runWorker.
+// dispatch/runWorker. It runs black-box against package jobs from this
+// module's unittest/ directory (the unit-tier home for behaviour suites
+// with no single source-file target), driving the queue entirely through
+// the exported API; the queue-construction and polling helpers are the
+// mirrored copies this directory's test_support_test.go holds (see that
+// file's doc comment for why the in-package helpers cannot be shared).
 
 // TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts is
 // the deterministic end-to-end regression: a single worker is blocked
@@ -29,16 +35,16 @@ import (
 // Attempts 1 with StartedAt set. Deterministic without wall-clock sleeps: the worker's occupancy of
 // the second Job is guaranteed by the first Job's blocked Handle.
 func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *testing.T) {
-	q := newTestQueue(t, WithWorkerCount(1))
-	entered := make(chan JobID, 1)
+	q := newTestQueue(t, jobs.WithWorkerCount(1))
+	entered := make(chan jobs.JobID, 1)
 	release := make(chan struct{})
-	blocker := NewHandlerFunc("claim-window.block", func(_ context.Context, job *Job, _ ProgressFn) (Result, error) {
+	blocker := jobs.NewHandlerFunc("claim-window.block", func(_ context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
 		entered <- job.ID
 		<-release
-		return Result{}, nil
+		return jobs.Result{}, nil
 	})
-	runner := NewHandlerFunc("claim-window.fast", func(context.Context, *Job, ProgressFn) (Result, error) {
-		return Result{Data: []byte("ok")}, nil
+	runner := jobs.NewHandlerFunc("claim-window.fast", func(context.Context, *jobs.Job, jobs.ProgressFn) (jobs.Result, error) {
+		return jobs.Result{Data: []byte("ok")}, nil
 	})
 	if err := q.RegisterHandler(blocker); err != nil {
 		t.Fatalf("RegisterHandler(blocker) error = %v", err)
@@ -50,7 +56,7 @@ func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *t
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
-	slowID, err := q.Enqueue(context.Background(), Task{Type: "claim-window.block", TenantID: "tenant-a"})
+	slowID, err := q.Enqueue(context.Background(), jobs.Task{Type: "claim-window.block", TenantID: "tenant-a"})
 	if err != nil {
 		t.Fatalf("Enqueue(blocker) error = %v", err)
 	}
@@ -63,11 +69,11 @@ func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *t
 	// The second Job: the dispatcher claims it (StatusRunning in the
 	// database) and blocks handing it to the worker, which is still inside
 	// the blocker's Handle -- the claimed-but-not-started window.
-	fastID, err := q.Enqueue(context.Background(), Task{Type: "claim-window.fast", TenantID: "tenant-a"})
+	fastID, err := q.Enqueue(context.Background(), jobs.Task{Type: "claim-window.fast", TenantID: "tenant-a"})
 	if err != nil {
 		t.Fatalf("Enqueue(runner) error = %v", err)
 	}
-	pollJob(t, q, ctx, fastID, 3*time.Second, func(j *Job) bool { return j.Status == StatusRunning })
+	pollJob(t, q, ctx, fastID, 3*time.Second, func(j *jobs.Job) bool { return j.Status == jobs.StatusRunning })
 
 	job, err := q.Get(ctx, fastID)
 	if err != nil {
@@ -82,12 +88,12 @@ func TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts(t *t
 
 	close(release)
 	slowJob := waitTerminal(t, q, ctx, slowID)
-	if slowJob.Status != StatusSucceeded {
-		t.Fatalf("blocker job Status = %v, want %v", slowJob.Status, StatusSucceeded)
+	if slowJob.Status != jobs.StatusSucceeded {
+		t.Fatalf("blocker job Status = %v, want %v", slowJob.Status, jobs.StatusSucceeded)
 	}
 	job = waitTerminal(t, q, ctx, fastID)
-	if job.Status != StatusSucceeded {
-		t.Fatalf("runner job Status = %v, want %v", job.Status, StatusSucceeded)
+	if job.Status != jobs.StatusSucceeded {
+		t.Fatalf("runner job Status = %v, want %v", job.Status, jobs.StatusSucceeded)
 	}
 	if job.Attempts != 1 {
 		t.Errorf("runner job final Attempts = %d, want 1 (exactly one Handle call ran, counted at its handoff)", job.Attempts)
