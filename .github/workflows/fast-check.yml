@@ -1,8 +1,12 @@
 name: fast-check
 # Fast per-PR check pipeline: lint + unit tests + build of every real
 # module and package, plus the repository-level discipline checks that
-# exist. Target duration under 8 minutes; every job carries a timeout
-# and stale runs are cancelled via concurrency.
+# exist. Target duration ~10 minutes (written when the coverage-gate
+# measurement ran for six modules only; since the gate covers every
+# matrix row, each module job also runs its suite a second time without
+# -race under -coverprofile -- leg 3b below -- and the slowest row sets
+# the wall clock); every job carries a timeout and stale runs are
+# cancelled via concurrency.
 #
 # COVERAGE -- what runs:
 #   * go-modules job: the modules with real, tested implementation --
@@ -10,11 +14,13 @@ name: fast-check
 #     go-module-ci workflow: golangci-lint (the project-standard lint
 #     leg, .golangci.yml at the repo root -- pinned, checksummed binary
 #     and analysis cache from setup-go-env), go vet, unit tests under
-#     -race, a workspace-context build and a GOWORK=off standalone
-#     build. Stub modules (a go.mod + doc.go only) are deliberately
-#     absent: they have no code to check, and listing them would imply
-#     coverage that does not exist. Adding a module to this matrix is
-#     the whole cost of adding it to CI.
+#     -race, the coverage gate (leg 3b: the module's exact statement
+#     coverage under an 80% floor and against its committed baseline,
+#     measured excluding .gen.go statements), a workspace-context build
+#     and a GOWORK=off standalone build. Stub modules (a go.mod +
+#     doc.go only) are deliberately absent: they have no code to check,
+#     and listing them would imply coverage that does not exist. Adding
+#     a module to this matrix is the whole cost of adding it to CI.
 #   * npm-packages job: the packages with real, tested implementation --
 #     every row of the matrix below -- each run through the reusable
 #     npm-package-ci workflow: a frozen-lockfile workspace install from
@@ -54,14 +60,17 @@ name: fast-check
 #         candidates.
 #       - tools/check_coverage_baseline.py --selfcheck -- the
 #         coverage-baseline file's own health gate for docs/internal/20's
-#         "coverage must not decline (against a baseline)" rule: every
-#         row in tools/coverage-baselines.json must name one of the six
-#         foundation modules (pkgcore, dbkit, tenancy, rbac, billing,
-#         jobs) with a real go.mod, and every foundation module must
-#         have a row -- so a stale or missing row cannot silently
-#         exempt a module from the comparison the go-module-ci coverage
-#         leg (reusable-go-module-ci.yml leg 3b) runs on every module
-#         job.
+#         coverage rule (every released module: an 80% floor measured
+#         excluding .gen.go statements, plus no decline against the
+#         recorded baseline): every row in tools/coverage-baselines.json
+#         must name one of the 22 gated modules (the 21 go/ modules with
+#         a go.mod plus examples/reference-app) with a real go.mod, and
+#         every gated module must have a row -- so a stale or missing
+#         row cannot silently exempt a module from the comparisons the
+#         go-module-ci coverage leg (reusable-go-module-ci.yml leg 3b)
+#         runs on every module job. The reference app's own coverage
+#         check is not gated here: its unit suite is full-check-only,
+#         so the measurement rides full-check's reference-app job.
 #       - tools/check_spec_request_tenant_id.py -- the API-spec lint for
 #         the 18-cicd discipline row "the API layer must not accept an
 #         externally supplied tenant_id": every backend fragment's
@@ -258,12 +267,13 @@ jobs:
       # step like the CJK scan above it.
       - name: Tenant-isolation coverage check (Repository isolation suites)
         run: python3 tools/check_repo_isolation.py
-      # Coverage-baseline file health: every row must name a foundation
-      # module (docs/internal/20's gated six) with a real go.mod, and
-      # every foundation module must have a row -- the gate the
-      # go-module-ci coverage leg compares against must itself be
+      # Coverage-baseline file health: every row must name a gated
+      # module (docs/internal/20's released set: the 21 go/ modules with
+      # a go.mod plus examples/reference-app) with a real go.mod, and
+      # every gated module must have a row -- the baselines the
+      # go-module-ci coverage leg compares against must themselves be
       # complete and current, or a missing row would silently exempt a
-      # module from the "coverage must not decline" rule.
+      # module from the 80% floor and the no-decline rule.
       - name: Coverage-baseline file self-check
         run: python3 tools/check_coverage_baseline.py --selfcheck
       # API-spec lint for the discipline-table row "the API layer must

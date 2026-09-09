@@ -35,21 +35,31 @@ name: go-module-ci
 #                                layered-triggering rule puts them in the
 #                                pre-merge full matrix (full-check), not in
 #                                the fast per-PR check.
-#   3b. Coverage baseline         docs/internal/20-quality-and-security.md's
-#     (foundation modules)       "coverage must not decline (against a
-#                                baseline)" rule for the six foundation
-#                                modules (pkgcore, dbkit, tenancy, rbac,
-#                                billing, jobs): tools/check_coverage_baseline.py
-#                                measures the module's exact unit-suite
-#                                statement coverage and compares it with
+#   3b. Coverage gate            docs/internal/20-quality-and-security.md's
+#     (every module)             coverage rule for every released module:
+#                                tools/check_coverage_baseline.py measures
+#                                the module's exact unit-suite statement
+#                                coverage, excluding generated files
+#                                (.gen.go -- the census is hand-written
+#                                code only), and fails when the measured
+#                                total sits more than the 0.05-point
+#                                tolerance below either bound -- the 80%
+#                                floor (the 2026-09 product decision) or
 #                                the committed tools/coverage-baselines.json
-#                                row, failing on a decline. A module
-#                                outside the gated set prints a notice and
-#                                passes; the baseline file's own health is
-#                                gated by the same script's --selfcheck in
-#                                fast-check's repo-checks job, so a stale
-#                                or missing row cannot silently rot into a
-#                                row nobody compares against.
+#                                row (the no-decline rule, which predates
+#                                the floor and survives it). A module
+#                                outside the gated set (a new go/ module
+#                                not yet added to the tool's list) prints
+#                                a notice and passes; the baseline file's
+#                                own health is gated by the same script's
+#                                --selfcheck in fast-check's repo-checks
+#                                job, so a stale or missing row cannot
+#                                silently rot into a row nobody compares
+#                                against. The reference app is not a row
+#                                of this matrix: its coverage gate runs
+#                                in full-check's reference-app job (the
+#                                app's unit suite is full-check-only, so
+#                                its measurement belongs beside it).
 #   4. go build ./...            module build in workspace context.
 #   5. GOWORK=off go build ./... standalone build proving the module's
 #                                go.mod/go.sum suffice outside the
@@ -97,13 +107,14 @@ jobs:
       - name: Unit tests under the race detector
         working-directory: ${{ inputs.module }}
         run: go test -race ./...
-      - name: Coverage baseline (foundation modules)
-        # The docs/internal/20 coverage rule for the six foundation
-        # modules: the measured unit-suite statement coverage may not
-        # drop below the committed tools/coverage-baselines.json row
+      - name: Coverage gate (80% floor and no-decline vs baseline)
+        # The docs/internal/20 coverage rule for every released module:
+        # the measured unit-suite statement coverage must clear the 80%
+        # floor (excluding .gen.go statements) and must not drop below
+        # the committed tools/coverage-baselines.json row
         # (tools/check_coverage_baseline.py's own header has the full
-        # mechanism and the decline-response contract). Runs in every
-        # module's job and passes with a notice for modules outside the
+        # mechanism and the breach-response contract). Runs in every
+        # module's job and passes with a notice for a module outside the
         # gated set, so adding the leg here never needs a caller-side
         # list to keep in step.
         working-directory: ${{ inputs.module }}
