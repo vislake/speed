@@ -145,7 +145,7 @@ type testAdminEnv struct {
 
 	// Metering and Billing are real modules, WIRED into adminModule
 	// through the optional WithMetering/WithBilling options exactly as the
-	// reference app wires them (cmd/server/server.go): the usage tests
+	// reference app wires them (internal/app/server.go): the usage tests
 	// exercise UsageService through the composed module's own Usage()
 	// surface, the wiring shape a real host boots -- the mirror of
 	// buildTestAdminModule calling nothing of AttachRBAC's own job and
@@ -254,7 +254,7 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 
 	// metering and billing are constructed BEFORE adminModule so the
 	// optional WithMetering/WithBilling options below can wire them in,
-	// the identical ordering a real host's cmd/server/server.go follows.
+	// the identical ordering a real host's internal/app/server.go follows.
 	meteringModule := metering.NewModule(db)
 	billingModule := billing.NewModule(db, meteringModule.Aggregator())
 

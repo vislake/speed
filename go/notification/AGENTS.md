@@ -18,8 +18,8 @@ the platform-blacklist table (schema and read path; writers deferred, see
 below), the module's own OpenAPI fragment with a generated, compile-checked
 HTTP handler, the per-replica realtime hub behind the inbox stream, and the
 dual-dialect migration set. The reference app (`examples/reference-app`) is
-the mandatory first consumer: `cmd/server/server.go` wires `notification.NewModule`
-through `Kernel.Bootstrap`, `cmd/server/demo_notification.go` supplies the
+the mandatory first consumer: `internal/app/server.go` wires `notification.NewModule`
+through `Kernel.Bootstrap`, `internal/app/demo_notification.go` supplies the
 host-side demo seams, and `cmd/server/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 

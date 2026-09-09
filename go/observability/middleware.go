@@ -101,7 +101,7 @@ const (
 //
 // 256 is comfortably above the number of distinct literal routes any real
 // module in this repository registers (a handful per module; see
-// mountModuleRoutes in examples/reference-app/cmd/server/server.go), even
+// mountModuleRoutes in examples/reference-app/internal/app/server.go), even
 // summed across all planned modules, while still bounding worst-case
 // series growth to a small, fixed number instead of the unbounded growth
 // an attacker-supplied path would produce. If a legitimate route count
@@ -143,7 +143,7 @@ const RouteLabelOverflowValue = "{overflow}"
 // real module in this repository registers: "/api/v1/notes" (the notes
 // module's apiPath) is 14 bytes, and "/healthz" / "/metrics" (see
 // mountModuleRoutes and its callers in
-// examples/reference-app/cmd/server/server.go) are 8 bytes each. It also
+// examples/reference-app/internal/app/server.go) are 8 bytes each. It also
 // comfortably outsizes any four-level nested resource path with a 36-byte
 // UUID at every level plus literal segment names, which totals well under
 // 250 bytes -- while still keeping routeLabelLimiter's worst-case memory
@@ -237,7 +237,7 @@ func methodMetricLabel(method string) string {
 // nothing about tracing middleware specifically, so that fixed chain is
 // the tie-breaker this package follows: Middleware is meant to wrap
 // OUTSIDE tenancy.Middleware, not inside it. See
-// examples/reference-app/cmd/server/server.go's buildServer for where this
+// examples/reference-app/internal/app/server.go's BuildServer for where this
 // is actually wired, with the same reasoning repeated at the call site.
 //
 // That position is deliberate, not incidental: a request tenancy.Middleware
@@ -704,7 +704,7 @@ var (
 // exactly like request-time labels when they are seeded, so the same
 // bounds apply to them (see routeLabelLimiter.seed).
 //
-// examples/reference-app is the mandatory first consumer: its buildServer
+// examples/reference-app is the mandatory first consumer: its BuildServer
 // calls this with the module table reg.Routes.Routes() holds plus the two
 // host-level routes (/healthz and /metrics) it mounts on the mux
 // directly, and its obs_route_seed_test.go drives the real composed

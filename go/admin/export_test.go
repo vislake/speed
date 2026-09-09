@@ -64,7 +64,7 @@ func TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing(t *testing.
 	// The worker only dispatches to handlers registered on the queue
 	// itself (StandaloneQueue.RegisterHandler) -- reg.Jobs.Handlers()
 	// (what Module.Register populated) is what a host loops over to wire
-	// this in production (examples/reference-app/cmd/server/server.go);
+	// this in production (examples/reference-app/internal/app/server.go);
 	// this test performs the identical one-handler registration by hand.
 	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)

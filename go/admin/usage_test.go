@@ -367,7 +367,7 @@ func TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTena
 // through the real handler renders one row per ledger tenant with
 // go/metering's and go/billing's data stitched in -- exercised through the
 // Module-level WithMetering/WithBilling wiring buildTestAdminModule now
-// applies (the identical options a real host's cmd/server/server.go
+// applies (the identical options a real host's internal/app/server.go
 // passes), not through a hand-built UsageService. A tenant with recorded
 // usage and a credit grant answers its metering summaries and balance on
 // the wire; a tenant that never touched either answers an empty

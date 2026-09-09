@@ -129,7 +129,7 @@ func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, use
 // This is the identical structurally-typed, no-import seam org.SubjectResolver
 // and notification.SubjectResolver already declare -- same signature, same
 // contract, so a host implementing either of those (see
-// examples/reference-app/cmd/server/server.go's demoOrgSubjectResolver) can
+// examples/reference-app/internal/app/server.go's DemoOrgSubjectResolver) can
 // hand the identical value to WithSubjectResolver here with no adapter code
 // at all. go/integration still does not import go/authn to get this: the
 // seam is the mandatory injection point (the module-boundary rule),

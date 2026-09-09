@@ -57,8 +57,8 @@ type Config struct {
 	// bootstrap settings and passes it here via WithOTLPEndpoint. This
 	// field is the seam a real host wires up.
 	//
-	// examples/reference-app demonstrates that wiring: cmd/server/server.go's
-	// configFromEnv reads the bootstrap variable APP_OTLP_ENDPOINT
+	// examples/reference-app demonstrates that wiring: internal/app/server.go's
+	// ConfigFromEnv reads the bootstrap variable APP_OTLP_ENDPOINT
 	// (empty -- the default -- leaves Init on the local exporters),
 	// cmd/server/main.go's observabilityOptions hands a non-empty value
 	// over through WithOTLPEndpoint, and the app's boot blank-imports
@@ -67,7 +67,7 @@ type Config struct {
 	// ErrOTLPExporterNotRegistered, which names the import as the fix).
 	// A host wiring real production OTLP export therefore copies that
 	// example -- the APP_REDIS_ADDR shape (resolve a bootstrap setting
-	// in configFromEnv, hand it over through the matching option) --
+	// in ConfigFromEnv, hand it over through the matching option) --
 	// rather than starting this field's resolution from scratch.
 	OTLPEndpoint string
 
@@ -261,7 +261,7 @@ var (
 // instead (metrics are pushed, not pulled), no local reader was
 // registered, or Init has not run at all yet.
 //
-// See examples/reference-app/cmd/server/server.go for where a host mounts
+// See examples/reference-app/internal/app/server.go for where a host mounts
 // this at /metrics, and blank-imports go/observability/exporter/prometheus
 // to get a real answer from it.
 func MetricsHandler() http.Handler {

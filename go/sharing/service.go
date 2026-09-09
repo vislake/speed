@@ -105,7 +105,7 @@ const viewReservationTimeout = 30 * time.Minute
 // no-import-edge shape go/org's FeatureGate and go/org's Scope use to reach
 // go/config-shaped or go/org-shaped behavior without an import in either
 // direction. A host's adapter over *config.Service satisfies this
-// structurally (the reference app wires one, its sharingConfigReader);
+// structurally (the reference app wires one, its SharingConfigReader);
 // sharing declares the config item (module.go's ConfigDefaultExpiry) but
 // never imports go/config itself, and without a wired reader Service falls
 // back to defaultShareExpiry.

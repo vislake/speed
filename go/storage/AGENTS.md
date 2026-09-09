@@ -16,7 +16,7 @@ HTTP surface (`api/openapi.yaml`, the generated `api.ServerInterface`,
 `Handler`, mounted by `Register` at `/api/v1/storage`); the Docker-backed
 `integration_test/` tier (a PostgreSQL leg and a RustFS/S3 leg, see
 "Testing"); and the reference app wired as the module's mandatory first
-consumer end to end (`examples/reference-app/cmd/server/server.go`,
+consumer end to end (`examples/reference-app/internal/app/server.go`,
 `cmd/server/storage_flow_test.go`). See "Deferred and not shipped" for what
 is deliberately absent. All gates run green: `go build ./...`,
 `go vet ./...`, `golangci-lint run ./...`, `go test ./... -race` (from this
@@ -499,14 +499,14 @@ invocation full-check.yml's integration-tiers job runs for this module:
   that do run never duplicate within a window — while later windows' enqueues
   schedule the sweep again.
 - **The sweep keys are window-scoped.** The app's host-side periodic-task
-  scheduler (`examples/reference-app/cmd/server/periodic_scheduler.go`)
+  scheduler (`examples/reference-app/internal/app/periodic_scheduler.go`)
   enqueues one sweep per unique host tenant every tick — the cadence
   `cfg.PeriodicTaskInterval` (one minute by default,
   `defaultPeriodicTaskSchedulerInterval`), the tenants the values of the
   host's own `cfg.HostTenants` map, deduplicated, each sweep enqueued under
   the tenant's own `pkgcore` context because the sweep handler runs
   tenant-scoped — started and stopped with the queue worker in
-  `cmd/server/server.go`'s `buildServer` (the same `cfg.DisableQueueWorker`
+  `internal/app/server.go`'s `BuildServer` (the same `cfg.DisableQueueWorker`
   gate). `EnqueueExpirySweep` derives its idempotency key from the
   `expirySweepWindowSize` window the enqueue falls in
   (`expirySweepIdempotencyKey`/`expirySweepWindowStart`, cleanup.go), not

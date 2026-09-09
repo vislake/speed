@@ -17,7 +17,7 @@ const (
 	// handlePublic). Hosts mount config routes behind their own tenant
 	// middleware; the path constant is exported so a host can name the
 	// route in an allowlist without stringly duplicating it -- the
-	// reference app does exactly that (cmd/server/server.go's middleware
+	// reference app does exactly that (internal/app/server.go's middleware
 	// allowlist).
 	PathPublic = "/api/config/public"
 

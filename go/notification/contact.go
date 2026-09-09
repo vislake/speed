@@ -84,7 +84,7 @@ const ContactAddressSerializerName = "notification_address_enc"
 // referenced constant rather than a hand-typed string that can drift from
 // the schema. The reference app is the mandatory consumer: both of its
 // contact indexers are built over this constant at bootstrap
-// (examples/reference-app/cmd/server/server.go), and the module's own unit
+// (examples/reference-app/internal/app/server.go), and the module's own unit
 // suite pins the constant against both models' gorm tags and the migrated
 // schema (address_index_column_test.go).
 const AddressIndexColumn = "address_index"

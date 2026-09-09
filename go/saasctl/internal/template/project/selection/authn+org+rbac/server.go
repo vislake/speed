@@ -49,7 +49,7 @@ const (
 // buildServer wires this project's Kernel, the modules the generator
 // selected for it, their migrations, and the middleware chain into a
 // single http.Handler -- the generated project's only composition point,
-// mirroring examples/reference-app/cmd/server/server.go with every
+// mirroring examples/reference-app/internal/app/server.go with every
 // demo-specific piece removed. It returns the composed handler and a
 // cleanup function that closes everything buildServer opened (the attached
 // services and the underlying database connection); the caller must call
@@ -298,7 +298,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// default, since every resolved seam must satisfy
 	// DeploymentModeDistributed's RequiredCapabilities (MultiReplicaSafe).
 	// The four conditional injections below follow the exact shape
-	// examples/reference-app/cmd/server/server.go's own kernel-wiring
+	// examples/reference-app/internal/app/server.go's own kernel-wiring
 	// comment documents at length: an unset env var leaves that seam on the
 	// Preset's in-process default, so `go run ./cmd/server` stays
 	// byte-for-byte unaffected, and a configured one injects a real

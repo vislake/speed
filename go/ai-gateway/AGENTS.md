@@ -245,7 +245,7 @@ tenantless calls explicitly.
   `jobs.StandaloneQueue`, a real `storage.ObjectService` (both required by
   `WithImageGeneration`), `Gateway.GenerateImage`, draining
   `reg.Jobs.Handlers()` onto the queue exactly as `examples/reference-app`'s
-  own `cmd/server/server.go` does, and polling the enqueued job to
+  own `internal/app/server.go` does, and polling the enqueued job to
   completion against a fake OpenAI-compatible images endpoint -- alongside
   the chat-only `Example`; a new public API ships with a compilable godoc
   `Example`.
@@ -322,7 +322,7 @@ tenantless calls explicitly.
   row resolves to. `PermissionRead` ("ai-gateway:read") gates GET/HEAD.
   The Handler itself performs no permission check, exactly like every other
   module handler in this codebase: the host's router-level rbac gate
-  decides. The reference app's `aiGatewayPermissionFor` (`demo_subject.go`)
+  decides. The reference app's `aiGatewayPermissionFor` (`internal/app/demo_subject.go`)
   is the first concrete instance of that gate: GET/HEAD read, a
   `/platform`-suffixed path manage_platform, any other write.
 - Handler translation only, no new business decision (`handler.go`'s own
@@ -490,8 +490,8 @@ already uploaded and completed through go/storage's own HTTP surface, it
 asks the gateway for an async before/after AI smile simulation -- an
 `ImageOperationImageToImage` request under the logical
 model key `"image:smile-simulation"`. Two hand-written
-routes (`cmd/server/smilesim.go`, outside the OpenAPI machinery for the
-identical reason consult.go's route is): `POST
+routes (`internal/app/smilesim.go`, outside the OpenAPI machinery for the
+identical reason internal/app/consult.go's route is): `POST
 /api/v1/smile-simulation/simulate` enqueues the job and answers 202 with
 its id, and `GET /api/v1/smile-simulation/jobs/{id}` polls the app's own
 `jobs.StandaloneQueue` (the same pool storage's thumbnail-derive task and
@@ -508,10 +508,10 @@ for an image-to-image request) and that the generated output lands as a
 real, separate, completed go/storage object.
 
 The reference app is also the credential-write surface's mandatory first
-consumer. Its demo boot (`cmd/server/server.go`) writes the chat and image
+consumer. Its demo boot (`internal/app/server.go`) writes the chat and image
 platform defaults from `SPEED_AIGATEWAY_*` configuration; those writes sit
 side by side with the module's own HTTP routes, mounted behind
-`demo_subject.go`'s real rbac gate: `aiGatewayPermissionFor` selects among
+`internal/app/demo_subject.go`'s real rbac gate: `aiGatewayPermissionFor` selects among
 the three permissions per request (see "Credential HTTP surface"), and the
 seeded demo role `demo-aigateway-tenant-writer` (granted aigateway:read +
 aigateway:write in every demo tenant, deliberately NOT
@@ -641,7 +641,7 @@ proofs.
   `go/storage`-module work on the gate's own transaction shape -- taking
   the write lock first (e.g. `BEGIN IMMEDIATE`) instead of reading then
   upgrading -- or a queue-concurrency change in the reference app's own
-  wiring (`cmd/server/server.go`'s shared `StandaloneQueue`).
+  wiring (`internal/app/server.go`'s shared `StandaloneQueue`).
   A retry of `imageGenerateHandler.Handle` itself never re-runs the vendor
   call or double-records usage: `image_job_store.go` claims a job (a
   content-less "pending" row) BEFORE the vendor is ever called rather than

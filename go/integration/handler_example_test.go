@@ -78,7 +78,7 @@ func ExampleHandler() {
 	}
 
 	// reg.Routes.Routes() is exactly what a real host copies onto its own
-	// mux (examples/reference-app/cmd/server's mountModuleRoutes); this
+	// mux (examples/reference-app/internal/app's mountModuleRoutes); this
 	// example dispatches straight to the one route this module mounts,
 	// since api.HandlerFromMux (handler.go's NewHandler) already routes
 	// every operation this fragment declares.

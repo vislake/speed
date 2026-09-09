@@ -96,7 +96,7 @@ const derivedKeySize = 32
 // mixes the two freely: derive everything from one root secret by
 // default, override any single purpose's key independently when that
 // purpose's own rotation cadence demands it. See
-// examples/reference-app/cmd/server/server.go's APP_ROOT_KEY wiring for
+// examples/reference-app/internal/app/server.go's APP_ROOT_KEY wiring for
 // exactly this precedence in practice: an explicitly-set individual key's
 // own environment variable always wins over a value DeriveKey would have
 // produced for it.

@@ -77,7 +77,7 @@ func ExampleHandler() {
 	}
 
 	// reg.Routes.Routes() is exactly what a real host copies onto its own
-	// mux (examples/reference-app/cmd/server's mountModuleRoutes, gated
+	// mux (examples/reference-app/internal/app's mountModuleRoutes, gated
 	// there on rbac's PermissionRead/PermissionWrite/
 	// PermissionManagePlatform per module.go's own doc comment); this
 	// example dispatches straight to the one route this module mounts,

@@ -16,7 +16,7 @@ import (
 // codebase's own go/authn.Middleware already reads -- and go/authn.
 // Middleware is not merely A precedent to be consistent with, it is a hard
 // constraint: it is mounted as the OUTERMOST layer of every route this
-// reference app serves (examples/reference-app/cmd/server/server.go's own
+// reference app serves (examples/reference-app/internal/app/server.go's own
 // "handler := authn.Middleware(...)(topMux)"), and its own doc comment
 // states its contract for a present-but-unverifiable bearer credential
 // plainly: "A token that does not verify: 401 immediately... letting it
@@ -39,8 +39,8 @@ import (
 // treatment in that same chain). A host mounting this module's own
 // Authenticate-gated routes must therefore allowlist them in
 // tenancy.Middleware (tenancy.WithAllowlist) the identical way
-// sharing.PathAccess already is -- see examples/reference-app/cmd/server/
-// server.go's own wiring for the real instance of this.
+// sharing.PathAccess already is -- see examples/reference-app/internal/app/server.go's
+// own wiring for the real instance of this.
 const HeaderAPIKey = "X-API-Key" //nolint:gosec // a header name, not a credential.
 
 // authenticatedAPIKeyContextKey is the unexported context key Middleware
@@ -97,7 +97,7 @@ func AuthenticatedAPIKeyFromContext(ctx context.Context) (*AuthenticatedAPIKey, 
 // the shared anonymous counters -- see WithAuthenticationGuard's own doc
 // comment for the full pre-auth identifier discussion, which follows
 // authn's login-limit precedent of limiting attempts before verifying
-// credentials. See examples/reference-app/cmd/server/server.go's
+// credentials. See examples/reference-app/internal/app/integration_authenticate.go's
 // wireIntegrationAuthenticated for the composed chain a host mounts.
 type AuthMiddleware struct {
 	module *Module

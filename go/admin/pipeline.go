@@ -67,7 +67,7 @@ type GrantLookup interface {
 //   - A permission check downstream uses the TARGET user's Subject,
 //     never the administrator's: the substituted Principal's UserID is
 //     grant.TargetUserID, so a subject-resolving seam built from
-//     authn.PrincipalFromContext (the reference app's demoSubjectResolver,
+//     authn.PrincipalFromContext (the reference app's DemoSubjectResolver,
 //     for one) reads the target's identity, and rbac.RequirePermission
 //     evaluates against exactly that.
 //   - It fails closed on an invalid/expired/ended grant: lookup.Lookup's

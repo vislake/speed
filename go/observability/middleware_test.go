@@ -1447,7 +1447,7 @@ func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testi
 
 	// The shape a real host registers: host-level leaf routes plus the
 	// module mount PREFIXES its pkgcore registry carries (mirrors
-	// examples/reference-app/cmd/server/server.go's own
+	// examples/reference-app/internal/app/server.go's own
 	// obs.RegisterMountedRoutes call).
 	obs.RegisterMountedRoutes([]pkgcore.MountedRoute{
 		{Path: "/healthz"},

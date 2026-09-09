@@ -208,7 +208,7 @@ func Example_generateImage() {
 	// One jobs.StandaloneQueue carries both the image-generation task
 	// GenerateImage enqueues and storage's own thumbnail-derive task --
 	// WithImageGeneration and storage.WithQueue deliberately share it, the
-	// same shape examples/reference-app/cmd/server/server.go wires.
+	// same shape examples/reference-app/internal/app/server.go wires.
 	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
 
 	// go/storage's ObjectService is safe to call right after NewModule,
@@ -245,7 +245,8 @@ func Example_generateImage() {
 	// Drain every job handler Bootstrap's Register calls declared (the
 	// image-generate handler this module claims, plus storage's own
 	// thumbnail-derive and expiry-sweep handlers) onto the queue and start
-	// it -- the identical pattern server.go's own wiring uses.
+	// it -- the identical pattern examples/reference-app/internal/app/server.go's
+	// own wiring uses.
 	for jobType, handler := range reg.Jobs.Handlers() {
 		jobsHandler, ok := handler.(jobs.Handler)
 		if !ok {

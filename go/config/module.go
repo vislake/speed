@@ -141,7 +141,7 @@ func withAfterRefreshLockForTest(hook func()) Option {
 // NewModule returns a Module whose configs table lives in db. Constructing
 // a Module performs no I/O -- opening and migrating db is the caller's
 // responsibility, done once at startup before Bootstrap ever calls
-// Register (see examples/reference-app/cmd/server's wiring for the exact
+// Register (see examples/reference-app/internal/app's wiring for the exact
 // sequence). db must not be nil by the time Attach runs; Register itself
 // never touches it (per pkgcore.Module's "declares, never performs I/O"
 // contract).

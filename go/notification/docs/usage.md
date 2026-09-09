@@ -163,7 +163,7 @@ that re-checks preferences, consent and addresses at send time, renders
 the recipient's locale, and sends over the resolved transport -- needs a
 real queue running (`jobs.NewStandaloneQueue(db).Start(ctx)`) plus all six
 required `Option`s wired. `AGENTS.md`'s "Delivery pipeline" section walks
-that path end to end; `examples/reference-app/cmd/server/server.go`'s
+that path end to end; `examples/reference-app/internal/app/server.go`'s
 `notificationModule := notification.NewModule(db, ...)` call is the real,
 composed reference wiring every one of those six options together, and
 `cmd/server/notification_flow_test.go` drives it through a full

@@ -110,7 +110,7 @@ const (
 	// address ("host:port") that composes a REAL, MultiReplicaSafe
 	// implementation for both the "eventbus" and "kv" seams -- one Redis
 	// instance backs both, sharing one client, mirroring
-	// examples/reference-app/cmd/server/server.go's own identical
+	// examples/reference-app/internal/app/server.go's own identical
 	// APP_REDIS_ADDR wiring byte for byte (that file's own doc comment on
 	// this variable has the full reasoning, including why wiring only one of
 	// the two seams can never let a distributed composition pass Bootstrap).
@@ -135,7 +135,7 @@ const (
 	// refused by configFromEnv below rather than silently falling back to
 	// the Preset's local-directory default, since a partial S3 target is far
 	// more likely a typo than a deliberate choice -- the identical
-	// completeness rule examples/reference-app/cmd/server/server.go's own
+	// completeness rule examples/reference-app/internal/app/server.go's own
 	// s3EndpointEnv doc comment states. s3RegionEnv and s3UseSSLEnv refine
 	// the same composition and are optional: Region matters to AWS S3
 	// (MinIO- and RustFS-compatible servers ignore it), and s3UseSSLEnv,
@@ -181,7 +181,7 @@ const (
 	// fails closed with authn.ErrMissingDistributedSMSSender rather than an
 	// authn-containing selection silently keeping a console sender nobody in
 	// a distributed replica pool is reading -- the identical three-way
-	// branch examples/reference-app/cmd/server/server.go's own
+	// branch examples/reference-app/internal/app/server.go's own
 	// smsGatewayURLEnv doc comment describes.
 	smsGatewayURLEnv = "APP_SMS_GATEWAY_URL"
 )
