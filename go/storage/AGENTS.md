@@ -347,7 +347,10 @@ and object deletion (`storage_deleteObject`). `api/oapi-codegen.yaml` pins
 the same generator version notes and org use (v2.8.0);
 `api/storage-server.gen.go` is generated and committed, never hand-edited —
 `task api:gen` regenerates it from the fragment and api-contract.yml's own
-diff gate re-checks it on every spec-touching PR. The fragment is embedded
+diff gate re-checks it on every spec-touching PR. The fragment joins the merged `build/openapi/speed.yaml` document and
+through it the generated `@speed/api-sdk` -- the module-driven inclusion
+policy of docs/internal/21-api-contract.md: every platform module with
+an HTTP fragment is a merge member. The fragment is embedded
 (`//go:embed`), so the spec and the generated types travel inside the
 module binary (`OpenAPISpec()`); object keys still never cross the wire —
 consumers name objects by id, exactly as this file's key-grammar section
@@ -628,14 +631,6 @@ invocation full-check.yml's integration-tiers job runs for this module:
 
 ## Deferred and not shipped (with reasons)
 
-- **No frontend `@speed/api-sdk` surface for this module's fragment.** The
-  frontend orval leg of `task api:gen` runs over the merged document only
-  (`build/openapi/speed.yaml`), so a fragment reaches `@speed/api-sdk` by
-  entering that merge; storage's fragment feeds neither the merge nor
-  orval, and the reference app's consumer shell has no upload surface that
-  would exercise generated storage hooks. The backend half
-  (`api/storage-server.gen.go`) and its api-contract.yml diff gate ship
-  regardless.
 - **Audit emission is not wired.** The three audit actions are declared;
   the services log their transitions (`object completed`, `object deleted`,
   `expired upload reclaimed`) but emit no audit rows. A host that needs
