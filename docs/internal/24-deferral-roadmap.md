@@ -387,7 +387,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 
 档位判定以普查逐条记录为底;直接核读 31 条(A 13、L 6、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
-### 10.1 已闭于 main(A,44 项)
+### 10.1 已闭于 main(A,45 项)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -435,6 +435,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 66 | `go/compliance/export.go` | 24h 窗口旁 '(see ExportDelivery)':export 送达通知未实现,已从'later round's job'改写为现状 | export.go 已为现状表述(24h 窗口+送达通知缺失一致);无 later round 措辞 |
 | 67 | `go/pkgcore/AGENTS.md` | broker 后端(eventbus/redis\|nats\|postgres)同实例本地 fan-out 的 panic 防护不延伸(原 future-work 改写为 deliberately-not-extended) | pkgcore broker 本地 fan-out panic 防护已实际落地(31246d14)+AGENTS 记录闭合(19a4456b/33b70db5) |
 | 71 | `CLAUDE.md` | census 自指措辞 4 处(行 8×2 "this census's `go/dbkit` entry records" 与 "this census's `go/dbkit` entry has the detail";行 11 "the auth-ui census entry below";行 13 "the auth-ui census defers to this shell";原记行 12/14 锚已校为行 11/13) | 4 处实测均在(抽查已核);按"可改可留"全部保留并记因——四句均为 census 条目间互指(指向 go/dbkit、auth-ui 条目),属导航措辞而非流程措辞;原记引语 "The census closes with…" 经 CLAUDE.md 全史检索不存在,已从记录删除 |
+| 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | 闭:1f3257ba 随片段并入合并文档改写为现状(future-work 句由 merge 成员段落取代;另见第 9 章普查行 153 同批闭) |
 
 ### 10.2 台账缓办(L,9 项)
 
@@ -450,7 +451,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)x1/(D5)x1/(P2-2)x3/(P2-3)x1 共 6 处仍在(P2-6@184、D5@223、P2-2@279/335/373、P2-3@946);抽查已核 |
 
-### 10.3 真剩余(R,18 项;未来文本修复候选)
+### 10.3 真剩余(R,17 项;未来文本修复候选)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -462,7 +463,6 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 15 | `go/storage/repository.go` | 302 行注释保留 "Paging a state listing is future work if a tenant's backlog ever grows past one task's worth" —— C 类未来承诺句式,未改写为纯边界陈述亦未记录 | storage repository.go:302 "Paging a state listing is future work" 仍在;抽查已核 |
 | 18 | `examples/reference-app/web/src/test-utils/real-client.ts` | 行 22 'extracting a shared rig package is recorded DEFERRED' — deferral 语句,文件未被代理改动/报备 | real-client.ts:22 "recorded DEFERRED" 悬空指针仍在;抽查已核 |
 | 21 | `docs/internal/01-architecture.md` | admin 对 billing/metering/cfg 的用量看板依赖尚未建设 | docs/01 长注仍称 admin 对 billing/metering/cfg 依赖"尚未建设",而 usage.go 已 import 二者;抽查已核 |
-| 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | storage openapi 22 行 "stays future work until the merge tooling lands" 过期句仍在(merge 工具已落地);抽查已核 |
 | 27 | `go/admin/export_test.go` | 测试失败消息字符串保留过程措辞("on the unfixed code…" 等) | 测试失败消息字符串判为边界合法;残余=把字符串/注释边界判断写进规范文档(13 章) |
 | 28 | `web/packages/i18n/src/create.test.ts` | it() 标题含 "(M1 extension point)" 里程碑代号,未改未声明 | create.test.ts(非 .tsx)96 行 "(M1 extension point)" 标题仍在;抽查已核 |
 | 29 | `examples/reference-app/web/src/test-utils/matchMedia.ts` | 行 18 'recorded DEFERRED, as in real-client.ts' — 同族 deferral 语句 | matchMedia.ts:18 "recorded DEFERRED, as in real-client.ts" 仍在;抽查已核(需与 18 两处同步) |
