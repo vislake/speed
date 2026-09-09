@@ -100,6 +100,210 @@ The full API lives in the `dbkit` and `config` module pages of the
 module reference; see the tenancy and organizations domain page for
 how repositories get their tenant.
 
+## Complete example: a tenant-scoped subscriptions table and runtime settings
+
+This example gives one business module both halves of this page. A
+`subscriptions` table is declared as a tenant-scoped model and driven
+through `dbkit.Repository[T]` — a write with no tenant context fails
+closed. The same module declares `support.email` (a public string item)
+and `support.live_chat` (a feature flag) on the registry, and after
+`config`'s `Attach` freezes the schema, reads fall back narrow-to-wide:
+the schema default until a tenant-scoped write overrides it for that
+tenant alone. Everything is self-contained (in-memory SQLite, one
+connection), with every symbol taken from `go/dbkit`'s and `go/config`'s
+real APIs (the same calls their own example suites run).
+
+```go
+package main
+
+import (
+	"context"
+	"embed"
+	"fmt"
+
+	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/dbkit"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
+	"github.com/vislake/speed/go/pkgcore"
+)
+
+// subscription is a tenant-scoped model: exported ID and TenantID string
+// fields by those exact names, tenant_id the leftmost primary-key column.
+type subscription struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	PlanID   string `gorm:"size:64;not null"`
+	Status   string `gorm:"size:32;not null"`
+}
+
+func (s subscription) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(s.TenantID) }
+func (subscription) TableName() string               { return "subscriptions" }
+
+// subscriptionsModule declares the module's configuration items and feature
+// flags during Register; the config module folds them into the one schema.
+type subscriptionsModule struct{}
+
+func (subscriptionsModule) Name() string         { return "subscriptions" }
+func (subscriptionsModule) DependsOn() []string  { return nil }
+func (subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
+func (subscriptionsModule) Locales() embed.FS    { return embed.FS{} }
+func (subscriptionsModule) OpenAPISpec() []byte  { return nil }
+func (subscriptionsModule) Register(reg *pkgcore.Registry) error {
+	if err := reg.Config.Add(pkgcore.ConfigItem{
+		Key: "support.email", Type: "string", Default: "support@example.com",
+		Public: true, Description: "The address shown to this tenant's users",
+		Group:  "support",
+	}); err != nil {
+		return err
+	}
+	return reg.Features.Add(pkgcore.FeatureFlag{
+		Key: "support.live_chat", Default: false,
+		Description: "Whether the tenant gets the live-chat widget",
+	})
+}
+
+func main() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:data_config_example?mode=memory&cache=shared"})
+	if err != nil {
+		panic(err)
+	}
+
+	// Versioned SQL only -- never AutoMigrate. A real module ships its own
+	// dual-dialect migration files; this raw CREATE TABLE stands in for them.
+	if err = db.Exec(`CREATE TABLE subscriptions (
+		id        VARCHAR(26)  NOT NULL,
+		tenant_id VARCHAR(26)  NOT NULL,
+		plan_id   VARCHAR(64)  NOT NULL,
+		status    VARCHAR(32)  NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		panic(err)
+	}
+
+	// The config module owns the configs table, so its migrations must be
+	// applied before Attach reads or writes anything.
+	configModule := config.NewModule(db, config.WithPollInterval(0))
+	migrations := dbkit.NewMigrationRegistry()
+	if err = migrations.Register(configModule); err != nil {
+		panic(err)
+	}
+	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+
+	// Bootstrap walks the module graph, calling Register on each; Attach --
+	// exactly once, afterwards -- freezes the union of every declaration.
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, subscriptionsModule{}, configModule)
+	if err != nil {
+		panic(err)
+	}
+	svc, err := configModule.Attach(reg)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	// Repository half: the tenant comes from the context, never from an
+	// argument, so a caller without tenant context fails closed.
+	repo := dbkit.NewRepository[subscription](db)
+	acmeCtx := pkgcore.WithTenant(ctx, "tenant-acme")
+	sub := &subscription{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", PlanID: "plan_pro", Status: "active"}
+	if err = repo.Create(acmeCtx, sub); err != nil {
+		panic(err)
+	}
+	got, err := repo.FindByID(acmeCtx, sub.ID)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("subscription:", got.PlanID, got.Status)
+
+	if err = repo.Create(ctx, sub); err != nil {
+		fmt.Println("create without tenant:", err)
+	}
+
+	// Config half: with nothing written, the schema default is what every
+	// tenant reads; reads fall back narrow-to-wide (tenant, system, default).
+	email, err := config.GetTyped[string](svc, ctx, "support.email")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("default:", email)
+
+	if err = svc.Set(acmeCtx, config.ScopeTenant, "support.email",
+		config.Value{Data: "help@acme.example"}, "alice"); err != nil {
+		panic(err)
+	}
+	acmeEmail, err := config.GetTyped[string](svc, acmeCtx, "support.email")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("tenant-acme:", acmeEmail)
+
+	globexEmail, err := config.GetTyped[string](svc, pkgcore.WithTenant(ctx, "tenant-globex"), "support.email")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("tenant-globex:", globexEmail)
+
+	enabled, err := svc.IsEnabled(acmeCtx, "support.live_chat")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("live_chat:", enabled)
+}
+```
+
+**What each step of the program does.** The repository methods take the
+tenant from the context — `pkgcore.WithTenant` stands in for what
+`tenancy.Middleware` injects in a served request — so the uncontexted
+`Create` fails before the database is touched. On the config side,
+`Register` only declares; `Attach` is what freezes the schema and returns
+the `*Service` a host keeps. `svc.Set` writes at one scope tier
+(`config.ScopeTenant` here; a `ScopeSystem` write needs the audited system
+context), and the write publishes `config.item.changed`, which every
+process listens for — plus the poller `WithPollInterval(0)` disabled here
+as the anti-loss backstop.
+
+**How to run it.** From a checkout of this repository, put the file in a
+throwaway module next to the checkout and point the imports at it with
+`replace` lines — one per module the program imports, for example
+`replace github.com/vislake/speed/go/dbkit => /path/to/checkout/go/dbkit` —
+then run `go mod tidy` and `go run .` with `GOWORK=off` (the checkout's own
+`go.work` must not leak into the build). The tidy step fetches third-party
+dependencies once.
+
+**Expected result.** The program prints the six stdout lines below; the
+kernel's own seam-composition log lines go to stderr first:
+
+```
+subscription: plan_pro active
+create without tenant: pkgcore: no tenant in context; tenant-scoped access requires a context built with WithTenant
+default: support@example.com
+tenant-acme: help@acme.example
+tenant-globex: support@example.com
+live_chat: false
+```
+
+The row lands and reads back under `tenant-acme`; the very same `Create`
+on a context without a tenant is refused with `pkgcore.ErrNoTenant`'s own
+text before any SQL runs. The config reads show the fallback tiers in
+action: the schema default everywhere until `tenant-acme` overrides
+`support.email` for itself, after which a second tenant (`tenant-globex`)
+still reads the default. The feature flag resolves to its declared
+`false` default.
+
+**See it in the reference app.** The reference app's notes module is the
+same shape in real code:
+[`internal/notes/repository.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/repository.go)
+embeds `dbkit.Repository[Note]` instead of holding a raw `*gorm.DB`, and
+[`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)
+declares its configuration items and feature flags through
+`reg.Config.Add` / `reg.Features.Add` during `Register` — the exact
+declarations the reference app's `internal/app/server.go` then folds into
+the schema `configModule.Attach` freezes.
+
 ## Source
 
 - [dbkit AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/AGENTS.md)
