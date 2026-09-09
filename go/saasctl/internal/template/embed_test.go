@@ -2,9 +2,21 @@ package template
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/dbkit"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers dbkit.DialectSQLite for dbkit.Open
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pki"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // validSelectionKeys is the one enumeration of the five legal selection
@@ -507,6 +519,392 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 			if strings.Contains(src, wantConst) || strings.Contains(src, wantLiteral) {
 				t.Errorf("%s wires no org module, so its server.go must construct no org invitation indexer", key)
 			}
+		}
+	}
+}
+
+// TestPreauthExemption_DrivesTheGeneratedProjectShape is the behavioral
+// half of the P1 regression: an anonymous enterprise-OIDC authorize
+// request -- provider "oidc:acme", the dynamic per-tenant name authn
+// derives from authn.ProviderOIDCPrefix + a tenant id, which no fixed
+// allowlist can enumerate -- must reach authn's own handler instead of
+// being refused 403 tenancy.tenant_unresolved before it. The test
+// composes the real authn, pki and tenancy packages in exactly the shape
+// the generated server.go templates produce (the structural twin,
+// TestAuthnSelectionsExemptAuthnSubtreeByStructure, pins those templates
+// to this shape byte-level): authn's own subtree mounted on topMux
+// directly behind authn.Middleware, tenancy.Middleware wrapping only the
+// other routes. Authn answers a provider it has never seen with its own
+// coded refusal -- 400 authn.provider_unknown -- which is the proof the
+// request crossed the tenancy layer: the allowlist shape (asserted by the legacyShape leg below)
+// answered this exact request 403 tenancy.tenant_unresolved.
+func TestPreauthExemption_DrivesTheGeneratedProjectShape(t *testing.T) {
+	handler := buildComposedHandler(t, composedShapeNew)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/oidc:acme/authorize?redirect_uri=https%3A%2F%2Fapp.example%2Fcb", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET oidc:acme authorize = %d %s; authn's provider-unknown refusal is 400 (any non-403 answer that reaches authn proves the exemption; the pre-fix answer was the tenancy 403)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Code != "authn.provider_unknown" {
+		t.Fatalf("authorize body = %q, want the authn.provider_unknown envelope (code %q, err %v)", rec.Body.String(), body.Code, err)
+	}
+}
+
+// TestPreauthExemption_CallbackAlsoReachesAuthn drives the callback half
+// of the same pair. An anonymous POST with no usable state answers authn's
+// own refusal once it reaches the handler; the assertion that matters is
+// the negative one -- never the tenancy 403 the allowlist shape produced
+// for this path.
+func TestPreauthExemption_CallbackAlsoReachesAuthn(t *testing.T) {
+	handler := buildComposedHandler(t, composedShapeNew)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/social/oidc:acme/callback", strings.NewReader(`{"code":"c","state":"s"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), "tenancy.tenant_unresolved") {
+		t.Fatalf("oidc callback refused by tenancy: %d %s; the callback must reach authn's own handler", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest is the
+// anchor that shows why the structural exemption exists: compose the
+// allowlist shape -- the whole mux, authn subtree included, wrapped in
+// tenancy.Middleware with a fixed allowlist enumerating the built-in
+// social channels -- and the identical anonymous oidc:acme authorize
+// request is refused 403 tenancy.tenant_unresolved, because no fixed
+// enumeration can contain a per-tenant provider name. This leg is the
+// negative control: if it started passing, the tenancy layer would no
+// longer refuse unlisted anonymous pairs and the structural exemption
+// would be moot; if the current shape ever changed into the allowlist
+// one, the first test would fail.
+func TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest(t *testing.T) {
+	handler := buildComposedHandler(t, composedShapeLegacy)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/oidc:acme/authorize", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "tenancy.tenant_unresolved") {
+		t.Fatalf("legacy allowlist shape answered %d %s; want the 403 tenancy.tenant_unresolved the fixed enumeration produced for an unenumerable provider", rec.Code, rec.Body.String())
+	}
+}
+
+// composedShape selects which generated-server shape the composed handler
+// mirrors: the structural exemption (new) or the fixed allowlist (legacy).
+type composedShape int
+
+const (
+	composedShapeNew composedShape = iota
+	composedShapeLegacy
+)
+
+// buildComposedHandler assembles a REAL authn module (with pki as its
+// KeySource, over a real SQLite file) and composes the HTTP chain exactly
+// as the generated server.go does under the requested shape. The authn
+// handler is reached the way the generated code reaches it: through
+// reg.Routes after Kernel.Bootstrap registered the module.
+func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
+	t.Helper()
+	ctx := context.Background()
+	gdb, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: t.TempDir() + "/preauth.db"})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, closeErr := gdb.DB(); closeErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	pkiModule := pki.NewModule(gdb)
+	blindIndexKey := make([]byte, 32)
+	authnModule, err := authn.NewModule(gdb, authn.WithKeySource(pkiModule.Service()), authn.WithBlindIndexKey(blindIndexKey))
+	if err != nil {
+		t.Fatalf("authn.NewModule: %v", err)
+	}
+	reg, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeStandalone)).
+		Bootstrap(ctx, pkiModule, authnModule)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	// The generated mountModuleRoutes split and the topMux dispatch,
+	// spelled as the templates spell it.
+	const authnAPIPath = "/api/v1/authn"
+	authnMux := http.NewServeMux()
+	protectedMux := http.NewServeMux()
+	for _, route := range reg.Routes.Routes() {
+		target := protectedMux
+		if strings.HasPrefix(route.Path, authnAPIPath) {
+			target = authnMux
+		}
+		target.Handle(route.Path, route.Handler)
+		if !strings.HasSuffix(route.Path, "/") {
+			target.Handle(route.Path+"/", route.Handler)
+		}
+	}
+
+	if shape == composedShapeLegacy {
+		// The allowlist shape: every route -- authn's subtree included --
+		// behind tenancy.Middleware, with authn's pre-auth operations
+		// allowlisted one (method, path) pair at a time, the built-in
+		// social channels enumerated by hand.
+		allMux := http.NewServeMux()
+		for _, route := range reg.Routes.Routes() {
+			allMux.Handle(route.Path, route.Handler)
+			if !strings.HasSuffix(route.Path, "/") {
+				allMux.Handle(route.Path+"/", route.Handler)
+			}
+		}
+		opts := []tenancy.MiddlewareOption{
+			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register"),
+			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/password"),
+			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms/request"),
+			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms"),
+			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/token/refresh"),
+		}
+		for _, provider := range []string{
+			authn.ProviderGoogle, authn.ProviderGitHub, authn.ProviderWeChat,
+			authn.ProviderDingTalk, authn.ProviderFeishu,
+		} {
+			opts = append(opts,
+				tenancy.WithAllowlist(http.MethodGet, authnAPIPath+"/social/"+provider+"/authorize"),
+				tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/social/"+provider+"/callback"),
+			)
+		}
+		return authn.Middleware(authnModule.Service().Verifier())(
+			tenancy.Middleware(authn.NewPrincipalResolver(), opts...)(allMux))
+	}
+
+	topMux := http.NewServeMux()
+	topMux.Handle(authnAPIPath, authnMux)
+	topMux.Handle(authnAPIPath+"/", authnMux)
+	topMux.Handle("/", tenancy.Middleware(authn.NewPrincipalResolver(),
+		tenancy.WithAllowlist(http.MethodGet, "/healthz"),
+		tenancy.WithAllowlist(http.MethodHead, "/healthz"),
+	)(protectedMux))
+	return authn.Middleware(authnModule.Service().Verifier())(topMux)
+}
+
+// TestPreauthExemption_ComposedShapeIsTheTemplatesOwn pins the test's
+// composition constants to the template files it claims to mirror: if the
+// generated server.go templates compose differently (a renamed constant,
+// a different dispatch), the behavior test would be testing a shape the
+// templates do not produce -- this twin assertion closes that gap by
+// requiring the templates to carry the very markers this test's
+// composition is built from.
+func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
+	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
+		content, err := fs.ReadFile(Project, ProjectRoot+"/selection/"+key+"/server.go")
+		if err != nil {
+			t.Errorf("%s: %v", key, err)
+			continue
+		}
+		server := string(content)
+		for _, marker := range []string{
+			"const authnAPIPath = \"/api/v1/authn\"",
+			"topMux.Handle(authnAPIPath, authnMux)",
+			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
+		} {
+			if !strings.Contains(server, marker) {
+				t.Errorf("%s: the composed-shape twin marker %q is missing from the template", key, marker)
+			}
+		}
+	}
+}
+
+// The tests below pin the generated project README against the template
+// it ships beside: the golden/embed tests elsewhere in this package check
+// the template tree's structure, and these tests check that the README's
+// own PROSE agrees with the template's own source. Each test extracts
+// ground truth directly from the template source text (never a
+// hand-copied literal these tests could themselves fall behind) and
+// compares it against the README.
+
+// readmeContent reads the embedded, shared project README once per test.
+func readmeContent(t *testing.T) string {
+	t.Helper()
+	content, err := fs.ReadFile(Project, ProjectRoot+"/README.md")
+	if err != nil {
+		t.Fatalf("read project README: %v", err)
+	}
+	return string(content)
+}
+
+// goDirectivePattern matches a go.mod's "go X.Y.Z" directive line.
+var goDirectivePattern = regexp.MustCompile(`(?m)^go (\d+\.\d+\.\d+)$`)
+
+// TestReadmeGoVersionMatchesGoModTxt: the "Go X.Y.Z or newer" prerequisite
+// line in the README must name the exact version every selection's own
+// go.mod.txt declares in its "go" directive -- not a stale figure from an
+// earlier toolchain line. The check runs against every one of the five
+// legal selections (README's own claim is selection-independent), so a
+// selection whose go.mod.txt drifts from the others is caught too.
+func TestReadmeGoVersionMatchesGoModTxt(t *testing.T) {
+	readme := readmeContent(t)
+	readmeVersionPattern := regexp.MustCompile(`Go (\d+\.\d+\.\d+) or newer`)
+	m := readmeVersionPattern.FindStringSubmatch(readme)
+	if m == nil {
+		t.Fatal(`README does not state a "Go X.Y.Z or newer" prerequisite; the version-parity check has nothing to compare against`)
+	}
+	readmeVersion := m[1]
+
+	for _, key := range validSelectionKeys {
+		path := ProjectRoot + "/selection/" + key + "/go.mod.txt"
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		directive := goDirectivePattern.FindStringSubmatch(string(content))
+		if directive == nil {
+			t.Errorf("%s: no \"go X.Y.Z\" directive found", path)
+			continue
+		}
+		if directive[1] != readmeVersion {
+			t.Errorf("%s declares go %s but the README's Prerequisites section states Go %s or newer; the two have drifted",
+				path, directive[1], readmeVersion)
+		}
+	}
+}
+
+// envVarBacktickPattern matches a backtick-quoted, all-uppercase (with
+// digits and underscores) token in the README -- the exact shape every one
+// of the twenty bootstrap environment variable names takes when the
+// README refers to it (e.g. APP_S3_ENDPOINT or PORT, each wrapped in a
+// pair of backticks).
+var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
+
+// configGoEnvVarPattern matches one "<identifier>Env = \"<VALUE>\""
+// constant declaration in the template's config.go -- deliberately
+// duplicated from the identical pattern in
+// internal/appconfig/appconfig_test.go's own drift-proof test rather than
+// shared, since the two packages check two different kinds of drift (that
+// one checks the Go twin's parse behavior, this one checks the README's
+// prose) and neither should import the other's test helpers to do it.
+var configGoEnvVarPattern = regexp.MustCompile(`(?m)^\s*[A-Za-z0-9]+Env\s*=\s*"([A-Za-z0-9_]+)"`)
+
+// readEnvVarNamesFromConfigGo extracts the set of environment variable
+// names the embedded template's cmd/server/config.go actually parses.
+func readEnvVarNamesFromConfigGo(t *testing.T) map[string]bool {
+	t.Helper()
+	content, err := fs.ReadFile(Project, ProjectRoot+"/cmd/server/config.go")
+	if err != nil {
+		t.Fatalf("read the embedded template config.go: %v", err)
+	}
+	names := map[string]bool{}
+	for _, m := range configGoEnvVarPattern.FindAllStringSubmatch(string(content), -1) {
+		names[m[1]] = true
+	}
+	if len(names) == 0 {
+		t.Fatal("extracted zero environment variable names from config.go; the extraction pattern itself has drifted")
+	}
+	return names
+}
+
+// TestReadmeEnvTableMatchesConfigGoExactly is the env-var consistency
+// test: every environment variable the template's config.go actually
+// parses must be documented in the README (this README is the consumer's
+// first-run manual, so an undocumented variable is a gap), and every
+// backtick-quoted, all-caps token the README's Bootstrap Environment
+// section presents as a variable must be one config.go genuinely parses
+// -- never a stale or invented name.
+func TestReadmeEnvTableMatchesConfigGoExactly(t *testing.T) {
+	configVars := readEnvVarNamesFromConfigGo(t)
+	readme := readmeContent(t)
+
+	readmeVars := map[string]bool{}
+	for _, m := range envVarBacktickPattern.FindAllStringSubmatch(readme, -1) {
+		readmeVars[m[1]] = true
+	}
+
+	for name := range configVars {
+		if !readmeVars[name] {
+			t.Errorf("config.go parses %s but the README never mentions it; this README is the consumer's first-run manual and must document it", name)
+		}
+	}
+	for name := range readmeVars {
+		if !configVars[name] {
+			t.Errorf("README names %s as a bootstrap variable but config.go does not parse it; the README has drifted ahead of (or never matched) the template", name)
+		}
+	}
+}
+
+// devKeyBacktickPattern matches a backtick-quoted "dev*" identifier in the
+// README -- the shape every committed development key placeholder takes
+// when the README names it (e.g. devConfigKey or devPKILocalKeyCipherKey,
+// each wrapped in a pair of backticks).
+var devKeyBacktickPattern = regexp.MustCompile("`(dev[A-Za-z0-9]+)`")
+
+// devKeyDeclPattern matches one "dev<Name> = " assignment -- a var
+// declaration's own opening line, whether config.go's own standalone
+// "var dev<Name> = []byte{" form or an aligned one inside a var (...)
+// block with no per-line "var" keyword (each selection's server.go).
+var devKeyDeclPattern = regexp.MustCompile(`(?m)^\s*(?:var\s+)?(dev[A-Za-z0-9]+)\s*=`)
+
+// TestReadmeNamesOnlyRealDevKeyIdentifiers is the stale-name guard: it
+// collects every "dev*" identifier actually declared across the shared
+// config.go and every selection's own server.go, then asserts the README's
+// own "dev*" references are a subset of that real set -- a
+// named-identifier check, not a single-string grep, so any identifier the
+// README names that no generated file declares (a deleted one such as
+// devSigningKeySeed, say) fails the test, naming the orphan.
+func TestReadmeNamesOnlyRealDevKeyIdentifiers(t *testing.T) {
+	real := map[string]bool{}
+	collect := func(path string) {
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, m := range devKeyDeclPattern.FindAllStringSubmatch(string(content), -1) {
+			real[m[1]] = true
+		}
+	}
+	collect(ProjectRoot + "/cmd/server/config.go")
+	for _, key := range validSelectionKeys {
+		collect(ProjectRoot + "/selection/" + key + "/server.go")
+	}
+	if len(real) == 0 {
+		t.Fatal("extracted zero dev* key identifiers from the template; the extraction pattern itself has drifted")
+	}
+
+	readme := readmeContent(t)
+	referenced := map[string]bool{}
+	for _, m := range devKeyBacktickPattern.FindAllStringSubmatch(readme, -1) {
+		referenced[m[1]] = true
+	}
+	if len(referenced) == 0 {
+		t.Fatal("README names zero dev* key identifiers; the reference extraction pattern itself has drifted")
+	}
+	for name := range referenced {
+		if !real[name] {
+			t.Errorf("README names %s but no template file declares it; the README refers to an identifier that does not exist in the generated project", name)
+		}
+	}
+}
+
+// TestReadmeEditingSectionStillNamesTheShippedCommands is a narrow
+// regression guard for TestProjectReadmeNamesTheShippedMaintenanceCommands
+// in embed_test.go: the "Editing and regenerating" section's own
+// [redacted]-secrets sentence must still name every secret-shaped print
+// row (the five key variables plus the two infrastructure credentials),
+// so the README's own description of `saasctl config print` stays
+// truthful once the command renders more than five lines.
+func TestReadmeEditingSectionStillNamesTheShippedCommands(t *testing.T) {
+	readme := readmeContent(t)
+	const section = "## Editing and regenerating"
+	start := strings.Index(readme, section)
+	if start < 0 {
+		t.Fatalf("README has no %q section", section)
+	}
+	body := strings.Join(strings.Fields(readme[start:]), " ")
+	for _, want := range []string{"S3 secret key", "SMTP password"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s section's config-print description does not mention %q; it will misrepresent which rows are redacted", section, want)
 		}
 	}
 }
