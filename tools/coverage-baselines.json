@@ -1,11 +1,27 @@
 {
   "baselines": {
-    "go/billing": 77.525773,
-    "go/dbkit": 84.268707,
-    "go/jobs": 53.122591,
+    "examples/reference-app": 80.714847,
+    "go/admin": 87.73679,
+    "go/ai-gateway": 87.544484,
+    "go/authn": 81.033416,
+    "go/billing": 82.944091,
+    "go/compliance": 89.008621,
+    "go/config": 93.719008,
+    "go/dbkit": 84.418796,
+    "go/integration": 84.490961,
+    "go/jobs": 83.841463,
+    "go/metering": 92.137097,
+    "go/notification": 84.850692,
+    "go/observability": 92.822967,
+    "go/org": 85.47619,
     "go/pkgcore": 80.582524,
+    "go/pki": 82.655411,
+    "go/ratelimit": 97.826087,
     "go/rbac": 89.21466,
-    "go/tenancy": 79.150579
+    "go/saasctl": 91.458027,
+    "go/sharing": 85.267275,
+    "go/storage": 87.549801,
+    "go/tenancy": 84.555985
   },
   "toolchain": "go1.26.8"
 }
