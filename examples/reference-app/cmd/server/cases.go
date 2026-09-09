@@ -5,9 +5,11 @@
 // is registered by the generated api.HandlerFromMux helper, which
 // derives this surface's method+path patterns from the "paths:" keys of
 // the spec fragment itself -- one less copy of path+method truth
-// to keep in step with the spec by hand. The fragment joins the merged
-// application document, so the operations ship in the generated
-// @speed/api-sdk surface the case web UI calls. cases_flow_test.go drives
+// to keep in step with the spec by hand. The fragment is the app's own
+// API: it feeds the app-owned merged document and the app-owned SDK
+// (examples/reference-app/web/src/app-api) the case web UI calls --
+// never the platform merge contracts/speed.yaml (docs/internal/
+// 21-api-contract.md records the split). cases_flow_test.go drives
 // them through the composed HTTP stack.
 //
 // The five operations the case web UI renders from: upload a patient

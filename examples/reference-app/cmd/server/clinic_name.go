@@ -24,12 +24,14 @@ import (
 // The host answers that tenant's name from its own org rows through this
 // route, its own composition surface, mounted beside the other
 // hand-written app routes (cases, smilesim): it is not part of any
-// module's OpenAPI fragment (the module APIs' fragments are generated
-// into @speed/api-sdk, and this app-owned answer predates no machinery
-// -- it simply belongs to the host, exactly like /api/config/public's
-// host-side resolution). The web reaches it through the app's own
-// api-client RequestFn (src/tenant-name.ts), the same transport every
-// other app request rides.
+// module's OpenAPI fragment, nor of the app's own three fragments --
+// platform module fragments generate into @speed/api-sdk and the app's
+// own fragments into the app-owned SDK (src/app-api), while this
+// app-owned answer is in neither: it simply belongs to the host,
+// exactly like /api/config/public's host-side resolution. The web
+// reaches it through the app's own api-client RequestFn
+// (src/tenant-name.ts), the same transport every other app request
+// rides.
 //
 // The route sits behind authn.Middleware and tenancy.Middleware like
 // every non-allowlisted route: an anonymous caller is refused before

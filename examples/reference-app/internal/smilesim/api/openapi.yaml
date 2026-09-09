@@ -11,13 +11,15 @@ info:
     registrations to this fragment (the block-B round grew the fourth,
     the simulation-content read the before/after view renders); the
     app's handlers now implement the generated interface below, so a
-    spec change without a matching handler change cannot compile, and
-    the fragment joins the merged application document
-    (contracts/speed.yaml), so the operations ship in the generated
-    @speed/api-sdk surface the P3 web UI calls. This fragment follows
-    the operationId
+    spec change without a matching handler change cannot compile.
+    This fragment is the app's own API, not platform API: it serves the
+    app-owned merged document examples/reference-app/web/app-openapi.yaml
+    and the app-owned SDK the app's web host imports (src/app-api) --
+    never the platform merge contracts/speed.yaml or @speed/api-sdk (the
+    split is recorded in docs/internal/21-api-contract.md). This
+    fragment follows the operationId
     (<module>_<action><Resource>) and schema-name (<Module><Type>)
-    conventions from docs/internal/21-api-contract.md; task api:gen
+    conventions from docs/internal/21-api-contract.md; task api:gen:app
     regenerates smilesim-server.gen.go (in this directory) from this
     file, with oapi-codegen pinned at v2.8.0.
   version: 0.0.0

@@ -6,9 +6,11 @@
 // generated api.HandlerFromMux helper, which derives this surface's
 // method+path patterns from the "paths:" keys of the spec fragment
 // itself -- one less copy of path+method truth to keep in step with
-// the spec by hand. The fragment joins the merged application document,
-// so the operations ship in the generated @speed/api-sdk surface the
-// smile gallery calls.
+// the spec by hand. The fragment is the app's own API: it feeds the
+// app-owned merged document and the app-owned SDK
+// (examples/reference-app/web/src/app-api) the smile gallery calls --
+// never the platform merge contracts/speed.yaml (docs/internal/
+// 21-api-contract.md records the split).
 //
 // The surface demonstrates go/ai-gateway's Gateway.GenerateImage
 // end to end: smilesim_flow_test.go drives it through the composed HTTP

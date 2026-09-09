@@ -21,17 +21,19 @@ info:
     surface shipped (the frontend may only reach the backend through
     generated operations, so every op the cases UI calls must live
     here). The app's handlers implement the generated interface below,
-    so a spec change without a matching handler change cannot compile,
-    and the fragment joins the merged application document
-    (contracts/speed.yaml), so the operations ship in the generated
-    @speed/api-sdk surface the P3 web UI calls. A case detail's
-    per-photo simulations deliberately stay on the smile-simulation
-    surface (smilesim's own fragment), fetched per photo by the P3 view.
-    This fragment follows the operationId (<module>_<action><Resource>)
-    and schema-name (<Module><Type>) conventions from
-    docs/internal/21-api-contract.md; task api:gen regenerates
-    cases-server.gen.go (in this directory) from this file, with
-    oapi-codegen pinned at v2.8.0.
+    so a spec change without a matching handler change cannot compile.
+    This fragment is the app's own API, not platform API: it serves the
+    app-owned merged document examples/reference-app/web/app-openapi.yaml
+    and the app-owned SDK the app's web host imports (src/app-api) --
+    never the platform merge contracts/speed.yaml or @speed/api-sdk (the
+    split is recorded in docs/internal/21-api-contract.md). A case
+    detail's per-photo simulations deliberately stay on the
+    smile-simulation surface (smilesim's own fragment), fetched per
+    photo by the P3 view. This fragment follows the operationId
+    (<module>_<action><Resource>) and schema-name (<Module><Type>)
+    conventions from docs/internal/21-api-contract.md; task api:gen:app
+    regenerates cases-server.gen.go (in this directory) from this file,
+    with oapi-codegen pinned at v2.8.0.
   version: 0.0.0
 paths:
   /api/v1/cases:

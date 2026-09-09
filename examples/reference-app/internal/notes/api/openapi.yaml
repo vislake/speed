@@ -8,15 +8,15 @@ info:
     that land in later milestones; see the module's own doc.go. This
     fragment follows the operationId (<module>_<action><Resource>) and
     schema-name (<Module><Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
-    regenerates notes-server.gen.go (in this directory) from this file,
-    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml. The merge is no longer future
-    work: this fragment joins the other twelve fragments into the
-    committed application-wide contracts/speed.yaml (task api:merge,
-    redocly pinned at 2.51.1), which is also the frontend SDK's
-    generation input (docs/internal/21-api-contract.md's
-    spec-organization and merging section).
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. This fragment
+    is the app's own API, not platform API: it serves the app-owned
+    merged document examples/reference-app/web/app-openapi.yaml and the
+    app-owned SDK the app's web host imports (src/app-api) -- never the
+    platform merge contracts/speed.yaml or @speed/api-sdk (the split is
+    recorded in docs/internal/21-api-contract.md). task api:gen:app
+    regenerates notes-server.gen.go (in this directory) from this file
+    with oapi-codegen pinned at v2.8.0, and joins the app's three
+    fragments with redocly pinned at 2.51.1.
   version: 0.0.0
 paths:
   /api/v1/notes:
