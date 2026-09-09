@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -925,5 +926,97 @@ func TestLoad_IntegerLiteralsAcceptGoSyntax(t *testing.T) {
 				t.Errorf("Port = %d, want %d", got.Port, tt.want)
 			}
 		})
+	}
+}
+
+// TestSourceString_NamesEverySourceAndTheUnknownFallback pins the
+// human-readable source names error text carries, including the fallback a
+// source value outside the known set renders.
+func TestSourceString_NamesEverySourceAndTheUnknownFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := map[source]string{
+		sourceFlag:    "command-line flags",
+		sourceEnv:     "environment variables",
+		sourceFile:    "the config file",
+		sourceDefault: "the target struct",
+		source(99):    "an unknown source",
+	}
+	for s, want := range tests {
+		if got := s.String(); got != want {
+			t.Errorf("source(%d).String() = %q, want %q", s, got, want)
+		}
+	}
+}
+
+// TestLoad_ConfigFilePathBeneathAFileIsAStatError pins the readFile branch
+// between "file missing" (skipped) and "file unreadable" (refused): a path
+// whose parent is a regular file makes os.Stat fail with an error that is
+// not ErrNotExist, and that must surface as ErrSourceUnreadable naming the
+// file -- never as a silent skip.
+func TestLoad_ConfigFilePathBeneathAFileIsAStatError(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "plain-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v, want nil", err)
+	}
+	beneath := filepath.Join(file, "speed.yaml")
+
+	err := New(WithArgs(nil), WithEnviron(nil), WithConfigFile(beneath)).Load(newTestConfig())
+	if err == nil {
+		t.Fatal("Load succeeded, want a hard error for the config file path")
+	}
+	if !errors.Is(err, ErrSourceUnreadable) {
+		t.Errorf("error does not wrap ErrSourceUnreadable: %v", err)
+	}
+	if !strings.Contains(err.Error(), beneath) {
+		t.Errorf("error message does not name the file %q: %v", beneath, err)
+	}
+}
+
+// textEmptyOK is a TextUnmarshaler whose empty-text parse succeeds, for
+// acceptsEmpty's text-unmarshaler arm.
+type textEmptyOK string
+
+func (t *textEmptyOK) UnmarshalText(text []byte) error {
+	*t = textEmptyOK(text)
+	return nil
+}
+
+// TestAcceptsEmpty_TextUnmarshalersAnswerForThemselves pins that a field
+// type which parses itself from text decides the empty-value question for
+// itself: a type whose UnmarshalText("") succeeds accepts an empty value,
+// while one that refuses empty text (a time.Duration) does not.
+func TestAcceptsEmpty_TextUnmarshalersAnswerForThemselves(t *testing.T) {
+	t.Parallel()
+
+	if !acceptsEmpty(reflect.TypeOf(textEmptyOK(""))) {
+		t.Error("acceptsEmpty(textEmptyOK) = false, want true: its UnmarshalText accepts the empty text")
+	}
+	if acceptsEmpty(reflect.TypeOf(time.Duration(0))) {
+		t.Error("acceptsEmpty(time.Duration) = true, want false: its UnmarshalText refuses the empty text")
+	}
+	if acceptsEmpty(reflect.TypeOf(0)) {
+		t.Error("acceptsEmpty(int) = true, want false")
+	}
+}
+
+// recursiveTestConfig is a self-referential target: walking its type must
+// terminate, not recurse forever.
+type recursiveTestConfig struct {
+	Name string
+	Next *recursiveTestConfig
+}
+
+// TestLoad_SelfReferentialTargetTerminates pins the schema walk's cycle
+// guard: a target that references its own type through a pointer loads
+// cleanly instead of recursing without bound.
+func TestLoad_SelfReferentialTargetTerminates(t *testing.T) {
+	t.Parallel()
+
+	cfg := &recursiveTestConfig{}
+	if err := New(WithArgs(nil), WithEnviron(nil)).Load(cfg); err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
 	}
 }

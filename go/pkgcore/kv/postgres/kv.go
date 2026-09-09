@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -270,6 +271,16 @@ SELECT (SELECT count(*) FROM matched) + (SELECT count(*) FROM inserted)`
 	sweepSQL = `DELETE FROM pkgcore_kv_entries WHERE expires_at IS NOT NULL AND expires_at <= now()`
 )
 
+// dbQueries is the slice of a *pgxpool.Pool this store's statements run on.
+// The concrete pool satisfies it; the interface exists so a test double can
+// stand in for the pool (the same-package unit tests drive every statement
+// against a scripted double), while NewKVStore's signature and every caller
+// keep passing the real *pgxpool.Pool.
+type dbQueries interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
 // Store is the distributed deployment mode's KVStore backed by a
 // PostgreSQL connection pool every replica of a deployment shares. It
 // implements pkgcore.KVStore (see the var _ assertion below) and additionally
@@ -278,7 +289,7 @@ SELECT (SELECT count(*) FROM matched) + (SELECT count(*) FROM inserted)`
 // cannot reach it, and NewKVStore's doc comment for why that is deliberate
 // rather than an oversight.
 type Store struct {
-	pool *pgxpool.Pool
+	pool dbQueries
 
 	// now is the application-clock source WithClock supplies. No statement
 	// this store runs consults it: expiries are computed by the database

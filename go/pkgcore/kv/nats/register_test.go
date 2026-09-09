@@ -61,3 +61,24 @@ func TestConnFromConfig_InvalidAddressReturnsError(t *testing.T) {
 		t.Fatal("connFromConfig() against an address nothing listens on succeeded, want an error")
 	}
 }
+
+// TestClosableKVStoreClose_RunsTheConnectionCloser drives the wrapper's
+// resource-ownership contract directly (the registry's own New cannot run
+// hermetically: it provisions a JetStream bucket, a round trip): Close runs
+// the recorded closer exactly once, and a wrapper with no closer -- a
+// registration value built over a store the caller keeps owning -- still
+// closes cleanly.
+func TestClosableKVStoreClose_RunsTheConnectionCloser(t *testing.T) {
+	closed := 0
+	s := &closableKVStore{closeConn: func() { closed++ }}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if closed != 1 {
+		t.Errorf("connection closer ran %d times, want exactly 1", closed)
+	}
+
+	if err := (&closableKVStore{}).Close(); err != nil {
+		t.Errorf("Close() on a wrapper without a closer error = %v, want nil", err)
+	}
+}

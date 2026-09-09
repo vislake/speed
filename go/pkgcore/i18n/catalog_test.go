@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"errors"
+	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -939,5 +940,124 @@ func TestRealPkgcoreSeedIdsResolveInEveryLocale(t *testing.T) {
 				t.Errorf("Lookup(%s, %s) = %v", locale, code, err)
 			}
 		}
+	}
+}
+
+// failingLocaleFS is an fs.FS whose every open fails, for AddModule's
+// read-failure path: a module whose locale directory cannot even be listed
+// is refused with a wrapped error rather than silently registering nothing.
+type failingLocaleFS struct{}
+
+func (failingLocaleFS) Open(name string) (fs.File, error) {
+	return nil, errors.New("no storage behind this fs")
+}
+
+// TestAddModule_UnreadableLocaleFSIsRefused pins that a module whose locale
+// files cannot be read fails AddModule loudly instead of silently shipping
+// nothing.
+func TestAddModule_UnreadableLocaleFSIsRefused(t *testing.T) {
+	b := NewBuilder()
+	err := b.AddModule("notes", failingLocaleFS{})
+	if err == nil || !strings.Contains(err.Error(), "read locale files of module") {
+		t.Fatalf("AddModule over an unreadable fs = %v, want a wrapped read error", err)
+	}
+}
+
+// TestAddModule_PluralTableCarryingEveryCategoryAndMetadataKey pins that a
+// plural table may carry every CLDR category go-i18n knows plus the id,
+// hash, description and delimiter metadata keys: each form lands on the
+// message it names and renders for the locale whose rules select it.
+func TestAddModule_PluralTableCarryingEveryCategoryAndMetadataKey(t *testing.T) {
+	tableEN := `
+["full.plural"]
+id = "full.plural"
+hash = "translation-workflow artifact"
+description = "A message exercising the whole table surface."
+zero = "zero items"
+one = "{{.Count}} item"
+two = "two items"
+few = "few items"
+many = "many items"
+other = "{{.Count}} items"
+`
+	tableZH := `
+["full.plural"]
+id = "full.plural"
+hash = "翻译工作流产物"
+description = "一个覆盖整个表格面的消息。"
+zero = "零项"
+one = "{{.Count}} 项"
+two = "两项"
+few = "几项"
+many = "多项"
+other = "{{.Count}} 项"
+`
+	b := NewBuilder()
+	addPair(t, b, "full", tableZH, tableEN)
+	c := b.Build()
+
+	for _, tc := range []struct {
+		locale string
+		count  int64
+		want   string
+	}{
+		{LocaleENUS, 1, "1 item"},
+		{LocaleENUS, 2, "2 items"},
+		{LocaleZHCN, 1, "1 项"},
+	} {
+		got, err := c.LookupPlural(tc.locale, "full.plural", tc.count, map[string]any{"Count": tc.count})
+		if err != nil {
+			t.Fatalf("LookupPlural(%s, count=%d) error = %v", tc.locale, tc.count, err)
+		}
+		if got != tc.want {
+			t.Errorf("LookupPlural(%s, count=%d) = %q, want %q", tc.locale, tc.count, got, tc.want)
+		}
+	}
+}
+
+// TestAddModule_TableWithCustomDelimitersIsAccepted pins that the
+// leftdelim/rightdelim metadata keys are honoured rather than rejected: a
+// message may restate the template delimiters its translations use.
+func TestAddModule_TableWithCustomDelimitersIsAccepted(t *testing.T) {
+	body := `
+["custom.delims"]
+leftdelim = "«"
+rightdelim = "»"
+other = "a plain message"
+`
+	b := NewBuilder()
+	addPair(t, b, "custom", body, body)
+	c := b.Build()
+	if _, err := c.Lookup(LocaleENUS, "custom.delims", nil); err != nil {
+		t.Fatalf("Lookup(custom.delims) error = %v, want nil", err)
+	}
+}
+
+// TestAddModule_RejectsMalformedPluralTableRows pins the per-key shape
+// errors of a plural table: an id, description or delimiter that is not a
+// string, and a v1 translation key with an empty value, all refuse the
+// module with ErrUnsupportedShape naming the offending key.
+func TestAddModule_RejectsMalformedPluralTableRows(t *testing.T) {
+	tests := []struct {
+		name    string
+		row     string
+		wantErr string
+	}{
+		{"id not a string", `id = 5` + "\n" + `other = "x"`, "key \"id\" must be a string"},
+		{"description not a string", `description = 5` + "\n" + `other = "x"`, "key \"description\" must be a string"},
+		{"leftdelim not a string", `leftdelim = 5` + "\n" + `other = "x"`, "key \"leftdelim\" must be a string"},
+		{"rightdelim not a string", `rightdelim = 5` + "\n" + `other = "x"`, "key \"rightdelim\" must be a string"},
+		{"empty v1 translation", "translation = \"\"", `key "translation" has an empty translation`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := "[\"notes.bad\"]\n" + tt.row + "\n"
+			b := NewBuilder()
+			err := b.AddModule("notes", localeFS(map[string]string{
+				"zh-CN.toml": body,
+				"en-US.toml": body,
+			}))
+			wantError(t, err, ErrUnsupportedShape, tt.wantErr)
+		})
 	}
 }

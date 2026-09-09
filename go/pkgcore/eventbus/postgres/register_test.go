@@ -1,7 +1,11 @@
 package postgres
 
 import (
+	"context"
+	"errors"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -47,5 +51,35 @@ func TestPoolAndReplicaFromConfig_MissingReplicaID(t *testing.T) {
 	_, _, err := poolAndReplicaFromConfig(pkgcore.Config{"dsn": "postgres://user:pass@127.0.0.1:1/db"})
 	if err == nil {
 		t.Fatal("poolAndReplicaFromConfig() with no \"replica_id\" error = nil, want a non-nil error")
+	}
+}
+
+// TestClosableEventBusClose_StopsTheBusAndRunsThePoolCloser drives the
+// wrapper's resource-ownership contract directly (the registry's own New
+// cannot run hermetically: it builds a pool for a live server): Close stops
+// the bus -- a publish afterwards is refused with ErrEventBusClosed -- and
+// runs the recorded pool closer exactly once; a wrapper with no closer still
+// closes cleanly.
+func TestClosableEventBusClose_StopsTheBusAndRunsThePoolCloser(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("pgxpool.New() error = %v, want nil", err)
+	}
+	defer pool.Close()
+
+	closed := 0
+	b := &closableEventBus{EventBus: NewEventBus(pool, "replica-1"), closePool: func() { closed++ }}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if closed != 1 {
+		t.Errorf("pool closer ran %d times, want exactly 1", closed)
+	}
+	if err := b.Publish(context.Background(), pkgcore.Event{Type: "some.event", Payload: "x"}); !errors.Is(err, ErrEventBusClosed) {
+		t.Errorf("Publish after Close error = %v, want ErrEventBusClosed", err)
+	}
+
+	if err := (&closableEventBus{EventBus: NewEventBus(pool, "replica-2")}).Close(); err != nil {
+		t.Errorf("Close() on a wrapper without a closer error = %v, want nil", err)
 	}
 }

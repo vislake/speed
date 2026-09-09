@@ -1,6 +1,8 @@
 package nats
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -53,4 +55,26 @@ func TestConnFromConfig_UsesConfiguredURL(t *testing.T) {
 		t.Fatalf("connFromConfig() error = %v, want nil (RetryOnFailedConnect must not fail synchronously)", err)
 	}
 	t.Cleanup(conn.Close)
+}
+
+// TestBuiltinClose_StopsTheBusAndReleasesTheDialedConnection drives the
+// registration's resource-ownership contract: the value Build hands back is
+// the closable wrapper, and Close both stops the bus (a publish afterwards is
+// refused with ErrEventBusClosed) and releases the connection the
+// registration itself dialed.
+func TestBuiltinClose_StopsTheBusAndReleasesTheDialedConnection(t *testing.T) {
+	impl, _, err := pkgcore.EventBusRegistry.Build("eventbus.nats", pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v, want nil", "eventbus.nats", err)
+	}
+	closable, ok := impl.(*closableEventBus)
+	if !ok {
+		t.Fatalf("Build(%q) returned %T, want the *closableEventBus whose Close releases the dialed connection", "eventbus.nats", impl)
+	}
+	if err := closable.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if err := closable.Publish(context.Background(), pkgcore.Event{Type: "some.event", Payload: "x"}); !errors.Is(err, ErrEventBusClosed) {
+		t.Errorf("Publish after the builtin's Close error = %v, want ErrEventBusClosed", err)
+	}
 }

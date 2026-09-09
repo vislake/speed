@@ -46,3 +46,20 @@ func TestClientFromConfig_InvalidDBReturnsError(t *testing.T) {
 		t.Fatal("clientFromConfig() with an invalid db succeeded, want an error")
 	}
 }
+
+// TestBuiltinClose_ReleasesTheDialedClient drives the registration's
+// resource-ownership contract: the value Build hands back is the closable
+// wrapper, and Close releases the client the registration itself built.
+func TestBuiltinClose_ReleasesTheDialedClient(t *testing.T) {
+	impl, _, err := pkgcore.KVStoreRegistry.Build("kv.redis", pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v, want nil", "kv.redis", err)
+	}
+	closable, ok := impl.(*closableKVStore)
+	if !ok {
+		t.Fatalf("Build(%q) returned %T, want the *closableKVStore whose Close releases the dialed client", "kv.redis", impl)
+	}
+	if err := closable.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}

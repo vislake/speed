@@ -36,3 +36,21 @@ func TestPoolFromConfig_MissingDSN(t *testing.T) {
 		t.Fatal("poolFromConfig() with no \"dsn\" error = nil, want a non-nil error")
 	}
 }
+
+// TestClosableKVStoreClose_RunsThePoolCloser drives the wrapper's
+// resource-ownership contract directly: Close runs the recorded pool closer
+// exactly once, and a wrapper with no closer still closes cleanly.
+func TestClosableKVStoreClose_RunsThePoolCloser(t *testing.T) {
+	closed := 0
+	s := &closableKVStore{closePool: func() { closed++ }}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if closed != 1 {
+		t.Errorf("pool closer ran %d times, want exactly 1", closed)
+	}
+
+	if err := (&closableKVStore{}).Close(); err != nil {
+		t.Errorf("Close() on a wrapper without a closer error = %v, want nil", err)
+	}
+}

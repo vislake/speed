@@ -1,6 +1,8 @@
 package redis
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -45,5 +47,27 @@ func TestClientFromConfig_InvalidDBReturnsError(t *testing.T) {
 	_, err := clientFromConfig(pkgcore.Config{"db": "not-a-number"})
 	if err == nil {
 		t.Fatal("clientFromConfig() with an invalid db succeeded, want an error")
+	}
+}
+
+// TestBuiltinClose_StopsTheBusAndReleasesTheDialedClient drives the
+// registration's resource-ownership contract: the value Build hands back is
+// the closable wrapper, and Close both stops the bus (a publish afterwards
+// is refused with ErrEventBusClosed) and releases the client the
+// registration built.
+func TestBuiltinClose_StopsTheBusAndReleasesTheDialedClient(t *testing.T) {
+	impl, _, err := pkgcore.EventBusRegistry.Build("eventbus.redis", pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v, want nil", "eventbus.redis", err)
+	}
+	closable, ok := impl.(*closableEventBus)
+	if !ok {
+		t.Fatalf("Build(%q) returned %T, want the *closableEventBus whose Close releases the dialed client", "eventbus.redis", impl)
+	}
+	if err := closable.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if err := closable.Publish(context.Background(), pkgcore.Event{Type: "some.event", Payload: "x"}); !errors.Is(err, ErrEventBusClosed) {
+		t.Errorf("Publish after the builtin's Close error = %v, want ErrEventBusClosed", err)
 	}
 }
