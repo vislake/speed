@@ -18,12 +18,16 @@
  * api:merge task -- `task api:gen` depends on it, so a fragment edit can
  * never regenerate from a stale committed merge). The merge joins the
  * ten platform-module fragments -- admin, ai-gateway, authn, billing,
- * integration, notification, org, pki, sharing and storage -- plus the
- * reference app's own notes, cases and smilesim fragments: every
+ * integration, notification, org, pki, sharing and storage: every
  * platform module with an HTTP fragment belongs to the merged document
  * and this generated surface, which the api-contract consistency gates
  * pin and which does not rot from being uncalled
  * (docs/internal/21-api-contract.md's module-driven inclusion policy).
+ * The reference app's own notes, cases and smilesim fragments are
+ * deliberately not members -- the platform SDK covers the platform,
+ * and the app's own API generates into the app's own SDK through the
+ * app-owned flow (its own orval.config.ts under examples/reference-app/
+ * web, driven by Taskfile's api:gen:app task).
  * Output
  * covers types AND TanStack Query
  * hooks (client: react-query), written to src/index.ts; generated

@@ -13,15 +13,27 @@ sites' consistency held only by comments in that file saying "keep the
 two in lockstep" -- an enumeration that can drift silently.
 
 tools/api_fragments.json is the single machine-readable source of truth
-for the fragment list. This gate reads that manifest, the live tree and
-the workflow's legs, and fails (exit 1) on any of these disagreements:
+for the fragment list. The manifest carries two lists: `fragments`,
+the platform-module fragments this workflow's legs regenerate, and
+`app_owned`, the api/ directories that carry the same on-disk fragment
+signature but belong to the reference app's own generation flow (the
+app-owned leg joins the app's three fragments into the app's own merged
+document and SDK; see docs/internal/21-api-contract.md) -- they are
+deliberately not platform fragments and must appear in none of this
+workflow's legs. This gate reads the manifest, the live tree and the
+workflow's legs, and fails (exit 1) on any of these disagreements:
 
   * a fragment registered in the manifest whose api/ directory does not
     exist on disk with its openapi.yaml and oapi-codegen.yaml;
   * an api/ directory on disk carrying openapi.yaml and
-    oapi-codegen.yaml that the manifest does not register (the
-    tree-scan signature of a backend fragment; anything else that looks
-    like one must be registered or moved);
+    oapi-codegen.yaml that the manifest does not register and does not
+    list under `app_owned` (the tree-scan signature of a backend
+    fragment; anything else that looks like one must be registered or
+    listed app-owned or moved);
+  * an `app_owned` directory missing from the tree or missing its
+    openapi.yaml / oapi-codegen.yaml (the app-owned generation leg
+    regenerates from those files, so a vanished entry is a stale
+    manifest), or a directory listed in both lists;
   * a registered fragment missing from the pull_request or the push
     trigger path filter (each fragment's filter row is exactly its
     `<dir>/**`), or a path-filter row of fragment shape (`.../api/**`)
@@ -288,7 +300,8 @@ def _read_workflow(root: str) -> dict:
         )
 
 
-def _read_manifest(root: str, problems: list[str]) -> list[dict]:
+def _read_manifest(root: str, problems: list[str]) -> tuple[list[dict], list[str]]:
+    """Return (fragments, app_owned dirs) from tools/api_fragments.json."""
     path = os.path.join(root, MANIFEST_REL)
     try:
         with open(path, encoding="utf-8") as fh:
@@ -302,7 +315,7 @@ def _read_manifest(root: str, problems: list[str]) -> list[dict]:
     frags = data.get("fragments")
     if not isinstance(frags, list) or not frags:
         problems.append(f"{path}: 'fragments' must be a non-empty list")
-        return []
+        return [], []
     clean: list[dict] = []
     seen_names: set[str] = set()
     seen_dirs: set[str] = set()
@@ -361,7 +374,38 @@ def _read_manifest(root: str, problems: list[str]) -> list[dict]:
                 "merge_rank": rank,
             }
         )
-    return clean
+    app_owned: list[str] = []
+    seen_owned: set[str] = set()
+    owned = data.get("app_owned")
+    if owned is not None and not isinstance(owned, list):
+        problems.append(f"{path}: 'app_owned' must be a list of dirs")
+    elif owned:
+        for entry in owned:
+            if not isinstance(entry, str) or not entry:
+                problems.append(f"{path}: 'app_owned' entries must be dirs")
+                continue
+            if (
+                entry.startswith(("/", "./"))
+                or ".." in entry.split("/")
+                or not entry.endswith("/api")
+            ):
+                problems.append(
+                    f"{path}: 'app_owned' entry must be a repo-relative "
+                    f"path ending in '/api', not '{entry}'"
+                )
+                continue
+            if entry in seen_owned:
+                problems.append(f"{path}: duplicate 'app_owned' entry '{entry}'")
+                continue
+            if entry in seen_dirs:
+                problems.append(
+                    f"{path}: '{entry}' is registered as a fragment and "
+                    f"listed under 'app_owned'"
+                )
+                continue
+            seen_owned.add(entry)
+            app_owned.append(entry)
+    return clean, app_owned
 
 
 def _scan_fragment_dirs(root: str) -> list[str]:
@@ -447,11 +491,12 @@ def _merge_inputs(steps: list[dict]) -> list[str] | None:
     return None
 
 
-def check(root: str) -> tuple[list[str], int, int]:
-    """Check every leg against the manifest; return (problems, fragments, merged)."""
+def check(root: str) -> tuple[list[str], int, int, int]:
+    """Check every leg against the manifest; return (problems, fragments, merged, app_owned)."""
     problems: list[str] = []
-    frags = _read_manifest(root, problems)
+    frags, app_owned = _read_manifest(root, problems)
     manifest_dirs = {f["dir"] for f in frags}
+    app_owned_set = set(app_owned)
 
     for frag in frags:
         for needed in (FRAGMENT_SPEC, FRAGMENT_CONFIG):
@@ -464,14 +509,25 @@ def check(root: str) -> tuple[list[str], int, int]:
                     f"config"
                 )
 
+    for frag_dir in app_owned:
+        for needed in (FRAGMENT_SPEC, FRAGMENT_CONFIG):
+            path = os.path.join(root, frag_dir, needed)
+            if not os.path.isfile(path):
+                problems.append(
+                    f"app-owned fragment ({frag_dir}): {needed} is "
+                    f"missing -- an '{MANIFEST_REL}' app_owned entry must "
+                    f"carry the spec and generator config the app-owned "
+                    f"generation leg regenerates from"
+                )
+
     for frag_dir in _scan_fragment_dirs(root):
-        if frag_dir not in manifest_dirs:
+        if frag_dir not in manifest_dirs and frag_dir not in app_owned_set:
             problems.append(
                 f"{frag_dir}: looks like an api fragment (it holds "
                 f"{FRAGMENT_SPEC} and {FRAGMENT_CONFIG}) but is not "
-                f"registered in {MANIFEST_REL} -- register it there (and "
-                f"wire it into every leg below) or move it if it is not "
-                f"one"
+                f"registered in {MANIFEST_REL} nor listed under its "
+                f"'app_owned' entries -- register it there (and wire it "
+                f"into every leg below) or move it if it is not one"
             )
 
     doc = _read_workflow(root)
@@ -493,9 +549,17 @@ def check(root: str) -> tuple[list[str], int, int]:
             if row.endswith("/api/**"):
                 frag_dir = row[: -len("/**")]
                 if frag_dir not in manifest_dirs:
+                    suffix = ""
+                    if frag_dir in app_owned_set:
+                        suffix = (
+                            " (it is listed under app_owned -- "
+                            "app-owned fragments belong to the app's own "
+                            "generation leg, not this workflow's)"
+                        )
                     problems.append(
                         f"the {trigger} path filter names {row}, but "
                         f"{MANIFEST_REL} registers no fragment at {frag_dir}"
+                        f"{suffix}"
                     )
     for self_row in SELF_ROWS:
         for trigger in ("pull_request", "push"):
@@ -538,9 +602,17 @@ def check(root: str) -> tuple[list[str], int, int]:
             )
     for step_name, _run, regen_dir in regen:
         if regen_dir is not None and regen_dir not in manifest_dirs:
+            suffix = ""
+            if regen_dir in app_owned_set:
+                suffix = (
+                    " (it is listed under app_owned -- app-owned "
+                    "fragments regenerate through the app's own "
+                    "generation leg, not this workflow's)"
+                )
             problems.append(
                 f"regeneration step '{step_name}' regenerates {regen_dir}, "
                 f"but {MANIFEST_REL} registers no fragment there"
+                f"{suffix}"
             )
 
     actual = _merge_inputs(steps)
@@ -563,19 +635,21 @@ def check(root: str) -> tuple[list[str], int, int]:
             f"got [{', '.join(actual)}]"
         )
 
-    return problems, len(frags), len(merged)
+    return problems, len(frags), len(merged), len(app_owned)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Fragment-enumeration drift gate: .github/workflows/"
-            "api-contract.yml names the backend-fragment universe in its "
+            "api-contract.yml names the platform-fragment universe in its "
             "path filters, its oapi-codegen regeneration steps and its "
             "redocly join input list; tools/api_fragments.json is the "
-            "single source of truth, and this gate fails when the tree, "
-            "the manifest and any of those legs disagree. Exit 0 clean, "
-            "1 drift, 2 infrastructure error."
+            "single source of truth (its app_owned entries name the "
+            "reference app's own fragment directories, which this "
+            "workflow deliberately does not wire), and this gate fails "
+            "when the tree, the manifest and any of those legs disagree. "
+            "Exit 0 clean, 1 drift, 2 infrastructure error."
         )
     )
     parser.add_argument(
@@ -584,7 +658,7 @@ def main(argv: list[str] | None = None) -> int:
         help="repository root (default: the current directory)",
     )
     args = parser.parse_args(argv)
-    problems, n_frags, n_merged = check(args.root)
+    problems, n_frags, n_merged, n_app_owned = check(args.root)
     if problems:
         for problem in problems:
             print(f"api-fragments: drift    {problem}")
@@ -598,7 +672,7 @@ def main(argv: list[str] | None = None) -> int:
         "api-fragments: ok    "
         f"{n_frags} fragments in {MANIFEST_REL} match the tree, the "
         f"trigger path filters, the {n_frags} regeneration steps and the "
-        f"redocly join (merged: {n_merged})"
+        f"redocly join (merged: {n_merged}, app-owned: {n_app_owned})"
     )
     return 0
 

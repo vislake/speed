@@ -19,6 +19,15 @@
  *
  *   node web/scripts/orval-nodenext-fixup.mjs
  *
+ * The same one script serves the app-owned generation leg: the
+ * reference app's own SDK (Taskfile's api:gen:app task) runs the
+ * identical rewrite over its own generated entry and seam by passing
+ * both paths:
+ *
+ *   node web/scripts/orval-nodenext-fixup.mjs \
+ *     examples/reference-app/web/src/app-api/index.ts \
+ *     examples/reference-app/web/src/app-api/runtime.ts
+ *
  * The script is idempotent: an already-fixed file (every mutator
  * import already carrying the '.js' extension) exits 0 with the
  * already-carry message, so the post-regeneration step can be re-run
@@ -33,13 +42,20 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
-const indexPath = fileURLToPath(
+const defaultIndex = fileURLToPath(
   new URL('../packages/api-sdk/src/index.ts', import.meta.url),
 )
-const seamPath = fileURLToPath(
+const defaultSeam = fileURLToPath(
   new URL('../packages/api-sdk/src/runtime.ts', import.meta.url),
 )
+const indexPath = process.argv[2]
+  ? resolve(process.cwd(), process.argv[2])
+  : defaultIndex
+const seamPath = process.argv[3]
+  ? resolve(process.cwd(), process.argv[3])
+  : defaultSeam
 
 // One mutator import per line, braces between: orval emits a distinct
 // line per mutator name, all from './runtime'. The specifier -- not the

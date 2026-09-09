@@ -88,42 +88,42 @@ consumer-shell discipline.
 
 ## Generated surface (the merged document)
 
-orval input today is the merged `contracts/speed.yaml` -- the
-`task api:merge` leg (pinned redocly `join`) joining all thirteen
-fragments: the ten platform-module fragments (admin, ai-gateway,
-authn, billing, integration, notification, org, pki, sharing and
-storage) plus the reference app's own notes, cases and smilesim --
-linted against `redocly.yaml`'s naming rules. `task api:gen`'s
-frontend leg runs orval over that merged document, so a fragment
-only reaches this package by entering the merge, and every platform
-module with an HTTP fragment is a merge member by the module-driven
-inclusion policy of docs/internal/21-api-contract.md. The notes
-group generates:
+orval input is the merged `contracts/speed.yaml` -- the `task api:merge`
+leg (pinned redocly `join`) joining the ten platform-module fragments
+(admin, ai-gateway, authn, billing, integration, notification, org,
+pki, sharing and storage) -- linted against `redocly.yaml`'s naming
+rules. `task api:gen`'s frontend leg runs orval over that merged
+document, so a platform fragment only reaches this package by entering
+the merge, and every platform module with an HTTP fragment is a merge
+member by the module-driven inclusion policy of
+docs/internal/21-api-contract.md. The reference app's own fragments
+(notes, cases, smilesim) are deliberately not members: they are the
+app's own API, and the app generates its own app-owned SDK over them
+(`examples/reference-app/web/src/app-api`, Taskfile's `api:gen:app`
+leg), which the app's web host imports for its own surfaces -- the
+consumer-shaped generation flow that is the seed of the productized
+app-owned generation (docs/internal/21-api-contract.md). Platform
+membership, in the same per-operation shape:
 
-- `useNotesListNotes` -- `useQuery` hook; `notesListNotes(signal)`; the
-  `NotesListNotesResponse` type; query key `/api/v1/notes`.
-- `useNotesCreateNote` -- `useMutation` hook; `notesCreateNote(body)`;
-  `NotesCreateNoteRequest` in, `NotesNote` out.
-- Error typing is `NotesError` (the structured `{code, params}` envelope
-  -- codes resolve to bilingual user-facing text in the consuming
-  package's own catalogs; no i18n resources ship here).
+- `useAuthnLoginWithPassword` -- `useMutation` hook;
+  `authnLoginWithPassword(body)` function; the authn group covers the
+  full session lifecycle (login channels, logout, tenant switch,
+  refresh, registration, code sending, `/me`, session listing and
+  revocation, MFA and social sign-in) and exists because
+  `@speed/auth-core` consumes it (see Status below): a spec change
+  whose regenerated surface outgrows auth-core's calls fails that
+  package's typecheck.
+- Every other platform fragment group follows the same shape --
+  notification, billing, org, storage, sharing, pki, admin,
+  integration and ai-gateway each export their module's hooks, plain
+  functions, types and error envelopes.
+- Error typing is per-module (`NotesError`-shaped `{code, params}`
+  envelopes -- codes resolve to bilingual user-facing text in the
+  consuming package's own catalogs; no i18n resources ship here).
 - `./runtime` subpath: `bindRequestFn`, the `speedRequest` mutator and
-  the per-operation `speedRequestCredentialless` mutator.
-
-The authn group is the second export group, covering the full session
-lifecycle -- `authnLoginWithPassword`, `authnLoginWithSMSCode`,
-`authnLogout`, `authnSwitchTenant`, `authnRefreshToken`, plus
-registration, code sending, `/me`, session listing and revocation, MFA
-and social sign-in -- in the same per-operation shape:
-`useAuthnLoginWithPassword` mutation hook, `authnLoginWithPassword(body)`
-function, request/response types and `AuthnError` envelopes. The group
-exists because `@speed/auth-core` consumes it (see Status below), which
-puts the same compile pressure on it as on the notes group: a spec
-change whose regenerated surface outgrows auth-core's calls fails that
-package's typecheck. Every other fragment group follows the same
-per-operation shape -- cases, smilesim, notification, billing, org,
-storage, sharing, pki, admin, integration and ai-gateway each export
-their module's hooks, plain functions, types and error envelopes.
+  the per-operation `speedRequestCredentialless` mutator. The app-owned
+  SDK's own seam re-exports this subpath, so one `bindRequestFn` call
+  at bootstrap serves both generated surfaces.
 
 The peer family (`react` + `@tanstack/react-query` v5) exists so hosts
 share one `QueryClient`/`QueryClientProvider`; the package itself never
@@ -147,10 +147,12 @@ its real host: the consumer shell.
   workspace and never versioned) is the mandatory first consumer: its
   bootstrap binds one real `@speed/api-client` through this package's
   `bindRequestFn` seam, and its surfaces drive the generated
-  operations through the composed tree -- the notes operations through
-  the generated react-query hooks behind a real permission gate, the
-  authn operations through the auth-core session and the auth-ui /
-  account-ui / tenancy-ui component families. Its vitest suites run
+  operations through the composed tree -- the platform operations
+  (authn through the auth-core session and the auth-ui / account-ui /
+  tenancy-ui component families, billing through the billing-ui
+  family) through this package, and the app's own notes/cases/smilesim
+  operations through the app-owned SDK (`src/app-api`), which rides
+  this same seam and QueryClient. Its vitest suites run
   that composition over a scripted demo-server double whose mirrored
   facts the Go-side suites pin against the real composed server. The
   browser-page leg -- a browser driving the real server -- is not

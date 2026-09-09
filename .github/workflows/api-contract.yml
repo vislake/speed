@@ -70,22 +70,21 @@ name: api-contract
 #     fragment's own porcelain gate fails the job if the committed
 #     artifact is not what the spec generates. A step per fragment keeps
 #     each fragment's failure unambiguous in the job log. The fragments
-#     are the reference app's own notes, cases and smilesim
-#     (examples/reference-app/internal/{notes,cases,smilesim}/api) and
-#     the module fragments org, storage, notification, sharing, pki,
-#     admin, integration, ai-gateway, billing and authn; the full list
-#     lives in tools/api_fragments.json, the source of truth. The cases
-#     and smilesim handlers live in the app itself (cmd/server/cases.go
-#     and cmd/server/smilesim.go, behind compile-time ServerInterface
-#     assertions), so their compile enforcement is the reference-app go
-#     build below.
+#     are the ten platform-module fragments org, storage, notification,
+#     sharing, pki, admin, integration, ai-gateway, billing and authn;
+#     the full list lives in tools/api_fragments.json, the source of
+#     truth. The reference app's own notes, cases and smilesim fragments
+#     are not part of this pipeline: they regenerate through the app's
+#     own generation leg, the consumer-shaped twin of this one that the
+#     app runs for its own merged document and SDK (Taskfile's
+#     api:gen:app task and full-check.yml's reference-app job;
+#     docs/internal/21-api-contract.md records the split).
 #   * Spec merge + info stamp + naming-convention lint: the pinned
 #     redocly CLI 2.51.1 (the same `pnpm --package=@redocly/cli@2.51.1
 #     dlx redocly ...` invocation as Taskfile's api:merge task) `join`s
-#     all thirteen fragments -- the ten platform-module fragments
-#     (admin, ai-gateway, authn, billing, integration, notification,
-#     org, pki, sharing and storage) plus the reference app's own
-#     notes, cases and smilesim -- into contracts/speed.yaml, then
+#     all ten platform-module fragments (admin, ai-gateway, authn,
+#     billing, integration, notification, org, pki, sharing and
+#     storage) into contracts/speed.yaml, then
 #     web/scripts/redocly-join-fixup.mjs stamps the merged document's
 #     info block (join keeps the FIRST fragment's info; without the
 #     stamp the application-wide document -- and through orval's header
@@ -95,7 +94,7 @@ name: api-contract
 #     component schema-name and tag formats, the conventions that keep
 #     fragments from colliding under the merge), then the porcelain gate
 #     fails the job if the committed contracts/speed.yaml is not
-#     what the thirteen fragments merge -- plus the stamp -- to.
+#     what the ten fragments merge -- plus the stamp -- to.
 #     These steps
 #     sit before the frontend regeneration because the merged document
 #     is that leg's input.
@@ -113,14 +112,15 @@ name: api-contract
 #     gates below and does not rot from being uncalled -- whether a
 #     surface has an in-workspace web consumer is a consumption-proof
 #     question, not a merge-membership criterion (docs/internal/
-#     21-api-contract.md).
+#     21-api-contract.md; the reference app consumes its own three
+#     fragments through its own app-owned SDK, which is not part of
+#     this merged document).
 #   * Compile enforcement (all fragments but authn): `go build ./...` of
 #     examples/reference-app. The app imports every module among the
 #     fragments (go/pki as authn's KeySource), so a regenerated
-#     api.ServerInterface that outgrows any handler's compile-time
-#     assertion -- the module handlers and the app's own cases and
-#     smilesim handlers alike -- fails this one build step,
-#     transitively, with no separate step per module. Without this leg a
+#     api.ServerInterface that outgrows its module handler's compile-time
+#     assertion fails this one build step, transitively, with no
+#     separate step per module. Without this leg a
 #     spec+artifact change whose handler lagged would pass both this
 #     pipeline and fast-check (which does not build the reference app).
 #     Precise only for a parameter-free operation, though: an operation
@@ -152,17 +152,17 @@ name: api-contract
 #     colliding under the merge, and the merged-document diff gate
 #     catches a committed speed.yaml that drifted from a fresh merge, so
 #     a separate check would only re-check what those already do.
+#   * an app-owned pipeline here for the reference app's own fragments:
+#     the app runs its own generation leg (Taskfile api:gen:app) with
+#     its own porcelain gate in full-check.yml's reference-app job --
+#     the app is a consumer, and consumer-side generation gates belong
+#     to the consumer's own CI, which is the shape the app-owned flow
+#     seeds (docs/internal/21-api-contract.md).
 #
 # PATH SET -- spec/generator-toolchain changes only (see LOCKSTEP
 # above). Each fragment row covers the fragment's api/ directory, its
 # generator config and its backend generated artifact -- a hand-edit of
 # the generated file triggers the consistency diff:
-#   examples/reference-app/internal/notes/api/**
-#   examples/reference-app/internal/cases/api/**      the app's own
-#                                                     case-domain surface
-#   examples/reference-app/internal/smilesim/api/**   the app's own
-#                                                     smile-simulation
-#                                                     surface
 #   go/org/api/**
 #   go/storage/api/**
 #   go/notification/api/**
@@ -173,10 +173,11 @@ name: api-contract
 #   go/ai-gateway/api/**
 #   go/authn/api/**
 #   go/billing/api/**
-#   (every module fragment above joins the merge and the orval leg
-#   below -- every platform module with an HTTP fragment is a merge
-#   member; the notes, cases and smilesim rows above are the
-#   reference app's own fragments, merged the same way)
+#   (every platform module fragment above joins the merge and the
+#   orval leg below -- every platform module with an HTTP fragment is a
+#   merge member; the reference app's own notes, cases and smilesim
+#   fragments are absent by design, their regeneration belonging to the
+#   app's own generation leg)
 #   web/orval.config.ts, web/scripts/**              the frontend
 #                                                    generator config and
 #                                                    the fixup scripts
@@ -211,9 +212,6 @@ name: api-contract
 on:
   pull_request:
     paths:
-      - examples/reference-app/internal/notes/api/**
-      - examples/reference-app/internal/cases/api/**
-      - examples/reference-app/internal/smilesim/api/**
       - go/org/api/**
       - go/storage/api/**
       - web/orval.config.ts
@@ -244,9 +242,6 @@ on:
   push:
     branches: [main]
     paths:
-      - examples/reference-app/internal/notes/api/**
-      - examples/reference-app/internal/cases/api/**
-      - examples/reference-app/internal/smilesim/api/**
       - go/org/api/**
       - go/storage/api/**
       - web/orval.config.ts
@@ -309,94 +304,17 @@ jobs:
       # build leg need; the Go build cache makes repeated runs fast.
       - name: Set up pinned Go toolchain and caches
         uses: ./.github/actions/setup-go-env
-      - name: Regenerate the notes module's API surface (pinned oapi-codegen v2.8.0)
-        # The same command as Taskfile.yml's api:gen task -- keep the two in
-        # lockstep (both pin the generator at v2.8.0). Run from the fragment's
-        # own directory, where oapi-codegen.yaml's paths are relative.
-        run: |
-          cd examples/reference-app/internal/notes/api
-          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
-            -config oapi-codegen.yaml openapi.yaml
-      - name: Generated artifact must match the committed spec
-        # The consistency gate every regenerate step below repeats. git
-        # status --porcelain, not `git diff --exit-code`: `git diff`
-        # reports only modifications to TRACKED files, so a regeneration
-        # that CREATES a file -- an artifact a new fragment step or
-        # generator writes before its first commit -- would pass a diff
-        # gate silently. That is not hypothetical (fast-check's own
-        # workspace gate is porcelain for the identical reason, spelled
-        # out in its comment); --untracked-files=all still honours
-        # .gitignore. The status listing doubles as the failure output.
-        run: |
-          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            git status --porcelain --untracked-files=all
-            echo "error: regenerating from the committed spec left the tree"
-            echo "dirty. The checked-in api/notes-server.gen.go is not what"
-            echo "api/openapi.yaml generates -- did you change the spec"
-            echo "without running 'task api:gen' and committing the result?"
-            echo "Per docs/internal/21-api-contract.md, spec + generated"
-            echo "artifact + implementation ship in the same PR."
-            exit 1
-          fi
-      - name: Regenerate the cases domain's API surface (pinned oapi-codegen v2.8.0)
-        # The same command as Taskfile.yml's api:gen task's cases leg --
-        # keep the two in lockstep (both pin the generator at v2.8.0).
-        # Run from the fragment's own directory, where oapi-codegen.yaml's
-        # paths are relative, mirroring the notes step above exactly.
-        run: |
-          cd examples/reference-app/internal/cases/api
-          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
-            -config oapi-codegen.yaml openapi.yaml
-      - name: Cases' generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
-        # gate's comment above for why.
-        run: |
-          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            git status --porcelain --untracked-files=all
-            echo "error: regenerating from the committed spec left the tree"
-            echo "dirty. The checked-in internal/cases/api/cases-server.gen.go"
-            echo "is not what internal/cases/api/openapi.yaml generates --"
-            echo "did you change the spec without running 'task api:gen' and"
-            echo "committing the result?"
-            echo "Per docs/internal/21-api-contract.md, spec + generated"
-            echo "artifact + implementation ship in the same PR."
-            exit 1
-          fi
-      - name: Regenerate the smile-simulation surface's API (pinned oapi-codegen v2.8.0)
-        # The same command as Taskfile.yml's api:gen task's smilesim leg --
-        # keep the two in lockstep (both pin the generator at v2.8.0).
-        # Run from the fragment's own directory, where oapi-codegen.yaml's
-        # paths are relative, mirroring the notes step above exactly.
-        run: |
-          cd examples/reference-app/internal/smilesim/api
-          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
-            -config oapi-codegen.yaml openapi.yaml
-      - name: Smilesim's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
-        # gate's comment above for why.
-        run: |
-          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            git status --porcelain --untracked-files=all
-            echo "error: regenerating from the committed spec left the tree"
-            echo "dirty. The checked-in internal/smilesim/api/"
-            echo "smilesim-server.gen.go is not what internal/smilesim/api/"
-            echo "openapi.yaml generates -- did you change the spec without"
-            echo "running 'task api:gen' and committing the result?"
-            echo "Per docs/internal/21-api-contract.md, spec + generated"
-            echo "artifact + implementation ship in the same PR."
-            exit 1
-          fi
       - name: Regenerate org's API surface (pinned oapi-codegen v2.8.0)
         # The same command as Taskfile.yml's api:gen task's org leg -- keep
         # the two in lockstep (both pin the generator at v2.8.0). Run from
         # the fragment's own directory, where oapi-codegen.yaml's paths are
-        # relative, mirroring the notes step above exactly.
+        # relative, mirroring the org step above exactly.
         run: |
           cd go/org/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Org's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -414,13 +332,13 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's storage leg --
         # keep the two in lockstep (both pin the generator at v2.8.0). Run
         # from the fragment's own directory, where oapi-codegen.yaml's paths
-        # are relative, mirroring the notes and org steps above exactly.
+        # are relative, mirroring the org step above exactly.
         run: |
           cd go/storage/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Storage's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -438,14 +356,14 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's notification
         # leg -- keep the two in lockstep (both pin the generator at
         # v2.8.0). Run from the fragment's own directory, where
-        # oapi-codegen.yaml's paths are relative, mirroring the notes,
-        # org and storage steps above exactly.
+        # oapi-codegen.yaml's paths are relative, mirroring the org and
+        # storage steps above exactly.
         run: |
           cd go/notification/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Notification's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -464,14 +382,13 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's sharing leg --
         # keep the two in lockstep (both pin the generator at v2.8.0). Run
         # from the fragment's own directory, where oapi-codegen.yaml's
-        # paths are relative, mirroring the notes, org, storage and
-        # notification steps above exactly.
+        # paths are relative, mirroring the org, storage and notification steps above exactly.
         run: |
           cd go/sharing/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Sharing's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -490,8 +407,8 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's pki leg --
         # keep the two in lockstep (both pin the generator at v2.8.0).
         # Run from the fragment's own directory, where oapi-codegen.yaml's
-        # paths are relative, mirroring the notes, org, storage,
-        # notification and sharing steps above exactly.
+        # paths are relative, mirroring the org, storage, notification and sharing steps above
+        # exactly.
         run: |
           cd go/pki/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
@@ -515,14 +432,14 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's admin leg --
         # keep the two in lockstep (both pin the generator at v2.8.0).
         # Run from the fragment's own directory, where oapi-codegen.yaml's
-        # paths are relative, mirroring the notes, org, storage,
-        # notification, sharing and pki steps above exactly.
+        # paths are relative, mirroring the org, storage, notification, sharing and pki steps
+        # above exactly.
         run: |
           cd go/admin/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Admin's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -541,15 +458,14 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's integration
         # leg -- keep the two in lockstep (both pin the generator at
         # v2.8.0). Run from the fragment's own directory, where
-        # oapi-codegen.yaml's paths are relative, mirroring the notes,
-        # org, storage, notification, sharing and admin steps above
-        # exactly.
+        # oapi-codegen.yaml's paths are relative, mirroring the org, storage, notification, sharing and admin
+        # steps above exactly.
         run: |
           cd go/integration/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Integration's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -568,15 +484,15 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's ai-gateway
         # leg -- keep the two in lockstep (both pin the generator at
         # v2.8.0). Run from the fragment's own directory, where
-        # oapi-codegen.yaml's paths are relative, mirroring the notes,
-        # org, storage, notification, sharing, admin and integration
+        # oapi-codegen.yaml's paths are relative, mirroring the org,
+        # storage, notification, sharing, admin and integration
         # steps above exactly.
         run: |
           cd go/ai-gateway/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: ai-gateway's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -595,8 +511,8 @@ jobs:
         # The same command as Taskfile.yml's api:gen task's billing leg --
         # keep the two in lockstep (both pin the generator at v2.8.0).
         # Run from the fragment's own directory, where oapi-codegen.yaml's
-        # paths are relative, mirroring the notes, org, storage,
-        # notification and sharing steps above exactly.
+        # paths are relative, mirroring the org, storage, notification and sharing steps above
+        # exactly.
         # billing's fragment feeds the merge and orval below, like every
         # platform module's fragment does (see the api:merge task).
         run: |
@@ -604,7 +520,7 @@ jobs:
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Billing's generated artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
@@ -639,9 +555,6 @@ jobs:
         run: |
           mkdir -p contracts
           pnpm --package=@redocly/cli@2.51.1 dlx redocly join \
-            examples/reference-app/internal/notes/api/openapi.yaml \
-            examples/reference-app/internal/cases/api/openapi.yaml \
-            examples/reference-app/internal/smilesim/api/openapi.yaml \
             go/authn/api/openapi.yaml \
             go/notification/api/openapi.yaml \
             go/billing/api/openapi.yaml \
@@ -656,9 +569,9 @@ jobs:
       - name: Stamp the merged document's info block (deterministic post-join fixup)
         # redocly's join keeps the FIRST input's info block, so without
         # this stamp the merged application-wide document inherits the
-        # first fragment's own title and description -- notes', whose
+        # first fragment's own title and description -- authn's, whose
         # per-fragment identity does not describe the whole surface --
-        # and orval's generated header would read "Source: notes" for
+        # and orval's generated header would read "Source: authn" for
         # the whole application. The same command as Taskfile.yml's
         # api:merge task --
         # keep the two in lockstep. The stamp fails loudly (exit non-zero)
@@ -671,18 +584,17 @@ jobs:
         # the merge) and what is deliberately not checked yet.
         run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint contracts/speed.yaml --config redocly.yaml
       - name: Generated merged document must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
             git status --porcelain --untracked-files=all
-            echo "error: merging the thirteen fragments (plus the"
+            echo "error: merging the ten platform fragments (plus the"
             echo "info-block stamp) left the tree dirty. The checked-in"
-            echo "contracts/speed.yaml is not what the fragments"
-            echo "(the ten platform-module fragments admin, ai-gateway,"
-            echo "authn, billing, integration, notification, org, pki,"
-            echo "sharing and storage plus the reference app's own"
-            echo "notes, cases and smilesim) merge -- and"
+            echo "contracts/speed.yaml is not what the ten platform-module"
+            echo "fragments (admin, ai-gateway, authn, billing,"
+            echo "integration, notification, org, pki,"
+            echo "sharing and storage) merge -- and"
             echo "web/scripts/redocly-join-fixup.mjs stamps -- to"
             echo "today: did a fragment change"
             echo "without running 'task api:merge' and committing the"
@@ -705,23 +617,24 @@ jobs:
         # nodenext fixup rewrites the mutator import to its explicit .js
         # form (why: @speed/api-sdk's AGENTS.md). The input is the merged
         # document produced above -- the ten platform-module fragments
-        # plus the reference app's own notes, cases and smilesim (see the
-        # api:merge task).
+        # (see the api:merge task); the reference app's own fragments
+        # feed its own app-owned SDK instead (Taskfile's api:gen:app).
         run: |
           pnpm dlx orval@8.17.0 --config orval.config.ts
           node scripts/orval-nodenext-fixup.mjs
         working-directory: web
       - name: Generated frontend SDK must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
             git status --porcelain --untracked-files=all
             echo "error: regenerating from the committed spec left the tree"
             echo "dirty. The checked-in web/packages/api-sdk/src/index.ts is"
-            echo "not what the merged document (all thirteen fragments:"
-            echo "the ten platform-module fragments plus the reference"
-            echo "app's own notes, cases and smilesim) generates --"
+            echo "not what the merged document (the ten platform-module"
+            echo "fragments: admin, ai-gateway, authn, billing,"
+            echo "integration, notification, org, pki, sharing and"
+            echo "storage) generates --"
             echo "did you"
             echo "change the spec or web/orval.config.ts without running"
             echo "'task api:gen' and committing the result?"
@@ -731,34 +644,35 @@ jobs:
           fi
       - name: Handler must still implement the generated ServerInterface
         # The compile-enforcement half: if a spec change (and with it the
-        # generated interface) outgrew its Handler -- notes', org's,
+        # generated interface) outgrew its Handler -- org's,
         # storage's, notification's, sharing's, pki's, admin's,
-        # integration's, ai-gateway's -- or, for the app's own two
-        # fragments, the cmd/server implementations of the cases and
-        # smilesim interfaces (whose compile-time assertions live in
-        # cmd/server/cases.go and cmd/server/smilesim.go rather than in
-        # a module the app imports) -- this build of the reference app
-        # fails on the owning handler's compile-time assertion and shows
-        # exactly which method is missing. This same reference-app build
-        # is the compile-enforcement leg for every fragment-shipping
-        # module: examples/reference-app imports every
-        # fragment-shipping module named above -- go/pki as authn's
-        # KeySource, the rest through the mandatory-first-consumer rule
-        # -- so no module of the set needs a build step of its own.
+        # integration's, ai-gateway's or billing's -- this build of the
+        # reference app fails on the owning handler's compile-time
+        # assertion and shows exactly which method is missing. This same
+        # reference-app build is the compile-enforcement leg for every
+        # fragment-shipping platform module: examples/reference-app
+        # imports every fragment-shipping module named above -- go/pki
+        # as authn's KeySource, the rest through the
+        # mandatory-first-consumer rule -- so no module of the set needs
+        # a build step of its own. (The reference app's own notes, cases
+        # and smilesim handlers compile against the app-owned generated
+        # interfaces, which this pipeline does not regenerate; their
+        # handler-vs-interface enforcement is the app's own build, run
+        # by full-check's reference-app job and fast-check's
+        # repo-checks app build.)
         run: |
           cd examples/reference-app
           go build ./...
       - name: Regenerate authn's API surface (pinned oapi-codegen v2.8.0)
         # The same command as Taskfile.yml's api:gen task's authn leg --
         # keep the two in lockstep. Run from the fragment's own directory,
-        # where oapi-codegen.yaml's paths are relative, exactly like the
-        # notes leg above.
+        # where oapi-codegen.yaml's paths are relative, exactly like the org leg above.
         run: |
           cd go/authn/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
             -config oapi-codegen.yaml openapi.yaml
       - name: Generated authn artifact must match the committed spec
-        # Porcelain gate, not git diff --exit-code -- see the notes
+        # Porcelain gate, not git diff --exit-code -- see the org
         # gate's comment above for why.
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then

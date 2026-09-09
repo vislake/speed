@@ -22,7 +22,7 @@ import {
   isApiError,
 } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
-import { authnGetMe, notesListNotes } from '@speed/api-sdk'
+import { authnGetMe, orgListMembers } from '@speed/api-sdk'
 import {
   apiError,
   captureRejection,
@@ -1927,7 +1927,7 @@ describe('with the real api-client', () => {
       authorization: string | null
       body: string | null
     }> = []
-    let notesAttempts = 0
+    let membersAttempts = 0
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve
@@ -1941,9 +1941,9 @@ describe('with the real api-client', () => {
       if (url.pathname === '/api/v1/authn/login/password') {
         return jsonResponse(200, makePair())
       }
-      if (url.pathname === '/api/v1/notes') {
-        notesAttempts += 1
-        if (notesAttempts === 1) {
+      if (url.pathname === '/api/v1/org/members') {
+        membersAttempts += 1
+        if (membersAttempts === 1) {
           // The tenant-1 token the store holds is stale: refuse it and
           // start the silent refresh.
           return jsonResponse(401, {
@@ -1993,9 +1993,9 @@ describe('with the real api-client', () => {
     })
     expect(store.get()).toBe('access-1')
 
-    // The tenant-1 notes read goes out with the stale token, gets 401
+    // The tenant-1 org-members read goes out with the stale token, gets 401
     // and starts the silent refresh -- which the gate holds open.
-    const reading = notesListNotes()
+    const reading = orgListMembers()
     await waitForRefreshCall(fetchCalls)
 
     // The tenant switch commits while the refresh is still in flight.
@@ -2004,7 +2004,7 @@ describe('with the real api-client', () => {
 
     // The refresh resolves: its rotated token is adopted (the winner
     // kept the held token the refresh just consumed) but the verdict
-    // is false -- the refused notes read spoke for tenant-1 and must
+    // is false -- the refused org-members read spoke for tenant-1 and must
     // not replay under tenant-2.
     releaseRefresh()
     const error = await captureRejection(reading)
@@ -2015,12 +2015,12 @@ describe('with the real api-client', () => {
       // resolves with tenant-2's data.
       expect(error.auth).toBe(true)
     }
-    // Exactly one notes request was sent: no replay under the
+    // Exactly one org-members request was sent: no replay under the
     // switched tenant's token, so no tenant-2 answer could land under
     // a tenant-1 cache key.
-    expect(notesAttempts).toBe(1)
+    expect(membersAttempts).toBe(1)
     expect(
-      fetchCalls.filter((call) => call.path === '/api/v1/notes'),
+      fetchCalls.filter((call) => call.path === '/api/v1/org/members'),
     ).toHaveLength(1)
     // The switch's session stands untouched by the losing pair.
     expect(store.get()).toBe('access-switched')

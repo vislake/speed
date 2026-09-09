@@ -5,16 +5,19 @@ import { renderHook, waitFor } from '@testing-library/react'
 import type { RequestFn, RequestOptions } from '@speed/api-client'
 import { bindRequestFn } from './runtime'
 import {
-  getNotesListNotesQueryKey,
-  useNotesCreateNote,
-  useNotesListNotes,
+  getAuthnListSessionsQueryKey,
+  useAuthnListSessions,
+  useAuthnRegister,
 } from './index'
 
 /**
  * Exercises the generated surface (orval output, DO-NOT-EDIT) against a
  * bound fake request function: what is under test is that the hooks
  * issue exactly the calls the spec implies, with the query keys the
- * generated code stamps -- never a network, never a real client.
+ * generated code stamps -- never a network, never a real client. The
+ * authn operations stand in for any generated group: every platform
+ * fragment's operations share the identical generated shape, so this
+ * pair pins the surface mechanics the whole package relies on.
  */
 interface RecordedCall {
   path: string
@@ -23,8 +26,11 @@ interface RecordedCall {
 const calls: RecordedCall[] = []
 /** The payloads the endpoints would return, keyed by method + path. */
 const responses: Record<string, unknown> = {
-  'GET /api/v1/notes': { notes: [] },
-  'POST /api/v1/notes': { id: 'note-1', text: 'hello' },
+  'GET /api/v1/authn/sessions': { sessions: [] },
+  'POST /api/v1/authn/register': {
+    id: 'user-1',
+    email: 'a@example.test',
+  },
 }
 const fakeRequestFn: RequestFn = (async <T>(
   path: string,
@@ -48,44 +54,46 @@ beforeEach(() => {
   bindRequestFn(fakeRequestFn)
 })
 
-describe('useNotesListNotes', () => {
-  it('issues a GET for the notes path through the bound request function', async () => {
-    const { result } = renderHook(() => useNotesListNotes(), { wrapper })
+describe('useAuthnListSessions', () => {
+  it('issues a GET for the sessions path through the bound request function', async () => {
+    const { result } = renderHook(() => useAuthnListSessions(), { wrapper })
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true)
     })
-    expect(result.current.data).toEqual({ notes: [] })
+    expect(result.current.data).toEqual({ sessions: [] })
     // react-query passes its own AbortSignal into the query function, so
     // the recorded options carry a live signal -- assert the wire
     // slice, not structural equality over the whole options object.
     expect(calls).toMatchObject([
-      { path: '/api/v1/notes', options: { method: 'GET' } },
+      { path: '/api/v1/authn/sessions', options: { method: 'GET' } },
     ])
   })
 
   it('stamps the spec path as the query key, with no tenant prefix', () => {
     // Query-key tenant namespacing is a consumer-shell discipline; the
     // generated key is the bare spec path.
-    expect(getNotesListNotesQueryKey()).toEqual(['/api/v1/notes'])
+    expect(getAuthnListSessionsQueryKey()).toEqual(['/api/v1/authn/sessions'])
   })
 })
 
-describe('useNotesCreateNote', () => {
+describe('useAuthnRegister', () => {
   it('issues a POST carrying the request body through the bound request function', async () => {
-    const { result } = renderHook(() => useNotesCreateNote(), { wrapper })
+    const { result } = renderHook(() => useAuthnRegister(), { wrapper })
     act(() => {
-      result.current.mutate({ data: { text: 'hello' } })
+      result.current.mutate({
+        data: { password: 'secret', email: 'a@example.test' },
+      })
     })
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true)
     })
     expect(calls).toMatchObject([
       {
-        path: '/api/v1/notes',
+        path: '/api/v1/authn/register',
         options: {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: { text: 'hello' },
+          body: { password: 'secret', email: 'a@example.test' },
         },
       },
     ])

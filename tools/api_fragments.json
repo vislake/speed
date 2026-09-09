@@ -1,69 +1,59 @@
 {
     "fragments": [
         {
-            "name": "notes",
-            "dir": "examples/reference-app/internal/notes/api",
-            "merge_rank": 1
-        },
-        {
-            "name": "cases",
-            "dir": "examples/reference-app/internal/cases/api",
-            "merge_rank": 2
-        },
-        {
-            "name": "smilesim",
-            "dir": "examples/reference-app/internal/smilesim/api",
-            "merge_rank": 3
-        },
-        {
             "name": "authn",
             "dir": "go/authn/api",
-            "merge_rank": 4
+            "merge_rank": 1
         },
         {
             "name": "notification",
             "dir": "go/notification/api",
-            "merge_rank": 5
+            "merge_rank": 2
         },
         {
             "name": "billing",
             "dir": "go/billing/api",
+            "merge_rank": 3
+        },
+        {
+            "name": "admin",
+            "dir": "go/admin/api",
+            "merge_rank": 4
+        },
+        {
+            "name": "ai-gateway",
+            "dir": "go/ai-gateway/api",
+            "merge_rank": 5
+        },
+        {
+            "name": "integration",
+            "dir": "go/integration/api",
             "merge_rank": 6
         },
         {
             "name": "org",
             "dir": "go/org/api",
-            "merge_rank": 10
-        },
-        {
-            "name": "storage",
-            "dir": "go/storage/api",
-            "merge_rank": 13
-        },
-        {
-            "name": "sharing",
-            "dir": "go/sharing/api",
-            "merge_rank": 12
+            "merge_rank": 7
         },
         {
             "name": "pki",
             "dir": "go/pki/api",
-            "merge_rank": 11
+            "merge_rank": 8
         },
         {
-            "name": "admin",
-            "dir": "go/admin/api",
-            "merge_rank": 7
-        },
-        {
-            "name": "integration",
-            "dir": "go/integration/api",
+            "name": "sharing",
+            "dir": "go/sharing/api",
             "merge_rank": 9
         },
         {
-            "name": "ai-gateway",
-            "dir": "go/ai-gateway/api",
-            "merge_rank": 8
+            "name": "storage",
+            "dir": "go/storage/api",
+            "merge_rank": 10
         }
+    ],
+    "app_owned": [
+        "examples/reference-app/internal/notes/api",
+        "examples/reference-app/internal/cases/api",
+        "examples/reference-app/internal/smilesim/api"
     ]
 }

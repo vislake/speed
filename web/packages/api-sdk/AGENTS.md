@@ -77,12 +77,14 @@ and `src/` must keep passing it on every regeneration.
 ## What ships vs. what is deferred
 
 The generated surface over the merged document (`src/index.ts` --
-orval input is `contracts/speed.yaml`, the redocly `join` of the
-module fragments: the ten platform-module fragments (admin,
-ai-gateway, authn, billing, integration, notification, org, pki,
-sharing and storage) plus the reference app's own notes, cases and
-smilesim -- every platform module with an HTTP fragment is a merge
-member), the runtime seam, the regeneration
+orval input is `contracts/speed.yaml`, the redocly `join` of the ten
+platform-module fragments: admin, ai-gateway, authn, billing,
+integration, notification, org, pki, sharing and storage -- every
+platform module with an HTTP fragment is a merge member; the
+reference app's own notes, cases and smilesim fragments are NOT
+members, by design: the app's own API is generated into the app's own
+SDK through the app-owned flow, documented in docs/internal/
+21-api-contract.md), the runtime seam, the regeneration
 tooling (config + fixup script) and the CI wiring that regenerates and
 diffs the artifact. `@speed/auth-core` compile-consumes the authn
 surface in-workspace: its unit suite binds a scripted request function
