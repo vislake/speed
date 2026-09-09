@@ -667,9 +667,14 @@ class SandboxProofTest(unittest.TestCase):
             self.assertEqual(actual, expected)
             self.assertEqual(len(actual), len(expected))
 
-            # npm half proof, reporting which gate ran.
+            # npm half proof, reporting which gate ran. Uniformity is the
+            # gate -- the coordinator requires one shared version, whatever
+            # it is -- and the sandbox mirrors the live package.json
+            # versions (0.0.0 in the pre-release transition state, the
+            # real current version once releases have happened), so the
+            # assertion is on a single uniform version, not a pinned value.
             versions = {p["version"] for p in npm_packages}
-            self.assertEqual(versions, {"0.0.0"})
+            self.assertEqual(len(versions), 1)
             print(
                 "[self-test] npm gate: uniform-version JSON assertion "
                 f"passed for {len(npm_packages)} packages "
