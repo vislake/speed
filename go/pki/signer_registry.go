@@ -12,7 +12,8 @@ import (
 // host resolves a named Signer implementation through, mirroring the
 // database/sql driver-registration pattern pkgcore's own
 // EventBusRegistry/KVStoreRegistry/MailerRegistry/ObjectStoreRegistry
-// already follow (go/pkgcore/builtin_implementations.go) -- and the exact
+// already follow (pre-populated in go/pkgcore's eventbus_builtins.go,
+// kv_builtins.go, mailer_builtins.go and objectstore_builtins.go) -- and the exact
 // mechanism the KMS-backed providers follow too: go/pki/signer/vault and
 // go/pki/signer/kmsaws each register themselves under a name
 // ("signer.vault", "signer.aws-kms") from their own init(), the same shape

@@ -49,7 +49,7 @@ func init() {
 // name -- is a programming error in this file, not a condition a caller
 // could hit or would want to recover from. kv/redis's own register.go
 // carries an identical helper of the same name and shape; pkgcore's own
-// unexported one in builtin_implementations.go is not reachable from this
+// unexported one in registries.go is not reachable from this
 // package (root-package-private), so this is a deliberate small duplication
 // rather than a shared dependency neither package would otherwise need.
 func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registration[T]) {

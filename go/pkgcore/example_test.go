@@ -11,7 +11,8 @@ package pkgcore_test
 // them (that would cycle back into the package these subpackages depend on),
 // but this external test package can, and doing so here is what makes
 // ExampleWithPreset below -- and this same test binary's internal tests in
-// preset_test.go and builtin_implementations_test.go that resolve
+// preset_test.go and the seam built-in test files (eventbus_builtins_test.go,
+// kv_builtins_test.go, objectstore_builtins_test.go) that resolve
 // PresetDistributed's eventbus/kv/objectstore entries -- exercise the real,
 // subpackage implementations instead of failing with ErrUnknownImplementation:
 // go test links the internal "pkgcore" test package and this external

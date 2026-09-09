@@ -66,8 +66,8 @@ type signer struct {
 // NewSigner returns a pki.Signer backed by cfg's Vault Transit engine
 // mount. Nothing is dialed here: the underlying Vault client connects
 // lazily, on first use, exactly like every other built-in seam's client in
-// this codebase (go-redis, and the S3/SMTP clients pkgcore's own
-// builtin_implementations.go and objectstore/s3 build). An unusable
+// this codebase (go-redis, and the SMTP/S3 clients pkgcore's own
+// mailer_builtins.go and objectstore/s3 build). An unusable
 // configuration -- an empty Address or Token, or ModeEnvelope without
 // WrappingKeyName -- returns an error rather than panicking, which is a
 // deliberate departure from pkgcore's own S3/SMTP constructors (which

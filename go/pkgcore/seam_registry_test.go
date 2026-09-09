@@ -134,8 +134,8 @@ func TestSeamRegistry_Build_PropagatesConstructorError(t *testing.T) {
 
 // TestSeamRegistry_ConcurrentRegisterAndBuild_IsRaceFree pins the "safe for
 // concurrent Register and Build calls" contract SeamRegistry's own doc
-// comment makes: builtin_implementations.go builds every package-level
-// registry once at init time, but a host is free to Register its own
+// comment makes: the seam built-in files build every package-level registry
+// once at init time, but a host is free to Register its own
 // implementation at any point afterwards, concurrently with Kernel.Bootstrap
 // calls already resolving other names on the same registry.
 func TestSeamRegistry_ConcurrentRegisterAndBuild_IsRaceFree(t *testing.T) {

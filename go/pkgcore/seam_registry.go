@@ -71,10 +71,13 @@ type Registration[T any] struct {
 // assembly picks one by name -- through a Preset -- rather than switching on
 // a fixed, closed set of types. pkgcore pre-populates one SeamRegistry per
 // seam (EventBusRegistry, KVStoreRegistry, MailerRegistry,
-// ObjectStoreRegistry) with its built-in implementations in
-// builtin_implementations.go; a host registers its own implementation the
-// same way, by calling Register on the matching package-level registry
-// before it bootstraps a Kernel that names it in a Preset.
+// ObjectStoreRegistry) with its built-in implementations in the seam
+// built-in files (eventbus_builtins.go, kv_builtins.go, mailer_builtins.go,
+// objectstore_builtins.go, with the shared mustRegister glue and
+// ErrMissingSeamConfig in registries.go); a host registers its own
+// implementation the same way, by calling Register on the matching
+// package-level registry before it bootstraps a Kernel that names it in a
+// Preset.
 //
 // A SeamRegistry is safe for concurrent Register and Build calls.
 type SeamRegistry[T any] struct {

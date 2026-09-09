@@ -6,7 +6,7 @@ package s3
 // registers "objectstore.s3" on pkgcore's shared ObjectStoreRegistry, the
 // name pkgcore.PresetDistributed already names for the "objectstore" seam.
 // The registration lives here, beside the implementation it adapts, rather
-// than in pkgcore's own builtin_implementations.go: if the implementation
+// than in pkgcore's own objectstore_builtins.go: if the implementation
 // sat in its own package while the registration stayed behind,
 // PresetDistributed would point at a name nothing could resolve.
 //
@@ -55,8 +55,8 @@ func init() {
 // called here, against the one name this file controls, so a failure -- a
 // duplicate name -- is a programming error in this file, not a condition a
 // caller could hit or would want to recover from. pkgcore's own
-// builtin_implementations.go has an unexported helper of the same name and
-// shape for its own five built-ins; this package cannot call that one (it is
+// registries.go has an unexported helper of the same name and shape for its
+// root-package built-ins; this package cannot call that one (it is
 // unexported to the root package), so it carries its own copy rather than
 // inventing a different convention.
 func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registration[T]) {

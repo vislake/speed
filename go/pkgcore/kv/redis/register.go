@@ -6,7 +6,7 @@ package redis
 // "kv.redis" on pkgcore's shared KVStoreRegistry, the name
 // pkgcore.PresetDistributed already names for the "kv" seam. The
 // registration lives here, beside the implementation it adapts, rather than
-// in pkgcore's own builtin_implementations.go: if the implementation sat in
+// in pkgcore's own kv_builtins.go: if the implementation sat in
 // its own package while the registration stayed behind, PresetDistributed
 // would point at a name nothing could resolve.
 //
@@ -68,8 +68,8 @@ func (s *closableKVStore) Close() error {
 // called here, against the one name this file controls, so a failure -- a
 // duplicate name -- is a programming error in this file, not a condition a
 // caller could hit or would want to recover from. pkgcore's own
-// builtin_implementations.go has an unexported helper of the same name and
-// shape for its own five built-ins; this package cannot call that one (it is
+// registries.go has an unexported helper of the same name and shape for its
+// root-package built-ins; this package cannot call that one (it is
 // unexported to the root package), so it carries its own copy rather than
 // inventing a different convention.
 func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registration[T]) {

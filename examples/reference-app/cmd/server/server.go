@@ -1785,7 +1785,7 @@ func configFromEnv() (serverConfig, error) {
 	if smtpHost != "" {
 		// A real SMTP composition: declare the capabilities the
 		// "mailer.smtp" builtin registration itself declares
-		// (builtin_implementations.go), so this app's own env-driven
+		// (mailer_builtins.go), so this app's own env-driven
 		// SMTP wiring is capability-honest rather than borrowing the
 		// Stateless declaration server_test.go's in-process double uses
 		// (Mailer's own doc comment above explains the split).

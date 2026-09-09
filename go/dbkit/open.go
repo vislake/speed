@@ -219,7 +219,7 @@ var dialectRegistry = map[Dialect]func(dsn string) gorm.Dialector{}
 // registration can only be a programming error — two packages registering
 // the same Dialect name — never a runtime condition a caller could
 // encounter or would want to recover from, the same unrecoverable-wiring-
-// error convention pkgcore/builtin_implementations.go's mustRegister
+// error convention pkgcore/registries.go's mustRegister
 // documents for the identical situation.
 func RegisterDialect(dialect Dialect, factory func(dsn string) gorm.Dialector) {
 	dialectMu.Lock()
