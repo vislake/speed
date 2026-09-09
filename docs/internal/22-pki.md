@@ -397,7 +397,7 @@ type KeySource interface {
 | `go/authn/sms.go` | 注释中对 `WithSigningKeys` 的引用 |
 | `go/saasctl` 的 4 套模板 | 开发种子密钥的构造方式；**golden 文件逐字节比对需同步更新** |
 | `go/saasctl/internal/db/migrate.go` | 当前为跑迁移硬造了一把名为 `"saasctl db migrate"` 的假签名密钥——`NewModule` 强制要求密钥，连纯迁移都得编一个。接入后这处可以变干净 |
-| `examples/reference-app/cmd/server/server.go` | 装配方式 |
+| `examples/reference-app/internal/app/server.go` | 装配方式 |
 | 各模块测试与集成测试 | `go/authn` 5 个测试文件、reference-app 1 个集成测试 |
 
 ### 一个必须承认的代价

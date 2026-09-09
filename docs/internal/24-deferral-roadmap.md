@@ -62,7 +62,7 @@
 | 110 | BLOCKED | `go/billing/AGENTS.md` | 活网关消费者/真实资金移动未实现 | 加排:无真实接线网关资金流动;需活/沙箱支付凭证+购买流设计 |
 | 126 | BLOCKED | `CLAUDE.md` | billing 经由真实接线网关的资金流动 | 加排:无真实接线网关资金流动;需活/沙箱支付凭证+购买流设计 |
 | 152 | BLOCKED | `go/billing/AGENTS.md` | 演示 credit seed 非购买流 | 加排:demo 以 Grant 种子代替,真实 credit-pack 购买流需 live 通道凭据 |
-| 182 | BLOCKED | `cmd/server/server.go` | 真实支付网关集成(credit-pack/subscription 付费腿)未接线 | 加排:credit-pack/subscription 付费腿需 live 支付通道凭据 |
+| 182 | BLOCKED | `internal/app/server.go` | 真实支付网关集成(credit-pack/subscription 付费腿)未接线 | 加排:credit-pack/subscription 付费腿需 live 支付通道凭据 |
 | 111 | BLOCKED | `go/billing/gateway/stripe/event.go` | stripe 续期发票 InvoiceID 首周期后陈旧 | 加排:stripe 续期发票陈旧;需 recurring 订阅消费方+真实凭证驱动 |
 | 112 | BLOCKED | `go/billing/AGENTS.md` | Invoice/支付网关生命周期/Quota 路径无真实 caller | 加排:Invoice/网关生命周期无真实 caller;Quota/UsageReader 接线半属宿主 backlog |
 
@@ -182,7 +182,7 @@
 | 37 | BLOCKED | `docs/internal/22-pki.md` | 自动销毁机制未实现 | 模块级自动销毁已裁决有意不做;触发=真实直签部署消费者;宿主 ReclaimRetired 半已落地(0e1353ff) |
 | 40 | ROADMAP | `docs/internal/07-platform-services.md` | storage 病毒扫描钩子与 WebP/水印派生未实现 | 病毒扫描需外部杀毒引擎;WebP/水印属新派生种类+产品语义 |
 | 54 | ROADMAP | `examples/reference-app/web/src/useHashRoute.ts` | 正式路由库决策从未做出 | 正式路由库决策延后记录;导航现行为 hash 片段,随壳/平台面增长再定 |
-| 55 | ROADMAP | `cmd/server/server.go` | authn social per-provider credential 的动态 config 读渠道未实现 | 读回绑定等有活值消费端才接(反投机;flag 可见性已由宿主 FeatureGate 生效) |
+| 55 | ROADMAP | `internal/app/server.go` | authn social per-provider credential 的动态 config 读渠道未实现 | 读回绑定等有活值消费端才接(反投机;flag 可见性已由宿主 FeatureGate 生效) |
 | 61 | 实现 | `go/notification/sms.go` | SMS 未成为 pkgcore seam | 闭:`3f06333f`(feat(pkgcore): add the shared SMS seam)。SMS 现为 pkgcore 共享 seam(根包 `SMS`/`SMSSender` 契约 + console/http-gateway 发送器);carrier 适配器移入 `pkgcore/sms/`,authn 与 notification 消费方切换随 `87364ed4`/`7be42b46`。刻意无内核座位(无 registry/preset/capability 条目):两消费方均经各自 WithSMSSender 注入并自带接线期约束,`pkgcore.SMSSender` doc 记录该形状 |
 | 63 | ROADMAP | `go/authn/mfa.go` | RequireStepUp 无 MFA 账户无密码重输回退 | RequireStepUp 无密码回退需安全设计决策(证明有效期/与 MFA 组合) |
 | 82 | ROADMAP | `docs/internal/17-risks.md` | 数据分域表第五类取舍未定 | 数据分域表第五类取舍 wait-for-trigger 开放裁决 |
@@ -222,7 +222,7 @@
 | 200 | ROADMAP | `docs/internal/17-risks.md` | saasctl upgrade npm 侧改写与自检未落地 | 锚:create-saas-app;upgrade 的 web/package.json 改写随 web 模板 |
 | 205 | ROADMAP | `docs/internal/02-repo-and-release.md` | create-saas-app 与前端模板未实现 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 | 213 | ROADMAP | `.github/workflows/scaffold-verify.yml` | create-saas-app 与 web 侧模板未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
-| 215 | ROADMAP | `cmd/server/demo_subject.go` | X-Demo-User/X-Demo-User-Id demo 身份头的移除未做 | 锚:org-web 轮;X-Demo-User 演示身份头移除(kill switch 已交付) |
+| 215 | ROADMAP | `internal/app/demo_subject.go` | X-Demo-User/X-Demo-User-Id demo 身份头的移除未做 | 锚:org-web 轮;X-Demo-User 演示身份头移除(kill switch 已交付) |
 | 218 | ROADMAP | `.github/workflows/scaffold-verify.yml` | 注释 "a web-side scaffold-verify leg waits for create-saas-app"(:31)与 "the other four selections ... do NOT get a per-PR (or per-schedule) dual-mode BOOT proof of their own" 缺口说明(:23-31) | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 
 ### 8.2 锚:M2(媒体与变现行:storage、notification-ui、billing 前端包、ui-kit 组件族)

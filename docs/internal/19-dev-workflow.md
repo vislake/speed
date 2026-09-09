@@ -40,7 +40,7 @@ task release:plan   # 离线验证某个版本号下全模块的 lockstep 发布
 
 `task seed` 生成一套可用的演示数据：两个租户、多层级组织、若干用户与角色、示例套餐与订阅。reference-app 的演示和本地调试都依赖它，必须保持可用（纳入 CI 检查）。
 
-**`task seed` 尚未实现。** reference-app 目前没有任何演示数据装载路径——`cmd/server/server.go` 只硬编码了两个演示 Host→租户映射，各表启动时为空。因此 `task seed` 是 not-implemented stub（打印缺什么、如何临时手动演示，退出非零）。
+**`task seed` 尚未实现。** reference-app 目前没有任何演示数据装载路径——`internal/app/server.go` 只硬编码了两个演示 Host→租户映射，各表启动时为空。因此 `task seed` 是 not-implemented stub（打印缺什么、如何临时手动演示，退出非零）。
 
 ## 模块生成器
 
