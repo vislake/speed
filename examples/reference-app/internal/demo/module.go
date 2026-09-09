@@ -136,16 +136,16 @@ func (m *Module) Name() string { return moduleName }
 func (m *Module) DependsOn() []string { return nil }
 
 // Migrations implements pkgcore.Module. demo owns no tables, so it returns
-// an empty FS rather than shipping an empty migrations directory; cmd/server
-// therefore never registers demo on its dbkit.MigrationRegistry (see its
-// wiring comment).
+// an empty FS rather than shipping an empty migrations directory; internal/app
+// therefore never registers demo on its dbkit.MigrationRegistry (see the
+// wiring comment in internal/app/server.go).
 func (m *Module) Migrations() embed.FS { return embed.FS{} }
 
 // Locales implements pkgcore.Module.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
 // OpenAPISpec implements pkgcore.Module. demo mounts no HTTP surface of its
-// own -- the demo patient-message route is a hand-written cmd/server route
+// own -- the demo patient-message route is a hand-written internal/app route
 // outside the OpenAPI machinery (see internal/app/demo_notification.go) -- so
 // there is no fragment to return.
 func (m *Module) OpenAPISpec() []byte { return nil }

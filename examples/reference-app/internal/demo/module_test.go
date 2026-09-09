@@ -26,7 +26,7 @@ func TestModule_DependsOn_IsEmpty(t *testing.T) {
 }
 
 // TestModule_Migrations_IsEmpty pins demo's no-tables shape: its
-// Migrations() is an empty FS, which is exactly why cmd/server never
+// Migrations() is an empty FS, which is exactly why internal/app never
 // registers demo on its dbkit.MigrationRegistry (module.go's Migrations
 // doc comment).
 func TestModule_Migrations_IsEmpty(t *testing.T) {
@@ -41,7 +41,7 @@ func TestModule_Migrations_IsEmpty(t *testing.T) {
 }
 
 // TestModule_OpenAPISpec_IsNil pins demo's no-HTTP-surface shape: the
-// demo patient-message route is a hand-written cmd/server route outside
+// demo patient-message route is a hand-written internal/app route outside
 // the OpenAPI machinery, so there is no fragment to return.
 func TestModule_OpenAPISpec_IsNil(t *testing.T) {
 	if spec := NewModule().OpenAPISpec(); spec != nil {
