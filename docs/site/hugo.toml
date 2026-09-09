@@ -71,7 +71,6 @@ defaultContentLanguageInSubdir = false
   # outside that section as the site's landing/home page.
   BookSection = 'docs'
   BookRepo = 'https://github.com/vislake/speed'
-  BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/docs/site/{{ .Path }}'
   BookSearch = true
   BookComments = false
   # Every language shows a switcher regardless of whether every page has
