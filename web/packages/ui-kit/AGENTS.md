@@ -180,12 +180,12 @@ that a real viewport actually hides or shows the column.
   not indirect ones (ternary branches, literals crossing component
   boundaries) — documented partial enforcement; hosts own their
   literals.
-- **The storage frontend leg** — storage operations generated into
-  `@speed/api-sdk` from the `go/storage` OpenAPI fragment, the natural
-  transport for a host's upload code — is not implemented: orval runs
-  over the merged document only, which carries no storage fragment, so
-  no generated storage operation exists. The wire contract's authority
-  is `go/storage/api/openapi.yaml` itself; hosts run their own
-  transport and this package ships none. The deferral is recorded in
-  `go/storage/AGENTS.md`'s deferral list and the Taskfile `api:gen`
+- **No in-workspace host wires uploads over the generated storage
+  operations** — the storage operations are generated into
+  `@speed/api-sdk` from the merged document, which carries
+  `go/storage`'s fragment like every platform module's, so a host's
+  upload code can pair with `FileUploader`; no reference-app page does
+  so yet, and this package ships no transport either way. The wire
+  contract's authority is `go/storage/api/openapi.yaml` itself; the
+  gap is recorded in `go/storage/AGENTS.md` and the Taskfile `api:gen`
   header comment as well, so no single doc owns the claim.

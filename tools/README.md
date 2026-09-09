@@ -338,7 +338,8 @@ Manifest schema: one `fragments` array; each entry is `{"name":
 "<fragment id>", "dir": "<repo-relative api directory, ending in
 /api>", "merge_rank": <int, present only for fragments that join the
 redocly merge>}`. `merge_rank` is the join order (rank order == join
-order); its absence marks a backend-only fragment (regenerated and
+order); its
+absence marks a fragment outside the merge (regenerated and
 compile-checked, but feeding neither the merge nor the frontend SDK).
 
 Checked invariants (each goes red with an actionable message):

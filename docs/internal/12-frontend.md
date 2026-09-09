@@ -78,7 +78,7 @@ graph BT
 
 `FileUploader`（配合 storage，已交付，见下）、`StatCard` / `Sparkline`（用量展示）、`StatusBadge`、`SearchInput`、`ToastProvider`、`LoadingOverlay`、`JobProgress`（配合 jobs 的进度展示）——除 `FileUploader` 外的其余组件尚未实现。
 
-> `FileUploader` 已交付：完全受控的队列组件——队列就是 host 的 `rows` 状态，每行状态与进度按 props 原样渲染，每次 pick/取消/重试/移除经 `onSelectFiles`/`onCancel`/`onRetry`/`onRemove` 回调上报；**上传传输是 host 自己的代码，组件零 HTTP**——host 的传输就是组件的网络边界，大小/类型/数量预校验与并发上限都是 host 传输代码的职责；「组件全部受控」一条没有具名例外，组件与全家的关系见 ui-kit AGENTS.md。storage 的前端调用（api-sdk 生成的 hooks）尚未就位：其生成前提是 storage 片段进入合并文档——合并文档现含六个片段（notes、cases、smilesim、authn、notification、billing），storage 与 org 同属只有后端 leg、尚未进入合并文档的片段（[21 API 契约](21-api-contract.md) 有片段清单；该延期与 ui-kit AGENTS.md 的 deferral 条目同记）。
+> `FileUploader` 已交付：完全受控的队列组件——队列就是 host 的 `rows` 状态，每行状态与进度按 props 原样渲染，每次 pick/取消/重试/移除经 `onSelectFiles`/`onCancel`/`onRetry`/`onRemove` 回调上报；**上传传输是 host 自己的代码，组件零 HTTP**——host 的传输就是组件的网络边界，大小/类型/数量预校验与并发上限都是 host 传输代码的职责；「组件全部受控」一条没有具名例外，组件与全家的关系见 ui-kit AGENTS.md。storage 的前端调用（api-sdk 生成的 hooks）已就位：合并文档现为十三个片段（十个平台模块 + reference-app 自有三个），storage 与 org 的片段均已并入，`storage_createObject`/`storage_uploadObjectContent` 等操作随 orval 生成进 `@speed/api-sdk`（[21 API 契约](21-api-contract.md) 的片段清单与"模块驱动的合并策略"）；尚无工作区页面把这些 hooks 接上传 UI，该消费证明缺口与 ui-kit AGENTS.md 的对应条目同记。
 
 **表单方案**：react-hook-form + zod 校验。zod schema 优先从 OpenAPI 生成的类型推导，避免前后端校验规则各写一套。
 
