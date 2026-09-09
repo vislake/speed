@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // This file drives the case domain routes
-// (cmd/server/cases.go) through the real composed HTTP stack
+// (internal/app/cases.go) through the real composed HTTP stack
 // buildTestServer builds -- the authn+tenancy middleware chain, the real
 // registration/sign-in surface, and a real temp-file SQLite database whose
 // cases tables the boot's own EnsureSchema created -- not a mock of any of
@@ -20,7 +22,7 @@ import (
 // own doc comment explains why Host plays no part); where a request needs
 // a creator (the create route only -- the clinic-wide list reads no
 // creator), the attribution comes from the X-Demo-User-Id header
-// (demoNotesSubjectResolver, the same attribution seam notes' create
+// (DemoNotesSubjectResolver, the same attribution seam notes' create
 // handler uses), or from the verified Principal when no header rides
 // along.
 
@@ -34,7 +36,7 @@ type caseCreateBody struct {
 
 // testCase is the response shape a case's create/list/detail answers
 // share (the spec fragment's CasesCase, encoded by toCasesCase in
-// cases.go), decoded enough for this file's assertions.
+// internal/app/cases.go), decoded enough for this file's assertions.
 type testCase struct {
 	ID            string `json:"id"`
 	PatientName   string `json:"patient_name"`
@@ -66,7 +68,7 @@ func casesRequestAs(t *testing.T, srv *httptest.Server, method, path, token, cre
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if creator != "" {
-		req.Header.Set(demoOrgUserHeader, creator)
+		req.Header.Set(app.DemoOrgUserHeader, creator)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -150,7 +152,7 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-journey")
 
-	created := createCaseAs(t, srv, acmeToken, demoNotesCreatorUserID, caseCreateBody{
+	created := createCaseAs(t, srv, acmeToken, app.DemoNotesCreatorUserID, caseCreateBody{
 		PatientName:    "Anna Meyer",
 		PatientRef:     "CH-1001",
 		PhotoObjectIDs: []string{"photo-front-acme", "photo-smile-acme"},
@@ -161,14 +163,14 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 	if created.PatientName != "Anna Meyer" || created.PatientRef != "CH-1001" {
 		t.Fatalf("create answer = %+v, want the submitted patient record echoed", created)
 	}
-	if created.CreatorUserID != demoNotesCreatorUserID {
-		t.Fatalf("CreatorUserID = %q, want the X-Demo-User-Id attribution %q", created.CreatorUserID, demoNotesCreatorUserID)
+	if created.CreatorUserID != app.DemoNotesCreatorUserID {
+		t.Fatalf("CreatorUserID = %q, want the X-Demo-User-Id attribution %q", created.CreatorUserID, app.DemoNotesCreatorUserID)
 	}
 	if len(created.Photos) != 2 || created.Photos[0].ObjectID != "photo-front-acme" || created.Photos[1].ObjectID != "photo-smile-acme" {
 		t.Fatalf("create answer photos = %+v, want both in request order", created.Photos)
 	}
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, demoNotesCreatorUserID, nil)
+	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, app.DemoNotesCreatorUserID, nil)
 	defer listResp.Body.Close()
 	if listResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s status = %d, want 200", casesPath, listResp.StatusCode)
@@ -183,7 +185,7 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 		t.Fatalf("list = %+v, want exactly the created case", list.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, acmeToken, demoNotesCreatorUserID, nil)
+	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, acmeToken, app.DemoNotesCreatorUserID, nil)
 	defer detailResp.Body.Close()
 	detail, raw := decodeCasesResponse(t, detailResp)
 	if detailResp.StatusCode != http.StatusOK {
@@ -198,7 +200,7 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 
 	// A missing id is the coded not-found, indistinguishable from another
 	// tenant's id (pinned over HTTP by the cross-tenant leg below).
-	missingResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+"no-such-case", acmeToken, demoNotesCreatorUserID, nil)
+	missingResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+"no-such-case", acmeToken, app.DemoNotesCreatorUserID, nil)
 	assertCasesError(t, missingResp, http.StatusNotFound, "cases.not_found", "GET detail of an unknown case")
 }
 
@@ -212,11 +214,11 @@ func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-acme-owner")
 	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "cases-globex-owner")
 
-	created := createCaseAs(t, srv, acmeToken, demoNotesCreatorUserID, caseCreateBody{
+	created := createCaseAs(t, srv, acmeToken, app.DemoNotesCreatorUserID, caseCreateBody{
 		PatientName: "Acme Private",
 	})
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, globexToken, demoNotesCreatorUserID, nil)
+	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, globexToken, app.DemoNotesCreatorUserID, nil)
 	defer listResp.Body.Close()
 	var list struct {
 		Cases []testCase `json:"cases"`
@@ -228,7 +230,7 @@ func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
 		t.Fatalf("globex list = %+v, want empty (acme's case must be invisible)", list.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, globexToken, demoNotesCreatorUserID, nil)
+	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, globexToken, app.DemoNotesCreatorUserID, nil)
 	assertCasesError(t, detailResp, http.StatusNotFound, "cases.not_found", "GET detail of another tenant's case")
 }
 
@@ -275,7 +277,7 @@ func TestCasesFlow_ListIsClinicWide(t *testing.T) {
 
 // TestCasesFlow_PrincipalAttribution pins the no-demo-header path: a real
 // signed-in account acting through its access token alone is attributed
-// through the verified Principal (demoNotesSubjectResolver's fallback --
+// through the verified Principal (DemoNotesSubjectResolver's fallback --
 // the browser-shaped caller), and its case is visible on the clinic-wide
 // list to every attribution source -- the case's recorded creator is the
 // principal's id, but the creator column never hides or splits the list,
@@ -286,7 +288,7 @@ func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-principal")
 
 	created := createCaseAs(t, srv, acmeToken, "", caseCreateBody{PatientName: "Principal's Case"})
-	if created.CreatorUserID == "" || created.CreatorUserID == demoNotesCreatorUserID {
+	if created.CreatorUserID == "" || created.CreatorUserID == app.DemoNotesCreatorUserID {
 		t.Fatalf("CreatorUserID = %q, want the account's own principal user id, distinct from the demo creator", created.CreatorUserID)
 	}
 
@@ -295,7 +297,7 @@ func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 		creator string
 	}{
 		{what: "headerless read", creator: ""},
-		{what: "demo-creator header read", creator: demoNotesCreatorUserID},
+		{what: "demo-creator header read", creator: app.DemoNotesCreatorUserID},
 	} {
 		listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, tc.creator, nil)
 		var list struct {
@@ -321,24 +323,24 @@ func TestCasesFlow_ValidationAndConflicts_OverHTTP(t *testing.T) {
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-conflicts")
 
 	// An empty patient name is refused before anything is inserted.
-	emptyName := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demoNotesCreatorUserID,
+	emptyName := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, app.DemoNotesCreatorUserID,
 		bytes.NewReader([]byte(`{"patient_name":"   "}`)))
 	assertCasesError(t, emptyName, http.StatusBadRequest, "cases.patient_name_required", "create with an empty patient name")
 
 	// The same object twice in one request is a client bug, refused
 	// outright.
-	dupBody := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demoNotesCreatorUserID,
+	dupBody := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, app.DemoNotesCreatorUserID,
 		bytes.NewReader([]byte(`{"patient_name":"Dup","photo_object_ids":["photo-a","photo-a"]}`)))
 	assertCasesError(t, dupBody, http.StatusBadRequest, "cases.duplicate_photo_object", "create with a duplicated photo")
 
-	_ = createCaseAs(t, srv, acmeToken, demoNotesCreatorUserID, caseCreateBody{
+	_ = createCaseAs(t, srv, acmeToken, app.DemoNotesCreatorUserID, caseCreateBody{
 		PatientName:    "First Owner",
 		PhotoObjectIDs: []string{"photo-a"},
 	})
 
 	// Reusing an attached photo for a second case is the coded conflict
 	// the sequential double-create answers.
-	reuse := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demoNotesCreatorUserID,
+	reuse := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, app.DemoNotesCreatorUserID,
 		bytes.NewReader([]byte(`{"patient_name":"Second Owner","photo_object_ids":["photo-a"]}`)))
 	assertCasesError(t, reuse, http.StatusConflict, "cases.photo_already_attached", "create reusing an attached photo")
 }
@@ -357,7 +359,7 @@ func TestCasesFlow_Anonymous_Refused(t *testing.T) {
 }
 
 // TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody pins the
-// MaxBytesReader bound cmd/server/cases.go applies
+// MaxBytesReader bound internal/app/cases.go applies
 // (see casesMaxRequestBodyBytes), mirroring the identical regressions
 // internal/notes/handler_test.go's own oversized-body test and
 // go/authn/handler_test.go's TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody
@@ -383,12 +385,12 @@ func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	body.WriteString(strings.Repeat(" ", (1<<16)+1))
 	body.WriteString(`{"patient_name":"Anna Meyer"}`)
 
-	resp := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demoNotesCreatorUserID, strings.NewReader(body.String()))
+	resp := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, app.DemoNotesCreatorUserID, strings.NewReader(body.String()))
 	assertCasesError(t, resp, http.StatusBadRequest, "cases.invalid_request_body", "create with an oversized body")
 
 	// Nothing was created: the same creator can still create a case
 	// afterwards.
-	_ = createCaseAs(t, srv, acmeToken, demoNotesCreatorUserID, caseCreateBody{
+	_ = createCaseAs(t, srv, acmeToken, app.DemoNotesCreatorUserID, caseCreateBody{
 		PatientName: "After the refused oversized body",
 	})
 }

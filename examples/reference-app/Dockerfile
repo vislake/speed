@@ -33,7 +33,7 @@
 # certificate bundle (needed for outbound TLS -- a real SMTP relay,
 # S3-compatible endpoint or HTTP SMS gateway, all real possibilities once
 # APP_SMTP_*/APP_S3_*/APP_SMS_GATEWAY_URL are set -- see
-# cmd/server/server.go).
+# internal/app/server.go).
 #
 # The go builder image's tag is pinned to go.work's own `go` directive
 # (1.26.8) exactly -- bump both together, and re-verify the CGO_ENABLED=0
@@ -42,7 +42,7 @@
 # The frontend stage (below the go builder's RUN) builds the app's web
 # bundle and the final stage copies its dist/ into the image at
 # /app/web/dist with APP_WEB_DIST naming it -- the deployed product URL
-# serves its own frontend (see cmd/server/frontend.go for the serving
+# serves its own frontend (see internal/app/frontend.go for the serving
 # design and why the dist is read from disk rather than go:embed'd). The
 # go build deliberately does NOT depend on the frontend stage: frontend.go
 # resolves its directory at runtime, so the two stages build in parallel
@@ -184,7 +184,7 @@ COPY --from=builder --chown=65532:65532 /data /data
 COPY --from=frontend --chown=65532:65532 /src/examples/reference-app/web/dist /app/web/dist
 ENV APP_WEB_DIST=/app/web/dist
 
-# PORT mirrors cmd/server/server.go's own defaultPort ("8080", used when
+# PORT mirrors internal/app/server.go's own defaultPort ("8080", used when
 # PORT is unset) -- setting it here is documentation as much as default;
 # docker-compose.yml also sets it explicitly for the same route.
 ENV PORT=8080

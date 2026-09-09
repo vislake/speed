@@ -1,8 +1,8 @@
 package main
 
 // authn_enterprise_oidc_login_start_test.go pins the closure of the
-// enterprise-OIDC login-start gap authnAPIPath's own doc comment in
-// server.go records (the CONFIRMED GAP the composition fix below closes):
+// enterprise-OIDC login-start gap AuthnAPIPath's own doc comment in
+// internal/app/server.go records (the CONFIRMED GAP the composition fix below closes):
 // an anonymous request to /api/v1/authn/social/oidc:<tenant>/authorize --
 // the login-start step of a tenant that configured enterprise OIDC -- must
 // reach authn's own Handler instead of being refused by
@@ -14,7 +14,7 @@ package main
 // with 403 tenancy.tenant_unresolved before authn ever saw it, and
 // enabling enterprise OIDC for a real tenant would have silently needed a
 // code change in this file. Post-fix, topMux dispatches the whole
-// authnAPIPath subtree straight from authn.Middleware's own output (the
+// AuthnAPIPath subtree straight from authn.Middleware's own output (the
 // adminRoutePath branch's shape), tenancy never sees it, and authn's own
 // Handler is the authority on who may call what.
 //
@@ -35,6 +35,8 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/authn"
 )
@@ -60,7 +62,7 @@ func TestAuthnEnterpriseOIDCLoginStart_ReachesAuthnNotTenancy(t *testing.T) {
 	// "oidc:<tenant>" name (authn.ProviderOIDCPrefix + a tenant id) that no
 	// literal tenancy allowlist entry could ever enumerate -- the property
 	// that made the pre-fix composition a dead end for this path.
-	provider := url.PathEscape(authn.ProviderOIDCPrefix + string(demoSingleTenantID))
+	provider := url.PathEscape(authn.ProviderOIDCPrefix + string(app.DemoSingleTenantID))
 	authorizeURL := srv.URL + "/api/v1/authn/social/" + provider +
 		"/authorize?redirect_uri=" + url.QueryEscape("https://app.example.internal/callback")
 

@@ -33,7 +33,7 @@ export const SMILE_SIM_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
   'smilesim.unsupported_smile_style': 'cases.sim.errors.unsupportedSmileStyle',
   'smilesim.unsupported_tooth_shade': 'cases.sim.errors.unsupportedToothShade',
   'smilesim.strength_out_of_range': 'cases.sim.errors.strengthOutOfRange',
-  // The simulate route's request-shape refusals (cmd/server/smilesim.go).
+  // The simulate route's request-shape refusals (internal/app/smilesim.go).
   'smilesim.invalid_request_body': 'cases.sim.errors.invalidRequest',
   'smilesim.photo_object_id_required': 'cases.sim.errors.photoObjectIdRequired',
   'smilesim.recipient_not_in_tenant': 'cases.sim.errors.recipientNotInTenant',
@@ -45,7 +45,7 @@ export const SMILE_SIM_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
   // The poll route's not-found answer (go/jobs' own sentinel, passed
   // through by the job-status handler).
   'jobs.job_not_found': 'cases.sim.errors.jobNotFound',
-  // The simulation-content route's refusals (cmd/server/smilesim.go).
+  // The simulation-content route's refusals (internal/app/smilesim.go).
   'smilesim.simulation_not_found': 'cases.sim.errors.simulationNotFound',
   'smilesim.output_not_ready': 'cases.sim.errors.outputNotReady',
   'smilesim.output_not_found': 'cases.sim.errors.outputNotFound',

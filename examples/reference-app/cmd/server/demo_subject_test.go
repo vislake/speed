@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
@@ -16,7 +18,7 @@ import (
 
 // requestInTenant returns a request whose context carries tenantID the way
 // tenancy.Middleware leaves it after resolving the tenant from the caller's
-// verified access token (see server.go's middleware-chain doc comment on
+// verified access token (see internal/app/server.go's middleware-chain doc comment on
 // authn.NewPrincipalResolver).
 func requestInTenant(method string, tenantID pkgcore.TenantID) *http.Request {
 	r := httptest.NewRequest(method, "/api/v1/notes", nil)
@@ -31,20 +33,20 @@ func requestInTenant(method string, tenantID pkgcore.TenantID) *http.Request {
 // header; the TENANT never is, under any header a caller can set.
 func TestDemoSubjectResolver_TakesTheTenantFromTheContextNotTheRequest(t *testing.T) {
 	r := requestInTenant(http.MethodGet, "tenant-acme")
-	r.Header.Set(demoUserHeader, demoOwnerUserID)
+	r.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
 	// Everything a caller might try in order to steer the tenant.
 	r.Header.Set("X-Tenant-ID", "tenant-globex")
 	r.Header.Set("Tenant-ID", "tenant-globex")
 
-	sub, ok := demoSubjectResolver(r)
+	sub, ok := app.DemoSubjectResolver(r)
 	if !ok {
 		t.Fatal("the resolver reported no subject for a request with both a resolved tenant and a user")
 	}
 	if sub.TenantID != "tenant-acme" {
 		t.Fatalf("subject tenant = %q, want %q -- a client-supplied header must never steer the tenant", sub.TenantID, "tenant-acme")
 	}
-	if sub.UserID != demoOwnerUserID {
-		t.Fatalf("subject user = %q, want %q", sub.UserID, demoOwnerUserID)
+	if sub.UserID != app.DemoOwnerUserID {
+		t.Fatalf("subject user = %q, want %q", sub.UserID, app.DemoOwnerUserID)
 	}
 }
 
@@ -56,7 +58,7 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 		tenant pkgcore.TenantID
 		user   string
 	}{
-		{name: "no tenant resolved", user: demoOwnerUserID},
+		{name: "no tenant resolved", user: app.DemoOwnerUserID},
 		{name: "no user header", tenant: "tenant-acme"},
 		{name: "neither"},
 		{name: "empty user header", tenant: "tenant-acme", user: ""},
@@ -65,9 +67,9 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := requestInTenant(http.MethodGet, tc.tenant)
 			if tc.user != "" {
-				r.Header.Set(demoUserHeader, tc.user)
+				r.Header.Set(app.DemoUserHeader, tc.user)
 			}
-			if _, ok := demoSubjectResolver(r); ok {
+			if _, ok := app.DemoSubjectResolver(r); ok {
 				t.Fatal("the resolver produced a subject; every incomplete identity must report none")
 			}
 		})
@@ -75,26 +77,26 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 }
 
 // TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback pins the
-// two-source semantics demoUserHeader's own comment describes. The demo
+// two-source semantics DemoUserHeader's own comment describes. The demo
 // header, when present, still names the acting user exactly as it always
 // did -- the pre-auth flows send both a token and a header, and the header
 // is what they mean, so it must keep winning; only without a header does a
 // verified Principal in the request context supply the user, which is the
-// path the real accounts demo_users.go seeds take.
+// path the real accounts internal/app/demo_users.go seeds take.
 func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) {
 	principal := authn.Principal{UserID: "real-seeded-user", TenantID: "tenant-acme", SessionID: "session-1"}
 
 	t.Run("the demo header wins when both are present", func(t *testing.T) {
 		r := requestInTenant(http.MethodGet, "tenant-acme")
 		r = r.WithContext(authn.WithPrincipal(r.Context(), principal))
-		r.Header.Set(demoUserHeader, demoReaderUserID)
+		r.Header.Set(app.DemoUserHeader, app.DemoReaderUserID)
 
-		sub, ok := demoSubjectResolver(r)
+		sub, ok := app.DemoSubjectResolver(r)
 		if !ok {
 			t.Fatal("no subject for a request with a tenant, a verified principal and a demo header")
 		}
-		if sub.UserID != demoReaderUserID {
-			t.Fatalf("subject user = %q, want the header's %q -- the header names who acts", sub.UserID, demoReaderUserID)
+		if sub.UserID != app.DemoReaderUserID {
+			t.Fatalf("subject user = %q, want the header's %q -- the header names who acts", sub.UserID, app.DemoReaderUserID)
 		}
 	})
 
@@ -102,7 +104,7 @@ func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) 
 		r := requestInTenant(http.MethodGet, "tenant-acme")
 		r = r.WithContext(authn.WithPrincipal(r.Context(), principal))
 
-		sub, ok := demoSubjectResolver(r)
+		sub, ok := app.DemoSubjectResolver(r)
 		if !ok {
 			t.Fatal("no subject for a request with a tenant and a verified principal")
 		}
@@ -123,7 +125,7 @@ func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) 
 			UserID: "real-seeded-user", TenantID: "tenant-globex", SessionID: "session-1",
 		}))
 
-		sub, ok := demoSubjectResolver(r)
+		sub, ok := app.DemoSubjectResolver(r)
 		if !ok {
 			t.Fatal("no subject for a request with a tenant and a verified principal")
 		}
@@ -137,7 +139,7 @@ func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) 
 // and, more importantly, its strict direction: a method this app never
 // considered demands the WRITE permission, not the read one.
 func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
-	permissionFor := demoPermissionFor(notesResource)
+	permissionFor := app.DemoPermissionFor(app.NotesResource)
 	tests := []struct {
 		method string
 		want   string
@@ -153,7 +155,7 @@ func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.method, func(t *testing.T) {
 			if got := permissionFor(requestInTenant(tc.method, "tenant-acme")); got != tc.want {
-				t.Fatalf("demoPermissionFor(%s) = %q, want %q", tc.method, got, tc.want)
+				t.Fatalf("DemoPermissionFor(%s) = %q, want %q", tc.method, got, tc.want)
 			}
 		})
 	}
@@ -166,7 +168,7 @@ func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
 func TestGuardModuleRoute_UnknownPath_RefusesToMount(t *testing.T) {
 	const unlisted = "/api/v1/invoices"
 
-	handler, err := guardModuleRoute(nil, unlisted, http.NotFoundHandler(), orgRouteGuardDeps{}, false)
+	handler, err := app.GuardModuleRoute(nil, unlisted, http.NotFoundHandler(), app.OrgRouteGuardDeps{}, false)
 	if err == nil {
 		t.Fatal("an unlisted mounted path was accepted; it must fail the server build")
 	}
@@ -194,9 +196,9 @@ func TestGuardModuleRoute_PublicPath_IsNotGated(t *testing.T) {
 			// A nil Authorizer would make any gated route fail with
 			// rbac.service_not_attached, so reaching the handler proves no
 			// gate was applied rather than that a gate happened to allow.
-			handler, err := guardModuleRoute(nil, path, inner, orgRouteGuardDeps{}, false)
+			handler, err := app.GuardModuleRoute(nil, path, inner, app.OrgRouteGuardDeps{}, false)
 			if err != nil {
-				t.Fatalf("guardModuleRoute(%q): %v", path, err)
+				t.Fatalf("GuardModuleRoute(%q): %v", path, err)
 			}
 
 			rec := httptest.NewRecorder()
@@ -214,10 +216,10 @@ func TestGuardModuleRoute_PublicPath_IsNotGated(t *testing.T) {
 // breaks here rather than silently gating on a permission the module no
 // longer declares.
 func TestNotesResource_MatchesTheModulesOwnPermissions(t *testing.T) {
-	if got := rbac.Permission(notesResource, demoActionRead); got != notes.PermissionRead {
+	if got := rbac.Permission(app.NotesResource, app.DemoActionRead); got != notes.PermissionRead {
 		t.Fatalf("read permission = %q, want %q", got, notes.PermissionRead)
 	}
-	if got := rbac.Permission(notesResource, demoActionWrite); got != notes.PermissionWrite {
+	if got := rbac.Permission(app.NotesResource, app.DemoActionWrite); got != notes.PermissionWrite {
 		t.Fatalf("write permission = %q, want %q", got, notes.PermissionWrite)
 	}
 }
@@ -237,12 +239,12 @@ func TestSplitDemoPermission(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.permission, func(t *testing.T) {
-			resource, action, ok := splitDemoPermission(tc.permission)
+			resource, action, ok := app.SplitDemoPermission(tc.permission)
 			if ok != tc.ok {
-				t.Fatalf("splitDemoPermission(%q) ok = %v, want %v", tc.permission, ok, tc.ok)
+				t.Fatalf("SplitDemoPermission(%q) ok = %v, want %v", tc.permission, ok, tc.ok)
 			}
 			if ok && (resource != tc.resource || action != tc.action) {
-				t.Fatalf("splitDemoPermission(%q) = (%q, %q), want (%q, %q)",
+				t.Fatalf("SplitDemoPermission(%q) = (%q, %q), want (%q, %q)",
 					tc.permission, resource, action, tc.resource, tc.action)
 			}
 		})
@@ -264,10 +266,10 @@ func TestMustResourceOf_DisagreeingPermissions_Panics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func() {
 				if recover() == nil {
-					t.Fatalf("mustResourceOf(%v) returned instead of panicking", tc.permissions)
+					t.Fatalf("MustResourceOf(%v) returned instead of panicking", tc.permissions)
 				}
 			}()
-			_ = mustResourceOf(tc.permissions...)
+			_ = app.MustResourceOf(tc.permissions...)
 		})
 	}
 }

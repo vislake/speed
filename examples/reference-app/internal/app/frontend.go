@@ -1,4 +1,4 @@
-package main
+package app
 
 // This file serves the reference app's built frontend -- the dist/
 // directory examples/reference-app/web's `pnpm build` (tsc plus vite)
@@ -50,7 +50,7 @@ package main
 //     hash-routed app working.
 //   - The static surface never falls into the authn/tenancy middleware
 //     chain: withFrontend wraps the OUTSIDE of authn.Middleware's own
-//     output in buildServer, so a request the frontend answers never meets
+//     output in BuildServer, so a request the frontend answers never meets
 //     tenant resolution (GET / answers 200 to a caller with no tenant,
 //     exactly what a deployed sign-in page needs) and the API requests
 //     that do reach the chain pass through unchanged.
@@ -83,7 +83,7 @@ import (
 // webDistEnv names the environment variable holding the path of the
 // directory this server serves the built frontend from (see this file's
 // package doc comment for the full serving design). Empty -- the default,
-// and what every caller of buildServer without a frontend gets --
+// and what every caller of BuildServer without a frontend gets --
 // leaves the composed API handler serving no static files: no
 // interception, no extra wrapping.
 const webDistEnv = "APP_WEB_DIST"
@@ -135,7 +135,7 @@ type frontend struct {
 	next http.Handler
 }
 
-// withFrontend wraps next -- buildServer's fully composed API handler,
+// withFrontend wraps next -- BuildServer's fully composed API handler,
 // authn.Middleware's output included -- so that requests the frontend
 // answers never enter the authn/tenancy middleware chain, while every
 // request the frontend does not answer reaches next byte-for-byte as it
@@ -224,7 +224,7 @@ func (f *frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to enumerate.
 func serverOwnedPath(p string) bool {
 	return p == "/api" || strings.HasPrefix(p, "/api/") ||
-		p == healthzPath || p == metricsPath
+		p == HealthzPath || p == MetricsPath
 }
 
 // cleanWebRel returns p's cleaned form relative to the frontend directory

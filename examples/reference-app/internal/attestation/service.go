@@ -189,7 +189,7 @@ func (s *Service) findAuthority(ctx context.Context, authorities *pki.AuthorityR
 // certificate (see certificateUsable) is left alone and its bytes are
 // never opened: repeated observations of one succeeded output -- every
 // poll, enumeration or content read that drives them
-// (cmd/server/smilesim.go) -- cost the row lookup alone. Otherwise the
+// (internal/app/smilesim.go) -- cost the row lookup alone. Otherwise the
 // object's bytes are opened under the ctx tenant (an object another
 // tenant owns is refused before anything is written), digested, and
 // handed to EnsureAttestedContent, which applies the write-or-refresh
@@ -389,7 +389,7 @@ func (s *Service) certificateUsable(ctx context.Context, certificateID string) (
 // attested output whose attestation does not verify, and passes an object
 // with no attestation row -- the uploaded photos and any other plain
 // object shares are untouched by this layer. The gate in
-// cmd/server/sharing_resolver.go runs it after reading the content, so
+// internal/app/sharing_resolver.go runs it after reading the content, so
 // the digest comparison is over the exact bytes the visitor would have
 // received.
 //

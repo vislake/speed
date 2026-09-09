@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
@@ -27,8 +29,8 @@ import (
 // must keep importing neither org nor anything shaped like it -- see
 // go/rbac/reap.go's own header comment -- so a test that needs BOTH real
 // services on one real bus cannot live inside either module's own test
-// package. This file adds no production wiring to server.go; it builds its
-// own minimal two-module kernel, independent of buildServer's much larger
+// package. This file adds no production wiring to internal/app/server.go; it builds its
+// own minimal two-module kernel, independent of BuildServer's much larger
 // composition.
 //
 // The property: a binding scoped to a deleted node must not stay live.
@@ -38,7 +40,7 @@ import (
 
 // newOrgRBACReapHarness boots a minimal, self-contained kernel of exactly
 // two modules -- org and rbac -- over a fresh SQLite file, migrated and
-// bootstrapped the same way buildServer composes the full app, just without
+// bootstrapped the same way BuildServer composes the full app, just without
 // every other module the full app also wires. It returns the real
 // TreeService, the real MemberService and the real rbac Service, all backed
 // by the same pkgcore.Registry and its real event bus, so a delete or a
@@ -76,7 +78,7 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 	// org.Module.Register's own doc comment.
 	orgModule := org.NewModule(db, org.WithEmailIndexer(orgIndexer), org.WithInvitationEmailDisabled())
 	// WithSubtreeResolver is wired onto org's real Scope -- the
-	// orgSubtreeResolver adapter buildServer itself uses (server.go) -- so
+	// OrgSubtreeResolver adapter BuildServer itself uses (internal/app/server.go) -- so
 	// the seam answers node liveness against the very tree this harness
 	// mutates. That matters only to the restore side of the reap pair: the
 	// member-restored re-instatement re-verifies every node-scoped row's
@@ -88,7 +90,7 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 	// narrowing -- are still not exercised by this file's assertions, which
 	// read Can and the binding rows directly; the seam is wired for the
 	// restore-side consumer, not for them.
-	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(orgSubtreeResolver{scope: orgModule.Scope()}))
+	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(app.OrgSubtreeResolver{Scope: orgModule.Scope()}))
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(orgModule); regErr != nil {

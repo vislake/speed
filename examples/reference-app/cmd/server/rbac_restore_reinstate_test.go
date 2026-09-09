@@ -45,7 +45,7 @@ import (
 // SubtreeResolver before any un-mark, because the org.member.restored
 // event asserts the membership and never the node. The team node here was
 // never deleted, so the harness's org-backed resolver -- wired in
-// newOrgRBACReapHarness exactly as buildServer wires the full app -- must
+// newOrgRBACReapHarness exactly as BuildServer wires the full app -- must
 // answer that the node lives for this binding to come back: the
 // member-restored-while-the-node-lives half of the b52b64d property,
 // whose member-restored-while-the-node-stays-deleted half

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/org"
@@ -16,7 +18,7 @@ import (
 
 // newClinicNameTree returns an org TreeService over a freshly migrated
 // SQLite database -- the real org module's tree, exactly the service
-// buildServer wires into wireClinicName (server.go) -- so the route
+// BuildServer wires into WireClinicName (internal/app/server.go) -- so the route
 // handler tests below exercise the real Root lookup against the real
 // tree, not a stand-in.
 func newClinicNameTree(t *testing.T) *org.TreeService {
@@ -38,7 +40,7 @@ func newClinicNameTree(t *testing.T) *org.TreeService {
 // returns the recorded response.
 func clinicNameGET(t *testing.T, mux *http.ServeMux, tenant string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, clinicNamePath, nil)
+	req := httptest.NewRequest(http.MethodGet, app.ClinicNamePath, nil)
 	if tenant != "" {
 		req = req.WithContext(pkgcore.WithTenant(req.Context(), pkgcore.TenantID(tenant)))
 	}
@@ -48,9 +50,9 @@ func clinicNameGET(t *testing.T, mux *http.ServeMux, tenant string) *httptest.Re
 }
 
 // decodeClinicNameResponse decodes rec's body as the name answer.
-func decodeClinicNameResponse(t *testing.T, rec *httptest.ResponseRecorder) clinicNameResponse {
+func decodeClinicNameResponse(t *testing.T, rec *httptest.ResponseRecorder) app.ClinicNameResponse {
 	t.Helper()
-	var resp clinicNameResponse
+	var resp app.ClinicNameResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode clinic-name response: %v; body = %s", err, rec.Body.String())
 	}
@@ -60,7 +62,7 @@ func decodeClinicNameResponse(t *testing.T, rec *httptest.ResponseRecorder) clin
 // TestClinicNameRoute_TenantWithATreeAnswersItsRootName drives the route's
 // name-answering half: a tenant whose org tree has a root node reads its
 // name back -- the answer this app's own web chrome shows for a tenant no
-// static demo copy describes (clinic_name.go's own doc comment).
+// static demo copy describes (internal/app/clinic_name.go's own doc comment).
 func TestClinicNameRoute_TenantWithATreeAnswersItsRootName(t *testing.T) {
 	tree := newClinicNameTree(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-clinic-a"))
@@ -69,7 +71,7 @@ func TestClinicNameRoute_TenantWithATreeAnswersItsRootName(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	wireClinicName(mux, tree)
+	app.WireClinicName(mux, tree)
 	rec := clinicNameGET(t, mux, "tenant-clinic-a")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -87,7 +89,7 @@ func TestClinicNameRoute_TenantWithATreeAnswersItsRootName(t *testing.T) {
 func TestClinicNameRoute_TenantWithNoTreeAnswersAnEmptyName(t *testing.T) {
 	tree := newClinicNameTree(t)
 	mux := http.NewServeMux()
-	wireClinicName(mux, tree)
+	app.WireClinicName(mux, tree)
 
 	rec := clinicNameGET(t, mux, "tenant-with-no-tree")
 	if rec.Code != http.StatusOK {
@@ -105,9 +107,9 @@ func TestClinicNameRoute_TenantWithNoTreeAnswersAnEmptyName(t *testing.T) {
 func TestClinicNameRoute_NonGetMethod_IsRefused(t *testing.T) {
 	tree := newClinicNameTree(t)
 	mux := http.NewServeMux()
-	wireClinicName(mux, tree)
+	app.WireClinicName(mux, tree)
 
-	req := httptest.NewRequest(http.MethodPost, clinicNamePath, nil)
+	req := httptest.NewRequest(http.MethodPost, app.ClinicNamePath, nil)
 	req = req.WithContext(pkgcore.WithTenant(req.Context(), pkgcore.TenantID("tenant-clinic-a")))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -118,7 +120,7 @@ func TestClinicNameRoute_NonGetMethod_IsRefused(t *testing.T) {
 	if allow := rec.Header().Get("Allow"); allow != http.MethodGet {
 		t.Fatalf("Allow header = %q, want %q", allow, http.MethodGet)
 	}
-	var envelope clinicNameError
+	var envelope app.ClinicNameError
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
@@ -137,13 +139,13 @@ func TestClinicNameRoute_NonGetMethod_IsRefused(t *testing.T) {
 func TestClinicNameRoute_NoTenantInContext_AnswersACodedError(t *testing.T) {
 	tree := newClinicNameTree(t)
 	mux := http.NewServeMux()
-	wireClinicName(mux, tree)
+	app.WireClinicName(mux, tree)
 
 	rec := clinicNameGET(t, mux, "")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
-	var envelope clinicNameError
+	var envelope app.ClinicNameError
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
@@ -153,17 +155,17 @@ func TestClinicNameRoute_NoTenantInContext_AnswersACodedError(t *testing.T) {
 }
 
 // TestWriteClinicNameError_PreservesACodedErrorAndFoldsARawOne pins
-// writeClinicNameError's classification directly: an *apperr.Error keeps
+// WriteClinicNameError's classification directly: an *apperr.Error keeps
 // its own code and status on the wire, and a raw error is folded into
 // the internal fallback so a caller never sees raw Go error text.
 func TestWriteClinicNameError_PreservesACodedErrorAndFoldsARawOne(t *testing.T) {
 	coded := apperr.Invalid("test.clinic_name_error")
 	rec := httptest.NewRecorder()
-	writeClinicNameError(rec, coded)
+	app.WriteClinicNameError(rec, coded)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("coded error status = %d, want 400", rec.Code)
 	}
-	var envelope clinicNameError
+	var envelope app.ClinicNameError
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestWriteClinicNameError_PreservesACodedErrorAndFoldsARawOne(t *testing.T) 
 	}
 
 	rec = httptest.NewRecorder()
-	writeClinicNameError(rec, context.DeadlineExceeded)
+	app.WriteClinicNameError(rec, context.DeadlineExceeded)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("raw error status = %d, want 500", rec.Code)
 	}

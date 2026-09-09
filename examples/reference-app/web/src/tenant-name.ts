@@ -1,6 +1,6 @@
 /**
  * tenant-name.ts -- the app's typed access to its own tenant-identity
- * answer: GET /api/reference-app/clinic-name (cmd/server/clinic_name.go)
+ * answer: GET /api/reference-app/clinic-name (internal/app/clinic_name.go)
  * returns the org root name of the tenant the signed-in caller's access
  * token is scoped to.
  *
@@ -17,7 +17,7 @@
  * the same hand-kept-shape relationship the config endpoints have with
  * api-client's typed wrappers. The path is a host constant, not part of
  * any module's OpenAPI fragment, so it is spelled here and in
- * cmd/server/clinic_name.go (clinicNamePath) and kept in step by the Go
+ * internal/app/clinic_name.go (ClinicNamePath) and kept in step by the Go
  * flow test that mounts the route and the web suites that drive it.
  *
  * The answer is deliberately one name: name is the org root name, or ''
@@ -28,7 +28,7 @@
 import type { RequestFn } from '@speed/api-client'
 
 /** The path of the app's own clinic-name answer (clinicNamePath in
- * cmd/server/clinic_name.go). */
+ * internal/app/clinic_name.go). */
 export const CLINIC_NAME_PATH = '/api/reference-app/clinic-name'
 
 /** The answer's wire shape. */

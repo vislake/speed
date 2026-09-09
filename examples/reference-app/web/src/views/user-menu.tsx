@@ -7,7 +7,7 @@
  * static data over the two seeded demo tenants, its display names
  * app namespace keys -- plus, when the session's current tenant is
  * not one of them (a self-registered account's own clinic, which
- * registration provisions -- cmd/server/self_service.go), one extra
+ * registration provisions -- internal/app/self_service.go), one extra
  * row naming that tenant by its clinic's own name -- the org root
  * name the app fetches from its tenant-identity answer
  * (useCurrentTenantName / tenant-name.ts), never the raw tenant id
@@ -113,7 +113,7 @@ export function UserMenu(): ReactElement {
     name: t(tenant.nameKey),
   }))
   // A self-registered account's own clinic (registration provisions the
-  // registrant a tenant of its own -- cmd/server/self_service.go) is not
+  // registrant a tenant of its own -- internal/app/self_service.go) is not
   // among the seeded demo tenants this roster knows, yet the switcher's
   // trigger must name the tenant the session actually runs in: a
   // current-tenant id absent from the options would leave the trigger

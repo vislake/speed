@@ -10,7 +10,7 @@ import (
 // two-return seam because go/storage's ObjectService.OpenContent also
 // returns the object row (three returns), and the attestation paths have
 // no use for the row's metadata. The host satisfies it with a tiny
-// adapter over *storage.ObjectService (cmd/server/sharing_resolver.go's
+// adapter over *storage.ObjectService (internal/app/sharing_resolver.go's
 // storageContentOpener); tests implement it directly, which is the whole
 // point of the seam.
 type ContentOpener interface {

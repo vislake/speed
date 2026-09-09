@@ -1,7 +1,7 @@
 //go:build integration
 
 // This file is the Docker-backed regression for the smilesim completion
-// subscription's cross-instance wire shape: cmd/server/demo_notification.go's
+// subscription's cross-instance wire shape: internal/app/demo_notification.go's
 // smilesim.EventSimulationCompleted subscription reads its payload through
 // a probe (simulationCompletedFieldsFromPayload) rather than a naked type
 // assertion, because pkgcore/eventbus/redis's EventBus always JSON
@@ -74,7 +74,7 @@ import (
 )
 
 // The reference app's own constants, hardcoded here with a note that they
-// must match cmd/server/demo_notification.go's real declarations --
+// must match internal/app/demo_notification.go's real declarations --
 // mirroring this directory's own established convention
 // (redis_eventbus_composition_test.go's acmeTenantID/demoOwnerEmail doc
 // comment).

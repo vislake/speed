@@ -9,17 +9,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // team_members_test.go is the consumer proof of the reference-app's own
-// roster-with-identity answer (team_members.go): GET
+// roster-with-identity answer (internal/app/team_members.go): GET
 // /api/reference-app/team-members answers the caller's tenant's org
 // roster, every row enriched with the identity of the person behind it
 // from authn's users table -- the display name the account registered
 // with, or its email when no name was given. These tests drive the real
-// composed stack (buildServer's own output) with the demo-user seed
+// composed stack (BuildServer's own output) with the demo-user seed
 // switched on, and authenticate their callers as the real seeded
 // accounts -- bearer token, NO demo header -- so the rbac gate evaluates
 // the Principal's own grants, the shape a browser request has.
@@ -43,12 +45,12 @@ import (
 // server_test.go's testNote takes -- because this host route belongs to
 // no module fragment: its shape is hand-kept in step with src/team-api.ts
 // and the demo server the web suites ride. The decode targets are the
-// route's own wire types (team_members.go's teamMemberRow and
-// teamMembersResponse, reachable here because this test lives in the
+// route's own wire types (internal/app/team_members.go's TeamMemberRow and
+// TeamMembersResponse, reachable here because this test lives in the
 // same package): what the test asserts on is the JSON shape those types
 // marshal, never a separately-typed copy that could drift from them.
 
-// buildSeededTeamTestServer composes buildServer's real output with the
+// buildSeededTeamTestServer composes BuildServer's real output with the
 // demo-user seed switched on AND a capturingMailer standing in for the
 // console mailer, so a test can both act as the seeded demo accounts
 // (bearer tokens from demoLogin) and pull an invitation token out of the
@@ -61,9 +63,9 @@ func buildSeededTeamTestServer(t *testing.T) (*httptest.Server, *capturingMailer
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -76,15 +78,15 @@ func buildSeededTeamTestServer(t *testing.T) (*httptest.Server, *capturingMailer
 	return srv, mailer
 }
 
-// rosterRequest GETs teamMembersPath as token -- the bearer access token
+// rosterRequest GETs TeamMembersPath as token -- the bearer access token
 // is the ONLY thing that selects a tenant and names the caller; no demo
 // header rides along, exactly the shape a browser request has -- and
 // returns the HTTP status plus either the decoded answer (200) or the
 // decoded error envelope (anything else).
-func rosterRequest(t *testing.T, srv *httptest.Server, token string) (int, teamMembersResponse, map[string]any) {
+func rosterRequest(t *testing.T, srv *httptest.Server, token string) (int, app.TeamMembersResponse, map[string]any) {
 	t.Helper()
 
-	req, err := http.NewRequest(http.MethodGet, srv.URL+teamMembersPath, nil)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+app.TeamMembersPath, nil)
 	if err != nil {
 		t.Fatalf("build roster request: %v", err)
 	}
@@ -92,7 +94,7 @@ func rosterRequest(t *testing.T, srv *httptest.Server, token string) (int, teamM
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("GET %s: %v", teamMembersPath, err)
+		t.Fatalf("GET %s: %v", app.TeamMembersPath, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -105,9 +107,9 @@ func rosterRequest(t *testing.T, srv *httptest.Server, token string) (int, teamM
 		if err := json.Unmarshal(raw, &envelope); err != nil {
 			t.Fatalf("decode roster error body %q: %v", raw, err)
 		}
-		return resp.StatusCode, teamMembersResponse{}, envelope
+		return resp.StatusCode, app.TeamMembersResponse{}, envelope
 	}
-	var answer teamMembersResponse
+	var answer app.TeamMembersResponse
 	if err := json.Unmarshal(raw, &answer); err != nil {
 		t.Fatalf("decode roster body %q: %v", raw, err)
 	}
@@ -132,7 +134,7 @@ func signInAsDemo(t *testing.T, srv *httptest.Server, email string, tenant pkgco
 // carries a human identity (a display name or an email), never an empty
 // pair -- a row nobody can name is exactly the raw-id defect this route
 // exists to close, one member at a time.
-func expectEveryRowNamed(t *testing.T, answer teamMembersResponse) {
+func expectEveryRowNamed(t *testing.T, answer app.TeamMembersResponse) {
 	t.Helper()
 	for _, row := range answer.Members {
 		if row.DisplayName == "" && row.Email == "" {
@@ -145,7 +147,7 @@ func expectEveryRowNamed(t *testing.T, answer teamMembersResponse) {
 // expectNoRawIDAsIdentity asserts that no row's identity fields carry the
 // member's raw user id where a name belongs -- the exact defect this
 // route exists to fix, at the wire level.
-func expectNoRawIDAsIdentity(t *testing.T, answer teamMembersResponse) {
+func expectNoRawIDAsIdentity(t *testing.T, answer app.TeamMembersResponse) {
 	t.Helper()
 	for _, row := range answer.Members {
 		if row.DisplayName == row.UserID || row.Email == row.UserID {
@@ -158,7 +160,7 @@ func expectNoRawIDAsIdentity(t *testing.T, answer teamMembersResponse) {
 // accounts all registered without a display name, so their rows' identity
 // is their email, and member order is not load-bearing (org lists by
 // node, then user id).
-func rosterEmails(answer teamMembersResponse) map[string]struct{} {
+func rosterEmails(answer app.TeamMembersResponse) map[string]struct{} {
 	set := make(map[string]struct{}, len(answer.Members))
 	for _, row := range answer.Members {
 		set[row.Email] = struct{}{}
@@ -174,10 +176,10 @@ func TestTeamMembersEndpoint_NamesEveryMemberOfTheTenantFromAuthn(t *testing.T) 
 	// all registered without a display name -- so their rows' identity is
 	// the email each account registered with, read from authn's users
 	// table, never a raw user id.
-	ownerToken := signInAsDemo(t, srv, demoOwnerEmail, demoSingleTenantID)
+	ownerToken := signInAsDemo(t, srv, app.DemoOwnerEmail, app.DemoSingleTenantID)
 	status, answer, _ := rosterRequest(t, srv, ownerToken)
 	if status != http.StatusOK {
-		t.Fatalf("GET %s as the demo owner: status %d, want 200", teamMembersPath, status)
+		t.Fatalf("GET %s as the demo owner: status %d, want 200", app.TeamMembersPath, status)
 	}
 	if len(answer.Members) != 3 {
 		t.Fatalf("tenant-acme roster answered %d members, want the three seeded accounts", len(answer.Members))
@@ -186,7 +188,7 @@ func TestTeamMembersEndpoint_NamesEveryMemberOfTheTenantFromAuthn(t *testing.T) 
 	expectNoRawIDAsIdentity(t, answer)
 
 	emails := rosterEmails(answer)
-	for _, email := range []string{demoOwnerEmail, demoReaderEmail, demoAcmeOnlyEmail} {
+	for _, email := range []string{app.DemoOwnerEmail, app.DemoReaderEmail, app.DemoAcmeOnlyEmail} {
 		if _, ok := emails[email]; !ok {
 			t.Errorf("tenant-acme roster names no row %q (rows: %v)", email, emails)
 		}
@@ -196,16 +198,16 @@ func TestTeamMembersEndpoint_NamesEveryMemberOfTheTenantFromAuthn(t *testing.T) 
 	// the enrichment can never reach past the tenant whose roster the org
 	// rows named -- demo-acme-only holds no seat in tenant-globex, so
 	// tenant-globex's roster must not name it.
-	globexToken := signInAsDemo(t, srv, demoOwnerEmail, pkgcore.TenantID("tenant-globex"))
+	globexToken := signInAsDemo(t, srv, app.DemoOwnerEmail, pkgcore.TenantID("tenant-globex"))
 	status, answer, _ = rosterRequest(t, srv, globexToken)
 	if status != http.StatusOK {
-		t.Fatalf("GET %s as the demo owner in tenant-globex: status %d, want 200", teamMembersPath, status)
+		t.Fatalf("GET %s as the demo owner in tenant-globex: status %d, want 200", app.TeamMembersPath, status)
 	}
 	emails = rosterEmails(answer)
-	if _, ok := emails[demoAcmeOnlyEmail]; ok {
+	if _, ok := emails[app.DemoAcmeOnlyEmail]; ok {
 		t.Errorf("tenant-globex roster names demo-acme-only (%v), which holds no seat there", emails)
 	}
-	for _, email := range []string{demoOwnerEmail, demoReaderEmail} {
+	for _, email := range []string{app.DemoOwnerEmail, app.DemoReaderEmail} {
 		if _, ok := emails[email]; !ok {
 			t.Errorf("tenant-globex roster names no row %q (rows: %v)", email, emails)
 		}
@@ -219,20 +221,20 @@ func TestTeamMembersEndpoint_RefusesACallerWithoutOrgRead(t *testing.T) {
 	// else) in every tenant -- the shape whose roster read the org module
 	// route refuses with the rbac gate's 403, which is what closes the web
 	// team surface's gate to it. This answer must refuse it identically.
-	readerToken := signInAsDemo(t, srv, demoReaderEmail, demoSingleTenantID)
+	readerToken := signInAsDemo(t, srv, app.DemoReaderEmail, app.DemoSingleTenantID)
 	status, _, envelope := rosterRequest(t, srv, readerToken)
 	if status != http.StatusForbidden {
-		t.Fatalf("GET %s as the demo reader: status %d, want the rbac gate's 403", teamMembersPath, status)
+		t.Fatalf("GET %s as the demo reader: status %d, want the rbac gate's 403", app.TeamMembersPath, status)
 	}
 	code, _ := envelope["code"].(string)
 	if code != "rbac.permission_denied" {
-		t.Fatalf("GET %s as the demo reader: code %q, want %q", teamMembersPath, code, "rbac.permission_denied")
+		t.Fatalf("GET %s as the demo reader: code %q, want %q", app.TeamMembersPath, code, "rbac.permission_denied")
 	}
 }
 
 func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName(t *testing.T) {
 	srv, mailer := buildSeededTeamTestServer(t)
-	ownerToken := signInAsDemo(t, srv, demoOwnerEmail, demoSingleTenantID)
+	ownerToken := signInAsDemo(t, srv, app.DemoOwnerEmail, app.DemoSingleTenantID)
 
 	// The clinic's second employee: a self-registered account that typed a
 	// display name at registration -- the shape a colleague invited by a
@@ -318,9 +320,9 @@ func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName
 	// answered as another raw user id.
 	status, answer, _ := rosterRequest(t, srv, ownerToken)
 	if status != http.StatusOK {
-		t.Fatalf("GET %s as the demo owner: status %d, want 200", teamMembersPath, status)
+		t.Fatalf("GET %s as the demo owner: status %d, want 200", app.TeamMembersPath, status)
 	}
-	var inviteeRow *teamMemberRow
+	var inviteeRow *app.TeamMemberRow
 	for i := range answer.Members {
 		if answer.Members[i].UserID == created.ID {
 			inviteeRow = &answer.Members[i]
@@ -343,14 +345,14 @@ func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName
 // TestWriteTeamMembersJSON_NilSliceAnswersTheEmptyArray pins the 200
 // answer's wire shape for a tenant with no members: the members field is
 // [] -- never null -- the promise org's own list answers make and the
-// roster reader's `?? []` relies on (team_members.go's own doc comment).
+// roster reader's `?? []` relies on (internal/app/team_members.go's own doc comment).
 func TestWriteTeamMembersJSON_NilSliceAnswersTheEmptyArray(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeTeamMembersJSON(rec, nil)
+	app.WriteTeamMembersJSON(rec, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var resp teamMembersResponse
+	var resp app.TeamMembersResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
 	}
@@ -363,7 +365,7 @@ func TestWriteTeamMembersJSON_NilSliceAnswersTheEmptyArray(t *testing.T) {
 }
 
 // TestWriteTeamMemberError_PreservesACodedErrorAndFoldsARawOne pins
-// writeTeamMemberError's classification directly: an *apperr.Error keeps
+// WriteTeamMemberError's classification directly: an *apperr.Error keeps
 // its own code and status on the wire (org's coded storage errors pass
 // through as themselves), and a raw error collapses to the
 // reference_app.internal_error fallback -- a caller never sees raw Go
@@ -371,8 +373,8 @@ func TestWriteTeamMembersJSON_NilSliceAnswersTheEmptyArray(t *testing.T) {
 func TestWriteTeamMemberError_PreservesACodedErrorAndFoldsARawOne(t *testing.T) {
 	coded := apperr.Invalid("test.team_member_error")
 	rec := httptest.NewRecorder()
-	writeTeamMemberError(rec, coded)
-	var envelope teamMemberError
+	app.WriteTeamMemberError(rec, coded)
+	var envelope app.TeamMemberError
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
@@ -381,7 +383,7 @@ func TestWriteTeamMemberError_PreservesACodedErrorAndFoldsARawOne(t *testing.T) 
 	}
 
 	rec = httptest.NewRecorder()
-	writeTeamMemberError(rec, context.DeadlineExceeded)
+	app.WriteTeamMemberError(rec, context.DeadlineExceeded)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("raw error status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}

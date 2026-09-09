@@ -192,7 +192,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		// Unreachable in normal operation: apiPath is never allowlisted
-		// (see cmd/server/server.go's buildServer), so tenancy.Middleware
+		// (see internal/app/server.go's buildServer), so tenancy.Middleware
 		// already rejected any request that could reach here without a
 		// resolved tenant. Handled anyway, rather than assumed away,
 		// because a handler must never rely solely on a lower layer's
@@ -494,7 +494,7 @@ func (h *Handler) NotesListNotes(w http.ResponseWriter, r *http.Request) {
 // never from the request -- the same rule NotesCreateNote documents. The
 // caller is resolved through the SubjectResolver seam and installed as the
 // row's deleted_by actor, mirroring how self-service provisioning
-// attributes its own user-scoped writes (cmd/server/self_service.go): a
+// attributes its own user-scoped writes (internal/app/self_service.go): a
 // deleted_by attribution that names the real actor is the point of the
 // column, and an unattributable request is refused with 401 exactly like
 // an unattributable create -- never deleted with an empty attribution.

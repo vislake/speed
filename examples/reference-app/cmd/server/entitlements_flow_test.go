@@ -9,7 +9,7 @@ package main
 //
 // What the seam gates, and what this file proves about it:
 //
-//   - cmd/server/server.go wires aigateway.WithEntitlements over
+//   - internal/app/server.go wires aigateway.WithEntitlements over
 //     billingModule.Entitlements() (an EntitlementsFunc closure -- the
 //     sanctioned adapter shape go/ai-gateway/seams.go documents), so
 //     go/ai-gateway's own checkEntitlement now judges every Chat /
@@ -20,7 +20,7 @@ package main
 //     "model:image:smile-simulation" for every smile-simulation
 //     generation), which is exactly the grant set cmd/server's
 //     seedDemoEntitlements stamps on the demo Plan every boot resolves
-//     (demo_entitlements.go) -- so a demo tenant's requests pass, and a
+//     (internal/app/demo_entitlements.go) -- so a demo tenant's requests pass, and a
 //     tenant whose Active subscription was canceled is refused.
 //   - The refusal arrives as go/ai-gateway's own coded error
 //     (ErrEntitlementDenied, Forbidden, "aigateway.entitlement_denied",
@@ -36,7 +36,7 @@ package main
 // cancellation takes effect immediately with no cache to invalidate:
 // EntitlementsService.Check reads the tenant's subscription row fresh on
 // every call (go/billing/subscription.go's own doc comment), and the
-// boot-time seed runs exactly once per process (server.go), so a
+// boot-time seed runs exactly once per process (internal/app/server.go), so a
 // mid-test cancel is never undone while this process lives -- the honest
 // stand-in for "this tenant's subscription lapsed between requests",
 // exactly the state change a real payment-channel failure would drive.
@@ -53,13 +53,15 @@ package main
 //
 // The subscription state this suite depends on is a demo seed, and the
 // purchase leg that would create a subscription for real stays out of
-// scope -- see demo_entitlements.go's package doc comment.
+// scope -- see internal/app/demo_entitlements.go's package doc comment.
 import (
 	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/billing"
@@ -77,10 +79,10 @@ import (
 // Subscriptions() to drive the lifecycle (and could reach Entitlements()
 // directly for an assertion, should one ever need the judgment itself
 // rather than its HTTP consequence). No migration call is needed on this
-// second connection: buildServer's own migrationRegistry.Apply already
+// second connection: BuildServer's own migrationRegistry.Apply already
 // applied go/billing's migrations to cfg.SQLitePath before any test's
 // server ever started serving.
-func openBillingModule(t *testing.T, cfg serverConfig) *billing.Module {
+func openBillingModule(t *testing.T, cfg app.ServerConfig) *billing.Module {
 	t.Helper()
 
 	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
@@ -107,7 +109,7 @@ func openBillingModule(t *testing.T, cfg serverConfig) *billing.Module {
 // status doc), and the boot-time seed never runs again within this
 // process, so the refusal the tests below assert stays in force for the
 // rest of the test.
-func cancelActiveDemoSubscription(t *testing.T, cfg serverConfig, tenantID pkgcore.TenantID) {
+func cancelActiveDemoSubscription(t *testing.T, cfg app.ServerConfig, tenantID pkgcore.TenantID) {
 	t.Helper()
 
 	ctx := pkgcore.WithTenant(context.Background(), tenantID)
@@ -191,7 +193,7 @@ func TestConsultSuggest_SeededSubscriptionPasses_ReachesChatProvider(t *testing.
 		t.Fatalf("decode response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST %s status = %d, want %d; body = %+v", consultSuggestPath, resp.StatusCode, http.StatusOK, out)
+		t.Fatalf("POST %s status = %d, want %d; body = %+v", app.ConsultSuggestPath, resp.StatusCode, http.StatusOK, out)
 	}
 	if out.Suggestion != wantSuggestion {
 		t.Fatalf("suggestion = %q, want the fake server's scripted reply %q", out.Suggestion, wantSuggestion)

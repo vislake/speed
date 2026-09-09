@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // org_invitation_signin_test.go is the end-to-end regression for the
@@ -16,7 +18,7 @@ import (
 // real, persistent org Membership row, and sign-in must keep honoring that
 // row -- in the process that accepted it and in every later process booted
 // against the same database. The membership answers come from org's own
-// rows, read live through the org-backed sign_in_memberships.go store; an
+// rows, read live through the org-backed internal/app/sign_in_memberships.go store; an
 // in-process roster alone would lose an accepted invitation's membership
 // when the accepting process exited, leaving the invited user unable to
 // sign in to the invited tenant: 403 authn.tenant_membership_required
@@ -29,7 +31,7 @@ import (
 // membership by hand -- its only path to a membership in the INVITING
 // tenant is really accepting the invitation below. (Its registration does
 // provision its own clinic under this app's self-service signup --
-// self_service.go -- which is a DIFFERENT tenant: the sign-ins this test
+// internal/app/self_service.go -- which is a DIFFERENT tenant: the sign-ins this test
 // drives all name tenant-acme explicitly, so the clinic never answers
 // them, and the pre-invitation control below remains a genuine control
 // for the tenant that matters: an invitee cannot enter the inviting
@@ -52,7 +54,7 @@ import (
 // account a membership anywhere by hand -- this account must reach its
 // membership in the inviting tenant through org's own real
 // invitation-accept flow alone. (Its registration's self-service clinic,
-// self_service.go, is a different tenant and plays no part in this test's
+// internal/app/self_service.go, is a different tenant and plays no part in this test's
 // explicit-tenant sign-ins.)
 func registerOnlyRealAccount(t *testing.T, srv *httptest.Server, email, password string) (userID string) {
 	t.Helper()
@@ -99,14 +101,14 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// explicitly, in order. cfg comes back too: registerAndAuthenticate
 	// reaches the membership store through it, exactly as every other flow
 	// test in this package does.
-	boot := func() (*httptest.Server, serverConfig, *capturingMailer, func() error) {
+	boot := func() (*httptest.Server, app.ServerConfig, *capturingMailer, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
 		mailer := &capturingMailer{}
 		cfg.Mailer = mailer
-		handler, cleanup, _, err := buildServer(context.Background(), cfg)
+		handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 		if err != nil {
-			t.Fatalf("buildServer: %v", err)
+			t.Fatalf("BuildServer: %v", err)
 		}
 		return httptest.NewServer(handler), cfg, mailer, cleanup
 	}
@@ -137,7 +139,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	inviteeUserID := registerOnlyRealAccount(t, srv1, inviteeEmail, inviteePassword)
 
 	// The invitee's registration provisioned its own self-service clinic
-	// (a different tenant, self_service.go), and signing into it succeeds
+	// (a different tenant, internal/app/self_service.go), and signing into it succeeds
 	// -- the account is real and the password right, and the clinic bearer
 	// is what the login-history read after the control below needs
 	// (history is the one place a refusal's real reason survives).
@@ -150,7 +152,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// Control: before any invitation exists, the freshly registered
 	// invitee cannot sign into the inviting tenant -- its only membership
 	// so far is the self-service clinic its registration provisioned
-	// (self_service.go), which is a different tenant, so this
+	// (internal/app/self_service.go), which is a different tenant, so this
 	// explicit-tenant sign-in proves the invitee starts with no seat in the
 	// tenant the invitation will open. The refusal is the unified 401
 	// authn.invalid_credentials answer a wrong password also gets -- the

@@ -13,7 +13,8 @@
 // (internal/smilesim/service.go's own "Credit accounting" section) has
 // something real to reserve against. The credit-pack-purchase leg itself
 // stays unwired: a real charge is out of this demo's scope.
-package main
+
+package app
 
 import (
 	"context"
@@ -23,15 +24,15 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// demoSimulationCreditGrant is the number of credits seedDemoCredits grants
+// DemoSimulationCreditGrant is the number of credits seedDemoCredits grants
 // each demo tenant at boot -- enough for many multiples of
 // smilesim.CreditsPerSimulation (internal/smilesim/service.go) worth of smile
 // simulations, a round, memorable demo number rather than anything tied to
 // a real credit-pack SKU (no such SKU exists yet -- see this file's own
 // package doc comment).
-const demoSimulationCreditGrant int64 = 1000
+const DemoSimulationCreditGrant int64 = 1000
 
-// demoCreditGrantReason is the free-text Reason (billing.GrantInput.Reason)
+// DemoCreditGrantReason is the free-text Reason (billing.GrantInput.Reason)
 // every grant demo_credits.go's shared per-tenant grant (grantDemoCredits)
 // issues -- the boot-time demo seed's (seedDemoCredits) and the
 // self-service clinic provisioning path's (self_service.go's provision)
@@ -39,9 +40,9 @@ const demoSimulationCreditGrant int64 = 1000
 // transaction history, or a billing-history UI) can tell
 // this app's seed grant apart from a real purchase or an in-app spend at
 // a glance.
-const demoCreditGrantReason = "demo:seed"
+const DemoCreditGrantReason = "demo:seed"
 
-// grantDemoCredits grants demoSimulationCreditGrant credits to ONE tenant,
+// grantDemoCredits grants DemoSimulationCreditGrant credits to ONE tenant,
 // via a real billing.CreditService.Grant call under the tenant's own
 // context -- never a direct database write. Both of this app's paths that
 // give a tenant a starting balance converge on this call:
@@ -86,15 +87,15 @@ func grantDemoCredits(ctx context.Context, credits *billing.CreditService, tenan
 		return nil
 	}
 	if _, err := credits.Grant(tenantCtx, billing.GrantInput{
-		Amount: demoSimulationCreditGrant,
-		Reason: demoCreditGrantReason,
+		Amount: DemoSimulationCreditGrant,
+		Reason: DemoCreditGrantReason,
 	}); err != nil {
 		return fmt.Errorf("reference-app: grant demo credits to %q: %w", tenantID, err)
 	}
 	return nil
 }
 
-// seedDemoCredits grants demoSimulationCreditGrant credits to every tenant
+// seedDemoCredits grants DemoSimulationCreditGrant credits to every tenant
 // named in tenants (cfg.HostTenants), one grantDemoCredits call per tenant
 // -- the same per-tenant grant self_service.go's clinic provisioning uses,
 // so a clinic's starting balance is the SAME grant a demo tenant's boot

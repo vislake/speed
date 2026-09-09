@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -35,7 +35,7 @@ import (
 //     held forever, go/jobs) that means at most one sweep per tenant per
 //     window: an object whose retention deadline passes is reaped by the
 //     next window's sweep, and a sweep job that dead-letters poisons only
-//     its own window. What periodic_scheduler_flow_test.go's two-boot
+//     its own window. What cmd/server/periodic_scheduler_flow_test.go's two-boot
 //     test proves
 //     end to end: boot 1 lets a completed object
 //     expire with the scheduler disabled, and boot 2's first sweep -- the
@@ -59,7 +59,7 @@ import (
 //     compliance's own stored export manifests alike -- so nothing else
 //     needs its own schedule point. The trigger-half proof is the same
 //     two-boot shape as the expiry sweep's:
-//     periodic_scheduler_flow_test.go's retention leg lets boot 1 leave a
+//     cmd/server/periodic_scheduler_flow_test.go's retention leg lets boot 1 leave a
 //     soft-deleted note 45 days past the default window with the scheduler
 //     disabled, and boot 2's first sweep must then hard-delete that row
 //     through the real host wiring.
@@ -70,7 +70,7 @@ import (
 //     tenant go/admin's D3 ledger records. The ledger half closes the
 //     wiring P1 where a self-registered clinic -- a tenant this app's own
 //     registration flow provisions at runtime (self_service.go's
-//     clinicTenantOf: "tenant-" + user id, by construction never a
+//     ClinicTenantOf: "tenant-" + user id, by construction never a
 //     cfg.HostTenants value) -- never entered the scheduler's universe,
 //     so storage's expiry sweep and compliance's retention sweep never
 //     ran for it: expired objects stayed unreclaimed and soft-deleted
@@ -125,7 +125,7 @@ import (
 // internal/smilesim's reconciler.
 //
 // The scheduler's start and stop are bound to the queue's lifecycle in
-// buildServer: it starts only when the queue worker did (the same
+// BuildServer: it starts only when the queue worker did (the same
 // cfg.DisableQueueWorker gate that guards standaloneQueue.Start -- a task
 // this replica can never execute is pointless to enqueue), and cleanup
 // stops it before standaloneQueue.Close, so no tick can enqueue against a
@@ -172,7 +172,7 @@ type periodicTenantUniverse struct {
 	// ledger is go/admin's D3 tenant-ledger service
 	// (adminModule.Tenants()). Its ListAllIDs names every ledger row --
 	// "every tenant the platform knows about" -- self-registered clinics
-	// included. Always non-nil in this app's composition: buildServer
+	// included. Always non-nil in this app's composition: BuildServer
 	// wires go/admin mandatorily and hands its Tenants() service here.
 	ledger *admin.TenantService
 }
@@ -228,7 +228,7 @@ func (u *periodicTenantUniverse) tenantIDs(ctx context.Context) []pkgcore.Tenant
 // periodic mechanisms' tasks every interval (defaultPeriodicTaskSchedulerInterval
 // when interval is non-positive -- the injectable cadence exists for the
 // flow tests, which drive real ticks within test time, exactly like the
-// serverConfig test-override fields of server.go).
+// ServerConfig test-override fields of server.go).
 //
 // universe is the host's tenant universe, resolved fresh by every tick
 // (periodicTenantUniverse's own doc comment): the tenants cfg.HostTenants

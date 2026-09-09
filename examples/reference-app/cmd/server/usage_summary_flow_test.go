@@ -6,7 +6,7 @@ package main
 // /api/v1/admin/usage-summary answers 200 with REAL go/metering data for
 // the system-domain operator. Before this round's wiring it answered 500
 // with the coded body admin.usage_modules_not_wired
-// (go/admin/errors.go's ErrUsageModulesNotWired) -- buildServer passed
+// (go/admin/errors.go's ErrUsageModulesNotWired) -- BuildServer passed
 // adminModule neither admin.WithMetering nor admin.WithBilling (that
 // refusal and its fail-before state are the subject of
 // TestAdminFlow_Round2Routes_ReachableForPlatformStaff's D9 leg).
@@ -35,7 +35,7 @@ package main
 // deliberately do not duplicate.
 //
 // The system-domain operator driving the endpoint is the seeded
-// demo-platform-staff account (demo_admin.go), the one account this app
+// demo-platform-staff account (internal/app/demo_admin.go), the one account this app
 // grants admin:* permissions to under rbac.SystemDomain; demo-owner is
 // deliberately a tenant-domain owner whose admin access is pinned 403 by
 // TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole.
@@ -47,6 +47,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // The wire shapes this suite decodes, field-named after admin's own
@@ -87,10 +89,10 @@ type (
 // test-only-override shape buildConsultTestServer uses, so every
 // consult/smilesim AI call this suite drives records usage through the
 // real gateway onto the real wired metering module.
-func buildUsageSummaryTestServer(t *testing.T, aiServer *fakeOpenAICompatibleServer) (*httptest.Server, serverConfig) {
+func buildUsageSummaryTestServer(t *testing.T, aiServer *fakeOpenAICompatibleServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
-	srv, cfg, _ := buildAdminTestServer(t, func(c *serverConfig) {
+	srv, cfg, _ := buildAdminTestServer(t, func(c *app.ServerConfig) {
 		c.AIGatewayBaseURL = aiServer.URL
 		c.AIGatewayAPIKey = "sk-test-usage-key"
 	})
@@ -113,7 +115,7 @@ func waitForUsageSummaryRow(t *testing.T, srv *httptest.Server, staffToken, want
 	var last adminUsageSummaryResponse
 	for time.Now().Before(deadline) {
 		last = adminUsageSummaryResponse{}
-		adminRequest(t, srv, http.MethodGet, adminUsageSummaryPath, staffToken, nil, http.StatusOK, &last, nil)
+		adminRequest(t, srv, http.MethodGet, app.AdminUsageSummaryPath, staffToken, nil, http.StatusOK, &last, nil)
 		for _, row := range last.Rows {
 			if row.MeteringSummaries == nil {
 				continue
@@ -190,7 +192,7 @@ func TestUsageSummary_D9Endpoint_RealRecordedUsage(t *testing.T) {
 	// the tenant with no recorded usage shows an empty-but-present
 	// meteringSummaries rather than an absent field or an error.
 	final := adminUsageSummaryResponse{}
-	adminRequest(t, srv, http.MethodGet, adminUsageSummaryPath, staffToken, nil, http.StatusOK, &final, nil)
+	adminRequest(t, srv, http.MethodGet, app.AdminUsageSummaryPath, staffToken, nil, http.StatusOK, &final, nil)
 	rowsByTenant := map[string]adminUsageSummaryRow{}
 	for _, r := range final.Rows {
 		rowsByTenant[r.TenantID] = r

@@ -2,7 +2,7 @@ package main
 
 // pki_revoke_gate_flow_test.go drives go/pki's signing-key revoke HTTP
 // operation -- POST /api/v1/pki/signing-keys/{kid}/revoke under
-// pkiRoutePath, gated by guardPkiRoute (demo_subject.go) -- through the
+// PkiRoutePath, gated by guardPkiRoute (internal/app/demo_subject.go) -- through the
 // composed HTTP stack, and pins the platform-domain half of the
 // permission contract go/pki/module.go now records: revoking a row of
 // pki_signing_keys (platform data) is gated on pki.PermissionRevokeSigningKey
@@ -21,8 +21,8 @@ package main
 // this test's 403 expectation is the fail-before leg.
 //
 // The positive leg is the honest counterpart: a real platform-staff
-// account -- demoPlatformStaffEmail, holding BuiltinRoleOwner under
-// rbac.SystemDomain (seedDemoPlatformStaff, demo_admin.go) -- signs in
+// account -- DemoPlatformStaffEmail, holding BuiltinRoleOwner under
+// rbac.SystemDomain (seedDemoPlatformStaff, internal/app/demo_admin.go) -- signs in
 // with its own credential source and revokes the same key successfully.
 // Without this leg the gate could be broken-closed instead of domain-
 // shifted, and the demo would prove no way to reach the operation at all.
@@ -34,6 +34,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit"
@@ -53,9 +55,9 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	cfg := testConfig(t)
 	cfg.DemoUsersPassword = demoSeedPassword
 	cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -71,11 +73,11 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	// relies on), so the key this test revokes is the app's real boot key,
 	// never a hand-seeded row. The owner's sign-in provides the tenant
 	// bearer token the negative leg rides on.
-	status, code, staffToken := demoLogin(t, srv, demoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, staffToken := demoLogin(t, srv, app.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("platform-staff login: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	status, code, ownerToken := demoLogin(t, srv, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("demo-owner login: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -106,14 +108,14 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	if boot == nil {
 		t.Fatalf("purpose %q has no active signing key after the two sign-ins -- authn never bootstrapped it", authn.AccessTokenKeyPurpose)
 	}
-	revokePath := pkiRoutePath + "/signing-keys/" + boot.ID + "/revoke"
+	revokePath := app.PkiRoutePath + "/signing-keys/" + boot.ID + "/revoke"
 
 	// Negative leg: demo-owner in tenant-acme holds pki:revoke_signing_key
 	// there (the owner role carries every declared permission), yet the
 	// revoke must be refused: the gate evaluates that permission under
 	// rbac.SystemDomain, where the header identity has no grant. This is
 	// the leg that an ungated route answers with a 200 that revokes the key.
-	ownerResp := storageRequest(t, srv, http.MethodPost, revokePath, ownerToken, demoOwnerUserID, "application/json",
+	ownerResp := storageRequest(t, srv, http.MethodPost, revokePath, ownerToken, app.DemoOwnerUserID, "application/json",
 		strings.NewReader(`{"reason":"tenant admin test revoke"}`))
 	defer ownerResp.Body.Close()
 	ownerBody, err := io.ReadAll(ownerResp.Body)

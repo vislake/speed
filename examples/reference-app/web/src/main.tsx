@@ -74,7 +74,7 @@
  *     is also what the reference-app server itself serves in a deployed
  *     shape: the Dockerfile builds this directory's dist/ into the image
  *     and the server serves it from disk under APP_WEB_DIST
- *     (cmd/server/frontend.go). What does not ship is browser automation
+ *     (internal/app/frontend.go). What does not ship is browser automation
  *     driving that server-served page; the shipped browser story is the
  *     dev-server page plus rendering under test harnesses.
  */

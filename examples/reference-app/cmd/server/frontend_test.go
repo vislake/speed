@@ -1,10 +1,10 @@
 package main
 
-// Tests for frontend.go's built-frontend serving: the httptest regressions
+// Tests for internal/app/frontend.go's built-frontend serving: the httptest regressions
 // of the acceptance blocker they discharge (an anonymous GET / answering
 // the app's page instead of a tenancy refusal, a built asset answering its
 // bytes, an unknown non-API path answering the SPA fallback, API behavior
-// byte-identical), plus the serving rules frontend.go's package doc
+// byte-identical), plus the serving rules internal/app/frontend.go's package doc
 // comment pins: opt-in via cfg.WebDistDir, asset misses as real 404s, the
 // cache policy split, HEAD support, and path-traversal confinement to the
 // configured directory.
@@ -16,7 +16,7 @@ package main
 // `base` override exists in that app's vite.config.ts, so the built
 // index.html references its bundles at the root-absolute /assets/* paths
 // this handler serves). The suite drives the real composed handler through
-// buildServer, never a mock of the wiring.
+// BuildServer, never a mock of the wiring.
 
 import (
 	"net/http"
@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // fixtureIndexHTML is the fixture index.html: the same mount-point shape
@@ -74,16 +76,16 @@ func writeFrontendFixture(t *testing.T) string {
 	return dir
 }
 
-// serveFrontendRequest drives one request through buildServer's real
+// serveFrontendRequest drives one request through BuildServer's real
 // composed handler with cfg.WebDistDir set to a fixture dist, returning
 // the recorder.
 func serveFrontendRequest(t *testing.T, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	cfg := testConfig(t)
 	cfg.WebDistDir = writeFrontendFixture(t)
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -189,7 +191,7 @@ func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 
 	// /healthz stays the probe endpoint behind its own path, and the
 	// frontend must not swallow it as an unknown path.
-	rec = serveFrontendRequest(t, http.MethodGet, healthzPath)
+	rec = serveFrontendRequest(t, http.MethodGet, app.HealthzPath)
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
 		t.Fatalf("GET /healthz = %d %q, want 200 %q", rec.Code, rec.Body, "ok")
 	}
@@ -204,14 +206,14 @@ func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 }
 
 // TestFrontend_Disabled_BehaviorsByteIdentical pins the opt-in property:
-// a buildServer boot with no WebDistDir must answer exactly as an
+// a BuildServer boot with no WebDistDir must answer exactly as an
 // unintercepted server does -- the frontend changes nothing unless an
 // operator (or a test) configures a dist directory.
 func TestFrontend_Disabled_BehaviorsByteIdentical(t *testing.T) {
 	cfg := testConfig(t)
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -272,9 +274,9 @@ func TestFrontend_PathTraversal_StaysInsideTheDist(t *testing.T) {
 	// ever contain its bytes.
 	canary := "CANARY-OUTSIDE-THE-DIST"
 	cfg.WebDistDir = dir
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -331,9 +333,9 @@ func TestFrontend_PathTraversal_NoEscapeShapeNamesOrReadsOutsideTheDist(t *testi
 		t.Fatalf("write canary: %v", err)
 	}
 	cfg.WebDistDir = dir
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -347,7 +349,7 @@ func TestFrontend_PathTraversal_NoEscapeShapeNamesOrReadsOutsideTheDist(t *testi
 	// the root/fallback answer (index.html, status 200) for a cleaned name
 	// that does not exist in the dist and is not under /assets/; wantAssetMiss
 	// is the real 404 a missing file under the cleaned /assets/ prefix gets
-	// (frontend.go's broken-deploy signal). Which of the two a shape lands
+	// (internal/app/frontend.go's broken-deploy signal). Which of the two a shape lands
 	// on is a property of where its cleaned form sits, not of the escape
 	// attempt -- the pin collapses every shape into the dist, and the dist's
 	// own serving rules answer from there.

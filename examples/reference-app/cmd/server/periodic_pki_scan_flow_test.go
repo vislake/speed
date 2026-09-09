@@ -1,7 +1,7 @@
 package main
 
 // periodic_pki_scan_flow_test.go proves that the reference app's host-side
-// periodic-task scheduler (periodic_scheduler.go) really drives go/pki's
+// periodic-task scheduler (internal/app/periodic_scheduler.go) really drives go/pki's
 // signing-key expiry scan through the composed stack: real ticks at the
 // flow tests' cfg.PeriodicTaskInterval (periodicFlowTickInterval, one
 // second) enqueue Service.EnqueueExpiryScan tasks, the app's real
@@ -45,9 +45,9 @@ package main
 //     successor key) and the promotion (pending -> active while the boot
 //     key -> retiring) can only be produced by expiryScanHandler runs that
 //     real ticks enqueued and the real queue worker drained.
-//   - The test's only timing nudge is the same test-override serverConfig
+//   - The test's only timing nudge is the same test-override ServerConfig
 //     fields every flow test uses: cfg.PKIPropagationWindow,
-//     cfg.PKIRenewalLeadTime and cfg.PKIExpiryScanWindow (buildServer
+//     cfg.PKIRenewalLeadTime and cfg.PKIExpiryScanWindow (BuildServer
 //     applies pki.WithPropagationWindow / pki.WithRenewalLeadTime /
 //     pki.WithExpiryScanWindow for non-zero values). PKIRenewalLeadTime is
 //     set LONGER than the key validity EnsurePurpose grants (one year,
@@ -63,7 +63,7 @@ package main
 //     constants are compressed, exactly like the compressed cadence of
 //     periodicFlowTickInterval itself.
 //   - Observation is the same second-connection reach the audit flow test
-//     uses (TestBuildServer_NoteCreate_PersistsAuditEvent): buildServer
+//     uses (TestBuildServer_NoteCreate_PersistsAuditEvent): BuildServer
 //     hands out neither its *gorm.DB nor module services, so a second
 //     dbkit.Open connection to the same SQLite file is the only way a test
 //     can read pki_signing_keys, through the module's own exported
@@ -89,6 +89,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit"
@@ -141,7 +143,7 @@ const signingKeyRotationDeadline = 20 * time.Second
 // sign-in, successor staged and promoted by real scheduled scans, observed
 // through a second connection to the app's own SQLite file.
 func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T) {
-	srv, cfg := buildPeriodicTestServer(t, func(cfg *serverConfig) {
+	srv, cfg := buildPeriodicTestServer(t, func(cfg *app.ServerConfig) {
 		cfg.PeriodicTaskInterval = periodicFlowTickInterval
 		cfg.PKIPropagationWindow = pkiFlowPropagationWindow
 		cfg.PKIRenewalLeadTime = pkiFlowRenewalLeadTime
@@ -151,7 +153,7 @@ func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T
 	// The observer: a second connection to the same SQLite file the
 	// running server writes, read through pki's own repository. The same
 	// reach TestBuildServer_NoteCreate_PersistsAuditEvent uses for the
-	// audit table -- buildServer exposes neither its *gorm.DB nor any
+	// audit table -- BuildServer exposes neither its *gorm.DB nor any
 	// module service, and pki_signing_keys is platform data whose
 	// repository is a plain, tenant-unfiltered *gorm.DB.
 	observerDB, err := dbkit.Open(context.Background(), dbkit.Options{
@@ -177,7 +179,7 @@ func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T
 
 	// Step 1: at boot, before anyone has signed in, the purpose has no
 	// signing key at all. EnsurePurpose runs lazily inside authn's first
-	// token issue -- nothing at buildServer or in demo seeding signs a
+	// token issue -- nothing at BuildServer or in demo seeding signs a
 	// token -- so this assert is what makes the next read's "boot key"
 	// label exact: whatever the sign-in below creates is the key the
 	// scheduler's scans will have to replace. If a boot path starts

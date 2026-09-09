@@ -11,7 +11,7 @@ package main
 //
 // The two module fragments deliberately never meet in this file:
 // go/storage is exercised only through HTTP, and the demo identity
-// machinery (demo_subject.go) is the only thing that knows storage's
+// machinery (internal/app/demo_subject.go) is the only thing that knows storage's
 // permission names. That mirrors the module boundary the whole repository
 // is built on -- the reference app is the host that composes them.
 
@@ -29,6 +29,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // exifSignature is the ASCII marker that opens every APP1 EXIF payload,
@@ -78,7 +80,7 @@ type testStorageListResponse struct {
 // server_test.go's notesRequestAs shape: the token signs a real account
 // into the tenant (registerAndAuthenticate), and the demo user header
 // then names which seeded demo grant the rbac gate decides the request
-// against (demo_subject.go's seedDemoGrants). body may be any reader
+// against (internal/app/demo_subject.go's seedDemoGrants). body may be any reader
 // (JSON for the metadata endpoints, raw bytes for the content endpoint);
 // when it is non-nil, contentType names the body's media type. An empty
 // token sends no Authorization header at all; an empty user sends no
@@ -95,7 +97,7 @@ func storageRequest(t *testing.T, srv *httptest.Server, method, path, token, use
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(demoUserHeader, user)
+		req.Header.Set(app.DemoUserHeader, user)
 	}
 	if body != nil && contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -227,7 +229,7 @@ func waitForDerivative(t *testing.T, srv *httptest.Server, token, objectID strin
 	path := "/api/v1/storage/objects/" + objectID
 	start := time.Now()
 	for {
-		resp := storageRequest(t, srv, http.MethodGet, path, token, demoOwnerUserID, "", nil)
+		resp := storageRequest(t, srv, http.MethodGet, path, token, app.DemoOwnerUserID, "", nil)
 		obj := decodeStorageObject(t, resp, http.StatusOK, "poll GET "+path)
 		if obj.Derivatives != nil && len(*obj.Derivatives) > 0 {
 			return obj
@@ -293,7 +295,7 @@ func completeObject(t *testing.T, srv *httptest.Server, token, user, objectID st
 func uploadAndComplete(t *testing.T, srv *httptest.Server, token string, content []byte, declaredChecksum string) testStorageObject {
 	t.Helper()
 
-	declared := declareUpload(t, srv, token, demoOwnerUserID, int64(len(content)), "image/jpeg", declaredChecksum)
+	declared := declareUpload(t, srv, token, app.DemoOwnerUserID, int64(len(content)), "image/jpeg", declaredChecksum)
 	if declared.State != "uploading" {
 		t.Fatalf("create response state = %q, want %q", declared.State, "uploading")
 	}
@@ -307,12 +309,12 @@ func uploadAndComplete(t *testing.T, srv *httptest.Server, token string, content
 	// An uploading row is invisible on the read surface: its descriptor
 	// was the create response.
 	resp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+declared.ID,
-		token, demoOwnerUserID, "", nil)
+		token, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusNotFound, "storage.object_not_found",
 		"GET an uploading object before completion")
 
-	uploadBytes(t, srv, token, demoOwnerUserID, declared.ID, content)
-	return completeObject(t, srv, token, demoOwnerUserID, declared.ID)
+	uploadBytes(t, srv, token, app.DemoOwnerUserID, declared.ID, content)
+	return completeObject(t, srv, token, app.DemoOwnerUserID, declared.ID)
 }
 
 // TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd
@@ -336,7 +338,7 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
-	// against (demo_subject.go's seedDemoGrants).
+	// against (internal/app/demo_subject.go's seedDemoGrants).
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-flow")
 
 	jpegBytes := jpegWithExif(t)
@@ -395,7 +397,7 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 	// Step 5a: download the sanitized original. It must be a decodable
 	// 48x32 JPEG whose EXIF (and its GPS) is gone.
 	contentResp := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+completed.ID+"/content", acmeToken, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+completed.ID+"/content", acmeToken, app.DemoOwnerUserID, "", nil)
 	content, err := io.ReadAll(contentResp.Body)
 	contentResp.Body.Close()
 	if err != nil {
@@ -422,7 +424,7 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 	// and no item carries a derivatives array (a list must never fan out
 	// one query per row).
 	listResp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		acmeToken, demoOwnerUserID, "", nil)
+		acmeToken, app.DemoOwnerUserID, "", nil)
 	listBody, err := io.ReadAll(listResp.Body)
 	listResp.Body.Close()
 	if err != nil {
@@ -447,7 +449,7 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 	// existed.
 	for attempt, want := range []int{http.StatusNoContent, http.StatusNotFound} {
 		resp := storageRequest(t, srv, http.MethodDelete, "/api/v1/storage/objects/"+completed.ID,
-			acmeToken, demoOwnerUserID, "", nil)
+			acmeToken, app.DemoOwnerUserID, "", nil)
 		if attempt == 0 {
 			resp.Body.Close()
 			if resp.StatusCode != want {
@@ -461,7 +463,7 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 
 	// The deleted object's content is gone too -- the bytes went with it.
 	resp := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+completed.ID+"/content", acmeToken, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+completed.ID+"/content", acmeToken, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusNotFound, "storage.object_not_found",
 		"GET content of the deleted object")
 }
@@ -481,12 +483,12 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 	// The reader may neither declare an upload nor list objects: both
 	// directions of the storage:write / storage:read gate are closed.
 	resp := storageRequest(t, srv, http.MethodPost, "/api/v1/storage/objects",
-		acmeToken, demoReaderUserID, "application/json",
+		acmeToken, app.DemoReaderUserID, "application/json",
 		bytes.NewReader([]byte(`{"declaredSize":10,"declaredType":"text/plain"}`)))
 	assertPermissionDenied(t, resp, "POST /api/v1/storage/objects as the read-only demo user")
 
 	resp = storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects",
-		acmeToken, demoReaderUserID, "", nil)
+		acmeToken, app.DemoReaderUserID, "", nil)
 	assertPermissionDenied(t, resp, "GET /api/v1/storage/objects as the read-only demo user")
 
 	// A user with no grant at all is refused too.
@@ -509,7 +511,7 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 	// proves the refusal above was the permission decision, not the
 	// storage surface itself failing.
 	jpegBytes := jpegWithExif(t)
-	declared := declareUpload(t, srv, acmeToken, demoOwnerUserID, int64(len(jpegBytes)), "image/jpeg", "")
+	declared := declareUpload(t, srv, acmeToken, app.DemoOwnerUserID, int64(len(jpegBytes)), "image/jpeg", "")
 	if declared.ID == "" || declared.State != "uploading" {
 		t.Fatalf("owner's declaration = %+v, want an uploading object", declared)
 	}
@@ -524,7 +526,7 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 // the same user, through the gate, is told the object does not exist.
 func TestBuildServer_StorageIsolation_CrossTenantObjectInvisible(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
-	// demoOwnerUserID holds the owner role in BOTH demo tenants
+	// DemoOwnerUserID holds the owner role in BOTH demo tenants
 	// (seedDemoGrants seeds every configured tenant), so a refusal cannot
 	// be the gate's: the tenant each request acts in comes from its bearer
 	// token, never from a Host header or any caller-supplied field.
@@ -537,19 +539,19 @@ func TestBuildServer_StorageIsolation_CrossTenantObjectInvisible(t *testing.T) {
 	// tenant-globex, acting as the same owner-role user, cannot see the
 	// object...
 	resp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+acmeObject.ID,
-		globexToken, demoOwnerUserID, "", nil)
+		globexToken, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusNotFound, "storage.object_not_found",
 		"GET tenant-acme's object from tenant-globex")
 
 	// ...nor its bytes...
 	resp = storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+acmeObject.ID+"/content",
-		globexToken, demoOwnerUserID, "", nil)
+		globexToken, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusNotFound, "storage.object_not_found",
 		"GET tenant-acme's content from tenant-globex")
 
 	// ...nor delete it...
 	resp = storageRequest(t, srv, http.MethodDelete, "/api/v1/storage/objects/"+acmeObject.ID,
-		globexToken, demoOwnerUserID, "", nil)
+		globexToken, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusNotFound, "storage.object_not_found",
 		"DELETE tenant-acme's object from tenant-globex")
 
@@ -557,7 +559,7 @@ func TestBuildServer_StorageIsolation_CrossTenantObjectInvisible(t *testing.T) {
 	// leaked nowhere. The object in tenant-acme is untouched and still
 	// serves its own tenant.
 	listResp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		globexToken, demoOwnerUserID, "", nil)
+		globexToken, app.DemoOwnerUserID, "", nil)
 	listed := decodeList(t, listResp, "GET list as tenant-globex")
 	if len(listed.Objects) != 0 {
 		t.Fatalf("tenant-globex's list = %+v, want empty", listed.Objects)
@@ -601,11 +603,11 @@ func TestBuildServer_StorageComplete_ChecksumMismatchConflicts(t *testing.T) {
 	// Declare the checksum of different bytes -- same length, so nothing
 	// but the hash can catch the lie.
 	fake := bytes.Repeat([]byte{0xAB}, len(jpegBytes))
-	declared := declareUpload(t, srv, acmeToken, demoOwnerUserID, int64(len(jpegBytes)), "image/jpeg", sha256Hex(fake))
-	uploadBytes(t, srv, acmeToken, demoOwnerUserID, declared.ID, jpegBytes)
+	declared := declareUpload(t, srv, acmeToken, app.DemoOwnerUserID, int64(len(jpegBytes)), "image/jpeg", sha256Hex(fake))
+	uploadBytes(t, srv, acmeToken, app.DemoOwnerUserID, declared.ID, jpegBytes)
 
 	resp := storageRequest(t, srv, http.MethodPost,
-		"/api/v1/storage/objects/"+declared.ID+"/complete", acmeToken, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+declared.ID+"/complete", acmeToken, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusConflict, "storage.checksum_mismatch",
 		"POST complete with mismatching checksum")
 
@@ -613,7 +615,7 @@ func TestBuildServer_StorageComplete_ChecksumMismatchConflicts(t *testing.T) {
 	// uploading row stays invisible -- its 404 proves no finalization
 	// slipped through on the conflict path.
 	resp = storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+declared.ID,
-		acmeToken, demoOwnerUserID, "", nil)
+		acmeToken, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, resp, http.StatusNotFound, "storage.object_not_found",
 		"GET after the refused completion")
 }

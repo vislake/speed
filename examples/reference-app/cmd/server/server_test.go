@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/config"
@@ -33,67 +35,67 @@ import (
 // policy default (go/authn/password.go) accepts it.
 const testPassword = "a perfectly fine passphrase"
 
-// demoNotesCreatorUserID is declared in demo_subject.go, next to the other
+// DemoNotesCreatorUserID is declared in internal/app/demo_subject.go, next to the other
 // demo identity constants, because the running server's own glue reads it
-// too (demo_notification.go's demo address table keys on it); the test
+// too (internal/app/demo_notification.go's demo address table keys on it); the test
 // helpers here and in notification_flow_test.go reference the same constant
 // so a test's X-Demo-User-Id header always names the user the server's
-// subscription will dispatch to. See demo_subject.go's comment there for
+// subscription will dispatch to. See internal/app/demo_subject.go's comment there for
 // what the id means.
 
-// testConfig returns a serverConfig backed by a fresh, per-test temp-file
+// testConfig returns a ServerConfig backed by a fresh, per-test temp-file
 // SQLite database, so tests never share state and never touch a real file
 // outside t.TempDir(). Memberships is always a fresh, empty
 // signInMemberships -- tests that need an account to actually reach a
 // tenant grant it explicitly via registerAndAuthenticate below, keeping
-// the same reference buildServer itself wires (and attaches to org) so a
+// the same reference BuildServer itself wires (and attaches to org) so a
 // test's grant is visible to the running server.
 //
 // NotificationIndexKey is set because every boot wires the notification
 // module's two contact indexers from the struct field directly -- the
 // APP_NOTIFICATION_INDEX_KEY environment default only exists on the
-// configFromEnv path, which this helper never takes -- and an empty key
+// ConfigFromEnv path, which this helper never takes -- and an empty key
 // fails the boot before the first request. PKILocalKeyCipherKey,
 // AuthnBlindIndexKey and AuthnPIICipherKey are set for the identical
-// reason: buildServer reads all three straight off cfg (APP_ROOT_KEY's
+// reason: BuildServer reads all three straight off cfg (APP_ROOT_KEY's
 // derivation and each key's own individual env var both live in
-// configFromEnv, which this helper bypasses entirely), so an empty value
+// ConfigFromEnv, which this helper bypasses entirely), so an empty value
 // here fails the boot the same way an empty ConfigKey would.
-func testConfig(t *testing.T) serverConfig {
+func testConfig(t *testing.T) app.ServerConfig {
 	t.Helper()
-	return serverConfig{
+	return app.ServerConfig{
 		DeploymentMode:       pkgcore.DeploymentModeStandalone,
 		Port:                 "0",
 		SQLitePath:           filepath.Join(t.TempDir(), "reference-app-test.db"),
-		ConfigKey:            devConfigKey,
-		OrgIndexKey:          devOrgIndexKey,
-		NotificationIndexKey: devNotificationIndexKey,
-		PKILocalKeyCipherKey: devPKILocalKeyCipherKey,
-		AuthnBlindIndexKey:   devBlindIndexKey,
-		AuthnPIICipherKey:    devPIICipherKey,
-		HostTenants:          demoHostTenants,
-		Memberships:          newSignInMemberships(),
+		ConfigKey:            app.DevConfigKey,
+		OrgIndexKey:          app.DevOrgIndexKey,
+		NotificationIndexKey: app.DevNotificationIndexKey,
+		PKILocalKeyCipherKey: app.DevPKILocalKeyCipherKey,
+		AuthnBlindIndexKey:   app.DevBlindIndexKey,
+		AuthnPIICipherKey:    app.DevPIICipherKey,
+		HostTenants:          app.DemoHostTenants,
+		Memberships:          app.NewSignInMemberships(),
 	}
 }
 
-// buildTestServer wires up buildServer's real output behind an
+// buildTestServer wires up BuildServer's real output behind an
 // httptest.Server, so tests exercise the exact composed handler main.go
 // itself serves -- the authn+tenancy middleware chain, the notes Module's
 // real handler, and a real (if temp-file) SQLite database -- not a mock of
-// any of them. It returns the serverConfig alongside the server so a
+// any of them. It returns the ServerConfig alongside the server so a
 // caller can reach cfg.Memberships to grant a demo account tenant
 // membership after registering it (registerAndAuthenticate does this), and
-// buildServer's wired *compliance.Module -- the one reach a test has into
+// BuildServer's wired *compliance.Module -- the one reach a test has into
 // the retention/erasure/export services, which compliance_flow_test.go
 // drives (every other flow test in this package is HTTP-driven and discards
-// it, exactly as buildServer's own doc comment describes main.go doing).
-func buildTestServer(t *testing.T) (*httptest.Server, serverConfig, *compliance.Module) {
+// it, exactly as BuildServer's own doc comment describes main.go doing).
+func buildTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *compliance.Module) {
 	t.Helper()
 
 	cfg := testConfig(t)
-	handler, cleanup, complianceModule, err := buildServer(context.Background(), cfg)
+	handler, cleanup, complianceModule, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -108,8 +110,8 @@ func buildTestServer(t *testing.T) (*httptest.Server, serverConfig, *compliance.
 
 // registerAndAuthenticate registers a fresh demo account through authn's
 // real HTTP surface (POST /api/v1/authn/register), grants it membership in
-// tenant via cfg.Memberships (the seam buildServer itself wires authn's
-// MembershipReader to -- see sign_in_memberships.go's own doc comment:
+// tenant via cfg.Memberships (the seam BuildServer itself wires authn's
+// MembershipReader to -- see internal/app/sign_in_memberships.go's own doc comment:
 // org's rows answer customer-tenant questions first, and the grant this
 // helper records is the in-process test shortcut that answers when org has
 // no row for the pair), signs it in with a tenant_id request naming
@@ -118,10 +120,10 @@ func buildTestServer(t *testing.T) (*httptest.Server, serverConfig, *compliance.
 // That token is now the ONLY thing that selects a tenant for a protected
 // route in this app: with authn.Middleware running ahead of
 // tenancy.Middleware(authn.NewPrincipalResolver()), Host plays no part in
-// resolving the notes API's tenant at all (see server.go's middleware-chain
+// resolving the notes API's tenant at all (see internal/app/server.go's middleware-chain
 // doc comment) -- every test in this file varies the token it authenticates with, never Host, to reach a
 // different tenant.
-func registerAndAuthenticate(t *testing.T, srv *httptest.Server, cfg serverConfig, tenant pkgcore.TenantID, emailLocalPart string) string {
+func registerAndAuthenticate(t *testing.T, srv *httptest.Server, cfg app.ServerConfig, tenant pkgcore.TenantID, emailLocalPart string) string {
 	t.Helper()
 
 	email := emailLocalPart + "@example.com"
@@ -149,7 +151,7 @@ func registerAndAuthenticate(t *testing.T, srv *httptest.Server, cfg serverConfi
 	}
 
 	if cfg.Memberships == nil {
-		t.Fatal("registerAndAuthenticate: cfg.Memberships is nil -- testConfig always sets it, was a different serverConfig passed?")
+		t.Fatal("registerAndAuthenticate: cfg.Memberships is nil -- testConfig always sets it, was a different app.ServerConfig passed?")
 	}
 	cfg.Memberships.Grant(user.ID, tenant)
 
@@ -200,13 +202,13 @@ type testListNotesResponse struct {
 //
 // Two demo headers ride along, each naming a different thing:
 //
-//   - X-Demo-User names WHO is acting for the rbac gate (demo_subject.go's
-//     demoUserHeader). demoOwnerUserID holds every permission, so these two
+//   - X-Demo-User names WHO is acting for the rbac gate (internal/app/demo_subject.go's
+//     DemoUserHeader). DemoOwnerUserID holds every permission, so these two
 //     helpers exercise the happy path; the tests that exercise the gate
 //     itself send other users, or none.
 //   - X-Demo-User-Id names the creating user for notes' own SubjectResolver
-//     (demoNotesSubjectResolver in server.go) -- the value that lands in the
-//     note's CreatorUserID; see demoNotesCreatorUserID above.
+//     (DemoNotesSubjectResolver in internal/app/server.go) -- the value that lands in the
+//     note's CreatorUserID; see DemoNotesCreatorUserID above.
 func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) string {
 	t.Helper()
 
@@ -221,8 +223,8 @@ func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) string
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
-	req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -255,7 +257,7 @@ func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -339,9 +341,9 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 // sends no demo user header at all, which is how a request with a
 // resolvable tenant (the token) but no identity is expressed.
 //
-// A non-empty user additionally sends X-Demo-User-Id (demoNotesCreatorUserID):
+// A non-empty user additionally sends X-Demo-User-Id (DemoNotesCreatorUserID):
 // notes' create handler attributes the note through its own SubjectResolver
-// (demoNotesSubjectResolver in server.go), which reads that header first and
+// (DemoNotesSubjectResolver in internal/app/server.go), which reads that header first and
 // falls back to the verified Principal when no demo header is present -- so
 // the requests that carry a demo user carry the creator header the demo
 // flows were built around, while a token-only request (demo_users_test.go,
@@ -358,8 +360,8 @@ func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user stri
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(demoUserHeader, user)
-		req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+		req.Header.Set(app.DemoUserHeader, user)
+		req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -417,33 +419,33 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
-	// against (demo_subject.go's seedDemoGrants).
+	// against (internal/app/demo_subject.go's seedDemoGrants).
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-owner")
 
 	// The owner may write.
-	resp := notesRequestAs(t, srv, http.MethodPost, acmeToken, demoOwnerUserID,
+	resp := notesRequestAs(t, srv, http.MethodPost, acmeToken, app.DemoOwnerUserID,
 		strings.NewReader(`{"text":"owner note"}`))
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
 			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("POST as %s: status = %d, want %d; body = %s", demoOwnerUserID, resp.StatusCode, http.StatusCreated, body)
+			t.Fatalf("POST as %s: status = %d, want %d; body = %s", app.DemoOwnerUserID, resp.StatusCode, http.StatusCreated, body)
 		}
 	}()
 
 	// The reader may list...
-	resp = notesRequestAs(t, srv, http.MethodGet, acmeToken, demoReaderUserID, nil)
+	resp = notesRequestAs(t, srv, http.MethodGet, acmeToken, app.DemoReaderUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("GET as %s: status = %d, want %d; body = %s", demoReaderUserID, resp.StatusCode, http.StatusOK, body)
+			t.Fatalf("GET as %s: status = %d, want %d; body = %s", app.DemoReaderUserID, resp.StatusCode, http.StatusOK, body)
 		}
 	}()
 
 	// ...and may not create. This is the whole point of the gate.
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeToken, demoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
+		notesRequestAs(t, srv, http.MethodPost, acmeToken, app.DemoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
 		"POST as the read-only demo user")
 
 	// A user with no grant at all is refused in both directions.
@@ -480,7 +482,7 @@ func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
 //
 // Both demo tenants seed most of the same user ids, so a test using one of
 // those would pass even against an engine keyed on the user alone. The
-// sharp case is demoSingleTenantUserID, which is granted in tenant-acme
+// sharp case is DemoSingleTenantUserID, which is granted in tenant-acme
 // and nowhere else: the identical user id, acting through a token that
 // signs into tenant-globex, must be refused. The tenant the decision is
 // made in comes from the bearer token, never from anything the caller
@@ -490,28 +492,28 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-acme")
 	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "pg-globex")
 
-	resp := notesRequestAs(t, srv, http.MethodGet, acmeToken, demoSingleTenantUserID, nil)
+	resp := notesRequestAs(t, srv, http.MethodGet, acmeToken, app.DemoSingleTenantUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("GET in the tenant that granted %s: status = %d, want %d; body = %s",
-				demoSingleTenantUserID, resp.StatusCode, http.StatusOK, body)
+				app.DemoSingleTenantUserID, resp.StatusCode, http.StatusOK, body)
 		}
 	}()
 
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, globexToken, demoSingleTenantUserID, nil),
+		notesRequestAs(t, srv, http.MethodGet, globexToken, app.DemoSingleTenantUserID, nil),
 		"GET as the same user id in the tenant that never granted it")
 
 	// And the refusal is genuinely about the tenant rather than the user
 	// being unknown: the SAME tenant grants the same role to demo-reader.
-	resp = notesRequestAs(t, srv, http.MethodGet, globexToken, demoReaderUserID, nil)
+	resp = notesRequestAs(t, srv, http.MethodGet, globexToken, app.DemoReaderUserID, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET as %s in tenant-globex: status = %d, want %d; body = %s",
-			demoReaderUserID, resp.StatusCode, http.StatusOK, body)
+			app.DemoReaderUserID, resp.StatusCode, http.StatusOK, body)
 	}
 }
 
@@ -555,7 +557,7 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			req, err := http.NewRequest(method, srv.URL+healthzPath, nil)
+			req, err := http.NewRequest(method, srv.URL+app.HealthzPath, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}
@@ -563,12 +565,12 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 			resp, err := srv.Client().Do(req)
 			if err != nil {
-				t.Fatalf("%s %s (Host=%q): %v", method, healthzPath, host, err)
+				t.Fatalf("%s %s (Host=%q): %v", method, app.HealthzPath, host, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("%s %s (Host=%q) status = %d, want 200", method, healthzPath, host, resp.StatusCode)
+				t.Fatalf("%s %s (Host=%q) status = %d, want 200", method, app.HealthzPath, host, resp.StatusCode)
 			}
 		}
 	}
@@ -576,9 +578,9 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 // failingResolver deliberately fails every resolution, standing in for any
 // Resolver's failure mode in general -- an invalid or missing bearer token
-// under authn.NewPrincipalResolver (server.go's middleware-chain doc
+// under authn.NewPrincipalResolver (internal/app/server.go's middleware-chain doc
 // comment). Using a resolver that always fails, rather than driving
-// buildServer's real composed chain with a missing/invalid token, keeps
+// BuildServer's real composed chain with a missing/invalid token, keeps
 // this test about the allowlist mechanism in isolation.
 type failingResolver struct{}
 
@@ -588,23 +590,23 @@ func (failingResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 
 func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
+	mux.HandleFunc(http.MethodGet+" "+app.HealthzPath, app.HealthzHandler)
 
-	// The same construction buildServer uses: tenancy.Middleware wrapping
-	// the mux, allowlisting both GET and HEAD for healthzPath -- see
-	// server.go's own comment on why HEAD needs its own entry too.
+	// The same construction BuildServer uses: tenancy.Middleware wrapping
+	// the mux, allowlisting both GET and HEAD for HealthzPath -- see
+	// internal/app/server.go's own comment on why HEAD needs its own entry too.
 	handler := tenancy.Middleware(failingResolver{},
-		tenancy.WithAllowlist(http.MethodGet, healthzPath),
-		tenancy.WithAllowlist(http.MethodHead, healthzPath),
+		tenancy.WithAllowlist(http.MethodGet, app.HealthzPath),
+		tenancy.WithAllowlist(http.MethodHead, app.HealthzPath),
 	)(mux)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, healthzPath, nil)
+		req := httptest.NewRequest(method, app.HealthzPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, healthzPath, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, app.HealthzPath, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -613,15 +615,15 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	// RFC 9110) even though the handler wrote one, so asserting on it only
 	// for the GET request keeps this test honest about what HEAD actually
 	// guarantees.
-	req := httptest.NewRequest(http.MethodGet, healthzPath, nil)
+	req := httptest.NewRequest(http.MethodGet, app.HealthzPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Body.String() != "ok" {
-		t.Fatalf("GET %s body = %q, want %q", healthzPath, rec.Body.String(), "ok")
+		t.Fatalf("GET %s body = %q, want %q", app.HealthzPath, rec.Body.String(), "ok")
 	}
 
 	// Sanity check, proving the allowlist -- not general leniency in
-	// healthzHandler or the mux -- is what let the requests above through:
+	// HealthzHandler or the mux -- is what let the requests above through:
 	// the identical failing resolver still fails closed (403) for a path
 	// that was never allowlisted.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
@@ -637,52 +639,52 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // test for a gap this app's own wiring had until it was caught by
 // literally curling the running server during manual verification: a
 // plain `curl -X POST /healthz` (unrelated) revealed net/http's ServeMux
-// automatically serves HEAD healthzPath from a registered "GET
-// "+healthzPath pattern (Go's long-standing GET-implies-HEAD convenience),
+// automatically serves HEAD HealthzPath from a registered "GET
+// "+HealthzPath pattern (Go's long-standing GET-implies-HEAD convenience),
 // but tenancy.Middleware does NOT extend WithAllowlist's (method, path)
 // exemption the same way -- its own doc comment says so explicitly:
 // "allowlist http.MethodHead explicitly if a health check needs it too."
 // Allowlisting GET alone therefore looks fine under a resolver that never
 // fails, while silently leaving HEAD one resolver failure away from a 403
 // -- exactly what authn.NewPrincipalResolver does fail with whenever
-// no Principal is present (server.go's middleware-chain doc comment).
+// no Principal is present (internal/app/server.go's middleware-chain doc comment).
 //
 // This test reproduces exactly that gap (deliberately allowlisting GET
-// only, unlike buildServer's real wiring) as a permanent canary: if it
+// only, unlike BuildServer's real wiring) as a permanent canary: if it
 // ever starts failing -- HEAD suddenly returning 200 -- either net/http's
-// or tenancy.Middleware's GET/HEAD behavior changed, and server.go's
-// buildServer may no longer need its explicit HEAD allowlist entry.
+// or tenancy.Middleware's GET/HEAD behavior changed, and internal/app/server.go's
+// BuildServer may no longer need its explicit HEAD allowlist entry.
 func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
+	mux.HandleFunc(http.MethodGet+" "+app.HealthzPath, app.HealthzHandler)
 
-	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, healthzPath))(mux)
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, app.HealthzPath))(mux)
 
-	req := httptest.NewRequest(http.MethodHead, healthzPath, nil)
+	req := httptest.NewRequest(http.MethodHead, app.HealthzPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", healthzPath, rec.Code)
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", app.HealthzPath, rec.Code)
 	}
 }
 
 // TestBuildServer_Metrics_NoTenantRequired proves /metrics responds through
 // the real composed server regardless of Host, mirroring
 // TestBuildServer_Healthz_NoTenantRequired above for the other route
-// buildServer allowlists (see server.go's metricsPath doc comment: a
+// BuildServer allowlists (see internal/app/server.go's MetricsPath doc comment: a
 // scraper, like a liveness probe, has no demo Host to send and must not
 // depend on one).
 //
 // Unlike the healthz version, this does not assert on a literal 200:
-// metricsHandler (server.go) serves whatever obs.MetricsHandler() currently
-// returns, and -- like every other test that drives buildServer directly in
-// this file -- this test never calls obs.Init, so metricsHandler answers
+// MetricsHandler (internal/app/server.go) serves whatever obs.MetricsHandler() currently
+// returns, and -- like every other test that drives BuildServer directly in
+// this file -- this test never calls obs.Init, so MetricsHandler answers
 // its documented "before Init has run" 404 here, not a real scrape (see
 // MetricsHandler's own doc comment in go/observability/init.go). The
 // property this test level can honestly verify is narrower, but is the one
 // actually in question here: tenancy.Middleware's allowlist let the
-// request through to metricsHandler at all, for every Host, instead of
+// request through to MetricsHandler at all, for every Host, instead of
 // rejecting it with 403 -- ErrTenantUnresolved is the ONLY status
 // Middleware itself ever produces (go/tenancy/middleware.go), so "not 403"
 // is a precise proof of "no tenant required" at this level.
@@ -695,7 +697,7 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			req, err := http.NewRequest(method, srv.URL+metricsPath, nil)
+			req, err := http.NewRequest(method, srv.URL+app.MetricsPath, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}
@@ -703,29 +705,29 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 
 			resp, err := srv.Client().Do(req)
 			if err != nil {
-				t.Fatalf("%s %s (Host=%q): %v", method, metricsPath, host, err)
+				t.Fatalf("%s %s (Host=%q): %v", method, app.MetricsPath, host, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode == http.StatusForbidden {
 				t.Fatalf("%s %s (Host=%q) status = %d, want anything but 403 (tenant resolution must not be required for this route)",
-					method, metricsPath, host, resp.StatusCode)
+					method, app.MetricsPath, host, resp.StatusCode)
 			}
 		}
 	}
 }
 
-// TestMetricsAllowlist_ResolutionFailure_StillReturns200 is metricsPath's
+// TestMetricsAllowlist_ResolutionFailure_StillReturns200 is MetricsPath's
 // counterpart to TestHealthzAllowlist_ResolutionFailure_StillReturns200
 // above, proving the same property tenancy.WithAllowlist gives /healthz --
 // the route stays reachable even when the Resolver fails outright -- for
-// the other route buildServer allowlists.
+// the other route BuildServer allowlists.
 //
 // Unlike TestBuildServer_Metrics_NoTenantRequired above, this test calls
 // obs.Init() itself first -- no deployment mode argument; Init's
 // no-endpoint path wires the local exporters, which is exactly the
 // wiring main.go's run() arranges before serving any production traffic
-// -- so metricsHandler answers with a real Prometheus scrape (200)
+// -- so MetricsHandler answers with a real Prometheus scrape (200)
 // here, reproducing, as a permanent automated test, exactly what manual
 // verification of this gap found: with Init having actually run, both
 // GET and HEAD /metrics return 200 regardless of Host/resolution
@@ -747,28 +749,28 @@ func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
+	mux.HandleFunc(http.MethodGet+" "+app.MetricsPath, app.MetricsHandler)
 
-	// The same construction buildServer uses: tenancy.Middleware wrapping
-	// the mux, allowlisting both GET and HEAD for metricsPath -- see
-	// server.go's own comment on why HEAD needs its own entry too.
+	// The same construction BuildServer uses: tenancy.Middleware wrapping
+	// the mux, allowlisting both GET and HEAD for MetricsPath -- see
+	// internal/app/server.go's own comment on why HEAD needs its own entry too.
 	handler := tenancy.Middleware(failingResolver{},
-		tenancy.WithAllowlist(http.MethodGet, metricsPath),
-		tenancy.WithAllowlist(http.MethodHead, metricsPath),
+		tenancy.WithAllowlist(http.MethodGet, app.MetricsPath),
+		tenancy.WithAllowlist(http.MethodHead, app.MetricsPath),
 	)(mux)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, metricsPath, nil)
+		req := httptest.NewRequest(method, app.MetricsPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, metricsPath, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, app.MetricsPath, rec.Code, rec.Body.String())
 		}
 	}
 
 	// Sanity check, proving the allowlist -- not general leniency in
-	// metricsHandler or the mux -- is what let the requests above through:
+	// MetricsHandler or the mux -- is what let the requests above through:
 	// the identical failing resolver still fails closed (403) for a path
 	// that was never allowlisted.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
@@ -780,34 +782,34 @@ func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	}
 }
 
-// TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed is metricsPath's
+// TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed is MetricsPath's
 // counterpart to TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed
-// above. buildServer allowlists metricsPath the same two-calls-one-per-
-// method way it allowlists healthzPath (server.go), so it carries the exact
+// above. BuildServer allowlists MetricsPath the same two-calls-one-per-
+// method way it allowlists HealthzPath (internal/app/server.go), so it carries the exact
 // same regression risk: net/http's ServeMux auto-serves HEAD from the
-// registered "GET "+metricsPath pattern, but tenancy.Middleware does not
+// registered "GET "+MetricsPath pattern, but tenancy.Middleware does not
 // extend WithAllowlist's exemption from GET to HEAD automatically (its own
 // doc comment says so explicitly) -- so forgetting, or later deleting, the
-// tenancy.WithAllowlist(http.MethodHead, metricsPath) call in buildServer
+// tenancy.WithAllowlist(http.MethodHead, MetricsPath) call in BuildServer
 // would silently leave HEAD /metrics one resolver failure away from a 403.
 //
 // This test reproduces that gap deliberately (GET allowlisted only) as a
 // permanent canary: if it ever starts failing -- HEAD suddenly returning
 // 200 -- either net/http's or tenancy.Middleware's GET/HEAD behavior
-// changed, or buildServer may no longer need its explicit HEAD allowlist
-// entry for metricsPath.
+// changed, or BuildServer may no longer need its explicit HEAD allowlist
+// entry for MetricsPath.
 func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
+	mux.HandleFunc(http.MethodGet+" "+app.MetricsPath, app.MetricsHandler)
 
-	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, metricsPath))(mux)
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, app.MetricsPath))(mux)
 
-	req := httptest.NewRequest(http.MethodHead, metricsPath, nil)
+	req := httptest.NewRequest(http.MethodHead, app.MetricsPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", metricsPath, rec.Code)
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", app.MetricsPath, rec.Code)
 	}
 }
 
@@ -832,7 +834,7 @@ const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 // guarantees the mode can never silently degrade into a
 // SQLite-and-in-memory run under a "distributed" label.
 //
-// The event bus is constructed by buildServer itself
+// The event bus is constructed by BuildServer itself
 // -- before dbkit.Open, so the automatic org audit capture can publish on
 // the same bus the Kernel later resolves (see the Open call's own comment)
 // -- and injected through WithEventBus in the standalone as well as the
@@ -844,8 +846,8 @@ const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 // never silently degrade.
 //
 // cfg.SMSGatewayURL is set to fakeSMSGatewayURL so that authn's own
-// wiring-time SMS-sender validation, which buildServer reaches BEFORE
-// Kernel.Bootstrap (see buildServer's authn wiring comment), does not mask
+// wiring-time SMS-sender validation, which BuildServer reaches BEFORE
+// Kernel.Bootstrap (see BuildServer's authn wiring comment), does not mask
 // the Kernel-level failure this test actually pins;
 // TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed below
 // is what proves that earlier validation on its own.
@@ -854,16 +856,16 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
-	_, _, _, err := buildServer(context.Background(), cfg)
+	_, _, _, err := app.BuildServer(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("buildServer with DeploymentModeDistributed: want error, got nil")
+		t.Fatal("BuildServer with DeploymentModeDistributed: want error, got nil")
 	}
 	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
-		t.Fatalf("buildServer with DeploymentModeDistributed: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
+		t.Fatalf("BuildServer with DeploymentModeDistributed: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
 	for _, want := range []string{`seam "eventbus"`, `"<injected>"`, "MultiReplicaSafe", `"distributed"`} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("buildServer with DeploymentModeDistributed: error %q does not mention %s", err, want)
+			t.Fatalf("BuildServer with DeploymentModeDistributed: error %q does not mention %s", err, want)
 		}
 	}
 }
@@ -871,7 +873,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 // TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer
 // is the second half of the distributed-mode pin under the env-driven
 // wiring: APP_REDIS_ADDR composes BOTH the
-// "eventbus" and the "kv" seam onto one shared *redis.Client (buildServer's
+// "eventbus" and the "kv" seam onto one shared *redis.Client (BuildServer's
 // kernel-options doc comment explains why one Redis instance backs both),
 // so a distributed deployment with only cfg.RedisAddr set clears both
 // "eventbus" and "kv" and fails capability validation on the NEXT seam
@@ -880,7 +882,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 // no APP_SMTP_* composition to swap it for. This is the "one
 // seam wired isn't enough" property of the distributed
 // mode, demonstrated at the mailer seam. Validation precedes module registration, so no Subscribe is ever
-// reached, and the cleanup buildServer runs on this error path is equally
+// reached, and the cleanup BuildServer runs on this error path is equally
 // network-free: RedisEventBus starts no goroutine and touches no network
 // until the first Subscribe (its group-destroy sweep returns early with
 // nothing subscribed), a go-redis client dials lazily, and kv/redis.
@@ -893,16 +895,16 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 	cfg.RedisAddr = "127.0.0.1:6379"
 	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
-	_, _, _, err := buildServer(context.Background(), cfg)
+	_, _, _, err := app.BuildServer(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("buildServer with DeploymentModeDistributed and Redis configured: want error, got nil")
+		t.Fatal("BuildServer with DeploymentModeDistributed and Redis configured: want error, got nil")
 	}
 	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
-		t.Fatalf("buildServer with DeploymentModeDistributed and Redis configured: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
+		t.Fatalf("BuildServer with DeploymentModeDistributed and Redis configured: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
 	for _, want := range []string{`seam "mailer"`, `"mailer.console"`, "MultiReplicaSafe", `"distributed"`} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("buildServer with DeploymentModeDistributed and Redis configured: error %q does not mention %s", err, want)
+			t.Fatalf("BuildServer with DeploymentModeDistributed and Redis configured: error %q does not mention %s", err, want)
 		}
 	}
 }
@@ -915,7 +917,7 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 // reading. Passing WithSMSSender(NewConsoleSMSSender(...))
 // unconditionally regardless of deployment mode would hide that gap.
 // This is authn's OWN wiring-time validation (authn.NewModule's
-// newOptions), which buildServer reaches before it ever calls
+// newOptions), which BuildServer reaches before it ever calls
 // pkgcore.NewKernel(...).Bootstrap -- so this failure fires regardless of
 // whether any other seam (Redis, S3, SMTP) is configured, and this test
 // configures none of them, needing no Docker and touching no network.
@@ -923,20 +925,20 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 
-	_, _, _, err := buildServer(context.Background(), cfg)
+	_, _, _, err := app.BuildServer(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("buildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: want error, got nil")
+		t.Fatal("BuildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: want error, got nil")
 	}
 	if !errors.Is(err, authn.ErrMissingDistributedSMSSender) {
-		t.Fatalf("buildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
+		t.Fatalf("BuildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
 	}
 }
 
 // A no-Docker "positive" counterpart to the three tests above -- one that
 // composes every seam onto a fake, unreachable address and asserts
-// buildServer succeeds -- was deliberately NOT added here, and this is a
+// BuildServer succeeds -- was deliberately NOT added here, and this is a
 // real gap, not a silent one: this app's own seedDemoGrants
-// (demo_subject.go), which every buildServer call runs unconditionally
+// (internal/app/demo_subject.go), which every BuildServer call runs unconditionally
 // after Bootstrap to seed the demo tenants' built-in roles, makes a
 // SYNCHRONOUS rbac.Service call that publishes on whatever EventBus
 // Bootstrap resolved -- eventbus/redis.EventBus.Publish genuinely appends
@@ -949,7 +951,7 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 // proven at the unit tier without either standing up real infrastructure
 // (which belongs in a Docker-backed integration tier, not here) or
 // special-casing seedDemoGrants for tests (which would test a different
-// wiring than main() runs, the exact anti-pattern buildServer's own doc
+// wiring than main() runs, the exact anti-pattern BuildServer's own doc
 // comment warns against). The genuine, real-infrastructure proof is
 // examples/reference-app/integration_test/distributed_mode_test.go.
 
@@ -959,7 +961,7 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 // createNoteAs/listNotesAs above, which assert success internally, this is
 // mostly for tests that expect the request to be rejected.
 //
-// It always carries X-Demo-User-Id too (demoNotesCreatorUserID): one POST
+// It always carries X-Demo-User-Id too (DemoNotesCreatorUserID): one POST
 // caller -- the tenant-hint forgery test below -- expects 201 and reaches
 // notes' create handler, which resolves the creator through the same seam,
 // while every rejection here dies upstream of that handler, where the
@@ -974,8 +976,8 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
-	req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -992,7 +994,7 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 // Host once resolved to a shared demoDefaultTenant
 // bucket any anonymous caller could read from and write to. That bucket no
 // longer exists at all -- Host plays no part in the notes API's tenant
-// resolution any more (server.go's middleware-chain doc comment) -- but
+// resolution any more (internal/app/server.go's middleware-chain doc comment) -- but
 // the SAME fail-closed property has a new, equally real way to matter: a
 // request carrying no credential, and one carrying a credential that does
 // not verify, must both be refused rather than served from any shared or
@@ -1061,14 +1063,14 @@ func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestConfigFromEnv_Defaults verifies configFromEnv's zero-environment
-// defaults. Every other test in this file drives buildServer directly
-// through testConfig(t), bypassing configFromEnv (and its os.Getenv reads)
-// entirely, so configFromEnv itself is covered.
+// TestConfigFromEnv_Defaults verifies ConfigFromEnv's zero-environment
+// defaults. Every other test in this file drives BuildServer directly
+// through testConfig(t), bypassing ConfigFromEnv (and its os.Getenv reads)
+// entirely, so ConfigFromEnv itself is covered.
 //
-// Each variable configFromEnv reads is explicitly set to "" via t.Setenv,
+// Each variable ConfigFromEnv reads is explicitly set to "" via t.Setenv,
 // rather than left untouched, so this test's outcome does not depend on
-// the ambient environment configFromEnv happens to run in -- PORT in
+// the ambient environment ConfigFromEnv happens to run in -- PORT in
 // particular is commonly preset by hosting platforms, and an ambient value
 // would make this test spuriously fail (or, worse, spuriously pass for the
 // wrong reason) outside a clean shell. t.Setenv also restores the previous
@@ -1086,21 +1088,21 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("APP_READ_FLY_CLIENT_IP", "")
 	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "")
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone {
 		t.Fatalf("DeploymentMode = %q, want %q", cfg.DeploymentMode, pkgcore.DeploymentModeStandalone)
 	}
-	if cfg.Port != defaultPort {
-		t.Fatalf("Port = %q, want %q", cfg.Port, defaultPort)
+	if cfg.Port != app.DefaultPort {
+		t.Fatalf("Port = %q, want %q", cfg.Port, app.DefaultPort)
 	}
-	if cfg.SQLitePath != defaultSQLitePath {
-		t.Fatalf("SQLitePath = %q, want %q", cfg.SQLitePath, defaultSQLitePath)
+	if cfg.SQLitePath != app.DefaultSQLitePath {
+		t.Fatalf("SQLitePath = %q, want %q", cfg.SQLitePath, app.DefaultSQLitePath)
 	}
-	if !bytes.Equal(cfg.ConfigKey, devConfigKey) {
-		t.Fatalf("ConfigKey = %x, want the dev default %x", cfg.ConfigKey, devConfigKey)
+	if !bytes.Equal(cfg.ConfigKey, app.DevConfigKey) {
+		t.Fatalf("ConfigKey = %x, want the dev default %x", cfg.ConfigKey, app.DevConfigKey)
 	}
 	if cfg.RedisAddr != "" {
 		t.Fatalf("RedisAddr = %q, want the empty default (in-process bus)", cfg.RedisAddr)
@@ -1115,12 +1117,12 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 		t.Fatalf("ObjectStoreRoot = %q, want the empty default (Preset local-store directory)", cfg.ObjectStoreRoot)
 	}
 	if cfg.DisableDemoUserHeader {
-		t.Fatal("DisableDemoUserHeader = true, want false (the default: demoUserHeader keeps winning, unchanged)")
+		t.Fatal("DisableDemoUserHeader = true, want false (the default: app.DemoUserHeader keeps winning, unchanged)")
 	}
 	if cfg.ReadFlyClientIP {
 		t.Fatal("ReadFlyClientIP = true, want false (the default: no vendor header is read, authn's fail-closed shape)")
 	}
-	if cfg.failSelfServiceProvision != nil {
+	if cfg.FailSelfServiceProvision != nil {
 		t.Fatal("failSelfServiceProvision armed with an unset APP_FAIL_SELF_SERVICE_PROVISION: an absent variable must leave the self-service provisioning untouched (production behaviour unchanged)")
 	}
 }
@@ -1142,45 +1144,45 @@ func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *test
 
 	t.Run("0 disables the injection", func(t *testing.T) {
 		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "0")
-		cfg, err := configFromEnv()
+		cfg, err := app.ConfigFromEnv()
 		if err != nil {
-			t.Fatalf("configFromEnv() error = %v", err)
+			t.Fatalf("ConfigFromEnv() error = %v", err)
 		}
-		if cfg.failSelfServiceProvision != nil {
+		if cfg.FailSelfServiceProvision != nil {
 			t.Fatal("failSelfServiceProvision armed with the variable at 0, want the disabled default")
 		}
 	})
 	t.Run("a positive count arms the injection with exactly that budget", func(t *testing.T) {
 		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "2")
-		cfg, err := configFromEnv()
+		cfg, err := app.ConfigFromEnv()
 		if err != nil {
-			t.Fatalf("configFromEnv() error = %v", err)
+			t.Fatalf("ConfigFromEnv() error = %v", err)
 		}
-		if cfg.failSelfServiceProvision == nil {
+		if cfg.FailSelfServiceProvision == nil {
 			t.Fatal("failSelfServiceProvision nil with the variable at 2, want the armed injection")
 		}
 		// The first two provisioning attempts of one account fail...
-		if err := cfg.failSelfServiceProvision("budget-account"); err == nil {
+		if err := cfg.FailSelfServiceProvision("budget-account"); err == nil {
 			t.Fatal("the armed injection's first attempt of an account did not fail")
 		}
-		if err := cfg.failSelfServiceProvision("budget-account"); err == nil {
+		if err := cfg.FailSelfServiceProvision("budget-account"); err == nil {
 			t.Fatal("the armed injection's second attempt of an account did not fail")
 		}
 		// ...and the third succeeds: the budget is per account, so the
 		// count is the number of failed attempts, never a permanent block.
-		if err := cfg.failSelfServiceProvision("budget-account"); err != nil {
+		if err := cfg.FailSelfServiceProvision("budget-account"); err != nil {
 			t.Fatalf("the armed injection failed an attempt past its budget: %v", err)
 		}
 		// A different account starts its own fresh budget of N.
-		if err := cfg.failSelfServiceProvision("another-budget-account"); err == nil {
+		if err := cfg.FailSelfServiceProvision("another-budget-account"); err == nil {
 			t.Fatal("the armed injection's first attempt of a second account did not fail")
 		}
 	})
 	t.Run("not a number refuses boot", func(t *testing.T) {
 		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "one")
-		_, err := configFromEnv()
+		_, err := app.ConfigFromEnv()
 		if err == nil {
-			t.Fatal("configFromEnv() error = nil, want a parse refusal naming APP_FAIL_SELF_SERVICE_PROVISION")
+			t.Fatal("ConfigFromEnv() error = nil, want a parse refusal naming APP_FAIL_SELF_SERVICE_PROVISION")
 		}
 		if !strings.Contains(err.Error(), "APP_FAIL_SELF_SERVICE_PROVISION") {
 			t.Fatalf("parse refusal does not name the variable: %v", err)
@@ -1188,9 +1190,9 @@ func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *test
 	})
 	t.Run("a negative count refuses boot", func(t *testing.T) {
 		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "-1")
-		_, err := configFromEnv()
+		_, err := app.ConfigFromEnv()
 		if err == nil {
-			t.Fatal("configFromEnv() error = nil, want a refusal of a negative count")
+			t.Fatal("ConfigFromEnv() error = nil, want a refusal of a negative count")
 		}
 		if !strings.Contains(err.Error(), "APP_FAIL_SELF_SERVICE_PROVISION") {
 			t.Fatalf("negative-count refusal does not name the variable: %v", err)
@@ -1199,7 +1201,7 @@ func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *test
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
-// configFromEnv reads is actually honored.
+// ConfigFromEnv reads is actually honored.
 func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", string(pkgcore.DeploymentModeDistributed))
 	t.Setenv("PORT", "9999")
@@ -1214,9 +1216,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_READ_FLY_CLIENT_IP", "true")
 	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "2")
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.DeploymentMode != pkgcore.DeploymentModeDistributed {
 		t.Fatalf("DeploymentMode = %q, want %q", cfg.DeploymentMode, pkgcore.DeploymentModeDistributed)
@@ -1263,17 +1265,17 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	if !bytes.Equal(cfg.ConfigKey, wantKey) {
 		t.Fatalf("ConfigKey = %x, want the decoded APP_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
 	}
-	if cfg.failSelfServiceProvision == nil {
+	if cfg.FailSelfServiceProvision == nil {
 		t.Fatal("failSelfServiceProvision nil with APP_FAIL_SELF_SERVICE_PROVISION=2, want the armed injection")
 	}
 	// The variable's value is the number of attempts to fail: with N=2 the
 	// first two attempts of one account fail and the third succeeds.
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := cfg.failSelfServiceProvision("override-account"); err == nil {
+		if err := cfg.FailSelfServiceProvision("override-account"); err == nil {
 			t.Fatalf("the armed injection's attempt %d of an account did not fail (N=2)", attempt)
 		}
 	}
-	if err := cfg.failSelfServiceProvision("override-account"); err != nil {
+	if err := cfg.FailSelfServiceProvision("override-account"); err != nil {
 		t.Fatalf("the armed injection failed an attempt past its two-attempt budget: %v", err)
 	}
 }
@@ -1293,21 +1295,21 @@ func TestConfigFromEnv_ReadFlyClientIPWithoutTrustedProxies_ReturnsError(t *test
 
 	t.Run("true with no proxy declared", func(t *testing.T) {
 		t.Setenv("APP_READ_FLY_CLIENT_IP", "true")
-		if _, err := configFromEnv(); err == nil {
-			t.Fatal("configFromEnv() error = nil, want a refusal naming both variables")
+		if _, err := app.ConfigFromEnv(); err == nil {
+			t.Fatal("ConfigFromEnv() error = nil, want a refusal naming both variables")
 		}
 	})
 	t.Run("not a strict bool", func(t *testing.T) {
 		t.Setenv("APP_READ_FLY_CLIENT_IP", "yes")
-		if _, err := configFromEnv(); err == nil {
-			t.Fatal("configFromEnv() error = nil, want a bool-parse refusal")
+		if _, err := app.ConfigFromEnv(); err == nil {
+			t.Fatal("ConfigFromEnv() error = nil, want a bool-parse refusal")
 		}
 	})
 	t.Run("false with no proxy declared stays accepted", func(t *testing.T) {
 		t.Setenv("APP_READ_FLY_CLIENT_IP", "false")
-		cfg, err := configFromEnv()
+		cfg, err := app.ConfigFromEnv()
 		if err != nil {
-			t.Fatalf("configFromEnv() error = %v", err)
+			t.Fatalf("ConfigFromEnv() error = %v", err)
 		}
 		if cfg.ReadFlyClientIP {
 			t.Fatal("ReadFlyClientIP = true, want false")
@@ -1316,9 +1318,9 @@ func TestConfigFromEnv_ReadFlyClientIPWithoutTrustedProxies_ReturnsError(t *test
 }
 
 // TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError proves the
-// "objectstore"-seam ambiguity rule objectStoreRootEnv's own doc comment
+// "objectstore"-seam ambiguity rule ObjectStoreRootEnv's own doc comment
 // states: a complete APP_S3_* composition and APP_OBJECT_STORE_ROOT both
-// name a store for the one seam, so configFromEnv refuses the combination
+// name a store for the one seam, so ConfigFromEnv refuses the combination
 // loudly -- never by silently preferring one -- while each composition on
 // its own stays accepted. TestConfigFromEnv_ReadsOverrides already pins
 // the root-alone side; the S3-alone control below is the other half,
@@ -1329,25 +1331,25 @@ func TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
 
-	t.Setenv(s3EndpointEnv, "https://objects.example.test")
-	t.Setenv(s3BucketEnv, "bucket")
-	t.Setenv(s3AccessKeyEnv, "key")
-	t.Setenv(s3SecretKeyEnv, "secret")
+	t.Setenv(app.S3EndpointEnv, "https://objects.example.test")
+	t.Setenv(app.S3BucketEnv, "bucket")
+	t.Setenv(app.S3AccessKeyEnv, "key")
+	t.Setenv(app.S3SecretKeyEnv, "secret")
 
-	t.Setenv(objectStoreRootEnv, "/var/lib/reference-app/objects")
-	if _, err := configFromEnv(); err == nil {
-		t.Fatal("configFromEnv with both APP_OBJECT_STORE_ROOT and a complete APP_S3_* composition: want error, got nil")
-	} else if !strings.Contains(err.Error(), objectStoreRootEnv) {
-		t.Fatalf("configFromEnv error = %v, want it to name %s", err, objectStoreRootEnv)
+	t.Setenv(app.ObjectStoreRootEnv, "/var/lib/reference-app/objects")
+	if _, err := app.ConfigFromEnv(); err == nil {
+		t.Fatal("ConfigFromEnv with both APP_OBJECT_STORE_ROOT and a complete APP_S3_* composition: want error, got nil")
+	} else if !strings.Contains(err.Error(), app.ObjectStoreRootEnv) {
+		t.Fatalf("ConfigFromEnv error = %v, want it to name %s", err, app.ObjectStoreRootEnv)
 	}
 
-	t.Setenv(objectStoreRootEnv, "")
-	if _, err := configFromEnv(); err != nil {
-		t.Fatalf("configFromEnv with the complete S3 composition alone: %v", err)
+	t.Setenv(app.ObjectStoreRootEnv, "")
+	if _, err := app.ConfigFromEnv(); err != nil {
+		t.Fatalf("ConfigFromEnv with the complete S3 composition alone: %v", err)
 	}
 }
 
-// TestConfigFromEnv_ConfigKeyRejectsMalformedValues proves configFromEnv
+// TestConfigFromEnv_ConfigKeyRejectsMalformedValues proves ConfigFromEnv
 // fails configuration loading on a malformed APP_CONFIG_KEY -- too short
 // to be a 32-byte key, or not hex at all -- with a precise error, rather
 // than letting a subtly wrong key reach dbkit.NewCipher (whose error would
@@ -1364,8 +1366,8 @@ func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("APP_CONFIG_KEY", encoded)
-			if _, err := configFromEnv(); err == nil {
-				t.Fatalf("configFromEnv with APP_CONFIG_KEY=%q: want error, got nil", encoded)
+			if _, err := app.ConfigFromEnv(); err == nil {
+				t.Fatalf("ConfigFromEnv with APP_CONFIG_KEY=%q: want error, got nil", encoded)
 			}
 		})
 	}
@@ -1373,7 +1375,7 @@ func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
 
 // TestConfigFromEnv_InvalidDeploymentMode_ReturnsError proves the
 // pkgcore.ParseDeploymentMode error path actually propagates out of
-// configFromEnv: an invalid APP_DEPLOYMENT_MODE value must fail
+// ConfigFromEnv: an invalid APP_DEPLOYMENT_MODE value must fail
 // configuration loading -- and therefore run() in main.go -- rather than
 // silently fall back to the standalone default or panic.
 func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
@@ -1381,23 +1383,23 @@ func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
 
-	_, err := configFromEnv()
+	_, err := app.ConfigFromEnv()
 	if err == nil {
-		t.Fatal("configFromEnv with APP_DEPLOYMENT_MODE=not-a-real-deployment-mode: want error, got nil")
+		t.Fatal("ConfigFromEnv with APP_DEPLOYMENT_MODE=not-a-real-deployment-mode: want error, got nil")
 	}
 	if !errors.Is(err, pkgcore.ErrInvalidDeploymentMode) {
-		t.Fatalf("configFromEnv error = %v, want it to wrap %v", err, pkgcore.ErrInvalidDeploymentMode)
+		t.Fatalf("ConfigFromEnv error = %v, want it to wrap %v", err, pkgcore.ErrInvalidDeploymentMode)
 	}
 }
 
 // rootKeyEnvVars lists every environment variable an explicit individual
-// key can be set through, in the same order rootKeyEnv's own doc comment
+// key can be set through, in the same order RootKeyEnv's own doc comment
 // lists the six key materials. The root-key tests below clear all six
 // before setting APP_ROOT_KEY, so every key is proven to resolve through
 // the derivation path with nothing left over from the ambient environment.
 var rootKeyEnvVars = []string{
-	configKeyEnv, orgIndexKeyEnv, notificationIndexKeyEnv,
-	pkiLocalKeyCipherKeyEnv, authnBlindIndexKeyEnv, authnPIICipherKeyEnv,
+	app.ConfigKeyEnv, app.OrgIndexKeyEnv, app.NotificationIndexKeyEnv,
+	app.PkiLocalKeyCipherKeyEnv, app.AuthnBlindIndexKeyEnv, app.AuthnPIICipherKeyEnv,
 }
 
 // clearRootKeyOverrides sets every one of rootKeyEnvVars to "" via
@@ -1413,7 +1415,7 @@ func clearRootKeyOverrides(t *testing.T) {
 
 // TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
 // -- no individual key env var set -- derives every one of the six key
-// materials rootKeyEnv's own doc comment lists, and that configFromEnv's
+// materials RootKeyEnv's own doc comment lists, and that ConfigFromEnv's
 // derivation matches dbkit.DeriveKey called directly with this file's own
 // rootKeyPurpose* constants: not merely "some non-default bytes landed in
 // cfg", but the exact key a caller who knew the root and the purpose
@@ -1425,11 +1427,11 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 	clearRootKeyOverrides(t)
 
 	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_DerivesAllSixKeys root secret"))
-	t.Setenv(rootKeyEnv, hex.EncodeToString(rootKey[:]))
+	t.Setenv(app.RootKeyEnv, hex.EncodeToString(rootKey[:]))
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 
 	for _, tt := range []struct {
@@ -1437,12 +1439,12 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 		got     []byte
 		purpose string
 	}{
-		{"ConfigKey", cfg.ConfigKey, rootKeyPurposeConfigCipher},
-		{"OrgIndexKey", cfg.OrgIndexKey, rootKeyPurposeOrgIndex},
-		{"NotificationIndexKey", cfg.NotificationIndexKey, rootKeyPurposeNotificationIndex},
-		{"PKILocalKeyCipherKey", cfg.PKILocalKeyCipherKey, rootKeyPurposePKILocalKeyCipher},
-		{"AuthnBlindIndexKey", cfg.AuthnBlindIndexKey, rootKeyPurposeAuthnBlindIndex},
-		{"AuthnPIICipherKey", cfg.AuthnPIICipherKey, rootKeyPurposeAuthnPIICipher},
+		{"ConfigKey", cfg.ConfigKey, app.RootKeyPurposeConfigCipher},
+		{"OrgIndexKey", cfg.OrgIndexKey, app.RootKeyPurposeOrgIndex},
+		{"NotificationIndexKey", cfg.NotificationIndexKey, app.RootKeyPurposeNotificationIndex},
+		{"PKILocalKeyCipherKey", cfg.PKILocalKeyCipherKey, app.RootKeyPurposePKILocalKeyCipher},
+		{"AuthnBlindIndexKey", cfg.AuthnBlindIndexKey, app.RootKeyPurposeAuthnBlindIndex},
+		{"AuthnPIICipherKey", cfg.AuthnPIICipherKey, app.RootKeyPurposeAuthnPIICipher},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			want, deriveErr := dbkit.DeriveKey(rootKey[:], tt.purpose)
@@ -1475,7 +1477,7 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 }
 
 // TestConfigFromEnv_RootKey_IndividualOverrideWins proves the precedence
-// order rootKeyEnv's own doc comment states: with both APP_ROOT_KEY and
+// order RootKeyEnv's own doc comment states: with both APP_ROOT_KEY and
 // one individual key env var (APP_CONFIG_KEY) set, the explicit
 // individual value wins for that one key, while every other key still
 // resolves through the root-key derivation -- the "power users can still
@@ -1487,35 +1489,35 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 	clearRootKeyOverrides(t)
 
 	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins root secret"))
-	t.Setenv(rootKeyEnv, hex.EncodeToString(rootKey[:]))
+	t.Setenv(app.RootKeyEnv, hex.EncodeToString(rootKey[:]))
 
 	explicitConfigKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins explicit APP_CONFIG_KEY"))
-	t.Setenv(configKeyEnv, hex.EncodeToString(explicitConfigKey[:]))
+	t.Setenv(app.ConfigKeyEnv, hex.EncodeToString(explicitConfigKey[:]))
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 
 	if !bytes.Equal(cfg.ConfigKey, explicitConfigKey[:]) {
 		t.Fatalf("cfg.ConfigKey = %x, want the explicit %s value %x (it must win over the APP_ROOT_KEY derivation)",
-			cfg.ConfigKey, configKeyEnv, explicitConfigKey[:])
+			cfg.ConfigKey, app.ConfigKeyEnv, explicitConfigKey[:])
 	}
 
-	wantOrgIndexKey, err := dbkit.DeriveKey(rootKey[:], rootKeyPurposeOrgIndex)
+	wantOrgIndexKey, err := dbkit.DeriveKey(rootKey[:], app.RootKeyPurposeOrgIndex)
 	if err != nil {
 		t.Fatalf("dbkit.DeriveKey: %v", err)
 	}
 	if !bytes.Equal(cfg.OrgIndexKey, wantOrgIndexKey) {
 		t.Fatalf("cfg.OrgIndexKey = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since %s was never set",
-			cfg.OrgIndexKey, wantOrgIndexKey, orgIndexKeyEnv)
+			cfg.OrgIndexKey, wantOrgIndexKey, app.OrgIndexKeyEnv)
 	}
 }
 
 // TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose is
 // the end-to-end proof: APP_ROOT_KEY set alone (every
-// individual key env var cleared), configFromEnv resolves all six key
-// materials through dbkit.DeriveKey, buildServer boots a real composed
+// individual key env var cleared), ConfigFromEnv resolves all six key
+// materials through dbkit.DeriveKey, BuildServer boots a real composed
 // server from the result, and every one of the six derived keys is
 // exercised through the real mechanism it protects -- never merely "no
 // error from NewCipher/NewBlindIndexer".
@@ -1523,10 +1525,10 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 // ConfigKey, OrgIndexKey and NotificationIndexKey are proven with a real
 // encrypt/decrypt or Index/Equal round trip through the exact dbkit
 // primitive (and, for the two blind-index keys, the same normalizer and
-// column-name argument buildServer itself wires them with -- org's over
+// column-name argument BuildServer itself wires them with -- org's over
 // the org.EmailIndexColumn constant, notification's over the
 // notification.AddressIndexColumn constant, each referenced by this
-// file's replicas and server.go's call sites alike so neither can drift
+// file's replicas and internal/app/server.go's call sites alike so neither can drift
 // apart from the wiring; Equal's returned column is never executed
 // against a database here, which is exactly why each module's own suite
 // pins its constant to the real migrated column
@@ -1550,14 +1552,14 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	clearRootKeyOverrides(t)
 
 	rootKey := sha256.Sum256([]byte("TestBuildServer_RootKeyAlone root secret"))
-	t.Setenv(rootKeyEnv, hex.EncodeToString(rootKey[:]))
+	t.Setenv(app.RootKeyEnv, hex.EncodeToString(rootKey[:]))
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
-	cfg.HostTenants = demoHostTenants
-	cfg.Memberships = newSignInMemberships()
+	cfg.HostTenants = app.DemoHostTenants
+	cfg.Memberships = app.NewSignInMemberships()
 
 	// ConfigKey: the exact mechanism go/config's Sensitive values are
 	// sealed with (config.WithCipher over dbkit.NewCipher, per
@@ -1581,7 +1583,7 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	}
 
 	// OrgIndexKey and NotificationIndexKey: the exact BlindIndexer
-	// construction (column name and normalizer included) buildServer
+	// construction (column name and normalizer included) BuildServer
 	// itself wires org.WithEmailIndexer and the notification contact
 	// indexers from -- a real Index/Equal round trip under each derived
 	// key.
@@ -1606,9 +1608,9 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey,
 	// together: boot the real composed server and drive a real
 	// register-then-login round trip through it.
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer with APP_ROOT_KEY alone: %v", err)
+		t.Fatalf("BuildServer with APP_ROOT_KEY alone: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -1684,7 +1686,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+globexToken)
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
 	req.Header.Set("X-Tenant-ID", "tenant-acme")
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -1707,7 +1709,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req2.Header.Set("Authorization", "Bearer "+globexToken)
-	req2.Header.Set(demoUserHeader, demoOwnerUserID)
+	req2.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
 	resp2, err := srv.Client().Do(req2)
 	if err != nil {
 		t.Fatalf("GET with forged tenant_id query parameter: %v", err)
@@ -1766,7 +1768,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 // notes.Handler, a real SQLite database) exactly as
 // TestBuildServer_MultiTenantIsolation_EndToEnd above does, then reads the
 // audit_events table back through a second dbkit.Open connection to the
-// same SQLite file -- the identical "buildServer hands out neither its
+// same SQLite file -- the identical "BuildServer hands out neither its
 // *gorm.DB nor a module's own service, so a second connection is the only
 // reach a test has into storage" pattern config_public_endpoint_gates_test.go's
 // buildSeededTestServer/seedConfigRows already use for the config
@@ -1776,9 +1778,9 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 // narrower unit-level claim).
 func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	cfg := testConfig(t)
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -1819,7 +1821,7 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	}
 	// tenant-acme's own audit trail is not notes' alone: seedDemoCredits'
 	// own boot-time Grant
-	// (demo_credits.go) is itself a real CreditService.Grant call, which
+	// (internal/app/demo_credits.go) is itself a real CreditService.Grant call, which
 	// records its own "billing.credit.grant" AuditEvent for this same
 	// tenant (credit_service.go's emitCreditAudit) -- see
 	// billing_credit_flow_test.go's own audit tests for that surface's
@@ -1849,16 +1851,16 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 		t.Fatalf("AuditEvent.Result().Success = %v, want true", got.Result().Success)
 	}
 	// The row must be attributed to the creating user -- the value
-	// createNoteAs sent as X-Demo-User-Id (demoNotesCreatorUserID), which
-	// demoNotesSubjectResolver answers for notes' SubjectResolver seam and
+	// createNoteAs sent as X-Demo-User-Id (DemoNotesCreatorUserID), which
+	// DemoNotesSubjectResolver answers for notes' SubjectResolver seam and
 	// recordNoteCreatedAudit now layers as the audit event's Actor (see its
 	// doc comment in internal/notes/handler.go). audit.Emit copies the
 	// Actor from ctx at emit time, and no middleware in the composed chain
 	// populates that carrier, so an empty actor_type/actor_id here means
 	// the audit trail cannot answer "who created this note".
-	if actor := got.Actor(); actor.Type != pkgcore.ActorTypeUser || actor.ID != demoNotesCreatorUserID {
+	if actor := got.Actor(); actor.Type != pkgcore.ActorTypeUser || actor.ID != app.DemoNotesCreatorUserID {
 		t.Fatalf("AuditEvent.Actor() = %+v, want {Type: %q, ID: %q}",
-			actor, pkgcore.ActorTypeUser, demoNotesCreatorUserID)
+			actor, pkgcore.ActorTypeUser, app.DemoNotesCreatorUserID)
 	}
 	if got.OccurredAt.IsZero() {
 		t.Fatal("AuditEvent.OccurredAt is zero, want a real timestamp")
@@ -1871,7 +1873,7 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	// table is platform data, not dbkit.TenantScoped (see go/dbkit/audit's
 	// model.go doc comment). The control asserts on notes.note.create
 	// events specifically, not "zero events of any kind": tenant-globex
-	// is demo-seeded credits too (demoHostTenants lists it alongside
+	// is demo-seeded credits too (DemoHostTenants lists it alongside
 	// tenant-acme), so it carries its own boot-time
 	// "billing.credit.grant" AuditEvent -- exactly the same real,
 	// expected row this test's own tenant-acme assertion above tolerates
@@ -1898,8 +1900,8 @@ func auditEventsWithAction(events []audit.AuditEvent, action string) []audit.Aud
 }
 
 // TestSocialChannelFlagKey_MapsEveryGatedProvider pins the host-side
-// mirror of authn's channel-flag mapping (server.go's
-// socialChannelFlagKey doc comment): every provider authn gates maps to
+// mirror of authn's channel-flag mapping (internal/app/server.go's
+// SocialChannelFlagKey doc comment): every provider authn gates maps to
 // that provider's own feature-flag key -- the very key
 // openConfiguredAuthnChannels writes true at boot -- and a provider
 // authn does not gate maps to "", so the boot-time channel-opening loop
@@ -1915,21 +1917,21 @@ func TestSocialChannelFlagKey_MapsEveryGatedProvider(t *testing.T) {
 		"":                         "",
 	}
 	for name, want := range cases {
-		if got := socialChannelFlagKey(name); got != want {
-			t.Errorf("socialChannelFlagKey(%q) = %q, want %q", name, got, want)
+		if got := app.SocialChannelFlagKey(name); got != want {
+			t.Errorf("SocialChannelFlagKey(%q) = %q, want %q", name, got, want)
 		}
 	}
 }
 
-// TestOrgFeatureGate_NotAttachedYet_FailsClosed pins orgFeatureGate's
-// ordering safety net directly: before buildServer's configModule.Attach
+// TestOrgFeatureGate_NotAttachedYet_FailsClosed pins OrgFeatureGate's
+// ordering safety net directly: before BuildServer's configModule.Attach
 // has filled the service pointer (or when the gate outlives the variable
 // it points at), IsEnabled answers a coded error rather than panicking on
 // a nil *config.Service -- the failure mode the **service-pointer
-// indirection exists to avoid (server.go's own doc comment).
+// indirection exists to avoid (internal/app/server.go's own doc comment).
 func TestOrgFeatureGate_NotAttachedYet_FailsClosed(t *testing.T) {
 	var svc *config.Service
-	gate := orgFeatureGate{service: &svc}
+	gate := app.OrgFeatureGate{Service: &svc}
 	enabled, err := gate.IsEnabled(context.Background(), "any.key")
 	if err == nil {
 		t.Fatal("IsEnabled before attach error = nil, want the not-attached-yet error")
@@ -2001,9 +2003,9 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 			for key, value := range tc.env {
 				t.Setenv(key, value)
 			}
-			_, err := configFromEnv()
+			_, err := app.ConfigFromEnv()
 			if err == nil {
-				t.Fatal("configFromEnv succeeded, want the partial-composition refusal")
+				t.Fatal("ConfigFromEnv succeeded, want the partial-composition refusal")
 			}
 			if !strings.Contains(err.Error(), tc.wantIn) {
 				t.Errorf("error = %q, want it to name %q", err, tc.wantIn)
@@ -2014,7 +2016,7 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 
 // TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer pins the
 // success half of the SMTP wiring: with both variables set and a
-// parseable port, configFromEnv resolves a real SMTP Mailer carrying the
+// parseable port, ConfigFromEnv resolves a real SMTP Mailer carrying the
 // host and the credentials -- the composition the config's Mailer field
 // and MailerCapabilities hand to Kernel.Bootstrap.
 func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
@@ -2037,9 +2039,9 @@ func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
 	t.Setenv("APP_SMTP_USERNAME", "mailer@example.com")
 	t.Setenv("APP_SMTP_PASSWORD", "smtp-secret")
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.Mailer == nil {
 		t.Fatal("Mailer = nil, want the resolved SMTP mailer")
@@ -2076,9 +2078,9 @@ func TestConfigFromEnv_MalformedIndividualKeysAreRefused(t *testing.T) {
 	} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "not-64-hex-chars")
-			_, err := configFromEnv()
+			_, err := app.ConfigFromEnv()
 			if err == nil {
-				t.Fatalf("configFromEnv with a malformed %s succeeded, want the refusal", key)
+				t.Fatalf("ConfigFromEnv with a malformed %s succeeded, want the refusal", key)
 			}
 			if !strings.Contains(err.Error(), key) {
 				t.Errorf("error = %q, want it to name %q", err, key)

@@ -46,6 +46,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -53,11 +55,11 @@ import (
 )
 
 // The billing fragment's two wire paths, composed from the same
-// billingRoutePath constant demoRouteGuards' table entry names -- the
+// BillingRoutePath constant demoRouteGuards' table entry names -- the
 // flow tests' anchor on the wire, never a second copy of path truth.
 const (
-	billingBalancePath       = billingRoutePath + "/credits/balance"
-	billingTransactionsPath  = billingRoutePath + "/credits/transactions"
+	billingBalancePath       = app.BillingRoutePath + "/credits/balance"
+	billingTransactionsPath  = app.BillingRoutePath + "/credits/transactions"
 	billingCreditTestReserve = "billing-http-flow:reserve-1"
 )
 
@@ -88,8 +90,8 @@ type testBillingTransactionPage struct {
 
 // billingRequest issues method against path on srv as the demo actor user
 // -- the X-Demo-User value the rbac gate decides the request against
-// (demoOwnerUserID for the owner-role actor every success leg below uses;
-// demoReaderUserID for the gate-closes leg) -- in the tenant the bearer
+// (DemoOwnerUserID for the owner-role actor every success leg below uses;
+// DemoReaderUserID for the gate-closes leg) -- in the tenant the bearer
 // token's account belongs to. It is the billing sibling of
 // storage_flow_test.go's storageRequest. The caller owns the returned
 // response's body.
@@ -104,7 +106,7 @@ func billingRequest(t *testing.T, srv *httptest.Server, method, path, token, use
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(demoUserHeader, user)
+		req.Header.Set(app.DemoUserHeader, user)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -193,13 +195,13 @@ func TestBillingHttpSurface_SmilesimConsumptionReadsBackOverRoutes(t *testing.T)
 	const tenantID pkgcore.TenantID = "tenant-acme"
 	token := registerAndAuthenticate(t, srv, cfg, tenantID, "billing-http-owner")
 
-	// The demo seed at boot granted tenant-acme demoSimulationCreditGrant
+	// The demo seed at boot granted tenant-acme DemoSimulationCreditGrant
 	// credits -- the balance the route must report before anything is
 	// spent.
-	before := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, demoOwnerUserID),
+	before := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, app.DemoOwnerUserID),
 		http.StatusOK, "balance before simulating")
-	if before.Available != demoSimulationCreditGrant || before.Reserved != 0 {
-		t.Fatalf("balance before simulating = %+v, want available %d / reserved 0 (the boot-time demo seed)", before, demoSimulationCreditGrant)
+	if before.Available != app.DemoSimulationCreditGrant || before.Reserved != 0 {
+		t.Fatalf("balance before simulating = %+v, want available %d / reserved 0 (the boot-time demo seed)", before, app.DemoSimulationCreditGrant)
 	}
 
 	// One genuine smile simulation through the composed stack: upload a
@@ -235,7 +237,7 @@ func TestBillingHttpSurface_SmilesimConsumptionReadsBackOverRoutes(t *testing.T)
 	// exactly the seed minus CreditsPerSimulation, reserved back at zero
 	// (Confirm released the reservation -- it did not leave the credits
 	// stranded in the reserved bucket).
-	after := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, demoOwnerUserID),
+	after := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, app.DemoOwnerUserID),
 		http.StatusOK, "balance after simulating")
 	if want := before.Available - smilesim.CreditsPerSimulation; after.Available != want {
 		t.Errorf("balance after a successful generation = %+v, want available %d (seed %d minus CreditsPerSimulation %d)", after, want, before.Available, smilesim.CreditsPerSimulation)
@@ -248,18 +250,18 @@ func TestBillingHttpSurface_SmilesimConsumptionReadsBackOverRoutes(t *testing.T)
 	// the boot-time grant (type grant, status confirmed) and the
 	// simulation's deduct row (type deduct, status confirmed -- the
 	// reservation became a permanent spend), and nothing else.
-	page := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, token, demoOwnerUserID),
+	page := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, token, app.DemoOwnerUserID),
 		http.StatusOK, "transactions after simulating")
 	if len(page.Transactions) != 2 {
 		t.Fatalf("transactions carry %d rows, want exactly 2 (seed grant + confirmed deduct); rows = %+v", len(page.Transactions), page.Transactions)
 	}
 	grant, ok := findBillingTransaction(page, func(tx testBillingTransaction) bool {
-		return tx.Type == "grant" && tx.Amount == demoSimulationCreditGrant
+		return tx.Type == "grant" && tx.Amount == app.DemoSimulationCreditGrant
 	})
 	if !ok {
-		t.Errorf("no demo-seed grant row (type grant, amount %d) in %+v", demoSimulationCreditGrant, page.Transactions)
-	} else if grant.Status != "confirmed" || grant.Reason != demoCreditGrantReason {
-		t.Errorf("grant row = %+v, want status confirmed and reason %q", grant, demoCreditGrantReason)
+		t.Errorf("no demo-seed grant row (type grant, amount %d) in %+v", app.DemoSimulationCreditGrant, page.Transactions)
+	} else if grant.Status != "confirmed" || grant.Reason != app.DemoCreditGrantReason {
+		t.Errorf("grant row = %+v, want status confirmed and reason %q", grant, app.DemoCreditGrantReason)
 	}
 	deduct, ok := findBillingTransaction(page, func(tx testBillingTransaction) bool {
 		return tx.Type == "deduct" && tx.Amount == smilesim.CreditsPerSimulation
@@ -305,10 +307,10 @@ func TestBillingHttpSurface_TenantBoundaryHoldsOverRoutes(t *testing.T) {
 		{acme, acmeToken},
 		{globex, globexToken},
 	} {
-		bal := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, tc.token, demoOwnerUserID),
+		bal := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, tc.token, app.DemoOwnerUserID),
 			http.StatusOK, "seeded balance of "+string(tc.tenant))
-		if bal.Available != demoSimulationCreditGrant || bal.Reserved != 0 {
-			t.Fatalf("%s's seeded balance = %+v, want available %d / reserved 0", tc.tenant, bal, demoSimulationCreditGrant)
+		if bal.Available != app.DemoSimulationCreditGrant || bal.Reserved != 0 {
+			t.Fatalf("%s's seeded balance = %+v, want available %d / reserved 0", tc.tenant, bal, app.DemoSimulationCreditGrant)
 		}
 	}
 
@@ -326,40 +328,40 @@ func TestBillingHttpSurface_TenantBoundaryHoldsOverRoutes(t *testing.T) {
 	// acme's own route read now reports the drained balance; globex's
 	// still reports the untouched seed -- a caller can only ever see its
 	// own tenant's credits.
-	acmeBal := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, acmeToken, demoOwnerUserID),
+	acmeBal := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, acmeToken, app.DemoOwnerUserID),
 		http.StatusOK, "balance of tenant-acme after draining")
-	if want := demoSimulationCreditGrant - 300; acmeBal.Available != want {
+	if want := app.DemoSimulationCreditGrant - 300; acmeBal.Available != want {
 		t.Errorf("tenant-acme balance after draining = available %d, want %d", acmeBal.Available, want)
 	}
-	globexBal := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, globexToken, demoOwnerUserID),
+	globexBal := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, globexToken, app.DemoOwnerUserID),
 		http.StatusOK, "balance of tenant-globex after tenant-acme spent")
-	if globexBal.Available != demoSimulationCreditGrant {
-		t.Errorf("tenant-globex balance = available %d, want the untouched seed %d -- another tenant's spend must be invisible", globexBal.Available, demoSimulationCreditGrant)
+	if globexBal.Available != app.DemoSimulationCreditGrant {
+		t.Errorf("tenant-globex balance = available %d, want the untouched seed %d -- another tenant's spend must be invisible", globexBal.Available, app.DemoSimulationCreditGrant)
 	}
 
 	// The ledger boundary holds the same way: acme's transactions carry
 	// its own expire row; globex's carry only its own single seed grant,
 	// with no trace of acme's spend.
-	acmePage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, acmeToken, demoOwnerUserID),
+	acmePage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, acmeToken, app.DemoOwnerUserID),
 		http.StatusOK, "transactions of tenant-acme")
 	if _, ok := findBillingTransaction(acmePage, func(tx testBillingTransaction) bool {
 		return tx.Type == "expire" && tx.Amount == 300 && tx.Reason == "test:drain-acme"
 	}); !ok {
 		t.Errorf("tenant-acme's transactions lack its own expire row; rows = %+v", acmePage.Transactions)
 	}
-	globexPage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, globexToken, demoOwnerUserID),
+	globexPage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, globexToken, app.DemoOwnerUserID),
 		http.StatusOK, "transactions of tenant-globex")
 	if len(globexPage.Transactions) != 1 {
 		t.Fatalf("tenant-globex's transactions carry %d rows, want exactly its own seed grant; rows = %+v", len(globexPage.Transactions), globexPage.Transactions)
 	}
-	if row := globexPage.Transactions[0]; row.Type != "grant" || row.Amount != demoSimulationCreditGrant {
+	if row := globexPage.Transactions[0]; row.Type != "grant" || row.Amount != app.DemoSimulationCreditGrant {
 		t.Errorf("tenant-globex's only row = %+v, want its own seed grant", row)
 	}
 
 	// The gate closes on a caller without the permission: the demo reader
 	// holds notes:read and nothing else, so the same balance read answers
 	// the coded rbac refusal -- deny by default holds over HTTP too.
-	assertBillingError(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, acmeToken, demoReaderUserID),
+	assertBillingError(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, acmeToken, app.DemoReaderUserID),
 		http.StatusForbidden, "rbac.permission_denied", "balance read as the demo reader")
 }
 
@@ -394,12 +396,12 @@ func TestBillingHttpSurface_RefundIsALedgerRowNotASilentChange(t *testing.T) {
 	// While the reservation is outstanding, the routes show the reserve:
 	// 10 credits moved from available into reserved, and a pending deduct
 	// row at the head of the ledger.
-	reserved := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, demoOwnerUserID),
+	reserved := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, app.DemoOwnerUserID),
 		http.StatusOK, "balance while reserved")
-	if reserved.Available != demoSimulationCreditGrant-10 || reserved.Reserved != 10 {
-		t.Errorf("balance while reserved = %+v, want available %d / reserved 10", reserved, demoSimulationCreditGrant-10)
+	if reserved.Available != app.DemoSimulationCreditGrant-10 || reserved.Reserved != 10 {
+		t.Errorf("balance while reserved = %+v, want available %d / reserved 10", reserved, app.DemoSimulationCreditGrant-10)
 	}
-	pendingPage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, token, demoOwnerUserID),
+	pendingPage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, token, app.DemoOwnerUserID),
 		http.StatusOK, "transactions while reserved")
 	pendingRow, ok := findBillingTransaction(pendingPage, func(tx testBillingTransaction) bool { return tx.ID == billingCreditTestReserve })
 	if !ok {
@@ -420,12 +422,12 @@ func TestBillingHttpSurface_RefundIsALedgerRowNotASilentChange(t *testing.T) {
 	// reports status "refunded" -- the refund is observable as the row's
 	// classification, never as a row that vanished and never as a change
 	// with no ledger trace.
-	restored := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, demoOwnerUserID),
+	restored := decodeBillingBalance(t, billingRequest(t, srv, http.MethodGet, billingBalancePath, token, app.DemoOwnerUserID),
 		http.StatusOK, "balance after refund")
-	if restored.Available != demoSimulationCreditGrant || restored.Reserved != 0 {
-		t.Errorf("balance after refund = %+v, want the full seed back (available %d / reserved 0)", restored, demoSimulationCreditGrant)
+	if restored.Available != app.DemoSimulationCreditGrant || restored.Reserved != 0 {
+		t.Errorf("balance after refund = %+v, want the full seed back (available %d / reserved 0)", restored, app.DemoSimulationCreditGrant)
 	}
-	refundPage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, token, demoOwnerUserID),
+	refundPage := decodeBillingTransactions(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath, token, app.DemoOwnerUserID),
 		http.StatusOK, "transactions after refund")
 	refundedRow, ok := findBillingTransaction(refundPage, func(tx testBillingTransaction) bool { return tx.ID == billingCreditTestReserve })
 	if !ok {
@@ -454,7 +456,7 @@ func TestBillingHttpSurface_RefusalsAreMappedCodesNotRawErrors(t *testing.T) {
 	const tenantID pkgcore.TenantID = "tenant-acme"
 	token := registerAndAuthenticate(t, srv, cfg, tenantID, "billing-refusals-owner")
 
-	params := assertBillingError(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath+"?limit=0", token, demoOwnerUserID),
+	params := assertBillingError(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath+"?limit=0", token, app.DemoOwnerUserID),
 		http.StatusBadRequest, "billing.invalid_limit", "transactions with limit=0")
 	for _, key := range []string{"limit", "min", "max"} {
 		if _, ok := params[key]; !ok {
@@ -470,7 +472,7 @@ func TestBillingHttpSurface_RefusalsAreMappedCodesNotRawErrors(t *testing.T) {
 	// The malformed half must answer the JSON envelope -- never
 	// oapi-codegen's default plain-text body with the binder's raw parse
 	// message in it.
-	resp := billingRequest(t, srv, http.MethodGet, billingTransactionsPath+"?limit=abc", token, demoOwnerUserID)
+	resp := billingRequest(t, srv, http.MethodGet, billingTransactionsPath+"?limit=abc", token, app.DemoOwnerUserID)
 	malformedParams := assertBillingError(t, resp, http.StatusBadRequest, "billing.invalid_request", "transactions with limit=abc")
 	if malformedParams["parameter"] != "limit" {
 		t.Errorf("limit=abc envelope params = %v, want the failing parameter named (\"limit\")", malformedParams)

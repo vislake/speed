@@ -5,7 +5,7 @@
  * go/admin's ledger, one section each, read from the module's own
  * operator-facing route (admin-api.ts -- GET /api/v1/admin/usage-summary,
  * mounted behind the same admin route guard as the ledger,
- * cmd/server/demo_admin.go's guardAdminRoute, which evaluates every
+ * internal/app/demo_admin.go's guardAdminRoute, which evaluates every
  * admin:* permission in rbac.SystemDomain).
  *
  * WHAT ONE SECTION SHOWS

@@ -37,6 +37,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/admin"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -134,23 +136,23 @@ func adminRequest(t *testing.T, srv *httptest.Server, method, path, token string
 	}
 }
 
-// buildAdminTestServer composes buildServer's real output with the demo
+// buildAdminTestServer composes BuildServer's real output with the demo
 // accounts (and admin's own demo platform-staff account) seeded, and a
 // capturing mailer so org invitation tokens can be recovered the same way
 // org_flow_test.go's buildOrgTestServer does.
 // opts, applied in order after the shared defaults above, let a caller
-// customize the config buildServer boots from --
+// customize the config BuildServer boots from --
 // TestAdminFlow_SuspendTenant_... uses it to add its own
-// ad hoc tenant to cfg.HostTenants (never demoHostTenants directly, a
+// ad hoc tenant to cfg.HostTenants (never DemoHostTenants directly, a
 // shared package-level map every other test relies on unmodified), which
-// is what makes seedDemoGrants seed demoOwnerUserID's rbac grant there too.
-func buildAdminTestServer(t *testing.T, opts ...func(*serverConfig)) (*httptest.Server, serverConfig, *capturingMailer) {
+// is what makes seedDemoGrants seed DemoOwnerUserID's rbac grant there too.
+func buildAdminTestServer(t *testing.T, opts ...func(*app.ServerConfig)) (*httptest.Server, app.ServerConfig, *capturingMailer) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	cfg.DemoUsersPassword = demoSeedPassword
 	// The platform-staff account is seeded from its OWN variable, never the
-	// demo users' one (demo_admin.go's demoPlatformStaffPasswordEnv), so a
+	// demo users' one (internal/app/demo_admin.go's demoPlatformStaffPasswordEnv), so a
 	// suite that signs it in sets its own field -- and signs it in with its
 	// own passphrase below.
 	cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
@@ -160,9 +162,9 @@ func buildAdminTestServer(t *testing.T, opts ...func(*serverConfig)) (*httptest.
 		opt(&cfg)
 	}
 
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -178,14 +180,14 @@ func buildAdminTestServer(t *testing.T, opts ...func(*serverConfig)) (*httptest.
 // platformStaffToken signs the seeded demo platform-staff account in, with
 // the account's OWN passphrase (demoPlatformStaffSeedPassword -- the
 // platform-staff seed reads its own variable, never the demo users' one,
-// per demo_admin.go; signing it in with the demo users' passphrase must
+// per internal/app/demo_admin.go; signing it in with the demo users' passphrase must
 // never work). Its only membership is rbac.SystemDomain
 // (seedDemoPlatformStaff's own contract), so no tenant_id request is even
 // needed for it to resolve there -- but naming it explicitly keeps this
 // test readable regardless.
 func platformStaffToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
-	status, code, token := demoLogin(t, srv, demoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, token := demoLogin(t, srv, app.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK || token == "" {
 		t.Fatalf("platform-staff login status = %d code = %q, want 200 with a token", status, code)
 	}
@@ -198,7 +200,7 @@ func platformStaffToken(t *testing.T, srv *httptest.Server) string {
 // tenant has no root yet) rather than assuming this call is the first
 // ever root-creation request for the tenant -- which it is NOT for
 // tenant-acme in this file's tests, since buildAdminTestServer's demo
-// seed (seedDemoUsers' addDemoOrgMembership, demo_users.go) already
+// seed (seedDemoUsers' addDemoOrgMembership, internal/app/demo_users.go) already
 // created that tenant's root at boot, idempotently, the identical
 // Root-then-CreateRoot shape this helper mirrors. Only a tenant no demo
 // seed provisions a root for would still need the create branch.
@@ -241,9 +243,9 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-owner")
 	targetToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-target")
 
-	// tenant-acme is demoSingleTenantID -- the one tenant demoHostTenants
+	// tenant-acme is DemoSingleTenantID -- the one tenant DemoHostTenants
 	// configures -- so buildAdminTestServer's own demo seed (seedDemoUsers'
-	// addDemoOrgMembership, demo_users.go) has already created its org
+	// addDemoOrgMembership, internal/app/demo_users.go) has already created its org
 	// root and bound the demo accounts to it before this test's first
 	// request. existingOrgRoot reuses that root instead of racing it with
 	// a second org_createNode call, which org's own one-root-per-tenant
@@ -261,7 +263,7 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	}
 
 	// First half: cross-tenant search by email -- resolved BEFORE the
-	// invitation is accepted, because org's SubjectResolver (demoOrgSubjectResolver)
+	// invitation is accepted, because org's SubjectResolver (DemoOrgSubjectResolver)
 	// identifies the accepting caller ONLY from the X-Demo-User-Id header
 	// it is given, never from the verified Principal (its own doc comment
 	// says so explicitly); the membership org creates is therefore bound
@@ -297,7 +299,7 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	// by looping admin's own tenant ledger under tenancy.WithSystemContext
 	// and calling org's existing, unmodified per-tenant membership method.
 	// The account was registered at runtime, so under this app's
-	// self-service signup (self_service.go) its registration provisioned
+	// self-service signup (internal/app/self_service.go) its registration provisioned
 	// its own clinic
 	// -- tenant-<targetID>, the deterministic derivation -- whose root's
 	// org.node.created lazily registered the clinic in the very same
@@ -344,9 +346,9 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	// tenant, which is what lets step 2 below actually create a note
 	// rather than merely proving the gate closes.
 	var searched adminSearchUsersResponse
-	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+app.DemoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
 	if len(searched.Users) != 1 {
-		t.Fatalf("search for %q = %+v, want exactly one seeded account", demoOwnerEmail, searched.Users)
+		t.Fatalf("search for %q = %+v, want exactly one seeded account", app.DemoOwnerEmail, searched.Users)
 	}
 	targetID := searched.Users[0].ID
 
@@ -419,7 +421,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	// landed in the TARGET's own inbox -- read back as the target
 	// themselves (their own real token and their own real user id header),
 	// never through the impersonation session.
-	targetLoginStatus, targetLoginCode, targetToken := demoLogin(t, srv, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	targetLoginStatus, targetLoginCode, targetToken := demoLogin(t, srv, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if targetLoginStatus != http.StatusOK || targetToken == "" {
 		t.Fatalf("login as the impersonation target failed: status=%d code=%q", targetLoginStatus, targetLoginCode)
 	}
@@ -488,7 +490,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 // and demo-owner@example.com holds exactly that role in every configured
 // tenant (seedDemoUsers' own demoSeedAccounts table). Before this fix,
 // admin's own router-level gate (guardAdminRoute) built its rbac.Subject
-// from demoSubjectResolver, which reads TenantID from whatever tenant the
+// from DemoSubjectResolver, which reads TenantID from whatever tenant the
 // caller's OWN session happens to be scoped to -- so demo-owner's
 // perfectly ordinary tenant-acme session passed admin's gate purely
 // because "owner" happens to carry admin:*'s permission strings in the
@@ -499,13 +501,13 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 func TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole(t *testing.T) {
 	srv, _, _ := buildAdminTestServer(t)
 
-	status, code, ownerToken := demoLogin(t, srv, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK || ownerToken == "" {
 		t.Fatalf("demo-owner login status = %d code = %q, want 200 with a token", status, code)
 	}
 
 	// Cross-tenant user search, gated on admin:search_users.
-	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, ownerToken, nil, http.StatusForbidden, nil, nil)
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+app.DemoOwnerEmail, ownerToken, nil, http.StatusForbidden, nil, nil)
 
 	// The tenant ledger, gated on admin:access.
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/tenants/tenant-acme", ownerToken, nil, http.StatusForbidden, nil, nil)
@@ -539,9 +541,9 @@ func TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation(t *testing.T) {
 	staffToken := platformStaffToken(t, srv)
 
 	var searched adminSearchUsersResponse
-	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+app.DemoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
 	if len(searched.Users) != 1 {
-		t.Fatalf("search for %q = %+v, want exactly one seeded account", demoOwnerEmail, searched.Users)
+		t.Fatalf("search for %q = %+v, want exactly one seeded account", app.DemoOwnerEmail, searched.Users)
 	}
 	targetID := searched.Users[0].ID
 
@@ -562,7 +564,7 @@ func TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation(t *testing.T) {
 	// rbac.SystemDomain) would make this request fail with 403 instead.
 	impersonationHeaders := map[string]string{"X-Admin-Impersonation": grant.ID}
 	var searchedAgain adminSearchUsersResponse
-	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoPlatformStaffEmail, staffToken, nil, http.StatusOK, &searchedAgain, impersonationHeaders)
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+app.DemoPlatformStaffEmail, staffToken, nil, http.StatusOK, &searchedAgain, impersonationHeaders)
 	if len(searchedAgain.Users) != 1 {
 		t.Fatalf("search for the platform-staff account while impersonating = %+v, want exactly one", searchedAgain.Users)
 	}
@@ -582,7 +584,7 @@ type tenancyErrorBody struct {
 // this suite's whole point is asserting a REFUSAL happens, not just a
 // success.
 //
-// demoUser, when non-empty, is sent as the rbac demo header (demoUserHeader)
+// demoUser, when non-empty, is sent as the rbac demo header (DemoUserHeader)
 // naming which seeded identity org-route-guards' per-operation gate
 // evaluates -- empty omits it entirely, which is right for a path (admin's)
 // whose own subject resolver never reads it in the first place
@@ -597,7 +599,7 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, d
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if demoUser != "" {
-		req.Header.Set(demoUserHeader, demoUser)
+		req.Header.Set(app.DemoUserHeader, demoUser)
 	}
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -632,13 +634,13 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, d
 func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	const tenant = pkgcore.TenantID("tenant-suspend-flow")
 
-	// This test's own tenant is not one of demoHostTenants' two entries, so
-	// it must add itself to cfg.HostTenants before buildServer boots --
-	// otherwise seedDemoGrants never seeds demoOwnerUserID's rbac grant
+	// This test's own tenant is not one of DemoHostTenants' two entries, so
+	// it must add itself to cfg.HostTenants before BuildServer boots --
+	// otherwise seedDemoGrants never seeds DemoOwnerUserID's rbac grant
 	// there, and the org_createNode call below (which rides on that seeded
 	// identity like every other orgRequest caller)
 	// would be refused before the tenant-suspension check ever runs.
-	srv, cfg, _ := buildAdminTestServer(t, func(c *serverConfig) {
+	srv, cfg, _ := buildAdminTestServer(t, func(c *app.ServerConfig) {
 		c.HostTenants = map[string]pkgcore.TenantID{"tenant-suspend-flow.demo.localhost": tenant}
 	})
 	staffToken := platformStaffToken(t, srv)
@@ -654,12 +656,12 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// TestAdminFlow_SearchMembershipsAndAudit_EndToEnd above) rather than
 	// assuming a bare org_createNode is this tenant's first-ever root
 	// request avoids racing addDemoOrgMembership's own idempotent
-	// Root-then-CreateRoot boot-time seeding (demo_users.go), which reaches
+	// Root-then-CreateRoot boot-time seeding (internal/app/demo_users.go), which reaches
 	// this same tenant the moment this test's HostTenants override above
 	// makes it one of the inEveryTenant demo owner's configured tenants --
 	// whichever of the two runs first wins the create and the other reuses
 	// it, and the ledger lands either way. orgRequest itself sends the demo
-	// rbac header naming demoOwnerUserID (org's
+	// rbac header naming DemoOwnerUserID (org's
 	// route is gated per operation like every other module's, so ownerToken's
 	// freshly-registered account -- which holds no rbac grant of its own --
 	// rides on the pre-seeded owner identity's grant for this call. This
@@ -677,7 +679,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// tenancy.Middleware, upstream of org's own rbac permission gate, so
 	// the caller must already clear THAT gate for the suspension refusal (below)
 	// to be the one this test is actually proving.
-	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID); status != http.StatusOK {
+	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, app.DemoOwnerUserID); status != http.StatusOK {
 		t.Fatalf("GET %s before suspension: status = %d, want %d", nodePath, status, http.StatusOK)
 	}
 
@@ -694,7 +696,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// through an entirely different module's route, org's, not admin's
 	// own -- is refused, with the coded error tenancy.Middleware writes,
 	// never a bare status with no code.
-	status, body := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID)
+	status, body := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, app.DemoOwnerUserID)
 	if status != http.StatusForbidden {
 		t.Fatalf("GET %s after suspension: status = %d, want %d", nodePath, status, http.StatusForbidden)
 	}
@@ -705,7 +707,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// Suspension freezes the tenant's business data plane, not its
 	// members' account plane: authn's self-service subtree (login,
 	// /me, session and credential management) is mounted outside
-	// tenancy.Middleware -- the chain shape server.go's authnAPIPath
+	// tenancy.Middleware -- the chain shape internal/app/server.go's AuthnAPIPath
 	// doc comment records -- so this suspended tenant's
 	// already-authenticated member still reaches it. /me with the
 	// pre-suspension ownerToken is the self-service read that must keep
@@ -726,7 +728,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 
 	// The same request that was refused a moment ago now succeeds again,
 	// with no restart and nothing else changed.
-	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID); status != http.StatusOK {
+	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, app.DemoOwnerUserID); status != http.StatusOK {
 		t.Fatalf("GET %s after resume: status = %d, want %d", nodePath, status, http.StatusOK)
 	}
 }
@@ -737,7 +739,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 // second identity channel this test would otherwise have to invent.
 func searchStaffID(t *testing.T, srv *httptest.Server, staffToken string) string {
 	t.Helper()
-	return searchUserID(t, srv, staffToken, demoPlatformStaffEmail)
+	return searchUserID(t, srv, staffToken, app.DemoPlatformStaffEmail)
 }
 
 // searchUserID resolves one account's user id by email through the
@@ -821,7 +823,7 @@ func bindAdminRole(t *testing.T, srv *httptest.Server, staffToken, roleKey, tena
 }
 
 // TestAdminFlow_..._ReachableForPlatformStaff reproduces the
-// coverage gap directly: adminPermissionFor (demo_admin.go) was
+// coverage gap directly: adminPermissionFor (internal/app/demo_admin.go) was
 // never named every mounted sub-path, so its switch fell through to the default
 // case for the role-management and send-records sub-paths, returning "" --
 // which rbac.RequirePermissionFunc's own doc comment says unconditionally
@@ -861,7 +863,7 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/notifications/send-records", staffToken, nil, http.StatusOK, &sendRecords, nil)
 
 	// The usage/billing dashboard. The app wires admin.WithMetering and
-	// admin.WithBilling at its admin-module site (cmd/server/server.go), so
+	// admin.WithBilling at its admin-module site (internal/app/server.go), so
 	// the platform-staff account -- which holds admin:usage_read via
 	// BuiltinRoleOwner -- answers 200 with the real per-tenant dashboard
 	// rather than the 500 (ErrUsageModulesNotWired) or 403 an unwired or
@@ -890,7 +892,7 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 //
 // The probes' system-domain role scaffolding is seeded directly against
 // rbac.Service under a system-tenant context -- the out-of-band shape
-// seedDemoPlatformStaff sanctions (demo_admin.go) -- rather than through
+// seedDemoPlatformStaff sanctions (internal/app/demo_admin.go) -- rather than through
 // admin's own role-management HTTP surface, which refuses
 // rbac.SystemDomain with admin.roles_system_domain_forbidden
 // (go/admin/role.go's checkTenantWritable: no admin:roles_manage-gated
@@ -902,11 +904,11 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 // HTTP callers, and every assertion below runs through it.
 func TestAdminFlow_AuditExport_RequiresExportPermission(t *testing.T) {
 	var rbacService *rbac.Service
-	srv, cfg, _ := buildAdminTestServer(t, func(cfg *serverConfig) {
+	srv, cfg, _ := buildAdminTestServer(t, func(cfg *app.ServerConfig) {
 		cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 	})
 	if rbacService == nil {
-		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
 	}
 	staffToken := platformStaffToken(t, srv)
 

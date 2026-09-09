@@ -9,9 +9,9 @@
 // itself ships no HTTP surface for chat, so there is no spec fragment for
 // a route calling it to grow into. Its one route (POST
 // /api/v1/consult/suggest) is mounted by hand in cmd/server
-// (cmd/server/consult.go), the same pattern the notification module's own
+// (internal/app/consult.go), the same pattern the notification module's own
 // demo patient-message route establishes in this app
-// (cmd/server/demo_notification.go's package comment).
+// (internal/app/demo_notification.go's package comment).
 package consult
 
 import (
@@ -27,7 +27,7 @@ import (
 // aigateway.ChatRequest.Model's own doc comment for why business code never
 // sees or hardcodes one). The host wires aigateway.WithModelRoute for this
 // exact key onto whatever provider should actually answer it
-// (cmd/server/server.go's buildServer).
+// (internal/app/server.go's buildServer).
 const LogicalModel = "chat:default"
 
 // systemPrompt primes every request this service sends: a short,
@@ -50,7 +50,7 @@ type Service struct {
 
 // NewService returns a Service reading notes through notesRepo -- expected
 // to share the host's own notes.Repository/database connection, exactly the
-// way go/dbkit/audit's persister shares it (cmd/server/server.go's own
+// way go/dbkit/audit's persister shares it (internal/app/server.go's own
 // wiring comment on auditModule explains the identical reasoning) -- and
 // asking gateway for suggestions. Constructing one performs no I/O.
 func NewService(notesRepo *notes.Repository, gateway *aigateway.Gateway) *Service {

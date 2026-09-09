@@ -6,9 +6,9 @@ package main
 // mandatory-first-consumer proof). It
 // drives the module's own spec-generated HTTP surface --
 // go/integration/api/openapi.yaml's six operations under
-// /api/v1/integration/webhooks, mounted through server.go's integrationModule
+// /api/v1/integration/webhooks, mounted through internal/app/server.go's integrationModule
 // wiring and the same generic mountModuleRoutes loop every other module's
-// fragment uses, gated by demo_subject.go's guardIntegrationRoute with its
+// fragment uses, gated by internal/app/demo_subject.go's guardIntegrationRoute with its
 // sub-path dispatch choosing integration:webhook:read for reads and
 // integration:webhook:manage for everything else -- through the composed
 // HTTP stack: create (capturing the raw signing secret, shown exactly once),
@@ -40,6 +40,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -97,10 +99,10 @@ type webhookDeliveriesResponse struct {
 // "/api/v1/integration/webhooks..." route) on srv as the acting user, in the
 // tenant the given bearer token resolves -- the identical shape
 // apikeyRequest, storageRequest and notesRequestAs all use. A non-empty user
-// additionally sends X-Demo-User-Id (demoNotesCreatorUserID, this app's one
+// additionally sends X-Demo-User-Id (DemoNotesCreatorUserID, this app's one
 // shared creator-attribution identity): integration_createWebhookSubscription
 // attributes the new subscription's CreatedBy through
-// integration.SubjectResolver (demoOrgSubjectResolver in server.go), which
+// integration.SubjectResolver (DemoOrgSubjectResolver in internal/app/server.go), which
 // reads that same header -- an empty user sends neither demo header, the
 // no-identity-at-all shape the permission-gate test below drives. body, when
 // non-nil, is sent as the JSON request body with the application/json
@@ -120,8 +122,8 @@ func webhookCRUDRequest(t *testing.T, srv *httptest.Server, method, path, token,
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(demoUserHeader, user)
-		req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+		req.Header.Set(app.DemoUserHeader, user)
+		req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -269,24 +271,24 @@ func TestBuildServer_WebhookPermissionGate_EnforcesTheWebhookPermissions(t *test
 	// integration:webhook:read / integration:webhook:manage gate are closed,
 	// on every operation class the fragment ships.
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, acmeToken, demoReaderUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, acmeToken, app.DemoReaderUserID, nil),
 		http.StatusForbidden, "rbac.permission_denied", "reader list")
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath+"/no-such-id/deliveries", acmeToken, demoReaderUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath+"/no-such-id/deliveries", acmeToken, app.DemoReaderUserID, nil),
 		http.StatusForbidden, "rbac.permission_denied", "reader deliveries listing")
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath, acmeToken, demoReaderUserID,
+		webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath, acmeToken, app.DemoReaderUserID,
 			[]byte(`{"url":"https://hooks.example.test/gate","eventTypes":["org.member.joined"]}`)),
 		http.StatusForbidden, "rbac.permission_denied", "reader create")
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/no-such-id", acmeToken, demoReaderUserID,
+		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/no-such-id", acmeToken, app.DemoReaderUserID,
 			[]byte(`{"active":false}`)),
 		http.StatusForbidden, "rbac.permission_denied", "reader update")
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodDelete, webhookBasePath+"/no-such-id", acmeToken, demoReaderUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodDelete, webhookBasePath+"/no-such-id", acmeToken, app.DemoReaderUserID, nil),
 		http.StatusForbidden, "rbac.permission_denied", "reader delete")
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath+"/no-such-id/restore", acmeToken, demoReaderUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath+"/no-such-id/restore", acmeToken, app.DemoReaderUserID, nil),
 		http.StatusForbidden, "rbac.permission_denied", "reader restore")
 
 	// A request with no identity at all (no demo header, and the token
@@ -299,13 +301,13 @@ func TestBuildServer_WebhookPermissionGate_EnforcesTheWebhookPermissions(t *test
 
 	// The owner, holding every permission any module declared, passes both
 	// directions -- the gate genuinely opens for the permission it names.
-	ownerCreateResp := webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath, acmeToken, demoOwnerUserID,
+	ownerCreateResp := webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath, acmeToken, app.DemoOwnerUserID,
 		[]byte(`{"url":"https://hooks.example.test/gate","eventTypes":["org.member.joined"]}`))
 	created := decodeWebhookSubscriptionCreated(t, ownerCreateResp, http.StatusCreated, "owner create")
 	if created.ID == "" {
 		t.Fatal("owner create returned no id")
 	}
-	ownerListResp := webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, acmeToken, demoOwnerUserID, nil)
+	ownerListResp := webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, acmeToken, app.DemoOwnerUserID, nil)
 	ownerListResp.Body.Close()
 	if ownerListResp.StatusCode != http.StatusOK {
 		t.Fatalf("owner list: status = %d, want %d", ownerListResp.StatusCode, http.StatusOK)
@@ -333,7 +335,7 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	// exactly once and the creator attributed through SubjectResolver, never
 	// a request field.
 	const createBody = `{"url":"https://hooks.example.test/crud","eventTypes":["org.member.joined"]}`
-	createResp := webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath, ownerToken, demoOwnerUserID, []byte(createBody))
+	createResp := webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath, ownerToken, app.DemoOwnerUserID, []byte(createBody))
 	created := decodeWebhookSubscriptionCreated(t, createResp, http.StatusCreated, "create")
 	if created.ID == "" {
 		t.Fatal("created subscription carries no id")
@@ -350,8 +352,8 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	if !created.Active {
 		t.Error("a freshly created subscription is not active -- delivery would never start")
 	}
-	if created.CreatedBy != demoNotesCreatorUserID {
-		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", created.CreatedBy, demoNotesCreatorUserID)
+	if created.CreatedBy != app.DemoNotesCreatorUserID {
+		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", created.CreatedBy, app.DemoNotesCreatorUserID)
 	}
 	if created.CreatedAt == "" {
 		t.Error("created subscription carries no createdAt")
@@ -361,7 +363,7 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	// secret-free shape -- decoded through a raw map, not
 	// webhookSubscriptionListRow, so an unexpected secret field cannot hide
 	// behind a struct that simply never declared it.
-	listResp := webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, ownerToken, demoOwnerUserID, nil)
+	listResp := webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, ownerToken, app.DemoOwnerUserID, nil)
 	listBody, err := io.ReadAll(listResp.Body)
 	listResp.Body.Close()
 	if err != nil {
@@ -394,13 +396,13 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	// create -- there is no supported way to leave a subscription with zero
 	// event types short of deleting it.
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID,
+		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID,
 			[]byte(`{"eventTypes":[]}`)),
 		http.StatusBadRequest, "integration.event_types_required", "update with empty eventTypes")
 
 	// A partial PATCH replaces only the field it names: url here, leaving
 	// eventTypes and the active gate untouched.
-	updateURLResp := webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID,
+	updateURLResp := webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID,
 		[]byte(`{"url":"https://hooks.example.test/crud/v2"}`))
 	updatedURL := decodeWebhookSubscriptionUpdate(t, updateURLResp, http.StatusOK, "update url")
 	if updatedURL.ID != created.ID {
@@ -418,7 +420,7 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 
 	// Pause with active=false -- the supported way to stop delivery without
 	// deleting.
-	pauseResp := webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID,
+	pauseResp := webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID,
 		[]byte(`{"active":false}`))
 	paused := decodeWebhookSubscriptionUpdate(t, pauseResp, http.StatusOK, "pause")
 	if paused.Active {
@@ -428,7 +430,7 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	// An update naming an id that never existed reports the collapsed
 	// not-found -- never a quiet success.
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/no-such-id", ownerToken, demoOwnerUserID,
+		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/no-such-id", ownerToken, app.DemoOwnerUserID,
 			[]byte(`{"active":true}`)),
 		http.StatusNotFound, "integration.webhook_subscription_not_found", "update an id that never existed")
 
@@ -437,12 +439,12 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	// "exists but not deleted", the identical signal Service-level Restore
 	// gives.
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath+"/"+created.ID+"/restore", ownerToken, demoOwnerUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath+"/"+created.ID+"/restore", ownerToken, app.DemoOwnerUserID, nil),
 		http.StatusNotFound, "integration.webhook_subscription_not_found", "restore a live subscription")
 
 	// Delete: the mark-delete takes the subscription out of every read this
 	// fragment performs...
-	deleteResp := webhookCRUDRequest(t, srv, http.MethodDelete, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID, nil)
+	deleteResp := webhookCRUDRequest(t, srv, http.MethodDelete, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID, nil)
 	deleteResp.Body.Close()
 	if deleteResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete: status = %d, want %d", deleteResp.StatusCode, http.StatusNoContent)
@@ -451,29 +453,29 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	// ...including the list, and both update and a second delete against the
 	// now-hidden id refuse with the same not-found.
 	postDeleteList := decodeWebhookSubscriptionList(t,
-		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, ownerToken, demoOwnerUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, ownerToken, app.DemoOwnerUserID, nil),
 		http.StatusOK, "list after delete")
 	if len(postDeleteList.WebhookSubscriptions) != 0 {
 		t.Fatalf("list after delete = %d rows, want 0 (mark-deleted rows are hidden from every read): %+v", len(postDeleteList.WebhookSubscriptions), postDeleteList.WebhookSubscriptions)
 	}
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID,
+		webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID,
 			[]byte(`{"active":true}`)),
 		http.StatusNotFound, "integration.webhook_subscription_not_found", "update a deleted subscription")
 	assertWebhookError(t,
-		webhookCRUDRequest(t, srv, http.MethodDelete, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodDelete, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID, nil),
 		http.StatusNotFound, "integration.webhook_subscription_not_found", "delete a deleted subscription")
 
 	// Restore: the row returns, but ALWAYS paused (active=false) whatever
 	// active held at deletion -- resuming automatic outbound delivery to a
 	// URL nobody has looked at since is never implicit.
-	restoreResp := webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath+"/"+created.ID+"/restore", ownerToken, demoOwnerUserID, nil)
+	restoreResp := webhookCRUDRequest(t, srv, http.MethodPost, webhookBasePath+"/"+created.ID+"/restore", ownerToken, app.DemoOwnerUserID, nil)
 	restoreResp.Body.Close()
 	if restoreResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("restore: status = %d, want %d", restoreResp.StatusCode, http.StatusNoContent)
 	}
 	restored := decodeWebhookSubscriptionList(t,
-		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, ownerToken, demoOwnerUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath, ownerToken, app.DemoOwnerUserID, nil),
 		http.StatusOK, "list after restore")
 	if len(restored.WebhookSubscriptions) != 1 {
 		t.Fatalf("list after restore = %d rows, want exactly 1: %+v", len(restored.WebhookSubscriptions), restored.WebhookSubscriptions)
@@ -486,7 +488,7 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 	}
 
 	// The explicit re-activation PATCH is the step that resumes delivery.
-	reactivateResp := webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, demoOwnerUserID,
+	reactivateResp := webhookCRUDRequest(t, srv, http.MethodPatch, webhookBasePath+"/"+created.ID, ownerToken, app.DemoOwnerUserID,
 		[]byte(`{"active":true}`))
 	reactivated := decodeWebhookSubscriptionUpdate(t, reactivateResp, http.StatusOK, "re-activate")
 	if !reactivated.Active {
@@ -527,7 +529,7 @@ func TestBuildServer_WebhookCRUD_DeliveriesList_RecentDeliveredRow(t *testing.T)
 	// detail of the send pipeline, never exposed to subscription-management
 	// callers).
 	deliveries := decodeWebhookDeliveries(t,
-		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath+"/"+sub.ID+"/deliveries", ownerToken, demoOwnerUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath+"/"+sub.ID+"/deliveries", ownerToken, app.DemoOwnerUserID, nil),
 		http.StatusOK, "deliveries listing")
 	if len(deliveries.Deliveries) != 1 {
 		t.Fatalf("deliveries = %d rows, want exactly 1 for one real delivery: %+v", len(deliveries.Deliveries), deliveries.Deliveries)
@@ -569,7 +571,7 @@ func TestBuildServer_WebhookCRUD_DeliveriesList_RecentDeliveredRow(t *testing.T)
 	// cannot distinguish "no such id" from "zero deliveries" (the
 	// no-enumeration rule the spec's description of this operation states).
 	unknown := decodeWebhookDeliveries(t,
-		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath+"/no-such-id/deliveries", ownerToken, demoOwnerUserID, nil),
+		webhookCRUDRequest(t, srv, http.MethodGet, webhookBasePath+"/no-such-id/deliveries", ownerToken, app.DemoOwnerUserID, nil),
 		http.StatusOK, "deliveries listing for an unknown id")
 	if len(unknown.Deliveries) != 0 {
 		t.Fatalf("deliveries for an unknown id = %d rows, want 0 (no-enumeration): %+v", len(unknown.Deliveries), unknown.Deliveries)

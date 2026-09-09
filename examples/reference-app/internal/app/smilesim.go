@@ -13,7 +13,7 @@
 // 21-api-contract.md records the split).
 //
 // The surface demonstrates go/ai-gateway's Gateway.GenerateImage
-// end to end: smilesim_flow_test.go drives it through the composed HTTP
+// end to end: cmd/server/smilesim_flow_test.go drives it through the composed HTTP
 // stack against an httptest.Server standing in for the OpenAI-compatible
 // images endpoint.
 //
@@ -25,7 +25,8 @@
 // route remains hand-written (its chat surface has no web consumer to
 // render it); this file's routes are the app-owned surfaces that grow a
 // fragment.
-package main
+
+package app
 
 import (
 	"context"
@@ -129,7 +130,7 @@ var (
 type smilesimHandler struct {
 	svc   *smilesim.Service
 	queue jobs.Queue
-	// memberships is the membership store buildServer wires authn's
+	// memberships is the membership store BuildServer wires authn's
 	// MembershipReader to. Always non-nil in this app's wiring; nil would
 	// make every named-recipient request fail closed rather than pass.
 	memberships *signInMemberships
@@ -427,12 +428,12 @@ func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r 
 	// refused rather than buffered in full. An over-bound read is an
 	// internal surprise, not a client fact, so it folds to the internal
 	// envelope with the reason in params.
-	raw, err := io.ReadAll(io.LimitReader(rc, maxPhotoBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(rc, MaxPhotoBytes+1))
 	if err != nil {
 		writeSmileSimError(w, smileSimErrInternal.WithCause(err))
 		return
 	}
-	if int64(len(raw)) > maxPhotoBytes {
+	if int64(len(raw)) > MaxPhotoBytes {
 		writeSmileSimError(w, smileSimErrInternal.WithParam("reason", "simulation content exceeds the serve bound"))
 		return
 	}

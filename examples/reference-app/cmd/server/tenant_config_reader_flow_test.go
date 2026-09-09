@@ -1,12 +1,12 @@
 package main
 
 // tenant_config_reader_flow_test.go is the mandatory-first-consumer proof
-// for the sharingConfigReader/complianceConfigReader host adapters over
-// go/config that server.go's real buildServer wires (defined alongside
-// orgFeatureGate): it drives them against a real go/config Service, a
+// for the SharingConfigReader/ComplianceConfigReader host adapters over
+// go/config that internal/app/server.go's real BuildServer wires (defined alongside
+// OrgFeatureGate): it drives them against a real go/config Service, a
 // real go/sharing Service and a real go/compliance.ExportService, all
 // composed through the same pkgcore.NewKernel().Bootstrap +
-// Module.Attach sequence buildServer itself uses. The tenant-configured
+// Module.Attach sequence BuildServer itself uses. The tenant-configured
 // default expiry applies when the tenant has configured one; a tenant
 // that has not still gets the module's own fixed default when no tenant
 // row overrides it.
@@ -15,7 +15,7 @@ package main
 // through the composed HTTP stack buildTestServer wires (the precedent
 // sharing_flow_test.go's secondSharingService set), because what is
 // under test is the reader wiring itself: the SAME
-// sharingConfigReader/complianceConfigReader types production code uses,
+// SharingConfigReader/ComplianceConfigReader types production code uses,
 // composed with the real services, not an unwired
 // *sharing.Service/*compliance.Module stand-in.
 
@@ -23,6 +23,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/config"
@@ -49,11 +51,11 @@ type tenantConfigReaderHarness struct {
 // newTenantConfigReaderHarness boots a minimal, self-contained composition
 // of go/config, go/sharing and go/compliance over a real, freshly migrated
 // SQLite database -- config.NewModule, sharing.NewModule (wired with
-// sharingConfigReader) and compliance.NewModule (wired with
+// SharingConfigReader) and compliance.NewModule (wired with
 // compliance.WithSharing over that same sharing.Service, and with
-// complianceConfigReader) registered through one real
+// ComplianceConfigReader) registered through one real
 // pkgcore.NewKernel().Bootstrap call, then config.Module.Attach -- the
-// exact ordering buildServer itself uses (config's own *config.Service is
+// exact ordering BuildServer itself uses (config's own *config.Service is
 // only produced strictly after Bootstrap returns), just trimmed to the
 // three modules the host adapters touch.
 func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
@@ -62,16 +64,16 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 	db := dbtest.NewSQLite(t)
 
 	// configService is filled by configModule.Attach below (nil until
-	// then); sharingConfigReader/complianceConfigReader hold a pointer to
+	// then); SharingConfigReader/ComplianceConfigReader hold a pointer to
 	// this variable, dereferenced lazily, for the identical ordering
-	// reason orgFeatureGate's own doc comment (server.go) explains: a
+	// reason OrgFeatureGate's own doc comment (internal/app/server.go) explains: a
 	// construction-time Option cannot capture a *config.Service that does
 	// not exist yet.
 	var configService *config.Service
 
 	configModule := config.NewModule(db)
 	sharingModule := sharing.NewModule(db,
-		sharing.WithTenantConfigReader(sharingConfigReader{service: &configService}),
+		sharing.WithTenantConfigReader(app.SharingConfigReader{Service: &configService}),
 	)
 	standaloneQueue := jobs.NewStandaloneQueue(db)
 	t.Cleanup(func() {
@@ -79,8 +81,8 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 			t.Errorf("close standalone queue: %v", closeErr)
 		}
 	})
-	// auditModule is needed here for the identical reason server.go's own
-	// buildServer wires one alongside configModule: compliance.Module.
+	// auditModule is needed here for the identical reason internal/app/server.go's own
+	// BuildServer wires one alongside configModule: compliance.Module.
 	// Register subscribes to config.EventConfigItemChanged
 	// (config_audit.go's onConfigItemChanged) and writes the change into
 	// the same audit_events table, so a config.Set that touches either
@@ -90,7 +92,7 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 	complianceModule := compliance.NewModule(audit.NewRepository(db),
 		compliance.WithQueue(standaloneQueue),
 		compliance.WithSharing(sharingModule.Service()),
-		compliance.WithExportConfigReader(complianceConfigReader{service: &configService}),
+		compliance.WithExportConfigReader(app.ComplianceConfigReader{Service: &configService}),
 	)
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
@@ -142,7 +144,7 @@ func setTenantDurationConfig(t *testing.T, cfg *config.Service, tenant pkgcore.T
 }
 
 // TestTenantConfigReader_Sharing_ConfiguredTenant_UsesConfiguredExpiry
-// proves sharingConfigReader genuinely resolves a tenant's configured
+// proves SharingConfigReader genuinely resolves a tenant's configured
 // sharing.default_expiry override -- written through go/config's real Set
 // path -- into the expiry sharing.Service.Create actually mints, rather
 // than always falling back to the module's own fixed 30-day default.
@@ -171,7 +173,7 @@ func TestTenantConfigReader_Sharing_ConfiguredTenant_UsesConfiguredExpiry(t *tes
 // TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault
 // proves the inverse: a tenant that never configured sharing.default_expiry
 // still gets the module's own fixed 30-day default, unchanged from before
-// the default shape -- sharingConfigReader wired but reporting "unconfigured"
+// the default shape -- SharingConfigReader wired but reporting "unconfigured"
 // behaves exactly as if it were never wired at all.
 func TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault(t *testing.T) {
 	h := newTenantConfigReaderHarness(t)
@@ -196,7 +198,7 @@ func TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault(t *tes
 }
 
 // TestTenantConfigReader_Compliance_ConfiguredTenant_UsesConfiguredExpiry
-// proves complianceConfigReader genuinely resolves a tenant's configured
+// proves ComplianceConfigReader genuinely resolves a tenant's configured
 // compliance.export_delivery_expiry override -- written through go/config's
 // real Set path -- into the expiry ExportService.Export's minted delivery
 // share actually carries, rather than always falling back to the module's

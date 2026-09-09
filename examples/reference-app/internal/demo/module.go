@@ -5,7 +5,7 @@
 // (smilesim.EventSimulationCompleted) that cmd/server's smilesim completion
 // glue dispatches to the user who started the simulation -- both wired end
 // to end as the notification module's consumers (see
-// cmd/server/demo_notification.go and the module's own notification_flow_test/
+// internal/app/demo_notification.go and the module's own notification_flow_test/
 // smilesim_flow_test suites).
 //
 // The package exists because both types' template copy must live inside
@@ -145,7 +145,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 
 // OpenAPISpec implements pkgcore.Module. demo mounts no HTTP surface of its
 // own -- the demo patient-message route is a hand-written cmd/server route
-// outside the OpenAPI machinery (see cmd/server/demo_notification.go) -- so
+// outside the OpenAPI machinery (see internal/app/demo_notification.go) -- so
 // there is no fragment to return.
 func (m *Module) OpenAPISpec() []byte { return nil }
 

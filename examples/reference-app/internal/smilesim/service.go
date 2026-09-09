@@ -13,7 +13,7 @@
 // /api/v1/smile-simulation/jobs/{id}, and GET
 // /api/v1/smile-simulation/photos/{photoObjectID}/simulations, the
 // per-photo enumeration that is the smile gallery's data source) are
-// mounted by hand in cmd/server (cmd/server/smilesim.go), the same pattern
+// mounted by hand in cmd/server (internal/app/smilesim.go), the same pattern
 // consult.go and the notification module's own demo patient-message route
 // establish in this app.
 //
@@ -70,7 +70,7 @@
 // gateway's own coded answer while no PreDeduct/Refund pair has ever been
 // written to the ledger for it (see Simulate's own doc comment). Every
 // credit-pack-purchase leg (a real Stripe/Alipay/WeChat sandbox charge)
-// is deliberately out of scope here -- cmd/server/server.go's
+// is deliberately out of scope here -- internal/app/server.go's
 // seedDemoCredits is the Grant-based demo stand-in, since no live
 // payment credentials exist in this environment.
 //
@@ -174,7 +174,7 @@
 // # Provider capability assessment (honest record)
 //
 // The provider behind this service is whatever image provider this app's
-// wiring routes smilesim.LogicalModel to -- today cmd/server/server.go
+// wiring routes smilesim.LogicalModel to -- today internal/app/server.go
 // routes the logical key to an OpenAI-compatible image provider serving the
 // vendor model id "dall-e-3" over the provider's /images/edits multipart
 // schema (an image-to-image call: the patient photo plus this package's
@@ -242,7 +242,7 @@ import (
 // image-side mirror of consult.LogicalModel's identical rule (see
 // aigateway.ImageRequest.Model's own doc comment). The host wires
 // aigateway.WithModelRoute for this exact key onto whatever image provider
-// should actually answer it (cmd/server/server.go's buildServer).
+// should actually answer it (internal/app/server.go's buildServer).
 const LogicalModel = "image:smile-simulation"
 
 // CreditsPerSimulation is the flat credit cost Simulate reserves for one
@@ -261,7 +261,7 @@ const CreditsPerSimulation int64 = 10
 // #nosec G101 -- this is a ledger annotation string, not a credential:
 // gosec's hardcoded-credential heuristic matches on the "cred" substring
 // inside "creditReasonSimulate" alone, the same class of false positive
-// cmd/server/demo_users.go's own demoUsersPasswordEnv constant already
+// internal/app/demo_users.go's own demoUsersPasswordEnv constant already
 // documents (there, the "Password" substring) for a differently-shaped
 // identifier.
 const creditReasonSimulate = "smilesim:simulate"
@@ -271,7 +271,7 @@ const creditReasonSimulate = "smilesim:simulate"
 // status and a recipient was named for it -- the "notes.note.create"
 // pattern's completion-side counterpart: a business fact published as a
 // pkgcore.Event, for the reference app's own demo notification glue
-// (cmd/server/demo_notification.go) to consume and dispatch through
+// (internal/app/demo_notification.go) to consume and dispatch through
 // go/notification, exactly as it already does for notes.EventNoteCreated.
 // Its Payload is a SimulationCompletedPayload.
 const EventSimulationCompleted = "smilesim.simulation_completed"
@@ -465,7 +465,7 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 // go/storage object -- happens later, inside the job go/ai-gateway's own
 // Module.Register registered. A caller retrieves the result once the job
 // completes by polling the same jobs.Queue this app's wiring shares with
-// go/ai-gateway (cmd/server/smilesim.go's job-status route) -- see
+// go/ai-gateway (internal/app/smilesim.go's job-status route) -- see
 // aigateway's own image_gateway.go doc comment for the full mechanism.
 //
 // recipientUserID, when non-empty, is remembered against the returned job

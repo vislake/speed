@@ -14,18 +14,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	obs "github.com/vislake/speed/go/observability"
 )
 
 // TestRunHealthcheck_OKResponse_Succeeds proves the success half of
-// runHealthcheck's contract: a listener answering healthzPath with 200
+// runHealthcheck's contract: a listener answering HealthzPath with 200
 // reports no error. This is the shape the running server itself produces
-// (healthzHandler in server.go always answers 200 with no tenant
+// (HealthzHandler in internal/app/server.go always answers 200 with no tenant
 // required), and it is the shape this example's Dockerfile's HEALTHCHECK
 // depends on to report the container healthy.
 func TestRunHealthcheck_OKResponse_Succeeds(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(healthzPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(app.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -41,12 +43,12 @@ func TestRunHealthcheck_OKResponse_Succeeds(t *testing.T) {
 // TestRunHealthcheck_NonOKResponse_Fails is the bug this test guards
 // against: a naive healthcheck that only checks "did the request succeed"
 // (a nil transport error) would report a container healthy even while its
-// own healthzPath answers a non-200 status -- exactly the shape a
+// own HealthzPath answers a non-200 status -- exactly the shape a
 // half-initialized or degraded server can produce. runHealthcheck must
 // treat that as a failure.
 func TestRunHealthcheck_NonOKResponse_Fails(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(healthzPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(app.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	port := startLoopbackServer(t, mux)
@@ -76,15 +78,15 @@ func TestRunHealthcheck_NothingListening_Fails(t *testing.T) {
 // TestRunHealthcheck_EmptyPort_UsesDefaultPort proves the empty-port
 // fallback runHealthcheck's own doc comment describes: an empty port
 // argument (the shape os.Getenv("PORT") returns when PORT is unset, exactly
-// configFromEnv's own default-handling for the running server) falls back
-// to defaultPort rather than probing an empty or malformed address.
+// ConfigFromEnv's own default-handling for the running server) falls back
+// to DefaultPort rather than probing an empty or malformed address.
 func TestRunHealthcheck_EmptyPort_UsesDefaultPort(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:"+defaultPort)
+	listener, err := net.Listen("tcp", "127.0.0.1:"+app.DefaultPort)
 	if err != nil {
-		t.Skipf("defaultPort %s is not free on this machine: %v", defaultPort, err)
+		t.Skipf("DefaultPort %s is not free on this machine: %v", app.DefaultPort, err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc(healthzPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(app.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: mux}}
@@ -99,15 +101,15 @@ func TestRunHealthcheck_EmptyPort_UsesDefaultPort(t *testing.T) {
 }
 
 // TestObservabilityOptions_EndpointAbsent_StaysOnLocalExporters pins the
-// conditional half of observabilityOptions' contract: a serverConfig with
-// no OTLP endpoint (the configFromEnv default when APP_OTLP_ENDPOINT is
+// conditional half of observabilityOptions' contract: a ServerConfig with
+// no OTLP endpoint (the ConfigFromEnv default when APP_OTLP_ENDPOINT is
 // unset) yields exactly the service-name option, so applying the returned
 // options to a fresh observability.Config leaves OTLPEndpoint empty --
 // obs.Init then stays on the local exporters, byte-identical to the
 // pre-APP_OTLP_ENDPOINT wiring (see otlpEndpointEnv's own doc comment in
-// server.go).
+// internal/app/server.go).
 func TestObservabilityOptions_EndpointAbsent_StaysOnLocalExporters(t *testing.T) {
-	opts := observabilityOptions(serverConfig{})
+	opts := observabilityOptions(app.ServerConfig{})
 	var cfg obs.Config
 	for _, opt := range opts {
 		opt(&cfg)
@@ -121,13 +123,13 @@ func TestObservabilityOptions_EndpointAbsent_StaysOnLocalExporters(t *testing.T)
 }
 
 // TestObservabilityOptions_EndpointSet_CarriesTheOption pins the other half
-// of the conditional: a serverConfig whose OTLPEndpoint was resolved from
-// APP_OTLP_ENDPOINT (by configFromEnv) yields an option set that includes
+// of the conditional: a ServerConfig whose OTLPEndpoint was resolved from
+// APP_OTLP_ENDPOINT (by ConfigFromEnv) yields an option set that includes
 // obs.WithOTLPEndpoint carrying that exact value -- the APP_REDIS_ADDR-shaped
 // hand-over that switches obs.Init onto the OTLP exporters.
 func TestObservabilityOptions_EndpointSet_CarriesTheOption(t *testing.T) {
 	const endpoint = "collector.example.internal:4317"
-	opts := observabilityOptions(serverConfig{OTLPEndpoint: endpoint})
+	opts := observabilityOptions(app.ServerConfig{OTLPEndpoint: endpoint})
 	var cfg obs.Config
 	for _, opt := range opts {
 		opt(&cfg)
@@ -169,12 +171,12 @@ func startLoopbackServer(t *testing.T, handler http.Handler) string {
 
 // TestRun_BootsServesHealthzAndShutsDownCleanly drives main.go's ordinary
 // boot path end to end, the one behavior this file's other tests reach
-// only in parts: configFromEnv resolves the zero-environment standalone
+// only in parts: ConfigFromEnv resolves the zero-environment standalone
 // defaults, run boots the whole composed server on the chosen port, the
-// server answers its own healthzPath -- the same probe this example's
+// server answers its own HealthzPath -- the same probe this example's
 // Dockerfile HEALTHCHECK runs -- and a cancelled base context takes it
 // down through the graceful-shutdown path, run returning nil. Every
-// configuration variable configFromEnv reads is explicitly cleared (the
+// configuration variable ConfigFromEnv reads is explicitly cleared (the
 // same discipline TestConfigFromEnv_Defaults documents), so the boot's
 // outcome never depends on the ambient environment; PORT and APP_DB_PATH
 // are then pinned to a free port and a fresh per-test database file, so

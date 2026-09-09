@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
@@ -21,13 +23,13 @@ import (
 // is a real consumer of go/compliance's retention mechanism (see
 // internal/notes/retention_participant.go's own doc comment for what that
 // discharges): notes' pkgcore.RetentionParticipant is registered on the
-// kernel's Retention registrar by buildServer, so the compliance module's
+// kernel's Retention registrar by BuildServer, so the compliance module's
 // three orchestrations reach real notes rows through the module it was
 // built over.
 //
 // The suite deliberately drives the three services through the wired
-// *compliance.Module buildServer returns (its fourth result -- the only
-// reach a test has into them, per buildServer's own doc comment), never
+// *compliance.Module BuildServer returns (its fourth result -- the only
+// reach a test has into them, per BuildServer's own doc comment), never
 // through the jobs handler that enqueues the sweep: SweepTenant runs
 // synchronously, which is what lets a test create notes, age one past the
 // retention window, and assert on the sweep's own result in one process.
@@ -50,8 +52,8 @@ import (
 // suite out of the server's live connection pool.
 
 // complianceOtherCreatorUserID is the second creator id these tests send as
-// the X-Demo-User-Id header (demoOrgUserHeader). demoNotesSubjectResolver
-// accepts any non-empty value there, and demoNotesCreatorUserID is only the
+// the X-Demo-User-Id header (DemoOrgUserHeader). DemoNotesSubjectResolver
+// accepts any non-empty value there, and DemoNotesCreatorUserID is only the
 // conventional one; naming a second value lets the erasure test prove that
 // an Erase of one creator-subject leaves another creator-subject's notes
 // untouched -- the cross-subject half of the non-erasability property,
@@ -111,7 +113,7 @@ func TestComplianceRetentionSweep_NotesParticipant_ReapsExpiredOnly(t *testing.T
 }
 
 // TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject is the
-// erasure leg: one Erase of the creator-subject demoNotesCreatorUserID in
+// erasure leg: one Erase of the creator-subject DemoNotesCreatorUserID in
 // tenant-acme physically removes both that creator's live note and that
 // creator's soft-deleted note (an erasure bypasses the retention window --
 // the soft-deleted note here is brand-new, far younger than the sweep's
@@ -134,7 +136,7 @@ func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testi
 	db := openSecondDB(t, cfg)
 	softDeleteAndBackdate(t, db, "tenant-acme", creatorDeletedID, time.Now())
 
-	subject := pkgcore.SubjectRef{TenantID: "tenant-acme", SubjectID: demoNotesCreatorUserID}
+	subject := pkgcore.SubjectRef{TenantID: "tenant-acme", SubjectID: app.DemoNotesCreatorUserID}
 	// The ctx must carry the subject's own tenant: Erase erases within
 	// the tenant ctx is scoped to -- the SubjectRef may only echo it back
 	// (go/compliance's Erase tenant gate) -- and enters its audited system
@@ -246,19 +248,19 @@ func TestComplianceExport_NotesParticipant_ExportsLiveNotesOnly(t *testing.T) {
 	if got.ID != liveID || got.Text != "live note content a subject would export" {
 		t.Fatalf("exported note = %+v, want the live note (id %s)", got, liveID)
 	}
-	if got.CreatorUserID != demoNotesCreatorUserID {
-		t.Fatalf("exported note CreatorUserID = %q, want %q", got.CreatorUserID, demoNotesCreatorUserID)
+	if got.CreatorUserID != app.DemoNotesCreatorUserID {
+		t.Fatalf("exported note CreatorUserID = %q, want %q", got.CreatorUserID, app.DemoNotesCreatorUserID)
 	}
 }
 
 // openSecondDB opens a second dbkit.Open connection to the same SQLite
 // file the server under test writes (cfg.SQLitePath) and registers its
 // close with the test -- the reach TestBuildServer_NoteCreate_PersistsAuditEvent
-// uses, which buildServer needs neither its *gorm.DB nor any module's
+// uses, which BuildServer needs neither its *gorm.DB nor any module's
 // service for a test to inspect its storage. The second connection is
 // deliberately not migrated: the server's own boot already applied every
 // migration, and this handle only reads and performs test-only writes.
-func openSecondDB(t *testing.T, cfg serverConfig) *gorm.DB {
+func openSecondDB(t *testing.T, cfg app.ServerConfig) *gorm.DB {
 	t.Helper()
 
 	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
@@ -329,11 +331,11 @@ func physicalNoteCount(t *testing.T, db *gorm.DB, tenant pkgcore.TenantID, noteI
 
 // createNoteAsByCreator is createNoteAs with the note's creator made
 // explicit: it POSTs a note with the given text, authenticated as token,
-// carrying X-Demo-User-Id (demoOrgUserHeader) equal to creatorID instead
-// of the demoNotesCreatorUserID default -- the header demoNotesSubjectResolver
-// reads to attribute a creator (server.go), which is what lets an erasure
+// carrying X-Demo-User-Id (DemoOrgUserHeader) equal to creatorID instead
+// of the DemoNotesCreatorUserID default -- the header DemoNotesSubjectResolver
+// reads to attribute a creator (internal/app/server.go), which is what lets an erasure
 // test target one real creator-subject while another creator's notes stay
-// untouched. The acting user for the rbac gate is demoOwnerUserID exactly
+// untouched. The acting user for the rbac gate is DemoOwnerUserID exactly
 // as in createNoteAs.
 func createNoteAsByCreator(t *testing.T, srv *httptest.Server, token, creatorID, text string) string {
 	t.Helper()
@@ -349,8 +351,8 @@ func createNoteAsByCreator(t *testing.T, srv *httptest.Server, token, creatorID,
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
-	req.Header.Set(demoOrgUserHeader, creatorID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(app.DemoOrgUserHeader, creatorID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {

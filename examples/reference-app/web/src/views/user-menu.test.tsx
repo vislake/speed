@@ -145,7 +145,7 @@ describe('UserMenu', () => {
   it('names a current tenant outside the demo roster on the trigger and in the list -- a self-service account in its own clinic', async () => {
     // A registered account signs into the clinic its registration
     // provisioned (demo-server.ts's self-service mirror of
-    // cmd/server/self_service.go): the fixture's derived clinic tenant
+    // internal/app/self_service.go): the fixture's derived clinic tenant
     // id is not among the seeded demo tenants the roster knows, so the
     // menu must still render a live trigger naming it -- never the
     // no-current-tenant disabled state a signed-in account would be
@@ -153,7 +153,7 @@ describe('UserMenu', () => {
     //
     // The clinic's NAME comes from the app's own tenant-identity answer
     // (the demo-server's /api/reference-app/clinic-name mirror of
-    // cmd/server/clinic_name.go), fetched when the current tenant is
+    // internal/app/clinic_name.go), fetched when the current tenant is
     // not on the demo roster: what the frame shows must be a name a
     // person can recognise -- the name the practice gave at
     // registration, like the demo tenants' own copy names -- never the

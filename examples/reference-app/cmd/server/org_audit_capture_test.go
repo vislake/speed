@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 )
@@ -25,7 +27,7 @@ import (
 // The fix this test pins is doc 10's own "automatic first, declaration
 // second" route, not hand-written audit.Emit at each write path: org's
 // OrgNode, Membership and Invitation models implement dbkit.Auditable,
-// buildServer wires dbkit.Options.AuditBus (with Options.AuditModels set
+// BuildServer wires dbkit.Options.AuditBus (with Options.AuditModels set
 // to org's own exported org.AuditableModels() -- notes.Note is outside
 // that scope by construction, since notes records its own trail through
 // audit.Emit), and go/dbkit/audit's persister module turns the captured
@@ -65,9 +67,9 @@ func TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentit
 	// every configured tenant, which is what lets the org requests below
 	// succeed rather than merely proving the gate closes.
 	var searched adminSearchUsersResponse
-	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+app.DemoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
 	if len(searched.Users) != 1 {
-		t.Fatalf("search for %q = %+v, want exactly one seeded account", demoOwnerEmail, searched.Users)
+		t.Fatalf("search for %q = %+v, want exactly one seeded account", app.DemoOwnerEmail, searched.Users)
 	}
 	ownerID := searched.Users[0].ID
 
@@ -88,7 +90,7 @@ func TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentit
 	// --- Leg A: an impersonated member removal. ---
 	// The victim is a seeded non-owner member of tenant-acme (the roster
 	// holds demo-owner, demo-reader and demo-acme-only, all active at the
-	// tenant's root -- demo_users.go's addDemoOrgMembership seed), so the
+	// tenant's root -- internal/app/demo_users.go's addDemoOrgMembership seed), so the
 	// removal passes Remove's not-the-last-active-member guard.
 	var roster orgListMembersResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/org/members", staffToken, nil, http.StatusOK, &roster, impersonationHeaders)
@@ -361,7 +363,7 @@ type auditRow struct {
 // auditRowsForTenant opens a second connection to the same SQLite file the
 // test's server writes and returns every audit row of the tenant -- the
 // identical reach server_test.go's note-audit persistence test uses.
-func auditRowsForTenant(t *testing.T, cfg serverConfig, tenantID string) []auditRow {
+func auditRowsForTenant(t *testing.T, cfg app.ServerConfig, tenantID string) []auditRow {
 	t.Helper()
 	auditDB, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
 	if err != nil {

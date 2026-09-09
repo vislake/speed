@@ -21,7 +21,8 @@
 // cmd/server/entitlements_flow_test.go drives both directions through the
 // real composed HTTP stack. The pay-and-confirm leg itself stays out of
 // this demo's scope.
-package main
+
+package app
 
 import (
 	"context"
@@ -35,11 +36,11 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
 
-// demoEntitlementPlanKey is the platform-wide Plan key seedDemoEntitlements
+// DemoEntitlementPlanKey is the platform-wide Plan key seedDemoEntitlements
 // resolves-else-creates. Every demo tenant subscribes to this one platform
 // Plan; nothing in this file ever creates a tenant-custom Plan, since the
 // demo story needs no custom deal.
-const demoEntitlementPlanKey = "demo"
+const DemoEntitlementPlanKey = "demo"
 
 // demoEntitlementGrants is the Grant set seedDemoEntitlements stamps on the
 // demo Plan, one Boolean grant (Value: true) per feature key this app's real
@@ -82,14 +83,14 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 	// ErrPlanNotFound means no demo Plan exists yet -- create one,
 	// platform-scoped (TenantID left at platformScopeSentinel, the empty
 	// string), stamping exactly demoEntitlementGrants onto it.
-	plan, err := plans.Resolve(ctx, "", demoEntitlementPlanKey)
+	plan, err := plans.Resolve(ctx, "", DemoEntitlementPlanKey)
 	if err != nil {
 		if appErr, ok := apperr.As(err); !ok || appErr.Code != billing.ErrPlanNotFound.Code {
 			return nil, fmt.Errorf("reference-app: resolve the demo entitlement plan: %w", err)
 		}
 		demoPlan := &billing.Plan{
 			TenantID: "",
-			Key:      demoEntitlementPlanKey,
+			Key:      DemoEntitlementPlanKey,
 			Name:     "Demo plan",
 		}
 		if err := demoPlan.SetGrants(demoEntitlementGrants); err != nil {
@@ -125,7 +126,7 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 //
 // The idempotence is bounded to one process's lifetime, stated honestly
 // rather than as an absolute: a subscription canceled during that
-// lifetime (entitlements_flow_test.go's refusal leg does exactly that,
+// lifetime (cmd/server/entitlements_flow_test.go's refusal leg does exactly that,
 // through a real Cancel call) is terminal and is never re-ensured while
 // the process lives -- the boot-time seed never re-runs, and a clinic's
 // provisioning never re-runs once its registration completed.
@@ -139,7 +140,7 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 // therefore true per boot, never per database file; what this app
 // guarantees for a running process is that it cannot silently
 // resubscribe a tenant an operator just took offline mid-session -- and
-// the refusal story entitlements_flow_test.go drives is exactly that
+// the refusal story cmd/server/entitlements_flow_test.go drives is exactly that
 // in-process one.
 func ensureDemoSubscription(ctx context.Context, subs *billing.SubscriptionService, plan *billing.Plan, tenantID pkgcore.TenantID) error {
 	tenantCtx := pkgcore.WithTenant(ctx, tenantID)

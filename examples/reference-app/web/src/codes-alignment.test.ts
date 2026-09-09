@@ -244,41 +244,41 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'cases.photo_already_attached': 'examples/reference-app/internal/cases/service.go:103 (ErrPhotoAlreadyAttached)',
   'cases.not_found': 'examples/reference-app/internal/cases/service.go:109 (ErrNotFound)',
   'cases.subject_unresolved': 'examples/reference-app/internal/cases/service.go:122 (ErrSubjectUnresolved)',
-  // examples/reference-app/cmd/server/cases_photos.go -- the photo
+  // examples/reference-app/internal/app/cases_photos.go -- the photo
   // upload/content route sentinels (surface orchestration codes; the
   // photo_content_too_large answers both the upload route and the
   // content route).
-  'cases.photo_content_required': 'examples/reference-app/cmd/server/cases_photos.go:73 (ErrPhotoContentRequired)',
-  'cases.photo_content_invalid': 'examples/reference-app/cmd/server/cases_photos.go:78 (ErrPhotoContentInvalid)',
-  'cases.photo_content_too_large': 'examples/reference-app/cmd/server/cases_photos.go:85 (ErrPhotoContentTooLarge)',
-  'cases.photo_rejected': 'examples/reference-app/cmd/server/cases_photos.go:93 (ErrPhotoRejected)',
-  'cases.photo_not_found': 'examples/reference-app/cmd/server/cases_photos.go:100 (ErrPhotoNotFound)',
-  // examples/reference-app/cmd/server/cases.go -- the case surface's
+  'cases.photo_content_required': 'examples/reference-app/internal/app/cases_photos.go:73 (ErrPhotoContentRequired)',
+  'cases.photo_content_invalid': 'examples/reference-app/internal/app/cases_photos.go:78 (ErrPhotoContentInvalid)',
+  'cases.photo_content_too_large': 'examples/reference-app/internal/app/cases_photos.go:85 (ErrPhotoContentTooLarge)',
+  'cases.photo_rejected': 'examples/reference-app/internal/app/cases_photos.go:93 (ErrPhotoRejected)',
+  'cases.photo_not_found': 'examples/reference-app/internal/app/cases_photos.go:100 (ErrPhotoNotFound)',
+  // examples/reference-app/internal/app/cases.go -- the case surface's
   // handler-level envelopes (the internal fallback writeCasesError
   // folds every non-apperr error into, and the shared malformed-body
   // sentinel every body-reading cases route writes -- both kept as
   // named declarations so the audits that cite them have a stable
   // site).
-  'cases.internal_error': 'examples/reference-app/cmd/server/cases.go:58 (casesErrInternal)',
-  'cases.invalid_request_body': 'examples/reference-app/cmd/server/cases.go:66 (casesInvalidRequestBody)',
+  'cases.internal_error': 'examples/reference-app/internal/app/cases.go:58 (casesErrInternal)',
+  'cases.invalid_request_body': 'examples/reference-app/internal/app/cases.go:66 (casesInvalidRequestBody)',
   // examples/reference-app/internal/smilesim/options.go -- the option
   // validation sentinels (named declarations the surface's option
   // pickers made reachable text).
   'smilesim.unsupported_smile_style': 'examples/reference-app/internal/smilesim/options.go:154 (ErrUnsupportedSmileStyle)',
   'smilesim.unsupported_tooth_shade': 'examples/reference-app/internal/smilesim/options.go:158 (ErrUnsupportedToothShade)',
   'smilesim.strength_out_of_range': 'examples/reference-app/internal/smilesim/options.go:162 (ErrStrengthOutOfRange)',
-  // examples/reference-app/cmd/server/smilesim.go -- the smile-simulation
+  // examples/reference-app/internal/app/smilesim.go -- the smile-simulation
   // surface's handler-level sentinels (the internal envelope, the
   // simulate route's request-shape refusals, the recipient gate, the
   // poll/content routes' not-found answers and the simulation-content
   // route's refusals).
-  'smilesim.internal_error': 'examples/reference-app/cmd/server/smilesim.go:55 (smileSimErrInternal)',
-  'smilesim.invalid_request_body': 'examples/reference-app/cmd/server/smilesim.go:66 (smilesimErrInvalidRequestBody)',
-  'smilesim.photo_object_id_required': 'examples/reference-app/cmd/server/smilesim.go:70 (smilesimErrPhotoObjectIDRequired)',
-  'smilesim.simulation_not_found': 'examples/reference-app/cmd/server/smilesim.go:82 (smileSimErrSimulationNotFound)',
-  'smilesim.output_not_ready': 'examples/reference-app/cmd/server/smilesim.go:86 (smileSimErrOutputNotReady)',
-  'smilesim.output_not_found': 'examples/reference-app/cmd/server/smilesim.go:91 (smileSimErrOutputNotFound)',
-  'smilesim.recipient_not_in_tenant': 'examples/reference-app/cmd/server/smilesim.go:446 (smilesimErrRecipientNotInTenant)',
+  'smilesim.internal_error': 'examples/reference-app/internal/app/smilesim.go:55 (smileSimErrInternal)',
+  'smilesim.invalid_request_body': 'examples/reference-app/internal/app/smilesim.go:66 (smilesimErrInvalidRequestBody)',
+  'smilesim.photo_object_id_required': 'examples/reference-app/internal/app/smilesim.go:70 (smilesimErrPhotoObjectIDRequired)',
+  'smilesim.simulation_not_found': 'examples/reference-app/internal/app/smilesim.go:82 (smileSimErrSimulationNotFound)',
+  'smilesim.output_not_ready': 'examples/reference-app/internal/app/smilesim.go:86 (smileSimErrOutputNotReady)',
+  'smilesim.output_not_found': 'examples/reference-app/internal/app/smilesim.go:91 (smileSimErrOutputNotFound)',
+  'smilesim.recipient_not_in_tenant': 'examples/reference-app/internal/app/smilesim.go:446 (smilesimErrRecipientNotInTenant)',
   // go/jobs/job.go -- the not-found sentinel the job-status handler
   // passes through for an unknown or another tenant's job id.
   'jobs.job_not_found': 'go/jobs/job.go:201 (ErrJobNotFound)',

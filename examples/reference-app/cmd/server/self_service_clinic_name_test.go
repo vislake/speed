@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -48,25 +50,25 @@ func registerFreshAccountNamed(t *testing.T, srv *httptest.Server, email, passwo
 }
 
 // clinicNameAs GETs the app's own tenant-identity answer
-// (/api/reference-app/clinic-name, cmd/server/clinic_name.go) with
+// (/api/reference-app/clinic-name, internal/app/clinic_name.go) with
 // token's bearer and decodes the {name} answer, failing the test on
 // anything but a 200 carrying the field.
 func clinicNameAs(t *testing.T, srv *httptest.Server, token string) (name string) {
 	t.Helper()
 
-	req, err := http.NewRequest(http.MethodGet, srv.URL+clinicNamePath, nil)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+app.ClinicNamePath, nil)
 	if err != nil {
 		t.Fatalf("build clinic-name request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("GET %s: %v", clinicNamePath, err)
+		t.Fatalf("GET %s: %v", app.ClinicNamePath, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s: status = %d, want %d; body = %s", clinicNamePath, resp.StatusCode, http.StatusOK, raw)
+		t.Fatalf("GET %s: status = %d, want %d; body = %s", app.ClinicNamePath, resp.StatusCode, http.StatusOK, raw)
 	}
 	var answer struct {
 		Name string `json:"name"`
@@ -80,7 +82,7 @@ func clinicNameAs(t *testing.T, srv *httptest.Server, token string) (name string
 // TestSelfServiceSignup_ClinicIsIdentifiedByTheNameItsRegistrationGave
 // pins the product decision for what a self-registered clinic is
 // called -- the name the practice typed into the register form's
-// display-name field names the clinic's org root (self_service.go's
+// display-name field names the clinic's org root (internal/app/self_service.go's
 // clinicRootNameFor), and the app's own tenant-identity answer serves
 // that root name back to the clinic's own signed-in principal. This is
 // the server half of the acceptance gate

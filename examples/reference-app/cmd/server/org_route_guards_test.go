@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
@@ -19,7 +21,7 @@ import (
 // it, demoRouteGuards[orgRoutePath] being routePublic would let ANY
 // authenticated tenant member -- holding no org permission at all --
 // create, move, rename and cascade-delete nodes and remove arbitrary
-// members. See demo_subject.go's demoRouteGuards doc comment on org's
+// members. See internal/app/demo_subject.go's demoRouteGuards doc comment on org's
 // path for the fixed shape this file exercises.
 
 // orgErrorBody is the {code, ...} envelope every refusal from either layer
@@ -35,7 +37,7 @@ type orgErrorBody struct {
 // token, with demoUser sent as the rbac gate's X-Demo-User header (empty
 // omits it, falling back to the token's own verified principal, who holds
 // no rbac grant in these tests' fresh accounts). Unlike orgRequest
-// (org_flow_test.go), which always sends demoOwnerUserID, this lets a test
+// (org_flow_test.go), which always sends DemoOwnerUserID, this lets a test
 // choose ANY identity -- this file's own tests exist specifically to prove
 // the gate closes for one identity and stays open for another, so the
 // identity is the one thing every call here must vary. It never fatals on
@@ -62,7 +64,7 @@ func orgRequestStatus(t *testing.T, srv *httptest.Server, method, path, token, d
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if demoUser != "" {
-		req.Header.Set(demoUserHeader, demoUser)
+		req.Header.Set(app.DemoUserHeader, demoUser)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -78,7 +80,7 @@ func orgRequestStatus(t *testing.T, srv *httptest.Server, method, path, token, d
 
 // orgRequestAs is orgRequest's (org_flow_test.go) twin with one difference:
 // the rbac demo identity is an explicit parameter rather than always
-// demoOwnerUserID, for a test that must drive a request as a NARROWLY
+// DemoOwnerUserID, for a test that must drive a request as a NARROWLY
 // privileged identity (the subtree-scoped grant below) and still fatal on
 // an unexpected status the way every other setup call in this suite does.
 func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoUser string, body, out any) {
@@ -103,7 +105,7 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if demoUser != "" {
-		req.Header.Set(demoUserHeader, demoUser)
+		req.Header.Set(app.DemoUserHeader, demoUser)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -124,16 +126,16 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 }
 
 // TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree is THE scenario:
-// demoReaderUserID holds notes:read alone (seedDemoGrants' demoReaderRoleKey,
-// demo_subject.go) and no org permission whatsoever, yet reaches org's
+// DemoReaderUserID holds notes:read alone (seedDemoGrants' demoReaderRoleKey,
+// internal/app/demo_subject.go) and no org permission whatsoever, yet reaches org's
 // routes -- tenancy.Middleware and the fixed authn+tenancy chain never
 // distinguish org's operations from any other tenant member's ordinary
-// traffic, so the per-operation permission gate (demo_subject.go's
+// traffic, so the per-operation permission gate (internal/app/demo_subject.go's
 // guardOrgRoute) is the only layer that refuses this caller. Every case
 // below must fail: without the gate all of them would succeed (2xx) -- the
 // cascade-delete case would even delete the tree.
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
-	// cfg.OnRBACReady (buildServer, mirroring
+	// cfg.OnRBACReady (BuildServer, mirroring
 	// TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly below)
 	// replaces buildTestServer here so this test asserts the rbac DECISION
 	// directly rather than only the HTTP status the coarse gate produces
@@ -145,9 +147,9 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -158,22 +160,22 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	if rbacService == nil {
-		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
 	}
 
 	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-caller")
 
 	// The rbac-level assertion the HTTP cases below are supposed to be a
 	// consequence of: demo-reader holds notes:read alone (seedDemoGrants'
-	// demoReaderRoleKey, demo_subject.go), no org:* permission whatsoever.
-	readerSub := rbac.Subject{TenantID: "tenant-acme", UserID: demoReaderUserID}
+	// demoReaderRoleKey, internal/app/demo_subject.go), no org:* permission whatsoever.
+	readerSub := rbac.Subject{TenantID: "tenant-acme", UserID: app.DemoReaderUserID}
 	for _, perm := range []string{
 		org.PermissionRead, org.PermissionManage,
 		org.PermissionInviteMember, org.PermissionRemoveMember,
 	} {
-		resource, action, ok := splitDemoPermission(perm)
+		resource, action, ok := app.SplitDemoPermission(perm)
 		if !ok {
-			t.Fatalf("splitDemoPermission(%q): malformed", perm)
+			t.Fatalf("SplitDemoPermission(%q): malformed", perm)
 		}
 		allowed, err := rbacService.Can(context.Background(), readerSub, action, resource)
 		if err != nil {
@@ -227,7 +229,7 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			status, body := orgRequestStatus(t, srv, tc.method, tc.path, token, demoReaderUserID, tc.body)
+			status, body := orgRequestStatus(t, srv, tc.method, tc.path, token, app.DemoReaderUserID, tc.body)
 			if status != http.StatusForbidden {
 				t.Fatalf("%s %s as demo-reader: status = %d, want %d (body = %+v)",
 					tc.method, tc.path, status, http.StatusForbidden, body)
@@ -249,7 +251,7 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 }
 
 // TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree is THE
-// scenario's positive twin: demoOwnerUserID (BuiltinRoleOwner, every
+// scenario's positive twin: DemoOwnerUserID (BuiltinRoleOwner, every
 // permission any module declared) can still perform every operation the
 // unprivileged test above proved refused -- the gate closes for one
 // identity and stays open for another, never a blunt admin-only wall over
@@ -283,7 +285,7 @@ func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
 
 	orgRequest(t, srv, http.MethodDelete, "/api/v1/org/nodes/"+child.ID+"?cascade=true", token, "", nil, nil)
 
-	status, _ := orgRequestStatus(t, srv, http.MethodGet, "/api/v1/org/nodes/"+child.ID, token, demoOwnerUserID, nil)
+	status, _ := orgRequestStatus(t, srv, http.MethodGet, "/api/v1/org/nodes/"+child.ID, token, app.DemoOwnerUserID, nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("GET the deleted child as demo-owner: status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -291,14 +293,14 @@ func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
 
 // TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly is item 3's
 // own proof: rbac's Authorizer.DataScope machinery's first REAL consumer
-// (enforceOrgNodeScope, demo_subject.go). A role granted scoped to node A
+// (enforceOrgNodeScope, internal/app/demo_subject.go). A role granted scoped to node A
 // (rbac.Scope{NodeID: nodeA.ID}, never the tenant root) lets its holder
 // manage exactly A's subtree -- and refuses the identical operation
 // against a SIBLING subtree and an ANCESTOR, even though Can() alone
 // (the coarse gate item 1+2 add) would answer true for both: the grant
 // exists somewhere in the tenant, just not there. This property is real
 // only because rbacModule is wired with WithSubtreeResolver onto org's own
-// Scope (server.go) -- fails closed (denies, the tenant-wide behavior of
+// Scope (internal/app/server.go) -- fails closed (denies, the tenant-wide behavior of
 // pre-org-route-guards code) without it, per SubtreeResolver's own
 // contract, so this test would fail before EITHER the router gate or
 // its SubtreeResolver wiring landed.
@@ -307,9 +309,9 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -320,7 +322,7 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	if rbacService == nil {
-		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
 	}
 
 	const tenant = pkgcore.TenantID("tenant-acme")

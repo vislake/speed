@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
@@ -22,7 +24,7 @@ import (
 
 // self_service_test.go is the regression suite for the self-service
 // signup journey: registration provisions the account's clinic
-// (self_service.go), so the journey must land the account inside its own
+// (internal/app/self_service.go), so the journey must land the account inside its own
 // clinic tenant with the org root, the membership and the owner grant it
 // can act on -- and that must survive the process restart that kills
 // every in-memory answer: the org rows alone answer on restart (the
@@ -123,7 +125,7 @@ func registerFreshAccount(t *testing.T, srv *httptest.Server, email, password st
 // TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic drives
 // the whole acceptance journey through the real composed HTTP stack: a
 // fresh account registers, the browser-shaped sign-in that follows lands
-// it inside its OWN clinic tenant (the deterministic clinicTenantOf
+// it inside its OWN clinic tenant (the deterministic ClinicTenantOf
 // derivation -- never one of the configured demo tenants), the clinic's
 // org tree answers the account's bearer token with the root node
 // registration provisioned, and the notes gate answers the owner grant
@@ -142,7 +144,7 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 	// The browser-shaped sign-in succeeds and lands the principal in the
 	// account's OWN clinic -- a sign-in a memberless account cannot take --
 	// the deterministic tenant derived from the registrant's user id
-	// (self_service.go's clinicTenantOf), never a configured demo tenant.
+	// (internal/app/self_service.go's ClinicTenantOf), never a configured demo tenant.
 	// The derivation is spelled out here rather than reached through the
 	// production helper so this suite keeps compiling (and failing with a
 	// clean assertion) against the pre-self-service code this regression
@@ -267,9 +269,9 @@ func TestSelfServiceSignup_ClinicOwnerSignInSurvivesARestart(t *testing.T) {
 	boot := func() (*httptest.Server, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
-		handler, cleanup, _, err := buildServer(context.Background(), cfg)
+		handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 		if err != nil {
-			t.Fatalf("buildServer: %v", err)
+			t.Fatalf("BuildServer: %v", err)
 		}
 		return httptest.NewServer(handler), cleanup
 	}
@@ -311,7 +313,7 @@ func TestSelfServiceSignup_ClinicOwnerSignInSurvivesARestart(t *testing.T) {
 
 // failOnceProvisioning fails exactly the first provisioning attempt it is
 // asked about and succeeds afterwards -- the
-// serverConfig.failSelfServiceProvision hook shape the failure-half
+// ServerConfig.FailSelfServiceProvision hook shape the failure-half
 // regression below arms before building its server.
 type failOnceProvisioning struct {
 	mu       sync.Mutex
@@ -343,7 +345,7 @@ func (f *failOnceProvisioning) observed() bool {
 // TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists is
 // the failure half of the self-service journey: the register route answers
 // 201 whether the synchronous provisioning attempt succeeded or failed
-// (authn never sees the failure -- self_service.go's # Failure semantics),
+// (authn never sees the failure -- internal/app/self_service.go's # Failure semantics),
 // so a failed attempt must recover on its own. It does, through the retry
 // job scheduleProvisionRetry enqueues on the app's standalone queue: the
 // job re-runs the same idempotent provision until it succeeds, and the
@@ -352,7 +354,7 @@ func (f *failOnceProvisioning) observed() bool {
 // hiccup.
 //
 // The injection is armed through the server's own config
-// (cfg.failSelfServiceProvision) before buildServer captures it into the
+// (cfg.FailSelfServiceProvision) before BuildServer captures it into the
 // provisioner, so the failure hits the real synchronous delivery inside
 // the register request, exactly where a genuine provisioning failure
 // would; the rest of the journey -- the register POST, the queue worker
@@ -369,10 +371,10 @@ func (f *failOnceProvisioning) observed() bool {
 func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *testing.T) {
 	inject := &failOnceProvisioning{}
 	cfg := testConfig(t)
-	cfg.failSelfServiceProvision = inject.fail
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	cfg.FailSelfServiceProvision = inject.fail
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	srv := httptest.NewServer(handler)
 	defer func() {
@@ -468,14 +470,14 @@ func waitForClinicMembership(t *testing.T, sqlitePath string, clinic pkgcore.Ten
 
 const selfServiceEnvDrivenEmail = "env-driven-founder@example.com"
 
-// selfServiceJourneyConfigFromEnv returns the serverConfig a REAL boot
-// reads (configFromEnv) under a hermetic environment: every variable
-// configFromEnv reads is cleared first, so the journey's outcome cannot
+// selfServiceJourneyConfigFromEnv returns the ServerConfig a REAL boot
+// reads (ConfigFromEnv) under a hermetic environment: every variable
+// ConfigFromEnv reads is cleared first, so the journey's outcome cannot
 // depend on the ambient environment the test happens to run in (a stray
 // APP_REDIS_ADDR or APP_S3_* in the shell would silently rewire a seam or
 // refuse the boot outright), with APP_DB_PATH pointed at a fresh per-test
 // temp file and APP_FAIL_SELF_SERVICE_PROVISION set to failCount.
-func selfServiceJourneyConfigFromEnv(t *testing.T, failCount string) serverConfig {
+func selfServiceJourneyConfigFromEnv(t *testing.T, failCount string) app.ServerConfig {
 	t.Helper()
 	for _, name := range [...]string{
 		"APP_DEPLOYMENT_MODE", "PORT", "APP_REDIS_ADDR", "APP_ROOT_KEY",
@@ -494,16 +496,16 @@ func selfServiceJourneyConfigFromEnv(t *testing.T, failCount string) serverConfi
 	}
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "self-service-env-driven.db"))
 	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", failCount)
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("configFromEnv: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	return cfg
 }
 
 // TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSignInLandsInClinic
 // is the env-driven half of the failure journey, driven the way a real
-// boot reads it: the server is built from configFromEnv's own output with
+// boot reads it: the server is built from ConfigFromEnv's own output with
 // APP_FAIL_SELF_SERVICE_PROVISION=1 in the environment, so a fresh
 // self-service register fails its first synchronous provisioning attempt,
 // the retry job converges the clinic, and a subsequent browser-shaped
@@ -519,14 +521,14 @@ func selfServiceJourneyConfigFromEnv(t *testing.T, failCount string) serverConfi
 // last step) is provably the retry job's work, never a synchronous
 // success.
 //
-// Failing before the switch existed: configFromEnv ignored the variable,
-// cfg.failSelfServiceProvision came back nil, and this test failed at the
+// Failing before the switch existed: ConfigFromEnv ignored the variable,
+// cfg.FailSelfServiceProvision came back nil, and this test failed at the
 // armed-hook assertion before any request was served.
 func TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSignInLandsInClinic(t *testing.T) {
 	cfg := selfServiceJourneyConfigFromEnv(t, "1")
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	srv := httptest.NewServer(handler)
 	defer func() {
@@ -536,8 +538,8 @@ func TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSi
 		}
 	}()
 
-	if cfg.failSelfServiceProvision == nil {
-		t.Fatal("APP_FAIL_SELF_SERVICE_PROVISION=1 booted a server whose provisioning is not injected -- the env switch is not wired into configFromEnv")
+	if cfg.FailSelfServiceProvision == nil {
+		t.Fatal("APP_FAIL_SELF_SERVICE_PROVISION=1 booted a server whose provisioning is not injected -- the env switch is not wired into app.ConfigFromEnv")
 	}
 
 	userID := registerFreshAccount(t, srv, selfServiceEnvDrivenEmail, selfServicePassword)
@@ -547,10 +549,10 @@ func TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSi
 	// injected failure -- the account's budget is spent, so the hook now
 	// answers nil for it (and still fails an untouched account's first
 	// attempt, proving the hook is live and per-account).
-	if err := cfg.failSelfServiceProvision(userID); err != nil {
+	if err := cfg.FailSelfServiceProvision(userID); err != nil {
 		t.Fatalf("the register's synchronous provisioning attempt never consumed its injected failure (hook answers %v): the convergence this test watches would not be the retry's work", err)
 	}
-	if err := cfg.failSelfServiceProvision("unrelated-fresh-account"); err == nil {
+	if err := cfg.FailSelfServiceProvision("unrelated-fresh-account"); err == nil {
 		t.Fatal("the armed injection did not fail an untouched account's first attempt")
 	}
 
@@ -619,8 +621,8 @@ func TestSelfServiceProvisionRetry_DeadLetter_LogsTheTerminalSignalByUserAndTena
 	// The provisioner behind the handler needs no booted org/rbac modules
 	// here: the injection fails at the top of provision, before any
 	// org/rbac step runs, which is exactly the terminal path under test.
-	handler := &selfServiceProvisionJobHandler{provisioner: &selfServiceProvisioner{
-		failProvision: func(string) error { return errors.New("injected terminal provisioning failure") },
+	handler := &app.SelfServiceProvisionJobHandler{Provisioner: &app.SelfServiceProvisioner{
+		FailProvision: func(string) error { return errors.New("injected terminal provisioning failure") },
 	}}
 	if regErr := queue.RegisterHandler(handler); regErr != nil {
 		t.Fatalf("RegisterHandler: %v", regErr)
@@ -637,13 +639,13 @@ func TestSelfServiceProvisionRetry_DeadLetter_LogsTheTerminalSignalByUserAndTena
 	}()
 
 	const userID = "terminal-account"
-	clinic := clinicTenantOf(userID)
-	payload, err := json.Marshal(selfServiceProvisionTask{UserID: userID})
+	clinic := app.ClinicTenantOf(userID)
+	payload, err := json.Marshal(app.SelfServiceProvisionTask{UserID: userID})
 	if err != nil {
 		t.Fatalf("marshal the provisioning retry task: %v", err)
 	}
 	jobID, err := queue.Enqueue(ctx, jobs.Task{
-		Type:     selfServiceProvisionTaskType,
+		Type:     app.SelfServiceProvisionTaskType,
 		TenantID: clinic,
 		Payload:  payload,
 	}, jobs.WithMaxRetries(1))

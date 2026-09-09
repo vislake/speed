@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // org_clinic_invitation_test.go pins invitation creation from a
@@ -19,10 +21,10 @@ import (
 // WithInvitationLinkBuilder seam (go/org/mail.go), a choice of host that
 // is display, never acceptance -- InviteService.Accept resolves the
 // invitation's own tenant from the token, server-side, and this app
-// allowlists the accept path through tenant resolution. server.go's
+// allowlists the accept path through tenant resolution. internal/app/server.go's
 // builder covers cfg.HostTenants' branded hosts and falls back to the
 // deployment's own public origin for every other tenant -- which is
-// every self-registered clinic: self_service.go's clinicTenantOf derives
+// every self-registered clinic: internal/app/self_service.go's ClinicTenantOf derives
 // the clinic tenant as "tenant-" + the registrant's user id, by
 // construction never a cfg.HostTenants value (that derivation's own doc
 // comment says so). A clinic that fell through to no host at all would
@@ -33,7 +35,7 @@ import (
 //
 // The journey below is the browser's own shape, driven end to end
 // through the real composed stack: a fresh account registers through the
-// real register route (provisioning its own clinic, self_service.go),
+// real register route (provisioning its own clinic, internal/app/self_service.go),
 // the browser-shaped sign-in lands in that clinic, the clinic's org tree
 // answers the account's bearer token, and the invitation is created with
 // the clinic's root node -- bearer token only, no demo identity header.
@@ -47,15 +49,15 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 	cfg.Mailer = mailer
 	// The clinic population has no branded host in cfg.HostTenants, so its
 	// accept links fall back to the deployment's own public origin
-	// (server.go's org wiring); the test names one the way a deployment
+	// (internal/app/server.go's org wiring); the test names one the way a deployment
 	// names its own (APP_PUBLIC_ORIGIN), and asserts the mail link against
 	// it below.
 	const publicOrigin = "https://app.demo.localhost"
 	cfg.PublicOrigin = publicOrigin
 
-	handler, cleanup, _, buildErr := buildServer(context.Background(), cfg)
+	handler, cleanup, _, buildErr := app.BuildServer(context.Background(), cfg)
 	if buildErr != nil {
-		t.Fatalf("buildServer: %v", buildErr)
+		t.Fatalf("BuildServer: %v", buildErr)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -66,12 +68,12 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 	t.Cleanup(srv.Close)
 
 	// A fresh clinic owner registers through the real register route; the
-	// self-service provisioning chain (self_service.go) gives the account
+	// self-service provisioning chain (internal/app/self_service.go) gives the account
 	// its own clinic tenant with an org tree root, a membership of it and
 	// the built-in owner role, synchronously with the 201.
 	const ownerEmail = "clinic-owner@example.com"
 	ownerUserID := registerFreshAccount(t, srv, ownerEmail, selfServicePassword)
-	wantTenant := clinicTenantOf(ownerUserID)
+	wantTenant := app.ClinicTenantOf(ownerUserID)
 
 	// The browser-shaped sign-in lands in the account's own clinic.
 	status, code, token, tenant := browserSignIn(t, srv, ownerEmail, selfServicePassword)
@@ -136,7 +138,7 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 
 	// The invitation mail really went out, addressed to the invitee, and
 	// its accept link points at the deployment's own public origin -- the
-	// fallback server.go's link builder applies to a tenant with no
+	// fallback internal/app/server.go's link builder applies to a tenant with no
 	// configured branded host. A configured demo tenant's host leaking
 	// into a clinic invitation would hand the invitee a link that brands
 	// someone else's tenant; the clinic's own links must carry the
@@ -171,7 +173,7 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 // permission-gated org route would refuse that header there. The rbac gate
 // and org's SubjectResolver must resolve the caller from the verified
 // Principal -- the clinic owner the registration provisioned with the
-// built-in owner role in the clinic (self_service.go). It fails the test
+// built-in owner role in the clinic (internal/app/self_service.go). It fails the test
 // on anything outside 2xx -- printing the envelope, so an earlier run
 // names the org.internal_error answer -- and otherwise decodes the
 // response into out (nil to skip decoding).

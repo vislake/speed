@@ -9,7 +9,7 @@
 // API: it feeds the app-owned merged document and the app-owned SDK
 // (examples/reference-app/web/src/app-api) the case web UI calls --
 // never the platform merge contracts/speed.yaml (docs/internal/
-// 21-api-contract.md records the split). cases_flow_test.go drives
+// 21-api-contract.md records the split). cmd/server/cases_flow_test.go drives:examples/reference-app/internal/app/cases.go
 // them through the composed HTTP stack.
 //
 // The five operations the case web UI renders from: upload a patient
@@ -21,7 +21,7 @@
 // detail's per-photo simulations deliberately stay on the smile-
 // simulation surface (see internal/cases's package doc comment's
 // "Shape decision" section) -- fetched per photo by the case view from
-// the simulation fragment that file's sibling cmd/server/smilesim.go
+// the simulation fragment that file's sibling smilesim.go
 // implements.
 //
 // None of these operations takes a permission check of its own: in this
@@ -37,7 +37,8 @@
 // reg.Routes/mountModuleRoutes, so none needs (and cannot silently
 // skip) an entry in demoRouteGuards' table, the same structural
 // argument smilesim.go's own header makes.
-package main
+
+package app
 
 import (
 	"encoding/json"
@@ -280,4 +281,4 @@ func writeCasesError(w http.ResponseWriter, err error) {
 // package's identical copy of the attribution seam (one host type, two
 // same-layer declarations -- see internal/cases's SubjectResolver doc
 // comment).
-var _ cases.SubjectResolver = demoNotesSubjectResolver{}
+var _ cases.SubjectResolver = DemoNotesSubjectResolver{}

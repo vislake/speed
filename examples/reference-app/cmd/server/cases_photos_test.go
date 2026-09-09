@@ -12,11 +12,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/storage"
 )
 
 // This file drives the case surface's two photo operations
-// (cmd/server/cases_photos.go) through the real composed HTTP stack:
+// (internal/app/cases_photos.go) through the real composed HTTP stack:
 // POST /api/v1/cases/photos/upload runs go/storage's three-step protocol
 // in-process, and GET /api/v1/cases/{caseId}/photos/{photoObjectID}/content
 // serves one attached photo's stored bytes. The photos are real -- a
@@ -121,7 +123,7 @@ func TestCasesPhotos_UploadThenContentOnCase_Journey(t *testing.T) {
 		t.Fatal("served photo content still carries the EXIF profile the completion pipeline must strip")
 	}
 	storageContent := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+uploaded.ObjectID+"/content",
-		acmeToken, demoOwnerUserID, "", nil)
+		acmeToken, app.DemoOwnerUserID, "", nil)
 	defer storageContent.Body.Close()
 	rawStorage, err := io.ReadAll(storageContent.Body)
 	if err != nil {
@@ -205,21 +207,21 @@ func TestCasesPhotos_ContentReadRefusals(t *testing.T) {
 }
 
 // TestCasesPhotos_UploadOversize_Refused pins the upload route's byte
-// bound: a decodable payload whose decoded length passes maxPhotoBytes
+// bound: a decodable payload whose decoded length passes MaxPhotoBytes
 // is refused with the coded too-large answer before the storage protocol
 // runs -- the route never stores a photo the serve path could not answer.
 func TestCasesPhotos_UploadOversize_Refused(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-oversize")
 
-	oversize := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'x'}, maxPhotoBytes+1))
+	oversize := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'x'}, app.MaxPhotoBytes+1))
 	resp := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
 		strings.NewReader(`{"content_base64":"`+oversize+`"}`))
 	assertCasesError(t, resp, http.StatusBadRequest, "cases.photo_content_too_large", "upload beyond the photo byte bound")
 }
 
 // TestCasesPhotoReadError_MapsTheObjectNotFoundCodeToThePhotoAnswer pins
-// casesPhotoReadError's classification directly: a content read whose
+// CasesPhotoReadError's classification directly: a content read whose
 // object no longer exists -- a deleted or reclaimed object, which the
 // storage module answers with the decorated storage.object_not_found
 // code (matched by Code, never identity, exactly as hasCasesPhotoCode
@@ -228,16 +230,16 @@ func TestCasesPhotos_UploadOversize_Refused(t *testing.T) {
 // the internal fallback carrying the original cause.
 func TestCasesPhotoReadError_MapsTheObjectNotFoundCodeToThePhotoAnswer(t *testing.T) {
 	missing := storage.ErrObjectNotFound.WithParam("id", "reclaimed-object")
-	got := casesPhotoReadError(missing)
-	if got.Code != ErrPhotoNotFound.Code {
-		t.Fatalf("casesPhotoReadError(object-not-found) code = %q, want %q", got.Code, ErrPhotoNotFound.Code)
+	got := app.CasesPhotoReadError(missing)
+	if got.Code != app.ErrPhotoNotFound.Code {
+		t.Fatalf("CasesPhotoReadError(object-not-found) code = %q, want %q", got.Code, app.ErrPhotoNotFound.Code)
 	}
 
-	other := casesPhotoReadError(context.DeadlineExceeded)
+	other := app.CasesPhotoReadError(context.DeadlineExceeded)
 	if other.Code != "cases.internal_error" {
-		t.Fatalf("casesPhotoReadError(raw failure) code = %q, want the internal fallback", other.Code)
+		t.Fatalf("CasesPhotoReadError(raw failure) code = %q, want the internal fallback", other.Code)
 	}
 	if !errors.Is(other, context.DeadlineExceeded) {
-		t.Error("casesPhotoReadError(raw failure) dropped the original cause, want it preserved")
+		t.Error("CasesPhotoReadError(raw failure) dropped the original cause, want it preserved")
 	}
 }

@@ -5,7 +5,7 @@ package main
 // authn+tenancy middleware chain, a real temp-file SQLite database
 // (carrying storage's, ai-gateway's and every other module's real
 // migrations), a real jobs.StandaloneQueue, and the smile-simulation
-// surface (cmd/server/smilesim.go, the app-side implementation of the
+// surface (internal/app/smilesim.go, the app-side implementation of the
 // generated interface its internal/smilesim/api fragment declares, whose
 // mount patterns the generated HandlerFromMux derives from the fragment
 // itself) -- against a fake
@@ -38,7 +38,7 @@ package main
 // Known, non-flaky WARN log this test deterministically surfaces: the
 // uploaded photo's own storage.object.derive.thumbnail job (enqueued by
 // its Complete) and the ai-gateway.image.generate job for the
-// SAME request run concurrently on buildServer's one shared
+// SAME request run concurrently on BuildServer's one shared
 // jobs.StandaloneQueue (WorkerCount 4 by default) against the app's one
 // file-backed SQLite database. The root cause is precise: the
 // derive job's gate (go/storage/repository.go's insertDerivativeIfAbsent)
@@ -65,7 +65,7 @@ package main
 // the failure mode is gone. The WARN stays by design: removing it would
 // be go/storage work on the gate's transaction shape (taking the write
 // lock first, e.g. BEGIN IMMEDIATE) or a queue-concurrency change in
-// this app's own wiring (cmd/server/server.go's shared StandaloneQueue)
+// this app's own wiring (internal/app/server.go's shared StandaloneQueue)
 // -- a boundary recorded here rather than worked around inside these
 // tests.
 
@@ -85,6 +85,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // fakeOpenAIImageServer answers every POST /images/edits with a fixed,
@@ -201,20 +203,20 @@ func newFakeOpenAIImageServer(t *testing.T) *fakeOpenAIImageServer {
 	return f
 }
 
-// buildSmileSimTestServer wires up buildServer's real output behind an
+// buildSmileSimTestServer wires up BuildServer's real output behind an
 // httptest.Server, with the ai-gateway image platform credential pointed
 // at imgServer -- the same test-only-override pattern
 // buildConsultTestServer already establishes for the chat credential.
-func buildSmileSimTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*httptest.Server, serverConfig) {
+func buildSmileSimTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-key"
 
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -407,7 +409,7 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 	// test's later byte-for-byte comparison is against the real ground
 	// truth, not the pre-sanitized upload.
 	contentResp := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+completedPhoto.ID+"/content", token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+completedPhoto.ID+"/content", token, app.DemoOwnerUserID, "", nil)
 	storedPhoto, err := io.ReadAll(contentResp.Body)
 	contentResp.Body.Close()
 	if err != nil {
@@ -444,7 +446,7 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 	}
 
 	// The fake server's own recorded request proves this app's wiring
-	// (aigateway.WithModelRoute(smilesim.LogicalModel, ...) in server.go)
+	// (aigateway.WithModelRoute(smilesim.LogicalModel, ...) in internal/app/server.go)
 	// actually ran end to end, rather than the test somehow
 	// short-circuiting the gateway: the vendor model id is the routed
 	// "dall-e-3", never the logical "image:smile-simulation" key business
@@ -462,7 +464,7 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 
 	// The generated image is readable back through storage's own HTTP
 	// surface, as a genuinely separate, completed object.
-	getResp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+outputObjectID, token, demoOwnerUserID, "", nil)
+	getResp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+outputObjectID, token, app.DemoOwnerUserID, "", nil)
 	outputObject := decodeStorageObject(t, getResp, http.StatusOK, "GET the generated simulation object")
 	if outputObject.State != "completed" {
 		t.Fatalf("generated object state = %q, want completed", outputObject.State)
@@ -477,7 +479,7 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 // recipient_user_id gets that recipient an SMS once the job succeeds --
 // internal/smilesim's Service publishes EventSimulationCompleted (from
 // NotifyOnCompletion, called by the job-status route this test polls
-// exactly like the earlier image-to-image test above), demo_notification.go's
+// exactly like the earlier image-to-image test above), internal/app/demo_notification.go's
 // subscription turns that into a notification.Dispatch of
 // demo.TypeKeySimulationReady, and the delivery job renders and sends it
 // over the sms-only channel that type declares.
@@ -486,7 +488,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 
 	// Built directly, rather than through buildSmileSimTestServer, so
 	// cfg.SMSOutput can be set to a capturing buffer before the one
-	// buildServer call -- the console SMS sender this app wires reads
+	// BuildServer call -- the console SMS sender this app wires reads
 	// cfg.SMSOutput exactly once, at construction time.
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
@@ -495,15 +497,15 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	cfg.SMSOutput = sms
 	// The named recipient is a legitimate in-tenant recipient only when it
 	// is an active member of the caller's tenant -- the simulate surface's
-	// own gate (cmd/server/smilesim.go's validateSimulateRecipient). The
+	// own gate (internal/app/smilesim.go's validateSimulateRecipient). The
 	// fixture is granted membership in tenant-acme, the tenant this test's
 	// caller signs into: the demo shape of a patient account in the same
 	// clinic, without which the request would (correctly) be refused.
-	cfg.Memberships.Grant(demoSmileSimRecipientUserID, "tenant-acme")
+	cfg.Memberships.Grant(app.DemoSmileSimRecipientUserID, "tenant-acme")
 
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -523,7 +525,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 
 	simulateBody, err := json.Marshal(map[string]string{
 		"photo_object_id":   completedPhoto.ID,
-		"recipient_user_id": demoSmileSimRecipientUserID,
+		"recipient_user_id": app.DemoSmileSimRecipientUserID,
 	})
 	if err != nil {
 		t.Fatalf("marshal simulate request: %v", err)
@@ -555,7 +557,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 		return len(smsLinesTo(sms, "+8613800138099")) == 1
 	})
 	// The demo module's copy renders in zh-CN (the fixed locale
-	// demo_notification.go's subscription dispatches with -- demo users
+	// internal/app/demo_notification.go's subscription dispatches with -- demo users
 	// carry no profile to negotiate a locale from, the same reasoning the
 	// note-created subscription's own doc comment gives), so this
 	// assertion checks only the line's structure -- never the rendered
@@ -579,7 +581,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 // TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver pins the
 // two-occurrence case: TWO simulations completed for the SAME
 // recipient are two distinct occurrences, and each must deliver on its
-// own. Before the fix, demo_notification.go's simulation-completed
+// own. Before the fix, internal/app/demo_notification.go's simulation-completed
 // subscription dispatched with empty Params, so both dispatches derived
 // the identical delivery key (same tenant, same type, same recipient,
 // same channel, same params) and the notification module settled the
@@ -604,11 +606,11 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-notify-twice-key"
 	sms := &lockedBuffer{}
 	cfg.SMSOutput = sms
-	cfg.Memberships.Grant(demoSmileSimRecipientUserID, "tenant-acme")
+	cfg.Memberships.Grant(app.DemoSmileSimRecipientUserID, "tenant-acme")
 
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -630,7 +632,7 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 		t.Helper()
 		simulateBody, err := json.Marshal(map[string]string{
 			"photo_object_id":   completedPhoto.ID,
-			"recipient_user_id": demoSmileSimRecipientUserID,
+			"recipient_user_id": app.DemoSmileSimRecipientUserID,
 		})
 		if err != nil {
 			t.Fatalf("marshal simulate request: %v", err)
@@ -904,8 +906,8 @@ func TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors(t *testing.T) {
 // member of another and that member's phone received the simulation-ready
 // SMS under the caller's tenant.
 //
-// demoSmileSimRecipientUserID (the demo address table's phone-carrying
-// fixture, demo_notification.go) is granted membership in tenant-globex
+// DemoSmileSimRecipientUserID (the demo address table's phone-carrying
+// fixture, internal/app/demo_notification.go) is granted membership in tenant-globex
 // ALONE here -- the tenant-B user whose phone the tenant-acme caller must
 // not be able to reach. The bug-state leg below polls the accepted job to
 // completion and records the SMS landing on that phone, so the failing run
@@ -918,11 +920,11 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-xtenant-key"
 	sms := &lockedBuffer{}
 	cfg.SMSOutput = sms
-	cfg.Memberships.Grant(demoSmileSimRecipientUserID, "tenant-globex")
+	cfg.Memberships.Grant(app.DemoSmileSimRecipientUserID, "tenant-globex")
 
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -947,7 +949,7 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 
 	simulateBody, err := json.Marshal(map[string]string{
 		"photo_object_id":   completedPhoto.ID,
-		"recipient_user_id": demoSmileSimRecipientUserID,
+		"recipient_user_id": app.DemoSmileSimRecipientUserID,
 	})
 	if err != nil {
 		t.Fatalf("marshal simulate request: %v", err)
@@ -963,7 +965,7 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 	}
 	resp.Body.Close()
 
-	recipientPhone := demoUserAddresses[demoSmileSimRecipientUserID].Phone
+	recipientPhone := app.DemoUserAddresses[app.DemoSmileSimRecipientUserID].Phone
 	if recipientPhone == "" {
 		t.Fatal("the demo recipient fixture carries no phone address -- the scenario needs one to demonstrate the harm")
 	}

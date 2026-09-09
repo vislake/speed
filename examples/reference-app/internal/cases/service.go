@@ -132,7 +132,7 @@ var (
 // simulation layer and of notes' module machinery), so each independent
 // package declares the seam, and one host type (cmd/server's
 // demoNotesSubjectResolver) satisfies both -- compile-time-checked at the
-// bottom of cmd/server/cases.go. A resolver that returns ok=false -- or is
+// bottom of internal/app/cases.go. A resolver that returns ok=false -- or is
 // not wired at all -- fails every create and list request closed with
 // ErrSubjectUnresolved, never an invented or empty creator.
 type SubjectResolver interface {

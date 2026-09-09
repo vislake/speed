@@ -2,10 +2,10 @@ package main
 
 // self_service_entitlements_test.go closes the entitlement half of the
 // self-service clinic story with real runs: the provisioning chain
-// self_service.go drives must leave a newly provisioned clinic with a
+// internal/app/self_service.go drives must leave a newly provisioned clinic with a
 // subscription and a credit balance, not just org, membership and owner
-// grant. The demo seeding (demo_entitlements.go's
-// seedDemoEntitlements, demo_credits.go's seedDemoCredits) grants only
+// grant. The demo seeding (internal/app/demo_entitlements.go's
+// seedDemoEntitlements, internal/app/demo_credits.go's seedDemoCredits) grants only
 // the boot-configured demo tenants (cfg.HostTenants); a clinic a
 // self-service registration provisions must be granted by provision
 // itself, or its owner's very first smile simulation is refused at
@@ -17,7 +17,7 @@ package main
 // boot-time demo seeding itself calls
 // (ensureDemoSubscription and grantDemoCredits), so the two paths cannot
 // drift apart. Each test
-// below drives the REAL composed HTTP stack (buildServer behind
+// below drives the REAL composed HTTP stack (BuildServer behind
 // httptest), never a mock, and reads balances and subscriptions back
 // through SECOND database connections -- the deterministic read shapes
 // billing_credit_flow_test.go and entitlements_flow_test.go establish.
@@ -29,7 +29,7 @@ package main
 //     aigateway.entitlement_denied.
 //   - TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance
 //     is regression (b): the same clinic's provisioning granted an Active
-//     subscription to the demo Plan and a demoSimulationCreditGrant
+//     subscription to the demo Plan and a DemoSimulationCreditGrant
 //     balance -- no subscription row and a zero balance is the
 //     un-granted shape.
 //   - TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo
@@ -42,7 +42,7 @@ package main
 //     is regression (c): the demo tenants' boot seeding is invariant
 //     under the provisioning path's use of the same shared per-tenant
 //     helpers -- one Active demo subscription and exactly one
-//     demoSimulationCreditGrant balance each, on the unchanged demo Plan
+//     DemoSimulationCreditGrant balance each, on the unchanged demo Plan
 //     with its unchanged Boolean grants.
 
 import (
@@ -52,6 +52,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/pkgcore"
@@ -75,7 +77,7 @@ const (
 // the demo Plan -- the row-level shape of "the tenant may use the gated
 // AI routes" (billing's EntitlementsService.Check reads exactly this row,
 // go/billing/subscription.go).
-func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg serverConfig, tenantID pkgcore.TenantID) {
+func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg app.ServerConfig, tenantID pkgcore.TenantID) {
 	t.Helper()
 
 	ctx := pkgcore.WithTenant(context.Background(), tenantID)
@@ -86,7 +88,7 @@ func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg serverConfig, ten
 	if active == nil {
 		t.Fatalf("tenant %q holds no Active subscription -- provisioning must subscribe it to the demo Plan", tenantID)
 	}
-	plan, err := openBillingModule(t, cfg).Plans().Resolve(ctx, "", demoEntitlementPlanKey)
+	plan, err := openBillingModule(t, cfg).Plans().Resolve(ctx, "", app.DemoEntitlementPlanKey)
 	if err != nil {
 		t.Fatalf("resolve the demo entitlement plan: %v", err)
 	}
@@ -95,7 +97,7 @@ func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg serverConfig, ten
 	}
 
 	// The demo Plan's grants are the exact model-access grants the app's
-	// routes judge (demo_entitlements.go): one Boolean true per logical
+	// routes judge (internal/app/demo_entitlements.go): one Boolean true per logical
 	// model key, never something a drifted copy could weaken.
 	for _, featureKey := range []string{"model:" + consult.LogicalModel, "model:" + smilesim.LogicalModel} {
 		grant, ok := plan.Grant(featureKey)
@@ -133,7 +135,7 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 	if status != http.StatusOK {
 		t.Fatalf("sign-in of the freshly registered clinic owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	clinic := clinicTenantOf(userID)
+	clinic := app.ClinicTenantOf(userID)
 	if tenant != clinic {
 		t.Fatalf("sign-in landed the principal in tenant %q, want its own clinic %q", tenant, clinic)
 	}
@@ -198,9 +200,9 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 	// simulation's worth is gone and nothing is left Reserved (the
 	// Confirm settled the reservation on the terminal poll).
 	after := creditBalanceFor(t, cfg, clinic)
-	if want := demoSimulationCreditGrant - smilesim.CreditsPerSimulation; after.Available != want {
+	if want := app.DemoSimulationCreditGrant - smilesim.CreditsPerSimulation; after.Available != want {
 		t.Errorf("clinic balance after a successful simulation = %+v, want Available %d (the %d demo seed minus CreditsPerSimulation %d)",
-			after, want, demoSimulationCreditGrant, smilesim.CreditsPerSimulation)
+			after, want, app.DemoSimulationCreditGrant, smilesim.CreditsPerSimulation)
 	}
 	if after.Reserved != 0 {
 		t.Errorf("clinic balance after a CONFIRMED generation = %+v, want Reserved 0", after)
@@ -211,7 +213,7 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 // is regression (b): the clinic a fresh registration provisions holds the
 // demo Plan's Active subscription (the row billing's EntitlementsService
 // judges every gated request against) and a credit balance of exactly
-// demoSimulationCreditGrant -- the same grant shape and value the demo
+// DemoSimulationCreditGrant -- the same grant shape and value the demo
 // seeding gives a demo clinic. Reads go through second connections, so
 // the assertion is on the database's own rows, never on what the server
 // process happens to hold in memory.
@@ -223,7 +225,7 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 	srv, cfg, _ := buildTestServer(t)
 
 	userID := registerFreshAccount(t, srv, selfServiceEntitlementRowEmail, selfServicePassword)
-	clinic := clinicTenantOf(userID)
+	clinic := app.ClinicTenantOf(userID)
 
 	// The subscription half of regression (b): the Active demo
 	// subscription and the demo Plan's unchanged Boolean grants.
@@ -231,13 +233,13 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 
 	// The credit half: exactly the demo seed grant -- non-zero, so the
 	// clinic's first simulations are payable, and exactly
-	// demoSimulationCreditGrant, so the provisioning seeded once and
+	// DemoSimulationCreditGrant, so the provisioning seeded once and
 	// never double-seeded.
 	bal := creditBalanceFor(t, cfg, clinic)
-	if bal.Available != demoSimulationCreditGrant || bal.Reserved != 0 {
+	if bal.Available != app.DemoSimulationCreditGrant || bal.Reserved != 0 {
 		t.Fatalf("clinic %s credit balance = %+v, want Available %d / Reserved 0 "+
-			"(the provisioning must seed the demoSimulationCreditGrant balance, not leave the clinic at zero)",
-			clinic, bal, demoSimulationCreditGrant)
+			"(the provisioning must seed the app.DemoSimulationCreditGrant balance, not leave the clinic at zero)",
+			clinic, bal, app.DemoSimulationCreditGrant)
 	}
 }
 
@@ -252,7 +254,7 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 //
 // The shape mirrors TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists
 // exactly (the same failOnceProvisioning hook armed through
-// cfg.failSelfServiceProvision before buildServer), then goes one step
+// cfg.FailSelfServiceProvision before BuildServer), then goes one step
 // further: once the retry's org work is visible, the subscription and the
 // seeded balance must follow from the SAME retried provision -- polled
 // through second connections rather than assumed synchronous.
@@ -263,10 +265,10 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo(t *testing.T) {
 	inject := &failOnceProvisioning{}
 	cfg := testConfig(t)
-	cfg.failSelfServiceProvision = inject.fail
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	cfg.FailSelfServiceProvision = inject.fail
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	srv := httptest.NewServer(handler)
 	defer func() {
@@ -280,7 +282,7 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 	if !inject.observed() {
 		t.Fatal("the synchronous provisioning attempt never consumed the injected failure, so nothing here exercises the retry")
 	}
-	clinic := clinicTenantOf(userID)
+	clinic := app.ClinicTenantOf(userID)
 
 	// The retry converged the org half: the membership row is the durable
 	// record of a provisioning attempt that ran to (near) completion, and
@@ -307,9 +309,9 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if bal.Available != demoSimulationCreditGrant || bal.Reserved != 0 {
+	if bal.Available != app.DemoSimulationCreditGrant || bal.Reserved != 0 {
 		t.Fatalf("clinic %s credit balance after the retried provisioning = %+v, want Available %d / Reserved 0",
-			clinic, bal, demoSimulationCreditGrant)
+			clinic, bal, app.DemoSimulationCreditGrant)
 	}
 	assertTenantHoldsActiveDemoSubscription(t, cfg, clinic)
 }
@@ -319,7 +321,7 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 // the provisioning path's use of the same shared per-tenant helpers --
 // each cfg.HostTenants tenant holds one Active subscription to the demo
 // Plan (whose Boolean grants are unchanged) and exactly one
-// demoSimulationCreditGrant balance, read through second connections.
+// DemoSimulationCreditGrant balance, read through second connections.
 // The test passes whether the shared helpers or a private path seeded a
 // given tenant: its job is the demo tenants' seeded state, not which
 // internal path produced it.
@@ -336,10 +338,10 @@ func TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance
 		assertTenantHoldsActiveDemoSubscription(t, cfg, tenantID)
 
 		bal := creditBalanceFor(t, cfg, tenantID)
-		if bal.Available != demoSimulationCreditGrant || bal.Reserved != 0 {
+		if bal.Available != app.DemoSimulationCreditGrant || bal.Reserved != 0 {
 			t.Fatalf("demo tenant %s credit balance = %+v, want Available %d / Reserved 0 -- "+
-				"the boot-time demo seed must grant each demo tenant exactly one demoSimulationCreditGrant",
-				tenantID, bal, demoSimulationCreditGrant)
+				"the boot-time demo seed must grant each demo tenant exactly one app.DemoSimulationCreditGrant",
+				tenantID, bal, app.DemoSimulationCreditGrant)
 		}
 	}
 	if len(checked) < 2 {

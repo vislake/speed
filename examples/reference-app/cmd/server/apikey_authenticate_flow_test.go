@@ -5,7 +5,7 @@ package main
 // request bearing a rotated-away or revoked key is refused", driven for
 // real, through this app's own composed HTTP
 // stack, against a real inbound endpoint (cmd/server/
-// integration_authenticate.go's integrationWhoamiPath) gated by
+// internal/app/integration_authenticate.go's IntegrationWhoamiPath) gated by
 // integration.AuthMiddleware. It shares apikey_flow_test.go's own helpers
 // (apikeyRequest, decodeCreatedAPIKey) for the session-authenticated CRUD
 // half of the flow, and never imports go/integration itself, matching that
@@ -26,6 +26,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/ratelimit"
 )
 
@@ -37,16 +39,16 @@ type testIntegrationWhoami struct {
 	Scopes    []string `json:"scopes"`
 }
 
-// whoamiRequest issues a GET against integrationWhoamiPath on srv, presenting
+// whoamiRequest issues a GET against IntegrationWhoamiPath on srv, presenting
 // rawKey as the X-API-Key bearer credential (integration.HeaderAPIKey) --
 // never Authorization, which this app's own outer authn.Middleware already
-// claims for session bearer tokens (see integration_authenticate.go's own
+// claims for session bearer tokens (see internal/app/integration_authenticate.go's own
 // HeaderAPIKey doc comment for why the two cannot share a header). An empty
 // rawKey sends no header at all.
 func whoamiRequest(t *testing.T, srv *httptest.Server, rawKey string) *http.Response {
 	t.Helper()
 
-	req, err := http.NewRequest(http.MethodGet, srv.URL+integrationWhoamiPath, nil)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+app.IntegrationWhoamiPath, nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -55,7 +57,7 @@ func whoamiRequest(t *testing.T, srv *httptest.Server, rawKey string) *http.Resp
 	}
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("GET %s: %v", integrationWhoamiPath, err)
+		t.Fatalf("GET %s: %v", app.IntegrationWhoamiPath, err)
 	}
 	return resp
 }
@@ -82,7 +84,7 @@ func decodeWhoami(t *testing.T, resp *http.Response, wantStatus int, what string
 
 // TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey
 // drives the full property end to end: create a key,
-// use it as a bearer credential against integrationWhoamiPath (succeeds),
+// use it as a bearer credential against IntegrationWhoamiPath (succeeds),
 // rotate it, use the OLD raw key value again (refused), use the NEW key
 // (succeeds), revoke it, use it again (refused).
 func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *testing.T) {
@@ -93,7 +95,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	// CRUD surface apikey_flow_test.go's own helpers drive -- the identical
 	// shape that test uses, since the inbound path changes nothing about how a key is
 	// issued.
-	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
+	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
 	if created.Key == "" {
 		t.Fatal("created key carries no raw key")
@@ -126,7 +128,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	}
 
 	// Rotate through the ordinary CRUD surface.
-	rotateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, demoOwnerUserID)
+	rotateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, app.DemoOwnerUserID)
 	rotated := decodeCreatedAPIKey(t, rotateResp, http.StatusOK, "rotate")
 
 	// The OLD raw key value is now refused as a bearer credential -- THE
@@ -145,7 +147,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	}
 
 	// Revoke the replacement through the ordinary CRUD surface.
-	revokeResp := apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, demoOwnerUserID)
+	revokeResp := apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, app.DemoOwnerUserID)
 	revokeResp.Body.Close()
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke: status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -172,10 +174,10 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 // charged against no budget, forever.
 //
 // The test bounds the demo route's budget by overriding the
-// integrationWhoamiLimits package var (field by field, without naming its
+// IntegrationWhoamiLimits package var (field by field, without naming its
 // integration.LayeredLimits type, keeping this file's own never-imports-
 // go/integration wire-shape discipline) for the duration of the test:
-// buildServer freezes the var's current value into the guard's
+// BuildServer freezes the var's current value into the guard's
 // LayeredLimiter at construction, and no other test in this package runs
 // concurrently (nothing here calls t.Parallel), so the override cannot leak
 // into a sibling server. With a budget of two global hits per minute, the
@@ -187,18 +189,18 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 // app-level "never a DB-hit authenticate" signal available: had the request
 // reached Authenticate, the valid key would have answered 200.
 func TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_Answers429(t *testing.T) {
-	originalLimits := integrationWhoamiLimits
-	integrationWhoamiLimits.Global = ratelimit.Limit{Rate: 2, Per: integrationWhoamiRateLimitWindow}
-	integrationWhoamiLimits.Tenant = ratelimit.Limit{}
-	integrationWhoamiLimits.Key = ratelimit.Limit{}
-	defer func() { integrationWhoamiLimits = originalLimits }()
+	originalLimits := app.IntegrationWhoamiLimits
+	app.IntegrationWhoamiLimits.Global = ratelimit.Limit{Rate: 2, Per: app.IntegrationWhoamiRateLimitWindow}
+	app.IntegrationWhoamiLimits.Tenant = ratelimit.Limit{}
+	app.IntegrationWhoamiLimits.Key = ratelimit.Limit{}
+	defer func() { app.IntegrationWhoamiLimits = originalLimits }()
 
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-auth-flood")
 
 	// Create a real key through the ordinary session-authenticated CRUD
 	// surface, the identical shape the rotate/revoke flow above uses.
-	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
+	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
 	if created.Key == "" {
 		t.Fatal("created key carries no raw key")

@@ -53,6 +53,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -128,7 +130,7 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 			t.Fatalf("marshal create body: %v", marshalErr)
 		}
 		createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-			token, demoOwnerUserID, "application/json", strings.NewReader(string(body)))
+			token, app.DemoOwnerUserID, "application/json", strings.NewReader(string(body)))
 		var share testCreateShareResponse
 		decodeSharingBody(t, createResp, http.StatusCreated, "create share for "+resourceRef, &share)
 		return share
@@ -200,8 +202,8 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 	// pki.certificate_revoked, so the old signature vouches for nothing.
 	writeStoredObject(t, cfg, "tenant-acme", outputObjectID, imgServer.generatedPNG)
 	revokeResp := storageRequest(t, srv, http.MethodPost,
-		pkiRoutePath+"/certificates/"+attestationRow+"/revoke",
-		token, demoOwnerUserID, "application/json",
+		app.PkiRoutePath+"/certificates/"+attestationRow+"/revoke",
+		token, app.DemoOwnerUserID, "application/json",
 		strings.NewReader(`{"reason":"simulation attestation key suspected compromised"}`))
 	revokeBody, _ := io.ReadAll(revokeResp.Body)
 	revokeResp.Body.Close()
@@ -263,8 +265,8 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 		t.Fatalf("GenerateCRL: %v", crlErr)
 	}
 	crlResp := storageRequest(t, srv, http.MethodGet,
-		pkiRoutePath+"/authorities/"+issuingAuthority.ID+"/crl",
-		token, demoOwnerUserID, "", nil)
+		app.PkiRoutePath+"/authorities/"+issuingAuthority.ID+"/crl",
+		token, app.DemoOwnerUserID, "", nil)
 	crlBody, _ := io.ReadAll(crlResp.Body)
 	crlResp.Body.Close()
 	if crlResp.StatusCode != http.StatusOK {
@@ -317,9 +319,9 @@ func TestX509Attestation_ChainAndAttestationsSurviveARestart(t *testing.T) {
 	// stops the queue worker and closes the database), so the second boot
 	// below is a genuine restart rather than two servers sharing one
 	// database live.
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer (first boot): %v", err)
+		t.Fatalf("BuildServer (first boot): %v", err)
 	}
 	firstSrv := httptest.NewServer(handler)
 	token := registerAndAuthenticate(t, firstSrv, cfg, "tenant-acme", "x509-restart")
@@ -403,11 +405,11 @@ func TestX509Attestation_ChainAndAttestationsSurviveARestart(t *testing.T) {
 
 // --- helpers --------------------------------------------------------------
 
-// buildAttestationTestServer wires buildServer's real output behind an
+// buildAttestationTestServer wires BuildServer's real output behind an
 // httptest.Server like buildSmileSimTestServer, with the AI-gateway image
 // credential pointed at imgServer AND the object store pinned to a known
 // directory (the tamper leg needs to reach the stored bytes).
-func buildAttestationTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*httptest.Server, serverConfig) {
+func buildAttestationTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
@@ -416,11 +418,11 @@ func buildAttestationTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) 
 	return buildAttestationServer(t, cfg), cfg
 }
 
-func buildAttestationServer(t *testing.T, cfg serverConfig) *httptest.Server {
+func buildAttestationServer(t *testing.T, cfg app.ServerConfig) *httptest.Server {
 	t.Helper()
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -432,7 +434,7 @@ func buildAttestationServer(t *testing.T, cfg serverConfig) *httptest.Server {
 	return srv
 }
 
-func openObserverDB(t *testing.T, cfg serverConfig) *gorm.DB {
+func openObserverDB(t *testing.T, cfg app.ServerConfig) *gorm.DB {
 	t.Helper()
 	db, err := dbkit.Open(context.Background(), dbkit.Options{
 		Dialect: dbkit.DialectSQLite,
@@ -514,11 +516,11 @@ func parseCertificatePEMBytes(t *testing.T, certPEM string) (*x509.Certificate, 
 // storedObjectPath resolves the local object store's file for one object:
 // cfg.ObjectStoreRoot/<tenant>/<objectID>/original -- the layout
 // go/storage's ObjectKey derives and pkgcore's LocalObjectStore serves.
-func storedObjectPath(cfg serverConfig, tenant string, objectID string) string {
+func storedObjectPath(cfg app.ServerConfig, tenant string, objectID string) string {
 	return filepath.Join(cfg.ObjectStoreRoot, tenant, objectID, "original")
 }
 
-func mustReadStoredObject(t *testing.T, cfg serverConfig, tenant string, objectID string) []byte {
+func mustReadStoredObject(t *testing.T, cfg app.ServerConfig, tenant string, objectID string) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(storedObjectPath(cfg, tenant, objectID))
 	if err != nil {
@@ -527,7 +529,7 @@ func mustReadStoredObject(t *testing.T, cfg serverConfig, tenant string, objectI
 	return raw
 }
 
-func writeStoredObject(t *testing.T, cfg serverConfig, tenant string, objectID string, content []byte) {
+func writeStoredObject(t *testing.T, cfg app.ServerConfig, tenant string, objectID string, content []byte) {
 	t.Helper()
 	path := storedObjectPath(cfg, tenant, objectID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -558,7 +560,7 @@ func mintShareAs(t *testing.T, srv *httptest.Server, token string, resourceRef s
 		t.Fatalf("marshal create body: %v", err)
 	}
 	createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-		token, demoOwnerUserID, "application/json", strings.NewReader(string(body)))
+		token, app.DemoOwnerUserID, "application/json", strings.NewReader(string(body)))
 	var share testCreateShareResponse
 	decodeSharingBody(t, createResp, http.StatusCreated, "create share for "+resourceRef, &share)
 	return share

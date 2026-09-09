@@ -1,13 +1,13 @@
 package main
 
-// demo_notification_test.go unit-tests simulationCompletedFieldsFromPayload
-// in isolation, the exact way noteCreatedFieldsFromPayload's own probe
+// demo_notification_test.go unit-tests SimulationCompletedFieldsFromPayload
+// in isolation, the exact way NoteCreatedFieldsFromPayload's own probe
 // would be tested if it carried a dedicated file: a concrete
 // smilesim.SimulationCompletedPayload value (the in-process EventBus
 // shape), a map[string]any shaped like what pkgcore/eventbus/redis's
 // EventBus actually hands a subscriber after its JSON round-trip (the
 // shape a same-process subscriber sees whenever it is not the bus instance
-// that published -- see the probe's own doc comment in demo_notification.go
+// that published -- see the probe's own doc comment in internal/app/demo_notification.go
 // for why that is not the same as "same process, always safe"), and a
 // handful of genuinely unreadable shapes that must still warn-and-drop.
 //
@@ -22,17 +22,19 @@ package main
 // job's image id, rides in the subscription's dispatch Params as the
 // per-occurrence marker that keeps two completed simulations for the same
 // recipient from collapsing into one delivery (see the probe's own doc
-// comment in demo_notification.go). Every readable-payload case below
+// comment in internal/app/demo_notification.go). Every readable-payload case below
 // therefore carries one, and the unreadable list names its absence.
 
 import (
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
 
-// --- noteCreatedFieldsFromPayload -------------------------------------
+// --- NoteCreatedFieldsFromPayload -------------------------------------
 //
 // The note-created probe's own dedicated suite, mirroring the
 // simulationCompleted suite above shape for shape: a concrete
@@ -46,7 +48,7 @@ import (
 
 func TestNoteCreatedFieldsFromPayload_ConcreteStruct(t *testing.T) {
 	payload := notes.NoteCreatedPayload{NoteID: "note-1", TenantID: "tenant-a", CreatorUserID: "user-7"}
-	noteID, creator, ok := noteCreatedFieldsFromPayload(payload)
+	noteID, creator, ok := app.NoteCreatedFieldsFromPayload(payload)
 	if !ok {
 		t.Fatal("probe rejected a concrete notes.NoteCreatedPayload, want extraction")
 	}
@@ -57,7 +59,7 @@ func TestNoteCreatedFieldsFromPayload_ConcreteStruct(t *testing.T) {
 
 func TestNoteCreatedFieldsFromPayload_DecodedMap(t *testing.T) {
 	payload := map[string]any{"note_id": "note-2", "tenant_id": "tenant-a", "creator_user_id": "user-8"}
-	noteID, creator, ok := noteCreatedFieldsFromPayload(payload)
+	noteID, creator, ok := app.NoteCreatedFieldsFromPayload(payload)
 	if !ok {
 		t.Fatal("probe rejected a decoded-map payload, want extraction")
 	}
@@ -71,7 +73,7 @@ func TestNoteCreatedFieldsFromPayload_SurvivesTheAlternativeSpellings(t *testing
 	// Redis-bus round-trip produces carries the struct field names as its
 	// keys, and the probe's contract is to read whichever shape arrived.
 	payload := map[string]any{"NoteID": "note-3", "CreatorUserID": "user-9"}
-	noteID, creator, ok := noteCreatedFieldsFromPayload(payload)
+	noteID, creator, ok := app.NoteCreatedFieldsFromPayload(payload)
 	if !ok {
 		t.Fatal("probe rejected the struct-spelling keys on a map payload")
 	}
@@ -95,7 +97,7 @@ func TestNoteCreatedFieldsFromPayload_Unreadable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			noteID, creator, ok := noteCreatedFieldsFromPayload(tc.payload)
+			noteID, creator, ok := app.NoteCreatedFieldsFromPayload(tc.payload)
 			if ok {
 				t.Errorf("unreadable payload must return ok=false, got (note %q, creator %q)", noteID, creator)
 			}
@@ -117,9 +119,9 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct(t *testing.T) {
 		Succeeded:       true,
 		OutputObjectID:  "obj-1",
 	}
-	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
+	recipientUserID, imageJobID, succeeded, ok := app.SimulationCompletedFieldsFromPayload(payload)
 	if !ok {
-		t.Fatalf("simulationCompletedFieldsFromPayload(%+v) ok = false, want true", payload)
+		t.Fatalf("SimulationCompletedFieldsFromPayload(%+v) ok = false, want true", payload)
 	}
 	if recipientUserID != "user-smilesim-recipient-1" {
 		t.Errorf("recipientUserID = %q, want %q", recipientUserID, "user-smilesim-recipient-1")
@@ -143,7 +145,7 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct_Failed(t *testing.T
 		RecipientUserID: "user-smilesim-recipient-1",
 		Succeeded:       false,
 	}
-	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
+	recipientUserID, imageJobID, succeeded, ok := app.SimulationCompletedFieldsFromPayload(payload)
 	if !ok {
 		t.Fatalf("ok = false, want true (a failed simulation is a readable payload)")
 	}
@@ -176,9 +178,9 @@ func TestSimulationCompletedFieldsFromPayload_DecodedMap(t *testing.T) {
 		"Succeeded":       true,
 		"OutputObjectID":  "obj-1",
 	}
-	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(decoded)
+	recipientUserID, imageJobID, succeeded, ok := app.SimulationCompletedFieldsFromPayload(decoded)
 	if !ok {
-		t.Fatalf("simulationCompletedFieldsFromPayload(%+v) ok = false, want true -- this is the exact shape the Redis EventBus delivers", decoded)
+		t.Fatalf("SimulationCompletedFieldsFromPayload(%+v) ok = false, want true -- this is the exact shape the Redis EventBus delivers", decoded)
 	}
 	if recipientUserID != "user-smilesim-recipient-1" {
 		t.Errorf("recipientUserID = %q, want %q", recipientUserID, "user-smilesim-recipient-1")
@@ -201,7 +203,7 @@ func TestSimulationCompletedFieldsFromPayload_DecodedMap_Failed(t *testing.T) {
 		"RecipientUserID": "user-smilesim-recipient-1",
 		"Succeeded":       false,
 	}
-	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(decoded)
+	recipientUserID, imageJobID, succeeded, ok := app.SimulationCompletedFieldsFromPayload(decoded)
 	if !ok {
 		t.Fatalf("ok = false, want true")
 	}
@@ -241,7 +243,7 @@ func TestSimulationCompletedFieldsFromPayload_Unreadable(t *testing.T) {
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
+			recipientUserID, imageJobID, succeeded, ok := app.SimulationCompletedFieldsFromPayload(payload)
 			if ok {
 				t.Fatalf("ok = true for %s, want false (recipientUserID=%q imageJobID=%q succeeded=%v)", name, recipientUserID, imageJobID, succeeded)
 			}

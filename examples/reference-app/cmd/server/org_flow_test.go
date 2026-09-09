@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -59,7 +61,7 @@ var _ pkgcore.Mailer = (*capturingMailer)(nil)
 var acceptURLPattern = regexp.MustCompile(`https://\S+`)
 
 // tokenFromMail extracts the invitation token carried on mail's accept URL --
-// reference-app's own org.WithInvitationLinkBuilder wiring (server.go) embeds
+// reference-app's own org.WithInvitationLinkBuilder wiring (internal/app/server.go) embeds
 // it as a "token" query parameter, exactly as a real invitee's browser would
 // receive it in the link they click.
 func tokenFromMail(t *testing.T, mail pkgcore.Mail) string {
@@ -79,26 +81,26 @@ func tokenFromMail(t *testing.T, mail pkgcore.Mail) string {
 	return token
 }
 
-// buildOrgTestServer wires buildServer's real output exactly like
+// buildOrgTestServer wires BuildServer's real output exactly like
 // buildTestServer (server_test.go), except with a capturingMailer standing in
 // for the deployment mode's default console mailer: org's invitation flow
 // needs to observe the sent message to recover the token that never appears
 // on any HTTP response (see capturingMailer's own doc comment above).
 //
-// It returns the serverConfig alongside the server and mailer, for the same
+// It returns the ServerConfig alongside the server and mailer, for the same
 // reason buildTestServer does: org's flow test authenticates its callers as
 // real authn users, and registerAndAuthenticate reaches cfg.Memberships to
 // grant each one membership in the tenant its token must select.
-func buildOrgTestServer(t *testing.T) (*httptest.Server, serverConfig, *capturingMailer) {
+func buildOrgTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *capturingMailer) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -142,20 +144,20 @@ type orgListMembersResponse struct {
 // the bearer access token is the ONLY thing that selects the tenant an org
 // operation runs in: org's routes sit behind tenancy.Middleware
 // (authn.NewPrincipalResolver) like every other protected route in this app,
-// and Host plays no part in resolving their tenant (see server.go's
+// and Host plays no part in resolving their tenant (see internal/app/server.go's
 // middleware-chain doc comment). token empty omits the Authorization header
 // entirely.
 //
 // subjectUserID is a separate thing from the token, the same split
 // createNoteAs's own doc comment (server_test.go) explains for notes: it is
-// the X-Demo-User-Id header org's own SubjectResolver (demoOrgSubjectResolver
-// in server.go) reads to name WHO is acting, for the two operations that
+// the X-Demo-User-Id header org's own SubjectResolver (DemoOrgSubjectResolver
+// in internal/app/server.go) reads to name WHO is acting, for the two operations that
 // resolve a caller identity (creating and accepting an invitation). Empty
 // omits the header entirely, which the operations that resolve no caller
 // identity must do (org_createNode).
 //
-// Every call also sends the rbac demo header (demoUserHeader) naming
-// demoOwnerUserID, the seeded identity seedDemoGrants grants BuiltinRoleOwner
+// Every call also sends the rbac demo header (DemoUserHeader) naming
+// DemoOwnerUserID, the seeded identity seedDemoGrants grants BuiltinRoleOwner
 // in every configured tenant -- org's
 // route is gated per operation on its own declared permissions like every
 // other module's, and this
@@ -196,9 +198,9 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 	if reader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
 	if subjectUserID != "" {
-		req.Header.Set(demoOrgUserHeader, subjectUserID)
+		req.Header.Set(app.DemoOrgUserHeader, subjectUserID)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -238,7 +240,7 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 // org_listMembers (handler.go's OrgListMembers -> MemberService.List)
 // resolves through that exact seam. This is the seam actually being
 // exercised, not merely declared: see org.FeatureGate's own wiring in
-// server.go (orgFeatureGate) for the parallel no-import technique used for
+// internal/app/server.go (OrgFeatureGate) for the parallel no-import technique used for
 // config, proven the same way by TestSystemFeatures_EnabledFlagChain_ResolvesDependencies
 // in config_public_endpoint_gates_test.go.
 func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *testing.T) {
@@ -248,7 +250,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// bearer token registerAndAuthenticate returns is what selects that
 	// tenant for the INVITER: org's routes sit behind the authn+tenancy
 	// middleware chain like every other route this app protects, and Host
-	// never resolves a tenant for them (see server.go's middleware-chain
+	// never resolves a tenant for them (see internal/app/server.go's middleware-chain
 	// doc comment). The INVITEE deliberately authenticates as nobody:
 	// org_acceptInvitation resolves the
 	// invitation's own tenant from the token, server-side, and the app's
@@ -382,7 +384,7 @@ func containsUserID(members []orgMembership, userID string) bool {
 // owner whose browser requests carry a bearer token and NEITHER demo
 // header -- the exact shape the team surface's invite flow produces -- can
 // create an invitation. A header-less request resolves through the
-// verified Principal (demoOrgSubjectResolver's principalFallback wiring);
+// verified Principal (DemoOrgSubjectResolver's principalFallback wiring);
 // without it the request would be refused with org.subject_unresolved even
 // though the rbac gate ahead of it had already let the same principal
 // through.
@@ -390,12 +392,12 @@ func containsUserID(members []orgMembership, userID string) bool {
 // The caller must genuinely hold the permission its bearer proves: this
 // test grants the registered account the owner role through the live rbac
 // service (the demo seeding grants only the header actors), so the whole
-// composed gate -- rbac's demoSubjectResolver falling back to the verified
-// Principal, then org's own demoOrgSubjectResolver with principalFallback
+// composed gate -- rbac's DemoSubjectResolver falling back to the verified
+// Principal, then org's own DemoOrgSubjectResolver with principalFallback
 // -- is exercised with no demo header anywhere on the wire.
 func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t *testing.T) {
 	// The server is built by hand rather than through buildOrgTestServer
-	// because the rbac hook must be armed on the config BEFORE buildServer
+	// because the rbac hook must be armed on the config BEFORE BuildServer
 	// runs (the hook fires inside it, right after seedDemoGrants) -- the
 	// same shape TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly
 	// uses. The capturingMailer stands in for the console mailer exactly as
@@ -406,9 +408,9 @@ func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -419,7 +421,7 @@ func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t
 	t.Cleanup(srv.Close)
 
 	if rbacService == nil {
-		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
 	}
 
 	const tenant = pkgcore.TenantID("tenant-acme")

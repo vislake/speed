@@ -1,12 +1,12 @@
 package main
 
 // authn_e2e_test.go drives the
-// reference app's real, composed HTTP server (buildServer's actual output,
+// reference app's real, composed HTTP server (BuildServer's actual output,
 // exactly like server_test.go and config_public_endpoint_gates_test.go do) through all
 // three sign-in entry points authn ships -- password, social (against a
 // local GitHub-shaped test server, never a live provider), and phone plus
 // an SMS code (the standalone deployment mode's console sender, captured
-// through serverConfig.SMSOutput) -- each yielding a working access token
+// through ServerConfig.SMSOutput) -- each yielding a working access token
 // that then successfully calls the notes API, plus the self-service
 // session-management surface: list devices, view login history, revoke
 // one device, and prove that device's refresh token now fails while
@@ -16,7 +16,7 @@ package main
 // property the revoke leg exists to prove.
 //
 // A second test below is the regression proof for the wiring gap:
-// buildServer passes authn.WithFeatureGate the
+// BuildServer passes authn.WithFeatureGate the
 // same lazy *config.Service adapter org's gate uses, so the module's eight
 // declared flags are enforced in THIS app, not just inside go/authn. The
 // test disables authn.password_login through the real config surface and
@@ -32,7 +32,7 @@ package main
 // tenant membership,
 // and this app's sign-in membership store never does that automatically --
 // org rows and explicit grants are the only memberships there are
-// (sign_in_memberships.go's own doc comment). Registering first and
+// (internal/app/sign_in_memberships.go's own doc comment). Registering first and
 // granting membership by hand sidesteps exactly that limitation.
 
 import (
@@ -48,6 +48,8 @@ import (
 	"regexp"
 	"sync"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
@@ -132,27 +134,27 @@ func (s *githubStub) provider() authn.SocialProvider {
 	)
 }
 
-// buildAuthnE2EServer wires buildServer with a real GitHub-shaped test
+// buildAuthnE2EServer wires BuildServer with a real GitHub-shaped test
 // provider, a redirect URI allowlisted for it, github's channel on the
 // trusted list (so a verified email auto-links rather than refusing --
 // go/authn/identity.go's resolveSocialAccount), and a captured SMS output
-// buffer -- everything server.go's default production wiring leaves empty
-// (serverConfig.SocialProviders/RedirectAllowlist/TrustedProviders' own doc
+// buffer -- everything internal/app/server.go's default production wiring leaves empty
+// (ServerConfig.SocialProviders/RedirectAllowlist/TrustedProviders' own doc
 // comments explain why). The optional mutate funcs, when any are passed,
-// run against the cfg immediately before buildServer is called, so a test
+// run against the cfg immediately before BuildServer is called, so a test
 // can reach a post-Attach seam such as cfg.OnConfigReady.
-func buildAuthnE2EServer(t *testing.T, mutate ...func(*serverConfig)) (*httptest.Server, serverConfig, *bytes.Buffer, *githubStub) {
+func buildAuthnE2EServer(t *testing.T, mutate ...func(*app.ServerConfig)) (*httptest.Server, app.ServerConfig, *bytes.Buffer, *githubStub) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	// This test signs its demo account into tenant-e2e, a tenant of its
-	// own that testConfig's shared demoHostTenants map (acme/globex) does
+	// own that testConfig's shared DemoHostTenants map (acme/globex) does
 	// not name. Replace the map -- never mutate the shared one -- so
-	// seedDemoGrants (demo_subject.go) seeds tenant-e2e with the built-in
+	// seedDemoGrants (internal/app/demo_subject.go) seeds tenant-e2e with the built-in
 	// roles and the demo grants at boot, exactly as it does for the two
 	// demo tenants in every other test: the merged notes gate resolves WHO
-	// is acting from demoUserHeader (demoSubjectResolver in
-	// demo_subject.go), and demo-owner -- the acting user createNoteAs
+	// is acting from DemoUserHeader (DemoSubjectResolver in
+	// internal/app/demo_subject.go), and demo-owner -- the acting user createNoteAs
 	// sends -- holds the owner role in every seeded tenant, so a notes
 	// call after a real sign-in is not denied for want of a grant.
 	cfg.HostTenants = map[string]pkgcore.TenantID{"e2e.demo.localhost": "tenant-e2e"}
@@ -173,9 +175,9 @@ func buildAuthnE2EServer(t *testing.T, mutate ...func(*serverConfig)) (*httptest
 		m(&cfg)
 	}
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -441,7 +443,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 
 	// The revoked session's OWN access token is refused on its very next
 	// request too, not merely at its natural expiry: this app runs in
-	// immediate revocation mode (server.go wires
+	// immediate revocation mode (internal/app/server.go wires
 	// authn.WithRevocationMode(authn.RevocationModeImmediate)), and the
 	// session manager is the revocation source Middleware consults by
 	// default, so an unexpired token issued moments ago must stop working
@@ -483,7 +485,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 }
 
 // TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen
-// is the regression proof for the wiring gap: buildServer passes
+// is the regression proof for the wiring gap: BuildServer passes
 // authn.WithFeatureGate the same lazy *config.Service adapter org's gate
 // uses, so authn's eight declared feature flags are enforced at request
 // time in THIS app -- a deployment that disables authn.password_login must
@@ -506,11 +508,11 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 // gate enforced the flag in the app.
 func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *testing.T) {
 	var configSvc *config.Service
-	srv, cfg, smsOut, github := buildAuthnE2EServer(t, func(cfg *serverConfig) {
+	srv, cfg, smsOut, github := buildAuthnE2EServer(t, func(cfg *app.ServerConfig) {
 		cfg.OnConfigReady = func(svc *config.Service) { configSvc = svc }
 	})
 	if configSvc == nil {
-		t.Fatal("cfg.OnConfigReady was never called by buildServer")
+		t.Fatal("cfg.OnConfigReady was never called by app.BuildServer")
 	}
 	client := srv.Client()
 
@@ -665,8 +667,8 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 // TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress
 // pins the host wiring for a trusted-proxy declaration: with the
 // deployment's two-part declaration in place
-// (serverConfig.TrustedProxies from APP_TRUSTED_PROXIES, and the
-// per-header vendor opt-in serverConfig.ReadFlyClientIP from
+// (ServerConfig.TrustedProxies from APP_TRUSTED_PROXIES, and the
+// per-header vendor opt-in ServerConfig.ReadFlyClientIP from
 // APP_READ_FLY_CLIENT_IP), the session and login-history rows a sign-in
 // writes must carry the REAL client address recovered from the
 // platform-injected forwarding header. The proxy declaration ALONE
@@ -724,7 +726,7 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 	// grants it membership of tenant-e2e, and signs it in, returning the
 	// sign-in's session id and the servers list/history responses' IPs.
 	accountSeq := 0
-	registerAndSignIn := func(t *testing.T, srv *httptest.Server, cfg serverConfig, client *http.Client,
+	registerAndSignIn := func(t *testing.T, srv *httptest.Server, cfg app.ServerConfig, client *http.Client,
 		registerHeaders, loginHeaders map[string]string,
 	) (sessionID string, sessionIP, historyIP string) {
 		t.Helper()
@@ -806,7 +808,7 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 		// before it reads the Fly-Client-IP header. The request carrying
 		// the proxy-written Fly-Client-IP records the address the
 		// platform forwarded, not 127.0.0.1.
-		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *serverConfig) {
+		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *app.ServerConfig) {
 			cfg.TrustedProxies = []string{"127.0.0.0/8"}
 			cfg.ReadFlyClientIP = true
 		})
@@ -826,7 +828,7 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 		// verbatim -- so authn must never read that single-hop vendor
 		// header, even though the peer is trusted. The client-chosen value
 		// is not recorded; the connection address is.
-		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *serverConfig) {
+		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *app.ServerConfig) {
 			cfg.TrustedProxies = []string{"127.0.0.0/8"}
 		})
 		spoof := map[string]string{"Fly-Client-IP": "198.51.100.7"}

@@ -32,7 +32,7 @@
 // offers no job-completion hook; see that method's doc comment). The
 // observations that make an output visible to its own tenant -- the
 // job-status poll, the per-photo enumeration and the simulation-content
-// read, all in cmd/server/smilesim.go -- each call EnsureAttested for a
+// read, all in internal/app/smilesim.go -- each call EnsureAttested for a
 // succeeded output, idempotently: an object with a row whose certificate
 // is still active is left alone. Every reachable share of an output
 // presupposes one of those observations (a share can only be minted

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -45,7 +45,7 @@ import (
 // tenant's own context, rbac's EnsureBuiltinRoles and AssignRole for the
 // grant, never a raw write and never a cross-module struct import. The
 // tenant id is DERIVED from the registrant's user id rather than minted
-// (clinicTenantOf), which is what makes the whole chain safe to repeat:
+// (ClinicTenantOf), which is what makes the whole chain safe to repeat:
 // an at-least-once bus redelivering the event, or two replicas of a
 // distributed composition both consuming it, converge on the SAME tenant
 // and the SAME idempotent org/rbac writes (org's own handleUserCreated
@@ -82,7 +82,7 @@ import (
 // registrations, which is the discriminator that keeps the demo path
 // byte-identical: an event published by seedDemoUsers' or
 // seedDemoPlatformStaff's own register POSTs (registration happens inside
-// buildServer, before the subscription exists) provisions nothing, while
+// BuildServer, before the subscription exists) provisions nothing, while
 // every registration that arrives once the server is up -- a browser's,
 // or a flow test's -- provisions. On the in-process bus the provisioning
 // runs synchronously inside the register request itself, before its 201
@@ -169,7 +169,15 @@ import (
 // never completed has no boot-time record to re-discover either -- its
 // retry job row, not a host bookkeeping row, is what the next boot's
 // queue start re-dispatches.
-type selfServiceProvisioner struct {
+
+// SelfServiceProvisioner provisions a self-registered account's clinic:
+// the org tree root, membership and owner grant, the demo entitlement
+// Plan subscription and the starting credit balance, all under the
+// account's own derived clinic tenant (the file's own doc comment above
+// describes the full chain and its failure semantics). WireSelfService
+// builds the fully-wired instance; the fields' own doc comments name what
+// each service is used for.
+type SelfServiceProvisioner struct {
 	// orgModule is the module whose TreeService and MemberService the
 	// clinic's org rows are created through, under the clinic tenant's own
 	// context -- the same services the demo seed and org's own HTTP
@@ -220,7 +228,7 @@ type selfServiceProvisioner struct {
 	// registered on (wireSelfService). Always set by wireSelfService.
 	queue *jobs.StandaloneQueue
 	// failProvision is the failure-injection point
-	// (serverConfig.failSelfServiceProvision, consulted at the top of
+	// (ServerConfig.failSelfServiceProvision, consulted at the top of
 	// provision): when non-nil it fails a provisioning attempt it is
 	// asked about by returning an error, so a failure can be placed on
 	// the synchronous delivery and the retry watched converging the same
@@ -228,11 +236,11 @@ type selfServiceProvisioner struct {
 	// every attempt (a test's closure, or a budget larger than the whole
 	// retry horizon) or only the first few attempts of each account
 	// (newProvisionFailureInjector, the env-driven shape). Nil under the
-	// production default (serverConfig's own doc comment).
-	failProvision func(userID string) error
+	// production default (ServerConfig's own doc comment).
+	FailProvision func(userID string) error
 }
 
-// newProvisionFailureInjector returns the failProvision hook configFromEnv
+// newProvisionFailureInjector returns the failProvision hook ConfigFromEnv
 // arms from APP_FAIL_SELF_SERVICE_PROVISION's count (see
 // failSelfServiceProvisionEnv's doc comment in server.go): the first
 // count provisioning attempts OF EACH ACCOUNT fail -- counted per user
@@ -275,12 +283,12 @@ func newProvisionFailureInjector(count int) func(userID string) error {
 // job and is skipped here, so the two auto paths never both provision
 // one account.
 //
-// The handler always returns nil (see selfServiceProvisioner's own doc
+// The handler always returns nil (see SelfServiceProvisioner's own doc
 // comment for why), so every failure below is a logged one -- and a failed
 // provisioning attempt is followed by the retry that converges the clinic
 // (scheduleProvisionRetry), never left for a redelivery that will not
 // come.
-func (p *selfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.Event) error {
+func (p *SelfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.Event) error {
 	log := obs.FromContext(ctx)
 	if evt.TenantID != "" {
 		// A user created inside an existing tenant is org's own
@@ -297,7 +305,7 @@ func (p *selfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.
 		return nil
 	}
 
-	clinic := clinicTenantOf(userID)
+	clinic := ClinicTenantOf(userID)
 	if err := p.provision(ctx, userID, clinic); err != nil {
 		// The register route has already answered (or is about to answer)
 		// 201 for this account, so a failure here must not surface as one
@@ -315,13 +323,13 @@ func (p *selfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.
 	return nil
 }
 
-// selfServiceProvisionTaskType is the jobs task type of the retry job a
+// SelfServiceProvisionTaskType is the jobs task type of the retry job a
 // failed synchronous provisioning attempt enqueues (scheduleProvisionRetry
 // below). The dotted spelling follows the task types this app's queue
 // already carries (storage.expiry_sweep, notification.deliver,
 // pki.expiry_scan); the type is this host's own, so its prefix names the
 // feature, not a module.
-const selfServiceProvisionTaskType = "self_service.provision_clinic"
+const SelfServiceProvisionTaskType = "self_service.provision_clinic"
 
 // selfServiceProvisionMaxRetries is how many retries beyond the first
 // attempt the retry job gets (jobs.WithMaxRetries; jobs.DefaultMaxRetries
@@ -337,17 +345,17 @@ const selfServiceProvisionTaskType = "self_service.provision_clinic"
 // rather than another attempt.
 const selfServiceProvisionMaxRetries = 10
 
-// selfServiceProvisionTask is the retry job's payload: the registrant's
+// SelfServiceProvisionTask is the retry job's payload: the registrant's
 // user id, the one fact provision needs (the clinic tenant is derived
-// from it, clinicTenantOf). The payload carries no tenant: the job's own
+// from it, ClinicTenantOf). The payload carries no tenant: the job's own
 // TenantID is the clinic, so the worker's rebuilt context already names
 // it when the handler runs (jobs.Handler's contract).
-type selfServiceProvisionTask struct {
+type SelfServiceProvisionTask struct {
 	UserID string `json:"user_id"`
 }
 
-// selfServiceProvisionJobHandler is the jobs.Handler for
-// selfServiceProvisionTaskType: it re-runs the clinic provisioning whose
+// SelfServiceProvisionJobHandler is the jobs.Handler for
+// SelfServiceProvisionTaskType: it re-runs the clinic provisioning whose
 // synchronous attempt failed. Every step provision takes is idempotent,
 // so the handler converges the clinic wherever the earlier attempt died:
 // a re-run lands the org tree root on a re-read when the root already
@@ -368,20 +376,25 @@ type selfServiceProvisionTask struct {
 // Start (go/jobs' own doc), and no job of this type can exist before this
 // registration completes anyway -- scheduleProvisionRetry, its only
 // enqueuer, runs inside a served register request, which cannot arrive
-// until buildServer has returned.
-type selfServiceProvisionJobHandler struct {
-	provisioner *selfServiceProvisioner
+// until BuildServer has returned.
+type SelfServiceProvisionJobHandler struct {
+	// Provisioner is the provisioner the handler drives. A test rig
+	// that only wants the retry job's terminal path constructs a
+	// provisioner whose FailProvision hook fails every attempt, with
+	// every other field nil (the failure lands before any org/rbac
+	// step runs); WireSelfService builds the fully-wired handler.
+	Provisioner *SelfServiceProvisioner
 }
 
 // compile-time checks that the retry handler satisfies jobs.Handler and
 // jobs.FailureHook.
 var (
-	_ jobs.Handler     = (*selfServiceProvisionJobHandler)(nil)
-	_ jobs.FailureHook = (*selfServiceProvisionJobHandler)(nil)
+	_ jobs.Handler     = (*SelfServiceProvisionJobHandler)(nil)
+	_ jobs.FailureHook = (*SelfServiceProvisionJobHandler)(nil)
 )
 
 // Type implements jobs.Handler.
-func (h *selfServiceProvisionJobHandler) Type() string { return selfServiceProvisionTaskType }
+func (h *SelfServiceProvisionJobHandler) Type() string { return SelfServiceProvisionTaskType }
 
 // Handle implements jobs.Handler: it re-runs provision for the task's user
 // under the clinic tenant context the worker rebuilt from the job's own
@@ -391,15 +404,15 @@ func (h *selfServiceProvisionJobHandler) Type() string { return selfServiceProvi
 // carries the registrant's user id so that recorded text names the
 // account even read out of context; the clinic tenant stays on the job
 // row itself, where the queue already keeps it.
-func (h *selfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
-	var task selfServiceProvisionTask
+func (h *SelfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
+	var task SelfServiceProvisionTask
 	if err := json.Unmarshal(job.Payload, &task); err != nil {
 		return jobs.Result{}, fmt.Errorf("reference-app: decode the clinic provisioning retry task: %w", err)
 	}
 	if task.UserID == "" {
 		return jobs.Result{}, fmt.Errorf("reference-app: the clinic provisioning retry task carries no user id")
 	}
-	if err := h.provisioner.provision(ctx, task.UserID, clinicTenantOf(task.UserID)); err != nil {
+	if err := h.Provisioner.provision(ctx, task.UserID, ClinicTenantOf(task.UserID)); err != nil {
 		return jobs.Result{}, fmt.Errorf("provisioning the clinic of user %s: %w", task.UserID, err)
 	}
 	return jobs.Result{}, nil
@@ -429,9 +442,9 @@ func (h *selfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.J
 // observed by the queue. A payload that no longer decodes (a task this
 // app itself never enqueues) cannot name the account; the log then names
 // the clinic and the cause and says the same consequence.
-func (h *selfServiceProvisionJobHandler) OnFailure(ctx context.Context, job *jobs.Job, cause error) {
+func (h *SelfServiceProvisionJobHandler) OnFailure(ctx context.Context, job *jobs.Job, cause error) {
 	log := obs.FromContext(ctx)
-	var task selfServiceProvisionTask
+	var task SelfServiceProvisionTask
 	if err := json.Unmarshal(job.Payload, &task); err != nil || task.UserID == "" {
 		log.Error("reference-app: clinic provisioning retry dead-lettered with a task payload that names no account; the account cannot sign in until it is provisioned by hand",
 			"error", cause)
@@ -454,14 +467,14 @@ func (h *selfServiceProvisionJobHandler) OnFailure(ctx context.Context, job *job
 // semantics pin a Job forever regardless of its outcome, so a keyed
 // retry that dead-lettered could never be re-enqueued by any later
 // mechanism.
-func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, userID string, clinic pkgcore.TenantID) {
+func (p *SelfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, userID string, clinic pkgcore.TenantID) {
 	log := obs.FromContext(ctx)
 	if p.queue == nil {
 		log.Error("reference-app: no job queue to retry the clinic provisioning on; the account cannot sign in until it is provisioned by hand",
 			"user_id", userID, "tenant_id", clinic)
 		return
 	}
-	payload, err := json.Marshal(selfServiceProvisionTask{UserID: userID})
+	payload, err := json.Marshal(SelfServiceProvisionTask{UserID: userID})
 	if err != nil {
 		// One string field cannot fail to marshal; the guard exists so a
 		// future payload change fails loudly here rather than silently
@@ -471,7 +484,7 @@ func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 		return
 	}
 	if _, err := p.queue.Enqueue(ctx, jobs.Task{
-		Type:     selfServiceProvisionTaskType,
+		Type:     SelfServiceProvisionTaskType,
 		TenantID: clinic,
 		Payload:  payload,
 	}, jobs.WithMaxRetries(selfServiceProvisionMaxRetries)); err != nil {
@@ -497,16 +510,16 @@ func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 // credits converges on the ensure's own guards (an Active subscription is
 // left where it is; a non-zero balance is never double-seeded), exactly
 // as it converges the org and rbac rows.
-func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, clinic pkgcore.TenantID) error {
-	// failProvision is the injection point (selfServiceProvisioner's own
+func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, clinic pkgcore.TenantID) error {
+	// failProvision is the injection point (SelfServiceProvisioner's own
 	// doc comment): armed, it fails this attempt before any step runs, so
 	// a failure can be placed on the synchronous delivery and the retry
 	// watched converging the same clinic -- or, with a budget past the
 	// whole retry horizon, the exhaustion watched dead-lettering. An
 	// injected failure must read like any other provisioning failure from
 	// here on, which is what the wrap below does.
-	if p.failProvision != nil {
-		if err := p.failProvision(userID); err != nil {
+	if p.FailProvision != nil {
+		if err := p.FailProvision(userID); err != nil {
 			return fmt.Errorf("reference-app: injected provisioning failure: %w", err)
 		}
 	}
@@ -614,7 +627,7 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 // itself comes from org's own message (org.default_workspace_name,
 // rendered in the platform default locale exactly as org's auto path
 // renders it), never from Go copy.
-func (p *selfServiceProvisioner) clinicRootNameFor(userID string, tenantCtx context.Context) string {
+func (p *SelfServiceProvisioner) clinicRootNameFor(userID string, tenantCtx context.Context) string {
 	if p.authnSvc != nil && userID != "" {
 		user, err := p.authnSvc.Users().FindByID(tenantCtx, userID)
 		if err == nil && strings.TrimSpace(user.DisplayName) != "" {
@@ -643,7 +656,7 @@ func (p *selfServiceProvisioner) clinicRootNameFor(userID string, tenantCtx cont
 // means something else to them. A missing catalog or message falls back
 // to the tenant id -- an identifier is not user-facing text, the same
 // fallback org's own function documents.
-func (p *selfServiceProvisioner) clinicRootName(ctx context.Context) string {
+func (p *SelfServiceProvisioner) clinicRootName(ctx context.Context) string {
 	fallback := func() string {
 		tenant, err := pkgcore.MustTenantFromContext(ctx)
 		if err != nil {
@@ -697,15 +710,15 @@ func ensureClinicRoot(ctx context.Context, tree *org.TreeService, name string) (
 	return nil, false, err
 }
 
-// clinicTenantOf derives the clinic tenant id for userID. The derivation
+// ClinicTenantOf derives the clinic tenant id for userID. The derivation
 // is what makes provisioning safe across replicas and redeliveries (see
-// selfServiceProvisioner's own doc comment): the same account always
+// SelfServiceProvisioner's own doc comment): the same account always
 // resolves to the same tenant, so two consumers of one registration event
 // converge on one clinic instead of minting two. The id is prefixed so it
 // can never collide with a configured host tenant's id (cfg.HostTenants
 // values are this host's own names) and stays within the VARCHAR(64)
 // tenant_id columns every module's tables carry.
-func clinicTenantOf(userID string) pkgcore.TenantID {
+func ClinicTenantOf(userID string) pkgcore.TenantID {
 	return pkgcore.TenantID("tenant-" + userID)
 }
 
@@ -756,7 +769,7 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // its recovery onto (scheduleProvisionRetry), whose job rows survive a
 // restart and are re-dispatched by the next boot's queue start. The three
 // billing services ride along as the provisioner's subscription and
-// credit half (selfServiceProvisioner's own field comments): plans is the
+// credit half (SelfServiceProvisioner's own field comments): plans is the
 // PlanService whose demo Plan the clinic subscribes to, subscriptions the
 // SubscriptionService the Active subscription is ensured through, and
 // credits the CreditService the clinic's starting balance is granted
@@ -769,15 +782,15 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // against a database a previous boot provisioned clinics into needs no
 // re-discovery pass and keeps every clinic owner's sign-in working.
 // failProvision is the failure-injection hook
-// serverConfig.failSelfServiceProvision carries (nil under the production
-// default; configFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION,
-// and a test may arm it on its own serverConfig before calling
-// buildServer), handed to the provisioner it builds.
+// ServerConfig.failSelfServiceProvision carries (nil under the production
+// default; ConfigFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION,
+// and a test may arm it on its own ServerConfig before calling
+// BuildServer), handed to the provisioner it builds.
 //
-// buildServer calls it AFTER the demo seeds have run, which is the
-// discriminator that keeps the demo path intact (selfServiceProvisioner's
+// BuildServer calls it AFTER the demo seeds have run, which is the
+// discriminator that keeps the demo path intact (SelfServiceProvisioner's
 // own doc comment): the demo accounts' registrations happen inside
-// buildServer, before this subscription exists, so they provision nothing
+// BuildServer, before this subscription exists, so they provision nothing
 // -- a demo account keeps exactly the memberships and grants the seed
 // gives it, and its no-tenant sign-in keeps landing in tenant-acme, the
 // first configured tenant. Every registration that reaches the server
@@ -797,7 +810,7 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // made them), which is the residual cost of the ordering discriminator
 // under a genuinely concurrent multi-replica boot.
 func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, plans *billing.PlanService, subscriptions *billing.SubscriptionService, credits *billing.CreditService, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
-	provisioner := &selfServiceProvisioner{
+	provisioner := &SelfServiceProvisioner{
 		orgModule:     orgModule,
 		rbacService:   rbacService,
 		plans:         plans,
@@ -806,10 +819,10 @@ func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.
 		authnSvc:      authnSvc,
 		catalog:       reg.Locales(),
 		queue:         queue,
-		failProvision: failProvision,
+		FailProvision: failProvision,
 	}
 	reg.Events.Subscribe(authn.EventUserCreated, provisioner.onUserCreated)
-	if err := queue.RegisterHandler(&selfServiceProvisionJobHandler{provisioner: provisioner}); err != nil {
+	if err := queue.RegisterHandler(&SelfServiceProvisionJobHandler{Provisioner: provisioner}); err != nil {
 		return fmt.Errorf("reference-app: register the clinic provisioning retry handler: %w", err)
 	}
 	return nil

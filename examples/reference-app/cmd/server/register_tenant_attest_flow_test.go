@@ -20,9 +20,9 @@ import (
 //
 // The chain that made it a common case was this host's own composition
 // as it stood before authn's subtree moved outside the tenancy chain
-// (server.go's authnAPIPath doc comment records that move): authn's
+// (internal/app/server.go's AuthnAPIPath doc comment records that move): authn's
 // pre-auth routes then sat inside the authn+tenancy middleware chain,
-// under server.go's authnPreAuthAllowlist, and go/tenancy.WithAllowlist
+// under internal/app/server.go's authnPreAuthAllowlist, and go/tenancy.WithAllowlist
 // only exempted a route from the 403 when tenant RESOLUTION FAILED -- it
 // never skipped resolution, so a register request carrying a valid bearer
 // still got the caller's tenant injected into its context. The api-client
@@ -31,7 +31,7 @@ import (
 // context, and Service.publish stamped it onto the event. Org's own
 // handleUserCreated (go/org/events.go) then seated the fresh account in
 // the CALLER's tenant, while this host's tenant-less self-service
-// provisioning (self_service.go) skipped it -- the new account got a
+// provisioning (internal/app/self_service.go) skipped it -- the new account got a
 // membership it was never granted and no clinic of its own. Today the
 // composition itself removes the injection path -- authn's branch never
 // passes through tenancy.Middleware, so no register request can arrive
@@ -46,7 +46,7 @@ import (
 // ErrInvalidCredentials: the login endpoint discloses nothing about
 // whether the password verified), and the signup provisioning path gives
 // it its own clinic (the browser-shaped sign-in lands in the
-// deterministic clinicTenantOf tenant).
+// deterministic ClinicTenantOf tenant).
 func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 

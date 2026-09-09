@@ -5,7 +5,7 @@
 #   docker compose -f docker-compose.yml -f docker-compose.distributed.yml up --build
 #
 # from examples/reference-app/. This demonstrates the distributed-mode-
-# shaped seam composition cmd/server/server.go's own env-var wiring
+# shaped seam composition internal/app/server.go's own env-var wiring
 # supports (see that file's redisAddrEnv/s3*Env/smtp*Env/smsGatewayURLEnv
 # doc comments, and README.md's "Real Redis inside a standalone topology"
 # section for the general pattern this extends to all four seams at once):
@@ -38,7 +38,7 @@
 # compose file's.
 #
 # The app's own database stays SQLite on the SAME named volume
-# docker-compose.yml already declares -- cmd/server/server.go hard-codes
+# docker-compose.yml already declares -- internal/app/server.go hard-codes
 # the SQLite dialect (see that file's own comments on the deviation), and
 # distributed_mode_test.go's package doc comment records exactly why a
 # single shared SQLite file is the correct topology given that, not a

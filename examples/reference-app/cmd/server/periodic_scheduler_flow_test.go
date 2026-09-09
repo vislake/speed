@@ -1,11 +1,11 @@
 package main
 
 // periodic_scheduler_flow_test.go is the flow-test companion of
-// periodic_scheduler.go: it proves the host's periodic-task scheduler
+// internal/app/periodic_scheduler.go: it proves the host's periodic-task scheduler
 // really drives a wired jobs mechanism through the composed stack. The
 // scheduler shares one tick cadence with the queue worker (the same
 // cfg.DisableQueueWorker gate starts and stops both, per
-// periodic_scheduler.go's own doc comment), so a real server built with a
+// internal/app/periodic_scheduler.go's own doc comment), so a real server built with a
 // tuned cfg.PeriodicTaskInterval performs real enqueues on real ticks
 // and the app's real standalone queue drains them into the wired modules'
 // handlers -- nothing here is called in-process, enqueued by hand or
@@ -36,7 +36,7 @@ package main
 //     storage.LifecycleService's real sweep, and the sweep runs the real
 //     delete protocol. The expired object's row is gone -- observed
 //     through a second-connection storage.ObjectRepository, the same
-//     "buildServer hands out neither its *gorm.DB nor a module service"
+//     "BuildServer hands out neither its *gorm.DB nor a module service"
 //     second connection server_test.go's audit test opens -- its bytes are
 //     gone on the filesystem under cfg.ObjectStoreRoot, its metadata and
 //     content answer 404, and the list holds only the survivor, whose own
@@ -59,7 +59,7 @@ package main
 //     nothing. Boot 2 runs the normal gate with the injected cadence; its
 //     very first tick enqueues tenant-acme's first retention sweep in a
 //     fresh retentionSweepWindowSize window (alongside the expiry sweep --
-//     both wired mechanisms share the one tick, per periodic_scheduler.go),
+//     both wired mechanisms share the one tick, per internal/app/periodic_scheduler.go),
 //     the worker drains the task into
 //     compliance's real retentionSweepHandler, and SweepTenant runs the
 //     notes participant's real HardDelete: the expired note's physical row
@@ -74,9 +74,9 @@ package main
 //     ReachSelfRegisteredClinicTenant proves BOTH wired mechanisms reach
 //     the rows of a tenant no configuration ever names -- a clinic the
 //     real self-service flow provisioned at runtime, whose tenant id is
-//     derived from its registrant's user id (self_service.go's
-//     clinicTenantOf) and can therefore never appear in cfg.HostTenants
-//     (self_service.go's own comment: a clinic id "can never collide with
+//     derived from its registrant's user id (internal/app/self_service.go's
+//     ClinicTenantOf) and can therefore never appear in cfg.HostTenants
+//     (internal/app/self_service.go's own comment: a clinic id "can never collide with
 //     a configured host tenant's id"). Same two-boot shape as the two
 //     legs above: boot 1 registers the clinic owner through the real
 //     register route -- whose synchronous provisioning creates the
@@ -138,6 +138,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/admin"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -178,23 +180,23 @@ const periodicFlowTickInterval = time.Second
 
 // buildPeriodicTestServer is buildTestServer with a tuning hook: it starts
 // from the same testConfig(buildTestServer uses), lets the caller adjust
-// the serverConfig (the scheduler flow tests inject the
+// the ServerConfig (the scheduler flow tests inject the
 // periodicFlowTickInterval cadence here -- the test-override field
-// buildServer reads, exactly like the Mailer and DisableQueueWorker fields
+// BuildServer reads, exactly like the Mailer and DisableQueueWorker fields
 // other tests tune), and then builds the exact composed server
 // buildTestServer builds,
 // periodic-task scheduler included. The *compliance.Module buildTestServer
 // returns is discarded, like every HTTP-driven flow test does.
-func buildPeriodicTestServer(t *testing.T, tune func(cfg *serverConfig)) (*httptest.Server, serverConfig) {
+func buildPeriodicTestServer(t *testing.T, tune func(cfg *app.ServerConfig)) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	if tune != nil {
 		tune(&cfg)
 	}
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -207,7 +209,7 @@ func buildPeriodicTestServer(t *testing.T, tune func(cfg *serverConfig)) (*httpt
 	return srv, cfg
 }
 
-// periodicSweepTestConfig returns a serverConfig for the two-boot sweep
+// periodicSweepTestConfig returns a ServerConfig for the two-boot sweep
 // test: testConfig's per-test temp files are replaced with fixed paths the
 // test itself owns (one t.TempDir each), so both boots of the sweep test
 // share one SQLite database file and one object-store directory. cfg is
@@ -217,7 +219,7 @@ func buildPeriodicTestServer(t *testing.T, tune func(cfg *serverConfig)) (*httpt
 // database file,
 // object-store root, HostTenants, the demo membership store -- identical
 // across the restart the test simulates.
-func periodicSweepTestConfig(t *testing.T) serverConfig {
+func periodicSweepTestConfig(t *testing.T) app.ServerConfig {
 	t.Helper()
 	cfg := testConfig(t)
 	cfg.SQLitePath = filepath.Join(t.TempDir(), "periodic-sweep.db")
@@ -227,7 +229,7 @@ func periodicSweepTestConfig(t *testing.T) serverConfig {
 
 // periodicFlowServer is a built composed server whose teardown the test
 // controls explicitly: close() shuts the HTTP listener down and runs
-// buildServer's cleanup to completion, releasing the queue, the scheduler
+// BuildServer's cleanup to completion, releasing the queue, the scheduler
 // and the database connections. A two-boot test must finish one boot
 // completely -- schema applied, connections closed, files released --
 // before building the next one over the same database and object-store
@@ -253,17 +255,17 @@ func (s *periodicFlowServer) close() error {
 	return s.closeErr
 }
 
-// buildPeriodicFlowServer builds the exact composed server buildServer
+// buildPeriodicFlowServer builds the exact composed server BuildServer
 // produces for cfg -- which the caller has already tuned for this boot --
 // behind an httptest.Server, and registers close() as a t.Cleanup safety
 // net so a test that fails before reaching its own explicit close() still
 // tears the boot down.
-func buildPeriodicFlowServer(t *testing.T, cfg serverConfig) *periodicFlowServer {
+func buildPeriodicFlowServer(t *testing.T, cfg app.ServerConfig) *periodicFlowServer {
 	t.Helper()
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	server := &periodicFlowServer{
 		srv:     httptest.NewServer(handler),
@@ -344,28 +346,28 @@ func observeExpirySweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 	t.Helper()
 
 	expiringMetadata := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiringID, token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiringID, token, app.DemoOwnerUserID, "", nil)
 	expiringMetadata.Body.Close()
 	if expiringMetadata.StatusCode != http.StatusNotFound {
 		return false, "expired object's metadata GET = " + http.StatusText(expiringMetadata.StatusCode) + ", want 404"
 	}
 
 	expiringContent := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiringID+"/content", token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiringID+"/content", token, app.DemoOwnerUserID, "", nil)
 	expiringContent.Body.Close()
 	if expiringContent.StatusCode != http.StatusNotFound {
 		return false, "expired object's content GET = " + http.StatusText(expiringContent.StatusCode) + ", want 404"
 	}
 
 	survivorMetadata := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+survivorID, token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+survivorID, token, app.DemoOwnerUserID, "", nil)
 	survivorMetadata.Body.Close()
 	if survivorMetadata.StatusCode != http.StatusOK {
 		return false, "survivor's metadata GET = " + http.StatusText(survivorMetadata.StatusCode) + ", want 200"
 	}
 
 	listResp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		token, demoOwnerUserID, "", nil)
+		token, app.DemoOwnerUserID, "", nil)
 	var listed testStorageListResponse
 	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
 		listResp.Body.Close()
@@ -437,7 +439,7 @@ func errString(err error) string {
 // the windowed keying leaves limited.
 //
 // Boot 1 runs with cfg.DisableQueueWorker set, the same gate that guards
-// both the worker and the scheduler (periodic_scheduler.go's doc comment),
+// both the worker and the scheduler (internal/app/periodic_scheduler.go's doc comment),
 // so no sweep key is ever resolved for tenant-acme in this database file
 // while boot 1 is up -- the queue never starts, so its schema is never
 // even created (go/jobs's StandaloneQueue applies it inside Start), which
@@ -492,10 +494,10 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// comfortably past the completion below, and short enough that boot 1
 	// does not idle long before closing.
 	expiresAt := time.Now().Add(3 * time.Second).Format(time.RFC3339)
-	declared := declareUploadWithExpiry(t, boot1.srv, boot1Token, demoOwnerUserID,
+	declared := declareUploadWithExpiry(t, boot1.srv, boot1Token, app.DemoOwnerUserID,
 		int64(len(jpegBytes)), "image/jpeg", expiresAt)
-	uploadBytes(t, boot1.srv, boot1Token, demoOwnerUserID, declared.ID, jpegBytes)
-	expiring := completeObject(t, boot1.srv, boot1Token, demoOwnerUserID, declared.ID)
+	uploadBytes(t, boot1.srv, boot1Token, app.DemoOwnerUserID, declared.ID, jpegBytes)
+	expiring := completeObject(t, boot1.srv, boot1Token, app.DemoOwnerUserID, declared.ID)
 	if expiring.ExpiresAt == "" {
 		t.Fatalf("completed object lost its retention deadline: %+v", expiring)
 	}
@@ -506,7 +508,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 
 	// storageDefaultObjectLifetime mirrors go/storage/module.go's
 	// defaultMaxObjectLifetime -- the default ceiling in force for a host
-	// that wires no WithMaxObjectLifetime, which this one is (server.go's
+	// that wires no WithMaxObjectLifetime, which this one is (internal/app/server.go's
 	// storage.NewModule call). The mirror is load-bearing: the survivor
 	// below lives because its default deadline sits months away, so a
 	// material change to the module's default -- or the host's adoption of
@@ -551,20 +553,20 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// wired sweep runs.
 	for _, obj := range []testStorageObject{expiring, survivor} {
 		resp := storageRequest(t, boot1.srv, http.MethodGet, "/api/v1/storage/objects/"+obj.ID,
-			boot1Token, demoOwnerUserID, "", nil)
+			boot1Token, app.DemoOwnerUserID, "", nil)
 		got := decodeStorageObject(t, resp, http.StatusOK, "GET after the deadline passed, before boot 2")
 		if got.ID != obj.ID {
 			t.Fatalf("GET %s answered object %s", obj.ID, got.ID)
 		}
 	}
 	resp := storageRequest(t, boot1.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiring.ID+"/content", boot1Token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiring.ID+"/content", boot1Token, app.DemoOwnerUserID, "", nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET content of the expired object before boot 2 = %d, want 200", resp.StatusCode)
 	}
 	listResp := storageRequest(t, boot1.srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		boot1Token, demoOwnerUserID, "", nil)
+		boot1Token, app.DemoOwnerUserID, "", nil)
 	before := decodeList(t, listResp, "GET list after the deadline passed, before boot 2")
 	if len(before.Objects) != 2 {
 		t.Fatalf("pre-boot-2 list = %+v, want exactly the two completed objects", before.Objects)
@@ -586,7 +588,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	boot2 := buildPeriodicFlowServer(t, boot2Cfg)
 	boot2Token := registerAndAuthenticate(t, boot2.srv, cfg, "tenant-acme", "periodic-sweep-boot-2")
 
-	// The second-connection observer: buildServer hands out neither its
+	// The second-connection observer: BuildServer hands out neither its
 	// *gorm.DB nor a module service, so a second dbkit.Open connection to
 	// the same SQLite file -- the identical pattern server_test.go's audit
 	// test uses -- is the only reach a test has into the objects table,
@@ -643,16 +645,16 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// helpers now that the state is terminal, so each property's failure
 	// names itself in the test output.
 	expiringMetadata := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiring.ID, boot2Token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiring.ID, boot2Token, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, expiringMetadata, http.StatusNotFound, "storage.object_not_found",
 		"GET metadata of the sweep-expired object after boot 2")
 	expiringContent := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiring.ID+"/content", boot2Token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiring.ID+"/content", boot2Token, app.DemoOwnerUserID, "", nil)
 	assertStorageError(t, expiringContent, http.StatusNotFound, "storage.object_not_found",
 		"GET content of the sweep-expired object after boot 2")
 
 	survivorMetadata := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+survivor.ID, boot2Token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+survivor.ID, boot2Token, app.DemoOwnerUserID, "", nil)
 	survivorAfter := decodeStorageObject(t, survivorMetadata, http.StatusOK,
 		"GET the survivor after the sweep")
 	if survivorAfter.ID != survivor.ID {
@@ -663,13 +665,13 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 			survivor.ExpiresAt, survivorAfter.ExpiresAt)
 	}
 	survivorContent := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+survivor.ID+"/content", boot2Token, demoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+survivor.ID+"/content", boot2Token, app.DemoOwnerUserID, "", nil)
 	survivorContent.Body.Close()
 	if survivorContent.StatusCode != http.StatusOK {
 		t.Fatalf("GET content of the survivor after the sweep = %d, want 200", survivorContent.StatusCode)
 	}
 	listAfter := storageRequest(t, boot2.srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		boot2Token, demoOwnerUserID, "", nil)
+		boot2Token, app.DemoOwnerUserID, "", nil)
 	final := decodeList(t, listAfter, "GET list after the sweep")
 	if len(final.Objects) != 1 || final.Objects[0].ID != survivor.ID {
 		t.Fatalf("post-sweep list = %+v, want only the survivor", final.Objects)
@@ -703,7 +705,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 // boot 2's first tick to schedule the sweep.
 //
 // Boot 1 runs with cfg.DisableQueueWorker set -- the same gate that guards
-// the worker and the scheduler (periodic_scheduler.go's doc comment) -- so
+// the worker and the scheduler (internal/app/periodic_scheduler.go's doc comment) -- so
 // no retention-sweep key is ever resolved for tenant-acme in this database
 // file while boot 1 is up. Boot 1 hosts a live note and one whose
 // deleted_at is backdated 45 days (past the 30-day default retention
@@ -719,7 +721,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 // enqueues tenant-acme's first retention sweep of a fresh window --
 // alongside the
 // expiry sweep, since both wired mechanisms share the one tick, per
-// periodic_scheduler.go; nothing in boot 2 needs a signed-in user, the
+// internal/app/periodic_scheduler.go; nothing in boot 2 needs a signed-in user, the
 // sweep is tenant-scoped from the host's tenant map. The worker drains the
 // task into compliance's real retentionSweepHandler, whose SweepTenant
 // runs the notes participant's real HardDelete. The test waits -- bounded,
@@ -821,8 +823,8 @@ func TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNot
 // periodicClinicEmail is the account the self-registered-clinic leg
 // registers. The local part is unique to this leg so a fresh database
 // never collides with the demo or suite accounts; the clinic tenant is
-// derived from the user id authn assigns (self_service.go's
-// clinicTenantOf), never chosen by the test.
+// derived from the user id authn assigns (internal/app/self_service.go's
+// ClinicTenantOf), never chosen by the test.
 const periodicClinicEmail = "periodic-clinic-founder@example.com"
 
 // createClinicNote POSTs a note to the clinic tenant as its real owner:
@@ -857,7 +859,7 @@ func createClinicNote(t *testing.T, srv *httptest.Server, token, text string) st
 
 // ledgerRowCount counts the D3 tenant-ledger rows (go/admin's
 // admin_tenants table) naming tenant in the shared database file -- the
-// durable discovery record periodic_scheduler.go's universe reads. The
+// durable discovery record internal/app/periodic_scheduler.go's universe reads. The
 // count goes through admin's own model over the second connection, the
 // same second-connection reach physicalNoteCount uses for notes rows:
 // admin_tenants is platform data (never dbkit.TenantScoped), so no
@@ -948,9 +950,9 @@ func observeClinicSweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 // guards the worker and the scheduler -- and hosts the clinic's rows
 // through the REAL self-service flow: a fresh account registers through
 // authn's real register route, whose synchronous provisioning
-// (self_service.go's wireSelfService subscription) creates the account's
+// (internal/app/self_service.go's wireSelfService subscription) creates the account's
 // own clinic tenant -- derived from the registrant's user id
-// (clinicTenantOf), so by construction absent from cfg.HostTenants --
+// (ClinicTenantOf), so by construction absent from cfg.HostTenants --
 // with its org root, membership and owner grant. The clinic owner then
 // hosts, under the clinic tenant and through the real HTTP surfaces, a
 // completed object whose retention deadline passes before boot 1 closes,

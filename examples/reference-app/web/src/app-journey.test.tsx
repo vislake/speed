@@ -34,7 +34,7 @@
  * account fragment. A bilingual leg closes the day, and the closing
  * self-service leg brings the register-turn visitor back: its sign-in
  * lands inside the clinic its registration provisioned (the server's
- * self-service signup, cmd/server/self_service.go) -- the empty notes
+ * self-service signup, internal/app/self_service.go) -- the empty notes
  * list of its own tenant, never the demo rows of the day and never a
  * membership-refusal. The whole trace pins with configGets === 3: the
  * initial Public-config fetch plus one revalidation per tenant switch
@@ -437,7 +437,7 @@ describe('the app journey', () => {
     // The visitor's own sign-in (the browser shape, no tenant named)
     // commits: the frame names the clinic tenant the registration
     // provisioned by the clinic's NAME (the fixture's
-    // /api/reference-app/clinic-name mirror of cmd/server/clinic_name.go
+    // /api/reference-app/clinic-name mirror of internal/app/clinic_name.go
     // answers the registration's recorded name; this register turn typed
     // no display name, so the answer is the fixture's
     // REGISTERED_CLINIC_DEFAULT_NAME -- never the raw derived tenant

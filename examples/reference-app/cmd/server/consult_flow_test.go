@@ -3,7 +3,7 @@ package main
 // consult_flow_test.go drives go/ai-gateway end to end through the composed
 // HTTP stack -- the authn+tenancy middleware chain, a real temp-file SQLite
 // database (carrying both notes' and ai-gateway's real migrations), and the
-// hand-written consult route (cmd/server/consult.go) -- against a fake
+// hand-written consult route (internal/app/consult.go) -- against a fake
 // OpenAI-compatible endpoint (fakeOpenAICompatibleServer below), standing in
 // for the real vendor: no live API key is available or needed, since the
 // OpenAI-compatible chat-completions schema is fully testable this way.
@@ -27,6 +27,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // fakeOpenAICompatibleServer answers every POST /chat/completions with a
@@ -75,21 +77,21 @@ func newFakeOpenAICompatibleServer(t *testing.T, reply string) *fakeOpenAICompat
 	return f
 }
 
-// buildConsultTestServer wires up buildServer's real output behind an
+// buildConsultTestServer wires up BuildServer's real output behind an
 // httptest.Server, with the ai-gateway platform credential pointed at
 // aiServer -- the same test-only-override pattern cfg.Mailer/cfg.SMSOutput
 // already establish (server_test.go's buildTestServer, notification_flow_test.go's
 // buildNotifTestServer).
-func buildConsultTestServer(t *testing.T, aiServer *fakeOpenAICompatibleServer) (*httptest.Server, serverConfig) {
+func buildConsultTestServer(t *testing.T, aiServer *fakeOpenAICompatibleServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	cfg.AIGatewayBaseURL = aiServer.URL
 	cfg.AIGatewayAPIKey = "sk-test-consult-key"
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -113,7 +115,7 @@ func consultSuggestRequest(t *testing.T, srv *httptest.Server, token, noteID str
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, srv.URL+consultSuggestPath, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+app.ConsultSuggestPath, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -122,7 +124,7 @@ func consultSuggestRequest(t *testing.T, srv *httptest.Server, token, noteID str
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("POST %s: %v", consultSuggestPath, err)
+		t.Fatalf("POST %s: %v", app.ConsultSuggestPath, err)
 	}
 	return resp
 }
@@ -153,14 +155,14 @@ func TestConsultSuggest_ReturnsGatewaySuggestion(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST %s status = %d, want %d; body = %+v", consultSuggestPath, resp.StatusCode, http.StatusOK, out)
+		t.Fatalf("POST %s status = %d, want %d; body = %+v", app.ConsultSuggestPath, resp.StatusCode, http.StatusOK, out)
 	}
 	if out.Suggestion != wantSuggestion {
 		t.Fatalf("suggestion = %q, want the fake server's scripted reply %q", out.Suggestion, wantSuggestion)
 	}
 
 	// The fake server's own recorded request is what proves this app's
-	// wiring (aigateway.WithModelRoute("chat:default", ...) in server.go)
+	// wiring (aigateway.WithModelRoute("chat:default", ...) in internal/app/server.go)
 	// actually ran, rather than the test somehow short-circuiting the
 	// gateway: the vendor model id is the routed "gpt-4o-mini", never the
 	// logical "chat:default" key business code asked for, and the note's
@@ -194,7 +196,7 @@ func TestConsultSuggest_UnknownNoteID_Refused(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("POST %s with an unknown note id status = %d, want a refusal", consultSuggestPath, resp.StatusCode)
+		t.Fatalf("POST %s with an unknown note id status = %d, want a refusal", app.ConsultSuggestPath, resp.StatusCode)
 	}
 	if aiServer.lastReqBody != nil {
 		t.Fatal("the fake OpenAI-compatible server received a request for an unknown note id, want none")
@@ -218,7 +220,7 @@ func TestConsultSuggest_NoteFromAnotherTenant_Refused(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("POST %s for another tenant's note status = %d, want a refusal", consultSuggestPath, resp.StatusCode)
+		t.Fatalf("POST %s for another tenant's note status = %d, want a refusal", app.ConsultSuggestPath, resp.StatusCode)
 	}
 	if aiServer.lastReqBody != nil {
 		t.Fatal("the fake OpenAI-compatible server received a request for another tenant's note, want none")

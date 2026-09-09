@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger is the
@@ -36,9 +38,9 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 	boot := func() (*httptest.Server, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
-		handler, cleanup, _, err := buildServer(context.Background(), cfg)
+		handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 		if err != nil {
-			t.Fatalf("buildServer: %v", err)
+			t.Fatalf("BuildServer: %v", err)
 		}
 		return httptest.NewServer(handler), cleanup
 	}
@@ -59,7 +61,7 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 	}
 
 	// Wipe the host's own clinic-ledger table between the boots, if a
-	// boot created one (self_service.go's self_service_clinics ledger).
+	// boot created one (internal/app/self_service.go's self_service_clinics ledger).
 	// Whether the delete succeeds or the table does not exist at all,
 	// what boot two signs in with may not depend on a row of this host
 	// bookkeeping.

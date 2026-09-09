@@ -3,7 +3,7 @@ info:
   title: smilesim
   description: >-
     The reference app's smile-simulation HTTP surface (internal/smilesim,
-    mounted by the app in cmd/server/smilesim.go): enqueue one async
+    mounted by the app in internal/app/smilesim.go): enqueue one async
     go/ai-gateway image-to-image simulation job for a patient photo,
     poll its status, enumerate every simulation generated from one
     photo, and read one simulation's generated image content. Product

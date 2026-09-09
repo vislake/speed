@@ -22,7 +22,7 @@
  *
  * The caller identity question deserves stating once: org's two
  * caller-scoped operations (create and accept an invitation) resolve
- * who is acting server-side, and the demo wiring's demoOrgSubjectResolver
+ * who is acting server-side, and the demo wiring's DemoOrgSubjectResolver
  * falls back to the verified access-token Principal when no demo header
  * rides along (server.go's wiring) -- so the calls below carry only the
  * bearer the client attaches, never a header of their own, exactly like

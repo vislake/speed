@@ -13,7 +13,7 @@
  * key relies on. The members half of the roster reads the app's OWN
  * roster-with-identity answer (team-api.ts -- GET
  * /api/reference-app/team-members, the host composition
- * cmd/server/team_members.go mounts, which enriches org's membership
+ * internal/app/team_members.go mounts, which enriches org's membership
  * rows with each member's display identity from authn's users table,
  * because org's membership rows carry opaque user ids by the module's
  * own boundary rule); the pending invitations and the clinic's root

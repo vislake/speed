@@ -41,7 +41,7 @@
  *
  * Registration answers 201 and PROVISIONS the account's own clinic --
  * the web mirror of the composed stack's self-service signup
- * (cmd/server/self_service.go, whose journey regression
+ * (internal/app/self_service.go, whose journey regression
  * self_service_test.go pins): the registered account is allocated its
  * own tenant (an id derived from the account, never one of the demo
  * tenants) and a later sign-in of the same identifier succeeds into
@@ -52,7 +52,7 @@
  * later sign-in answering 403 authn.tenant_membership_required --
  * exists on neither the real server nor this fixture. A
  * clinic's NAME mirrors the real host's naming decision
- * (cmd/server/self_service.go's clinicRootNameFor): the display name a
+ * (internal/app/self_service.go's clinicRootNameFor): the display name a
  * register body carries names the provisioned clinic (the later
  * /api/reference-app/clinic-name answer serves it), and a registration
  * that named none falls back to REGISTERED_CLINIC_DEFAULT_NAME -- the
@@ -122,7 +122,7 @@
  * other create refusals its surface renders). The members half of the
  * surface reads the app's OWN roster-with-identity answer, GET
  * /api/reference-app/team-members (200, {members: [...]}) -- the
- * mirror of the host route cmd/server/team_members.go mounts: org's
+ * mirror of the host route internal/app/team_members.go mounts: org's
  * member rows carry opaque user ids only by its module-boundary rule,
  * so the host answers the roster enriched with each member's display
  * identity from authn's users table (the display name the account
@@ -156,7 +156,7 @@
  * casesPhotoContentRefusal) -- the journeys gate and error surfaces are
  * driven by genuine refusals, never stubbed locally. The app's own
  * tenant-identity answer, GET /api/reference-app/clinic-name (200,
- * {name}), mirrors the host route cmd/server/clinic_name.go mounts:
+ * {name}), mirrors the host route internal/app/clinic_name.go mounts:
  * the org root name of the bearer principal's tenant, served for the
  * off-roster clinics the demo roster's host copy cannot name (see the
  * clinic-naming paragraph above). The smile-simulation and sharing
@@ -253,7 +253,7 @@ export const FIRST_REGISTERED_USER_ID = 'user-9'
 /** The clinic tenant the FIRST registered account's registration
  * provisions: 'tenant-' + its user id, the web mirror of the composed
  * stack's deterministic tenant derivation (self_service.go's
- * clinicTenantOf). A journey that signs the first registered account in
+ * ClinicTenantOf). A journey that signs the first registered account in
  * asserts the frame names this tenant. */
 export const FIRST_REGISTERED_CLINIC_TENANT_ID = `tenant-${FIRST_REGISTERED_USER_ID}`
 
@@ -462,8 +462,8 @@ export interface DemoServerOptions {
    * credits/balance and GET /api/v1/billing/credits/transactions).
    * Defaults to the demo mirror of a freshly booted server's state: a
    * tenant seeded with the boot-time grant (1000 credits, reason
-   * 'demo:seed' -- cmd/server/demo_credits.go's demoSimulationCreditGrant
-   * and demoCreditGrantReason), an empty reserved bucket and the seed
+   * 'demo:seed' -- internal/app/demo_credits.go's DemoSimulationCreditGrant
+   * and DemoCreditGrantReason), an empty reserved bucket and the seed
    * grant as the ledger's one row. Stateful from there, the way the
    * real handler's tenant-scoped ledger is: each accepted simulation
    * job appends its own deduct row (10 credits, reason
@@ -548,7 +548,7 @@ export interface DemoServerOptions {
    * tenant) is served the ledger; any other principal's read answers
    * the rbac gate's 403, the answer the real app's admin route guard
    * gives a caller whose user id holds no admin grant under the system
-   * domain (cmd/server/demo_admin.go's adminSubjectResolver). Default
+   * domain (internal/app/demo_admin.go's adminSubjectResolver). Default
    * [] -- the mirror of a ledger a freshly booted server auto-fills as
    * org roots are created. */
   readonly initialAdminTenants?: readonly DemoAdminTenant[]
@@ -559,7 +559,7 @@ export interface DemoServerOptions {
    * -- the demo-server's platform-staff shape) is served the dashboard;
    * any other principal's read answers the rbac gate's 403, the answer
    * the real app's admin route guard gives a caller whose user id holds
-   * no admin grant under the system domain (cmd/server/demo_admin.go's
+   * no admin grant under the system domain (internal/app/demo_admin.go's
    * adminSubjectResolver), exactly like the ledger read above. Default
    * [] -- the mirror of a freshly booted ledger with no tenants in it
    * yet. */
@@ -710,7 +710,7 @@ export interface DemoOrgMembership {
 
 /** One row of the team surface's roster answer (GET
  * /api/reference-app/team-members) -- the wire shape of the app's own
- * composition (cmd/server/team_members.go): the org membership facts
+ * composition (internal/app/team_members.go): the org membership facts
  * above plus the member's display identity from authn's users table,
  * each field the empty string when the account has none. */
 export interface DemoTeamMember {
@@ -839,12 +839,12 @@ const DEMO_PHOTO_CONTENT_BASE64 = 'cGhvdG8tYnl0ZXM='
 const DEMO_SIMULATION_CONTENT_BASE64 = 'c2ltdWxhdGlvbi1yZXN1bHQtYnl0ZXM='
 
 /** The boot-time credit grant every demo tenant receives, mirroring
- * cmd/server/demo_credits.go's demoSimulationCreditGrant -- the web
+ * internal/app/demo_credits.go's DemoSimulationCreditGrant -- the web
  * fixture's answer for a freshly booted server's balance and the seed
  * row its ledger serves. */
 export const DEMO_CREDIT_SEED_GRANT = 1000
 /** The reason the demo seed's grant row carries, mirroring
- * cmd/server/demo_credits.go's demoCreditGrantReason. */
+ * internal/app/demo_credits.go's DemoCreditGrantReason. */
 export const DEMO_CREDIT_SEED_REASON = 'demo:seed'
 /** The flat credit cost of one smile simulation, mirroring
  * internal/smilesim/service.go's CreditsPerSimulation: the amount the
@@ -1055,7 +1055,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // The demo account directory behind the roster answer's display
   // identity: user id to the account's own display name and email,
   // mirroring what the real server reads from authn's users table for
-  // a roster member (cmd/server/team_members.go's enrichment). The
+  // a roster member (internal/app/team_members.go's enrichment). The
   // seeded members answer from the configured account's own identifier
   // and the reader's; a registration records the account its email and
   // display name typed; and the initialTeamIdentities option scripts a
@@ -1231,7 +1231,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   }
   // The accounts a register answered, mapped to the clinic their
   // registration provisioned (the web mirror of the composed stack's
-  // self-service signup, cmd/server/self_service.go): the account's own
+  // self-service signup, internal/app/self_service.go): the account's own
   // user id and the own tenant -- an id derived from the account, never
   // one of the demo tenants -- a later sign-in lands in. Registration
   // alone now grants a sign-in-able membership, exactly like the real
@@ -1254,7 +1254,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // a journey pins about a seeded principal can collide with a
   // registered one. The clinic tenant id is derived from the account's
   // user id ('tenant-' + user_id), the same deterministic-derivation
-  // shape the real server uses (clinicTenantOf).
+  // shape the real server uses (ClinicTenantOf).
   let nextRegisteredUserNumber = 9
   let nextRegisteredSessionNumber = 9
   // Every issued access token, mapped to the principal it stands for.
@@ -1319,7 +1319,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       case 'GET /api/config/public':
         return jsonResponse(200, publicConfig)
       case 'GET /api/reference-app/clinic-name': {
-        // The app's own tenant-identity answer (cmd/server/clinic_name.go
+        // The app's own tenant-identity answer (internal/app/clinic_name.go
         // mounts the real route): the org root name of the tenant the
         // bearer principal is scoped to. A clinic a register answer
         // provisioned answers the name its registration carried; a
@@ -1335,7 +1335,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         if (principal.tenant_id === SYSTEM_PSEUDO_TENANT_ID) {
           // The platform-staff shape's pseudo-tenant has no org tree to
           // name it: the real host answers '' for a tenant with no tree
-          // (cmd/server/clinic_name.go), never an invented identifier,
+          // (internal/app/clinic_name.go), never an invented identifier,
           // and no journey may see a fabricated clinic name here.
           return jsonResponse(200, { name: '' })
         }
@@ -1397,7 +1397,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           }
           // Registration provisions the account's clinic -- its own user
           // id and its own tenant, derived from that id the way the real
-          // server derives it (self_service.go's clinicTenantOf) -- so
+          // server derives it (self_service.go's ClinicTenantOf) -- so
           // the 201 the register form shows answers for an account a
           // later sign-in can actually enter.
           const user_id = `user-${nextRegisteredUserNumber}`
@@ -1528,7 +1528,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       }
       case 'GET /api/reference-app/team-members': {
         // The app's own roster-with-identity answer
-        // (cmd/server/team_members.go), which the team surface reads its
+        // (internal/app/team_members.go), which the team surface reads its
         // members half from: the org membership rows of the bearer's
         // tenant, each enriched with the member's display identity from
         // the account directory above -- the display name the account
@@ -1612,7 +1612,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       case 'GET /api/v1/admin/tenants': {
         // The platform's tenant ledger (admin-api.ts), mirroring
         // go/admin's own operator-facing route behind this app's admin
-        // route guard (cmd/server/demo_admin.go's guardAdminRoute).
+        // route guard (internal/app/demo_admin.go's guardAdminRoute).
         // The bearer is resolved BEFORE the gate answers, like every
         // other gate here. The ledger is served only to a principal
         // scoped to the system pseudo-tenant -- the demo's

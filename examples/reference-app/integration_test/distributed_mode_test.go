@@ -21,7 +21,7 @@
 // # How the positive proof crosses a process boundary
 //
 // A note created on replica A must not be observable on replica B through
-// the shared SQLite file alone. cmd/server/server.go wires
+// the shared SQLite file alone. internal/app/server.go wires
 // jobs.NewStandaloneQueue(db) UNCONDITIONALLY, regardless of deployment
 // mode -- there is no Redis-backed jobs queue anywhere in this app -- and
 // both replicas share one SQLite file (see the deviation note below for
@@ -75,7 +75,7 @@
 //
 // The two replicas do not share a real PostgreSQL container; both use one
 // SQLite file at APP_DB_PATH. The reason is a fact about the live tree,
-// not a shortcut: cmd/server/server.go
+// not a shortcut: internal/app/server.go
 // hard-codes dbkit.DialectSQLite (its own blank import of
 // go/dbkit/dialect/sqlite is the only dialect driver this app links), with
 // no environment variable or option anywhere in this app's wiring that
@@ -102,7 +102,7 @@
 // # A recorded fact about the demo identity layer under two replicas
 //
 // A demo account's membership is org's own memberships row -- the
-// signInMemberships store (cmd/server/sign_in_memberships.go),
+// signInMemberships store (internal/app/sign_in_memberships.go),
 // which authn's WithMembershipReader reads to decide "does this user
 // belong to this tenant", answers customer-tenant questions from that
 // table, live -- and org's rows live in the SHARED database, so an
@@ -232,7 +232,7 @@ const distributedNoteCreatorUserID = "user-creator-1"
 // address this file's bonus MailHog assertion looks for.
 const distributedNoteCreatorEmail = "user-creator-1@demo.example"
 
-// demoUserIDHeader is cmd/server/server.go's demoOrgUserHeader copied byte
+// demoUserIDHeader is internal/app/server.go's demoOrgUserHeader copied byte
 // for byte: notes' own creator-subject resolver AND notification's own
 // subject resolver both read the acting user from this header, distinct
 // from demoUserHdr ("X-Demo-User", redis_eventbus_composition_test.go's own
@@ -701,7 +701,7 @@ func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *s
 // is the positive proof: two real reference-app server processes,
 // both booted under APP_DEPLOYMENT_MODE=distributed against the SAME
 // real Redis, the SAME real RustFS bucket and the SAME real SMTP catcher --
-// the composition cmd/server/server.go builds,
+// the composition internal/app/server.go builds,
 // declaring MultiReplicaSafe|SurvivesRestart on every one of the four
 // stateful seams Kernel.Bootstrap validates. Replica B additionally boots
 // with APP_DISABLE_QUEUE_WORKER=true, so it can never itself execute the

@@ -262,7 +262,7 @@ type testListNotesResponse struct {
 // createNoteAs doc).
 //
 // demoUserHdr/demoOwner name WHO is acting for rbac's demo gate:
-// demoSubjectResolver (cmd/server/demo_subject.go) reads the acting user
+// demoSubjectResolver (internal/app/demo_subject.go) reads the acting user
 // from the header -- a placeholder for the access token's subject claim
 // that the demo wiring keeps while authn supplies the tenant half -- so
 // these requests carry both the token and the header, exactly like the
@@ -278,7 +278,7 @@ const (
 	acmeTenantID = "tenant-acme"
 	demoUserHdr  = "X-Demo-User"
 	demoOwner    = "demo-owner"
-	// demoOwnerEmail is cmd/server/demo_users.go's demoOwnerEmail, copied
+	// demoOwnerEmail is internal/app/demo_users.go's demoOwnerEmail, copied
 	// byte for byte: the real account behind the demoOwner header identity,
 	// granted membership (and the built-in owner role) in every configured
 	// tenant, tenant-acme included, once demoUsersPassword seeds it.
@@ -606,7 +606,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	}
 	// tenant-acme's own audit trail is not notes' alone: seedDemoCredits'
 	// own boot-time Grant
-	// (cmd/server/demo_credits.go) is itself a real CreditService.Grant
+	// (internal/app/demo_credits.go) is itself a real CreditService.Grant
 	// call, which records its own "billing.credit.grant" AuditEvent
 	// for this same tenant (credit_service.go's emitCreditAudit).
 	// This test's own claim is narrower and unaffected: exactly

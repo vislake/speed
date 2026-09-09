@@ -13,7 +13,7 @@
  * satisfy. The name itself comes from useCurrentTenantName: demo copy
  * for the two boot-configured tenants, the fetched org root name for a
  * clinic that did not exist at boot (the fixture's
- * /api/reference-app/clinic-name mirror of cmd/server/clinic_name.go)
+ * /api/reference-app/clinic-name mirror of internal/app/clinic_name.go)
  * -- never the raw tenant id.
  *
  * Text expectations read the bundle values, never inline language (the
@@ -90,11 +90,11 @@ describe('CurrentClinicLine', () => {
 
   it('names a clinic that did not exist at boot, from the app’s own tenant-identity answer', async () => {
     // A self-registered account's clinic (a tenant derived at run time,
-    // cmd/server/self_service.go's clinicTenantOf) is not on the demo
+    // internal/app/self_service.go's ClinicTenantOf) is not on the demo
     // roster, yet the work area must still say where the work lands --
     // the acceptance property e2e/current-clinic-is-visible.spec.ts
     // exists for. The name is the clinic's own -- the fixture's
-    // /api/reference-app/clinic-name mirror of cmd/server/clinic_name.go
+    // /api/reference-app/clinic-name mirror of internal/app/clinic_name.go
     // answers the name the registration gave the clinic -- fetched
     // under the tenant-namespaced key, and the line renders nothing
     // until it lands (findBy waits the fetch out), never the raw

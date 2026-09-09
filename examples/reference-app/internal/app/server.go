@@ -1,8 +1,11 @@
-// Package main is examples/reference-app's minimal starter skeleton -- a
-// minimal, freely editable example rather than a business module. It never
-// goes through pkgcore.Module.Register itself; its whole job is wiring one
-// together (see buildServer below) and running it.
-package main
+// This file is the reference app's assembly core: ServerConfig's bootstrap
+// resolution (ConfigFromEnv), the full module composition (BuildServer) and
+// the host-side route guards and demo identity layer that wiring uses. It
+// sits in internal/app so the composed server is importable -- cmd/server's
+// main.go boots it as the thin process shell, and the app-level test
+// directory exercises it directly. See doc.go for the package's design.
+
+package app
 
 import (
 	"context"
@@ -43,7 +46,7 @@ import (
 	// exporters wire a real /metrics scrape endpoint only when a local
 	// metrics reader has been registered (go/observability's own doc
 	// comment on Init and RegisterLocalMetricsReader) -- this is what
-	// metricsHandler below actually serves once main.go's run has called
+	// MetricsHandler below actually serves once main.go's run has called
 	// obs.Init. Without this import, obs.Init still runs (traces and
 	// metrics both go to stdout), but MetricsHandler answers 404.
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
@@ -52,7 +55,7 @@ import (
 	// exporter factory obs.Init consults exactly when a caller supplies a
 	// non-empty WithOTLPEndpoint (go/observability's ErrOTLPExporterNotRegistered
 	// names this import as the fix). Without it, an APP_OTLP_ENDPOINT set
-	// in configFromEnv would fail run()'s Init with that error instead of
+	// in ConfigFromEnv would fail run()'s Init with that error instead of
 	// wiring the collector push the variable promises. Registration is
 	// inert while the endpoint stays unset: Init stays on the local
 	// exporters, byte-identical to this import never having existed.
@@ -78,50 +81,50 @@ import (
 )
 
 const (
-	// defaultPort is used when the PORT environment variable is unset.
-	defaultPort = "8080"
+	// DefaultPort is used when the PORT environment variable is unset.
+	DefaultPort = "8080"
 
-	// defaultSQLitePath is used when APP_DB_PATH is unset. It is a
+	// DefaultSQLitePath is used when APP_DB_PATH is unset. It is a
 	// relative path so `go run ./cmd/server` works with zero setup -- the
 	// example's own entry point must stay runnable with nothing
 	// configured.
-	defaultSQLitePath = "reference-app.db"
+	DefaultSQLitePath = "reference-app.db"
 
-	// shutdownTimeout bounds how long graceful shutdown waits for
+	// ShutdownTimeout bounds how long graceful shutdown waits for
 	// in-flight requests to finish before giving up.
-	shutdownTimeout = 10 * time.Second
+	ShutdownTimeout = 10 * time.Second
 
-	// readHeaderTimeout bounds how long the server waits to receive a
+	// ReadHeaderTimeout bounds how long the server waits to receive a
 	// request's headers before aborting the connection -- protects
 	// against slow-header (Slowloris-style) connections that trickle
 	// bytes to hold a socket open indefinitely.
-	readHeaderTimeout = 5 * time.Second
+	ReadHeaderTimeout = 5 * time.Second
 
-	// healthzPath is one of the routes exempted from tenant resolution, not
-	// the only one -- see buildServer's use of tenancy.WithAllowlist. It
-	// shares that list with metricsPath, config's two pre-auth display
+	// HealthzPath is one of the routes exempted from tenant resolution, not
+	// the only one -- see BuildServer's use of tenancy.WithAllowlist. It
+	// shares that list with MetricsPath, config's two pre-auth display
 	// endpoints, sharing's and integration's self-resolving routes and
 	// org's accept-invitation route, each exempted for its own reason;
-	// buildServer's allowlist comment enumerates them all. authn's own
-	// subtree is NOT on that list: authnAPIPath never sits downstream of
+	// BuildServer's allowlist comment enumerates them all. authn's own
+	// subtree is NOT on that list: AuthnAPIPath never sits downstream of
 	// tenancy.Middleware at all, so no allowlist entry exempts it (see
 	// that constant's own doc comment).
-	healthzPath = "/healthz"
+	HealthzPath = "/healthz"
 
-	// metricsPath is the standalone deployment mode's Prometheus scrape
+	// MetricsPath is the standalone deployment mode's Prometheus scrape
 	// endpoint, exempted from tenant resolution for exactly the same
-	// reason healthzPath is: a scraper (or a human's browser) has no demo
+	// reason HealthzPath is: a scraper (or a human's browser) has no demo
 	// Host to send and must not depend on one.
-	metricsPath = "/metrics"
+	MetricsPath = "/metrics"
 
-	// configKeyEnv names the environment variable holding the hex-encoded
+	// ConfigKeyEnv names the environment variable holding the hex-encoded
 	// 32-byte master key the config module seals Sensitive values with
 	// (config.WithCipher over dbkit.NewCipher). It is the bootstrap
 	// configuration this app's own configs table must never hold -- the
 	// key that encrypts the table cannot live in the table -- so it comes
 	// from the environment like every other bootstrap value, with the
 	// documented development default below.
-	configKeyEnv = "APP_CONFIG_KEY"
+	ConfigKeyEnv = "APP_CONFIG_KEY"
 
 	// configKeyHexLength is the encoded length of the required 32-byte key
 	// (2 hex characters per byte), checked so a short or malformed
@@ -129,71 +132,71 @@ const (
 	// rather than surfacing later as an opaque NewCipher error.
 	configKeyHexLength = 64
 
-	// orgIndexKeyEnv names the environment variable holding the hex-encoded
+	// OrgIndexKeyEnv names the environment variable holding the hex-encoded
 	// 32-byte HMAC key org.WithEmailIndexer's blind indexer is built from
 	// (dbkit.NewBlindIndexer). It is a SEPARATE bootstrap secret from
-	// configKeyEnv on purpose: this app reuses the config cipher (built
-	// from configKeyEnv) to also encrypt org's Invitation.Email column
+	// ConfigKeyEnv on purpose: this app reuses the config cipher (built
+	// from ConfigKeyEnv) to also encrypt org's Invitation.Email column
 	// (registered under org.EmailSerializerName below), and dbkit's own
 	// rule is that an AES key must never double as an HMAC key -- see
 	// go/org/invitation.go's EmailSerializerName doc comment. Introducing
 	// this one additional key, distinct from the cipher key, is what keeps
 	// that rule real rather than aspirational in this app's own wiring.
-	orgIndexKeyEnv = "APP_ORG_INDEX_KEY"
+	OrgIndexKeyEnv = "APP_ORG_INDEX_KEY"
 
-	// notificationIndexKeyEnv names the environment variable holding the
+	// NotificationIndexKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte HMAC key the blind indexers over the notification
 	// module's encrypted contact addresses are built from
 	// (dbkit.NewBlindIndexer). It is a SEPARATE bootstrap secret from
-	// configKeyEnv for the same reason orgIndexKeyEnv's doc comment above
+	// ConfigKeyEnv for the same reason OrgIndexKeyEnv's doc comment above
 	// gives: this app reuses the config cipher to also encrypt
 	// notification's Contact.Address column (registered under
 	// notification.ContactAddressSerializerName below), and dbkit's own rule
 	// is that an AES key must never double as an HMAC key. One HMAC key
 	// serves both the email and the phone indexers, exactly as authn's
-	// single blind-index key serves both of its indexers (devBlindIndexKey's
+	// single blind-index key serves both of its indexers (DevBlindIndexKey's
 	// comment says so) -- the two normalizers keep the two index columns'
 	// inputs in disjoint canonical forms, so a shared key leaks nothing
 	// between them.
-	notificationIndexKeyEnv = "APP_NOTIFICATION_INDEX_KEY"
+	NotificationIndexKeyEnv = "APP_NOTIFICATION_INDEX_KEY"
 
-	// pkiLocalKeyCipherKeyEnv names the environment variable holding the
+	// PkiLocalKeyCipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals go/pki's LocalSigner private-key
 	// column (pki_local_keys, via pki.RegisterLocalKeySerializer). Without
 	// it, a deployment that sets none of this file's other keys would
 	// silently run its signing-key storage on a key committed to this
-	// repository's own source (the devPKILocalKeyCipherKey development
+	// repository's own source (the DevPKILocalKeyCipherKey development
 	// default). It is a SEPARATE bootstrap secret from every other key in
 	// this file: dbkit's key-separation rule applies across modules, not
-	// only within one (devPKILocalKeyCipherKey's own doc comment).
-	pkiLocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
+	// only within one (DevPKILocalKeyCipherKey's own doc comment).
+	PkiLocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
 
-	// authnBlindIndexKeyEnv names the environment variable holding the
+	// AuthnBlindIndexKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte HMAC key authn.WithBlindIndexKey indexes its
 	// users.email_index/phone_index columns with (dbkit.NewBlindIndexer).
-	// Like pkiLocalKeyCipherKeyEnv above, it is the environment override
-	// for the hardcoded devBlindIndexKey development default. This key must
-	// stay IDENTICAL across restarts (devBlindIndexKey's
+	// Like PkiLocalKeyCipherKeyEnv above, it is the environment override
+	// for the hardcoded DevBlindIndexKey development default. This key must
+	// stay IDENTICAL across restarts (DevBlindIndexKey's
 	// own doc comment) or every already-stored email/phone blind index
 	// becomes unfindable, so setting this env var (or APP_ROOT_KEY, which
 	// derives it) and then changing it has the same operational
 	// consequences a real key rotation always has.
-	authnBlindIndexKeyEnv = "APP_AUTHN_BLIND_INDEX_KEY"
+	AuthnBlindIndexKeyEnv = "APP_AUTHN_BLIND_INDEX_KEY"
 
-	// authnPIICipherKeyEnv names the environment variable holding the
+	// AuthnPIICipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals authn's encrypted PII columns
 	// (email, phone, TOTP secrets) via authn.RegisterPIISerializer. Like
 	// its two siblings above, it is the environment override for the
-	// hardcoded devPIICipherKey development default -- deliberately a
+	// hardcoded DevPIICipherKey development default -- deliberately a
 	// SEPARATE secret from every other key in this file, including
-	// pkiLocalKeyCipherKeyEnv (devPIICipherKey's own doc comment).
-	authnPIICipherKeyEnv = "APP_AUTHN_PII_CIPHER_KEY"
+	// PkiLocalKeyCipherKeyEnv (DevPIICipherKey's own doc comment).
+	AuthnPIICipherKeyEnv = "APP_AUTHN_PII_CIPHER_KEY"
 
-	// rootKeyEnv names the environment variable holding a single
+	// RootKeyEnv names the environment variable holding a single
 	// hex-encoded 32-byte high-entropy root secret that, when set, derives
 	// ALL SIX of the key materials this file otherwise requires
-	// individually (configKeyEnv, orgIndexKeyEnv, notificationIndexKeyEnv,
-	// pkiLocalKeyCipherKeyEnv, authnBlindIndexKeyEnv, authnPIICipherKeyEnv)
+	// individually (ConfigKeyEnv, OrgIndexKeyEnv, NotificationIndexKeyEnv,
+	// PkiLocalKeyCipherKeyEnv, AuthnBlindIndexKeyEnv, AuthnPIICipherKeyEnv)
 	// via dbkit.DeriveKey, one distinct, versioned purpose string per key
 	// (see the rootKeyPurpose* constants below) -- so a deployer can set
 	// ONE secret instead of six and still end up with six independent
@@ -212,13 +215,13 @@ const (
 	// one specific key keeps setting that key's own variable instead, and
 	// the two compose freely. Leaving APP_ROOT_KEY unset leaves every one
 	// of the six keys on its own hardcoded development default.
-	rootKeyEnv = "APP_ROOT_KEY"
+	RootKeyEnv = "APP_ROOT_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
 	// address ("host:port") the injected EventBus AND KVStore connect to --
 	// one Redis instance backs both seams, sharing one *redis.Client the
 	// same way go/notification's own Redis integration leg shares one
-	// client across two bus instances (see buildServer's kernel doc comment
+	// client across two bus instances (see BuildServer's kernel doc comment
 	// below for what the resulting composition proves). Empty -- the
 	// default -- leaves both seams on the in-process implementations the
 	// Preset resolves, so zero-setup standalone development keeps working
@@ -237,7 +240,7 @@ const (
 	// so zero-setup standalone development keeps working with nothing
 	// running; set it to push both signals at a collector over OTLP. The
 	// shape is APP_REDIS_ADDR's own (resolve a bootstrap setting in
-	// configFromEnv, hand it over through the matching option): it is an
+	// ConfigFromEnv, hand it over through the matching option): it is an
 	// implementation-composition question, never a deployment-mode one --
 	// obs.Init takes no mode, and the exporter set the endpoint selects
 	// works identically in the standalone and distributed topologies this
@@ -249,8 +252,8 @@ const (
 	// aiGatewayImageBaseURLEnv and aiGatewayImageAPIKeyEnv name the
 	// environment variables that point the smile-simulation pipeline at an
 	// OpenAI-compatible images endpoint: when aiGatewayImageAPIKeyEnv is
-	// set, configFromEnv fills cfg.AIGatewayImageBaseURL/APIKey, and
-	// buildServer writes the platform-wide image-generation credential at
+	// set, ConfigFromEnv fills cfg.AIGatewayImageBaseURL/APIKey, and
+	// BuildServer writes the platform-wide image-generation credential at
 	// boot (see those fields' own doc comment). Both unset -- the default
 	// -- keeps the zero-setup posture exactly: the image credential row is
 	// never written and a simulate request dead-letters
@@ -268,13 +271,13 @@ const (
 	aiGatewayImageBaseURLEnv = "APP_AI_GATEWAY_IMAGE_BASE_URL"
 	// #nosec G101 -- an ENVIRONMENT VARIABLE NAME, not a credential value:
 	// the same gosec hardcoded-credential heuristic exception
-	// s3SecretKeyEnv's own #nosec comment documents.
+	// S3SecretKeyEnv's own #nosec comment documents.
 	aiGatewayImageAPIKeyEnv = "APP_AI_GATEWAY_IMAGE_API_KEY"
 
-	// s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv and s3SecretKeyEnv name the
+	// S3EndpointEnv, S3BucketEnv, S3AccessKeyEnv and S3SecretKeyEnv name the
 	// environment variables that together compose a real S3-compatible
 	// ObjectStore (objectstore/s3.NewObjectStore) for the "objectstore"
-	// seam. All four are required together -- configFromEnv fails loudly
+	// seam. All four are required together -- ConfigFromEnv fails loudly
 	// when only some of them are set, rather than silently falling back to
 	// the local-directory Preset default, since a partially named S3 target
 	// is far more likely a typo than a deliberate choice. s3RegionEnv and
@@ -282,19 +285,19 @@ const (
 	// Aliyun OSS (MinIO ignores it, per objectstore/s3.Config's own doc
 	// comment), and s3UseSSLEnv, parsed as a Go bool, defaults to false --
 	// plain HTTP, the common case for a local RustFS -- when unset.
-	s3EndpointEnv  = "APP_S3_ENDPOINT"
-	s3BucketEnv    = "APP_S3_BUCKET"
-	s3AccessKeyEnv = "APP_S3_ACCESS_KEY"
+	S3EndpointEnv  = "APP_S3_ENDPOINT"
+	S3BucketEnv    = "APP_S3_BUCKET"
+	S3AccessKeyEnv = "APP_S3_ACCESS_KEY"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
 	// value: gosec's hardcoded-credential heuristic matches on the substring
 	// "Secret" in the identifier alone, the same false positive
 	// demoUsersPasswordEnv's own #nosec comment (demo_users.go) already
 	// excepts elsewhere in this codebase.
-	s3SecretKeyEnv = "APP_S3_SECRET_KEY"
+	S3SecretKeyEnv = "APP_S3_SECRET_KEY"
 	s3RegionEnv    = "APP_S3_REGION"
 	s3UseSSLEnv    = "APP_S3_USE_SSL"
 
-	// objectStoreRootEnv names the environment variable that points the
+	// ObjectStoreRootEnv names the environment variable that points the
 	// "objectstore" seam at a fixed local directory instead of the
 	// Preset's throwaway temp directory: pkgcore.NewLocalObjectStore over
 	// APP_OBJECT_STORE_ROOT, injected with the SurvivesRestart capability
@@ -303,14 +306,14 @@ const (
 	// across replicas, so MultiReplicaSafe is never claimed for it. This
 	// is the local twin of the APP_S3_* composition above and an
 	// alternative to it: setting both names two different stores for one
-	// seam, so configFromEnv refuses the combination for the same
+	// seam, so ConfigFromEnv refuses the combination for the same
 	// fail-loud-on-ambiguous-config reason the S3 completeness rule gives.
-	objectStoreRootEnv = "APP_OBJECT_STORE_ROOT"
+	ObjectStoreRootEnv = "APP_OBJECT_STORE_ROOT"
 
 	// smtpHostEnv and smtpPortEnv name the environment variables that
 	// together compose a real SMTP Mailer (pkgcore.NewSMTPMailer) for the
 	// "mailer" seam; both are required together, for the same
-	// fail-loud-on-partial-config reason s3EndpointEnv's doc comment gives.
+	// fail-loud-on-partial-config reason S3EndpointEnv's doc comment gives.
 	// smtpUsernameEnv and smtpPasswordEnv are optional -- SMTP AUTH
 	// activates only when a username is set (pkgcore.SMTPConfig.Username's
 	// own doc comment). Unset -- the default -- leaves the "mailer" seam on
@@ -319,7 +322,7 @@ const (
 	smtpPortEnv     = "APP_SMTP_PORT"
 	smtpUsernameEnv = "APP_SMTP_USERNAME"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
-	// value, the identical false positive s3SecretKeyEnv's own #nosec
+	// value, the identical false positive S3SecretKeyEnv's own #nosec
 	// comment above excepts.
 	smtpPasswordEnv = "APP_SMTP_PASSWORD"
 
@@ -331,7 +334,7 @@ const (
 	// authn's own wiring-time
 	// validation fails closed with authn.ErrMissingDistributedSMSSender
 	// rather than this app silently keeping a console sender nobody in a
-	// distributed replica pool is reading -- see buildServer's authn
+	// distributed replica pool is reading -- see BuildServer's authn
 	// wiring comment for the three-way branch this drives.
 	smsGatewayURLEnv = "APP_SMS_GATEWAY_URL"
 
@@ -340,10 +343,10 @@ const (
 	// host and port, no path), the base URL the outbound mail links this
 	// app renders point recipients at when the recipient's tenant has no
 	// branded host of its own in cfg.HostTenants. The branded hosts
-	// cfg.HostTenants names are demo-only (demoHostTenants: the two
+	// cfg.HostTenants names are demo-only (DemoHostTenants: the two
 	// configured tenants), while every other tenant this app serves is a
 	// self-registered clinic its own register route provisions at runtime
-	// (self_service.go's clinicTenantOf: "tenant-" + the registrant's user
+	// (self_service.go's ClinicTenantOf: "tenant-" + the registrant's user
 	// id, by construction never a cfg.HostTenants value) -- and org's
 	// invitation email is the one outbound message whose link needs a host
 	// (server.go's org.WithInvitationLinkBuilder wiring below). Unset --
@@ -362,7 +365,7 @@ const (
 	publicOriginEnv = "APP_PUBLIC_ORIGIN"
 
 	// disableQueueWorkerEnv names the environment variable that, when set to
-	// any non-empty value, makes buildServer skip standaloneQueue.Start
+	// any non-empty value, makes BuildServer skip standaloneQueue.Start
 	// entirely: the queue still accepts Enqueue calls (a plain row insert,
 	// see jobs.StandaloneQueue.Enqueue's own doc comment -- it needs no
 	// dispatcher or worker goroutine), but this replica's own dispatcher and
@@ -375,27 +378,27 @@ const (
 	// never executed anything itself" into a genuine, deterministic
 	// cross-process EventBus proof rather than a coincidence a shared
 	// SQLite jobs table could also explain (see that file's own doc
-	// comment). Left unset (the default), buildServer starts the queue
+	// comment). Left unset (the default), BuildServer starts the queue
 	// worker normally.
 	disableQueueWorkerEnv = "APP_DISABLE_QUEUE_WORKER"
 
 	// disableDemoUserHeaderEnv names the environment variable that, when set
-	// to any non-empty value, makes buildServer stop reading EVERY demo
-	// identity header this app ships -- demoUserHeader (demo_subject.go's
-	// "X-Demo-User") AND demoOrgUserHeader ("X-Demo-User-Id", the
-	// attribution header demoOrgSubjectResolver and demoNotesSubjectResolver
+	// to any non-empty value, makes BuildServer stop reading EVERY demo
+	// identity header this app ships -- DemoUserHeader (demo_subject.go's
+	// "X-Demo-User") AND DemoOrgUserHeader ("X-Demo-User-Id", the
+	// attribution header DemoOrgSubjectResolver and DemoNotesSubjectResolver
 	// read) -- uniformly:
 	//
 	//   - every permission-gated route resolves its acting Subject from the
-	//     verified authn Principal alone, through demoSubjectResolverFor(true)
+	//     verified authn Principal alone, through DemoSubjectResolverFor(true)
 	//     (see that function's own doc comment);
-	//   - every attribution seam demoOrgSubjectResolver serves (org's
+	//   - every attribution seam DemoOrgSubjectResolver serves (org's
 	//     caller-scoped invitation endpoints, the notification module's whole
-	//     surface, integration's creator reads) and demoNotesSubjectResolver
+	//     surface, integration's creator reads) and DemoNotesSubjectResolver
 	//     serves (notes' create handler, the cases surface) resolves its
 	//     acting user from the verified authn Principal alone.
 	//
-	// This is the kill switch demoUserHeader's own doc comment describes for
+	// This is the kill switch DemoUserHeader's own doc comment describes for
 	// the rbac header's privilege-escalation hole -- an
 	// unauthenticated header that still outranks a proven identity when both
 	// are present, so a caller holding nothing more than a low-privilege
@@ -404,11 +407,11 @@ const (
 	// caller's own -- extended to the attribution header too:
 	// X-Demo-User-Id would let the same class of caller act as (or read the
 	// data of) any user id on the org/notification/cases/notes surfaces
-	// while demoUserHeader alone stays disabled. Left unset (the default),
+	// while DemoUserHeader alone stays disabled. Left unset (the default),
 	// every demo journey and every test keeps driving demo actors through
 	// the headers, which is deliberate: flipping the default would break
-	// them at once (demo_subject_test.go, notesRequestAs and friends in
-	// server_test.go, and the flow tests across this package that drive a
+	// them at once (cmd/server/demo_subject_test.go, notesRequestAs and friends in
+	// cmd/server/server_test.go, and the flow tests across this package that drive a
 	// demo actor through a header). An operator deploying this reference
 	// app somewhere a real, non-demo user might reach it is the one case
 	// this variable exists for: setting it closes the hole with no code
@@ -418,8 +421,8 @@ const (
 
 	// trustedProxiesEnv names the environment variable holding the
 	// comma-separated list of reverse-proxy addresses this deployment
-	// receives requests through -- the value configFromEnv hands
-	// authn.WithTrustedProxies (see serverConfig.TrustedProxies). This is
+	// receives requests through -- the value ConfigFromEnv hands
+	// authn.WithTrustedProxies (see ServerConfig.TrustedProxies). This is
 	// the deployment declaration that lets authn's session/login-history
 	// records carry the REAL client address instead of the proxy's: on
 	// Fly.io, declaring the Fly proxy ranges in fly.toml's [env] block is
@@ -436,7 +439,7 @@ const (
 	// whose proxy genuinely overwrites the Fly-Client-IP header on every
 	// request it forwards -- which is what authorizes authn to read that
 	// single-hop vendor header at all (go/authn's WithVendorClientIPHeaders
-	// and VendorClientIPHeaderFlyClientIP; see serverConfig.ReadFlyClientIP).
+	// and VendorClientIPHeaderFlyClientIP; see ServerConfig.ReadFlyClientIP).
 	// APP_TRUSTED_PROXIES alone can never authorize it: a generic reverse
 	// proxy (nginx, ALB, Envoy, Cloudflare) forwards a client-chosen
 	// Fly-Client-IP verbatim, so reading the header for every declared
@@ -444,7 +447,7 @@ const (
 	// address -- the smuggling hole this declaration pair exists to close.
 	// It is a strict bool ('true'/'false'), parsed at boot; unset is
 	// false. It only
-	// takes effect alongside APP_TRUSTED_PROXIES: configFromEnv refuses
+	// takes effect alongside APP_TRUSTED_PROXIES: ConfigFromEnv refuses
 	// 'true' with an empty proxy list, since that combination would
 	// silently keep recording the proxy itself -- the very defect the
 	// declaration pair exists to fix.
@@ -454,7 +457,7 @@ const (
 	// the failure-injection count for the self-service clinic
 	// provisioning chain (self_service.go). It is a TEST-AND-E2E-ONLY
 	// switch -- a real deployment must never set it -- with a strictly
-	// disabled default: absent, or "0", leaves cfg.failSelfServiceProvision
+	// disabled default: absent, or "0", leaves cfg.FailSelfServiceProvision
 	// nil (newProvisionFailureInjector(0) answers nil).
 	//
 	// Set to a positive integer N, the server fails the first N
@@ -474,11 +477,11 @@ const (
 	// or a negative one, refuses boot naming this variable.
 	failSelfServiceProvisionEnv = "APP_FAIL_SELF_SERVICE_PROVISION"
 
-	// rootKeyPurposeConfigCipher, rootKeyPurposeOrgIndex,
-	// rootKeyPurposeNotificationIndex, rootKeyPurposePKILocalKeyCipher,
-	// rootKeyPurposeAuthnBlindIndex and rootKeyPurposeAuthnPIICipher are the
+	// RootKeyPurposeConfigCipher, RootKeyPurposeOrgIndex,
+	// RootKeyPurposeNotificationIndex, RootKeyPurposePKILocalKeyCipher,
+	// RootKeyPurposeAuthnBlindIndex and RootKeyPurposeAuthnPIICipher are the
 	// six dbkit.DeriveKey purpose strings APP_ROOT_KEY's derivation uses,
-	// one per key material rootKeyEnv's doc comment above lists, in the
+	// one per key material RootKeyEnv's doc comment above lists, in the
 	// same order. Each is distinct (so no two ever derive the same bytes)
 	// and versioned (a trailing ".v1", per DeriveKey's own doc comment on
 	// why: any re-derivation bumps the suffix rather than
@@ -487,15 +490,15 @@ const (
 	// reuse one of these strings once APP_ROOT_KEY ships to a real
 	// deployment -- doing so is operationally identical to rotating that
 	// one key without telling anyone.
-	rootKeyPurposeConfigCipher      = "speed.reference-app.config.cipher.v1"
-	rootKeyPurposeOrgIndex          = "speed.reference-app.org.blind_index.v1"
-	rootKeyPurposeNotificationIndex = "speed.reference-app.notification.blind_index.v1"
-	rootKeyPurposePKILocalKeyCipher = "speed.reference-app.pki.local_key_cipher.v1"
-	rootKeyPurposeAuthnBlindIndex   = "speed.reference-app.authn.blind_index.v1"
-	rootKeyPurposeAuthnPIICipher    = "speed.reference-app.authn.pii_cipher.v1"
+	RootKeyPurposeConfigCipher      = "speed.reference-app.config.cipher.v1"
+	RootKeyPurposeOrgIndex          = "speed.reference-app.org.blind_index.v1"
+	RootKeyPurposeNotificationIndex = "speed.reference-app.notification.blind_index.v1"
+	RootKeyPurposePKILocalKeyCipher = "speed.reference-app.pki.local_key_cipher.v1"
+	RootKeyPurposeAuthnBlindIndex   = "speed.reference-app.authn.blind_index.v1"
+	RootKeyPurposeAuthnPIICipher    = "speed.reference-app.authn.pii_cipher.v1"
 )
 
-// devConfigKey is the master key used when APP_CONFIG_KEY is unset. It is
+// DevConfigKey is the master key used when APP_CONFIG_KEY is unset. It is
 // the ascending 0x00..0x1f byte sequence -- a recognizable constant, never
 // a secret -- because zero-setup standalone development (`go run
 // ./cmd/server`, `task dev`, this app's tests) must work with no
@@ -508,64 +511,64 @@ const (
 // deployment must set APP_CONFIG_KEY from a secret store (or refuse to
 // start); the constant exists so the *demo* keeps working out of the box,
 // and its name and doc comment are the guard rails that keep it honest.
-var devConfigKey = []byte{
+var DevConfigKey = []byte{
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
 	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
 	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 }
 
-// devOrgIndexKey is the HMAC key used when APP_ORG_INDEX_KEY is unset --
+// DevOrgIndexKey is the HMAC key used when APP_ORG_INDEX_KEY is unset --
 // the descending 0xff..0xe0 byte sequence, chosen precisely so it is
-// visibly a DIFFERENT 32 bytes from devConfigKey's ascending 0x00..0x1f
-// (see orgIndexKeyEnv's own doc comment for why the two must never be the
-// same secret). Like devConfigKey, this is a recognizable constant for
+// visibly a DIFFERENT 32 bytes from DevConfigKey's ascending 0x00..0x1f
+// (see OrgIndexKeyEnv's own doc comment for why the two must never be the
+// same secret). Like DevConfigKey, this is a recognizable constant for
 // zero-setup standalone development, never a secret a real deployment
 // should keep.
-var devOrgIndexKey = []byte{
+var DevOrgIndexKey = []byte{
 	0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
 	0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
 	0xef, 0xee, 0xed, 0xec, 0xeb, 0xea, 0xe9, 0xe8,
 	0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 }
 
-// devPKILocalKeyCipherKey, devBlindIndexKey and devPIICipherKey are authn's
+// DevPKILocalKeyCipherKey, DevBlindIndexKey and DevPIICipherKey are authn's
 // (and pki's) own committed-key placeholders, the same documented trade-off
-// as devConfigKey immediately above -- a real deployment must replace every
+// as DevConfigKey immediately above -- a real deployment must replace every
 // one of them with real secret-manager material, never commit real keys the
 // way this demo commits these. Each has a real override path
-// (pkiLocalKeyCipherKeyEnv / authnBlindIndexKeyEnv / authnPIICipherKeyEnv,
-// or APP_ROOT_KEY deriving all three at once -- see rootKeyEnv's own doc
-// comment); configFromEnv consults these three vars as resolveKey's
-// devDefault fallback, never directly from buildServer.
+// (PkiLocalKeyCipherKeyEnv / AuthnBlindIndexKeyEnv / AuthnPIICipherKeyEnv,
+// or APP_ROOT_KEY deriving all three at once -- see RootKeyEnv's own doc
+// comment); ConfigFromEnv consults these three vars as resolveKey's
+// devDefault fallback, never directly from BuildServer.
 //
 // Each protects something different and each MUST stay stable across
-// restarts for a different reason: devPKILocalKeyCipherKey seals go/pki's
+// restarts for a different reason: DevPKILocalKeyCipherKey seals go/pki's
 // LocalSigner private-key column (pki_local_keys, via
 // pki.RegisterLocalKeySerializer) -- the signing key itself is generated
 // once by pki.Service.EnsurePurpose (this file's authn.WithKeySource wiring
 // below) and PERSISTS in cfg.SQLitePath across restarts; authn.WithBlindIndexKey's
 // key must stay IDENTICAL across restarts or every already-stored
-// email/phone blind index becomes unfindable; and devPIICipherKey seals
+// email/phone blind index becomes unfindable; and DevPIICipherKey seals
 // authn's encrypted PII columns (email, phone, TOTP secrets) via
 // authn.RegisterPIISerializer, deliberately a DIFFERENT key from
-// devConfigKey -- dbkit's own key-separation rule (never let one key double
+// DevConfigKey -- dbkit's own key-separation rule (never let one key double
 // as two different AEAD constructions) applies across modules, not only
 // within one.
 var (
-	devPKILocalKeyCipherKey = []byte{
+	DevPKILocalKeyCipherKey = []byte{
 		0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
 		0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
 		0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
 		0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
 	}
-	devBlindIndexKey = []byte{
+	DevBlindIndexKey = []byte{
 		0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
 		0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
 		0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
 		0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
 	}
-	devPIICipherKey = []byte{
+	DevPIICipherKey = []byte{
 		0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67,
 		0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f,
 		0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
@@ -573,26 +576,26 @@ var (
 	}
 )
 
-// devNotificationIndexKey is the HMAC key used when
+// DevNotificationIndexKey is the HMAC key used when
 // APP_NOTIFICATION_INDEX_KEY is unset -- the ascending 0x80..0x9f byte
 // sequence, the next free 32-byte region of this file's recognizable
 // constants and chosen so it is visibly a DIFFERENT 32 bytes from every key
-// above it (see notificationIndexKeyEnv's own doc comment for why the
+// above it (see NotificationIndexKeyEnv's own doc comment for why the
 // notification index key and the config cipher key must never be the same
 // secret). Like its siblings, this is a recognizable constant for
 // zero-setup standalone development, never a secret a real deployment
 // should keep.
-var devNotificationIndexKey = []byte{
+var DevNotificationIndexKey = []byte{
 	0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
 	0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
 	0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
 	0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
 }
 
-// demoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
+// DemoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
 // lookup. It exists only so this reference app has *some* way to render a
 // tenant-specific brand on the config module's pre-auth display endpoints
-// (configModule's tenancy.NewDomainResolver wiring in buildServer below)
+// (configModule's tenancy.NewDomainResolver wiring in BuildServer below)
 // without a real custom-domain table.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
@@ -607,9 +610,9 @@ var devNotificationIndexKey = []byte{
 // the caller's ACCESS TOKEN instead (authn.NewPrincipalResolver, wired
 // below) -- an unauthenticated caller cannot choose a tenant just by
 // setting Host, which a Host-keyed lookup like this one would otherwise
-// allow. See buildServer's middleware-chain doc comment for the full
+// allow. See BuildServer's middleware-chain doc comment for the full
 // reasoning.
-var demoHostTenants = map[string]pkgcore.TenantID{
+var DemoHostTenants = map[string]pkgcore.TenantID{
 	"acme.demo.localhost":   "tenant-acme",
 	"globex.demo.localhost": "tenant-globex",
 }
@@ -621,7 +624,7 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 // org -- the two sit at the same dependency tier, peers, neither importing
 // the other -- so whatever answers authn's two membership questions must
 // be supplied by the assembling application, exactly like
-// demoNotesSubjectResolver and orgSubtreeResolver below are. The app's
+// DemoNotesSubjectResolver and OrgSubtreeResolver below are. The app's
 // membership store starts empty, and who fills it depends on the boot:
 //
 //   - Every boot seeds the fixed demo header actors' rbac grants
@@ -637,19 +640,19 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 //     rather than allows, and the org rows are that answer now).
 //   - Tests grant membership explicitly after registering an account
 //     through the real HTTP surface (registerAndAuthenticate in
-//     server_test.go, authn_e2e_test.go), keeping a reference to the same
-//     store buildServer itself wires.
+//     cmd/server/server_test.go, cmd/server/authn_e2e_test.go), keeping a reference to the same
+//     store BuildServer itself wires.
 
-// demoOrgUserHeader is the header demoOrgSubjectResolver reads to identify the
+// DemoOrgUserHeader is the header DemoOrgSubjectResolver reads to identify the
 // HTTP caller: the stand-in for the verified access-token claims a real
 // deployment's resolver would read, in exactly the spirit of
-// demoHostTenants' own disclaimer above. A caller sets it to whatever user
+// DemoHostTenants' own disclaimer above. A caller sets it to whatever user
 // id it wants to act as, with no verification whatsoever -- which is fine
 // for this reference app's own demonstration purposes and would be a
 // critical vulnerability in any real deployment.
-const demoOrgUserHeader = "X-Demo-User-Id"
+const DemoOrgUserHeader = "X-Demo-User-Id"
 
-// demoOrgSubjectResolver supplies the caller identity to every module that
+// DemoOrgSubjectResolver supplies the caller identity to every module that
 // declares the same structurally identical SubjectResolver seam: org's two
 // caller-scoped endpoints (creating and accepting an invitation), every
 // notification endpoint (which resolves its caller's inbox, contacts and
@@ -664,13 +667,13 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // module's own per-operation 401 (notification.subject_unresolved,
 // integration.subject_unresolved, org's sibling), never a fabricated user
 // id. That header-only refusal is pinned behaviour of this app's rig
-// (notification_flow_test.go's subject-less leg; demoRouteGuards names the
+// (cmd/server/notification_flow_test.go's subject-less leg; demoRouteGuards names the
 // path routePublic for the same reason) -- for notification's and
 // integration's surfaces it stays exactly that, because no browser-shaped
 // flow reaches them.
 //
 // The principalFallback field is a deliberate exception for ORG's wiring
-// alone, the same shape demoNotesSubjectResolver's
+// alone, the same shape DemoNotesSubjectResolver's
 // header-then-Principal fallback gives notes' and cases' creator
 // seams: org's caller-scoped endpoints also serve browser-shaped callers --
 // a signed-in clinic owner whose requests carry a bearer token and no demo
@@ -694,11 +697,11 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // requirement.
 //
 // headerDisabled carries the value of cfg.DisableDemoUserHeader
-// (APP_DISABLE_DEMO_USER_HEADER) buildServer wired this resolver with. The
+// (APP_DISABLE_DEMO_USER_HEADER) BuildServer wired this resolver with. The
 // zero value keeps the header-only resolver; the disabled wiring is what
 // an operator setting the kill switch gets, and it
 // is the point of this field: it is what extends the kill switch -- which
-// alone would only reach demoUserHeader in the rbac gate -- to this
+// alone would only reach DemoUserHeader in the rbac gate -- to this
 // resolver (and the org, notification and integration surfaces it serves),
 // which would otherwise honor X-Demo-User-Id unconditionally. With
 // headerDisabled set, Subject reads
@@ -706,15 +709,20 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // Principal alone -- the identity authn.Middleware proved -- failing
 // closed exactly like the header-only shape when no Principal exists. See
 // disableDemoUserHeaderEnv's own doc comment for the full contract.
-type demoOrgSubjectResolver struct {
-	headerDisabled bool
+type DemoOrgSubjectResolver struct {
+	// HeaderDisabled carries cfg.DisableDemoUserHeader
+	// (APP_DISABLE_DEMO_USER_HEADER): when true, Subject reads no demo
+	// header at all and resolves the verified authn Principal alone,
+	// failing closed without one -- see the type's own doc comment for
+	// the full contract. The zero value keeps the header-first resolver.
+	HeaderDisabled bool
 
-	// principalFallback lets ORG's wiring (server.go's org.NewModule
+	// PrincipalFallback lets ORG's wiring (this file's org.NewModule
 	// option) resolve a header-less request from the verified Principal
 	// authn.Middleware left in the request context -- the browser-shaped
 	// caller org's team surface needs. Zero value keeps the
 	// header-only contract (see the type's own doc comment).
-	principalFallback bool
+	PrincipalFallback bool
 }
 
 // Subject implements org.SubjectResolver, notification.SubjectResolver and
@@ -733,12 +741,12 @@ type demoOrgSubjectResolver struct {
 // principalFallback is set (org's wiring only), the verified Principal;
 // else fail closed. In the headerDisabled wiring, the verified Principal
 // alone.
-func (r demoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
-	if !r.headerDisabled {
-		if userID := req.Header.Get(demoOrgUserHeader); userID != "" {
+func (r DemoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
+	if !r.HeaderDisabled {
+		if userID := req.Header.Get(DemoOrgUserHeader); userID != "" {
 			return userID, true
 		}
-		if r.principalFallback {
+		if r.PrincipalFallback {
 			if principal, ok := authn.PrincipalFromContext(req.Context()); ok && principal.UserID != "" {
 				return principal.UserID, true
 			}
@@ -752,17 +760,17 @@ func (r demoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
 	return principal.UserID, true
 }
 
-// compile-time checks that demoOrgSubjectResolver satisfies the identical
+// compile-time checks that DemoOrgSubjectResolver satisfies the identical
 // SubjectResolver seam the three modules it serves declare.
 var (
-	_ org.SubjectResolver          = demoOrgSubjectResolver{}
-	_ notification.SubjectResolver = demoOrgSubjectResolver{}
-	_ integration.SubjectResolver  = demoOrgSubjectResolver{}
+	_ org.SubjectResolver          = DemoOrgSubjectResolver{}
+	_ notification.SubjectResolver = DemoOrgSubjectResolver{}
+	_ integration.SubjectResolver  = DemoOrgSubjectResolver{}
 )
 
-// demoNotesSubjectResolver is what notes' create handler resolves the
-// creating user from -- the notes.NewModule option buildServer wires
-// below. It is demoOrgSubjectResolver's behavior plus one source: like
+// DemoNotesSubjectResolver is what notes' create handler resolves the
+// creating user from -- the notes.NewModule option BuildServer wires
+// below. It is DemoOrgSubjectResolver's behavior plus one source: like
 // its sibling it reads the X-Demo-User-Id header first, the attribution
 // affordance every flow helper in this package sends and the namespace
 // demo_notification.go's address table keys on; and only when no header
@@ -770,29 +778,29 @@ var (
 // left in the request context. The fallback is what lets a browser-shaped
 // caller with no demo header create notes: the accounts demo_users.go
 // seeds (real users acting through their access tokens) are attributed
-// through it, exactly as they pass the rbac gate through demoSubjectResolver's
+// through it, exactly as they pass the rbac gate through DemoSubjectResolver's
 // own fallback, and the note-created events their creates publish name
 // their real user ids -- which resolve to no notification addresses, an
-// ordinary skip (see demo_notification.go's demoUserAddresses).
+// ordinary skip (see demo_notification.go's DemoUserAddresses).
 //
 // Notes' creator seam is not alone in having this second source:
 // org's caller-scoped endpoints share it -- the org module's
-// demoOrgSubjectResolver instance is wired with the type's
+// DemoOrgSubjectResolver instance is wired with the type's
 // principalFallback field set, giving org the
-// identical header-then-Principal shape (see demoOrgSubjectResolver's own
+// identical header-then-Principal shape (see DemoOrgSubjectResolver's own
 // doc comment). The notification module's caller-scoped endpoints keep the
 // header-only read, because its subject-less refusal is a pinned behaviour
 // of this app's rig -- and a request that reaches those surfaces without
 // the header stays refused rather than acting as the principal's user id.
 //
 // This is a placeholder, not a pattern to copy into a real deployment:
-// the header is exactly as unverifiable here as in demoOrgSubjectResolver,
+// the header is exactly as unverifiable here as in DemoOrgSubjectResolver,
 // and a real deployment's resolver reads the creating user from the
 // verified token the notes create handler already stands behind.
 //
 // headerDisabled carries the value of cfg.DisableDemoUserHeader
-// (APP_DISABLE_DEMO_USER_HEADER) buildServer wired this resolver with --
-// the sibling of demoOrgSubjectResolver's own field of the same name, and
+// (APP_DISABLE_DEMO_USER_HEADER) BuildServer wired this resolver with --
+// the sibling of DemoOrgSubjectResolver's own field of the same name, and
 // what extends the kill switch to this resolver: without it, a caller
 // could still name any creator through X-Demo-User-Id on notes' and
 // cases' surfaces while the rbac header alone was disabled. The
@@ -800,20 +808,25 @@ var (
 // with headerDisabled set, Subject skips the header read entirely
 // and resolves the caller from the verified authn Principal alone, failing
 // closed exactly like the default shape when no Principal exists.
-type demoNotesSubjectResolver struct {
-	headerDisabled bool
+type DemoNotesSubjectResolver struct {
+	// HeaderDisabled carries cfg.DisableDemoUserHeader
+	// (APP_DISABLE_DEMO_USER_HEADER): when true, Subject skips the
+	// header read and resolves the verified authn Principal alone,
+	// failing closed without one -- see the type's own doc comment for
+	// the full contract. The zero value keeps the header-first resolver.
+	HeaderDisabled bool
 }
 
 // Subject implements notes.SubjectResolver (and the cases package's
 // identical copy of the seam -- see the compile-time check at the bottom
-// of cmd/server/cases.go). It fails closed: no header (and, in the
+// of cases.go). It fails closed: no header (and, in the
 // headerDisabled wiring, no verified Principal) reports ("", false), and
 // the module's own per-operation refusal (notes.subject_unresolved,
 // cases.subject_unresolved) is what a caller then sees.
-func (r demoNotesSubjectResolver) Subject(req *http.Request) (string, bool) {
+func (r DemoNotesSubjectResolver) Subject(req *http.Request) (string, bool) {
 	userID := ""
-	if !r.headerDisabled {
-		userID = req.Header.Get(demoOrgUserHeader)
+	if !r.HeaderDisabled {
+		userID = req.Header.Get(DemoOrgUserHeader)
 	}
 	if userID == "" {
 		principal, ok := authn.PrincipalFromContext(req.Context())
@@ -825,18 +838,18 @@ func (r demoNotesSubjectResolver) Subject(req *http.Request) (string, bool) {
 	return userID, true
 }
 
-// compile-time check that demoNotesSubjectResolver satisfies notes' own
+// compile-time check that DemoNotesSubjectResolver satisfies notes' own
 // copy of the seam.
-var _ notes.SubjectResolver = demoNotesSubjectResolver{}
+var _ notes.SubjectResolver = DemoNotesSubjectResolver{}
 
-// orgFeatureGate adapts a *config.Service that is filled in AFTER this
+// OrgFeatureGate adapts a *config.Service that is filled in AFTER this
 // app's org.Module -- and its authn.Module -- are constructed into the
 // modules' FeatureGate seams, read lazily -- the
 // same "read a host seam at call time, never capture it at construction"
 // idiom go/org's own hostSeams applies throughout the module (see
 // go/org/events.go's doc comment on hostSeams for the identical reasoning).
 //
-// It exists because of a real ordering constraint in buildServer: the
+// It exists because of a real ordering constraint in BuildServer: the
 // config module's Service is only produced by configModule.Attach, which
 // per its own contract runs strictly AFTER Kernel.Bootstrap returns -- and
 // org.Module must already be part of that same Bootstrap call so its
@@ -846,33 +859,33 @@ var _ notes.SubjectResolver = demoNotesSubjectResolver{}
 // *config.Service pointer, which panics the moment anything calls
 // IsEnabled on it. Holding a pointer to the variable instead, and
 // dereferencing it only when IsEnabled is actually called (during a real
-// HTTP request, long after buildServer has finished wiring), sidesteps the
+// HTTP request, long after BuildServer has finished wiring), sidesteps the
 // ordering problem entirely.
-type orgFeatureGate struct{ service **config.Service }
+type OrgFeatureGate struct{ Service **config.Service }
 
 // IsEnabled implements org.FeatureGate -- and, identically,
 // authn.FeatureGate, which is the same declaration under a different
 // module: go/authn's copy of the seam (go/authn/module.go) mirrors org's
 // shape exactly, and the two modules never import each other. One
-// adapter therefore serves both gates, and buildServer passes the same
-// orgFeatureGate value to org.WithFeatureGate and to authn.WithFeatureGate
+// adapter therefore serves both gates, and BuildServer passes the same
+// OrgFeatureGate value to org.WithFeatureGate and to authn.WithFeatureGate
 // (see the authn wiring below).
-func (g orgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error) {
-	svc := *g.service
+func (g OrgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error) {
+	svc := *g.Service
 	if svc == nil {
 		return false, fmt.Errorf("reference-app: the config service is not attached yet")
 	}
 	return svc.IsEnabled(ctx, key)
 }
 
-// compile-time checks that orgFeatureGate satisfies org.FeatureGate and
+// compile-time checks that OrgFeatureGate satisfies org.FeatureGate and
 // authn.FeatureGate, the two identical no-import declarations it serves.
 var (
-	_ org.FeatureGate   = orgFeatureGate{}
-	_ authn.FeatureGate = orgFeatureGate{}
+	_ org.FeatureGate   = OrgFeatureGate{}
+	_ authn.FeatureGate = OrgFeatureGate{}
 )
 
-// socialChannelFlagKey maps a configured social provider's Name() to the
+// SocialChannelFlagKey maps a configured social provider's Name() to the
 // feature-flag key go/authn gates that channel under -- the host-side
 // mirror of go/authn/identity.go's own unexported socialChannelFlag
 // mapping, which this app cannot call. It returns "" for a provider authn
@@ -880,7 +893,7 @@ var (
 // turned off, so there is nothing for this host to open, and
 // openConfiguredAuthnChannels must skip it (writing an unknown key would
 // be a config ErrUnknownKey, since the schema knows only declared flags).
-func socialChannelFlagKey(name string) string {
+func SocialChannelFlagKey(name string) string {
 	switch name {
 	case authn.ProviderGoogle:
 		return authn.FeatureFlagSocialGoogle
@@ -906,7 +919,7 @@ func socialChannelFlagKey(name string) string {
 // credentials configured must not appear on the login page, so a flag that
 // defaulted on would advertise a channel whose unconfigured deployment
 // would fail it at the provider. A deployment that configures credentials
-// (here: that assembles the provider through serverConfig, its own
+// (here: that assembles the provider through ServerConfig, its own
 // out-of-band composition channel) is therefore expected to turn that
 // channel's own flag on, and this step is how THIS host does that, for
 // exactly the channels it actually wired. A system-tier row is the right
@@ -954,7 +967,7 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 		return fmt.Errorf("reference-app: build the authn channel system context: %w", err)
 	}
 	for _, provider := range providers {
-		flag := socialChannelFlagKey(provider.Name())
+		flag := SocialChannelFlagKey(provider.Name())
 		if flag == "" {
 			continue
 		}
@@ -965,19 +978,19 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 	return nil
 }
 
-// orgSubtreeResolver adapts org.Scope's Path method onto rbac.SubtreeResolver's
+// OrgSubtreeResolver adapts org.Scope's Path method onto rbac.SubtreeResolver's
 // NodePath -- the two no-import seams differ just enough (three return
 // values vs. two; "not found" folded into an error vs. a plain boolean)
-// that a one-line wrapper is needed, unlike orgFeatureGate/FeatureGate's
+// that a one-line wrapper is needed, unlike OrgFeatureGate/FeatureGate's
 // exact structural match above. org.Scope is safe to hold directly (unlike
 // *config.Service above): orgModule.Scope() is available the moment
 // org.NewModule returns, with no Attach-ordering constraint, so this
 // adapter captures it at construction rather than reading it lazily.
-type orgSubtreeResolver struct{ scope org.Scope }
+type OrgSubtreeResolver struct{ Scope org.Scope }
 
 // NodePath implements rbac.SubtreeResolver.
-func (r orgSubtreeResolver) NodePath(ctx context.Context, nodeID string) (string, bool, error) {
-	path, err := r.scope.Path(ctx, nodeID)
+func (r OrgSubtreeResolver) NodePath(ctx context.Context, nodeID string) (string, bool, error) {
+	path, err := r.Scope.Path(ctx, nodeID)
 	if err != nil {
 		if appErr, ok := apperr.As(err); ok && appErr.Code == org.ErrNodeNotFound.Code {
 			// rbac's own contract: an unresolvable node DENIES the binding
@@ -992,11 +1005,11 @@ func (r orgSubtreeResolver) NodePath(ctx context.Context, nodeID string) (string
 	return path, true, nil
 }
 
-// compile-time check that orgSubtreeResolver satisfies rbac.SubtreeResolver.
-var _ rbac.SubtreeResolver = orgSubtreeResolver{}
+// compile-time check that OrgSubtreeResolver satisfies rbac.SubtreeResolver.
+var _ rbac.SubtreeResolver = OrgSubtreeResolver{}
 
-// readTenantDurationConfig is the shared core sharingConfigReader and
-// complianceConfigReader below both call into: it resolves key's
+// readTenantDurationConfig is the shared core SharingConfigReader and
+// ComplianceConfigReader below both call into: it resolves key's
 // tenant-then-system-then-schema-default effective value through cfg
 // (go/config's own three-tier resolution, Service.Get's own doc comment)
 // and reports ok = false when it resolved at the schema default -- i.e.
@@ -1027,34 +1040,34 @@ func readTenantDurationConfig(ctx context.Context, cfg *config.Service, key stri
 	return d, true, nil
 }
 
-// sharingConfigReader adapts a *config.Service that is filled in AFTER
+// SharingConfigReader adapts a *config.Service that is filled in AFTER
 // this app's sharing.Module is constructed into sharing.TenantConfigReader,
 // read lazily -- the identical ordering problem and the identical fix
-// orgFeatureGate's own doc comment explains at length: configModule.Attach
+// OrgFeatureGate's own doc comment explains at length: configModule.Attach
 // (which produces the real *config.Service) runs strictly after
 // Kernel.Bootstrap returns, and sharing.Module must already be part of
 // that same Bootstrap call, so sharing.WithTenantConfigReader has to
 // receive something today that becomes live only later. Holding a
 // pointer to the configService variable, and dereferencing it only when
 // ShareDefaultExpiry is actually called (during a real request, long
-// after buildServer has finished wiring), sidesteps the ordering problem
-// exactly like orgFeatureGate does for org.FeatureGate.
-type sharingConfigReader struct{ service **config.Service }
+// after BuildServer has finished wiring), sidesteps the ordering problem
+// exactly like OrgFeatureGate does for org.FeatureGate.
+type SharingConfigReader struct{ Service **config.Service }
 
 // ShareDefaultExpiry implements sharing.TenantConfigReader.
-func (r sharingConfigReader) ShareDefaultExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
-	svc := *r.service
+func (r SharingConfigReader) ShareDefaultExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
+	svc := *r.Service
 	if svc == nil {
 		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
 	}
 	return readTenantDurationConfig(ctx, svc, sharing.ConfigDefaultExpiry, tenant)
 }
 
-// compile-time check that sharingConfigReader satisfies
+// compile-time check that SharingConfigReader satisfies
 // sharing.TenantConfigReader.
-var _ sharing.TenantConfigReader = sharingConfigReader{}
+var _ sharing.TenantConfigReader = SharingConfigReader{}
 
-// complianceConfigReader is compliance's own copy of sharingConfigReader,
+// ComplianceConfigReader is compliance's own copy of SharingConfigReader,
 // adapting the same lazily-filled *config.Service into
 // compliance.ExportDeliveryExpiryReader. It is a separate type, not a
 // shared one, because the two seams are structurally different Go
@@ -1063,32 +1076,32 @@ var _ sharing.TenantConfigReader = sharingConfigReader{}
 // nothing but call readTenantDurationConfig with a different config
 // key -- forcing one type to implement both method names would be a
 // coincidental unification neither module's own design asked for.
-type complianceConfigReader struct{ service **config.Service }
+type ComplianceConfigReader struct{ Service **config.Service }
 
 // ExportDeliveryExpiry implements compliance.ExportDeliveryExpiryReader.
-func (r complianceConfigReader) ExportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
-	svc := *r.service
+func (r ComplianceConfigReader) ExportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
+	svc := *r.Service
 	if svc == nil {
 		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
 	}
 	return readTenantDurationConfig(ctx, svc, compliance.ConfigExportDeliveryExpiry, tenant)
 }
 
-// compile-time check that complianceConfigReader satisfies
+// compile-time check that ComplianceConfigReader satisfies
 // compliance.ExportDeliveryExpiryReader.
-var _ compliance.ExportDeliveryExpiryReader = complianceConfigReader{}
+var _ compliance.ExportDeliveryExpiryReader = ComplianceConfigReader{}
 
-// serverConfig is main.go's own bootstrap wiring configuration -- the
+// ServerConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
 // mode, port, database path, the config master key, the optional Redis
 // address, the demo host map). It is a plain struct read from the
-// environment by configFromEnv, NOT the dynamic configuration the config
+// environment by ConfigFromEnv, NOT the dynamic configuration the config
 // module serves: dynamic configuration lives in the configs table and can
 // never hold the very key that encrypts it, so this bootstrap struct is
 // the deliberate exception to "a plain struct, not pkgcore/config's
 // dynamic configuration" -- it is main.go's own wiring, which never goes
 // through Module.Register either.
-type serverConfig struct {
+type ServerConfig struct {
 	DeploymentMode       pkgcore.DeploymentMode
 	Port                 string
 	SQLitePath           string
@@ -1098,10 +1111,10 @@ type serverConfig struct {
 
 	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey are
 	// the three key materials whose environment overrides arrive through
-	// pkiLocalKeyCipherKeyEnv, authnBlindIndexKeyEnv and
-	// authnPIICipherKeyEnv -- see those doc comments above for what each
+	// PkiLocalKeyCipherKeyEnv, AuthnBlindIndexKeyEnv and
+	// AuthnPIICipherKeyEnv -- see those doc comments above for what each
 	// protects and why each is a separate secret.
-	// configFromEnv resolves all six key fields on this struct (these
+	// ConfigFromEnv resolves all six key fields on this struct (these
 	// three plus ConfigKey/OrgIndexKey/NotificationIndexKey above) through
 	// the same three-tier precedence: an explicitly-set individual
 	// environment variable wins over a APP_ROOT_KEY derivation, which
@@ -1116,7 +1129,7 @@ type serverConfig struct {
 	// OTLPEndpoint is the "host:port" target this deployment pushes its
 	// traces and metrics to over OTLP/gRPC when non-empty (see
 	// otlpEndpointEnv's own doc comment above for what an empty value
-	// means). configFromEnv fills it from APP_OTLP_ENDPOINT; main.go's run
+	// means). ConfigFromEnv fills it from APP_OTLP_ENDPOINT; main.go's run
 	// hands it to obs.Init through obs.WithOTLPEndpoint, exactly the shape
 	// cfg.RedisAddr demonstrates for the Redis-backed seams.
 	OTLPEndpoint string
@@ -1127,7 +1140,7 @@ type serverConfig struct {
 	// HostTenants -- every self-registered clinic, whose tenant id
 	// self_service.go derives from its registrant and which no configured
 	// host can name (see publicOriginEnv's own doc comment above for the
-	// full population split). configFromEnv fills it from APP_PUBLIC_ORIGIN,
+	// full population split). ConfigFromEnv fills it from APP_PUBLIC_ORIGIN,
 	// defaulting to "http://localhost:" + the resolved PORT so a
 	// zero-setup local demo renders working links with no configuration;
 	// the field's zero value keeps the fail-loud behavior for a
@@ -1138,7 +1151,7 @@ type serverConfig struct {
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
 	// compose a real S3-compatible ObjectStore for the "objectstore" seam
 	// (objectstore/s3.NewObjectStore) when S3Endpoint is non-empty --
-	// s3EndpointEnv's own doc comment above has the completeness rule.
+	// S3EndpointEnv's own doc comment above has the completeness rule.
 	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
 	// local-directory default.
 	S3Endpoint  string
@@ -1151,15 +1164,15 @@ type serverConfig struct {
 	// ObjectStoreRoot, when non-empty, replaces the "objectstore" seam's
 	// Preset default with pkgcore.NewLocalObjectStore over this fixed
 	// directory -- the local twin of the S3 fields above, and an
-	// alternative to them (configFromEnv refuses both a complete S3
-	// composition and APP_OBJECT_STORE_ROOT, per objectStoreRootEnv's own
-	// doc comment). buildServer injects it declaring the SurvivesRestart
+	// alternative to them (ConfigFromEnv refuses both a complete S3
+	// composition and APP_OBJECT_STORE_ROOT, per ObjectStoreRootEnv's own
+	// doc comment). BuildServer injects it declaring the SurvivesRestart
 	// capability alone, never MultiReplicaSafe: the directory survives a
 	// process restart, but nothing about a single-process local store is
 	// replica-safe. The field exists because a host that needs its objects
 	// to outlive one process must name the directory itself -- the Preset
 	// default is a throwaway MkdirTemp -- which is exactly what the
-	// two-boot expiry-sweep flow test (periodic_scheduler_flow_test.go)
+	// two-boot expiry-sweep flow test (cmd/server/periodic_scheduler_flow_test.go)
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
 	ObjectStoreRoot string
 
@@ -1179,36 +1192,36 @@ type serverConfig struct {
 	// empty value means under each deployment mode.
 	SMSGatewayURL string
 
-	// DisableQueueWorker, when true, makes buildServer skip
+	// DisableQueueWorker, when true, makes BuildServer skip
 	// standaloneQueue.Start -- see disableQueueWorkerEnv's own doc comment
-	// above for why this exists and what it changes. configFromEnv sets it
+	// above for why this exists and what it changes. ConfigFromEnv sets it
 	// from APP_DISABLE_QUEUE_WORKER; false (the default) starts the queue
 	// worker normally.
 	DisableQueueWorker bool
 
-	// failSelfServiceProvision is the failure-injection hook for the
+	// FailSelfServiceProvision is the failure-injection hook for the
 	// self-service provisioning chain (self_service.go): when non-nil,
 	// every provisioning attempt the server makes consults it at the top
 	// of provision and fails when it returns an error, so a failure can
 	// be placed on the synchronous delivery of a registration's event and
 	// the retry job watched converging the same clinic. It has two
-	// writers: configFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION
+	// writers: ConfigFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION
 	// (absent or "0" leaves it nil -- the production default -- and N
 	// arms a hook failing the first N attempts of each account;
 	// failSelfServiceProvisionEnv's own doc comment has the contract),
-	// and the reference-app suites arm it on their own serverConfig
-	// before buildServer captures it into the provisioner it builds
+	// and the reference-app suites arm it on their own ServerConfig
+	// before BuildServer captures it into the provisioner it builds
 	// (wireSelfService). The hook answers per user id: a test's closure
 	// counts or keys on that argument however its scenario needs.
-	failSelfServiceProvision func(userID string) error
+	FailSelfServiceProvision func(userID string) error
 
-	// DisableDemoUserHeader, when true, makes buildServer wire every demo
+	// DisableDemoUserHeader, when true, makes BuildServer wire every demo
 	// identity source away from the demo headers: every permission-gated
-	// route's SubjectResolver through demoSubjectResolverFor(true), and
+	// route's SubjectResolver through DemoSubjectResolverFor(true), and
 	// every attribution seam through headerDisabled
-	// demoOrgSubjectResolver/demoNotesSubjectResolver instances -- see
+	// DemoOrgSubjectResolver/DemoNotesSubjectResolver instances -- see
 	// disableDemoUserHeaderEnv's own doc comment above for why this exists
-	// and exactly what it changes. configFromEnv sets it from
+	// and exactly what it changes. ConfigFromEnv sets it from
 	// APP_DISABLE_DEMO_USER_HEADER; false (the default) keeps every demo
 	// identity source on its header-enabled wiring, matching
 	// DisableQueueWorker's own contract just above.
@@ -1219,7 +1232,7 @@ type serverConfig struct {
 	// receives requests through, so authn's session/login-history records
 	// carry the real client address (recovered from the X-Forwarded-For
 	// chain those proxies append) instead of the proxy's address.
-	// configFromEnv fills it from APP_TRUSTED_PROXIES, a comma-separated
+	// ConfigFromEnv fills it from APP_TRUSTED_PROXIES, a comma-separated
 	// list (see trustedProxiesEnv); the empty default -- the
 	// zero-external-dependency `go run ./cmd/server` experience, and every
 	// test's config -- keeps authn's fail-closed behavior of recording
@@ -1247,7 +1260,7 @@ type serverConfig struct {
 	// would let a client smuggle its own value through a generic reverse
 	// proxy that forwards unknown headers verbatim (nginx, ALB, Envoy,
 	// Cloudflare), minting its own recorded AND rate-limited address.
-	// configFromEnv refuses true with an empty TrustedProxies: that
+	// ConfigFromEnv refuses true with an empty TrustedProxies: that
 	// combination could never read the header and would silently keep
 	// recording the proxy itself.
 	ReadFlyClientIP bool
@@ -1255,7 +1268,7 @@ type serverConfig struct {
 	// WebDistDir names the directory holding this app's built frontend
 	// (the dist/ examples/reference-app/web's `pnpm build` emits) when
 	// this process should serve that frontend itself -- see frontend.go's
-	// own package doc comment for the full serving design. configFromEnv
+	// own package doc comment for the full serving design. ConfigFromEnv
 	// sets it from APP_WEB_DIST; the empty default (the zero-external-
 	// dependency `go run ./cmd/server` experience, and every test's
 	// config) leaves the composed handler serving no static files at all.
@@ -1264,7 +1277,7 @@ type serverConfig struct {
 	// PeriodicTaskInterval is the cadence of this host's periodic-task
 	// scheduler (periodic_scheduler.go), the ticker that enqueues the
 	// jobs-driven mechanisms this app wired -- storage's per-tenant expiry
-	// sweep and pki's signing-key expiry scan. configFromEnv never sets
+	// sweep and pki's signing-key expiry scan. ConfigFromEnv never sets
 	// it, so zero (the default) means the scheduler's own default,
 	// defaultPeriodicTaskSchedulerInterval, and the flow tests inject a
 	// sub-second interval to drive real ticks within test time -- the same
@@ -1273,9 +1286,9 @@ type serverConfig struct {
 
 	// PKIPropagationWindow, PKIRenewalLeadTime and PKIExpiryScanWindow
 	// override pki's rotation timing and its expiry-scan idempotency window
-	// when non-zero: buildServer applies pki.WithPropagationWindow,
+	// when non-zero: BuildServer applies pki.WithPropagationWindow,
 	// pki.WithRenewalLeadTime and pki.WithExpiryScanWindow only for values
-	// above zero, so the zero default (what configFromEnv always leaves
+	// above zero, so the zero default (what ConfigFromEnv always leaves
 	// them at) keeps the module's own DefaultPropagationWindow /
 	// DefaultRenewalLeadTime / DefaultExpiryScanWindow in force. The pki
 	// flow test
@@ -1290,23 +1303,23 @@ type serverConfig struct {
 	PKIExpiryScanWindow  time.Duration
 
 	// Mailer overrides the console mailer the standalone Preset resolves
-	// for the "mailer" seam when set. configFromEnv sets it to a real
+	// for the "mailer" seam when set. ConfigFromEnv sets it to a real
 	// pkgcore.NewSMTPMailer composition when SMTPHost is configured (see
 	// SMTPHost's doc comment above); it is otherwise nil in production, so
-	// this field also exists for server_test.go's org invitation flow
+	// this field also exists for cmd/server/server_test.go's org invitation flow
 	// test, which needs the rendered mail back in-process to extract the
 	// invitation token rather than parsing it out of console output.
-	// buildServer injects Mailer with MailerCapabilities below, defaulting
+	// BuildServer injects Mailer with MailerCapabilities below, defaulting
 	// to pkgcore.Stateless when that field is left at its zero value --
 	// the honest capability for a throwaway test double.
 	Mailer pkgcore.Mailer
 
-	// MailerCapabilities declares the capability bits buildServer wires
-	// Mailer with, when Mailer is non-empty. configFromEnv sets it to
+	// MailerCapabilities declares the capability bits BuildServer wires
+	// Mailer with, when Mailer is non-empty. ConfigFromEnv sets it to
 	// pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart -- the capabilities
 	// the "mailer.smtp" builtin registration itself declares -- alongside
 	// its real SMTP Mailer; every other caller (every test's in-process
-	// double) leaves it at the zero value, which buildServer treats as
+	// double) leaves it at the zero value, which BuildServer treats as
 	// pkgcore.Stateless.
 	MailerCapabilities pkgcore.Capability
 
@@ -1314,25 +1327,25 @@ type serverConfig struct {
 	// through (authn.WithMembershipReader below): customer-tenant answers
 	// read org's own memberships table, and this store carries the
 	// rbac.SystemDomain grants plus any test shortcut. Nil defaults to a
-	// fresh, empty signInMemberships in buildServer; a test that needs to
+	// fresh, empty signInMemberships in BuildServer; a test that needs to
 	// seed membership after registering a demo user keeps its own reference
-	// by setting this field before calling buildServer, rather than
-	// reaching into buildServer's internals. See sign_in_memberships.go's
+	// by setting this field before calling BuildServer, rather than
+	// reaching into BuildServer's internals. See sign_in_memberships.go's
 	// own doc comment for the full shape.
 	Memberships *signInMemberships
 
-	// DemoUsersPassword, when non-empty, makes buildServer seed the three
+	// DemoUsersPassword, when non-empty, makes BuildServer seed the three
 	// demo accounts of demo_users.go at the end of its composition --
 	// register each through the composed handler, then grant the
 	// membership and role its actor model declares -- so a browser visitor
 	// can sign in as demo-owner@example.com and friends with a real
 	// account, real membership and real rbac grants, and no demo header.
-	// configFromEnv fills it from APP_DEMO_USERS_PASSWORD; the empty
+	// ConfigFromEnv fills it from APP_DEMO_USERS_PASSWORD; the empty
 	// default (the zero-external-dependency `go run ./cmd/server`
 	// experience) skips the seed entirely.
 	DemoUsersPassword string
 
-	// DemoPlatformStaffPassword, when non-empty, makes buildServer seed
+	// DemoPlatformStaffPassword, when non-empty, makes BuildServer seed
 	// the demo platform-staff account of demo_admin.go (seedDemoPlatformStaff)
 	// at the end of its composition, INDEPENDENTLY of DemoUsersPassword: a
 	// boot seeds each demo account set from its own variable, never one
@@ -1340,7 +1353,7 @@ type serverConfig struct {
 	// rbac.SystemDomain, every admin:* permission included) must never be
 	// seeded from the ordinary demo users' password, so the two credential
 	// sources stay apart by construction -- see demoPlatformStaffPasswordEnv's
-	// own doc comment (demo_admin.go) for why. configFromEnv fills it from
+	// own doc comment (demo_admin.go) for why. ConfigFromEnv fills it from
 	// APP_DEMO_PLATFORM_STAFF_PASSWORD; the empty default skips the seed.
 	DemoPlatformStaffPassword string
 
@@ -1355,7 +1368,7 @@ type serverConfig struct {
 	// credentials are configured for this example, and the per-provider
 	// credential items authn registers are never read through dynamic
 	// configuration (that read-through is unimplemented), so credentials
-	// reach authn only through this field. authn_e2e_test.go
+	// reach authn only through this field. cmd/server/authn_e2e_test.go
 	// supplies a channel pointed at a local httptest server here, to prove
 	// the social sign-in flow end to end without a live provider.
 	SocialProviders   []authn.SocialProvider
@@ -1363,16 +1376,16 @@ type serverConfig struct {
 	TrustedProviders  []string
 
 	// AIGatewayBaseURL and AIGatewayAPIKey, when AIGatewayAPIKey is
-	// non-empty, make buildServer write a platform-wide ai-gateway
+	// non-empty, make BuildServer write a platform-wide ai-gateway
 	// credential (aigateway.CredentialService.SetPlatformCredential) for
 	// aigateway.ProviderOpenAICompatible at boot, so the consult module's
-	// one route (cmd/server/consult.go) can actually reach a provider.
-	// configFromEnv never sets either -- there is no real OpenAI-compatible
+	// one route (consult.go) can actually reach a provider.
+	// ConfigFromEnv never sets either -- there is no real OpenAI-compatible
 	// key committed to this repository, the same posture SocialProviders'
 	// own doc comment above describes -- so the zero-setup `go run
 	// ./cmd/server` experience leaves the consult route permanently
 	// answering aigateway.ErrCredentialNotFound until an operator wires a
-	// real key. consult_flow_test.go is what sets both: AIGatewayBaseURL to
+	// real key. cmd/server/consult_flow_test.go is what sets both: AIGatewayBaseURL to
 	// an httptest.Server standing in for the OpenAI-compatible endpoint,
 	// and AIGatewayAPIKey to a fixed test value, exactly the way cfg.Mailer
 	// is a test-only override of a seam production leaves on its real
@@ -1382,30 +1395,30 @@ type serverConfig struct {
 
 	// AIGatewayImageBaseURL and AIGatewayImageAPIKey are the image-side
 	// mirror of AIGatewayBaseURL/AIGatewayAPIKey, above: when
-	// AIGatewayImageAPIKey is non-empty, buildServer writes a second
+	// AIGatewayImageAPIKey is non-empty, BuildServer writes a second
 	// platform-wide ai-gateway credential for
 	// aigateway.ProviderOpenAICompatibleImage at boot, so the smilesim
-	// module's routes (cmd/server/smilesim.go) can actually reach an image
+	// module's routes (smilesim.go) can actually reach an image
 	// provider. The two credentials are deliberately independent rows of
 	// the SAME ai_gateway_credentials table (keyed by provider name), so
 	// chat and image credentials coexist with no schema change.
-	// configFromEnv fills
+	// ConfigFromEnv fills
 	// both from aiGatewayImageBaseURLEnv/aiGatewayImageAPIKeyEnv when the
 	// API key variable is set (their doc comment carries the reasoning
 	// and the non-secret shape of the e2e value); when both are unset, no
 	// credential row is written, exactly like the chat pair above, and
-	// smilesim_flow_test.go is the other caller that sets both.
+	// cmd/server/smilesim_flow_test.go is the other caller that sets both.
 	AIGatewayImageBaseURL string
 	AIGatewayImageAPIKey  string
 
 	// WebhookURLValidator and WebhookHTTPClient override go/integration's
 	// two SSRF enforcement points together (integration.
 	// WithWebhookURLValidator's own doc comment explains why the two must
-	// always move together) for ONE Module instance this buildServer call
-	// composes -- never a production weakening, since configFromEnv never
-	// sets either and buildServer leaves both options unset (the module's
+	// always move together) for ONE Module instance this BuildServer call
+	// composes -- never a production weakening, since ConfigFromEnv never
+	// sets either and BuildServer leaves both options unset (the module's
 	// own strict default) whenever WebhookURLValidator is nil. This exists
-	// for webhook_flow_test.go alone: it is this app's only way to prove a
+	// for cmd/server/webhook_flow_test.go alone: it is this app's only way to prove a
 	// genuine signed HTTP delivery against a receiver it controls, since
 	// neither an httptest.Server (loopback) nor a sibling Docker container
 	// (RFC 1918 private space, exactly like every other Docker-backed
@@ -1418,24 +1431,24 @@ type serverConfig struct {
 	WebhookURLValidator func(ctx context.Context, url string) error
 	WebhookHTTPClient   *http.Client
 
-	// OnRBACReady, when non-nil, receives the live *rbac.Service buildServer
+	// OnRBACReady, when non-nil, receives the live *rbac.Service BuildServer
 	// attaches, immediately after seedDemoGrants seeds every configured
 	// tenant's built-in roles and demo grants. It exists purely for a test
 	// that needs to grant a role scoped to an organization node CREATED
 	// AFTER the server starts serving HTTP -- the subtree-scoped grant
-	// test (org_route_guards_test.go), which cannot
+	// test (cmd/server/org_route_guards_test.go), which cannot
 	// know a node's id at boot time, since org builds its tree through real
 	// HTTP calls the test itself drives once the server is up. Nil in every
 	// production boot and every other test is a complete no-op, mirroring
-	// WebhookURLValidator's identical "test-only override of what buildServer
+	// WebhookURLValidator's identical "test-only override of what BuildServer
 	// already wires, never a production weakening" shape above.
 	OnRBACReady func(*rbac.Service)
 
 	// OnConfigReady, when non-nil, receives the live *config.Service
-	// buildServer attaches, immediately after openConfiguredAuthnChannels
+	// BuildServer attaches, immediately after openConfiguredAuthnChannels
 	// opens the assembled social channels' system-tier flag rows. It exists
 	// purely for a test that must write a configuration row through the
-	// module's real Set path (authn_e2e_test.go's
+	// module's real Set path (cmd/server/authn_e2e_test.go's
 	// TestAuthnE2E_PasswordChannelDisabled...), which
 	// disables authn.password_login through the same system-tier write an
 	// operator's admin-console write would land (under
@@ -1443,7 +1456,7 @@ type serverConfig struct {
 	// refuses the password endpoint while SMS and social stay open. Nil in
 	// every production boot and every other test is a complete no-op,
 	// mirroring OnRBACReady's identical "test-only override of what
-	// buildServer already wires, never a production weakening" shape above.
+	// BuildServer already wires, never a production weakening" shape above.
 	OnConfigReady func(*config.Service)
 }
 
@@ -1452,7 +1465,7 @@ type serverConfig struct {
 // exactly configKeyHexLength hex characters or is not valid hex, rather than
 // letting a subtly wrong value surface later as an opaque dbkit.NewCipher /
 // dbkit.NewBlindIndexer / dbkit.DeriveKey error. Every one of this file's
-// six key-material environment variables, plus rootKeyEnv itself, share
+// six key-material environment variables, plus RootKeyEnv itself, share
 // this exact validation.
 func parseHexKeyEnv(envName, encoded string) ([]byte, error) {
 	if len(encoded) != configKeyHexLength {
@@ -1467,8 +1480,8 @@ func parseHexKeyEnv(envName, encoded string) ([]byte, error) {
 	return decoded, nil
 }
 
-// resolveKey applies the three-tier precedence configFromEnv uses for every
-// one of the six key materials rootKeyEnv's own doc comment lists: an
+// resolveKey applies the three-tier precedence ConfigFromEnv uses for every
+// one of the six key materials RootKeyEnv's own doc comment lists: an
 // explicitly-set individualEnv always wins, over a rootKey-derived value
 // (dbkit.DeriveKey(rootKey, purpose), computed only when rootKey is
 // non-nil -- i.e. APP_ROOT_KEY was set), which in turn always wins over
@@ -1482,7 +1495,7 @@ func resolveKey(rootKey []byte, purpose, individualEnv string, devDefault []byte
 	if rootKey != nil {
 		derived, err := dbkit.DeriveKey(rootKey, purpose)
 		if err != nil {
-			return nil, fmt.Errorf("reference-app: derive %s from %s: %w", individualEnv, rootKeyEnv, err)
+			return nil, fmt.Errorf("reference-app: derive %s from %s: %w", individualEnv, RootKeyEnv, err)
 		}
 		key = derived
 	}
@@ -1497,7 +1510,7 @@ func resolveKey(rootKey []byte, purpose, individualEnv string, devDefault []byte
 }
 
 // splitTrustedProxies splits trustedProxiesEnv's comma-separated value into
-// the per-entry list serverConfig.TrustedProxies carries: trimmed, empty
+// the per-entry list ServerConfig.TrustedProxies carries: trimmed, empty
 // entries dropped, empty input yielding nil. It never rejects an entry --
 // validation of the entries themselves is authn.WithTrustedProxies' job
 // (go/authn's newOptions refuses an entry that is neither an IP address nor
@@ -1516,27 +1529,27 @@ func splitTrustedProxies(raw string) []string {
 	return proxies
 }
 
-// configFromEnv reads serverConfig from the environment, defaulting to the
+// ConfigFromEnv reads ServerConfig from the environment, defaulting to the
 // standalone deployment mode on SQLite so `go run ./cmd/server` genuinely
 // starts a working server with zero external dependencies.
-func configFromEnv() (serverConfig, error) {
+func ConfigFromEnv() (ServerConfig, error) {
 	deploymentModeStr := os.Getenv("APP_DEPLOYMENT_MODE")
 	if deploymentModeStr == "" {
 		deploymentModeStr = string(pkgcore.DeploymentModeStandalone)
 	}
 	deploymentMode, err := pkgcore.ParseDeploymentMode(deploymentModeStr)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = defaultPort
+		port = DefaultPort
 	}
 
 	dbPath := os.Getenv("APP_DB_PATH")
 	if dbPath == "" {
-		dbPath = defaultSQLitePath
+		dbPath = DefaultSQLitePath
 	}
 
 	// failProvisionCount is the self-service provisioning failure
@@ -1546,16 +1559,16 @@ func configFromEnv() (serverConfig, error) {
 	// of N failed attempts (failSelfServiceProvisionEnv's own doc
 	// comment has the full contract and the e2e shape). Anything that
 	// is not a non-negative whole number refuses boot here, naming the
-	// variable, exactly like every other strict parse configFromEnv
+	// variable, exactly like every other strict parse ConfigFromEnv
 	// runs.
 	failProvisionCount := 0
 	if raw := os.Getenv(failSelfServiceProvisionEnv); raw != "" {
 		parsed, parseErr := strconv.Atoi(raw)
 		if parseErr != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s must be a whole number of provisioning attempts to fail (absent or 0 disables the injection), got %q: %w", failSelfServiceProvisionEnv, raw, parseErr)
+			return ServerConfig{}, fmt.Errorf("reference-app: %s must be a whole number of provisioning attempts to fail (absent or 0 disables the injection), got %q: %w", failSelfServiceProvisionEnv, raw, parseErr)
 		}
 		if parsed < 0 {
-			return serverConfig{}, fmt.Errorf("reference-app: %s must not be negative (absent or 0 disables the injection), got %d", failSelfServiceProvisionEnv, parsed)
+			return ServerConfig{}, fmt.Errorf("reference-app: %s must not be negative (absent or 0 disables the injection), got %d", failSelfServiceProvisionEnv, parsed)
 		}
 		failProvisionCount = parsed
 	}
@@ -1573,15 +1586,15 @@ func configFromEnv() (serverConfig, error) {
 	otlpEndpoint := os.Getenv(otlpEndpointEnv)
 
 	// The root secret: APP_ROOT_KEY when set (a hex-encoded 32-byte key --
-	// see rootKeyEnv's own doc comment), nil otherwise. nil is the signal
+	// see RootKeyEnv's own doc comment), nil otherwise. nil is the signal
 	// resolveKey below reads as "no root key configured" -- every one of
 	// the six key materials then falls back to its own hardcoded
 	// development default.
 	var rootKey []byte
-	if encoded := os.Getenv(rootKeyEnv); encoded != "" {
-		decoded, decodeErr := parseHexKeyEnv(rootKeyEnv, encoded)
+	if encoded := os.Getenv(RootKeyEnv); encoded != "" {
+		decoded, decodeErr := parseHexKeyEnv(RootKeyEnv, encoded)
 		if decodeErr != nil {
-			return serverConfig{}, decodeErr
+			return ServerConfig{}, decodeErr
 		}
 		rootKey = decoded
 	}
@@ -1590,71 +1603,71 @@ func configFromEnv() (serverConfig, error) {
 	// the identical three-tier precedence: an explicitly-set individual
 	// environment variable wins over what APP_ROOT_KEY would derive for
 	// it, which wins over the hardcoded development default -- see
-	// resolveKey's own doc comment and rootKeyEnv's above for the full
+	// resolveKey's own doc comment and RootKeyEnv's above for the full
 	// rationale. A malformed individual value fails startup with a precise
 	// message rather than surfacing later as an opaque cipher error;
 	// hex.DecodeString rejects anything that is not valid
 	// lowercase-or-uppercase hex, and the length check parseHexKeyEnv runs
 	// first rejects anything that does not decode to exactly 32 bytes.
-	configKey, err := resolveKey(rootKey, rootKeyPurposeConfigCipher, configKeyEnv, devConfigKey)
+	configKey, err := resolveKey(rootKey, RootKeyPurposeConfigCipher, ConfigKeyEnv, DevConfigKey)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
-	orgIndexKey, err := resolveKey(rootKey, rootKeyPurposeOrgIndex, orgIndexKeyEnv, devOrgIndexKey)
+	orgIndexKey, err := resolveKey(rootKey, RootKeyPurposeOrgIndex, OrgIndexKeyEnv, DevOrgIndexKey)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
-	notificationIndexKey, err := resolveKey(rootKey, rootKeyPurposeNotificationIndex, notificationIndexKeyEnv, devNotificationIndexKey)
+	notificationIndexKey, err := resolveKey(rootKey, RootKeyPurposeNotificationIndex, NotificationIndexKeyEnv, DevNotificationIndexKey)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
-	pkiLocalKeyCipherKey, err := resolveKey(rootKey, rootKeyPurposePKILocalKeyCipher, pkiLocalKeyCipherKeyEnv, devPKILocalKeyCipherKey)
+	pkiLocalKeyCipherKey, err := resolveKey(rootKey, RootKeyPurposePKILocalKeyCipher, PkiLocalKeyCipherKeyEnv, DevPKILocalKeyCipherKey)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
-	authnBlindIndexKey, err := resolveKey(rootKey, rootKeyPurposeAuthnBlindIndex, authnBlindIndexKeyEnv, devBlindIndexKey)
+	authnBlindIndexKey, err := resolveKey(rootKey, RootKeyPurposeAuthnBlindIndex, AuthnBlindIndexKeyEnv, DevBlindIndexKey)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
-	authnPIICipherKey, err := resolveKey(rootKey, rootKeyPurposeAuthnPIICipher, authnPIICipherKeyEnv, devPIICipherKey)
+	authnPIICipherKey, err := resolveKey(rootKey, RootKeyPurposeAuthnPIICipher, AuthnPIICipherKeyEnv, DevPIICipherKey)
 	if err != nil {
-		return serverConfig{}, err
+		return ServerConfig{}, err
 	}
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
 	// leaving the "objectstore" seam on the Preset's local-directory
 	// default; when any one of them is set, all four are required --
-	// s3EndpointEnv's own doc comment explains why a partial S3 target is
+	// S3EndpointEnv's own doc comment explains why a partial S3 target is
 	// refused rather than silently ignored.
-	s3Endpoint := os.Getenv(s3EndpointEnv)
-	s3Bucket := os.Getenv(s3BucketEnv)
-	s3AccessKey := os.Getenv(s3AccessKeyEnv)
-	s3SecretKey := os.Getenv(s3SecretKeyEnv)
+	s3Endpoint := os.Getenv(S3EndpointEnv)
+	s3Bucket := os.Getenv(S3BucketEnv)
+	s3AccessKey := os.Getenv(S3AccessKeyEnv)
+	s3SecretKey := os.Getenv(S3SecretKeyEnv)
 	if s3Endpoint != "" || s3Bucket != "" || s3AccessKey != "" || s3SecretKey != "" {
 		var missing []string
 		if s3Endpoint == "" {
-			missing = append(missing, s3EndpointEnv)
+			missing = append(missing, S3EndpointEnv)
 		}
 		if s3Bucket == "" {
-			missing = append(missing, s3BucketEnv)
+			missing = append(missing, S3BucketEnv)
 		}
 		if s3AccessKey == "" {
-			missing = append(missing, s3AccessKeyEnv)
+			missing = append(missing, S3AccessKeyEnv)
 		}
 		if s3SecretKey == "" {
-			missing = append(missing, s3SecretKeyEnv)
+			missing = append(missing, S3SecretKeyEnv)
 		}
 		if len(missing) > 0 {
-			return serverConfig{}, fmt.Errorf(
+			return ServerConfig{}, fmt.Errorf(
 				"reference-app: an S3 ObjectStore composition needs %s set too (got some but not all of %s/%s/%s/%s)",
-				strings.Join(missing, ", "), s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+				strings.Join(missing, ", "), S3EndpointEnv, S3BucketEnv, S3AccessKeyEnv, S3SecretKeyEnv)
 		}
 	}
 	s3UseSSL := false
 	if raw := os.Getenv(s3UseSSLEnv); raw != "" {
 		parsed, parseErr := strconv.ParseBool(raw)
 		if parseErr != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", s3UseSSLEnv, raw, parseErr)
+			return ServerConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", s3UseSSLEnv, raw, parseErr)
 		}
 		s3UseSSL = parsed
 	}
@@ -1662,7 +1675,7 @@ func configFromEnv() (serverConfig, error) {
 	// readFlyClientIP is the strict parse of readFlyClientIPEnv: 'true' is
 	// this deployment's declaration that its proxy is Fly's, the per-header
 	// opt-in that authorizes authn to read Fly-Client-IP (see
-	// serverConfig.ReadFlyClientIP). The declaration is only meaningful
+	// ServerConfig.ReadFlyClientIP). The declaration is only meaningful
 	// alongside trustedProxiesEnv -- authn reads a vendor header only from
 	// a request whose peer is a declared proxy, so the header with no
 	// declared proxy would never be read and the records would silently
@@ -1673,12 +1686,12 @@ func configFromEnv() (serverConfig, error) {
 	if raw := os.Getenv(readFlyClientIPEnv); raw != "" {
 		parsed, parseErr := strconv.ParseBool(raw)
 		if parseErr != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", readFlyClientIPEnv, raw, parseErr)
+			return ServerConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", readFlyClientIPEnv, raw, parseErr)
 		}
 		readFlyClientIP = parsed
 	}
 	if readFlyClientIP && len(splitTrustedProxies(os.Getenv(trustedProxiesEnv))) == 0 {
-		return serverConfig{}, fmt.Errorf(
+		return ServerConfig{}, fmt.Errorf(
 			"reference-app: %s is true but %s is empty: reading Fly-Client-IP is authorized only for a deployment whose proxy is declared there, and this pair would silently keep recording the proxy itself",
 			readFlyClientIPEnv, trustedProxiesEnv)
 	}
@@ -1686,16 +1699,16 @@ func configFromEnv() (serverConfig, error) {
 	// objectStoreRoot is the local-directory twin of the S3 composition
 	// above: unset leaves "objectstore" on the Preset's throwaway
 	// temp-directory default, set names a fixed directory whose contents
-	// survive this process's restart (objectStoreRootEnv's own doc
+	// survive this process's restart (ObjectStoreRootEnv's own doc
 	// comment has the capability reasoning). Both compositions at once
 	// would name two different stores for the one seam, so a non-empty
 	// root alongside a complete S3 target is refused rather than
 	// silently preferring one.
-	objectStoreRoot := os.Getenv(objectStoreRootEnv)
+	objectStoreRoot := os.Getenv(ObjectStoreRootEnv)
 	if objectStoreRoot != "" && s3Endpoint != "" {
-		return serverConfig{}, fmt.Errorf(
+		return ServerConfig{}, fmt.Errorf(
 			"reference-app: %s and an APP_S3_* composition name two different ObjectStores for one seam; set only one of them",
-			objectStoreRootEnv)
+			ObjectStoreRootEnv)
 	}
 
 	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
@@ -1708,12 +1721,12 @@ func configFromEnv() (serverConfig, error) {
 	case smtpHost == "" && smtpPortRaw == "":
 		// Both unset: the "mailer" seam stays on its Preset default.
 	case smtpHost == "" || smtpPortRaw == "":
-		return serverConfig{}, fmt.Errorf(
+		return ServerConfig{}, fmt.Errorf(
 			"reference-app: an SMTP Mailer composition needs both %s and %s set", smtpHostEnv, smtpPortEnv)
 	default:
 		parsed, parseErr := strconv.Atoi(smtpPortRaw)
 		if parseErr != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s must be a valid port number, got %q: %w", smtpPortEnv, smtpPortRaw, parseErr)
+			return ServerConfig{}, fmt.Errorf("reference-app: %s must be a valid port number, got %q: %w", smtpPortEnv, smtpPortRaw, parseErr)
 		}
 		smtpPort = parsed
 	}
@@ -1730,7 +1743,7 @@ func configFromEnv() (serverConfig, error) {
 		publicOrigin = "http://localhost:" + port
 	}
 
-	cfg := serverConfig{
+	cfg := ServerConfig{
 		DeploymentMode:        deploymentMode,
 		Port:                  port,
 		SQLitePath:            dbPath,
@@ -1759,7 +1772,7 @@ func configFromEnv() (serverConfig, error) {
 		TrustedProxies:        splitTrustedProxies(os.Getenv(trustedProxiesEnv)),
 		ReadFlyClientIP:       readFlyClientIP,
 		WebDistDir:            os.Getenv(webDistEnv),
-		HostTenants:           demoHostTenants,
+		HostTenants:           DemoHostTenants,
 		PublicOrigin:          publicOrigin,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it). The
@@ -1780,14 +1793,14 @@ func configFromEnv() (serverConfig, error) {
 		// absent or "0" -- keeps the field nil; a positive count arms the
 		// injection the e2e rig drives (failSelfServiceProvisionEnv's own
 		// doc comment).
-		failSelfServiceProvision: newProvisionFailureInjector(failProvisionCount),
+		FailSelfServiceProvision: newProvisionFailureInjector(failProvisionCount),
 	}
 	if smtpHost != "" {
 		// A real SMTP composition: declare the capabilities the
 		// "mailer.smtp" builtin registration itself declares
 		// (mailer_builtins.go), so this app's own env-driven
 		// SMTP wiring is capability-honest rather than borrowing the
-		// Stateless declaration server_test.go's in-process double uses
+		// Stateless declaration cmd/server/server_test.go's in-process double uses
 		// (Mailer's own doc comment above explains the split).
 		cfg.Mailer = pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
 			Host:     smtpHost,
@@ -1800,24 +1813,24 @@ func configFromEnv() (serverConfig, error) {
 	return cfg, nil
 }
 
-// buildServer wires the reference app's Kernel -- the authn, notes, org,
+// BuildServer wires the reference app's Kernel -- the authn, notes, org,
 // config, rbac, storage, demo, notification, ai-gateway and audit Modules --
 // their migrations, the job queue the storage and notification modules
-// share, the demo notification glue (cmd/server/demo_notification.go), the
-// consult glue (cmd/server/consult.go, go/ai-gateway's mandatory first
+// share, the demo notification glue (demo_notification.go), the
+// consult glue (consult.go, go/ai-gateway's mandatory first
 // consumer), and the authn+tenancy middleware chain into a single
 // http.Handler. It is the one place that wiring logic lives -- main() and
-// the end-to-end tests (server_test.go, authn_e2e_test.go,
-// org_flow_test.go, storage_flow_test.go, notification_flow_test.go and
-// consult_flow_test.go) all call it, so the two can never drift into
+// the end-to-end tests (cmd/server/server_test.go, cmd/server/authn_e2e_test.go,
+// cmd/server/org_flow_test.go, cmd/server/storage_flow_test.go, cmd/server/notification_flow_test.go and
+// cmd/server/consult_flow_test.go) all call it, so the two can never drift into
 // testing a different wiring than the one that actually runs.
 //
 // It returns the composed handler, a cleanup function that closes
-// everything buildServer opened (the services, the injected Redis bus and
+// everything BuildServer opened (the services, the injected Redis bus and
 // its client when one was built, and the underlying database connection),
-// and the wired *compliance.Module -- the compliance_flow_test.go's one
+// and the wired *compliance.Module -- the cmd/server/compliance_flow_test.go's one
 // reach into the retention/erasure/export services this app bootstraps,
-// since buildServer exposes no module itself otherwise. The caller must
+// since BuildServer exposes no module itself otherwise. The caller must
 // call cleanup once done with the handler.
 //
 // The deployment mode itself refuses nothing here: the Kernel it
@@ -1827,8 +1840,8 @@ func configFromEnv() (serverConfig, error) {
 // the declared mode. Every stateful seam this app knows about -- eventbus,
 // kv, mailer, objectstore, plus authn's own "SMS sender" seam -- can be
 // pointed at a real, MultiReplicaSafe-capable implementation through the
-// environment variables configFromEnv reads (redisAddrEnv, s3EndpointEnv
-// and friends, objectStoreRootEnv, smtpHostEnv and friends,
+// environment variables ConfigFromEnv reads (redisAddrEnv, S3EndpointEnv
+// and friends, ObjectStoreRootEnv, smtpHostEnv and friends,
 // smsGatewayURLEnv); every one of
 // them defaults to the standalone Preset's in-process implementation when
 // unset, so a plain `go run ./cmd/server` needs nothing else running. With
@@ -1842,7 +1855,7 @@ func configFromEnv() (serverConfig, error) {
 // tests pin the positive half of, and
 // examples/reference-app/integration_test/distributed_mode_test.go proves
 // end to end against real Docker-backed infrastructure.
-func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, *compliance.Module, error) {
+func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() error, *compliance.Module, error) {
 	// dbkit.Options.AuditBus is wired here (and notes.Note does implement
 	// dbkit.Auditable -- see its model.go), for org: org's OrgNode,
 	// Membership and Invitation models opt into dbkit.Auditable, so their
@@ -2040,7 +2053,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// in-flight jobs to finish, bounded by the same timeout that
 			// bounds HTTP graceful shutdown. Close is idempotent, so an
 			// error path that runs before Start is ever called is safe.
-			queueCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			queueCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 			keepErr(standaloneQueue.Close(queueCtx))
 			cancel()
 		}
@@ -2080,7 +2093,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// org's Invitation.Email column is encrypted at rest under this same
 	// cipher (registered here, before anything touches the Invitation
 	// model, since GORM resolves a named serializer at struct-parse time)
-	// and made queryable by a SEPARATE HMAC key -- see orgIndexKeyEnv's own
+	// and made queryable by a SEPARATE HMAC key -- see OrgIndexKeyEnv's own
 	// doc comment for why reusing cfg.ConfigKey for both would be exactly
 	// the AES-key-doubling-as-an-HMAC-key weakness dbkit warns against.
 	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
@@ -2102,7 +2115,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// same config cipher (registered here, before anything touches the
 	// Contact model, since GORM resolves a named serializer at struct-parse
 	// time) and made queryable by a SEPARATE HMAC key -- see
-	// notificationIndexKeyEnv's own doc comment for why reusing
+	// NotificationIndexKeyEnv's own doc comment for why reusing
 	// cfg.ConfigKey for both would be exactly the AES-key-doubling-as-an-
 	// HMAC-key weakness dbkit warns against. One key serves the email and
 	// the phone indexers alike (authn's single blind-index key precedent);
@@ -2156,9 +2169,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// through tenant resolution (the allowlist entry below), so a link to
 	// ANY host that serves this app's API is acceptable -- which is
 	// exactly what makes the fallback below safe. Only the two demo
-	// tenants have a configured host (demoHostTenants); every other
+	// tenants have a configured host (DemoHostTenants); every other
 	// tenant this app serves is a self-registered clinic whose tenant id
-	// self_service.go derives from its registrant (clinicTenantOf,
+	// self_service.go derives from its registrant (ClinicTenantOf,
 	// "tenant-" + user id, by construction never a cfg.HostTenants value
 	// -- that derivation's own doc comment says so), so no configured
 	// host can name it and its links draw their host from the second
@@ -2173,24 +2186,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	// configService is also read here, lazily, by org's feature gate -- see
-	// orgFeatureGate's own doc comment for why it cannot be handed
+	// OrgFeatureGate's own doc comment for why it cannot be handed
 	// configService directly at this point in the wiring.
 	orgModule := org.NewModule(db,
 		org.WithEmailIndexer(orgIndexer),
-		org.WithFeatureGate(orgFeatureGate{service: &configService}),
+		org.WithFeatureGate(OrgFeatureGate{Service: &configService}),
 		// principalFallback serves org's browser-shaped callers:
 		// org's two caller-scoped endpoints also serve the team surface's
 		// signed-in owner, whose requests carry a bearer
 		// token and no X-Demo-User-Id header -- so the org module's resolver
 		// instance falls back to the verified Principal when no demo header
 		// is present, the same header-then-Principal shape
-		// demoNotesSubjectResolver gives notes' and cases' creator seams.
+		// DemoNotesSubjectResolver gives notes' and cases' creator seams.
 		// The notification and integration modules keep the flag unset (see
-		// demoOrgSubjectResolver's own doc comment for why their
+		// DemoOrgSubjectResolver's own doc comment for why their
 		// header-only refusal stays pinned).
-		org.WithSubjectResolver(demoOrgSubjectResolver{
-			headerDisabled:    cfg.DisableDemoUserHeader,
-			principalFallback: true,
+		org.WithSubjectResolver(DemoOrgSubjectResolver{
+			HeaderDisabled:    cfg.DisableDemoUserHeader,
+			PrincipalFallback: true,
 		}),
 		org.WithMailFrom("invitations@reference-app.example"),
 		org.WithInvitationLinkBuilder(func(ctx context.Context, token string) (string, error) {
@@ -2213,7 +2226,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// email link. The link names org's real
 			// POST /api/v1/org/invitations/accept endpoint and carries the
 			// token as a query parameter purely so it is one recognizable
-			// string a person (or, in server_test.go's end-to-end suite, a
+			// string a person (or, in cmd/server/server_test.go's end-to-end suite, a
 			// test) can extract the token back out of.
 			return fmt.Sprintf("%s/api/v1/org/invitations/accept?token=%s", linkBase, url.QueryEscape(token)), nil
 		}),
@@ -2237,7 +2250,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// pki owns authn's signing-key lifecycle: LocalSigner (its own
 	// zero-external-dependency default) generates and stores the key in
 	// cfg.SQLitePath, so it persists across restarts with no dev-seed
-	// derivation required -- see devPKILocalKeyCipherKey's own doc comment.
+	// derivation required -- see DevPKILocalKeyCipherKey's own doc comment.
 	// The reference app assembles authn directly rather than through
 	// saasctl, so it wires pki here exactly as any authn-containing
 	// generated project's own server.go does.
@@ -2255,7 +2268,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// and go/pki/AGENTS.md record that honestly). The three
 	// knobs below are applied only when a test injects them: a zero
 	// PKIPropagationWindow, PKIRenewalLeadTime or PKIExpiryScanWindow
-	// (what configFromEnv always leaves them at) keeps pki's own
+	// (what ConfigFromEnv always leaves them at) keeps pki's own
 	// DefaultPropagationWindow / DefaultRenewalLeadTime /
 	// DefaultExpiryScanWindow in force.
 	pkiOpts := []pki.Option{pki.WithQueue(standaloneQueue)}
@@ -2272,7 +2285,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	memberships := cfg.Memberships
 	if memberships == nil {
-		memberships = newSignInMemberships()
+		memberships = NewSignInMemberships()
 	}
 	// The org-backed half of the membership store is bound AFTER Bootstrap,
 	// at the site just below the kernel call: TenantsOf's audited
@@ -2324,14 +2337,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// lazy *config.Service adapter org's own gate uses above --
 		// authn.FeatureGate is org.FeatureGate's identical declaration, and
 		// the config service is only produced by configModule.Attach, which
-		// runs after Bootstrap returns (orgFeatureGate's doc comment).
+		// runs after Bootstrap returns (OrgFeatureGate's doc comment).
 		// Without it this app's flags would be declarations with no
 		// enforcement: a row disabling authn.password_login would hide the
 		// login form while the password endpoint kept issuing tokens.
 		// The channels this host assembles through
 		// cfg.SocialProviders are opened at the system tier after Attach by
 		// openConfiguredAuthnChannels, since their flags default OFF.
-		authn.WithFeatureGate(orgFeatureGate{service: &configService}),
+		authn.WithFeatureGate(OrgFeatureGate{Service: &configService}),
 	}
 	// The per-header vendor opt-in (readFlyClientIPEnv), conditional on the
 	// deployment declaration: cfg.ReadFlyClientIP's 'true' declares this
@@ -2343,7 +2356,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// forwards a client-chosen value verbatim, so the header on its own
 	// could never be trusted -- and this app's records still carry the
 	// real client through the X-Forwarded-For chain Fly's proxy appends.
-	// configFromEnv refuses 'true' with an empty APP_TRUSTED_PROXIES, so
+	// ConfigFromEnv refuses 'true' with an empty APP_TRUSTED_PROXIES, so
 	// the two halves of the declaration cannot be assembled inconsistently.
 	if cfg.ReadFlyClientIP {
 		authnOpts = append(authnOpts, authn.WithVendorClientIPHeaders(authn.VendorClientIPHeaderFlyClientIP))
@@ -2372,7 +2385,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
 	}
 
-	// notes' creator seam is demoNotesSubjectResolver (declared above):
+	// notes' creator seam is DemoNotesSubjectResolver (declared above):
 	// notes' create handler reads the creating user's id through it and
 	// stamps it on the note and the event it publishes (internal/notes
 	// module.go's NoteCreatedPayload), so an unwired resolver -- NewModule's
@@ -2382,8 +2395,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Principal only when no header is present -- the fallback that lets the
 	// seeded accounts of demo_users.go create notes through their access
 	// tokens alone (see its own doc comment, and demo_subject.go's
-	// demoNotesCreatorUserID).
-	notesModule := notes.NewModule(db, notes.WithSubjectResolver(demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}))
+	// DemoNotesCreatorUserID).
+	notesModule := notes.NewModule(db, notes.WithSubjectResolver(DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}))
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
 	// own database connection -- no new infra dependency is needed for
@@ -2427,9 +2440,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// rbac needs nothing from this host but a database: it declares its own
 	// permissions during Register and reads EVERY module's declarations
 	// once, in Attach, after Bootstrap. WithSubtreeResolver IS wired, onto
-	// orgModule's own Scope (orgSubtreeResolver below, an adapter over the
+	// orgModule's own Scope (OrgSubtreeResolver below, an adapter over the
 	// two seams' slightly different signatures -- see its own doc comment):
-	// this app's organization tree is real (org_flow_test.go's multi-level
+	// this app's organization tree is real (cmd/server/org_flow_test.go's multi-level
 	// DSO tree, and the subtree-scoped grant test),
 	// so a node-scoped rbac binding must actually resolve against it rather
 	// than deny for want of a resolver. Every demo grant seedDemoGrants
@@ -2449,7 +2462,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// onto the queue; the queue's retries are what converge a reap that
 	// hit a transient database failure.
 	rbacModule := rbac.NewModule(db,
-		rbac.WithSubtreeResolver(orgSubtreeResolver{scope: orgModule.Scope()}),
+		rbac.WithSubtreeResolver(OrgSubtreeResolver{Scope: orgModule.Scope()}),
 		rbac.WithQueue(standaloneQueue))
 
 	// storageModule is the reference app's first consumer of go/storage.
@@ -2486,7 +2499,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	)
 
 	// sharingModule is the reference app's first real consumer of
-	// go/sharing end to end (sharing_flow_test.go): the host that wires a
+	// go/sharing end to end (cmd/server/sharing_flow_test.go): the host that wires a
 	// real ResourceResolver behind the module's public access surface. Its
 	// one public route
 	// resolves a Share's ResourceRef through storageSharingResolver
@@ -2494,16 +2507,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// storageModule's own ObjectService -- sharing never imports go/storage
 	// itself (resolver.go's own doc comment explains why), so this
 	// composition is entirely this app's own, the same way every other
-	// no-import-edge seam in this file (orgFeatureGate,
-	// demoOrgSubjectResolver, ...) is wired. WithTenantConfigReader wires
-	// sharingConfigReader (defined above, alongside orgFeatureGate), so a
+	// no-import-edge seam in this file (OrgFeatureGate,
+	// DemoOrgSubjectResolver, ...) is wired. WithTenantConfigReader wires
+	// SharingConfigReader (defined above, alongside OrgFeatureGate), so a
 	// tenant's own sharing.default_expiry override -- once config.Service
 	// exists, after Attach below -- actually governs Service.Create's
 	// resolved expiry instead of always falling back to
 	// defaultShareExpiry.
 	sharingModule := sharing.NewModule(db,
 		sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService(), attest: attestationService}),
-		sharing.WithTenantConfigReader(sharingConfigReader{service: &configService}),
+		sharing.WithTenantConfigReader(SharingConfigReader{Service: &configService}),
 	)
 
 	// integrationModule is the reference app's mandatory first consumer of
@@ -2515,10 +2528,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// go/integration may not import. WithWebhookQueue shares the same
 	// standaloneQueue every other module's asynchronous work already runs
 	// on. WebhookURLValidator/WebhookHTTPClient are test-only overrides
-	// (see their own doc comments on serverConfig above): nil in every
+	// (see their own doc comments on ServerConfig above): nil in every
 	// production boot, which leaves go/integration's SSRF protection
 	// exactly as strict as its default. WithSubjectResolver wires the
-	// identical demoOrgSubjectResolver
+	// identical DemoOrgSubjectResolver
 	// instance org's and notification's own wiring already share -- it is
 	// what lets the module's spec-generated HTTP surface (mounted below
 	// through the generic mountModuleRoutes loop) resolve a creator for
@@ -2530,7 +2543,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(standaloneQueue),
-		integration.WithSubjectResolver(demoOrgSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}),
+		integration.WithSubjectResolver(DemoOrgSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}),
 	}
 	if cfg.WebhookURLValidator != nil {
 		integrationOpts = append(integrationOpts, integration.WithWebhookURLValidator(cfg.WebhookURLValidator))
@@ -2542,10 +2555,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// notificationModule is the reference app's first consumer of
 	// go/notification, wired end to end as the module's mandatory
-	// first-consumer proof (see cmd/server/demo_notification.go for the
+	// first-consumer proof (see demo_notification.go for the
 	// host-side glue that
 	// drives it -- the note-created subscription and the demo
-	// patient-message route -- and notification_flow_test.go for the
+	// patient-message route -- and cmd/server/notification_flow_test.go for the
 	// end-to-end legs). Its six required seams are all host-supplied here:
 	// the console SMS sender writes to the same smsOutput the authn module's
 	// sender writes to (the standalone deployment mode's transport,
@@ -2561,7 +2574,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// demo_notification.go owns. WithSubjectResolver hands the HTTP surface
 	// the same demo identity layer type org's handler uses -- its own
 	// instance keeps principalFallback unset, so this surface's caller is
-	// whoever the X-Demo-User-Id header says (see demoOrgSubjectResolver's
+	// whoever the X-Demo-User-Id header says (see DemoOrgSubjectResolver's
 	// own doc comment on why the two wirings differ) -- the module
 	// resolves identity per operation and never reads it from the request
 	// otherwise.
@@ -2572,7 +2585,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),
 		notification.WithDeliveryQueue(standaloneQueue),
 		notification.WithUserAddressResolver(demoUserAddressResolver{}),
-		notification.WithSubjectResolver(demoOrgSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}),
+		notification.WithSubjectResolver(DemoOrgSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}),
 	)
 
 	// demoModule is the carrier of the app's demo notification type
@@ -2640,7 +2653,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// model id ("gpt-4o-mini") is opaque to this app -- it is passed
 	// through to whatever OpenAI-compatible endpoint the resolved
 	// credential's base URL actually names (the real OpenAI API in a real
-	// deployment, an httptest.Server in consult_flow_test.go) -- and never
+	// deployment, an httptest.Server in cmd/server/consult_flow_test.go) -- and never
 	// seen by consult's own code, per aigateway.ChatRequest.Model's own
 	// doc comment on why business code never hardcodes a vendor model id.
 	// aiGatewayModule additionally wires the image-generation
@@ -2756,8 +2769,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// module, so this is where compliance.ExportService.Export gains its
 	// first genuine delivery path (a real, single-view go/sharing link)
 	// rather than refusing every call with ErrSharingRequired.
-	// WithExportConfigReader wires complianceConfigReader (defined above,
-	// alongside orgFeatureGate and sharingConfigReader), so a tenant's own
+	// WithExportConfigReader wires ComplianceConfigReader (defined above,
+	// alongside OrgFeatureGate and SharingConfigReader), so a tenant's own
 	// compliance.export_delivery_expiry override -- once config.Service
 	// exists, after Attach below -- actually governs
 	// ExportService.Export's minted delivery-link expiry instead of always
@@ -2766,7 +2779,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	complianceModule := compliance.NewModule(complianceAuditRepo,
 		compliance.WithQueue(standaloneQueue),
 		compliance.WithSharing(sharingModule.Service()),
-		compliance.WithExportConfigReader(complianceConfigReader{service: &configService}),
+		compliance.WithExportConfigReader(ComplianceConfigReader{Service: &configService}),
 	)
 
 	// adminModule is the reference app's mandatory first consumer of
@@ -2784,7 +2797,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// ErrUsageModulesNotWired from UsageService.Summary, a host wiring
 	// one gets that dimension present and the other absent); this app
 	// wires both, so GET /api/v1/admin/usage-summary answers 200 with the
-	// real per-tenant dashboard -- see usage_summary_flow_test.go.
+	// real per-tenant dashboard -- see cmd/server/usage_summary_flow_test.go.
 	// WithAuthn takes the *authn.Module itself, not its
 	// Service() -- see admin.Module.DependsOn()'s own doc comment for the
 	// resulting "authn" dependency Kernel.Bootstrap's sort honors below.
@@ -2946,7 +2959,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// constructed above -- this app wires dbkit.Options.AuditBus for org's
 	// automatic write capture, which is why the construction happens
 	// before dbkit.Open, and why the SAME bus is injected here: see the
-	// Open call's own comment for the full reasoning, and org_audit_capture_test.go
+	// Open call's own comment for the full reasoning, and cmd/server/org_audit_capture_test.go
 	// for the composed proof.
 	//
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
@@ -2980,8 +2993,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// resolves and validates, "kv", would still fail on the Preset's
 	// in-process default.
 	//
-	// When the APP_S3_* variables are set (configFromEnv's own doc
-	// comment on s3EndpointEnv has the completeness rule), WithObjectStore
+	// When the APP_S3_* variables are set (ConfigFromEnv's own doc
+	// comment on S3EndpointEnv has the completeness rule), WithObjectStore
 	// injects a REAL S3-compatible ObjectStore (objectstore/s3.
 	// NewObjectStore, reaching MinIO, Aliyun OSS or AWS S3 through the
 	// minio-go client), declaring the same MultiReplicaSafe|SurvivesRestart
@@ -2996,8 +3009,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// for it.
 	//
 	// The Mailer override -- cfg.Mailer, non-nil either because
-	// configFromEnv composed a real pkgcore.NewSMTPMailer from the
-	// APP_SMTP_* variables, or because a test (server_test.go's org/
+	// ConfigFromEnv composed a real pkgcore.NewSMTPMailer from the
+	// APP_SMTP_* variables, or because a test (cmd/server/server_test.go's org/
 	// notification flow tests) injected an in-process capture double --
 	// rides along as a fourth conditional option. Its capability
 	// declaration is cfg.MailerCapabilities when set (MultiReplicaSafe|
@@ -3113,7 +3126,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// OnConfigReady, when non-nil, receives the live *config.Service now
 	// that the channel-flag rows above are in place -- the post-Attach
 	// seam a test needs to write further rows through the real Set path
-	// (serverConfig's field doc).
+	// (ServerConfig's field doc).
 	if cfg.OnConfigReady != nil {
 		cfg.OnConfigReady(configService)
 	}
@@ -3140,7 +3153,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// scope here. It runs
 	// unconditionally, like seedDemoGrants just above,
 	// regardless of cfg.DemoUsersPassword: internal/smilesim's own tests
-	// (smilesim_flow_test.go) need a real, non-zero starting balance on
+	// (cmd/server/smilesim_flow_test.go) need a real, non-zero starting balance on
 	// tenant-acme to exercise the successful-generation leg, exactly the
 	// way seedDemoGrants' own roles are needed by every test that gates a
 	// route on a permission, demo password or not.
@@ -3193,7 +3206,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	adminModule.AttachRBAC(rbacService)
 
 	// The ai-gateway platform credential: written only when cfg.AIGatewayAPIKey
-	// is set (see its own doc comment on serverConfig for why the default is
+	// is set (see its own doc comment on ServerConfig for why the default is
 	// empty). This must run after Bootstrap, because aiGatewayModule.Register
 	// is what calls pkgcore.RegisterSystemPurpose(aigateway.SystemPurposeCredentialWrite)
 	// -- WithSystemContext below refuses an unregistered purpose -- and the
@@ -3229,7 +3242,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// The ai-gateway image-generation platform credential -- the same
 	// system-context path as the chat credential above, written only when
 	// cfg.AIGatewayImageAPIKey is set (see its own doc comment on
-	// serverConfig), including the same deliberate bare-primitive choice
+	// ServerConfig), including the same deliberate bare-primitive choice
 	// and its boot-time precondition: a config-driven write re-affirmed on
 	// every restart under the fixed "reference-app-boot" actor, with no
 	// operator session or ticket to attribute an audit row to.
@@ -3299,7 +3312,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// context.Background(), never ctx, per
 		// startPeriodicTaskScheduler's own doc comment: the enqueues must
 		// keep running until cleanup's own periodicTaskSchedulerStop call,
-		// not be cut short by whatever cancels buildServer's own ctx.
+		// not be cut short by whatever cancels BuildServer's own ctx.
 		periodicTaskSchedulerStop = startPeriodicTaskScheduler(
 			context.Background(),
 			cfg.PeriodicTaskInterval,
@@ -3325,9 +3338,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	meteringModule.Start(ctx)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
-	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
-	orgGuardDeps := orgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
+	mux.HandleFunc(http.MethodGet+" "+HealthzPath, HealthzHandler)
+	mux.HandleFunc(http.MethodGet+" "+MetricsPath, MetricsHandler)
+	orgGuardDeps := OrgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
 	adminHandler, authnHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
 		_ = cleanup()
@@ -3362,11 +3375,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// CONSTRUCTION, so it must happen here, at assembly time, before
 	// main.go's run builds the middleware that serves traffic -- not after
 	// the server starts listening. Last registration wins, and every
-	// buildServer call registers the same table, so the repeated calls
+	// BuildServer call registers the same table, so the repeated calls
 	// this package's tests make are idempotent in effect.
 	obs.RegisterMountedRoutes(append([]pkgcore.MountedRoute{
-		{Path: healthzPath},
-		{Path: metricsPath},
+		{Path: HealthzPath},
+		{Path: MetricsPath},
 	}, reg.Routes.Routes()...))
 
 	// wireDemoNotification adds the reference app's demo glue on top of the
@@ -3379,12 +3392,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// publishes on that bus -- and the notificationModule services are the
 	// module's own accessors, the same instances its Register validated and
 	// its HTTP handler drives (see demo_notification.go for the seam
-	// contracts, and notification_flow_test.go for the end-to-end legs).
+	// contracts, and cmd/server/notification_flow_test.go for the end-to-end legs).
 	// The call cannot fail: nothing it does returns an error.
 	wireDemoNotification(mux, reg.EventBus(), notificationModule)
 
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
-	// (cmd/server/consult.go): consultService shares notesModule's own
+	// (consult.go): consultService shares notesModule's own
 	// database connection through a fresh notes.Repository, exactly the way
 	// auditModule shares it above -- no new infrastructure dependency is
 	// needed for this app to have a real consult surface -- and asks
@@ -3395,7 +3408,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	wireConsult(mux, consultService)
 
 	// wireSmileSim mounts the image-generation half of go/ai-gateway's
-	// mandatory-first-consumer routes (cmd/server/smilesim.go):
+	// mandatory-first-consumer routes (smilesim.go):
 	// smileSimService asks
 	// aiGatewayModule's own Gateway -- the same instance
 	// aiGatewayModule.Register validated -- to run an async smile
@@ -3434,7 +3447,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// section): each generation request's photo, effective options and job
 	// id land in this app's own SQLite the moment its enqueue succeeds,
 	// surviving a restart exactly like the job row they point at, so the
-	// per-photo enumeration route (cmd/server/smilesim.go) has its data
+	// per-photo enumeration route (smilesim.go) has its data
 	// source. Same
 	// EnsureSchema-before-first-use shape as the reservation store above.
 	smileSimulationStore := smilesim.NewSimulationStore(db)
@@ -3469,11 +3482,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// context.Background(), never ctx, per StartReconciler's own doc
 	// comment: the sweep must keep running until cleanup's own
 	// smileSimReconcilerStop call, not be cut short by whatever cancels
-	// buildServer's own ctx.
+	// BuildServer's own ctx.
 	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
 	// memberships rides along as the recipient gate's membership answer --
 	// the SAME store authn's MembershipReader reads, attached to org above
-	// (see wireSmileSim's own doc comment and cmd/server/smilesim.go's
+	// (see wireSmileSim's own doc comment and smilesim.go's
 	// validateSimulateRecipient).
 	// storageModule.ObjectService() is the fourth wireSmileSim argument:
 	// the simulation-content route reads a generated image's stored bytes
@@ -3481,18 +3494,18 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// wireSmileSim's own doc comment).
 	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService(), attestationService)
 
-	// wireClinicName mounts this host's own tenant-identity answer
-	// (cmd/server/clinic_name.go): the org root name of the tenant the
+	// WireClinicName mounts this host's own tenant-identity answer
+	// (clinic_name.go): the org root name of the tenant the
 	// caller's token is scoped to, the name the web renders for a clinic
 	// that did not exist at boot (self-service registration provisions
 	// it, naming the root after the registrant's display name) where the
 	// demo roster's static copy has no entry. Mounted here among the
 	// other hand-written app routes, behind the same chain every
 	// authenticated route sits behind.
-	wireClinicName(mux, orgModule.Tree())
+	WireClinicName(mux, orgModule.Tree())
 
 	// wireTeamMembers mounts this host's own roster-with-identity answer
-	// (cmd/server/team_members.go): the tenant's org membership roster,
+	// (team_members.go): the tenant's org membership roster,
 	// each row enriched with the member's display identity from authn's
 	// users table -- the composition the Team surface's "who works in
 	// this clinic" promise needs, since org's member rows carry opaque
@@ -3513,7 +3526,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	})
 
 	// wireCasesRoutes mounts the case domain
-	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped
+	// (internal/cases, mounted in cases.go): the tenant-scoped
 	// Case records a web UI renders from, each grouping a patient
 	// (the clinic-given name/reference, embedded in the row) with the
 	// photos of the case. caseRepository shares this app's own db
@@ -3528,10 +3541,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// /api/v1/smile-simulation/photos/{photoObjectID}/simulations), which
 	// a per-photo view fetches rather than the case endpoint joining
 	// them (see that package doc comment's "Shape decision" section). The
-	// creator-attribution seam is demoNotesSubjectResolver, the same host
+	// creator-attribution seam is DemoNotesSubjectResolver, the same host
 	// type notes' module uses -- it satisfies the cases package's
 	// identical copy of the SubjectResolver declaration,
-	// compile-time-checked at the bottom of cmd/server/cases.go.
+	// compile-time-checked at the bottom of cases.go.
 	caseRepository := cases.NewRepository(db)
 	if err := caseRepository.EnsureSchema(ctx); err != nil {
 		_ = cleanup()
@@ -3542,10 +3555,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// module's HTTP surface serves -- so the app's case surface and the
 	// module agree on what an object is and which tenant's rows each read
 	// (go/storage resolves the tenant from the request context itself).
-	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}, storageModule.ObjectService())
+	wireCasesRoutes(mux, cases.NewService(caseRepository), DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}, storageModule.ObjectService())
 
 	// wireIntegrationAuthenticated mounts go/integration's
-	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):
+	// mandatory-first-consumer route (integration_authenticate.go):
 	// a minimal "whoami" demo endpoint gated by the module's own
 	// AuthMiddleware -- a key authenticates, a rotated-away key is refused,
 	// a revoked key is refused -- through this app's own real, composed
@@ -3555,7 +3568,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the guard's limiter is built over this same resolved KVStore seam --
 	// so AuthMiddleware runs it BEFORE authentication and a forged-X-API-Key
 	// flood pays the guard's budget instead of reaching
-	// Service.Authenticate's lookups unbounded (apikey_authenticate_flow_test.go
+	// Service.Authenticate's lookups unbounded (cmd/server/apikey_authenticate_flow_test.go
 	// pins the order). The call cannot fail: nothing
 	// it does returns an error.
 	wireIntegrationAuthenticated(mux, integrationModule, reg.KVStore())
@@ -3592,13 +3605,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// listed in the allowlist below are the ONLY ones that work with no
 	// Principal at all -- this chain never even sees authn's own subtree,
 	// which topMux dispatches straight from authn.Middleware's output the
-	// way it does admin's (authnAPIPath's own doc comment below has the
+	// way it does admin's (AuthnAPIPath's own doc comment below has the
 	// why): healthz and metrics (their constants' doc comments above),
 	// config's two pre-auth display endpoints (still gated by their own
 	// internal DomainResolver, see configModule's wiring above -- entirely
 	// independent of this outer middleware), and the three routes that
 	// resolve their own tenant server-side once this middleware lets them
-	// through, sharing.PathAccess, integrationWhoamiPath and orgAcceptPath,
+	// through, sharing.PathAccess, IntegrationWhoamiPath and orgAcceptPath,
 	// each with its own entry comment right below.
 	//
 	// Both GET and HEAD are allowlisted for healthz/metrics, not GET
@@ -3646,8 +3659,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// section), and its pre-auth half -- enterprise OIDC's dynamically
 	// named "oidc:<tenant>" login-start path included -- cannot be
 	// expressed by tenancy.WithAllowlist's exact (method, path) matching at
-	// all (see authnAPIPath's own doc comment). topMux therefore dispatches
-	// authnAPIPath straight from authn.Middleware's own output, the same
+	// all (see AuthnAPIPath's own doc comment). topMux therefore dispatches
+	// AuthnAPIPath straight from authn.Middleware's own output, the same
 	// shape adminRoutePath gets above -- with the deliberate difference
 	// that authn's branch is UNGATED: it sits behind authn.Middleware's
 	// optional verification and nothing else, because authn's Handler
@@ -3675,10 +3688,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// tenant's requests on the very next one, rather than being
 			// a ledger fact nothing downstream ever consults.
 			tenancy.WithTenantStatusResolver(adminModule.Tenants()),
-			tenancy.WithAllowlist(http.MethodGet, healthzPath),
-			tenancy.WithAllowlist(http.MethodHead, healthzPath),
-			tenancy.WithAllowlist(http.MethodGet, metricsPath),
-			tenancy.WithAllowlist(http.MethodHead, metricsPath),
+			tenancy.WithAllowlist(http.MethodGet, HealthzPath),
+			tenancy.WithAllowlist(http.MethodHead, HealthzPath),
+			tenancy.WithAllowlist(http.MethodGet, MetricsPath),
+			tenancy.WithAllowlist(http.MethodHead, MetricsPath),
 			tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
 			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
 			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
@@ -3692,17 +3705,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// reach it at all. GET only: the fragment defines no other
 			// method on this path.
 			tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
-			// integrationWhoamiPath is the identical shape, one layer
+			// IntegrationWhoamiPath is the identical shape, one layer
 			// removed: its caller carries an API key, not a share token, and
 			// like sharing.PathAccess it resolves ITS OWN tenant --
 			// integration.AuthMiddleware, mounted ahead of this outer chain's
 			// tenancy.Middleware reaching this route at all, via
-			// Service.Authenticate (cmd/server/integration_authenticate.go).
+			// Service.Authenticate (integration_authenticate.go).
 			// Without this allowlist entry, tenancy.Middleware would refuse
 			// every request here with tenancy.tenant_unresolved before
 			// AuthMiddleware ever got the chance to resolve one from the
 			// presented key.
-			tenancy.WithAllowlist(http.MethodGet, integrationWhoamiPath),
+			tenancy.WithAllowlist(http.MethodGet, IntegrationWhoamiPath),
 			// orgAcceptPath (org_acceptInvitation) is the one org route this
 			// app lets through tenant resolution, for the identical reason
 			// sharing.PathAccess gets its entry: the caller an invitation
@@ -3728,8 +3741,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	topMux := http.NewServeMux()
 	topMux.Handle(adminRoutePath, adminHandler)
 	topMux.Handle(adminRoutePath+"/", adminHandler)
-	topMux.Handle(authnAPIPath, authnHandler)
-	topMux.Handle(authnAPIPath+"/", authnHandler)
+	topMux.Handle(AuthnAPIPath, authnHandler)
+	topMux.Handle(AuthnAPIPath+"/", authnHandler)
 	topMux.Handle("/", restOfAppChain)
 
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
@@ -3785,17 +3798,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the retry job that converges the clinic (see provision's own doc
 	// comment in self_service.go), and the queue's worker was started
 	// above, so the retry runs on this same process's pool.
-	// cfg.failSelfServiceProvision rides along as the failure-injection
+	// cfg.FailSelfServiceProvision rides along as the failure-injection
 	// hook -- nil under the disabled default (APP_FAIL_SELF_SERVICE_PROVISION
-	// absent or 0), armed either by configFromEnv's own env-driven parse or
-	// by a test's serverConfig.
-	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), billingModule.Plans(), billingModule.Subscriptions(), billingModule.Credits(), standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
+	// absent or 0), armed either by ConfigFromEnv's own env-driven parse or
+	// by a test's ServerConfig.
+	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), billingModule.Plans(), billingModule.Subscriptions(), billingModule.Credits(), standaloneQueue, cfg.FailSelfServiceProvision); wireErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, wireErr
 	}
 
 	// Serve the built frontend when this boot is configured with one
-	// (cfg.WebDistDir, set by configFromEnv from APP_WEB_DIST -- the
+	// (cfg.WebDistDir, set by ConfigFromEnv from APP_WEB_DIST -- the
 	// Dockerfile ships the dist and sets the variable itself). The wrap
 	// goes around the OUTSIDE of authn.Middleware's own output above, so
 	// the requests the frontend answers -- "/" itself, /assets/* and
@@ -3812,12 +3825,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	return handler, cleanup, complianceModule, nil
 }
 
-// authnAPIPath is authn's own HTTP mount point -- duplicated from
+// AuthnAPIPath is authn's own HTTP mount point -- duplicated from
 // go/authn/module.go's private apiPath constant of the same value, because
 // this app's wiring, not authn's package, is what names the path: it is
 // the second of the two module subtrees this app dispatches from
 // authn.Middleware's output directly (see mountModuleRoutes' doc comment
-// and buildServer's topMux composition), never through tenancy.Middleware.
+// and BuildServer's topMux composition), never through tenancy.Middleware.
 //
 // Why authn sits outside the tenancy chain -- the resolution of the
 // enterprise-OIDC login-start gap this file's earlier revisions recorded
@@ -3843,7 +3856,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 // EVERY tenant at once: mountModuleRoutes returns authn's handler here
 // instead of mounting it into the tenancy-guarded mux (its demoRouteGuards
 // entry stays routePublic, so the guard table still names it), topMux
-// serves the whole authnAPIPath subtree from authn.Middleware's own
+// serves the whole AuthnAPIPath subtree from authn.Middleware's own
 // output, and authn's Handler itself remains the per-operation authority
 // on whether a Principal is required (go/authn/handler.go's
 // requirePrincipal answers authn.authentication_required for a protected
@@ -3853,12 +3866,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 // reads a tenancy-injected tenant context -- every one derives what it
 // needs from the verified Principal's own claims, which is what makes the
 // branch safe in the first place.
-const authnAPIPath = "/api/v1/authn"
+const AuthnAPIPath = "/api/v1/authn"
 
 // mountModuleRoutes copies every route reg's modules mounted onto mux,
-// with TWO deliberate exceptions, each mounted by buildServer on its own
+// with TWO deliberate exceptions, each mounted by BuildServer on its own
 // topMux branch directly behind authn.Middleware and nothing else -- see
-// buildServer's own composition comment -- and each returned here instead
+// BuildServer's own composition comment -- and each returned here instead
 // of mounted into mux:
 //
 //   - admin's own mounted route (adminRoutePath): admin's HTTP surface
@@ -3869,7 +3882,7 @@ const authnAPIPath = "/api/v1/authn"
 //     ImpersonationMiddleware -- that decorator's effect is on the REST of
 //     the application's routes only"; "does NOT go through ordinary
 //     tenancy.Middleware tenant resolution").
-//   - authn's own mounted route (authnAPIPath): authn's HTTP surface never
+//   - authn's own mounted route (AuthnAPIPath): authn's HTTP surface never
 //     sits downstream of tenancy.Middleware, per the module's own
 //     architecture (go/authn's routes resolve the tenant from the
 //     Principal's own claim, per operation, never from a tenant a
@@ -3881,7 +3894,7 @@ const authnAPIPath = "/api/v1/authn"
 //     step of a sign-in), so a tenancy.Middleware in front of it refused
 //     every such request with tenancy.tenant_unresolved before authn's own
 //     OIDC logic ever saw it -- the CONFIRMED GAP this composition closes
-//     (see authnAPIPath's own doc comment below). authn.Middleware still
+//     (see AuthnAPIPath's own doc comment below). authn.Middleware still
 //     runs outside everything (it wraps topMux itself), so a genuinely
 //     invalid bearer still 401s before this branch is reached; what is
 //     gone is only the tenancy layer, whose fail-closed default had no
@@ -3907,17 +3920,17 @@ const authnAPIPath = "/api/v1/authn"
 // registered explicitly here, pointing at the same Handler, instead of
 // relying on ServeMux's implicit redirect-on-missing-slash behavior.
 //
-// Every route also passes through guardModuleRoute on the way out, which
+// Every route also passes through GuardModuleRoute on the way out, which
 // is where rbac's permission gate is applied -- see demo_subject.go's
-// demoRouteGuards. guardModuleRoute still runs for the two excepted paths
+// demoRouteGuards. GuardModuleRoute still runs for the two excepted paths
 // too (admin's dispatching to guardAdminRoute per its adminRouteSentinel
 // entry, authn's resolving routePublic per its own entry), so the table's
 // exhaustiveness check keeps covering both; only the DESTINATION of the
 // resulting handler differs. A path the table does not name fails the
 // build here rather than being served.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps orgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnHandler http.Handler, err error) {
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnHandler http.Handler, err error) {
 	for _, route := range reg.Routes.Routes() {
-		handler, guardErr := guardModuleRoute(az, route.Path, route.Handler, orgDeps, demoHeaderDisabled)
+		handler, guardErr := GuardModuleRoute(az, route.Path, route.Handler, orgDeps, demoHeaderDisabled)
 		if guardErr != nil {
 			return nil, nil, guardErr
 		}
@@ -3925,7 +3938,7 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 			adminHandler = handler
 			continue
 		}
-		if route.Path == authnAPIPath {
+		if route.Path == AuthnAPIPath {
 			authnHandler = handler
 			continue
 		}
@@ -3938,35 +3951,35 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
 	}
 	if authnHandler == nil {
-		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", authnAPIPath)
+		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", AuthnAPIPath)
 	}
 	return adminHandler, authnHandler, nil
 }
 
-// healthzHandler always returns 200 with no tenant required. It is
-// allowlisted in buildServer above, so an orchestrator's liveness probe
+// HealthzHandler always returns 200 with no tenant required. It is
+// allowlisted in BuildServer above, so an orchestrator's liveness probe
 // never depends on tenant resolution succeeding.
-func healthzHandler(w http.ResponseWriter, r *http.Request) {
+func HealthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
 }
 
-// metricsHandler serves whatever obs.MetricsHandler() currently returns --
+// MetricsHandler serves whatever obs.MetricsHandler() currently returns --
 // a real Prometheus scrape endpoint once main.go's run has called
 // obs.Init, or a 404 explaining why before that (see MetricsHandler's own
 // doc comment). It is fetched fresh on every request rather than captured
-// once when buildServer constructs the mux, so this route's behavior does
+// once when BuildServer constructs the mux, so this route's behavior does
 // not depend on Init having already run by mount time: run() does call
 // Init first (see main.go), but this indirection keeps that an
 // implementation detail of main.go rather than a hidden requirement on
-// buildServer's caller: a test that calls buildServer directly (as
-// server_test.go's TestBuildServer_Metrics_NoTenantRequired does) can mount
+// BuildServer's caller: a test that calls BuildServer directly (as
+// cmd/server/server_test.go's TestBuildServer_Metrics_NoTenantRequired does) can mount
 // the route and assert on it without needing to care whether obs.Init has
 // run yet in this process, or ever will -- see that test's own doc comment
 // for exactly which weaker property it falls back to proving as a result.
 // A test that instead builds its own mux around this same handler, as
 // TestMetricsAllowlist_ResolutionFailure_StillReturns200 does, is free to
 // call obs.Init itself first for a deterministic answer.
-func metricsHandler(w http.ResponseWriter, r *http.Request) {
+func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	obs.MetricsHandler().ServeHTTP(w, r)
 }

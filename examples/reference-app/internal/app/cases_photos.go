@@ -40,7 +40,8 @@
 // Both operations deliberately resolve no creator (see cases.go's
 // header): they are tenant-member work like the list and detail reads,
 // and the tenant is the one the middleware chain already resolved.
-package main
+
+package app
 
 import (
 	"bytes"
@@ -78,7 +79,7 @@ var (
 	ErrPhotoContentInvalid = apperr.Invalid("cases.photo_content_invalid")
 
 	// ErrPhotoContentTooLarge is returned when a photo's decoded bytes
-	// exceed maxPhotoBytes -- the bound this surface accepts in one
+	// exceed MaxPhotoBytes -- the bound this surface accepts in one
 	// request and serves in one answer -- with the limit and the actual
 	// length in params. The same code answers the content read when a
 	// stored photo exceeds the serve bound.
@@ -100,7 +101,7 @@ var (
 	ErrPhotoNotFound = apperr.NotFound("cases.photo_not_found")
 )
 
-// maxPhotoBytes is the byte ceiling one photo may carry in this
+// MaxPhotoBytes is the byte ceiling one photo may carry in this
 // surface: the decoded length a photo-upload request may submit and the
 // decoded length a photo-content answer may serve. It is deliberately
 // far below go/storage's own per-object ceiling (the module default is
@@ -108,12 +109,12 @@ var (
 // base64-encoded in JSON both ways, so an unbounded photo would mean an
 // unbounded JSON body and an unbounded JSON answer -- the two buffers
 // this surface must bound.
-const maxPhotoBytes = 20 << 20
+const MaxPhotoBytes = 20 << 20
 
 // photoUploadMaxRequestBodyBytes bounds a photo-upload request body
 // BEFORE it is decoded, the same MaxBytesReader reasoning as
 // casesMaxRequestBodyBytes: base64 inflates bytes by 4/3, so a body any
-// in-bounds photo can produce stays under maxPhotoBytes*4/3 plus JSON
+// in-bounds photo can produce stays under MaxPhotoBytes*4/3 plus JSON
 // overhead -- the slack below leaves room for the envelope and
 // whitespace while refusing an arbitrarily large payload.
 const photoUploadMaxRequestBodyBytes = 32 << 20
@@ -147,9 +148,9 @@ func (h *casesHandler) CasesUploadPhoto(w http.ResponseWriter, r *http.Request) 
 		writeCasesError(w, ErrPhotoContentInvalid)
 		return
 	}
-	if int64(len(decoded)) > maxPhotoBytes {
+	if int64(len(decoded)) > MaxPhotoBytes {
 		writeCasesError(w, ErrPhotoContentTooLarge.
-			WithParam("limit", maxPhotoBytes).
+			WithParam("limit", MaxPhotoBytes).
 			WithParam("length", len(decoded)))
 		return
 	}
@@ -217,7 +218,7 @@ func (h *casesHandler) CasesGetPhotoContent(w http.ResponseWriter, r *http.Reque
 
 	obj, rc, err := h.objects.OpenContent(r.Context(), photoObjectID)
 	if err != nil {
-		writeCasesError(w, casesPhotoReadError(err))
+		writeCasesError(w, CasesPhotoReadError(err))
 		return
 	}
 	defer func() { _ = rc.Close() }()
@@ -225,14 +226,14 @@ func (h *casesHandler) CasesGetPhotoContent(w http.ResponseWriter, r *http.Reque
 	// The serve bound mirrors the upload bound: a completed object any
 	// honest upload produced is within it, and a larger one (created
 	// through another surface) is refused rather than buffered in full.
-	raw, err := io.ReadAll(io.LimitReader(rc, maxPhotoBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(rc, MaxPhotoBytes+1))
 	if err != nil {
 		writeCasesError(w, apperr.Internal("cases.internal_error").WithCause(err))
 		return
 	}
-	if int64(len(raw)) > maxPhotoBytes {
+	if int64(len(raw)) > MaxPhotoBytes {
 		writeCasesError(w, ErrPhotoContentTooLarge.
-			WithParam("limit", maxPhotoBytes).
+			WithParam("limit", MaxPhotoBytes).
 			WithParam("length", len(raw)))
 		return
 	}
@@ -278,11 +279,11 @@ func casesPhotoProtocolError(err error, stage string) *apperr.Error {
 	}
 }
 
-// casesPhotoReadError maps a refusal from the content read onto this
+// CasesPhotoReadError maps a refusal from the content read onto this
 // surface's coded errors: an object that no longer exists (deleted or
 // reclaimed) answers the same cases.photo_not_found a case that never
 // referenced it answers, and every other failure is internal.
-func casesPhotoReadError(err error) *apperr.Error {
+func CasesPhotoReadError(err error) *apperr.Error {
 	if hasCasesPhotoCode(err, storage.ErrObjectNotFound.Code) {
 		return ErrPhotoNotFound
 	}

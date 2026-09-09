@@ -13,9 +13,9 @@ package main
 // webhook-subscription-CRUD surface (go/integration/api/openapi.yaml,
 // mounted under /api/v1/integration): each test below subscribes through
 // the integration_createWebhookSubscription operation -- the POST
-// webhooks.go's createWebhookSubscription helper issues, mounted through
+// internal/app/webhooks.go's createWebhookSubscription helper issues, mounted through
 // the same generic mountModuleRoutes loop every other module's fragment
-// uses, gated by demo_subject.go's guardIntegrationRoute. The whole CRUD
+// uses, gated by internal/app/demo_subject.go's guardIntegrationRoute. The whole CRUD
 // + recent-deliveries surface, driven end to end, lives in
 // webhook_crud_flow_test.go; this file's job is the DELIVERY side, which
 // no CRUD surface exercises.
@@ -33,9 +33,9 @@ package main
 // Docker bridge network) is either loopback or RFC 1918 private space
 // either way -- there is no address a receiver this test controls could
 // bind to that the module's real, unmodified SSRF check would accept. The
-// two serverConfig fields are a deliberate, additive, test-only escape
+// two ServerConfig fields are a deliberate, additive, test-only escape
 // hatch for exactly this situation (see their own doc comments on
-// serverConfig, and integration.WithWebhookURLValidator's own doc comment
+// ServerConfig, and integration.WithWebhookURLValidator's own doc comment
 // in go/integration/module.go, for the full argument, including why this
 // never weakens ANY other Module's or ANY production composition's SSRF
 // enforcement): every other test in this package, and every production
@@ -55,6 +55,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
@@ -182,14 +184,14 @@ type webhookSubscriptionResponse struct {
 // path createWebhookSubscription POSTs to.
 const webhookBasePath = "/api/v1/integration/webhooks"
 
-// buildWebhookFlowTestServer wires buildServer's real output exactly like
+// buildWebhookFlowTestServer wires BuildServer's real output exactly like
 // buildOrgTestServer (org_flow_test.go) -- a capturingMailer stands in for
 // the console mailer so this file can recover an invitation's token the
 // same way org_flow_test.go does -- plus the two webhook-only test
 // overrides this file's own header comment explains. client is shared by
 // every subscription this test creates; a plain client with no SSRF guard
 // can reach any httptest.Server this test starts, receiver or otherwise.
-func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Server, serverConfig, *capturingMailer) {
+func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Server, app.ServerConfig, *capturingMailer) {
 	t.Helper()
 
 	cfg := testConfig(t)
@@ -198,9 +200,9 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 	cfg.WebhookURLValidator = func(context.Context, string) error { return nil }
 	cfg.WebhookHTTPClient = client
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -214,17 +216,17 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 }
 
 // createWebhookSubscription drives the spec surface's create operation
-// (POST /api/v1/integration/webhooks, webhookBasePath) as demoOwnerUserID
+// (POST /api/v1/integration/webhooks, webhookBasePath) as DemoOwnerUserID
 // -- whose built-in owner role carries integration.PermissionWebhookManage,
-// the permission demo_subject.go's guardIntegrationRoute dispatches a
+// the permission internal/app/demo_subject.go's guardIntegrationRoute dispatches a
 // non-GET request under /webhooks to (the router-level gate
 // extended from method-only dispatch to sub-path dispatch precisely so the
 // API-key and webhook permission pairs each gate their own half of the
 // shared /api/v1/integration mount). The X-Demo-User-Id header names
-// demoNotesCreatorUserID, this app's one shared creator-attribution
+// DemoNotesCreatorUserID, this app's one shared creator-attribution
 // identity: integration_createWebhookSubscription attributes the new
 // subscription's CreatedBy through integration.SubjectResolver
-// (demoOrgSubjectResolver in server.go -- the identical seam instance
+// (DemoOrgSubjectResolver in internal/app/server.go -- the identical seam instance
 // integration_createAPIKey already reads), which reads that same
 // header; a create without it is refused 401 integration.subject_unresolved,
 // never attributed to a default user. token selects the tenant the
@@ -243,8 +245,8 @@ func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url st
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set(demoUserHeader, demoOwnerUserID)
-	req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := srv.Client().Do(req)
@@ -266,8 +268,8 @@ func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url st
 	if out.Secret == "" {
 		t.Fatal("created subscription carries no secret")
 	}
-	if out.CreatedBy != demoNotesCreatorUserID {
-		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", out.CreatedBy, demoNotesCreatorUserID)
+	if out.CreatedBy != app.DemoNotesCreatorUserID {
+		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", out.CreatedBy, app.DemoNotesCreatorUserID)
 	}
 	return out
 }
@@ -279,9 +281,9 @@ func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url st
 // membership. This IS org's real org.member.joined event: MemberService's
 // own Accept path (go/org/invite.go) publishes that event with exactly
 // these three ids (MembershipID, UserID, NodeID) once the HTTP call below
-// returns, which is what orgMemberJoinedWebhookMapping (webhooks.go) maps
+// returns, which is what orgMemberJoinedWebhookMapping (internal/app/webhooks.go) maps
 // onto the public payload a subscription receives.
-func triggerOrgMemberJoined(t *testing.T, srv *httptest.Server, cfg serverConfig, mailer *capturingMailer, tenant pkgcore.TenantID, namePrefix, inviteeEmail string) orgMembership {
+func triggerOrgMemberJoined(t *testing.T, srv *httptest.Server, cfg app.ServerConfig, mailer *capturingMailer, tenant pkgcore.TenantID, namePrefix, inviteeEmail string) orgMembership {
 	t.Helper()
 
 	// The name prefix is display text ("Webhook Success") and not an email
@@ -360,7 +362,7 @@ func TestWebhookFlow_RealSignedDelivery_EndToEnd(t *testing.T) {
 	}
 
 	// invitation_id is deliberately left out of the public schema
-	// (orgMemberJoinedWebhookMapping's own doc comment, webhooks.go) -- a
+	// (orgMemberJoinedWebhookMapping's own doc comment, internal/app/webhooks.go) -- a
 	// second, map-shaped decode of the same "data" field is what proves its
 	// absence, since the typed decode above would simply ignore an unwanted
 	// key rather than reveal one.

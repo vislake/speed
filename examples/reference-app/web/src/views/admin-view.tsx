@@ -3,7 +3,7 @@
  * web host: the platform's tenant ledger, the one operator task every
  * other one starts from, read from go/admin's own operator-facing
  * route (admin-api.ts -- GET /api/v1/admin/tenants, mounted in this
- * app behind guardAdminRoute, cmd/server/demo_admin.go, which
+ * app behind guardAdminRoute, internal/app/demo_admin.go, which
  * evaluates every admin:* permission in rbac.SystemDomain).
  *
  * WHO REACHES IT, AND HOW THE GATE WORKS

@@ -1,9 +1,9 @@
 // smile_journey_flow_test.go drives the block-B acceptance journey at the
 // wire level through the real composed HTTP stack -- the authn+tenancy
 // middleware chain, a real temp-file SQLite database, a real
-// jobs.StandaloneQueue, the cases surface (cmd/server/cases.go and
-// cases_photos.go, whose upload/create/content operations block A
-// shipped) and the smile-simulation surface (cmd/server/smilesim.go,
+// jobs.StandaloneQueue, the cases surface (internal/app/cases.go and
+// internal/app/cases_photos.go, whose upload/create/content operations block A
+// shipped) and the smile-simulation surface (internal/app/smilesim.go,
 // whose simulate/job-status/enumeration/content operations the
 // comparison view calls) -- against fakeOpenAIImageServer's canned,
 // replayed provider answers, the same deterministic stand-in the

@@ -1,7 +1,7 @@
 // The reference app's demo glue for go/notification: the host-side seams a
 // real deployment of the module needs and this app has no real source for,
 // plus the hand-written routes and subscriptions that demonstrate the module
-// end to end. notification_flow_test.go drives everything here through the
+// end to end. cmd/server/notification_flow_test.go drives everything here through the
 // composed HTTP stack.
 //
 // The glue is deliberately thin and deliberately demo-shaped:
@@ -37,7 +37,8 @@
 // modules: every seam below is a structurally-typed implementation of an
 // interface go/notification declares, in the same no-import direction org's
 // own host seams observe -- the host implements, the module consumes.
-package main
+
+package app
 
 import (
 	"context"
@@ -53,30 +54,30 @@ import (
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
-// demoUserAddresses maps the demo user ids this app's flows act as (see
-// demo_subject.go's demo user constants and demoNotesCreatorUserID) to the
+// DemoUserAddresses maps the demo user ids this app's flows act as (see
+// demo_subject.go's demo user constants and DemoNotesCreatorUserID) to the
 // outbound addresses a real host would hold in its own address store. The
 // map is this app's stand-in for that store -- and nothing more: the users
 // this app's own flows act as exist only as header values, so there is no
 // address table to read.
 //
-// Only demoNotesCreatorUserID carries an email: it is the only id a
+// Only DemoNotesCreatorUserID carries an email: it is the only id a
 // note-created event this app's flow helpers publish can name (every
 // helper sends it as the X-Demo-User-Id header notes' create handler
 // attributes through), and the email is what lets a note-created delivery
 // reach the email channel. A note-created event can instead name a seeded
 // account's real user id, when the account acts through its access token
-// with no demo header -- demoNotesSubjectResolver's Principal fallback,
-// the shape of demo_users_test.go's own requests; that id has no entry
+// with no demo header -- DemoNotesSubjectResolver's Principal fallback,
+// the shape of cmd/server/demo_users_test.go's own requests; that id has no entry
 // here, so its delivery resolves to no addresses, the same ordinary skip
-// as any other user with no addresses. demoNotesCreatorUserID carries no
+// as any other user with no addresses. DemoNotesCreatorUserID carries no
 // phone,
 // which the flow tests use deliberately: a user delivery whose SMS channel
 // finds no phone address is skipped with a recorded send record, never
 // failed (see UserAddresses' own doc comment). Every other demo user
 // resolves to no addresses -- an ordinary state, not an error.
 //
-// demoSmileSimRecipientUserID is the smile-simulation completion
+// DemoSmileSimRecipientUserID is the smile-simulation completion
 // notification's demo recipient fixture: a phone-only entry (the smilesim
 // completion notification's DefaultChannels is sms-only -- see
 // internal/demo/module.go's TypeKeySimulationReady -- so a phone is the
@@ -85,14 +86,20 @@ import (
 // also grants the fixture an ACTIVE MEMBERSHIP in the tenant its caller
 // operates in -- the demo shape of a real patient account in the clinic's
 // own tenant -- because the simulate surface refuses any recipient that is
-// not an active member of the caller's tenant (cmd/server/smilesim.go's
+// not an active member of the caller's tenant (smilesim.go's
 // validateSimulateRecipient): a recipient id that belongs to another
 // tenant must never receive this tenant's notification.
-const demoSmileSimRecipientUserID = "user-smilesim-recipient-1"
 
-var demoUserAddresses = map[string]notification.UserAddresses{
-	demoNotesCreatorUserID:      {Email: "user-creator-1@demo.example"},
-	demoSmileSimRecipientUserID: {Phone: "+8613800138099"},
+// DemoSmileSimRecipientUserID is the user id of the fixture patient
+// account whose outbound address the demo notification flows deliver to.
+const DemoSmileSimRecipientUserID = "user-smilesim-recipient-1"
+
+// DemoUserAddresses is the demo stand-in for a real host's address store,
+// mapping the demo user ids (see the narrative above) to their outbound
+// addresses.
+var DemoUserAddresses = map[string]notification.UserAddresses{
+	DemoNotesCreatorUserID:      {Email: "user-creator-1@demo.example"},
+	DemoSmileSimRecipientUserID: {Phone: "+8613800138099"},
 }
 
 // demoUserAddressResolver is the reference app's implementation of
@@ -111,7 +118,7 @@ type demoUserAddressResolver struct{}
 
 // Resolve implements notification.UserAddressResolver.
 func (demoUserAddressResolver) Resolve(_ context.Context, userID string) (notification.UserAddresses, error) {
-	return demoUserAddresses[userID], nil
+	return DemoUserAddresses[userID], nil
 }
 
 // compile-time check that demoUserAddressResolver satisfies the seam.
@@ -128,7 +135,7 @@ const demoPatientMessagePath = "/api/v1/demo/patient-message"
 
 // noteCreatedFieldKeys are the field spellings accepted for the note id and
 // the creator user id inside a notes.note.created payload, probed in order
-// by noteCreatedFieldsFromPayload.
+// by NoteCreatedFieldsFromPayload.
 //
 // Several spellings are accepted because the payload reaches the
 // subscription as data, not as a type: a same-process publish delivers
@@ -149,13 +156,13 @@ var noteCreatedFieldKeys = struct {
 	creator: []string{"creator_user_id", "CreatorUserID", "creatorUserID"},
 }
 
-// noteCreatedFieldsFromPayload extracts the note id and the creating user's
+// NoteCreatedFieldsFromPayload extracts the note id and the creating user's
 // id from a notes.note.created payload of any shape, by round-tripping it
 // through JSON into a map and probing the accepted key spellings. It returns
 // ok=false rather than an error for every unusable shape, because the
 // subscription's contract is to log and drop the event, never to fail the
 // publisher (see wireDemoNotification).
-func noteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok bool) {
+func NoteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok bool) {
 	if payload == nil {
 		return "", "", false
 	}
@@ -188,7 +195,7 @@ func noteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok
 // simulationCompletedFieldKeys are the field spellings accepted for the
 // image job id, the recipient user id and the success flag inside a
 // smilesim.EventSimulationCompleted payload, probed in order by
-// simulationCompletedFieldsFromPayload.
+// SimulationCompletedFieldsFromPayload.
 //
 // Both sides of this subscription are reference-app code, but that does NOT
 // make the payload's wire shape unambiguous: pkgcore's in-memory EventBus
@@ -202,7 +209,7 @@ func noteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok
 // fans a publish out to all of them). This subscription and smilesim's own
 // publisher happen to share one bus instance in this app's current wiring,
 // but nothing about the pkgcore.EventBus contract guarantees that stays
-// true, and the note-created subscription's own noteCreatedFieldsFromPayload
+// true, and the note-created subscription's own NoteCreatedFieldsFromPayload
 // probe exists for the identical reason. smilesim.SimulationCompletedPayload
 // carries no JSON tags (like notes' own payload, its fields are facts, not
 // an API contract), so the map spellings below are the plain struct field
@@ -217,11 +224,11 @@ var simulationCompletedFieldKeys = struct {
 	succeeded:       []string{"succeeded", "Succeeded"},
 }
 
-// simulationCompletedFieldsFromPayload extracts the image job id, the
+// SimulationCompletedFieldsFromPayload extracts the image job id, the
 // recipient user id and the success flag from a
 // smilesim.EventSimulationCompleted payload of any shape, by round-tripping
 // it through JSON into a map and probing the accepted key spellings --
-// mirroring noteCreatedFieldsFromPayload exactly, down to returning ok=false
+// mirroring NoteCreatedFieldsFromPayload exactly, down to returning ok=false
 // rather than an error for every unusable shape (the subscription's contract
 // is to log and drop the event, never to fail the publisher; see
 // wireDemoNotification). imageJobID and recipientUserID must each be a
@@ -236,7 +243,7 @@ var simulationCompletedFieldKeys = struct {
 // is read as whatever bool value is actually present -- false is a
 // meaningful, valid answer (a failed or cancelled simulation), so its
 // presence is tracked separately from its value.
-func simulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJobID string, succeeded, ok bool) {
+func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJobID string, succeeded, ok bool) {
 	if payload == nil {
 		return "", "", false, false
 	}
@@ -316,7 +323,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// event rather than silently.
 	bus.Subscribe(notes.EventNoteCreated, func(ctx context.Context, evt pkgcore.Event) error {
 		logger := observability.FromContext(ctx)
-		noteID, creatorUserID, ok := noteCreatedFieldsFromPayload(evt.Payload)
+		noteID, creatorUserID, ok := NoteCreatedFieldsFromPayload(evt.Payload)
 		if !ok {
 			// The log message is a constant string and the variable
 			// values ride as key-value attributes (backend coding
@@ -428,7 +435,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// pkgcore.Event, notification consumes it as a dispatch trigger" shape
 	// notes.EventNoteCreated's subscription above uses, and for the
 	// identical reason it too reads the payload through a probe
-	// (simulationCompletedFieldsFromPayload) rather than a naked type
+	// (SimulationCompletedFieldsFromPayload) rather than a naked type
 	// assertion: both sides of this subscription are reference-app code,
 	// but that does not make the payload's wire shape unambiguous -- see
 	// the probe's own doc comment for why a same-process subscriber is not
@@ -447,7 +454,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// and not just copy).
 	bus.Subscribe(smilesim.EventSimulationCompleted, func(ctx context.Context, evt pkgcore.Event) error {
 		logger := observability.FromContext(ctx)
-		recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(evt.Payload)
+		recipientUserID, imageJobID, succeeded, ok := SimulationCompletedFieldsFromPayload(evt.Payload)
 		if !ok {
 			logger.Warn("demo notification glue dropped a smilesim.simulation_completed event with an unreadable payload",
 				"event_type", evt.Type)

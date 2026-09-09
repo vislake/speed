@@ -1,6 +1,6 @@
 /**
  * team-api.ts -- the app's typed access to its own roster-with-identity
- * answer: GET /api/reference-app/team-members (cmd/server/team_members.go)
+ * answer: GET /api/reference-app/team-members (internal/app/team_members.go)
  * returns the tenant's org membership roster, every row enriched with the
  * display identity of the person behind it.
  *
@@ -16,7 +16,7 @@
  * the host's own route, the same hand-kept-shape relationship the
  * clinic-name route has with tenant-name.ts. The path is a host
  * constant, not part of any module's OpenAPI fragment, so it is spelled
- * here and in cmd/server/team_members.go (teamMembersPath) and kept in
+ * here and in internal/app/team_members.go (TeamMembersPath) and kept in
  * step by the Go flow test that mounts the route and the web suites that
  * drive it.
  *
@@ -37,7 +37,7 @@ import type { RequestFn } from '@speed/api-client'
 import type { OrgMembership } from './org-api.js'
 
 /** The path of the app's own roster-with-identity answer
- * (teamMembersPath in cmd/server/team_members.go). */
+ * (TeamMembersPath in internal/app/team_members.go). */
 export const TEAM_MEMBERS_PATH = '/api/reference-app/team-members'
 
 /** One roster row: the membership facts org's OrgMembership carries,

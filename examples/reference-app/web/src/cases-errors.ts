@@ -7,7 +7,7 @@
  * The code set is the server's own: the cases fragment's documented
  * answers (internal/cases's service errors -- patient-name, photo-
  * object and duplicate/not-found codes -- plus the surface-level photo
- * upload/content codes cmd/server/cases_photos.go defines and the
+ * upload/content codes internal/app/cases_photos.go defines and the
  * invalid-request-body/internal envelopes every handler can write) and
  * the transport's client.* codes. An answer that is not on the list (a
  * future server code, a client.http.<status> transport answer) resolves
@@ -31,7 +31,7 @@ export const CASES_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
   'cases.duplicate_photo_object': 'cases.errors.duplicatePhotoObject',
   'cases.too_many_photos': 'cases.errors.tooManyPhotos',
   'cases.photo_already_attached': 'cases.errors.photoAlreadyAttached',
-  // The photo-upload route's refusals (cmd/server/cases_photos.go).
+  // The photo-upload route's refusals (internal/app/cases_photos.go).
   'cases.photo_content_required': 'cases.errors.photoContentRequired',
   'cases.photo_content_invalid': 'cases.errors.photoContentInvalid',
   'cases.photo_content_too_large': 'cases.errors.photoContentTooLarge',

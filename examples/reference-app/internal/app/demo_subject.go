@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -32,22 +32,22 @@ import (
 //
 // The "where a Subject comes from" half: a request whose access token
 // verified is resolved from its Principal, the identity the authenticating
-// side proved. demoUserHeader survives as the affordance the pre-auth
+// side proved. DemoUserHeader survives as the affordance the pre-auth
 // flows were built around -- its own comment says exactly how the two
 // sources share the resolver -- and demo_users.go seeds real accounts
 // whose grants reach this same gate through the principal path.
 
-// demoUserHeader names the request header this example reads an acting
+// DemoUserHeader names the request header this example reads an acting
 // user id from.
 //
 // THIS IS NOT AUTHENTICATION, and it is not a pattern to copy. An
 // unauthenticated header is a claim, not an identity: anyone who can reach
 // the server can set it to any value and become that user. It carries the
-// same warning demoHostTenants and strictHostResolver carry in server.go.
+// same warning DemoHostTenants and strictHostResolver carry in server.go.
 //
 // The flows built around the header (the permission-gate and isolation
 // tests, the actor model seedDemoGrants below seeds) use it to say which
-// seeded demo actor is acting. demoSubjectResolver therefore reads it
+// seeded demo actor is acting. DemoSubjectResolver therefore reads it
 // first, so those flows keep their meaning; a request carrying no demo
 // header is resolved from the verified Principal authn.Middleware put in
 // the request context -- which is how the real accounts demo_users.go
@@ -63,43 +63,43 @@ import (
 // disableDemoUserHeaderEnv (server.go) is the escape hatch -- an operator
 // who deploys this reference app somewhere a real user might reach sets
 // APP_DISABLE_DEMO_USER_HEADER and every demo identity source is disabled
-// at once: demoSubjectResolverFor makes every gated route resolve from the
+// at once: DemoSubjectResolverFor makes every gated route resolve from the
 // verified Principal alone, this header not consulted at all, and
 // the SAME switch reaches the attribution header this app's other
-// resolver family reads (demoOrgUserHeader, "X-Demo-User-Id", server.go)
-// -- demoOrgSubjectResolver and demoNotesSubjectResolver are wired with
+// resolver family reads (DemoOrgUserHeader, "X-Demo-User-Id", server.go)
+// -- DemoOrgSubjectResolver and DemoNotesSubjectResolver are wired with
 // headerDisabled then, so notes' create handler, the cases surface, org's
 // caller-scoped endpoints and the notification surface resolve from the
 // verified Principal too. Left unset (the default),
 // neither header's behavior changes, which is what keeps
 // every demo journey and test built around them working.
-const demoUserHeader = "X-Demo-User"
+const DemoUserHeader = "X-Demo-User"
 
 // The demo users seeded into every configured tenant. Two of them, because
 // one user proves only that the gate opens: it takes a second, holding
 // strictly less authority, to prove the gate also closes on a real user
 // rather than only on an anonymous request.
 const (
-	// demoOwnerUserID holds the built-in owner role, so it carries every
+	// DemoOwnerUserID holds the built-in owner role, so it carries every
 	// permission any module declared -- including both of notes'.
-	demoOwnerUserID = "demo-owner"
+	DemoOwnerUserID = "demo-owner"
 
-	// demoReaderUserID holds demoReaderRoleKey, a custom role carrying
+	// DemoReaderUserID holds demoReaderRoleKey, a custom role carrying
 	// notes:read and nothing else. It may list notes and may not create
 	// one, which is the difference the permission gate exists to enforce.
-	demoReaderUserID = "demo-reader"
+	DemoReaderUserID = "demo-reader"
 
 	// demoReaderRoleKey is the tenant-scoped key of that read-only role.
 	// It is defined per tenant, like every role: roles are tenant data,
 	// and there is deliberately no cross-tenant template to copy from.
 	demoReaderRoleKey = "note-reader"
 
-	// demoNotesCreatorUserID is the X-Demo-User-Id header value the flow
+	// DemoNotesCreatorUserID is the X-Demo-User-Id header value the flow
 	// helpers that create notes send on every request. X-Demo-User-Id is a
 	// different namespace from X-Demo-User (the header this file's earlier
 	// const names): the latter names the seeded rbac grant the gate
 	// decides against (demo-owner and friends above), while the former
-	// names the user id notes' own SubjectResolver (demoNotesSubjectResolver
+	// names the user id notes' own SubjectResolver (DemoNotesSubjectResolver
 	// in server.go) attributes the CREATE to -- the value that lands in a
 	// note's CreatorUserID and in the NoteCreatedPayload event every
 	// subscriber reads. The value is a real-user-style id (org_flow_test's
@@ -109,31 +109,31 @@ const (
 	// note-created event this app's own flow helpers publish names it. An
 	// event can instead name a seeded account's real user id, when the
 	// account acts through its access token with no demo header at all --
-	// demoNotesSubjectResolver falls back to the verified Principal, the
-	// same fallback the rbac gate's demoSubjectResolver makes -- and that
+	// DemoNotesSubjectResolver falls back to the verified Principal, the
+	// same fallback the rbac gate's DemoSubjectResolver makes -- and that
 	// id, absent from the address table, resolves to no addresses: an
 	// ordinary miss, never an error.
-	demoNotesCreatorUserID = "user-creator-1"
+	DemoNotesCreatorUserID = "user-creator-1"
 
-	// demoSingleTenantUserID holds demoReaderRoleKey in ONE tenant only,
+	// DemoSingleTenantUserID holds demoReaderRoleKey in ONE tenant only,
 	// which is what makes this example demonstrate the single most
 	// important property of a grant: it is a fact about a (tenant, user)
 	// PAIR, never about a user. The same id acting under the other demo
 	// host holds nothing at all and is refused -- not because it is
 	// unknown, but because its grant lives in a different tenant.
-	demoSingleTenantUserID = "demo-acme-only"
+	DemoSingleTenantUserID = "demo-acme-only"
 
-	// demoAIGatewayTenantWriterUserID holds demoAIGatewayTenantWriterRoleKey,
+	// DemoAIGatewayTenantWriterUserID holds demoAIGatewayTenantWriterRoleKey,
 	// a custom role carrying exactly aigateway.PermissionWrite (and
 	// aigateway.PermissionRead) and NOT aigateway.PermissionManagePlatform.
 	// It exists purely to prove the two-tier permission gate is
-	// real: demoOwnerUserID holds BuiltinRoleOwner, which -- per rbac's own
+	// real: DemoOwnerUserID holds BuiltinRoleOwner, which -- per rbac's own
 	// builtin.go doc comment -- carries EVERY permission any module
 	// declared, platform-scope credential write included, so it cannot
 	// demonstrate the platform write being refused. This user can set its
 	// OWN tenant's BYOK credential but is refused the platform-wide write,
 	// which is the distinction the two permissions exist to enforce.
-	demoAIGatewayTenantWriterUserID = "demo-aigateway-tenant-writer"
+	DemoAIGatewayTenantWriterUserID = "demo-aigateway-tenant-writer"
 
 	// demoAIGatewayTenantWriterRoleKey is the tenant-scoped key of that
 	// role. It is defined per tenant, like every role: roles are tenant
@@ -142,18 +142,18 @@ const (
 	demoAIGatewayTenantWriterRoleKey = "ai-gateway-tenant-writer"
 )
 
-// demoSingleTenantID is the one tenant demoSingleTenantUserID is granted
+// DemoSingleTenantID is the one tenant DemoSingleTenantUserID is granted
 // in. It is a literal rather than "whichever tenant comes first" because
 // map iteration order is unspecified, and a demo whose grants move between
 // boots would be a poor thing to reason about.
-const demoSingleTenantID pkgcore.TenantID = "tenant-acme"
+const DemoSingleTenantID pkgcore.TenantID = "tenant-acme"
 
 // The two action halves this example composes permission strings from. A
 // permission is "<resource>:<action>" (rbac.Permission), and notes declares
 // exactly notes:read and notes:write.
 const (
-	demoActionRead  = "read"
-	demoActionWrite = "write"
+	DemoActionRead  = "read"
+	DemoActionWrite = "write"
 )
 
 // routePublic marks a mounted route that must NOT be gated on a
@@ -183,9 +183,9 @@ const storageRoutePath = "/api/v1/storage"
 // comment explains.
 const notificationRoutePath = "/api/v1/notifications"
 
-// pkiRoutePath is where the pki module mounts its routes -- the same
+// PkiRoutePath is where the pki module mounts its routes -- the same
 // unexported-path situation notesRoutePath's own comment explains.
-const pkiRoutePath = "/api/v1/pki"
+const PkiRoutePath = "/api/v1/pki"
 
 // integrationRoutePath is where go/integration's spec-generated HTTP
 // fragments mount their routes -- the same unexported-path situation
@@ -210,14 +210,14 @@ const integrationRoutePath = "/api/v1/integration"
 // doc comment in go/sharing for the full contrast.
 const sharingSharesRoutePath = sharing.PathShares
 
-// aiGatewayRoutePath is where go/ai-gateway's credential-write
+// AiGatewayRoutePath is where go/ai-gateway's credential-write
 // admin surface mounts its routes -- the same unexported-path situation
 // notesRoutePath's own comment explains.
-const aiGatewayRoutePath = "/api/v1/ai-gateway"
+const AiGatewayRoutePath = "/api/v1/ai-gateway"
 
-// billingRoutePath is where the billing module mounts its routes -- the
+// BillingRoutePath is where the billing module mounts its routes -- the
 // same unexported-path situation notesRoutePath's own comment explains.
-const billingRoutePath = "/api/v1/billing"
+const BillingRoutePath = "/api/v1/billing"
 
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
@@ -229,20 +229,20 @@ const billingRoutePath = "/api/v1/billing"
 // new module adds; a table whose default is "refuse to start" cannot.
 //
 // config's two paths are routePublic for the same reason they are
-// allowlisted in tenancy.Middleware (see buildServer): they are pre-auth
+// allowlisted in tenancy.Middleware (see BuildServer): they are pre-auth
 // display surfaces -- a login page's brand and feature flags -- that must
 // render before anyone has signed in, and they serve only what the design
 // marks public, never tenant data.
 //
 // org's path is gated for real, like storage's and sharing's: org's Handler
 // performs no PERMISSION check of its own -- it resolves a caller's raw
-// identity through SubjectResolver (demoOrgSubjectResolver in server.go)
+// identity through SubjectResolver (DemoOrgSubjectResolver in server.go)
 // for the two invitation operations, org_createInvitation and
 // org_acceptInvitation, and reads only the tenant from context for every
 // other operation -- so this router gate is where the example enforces
 // org's four declared permissions (org:read/manage/invite_member/remove_member)
 // per operation.
-// It is dispatched to guardOrgRoute, never demoPermissionFor's generic
+// It is dispatched to guardOrgRoute, never DemoPermissionFor's generic
 // read/write split or a single permissionFor override: org's operations
 // span FOUR permissions distinguished by sub-resource (tree vs. roster vs.
 // invitation), not by method alone, AND one operation -- accepting an
@@ -264,16 +264,16 @@ const billingRoutePath = "/api/v1/billing"
 // enforceOrgNodeScope's own doc comment for the full mechanism and its
 // known gaps).
 //
-// authn's path is routePublic because buildServer composes authn's whole
+// authn's path is routePublic because BuildServer composes authn's whole
 // subtree OUTSIDE the chain this table gates: topMux serves every
-// authnAPIPath request from a branch directly behind authn.Middleware's
+// AuthnAPIPath request from a branch directly behind authn.Middleware's
 // optional verification, never through the tenancy-guarded mux
-// guardModuleRoute returns handlers into -- the same branch shape
+// GuardModuleRoute returns handlers into -- the same branch shape
 // adminRoutePath gets, with the deliberate difference that authn's branch
 // is UNGATED -- and the only shape in which the enterprise-OIDC
 // login-start path (its provider value the dynamic "oidc:<tenant>" string
 // no exact-match allowlist entry can enumerate) can work at all;
-// server.go's authnAPIPath doc comment has the full composition. The
+// server.go's AuthnAPIPath doc comment has the full composition. The
 // routePublic entry stays so the table's exhaustiveness check keeps
 // naming the path, but no request reaches it through the guard this table
 // drives. authn.Handler itself is the per-operation authority on who may
@@ -292,16 +292,16 @@ const billingRoutePath = "/api/v1/billing"
 // leaves their enforcement to the host's authorization layer, and this
 // router gate is where the example enforces them. The demo grants seed
 // storage's permissions into no role but the built-in owner -- the demo
-// reader holds notes:read and nothing else -- which storage_flow_test.go
+// reader holds notes:read and nothing else -- which cmd/server/storage_flow_test.go
 // relies on to prove the gate closes on a user who holds another module's
 // permissions: a per-module permission is not a blanket role.
 //
 // notification's path is routePublic for the same structural reason org's
 // and authn's are: notification.Handler resolves and requires its own
 // caller identity per operation through SubjectResolver
-// (demoOrgSubjectResolver in server.go -- the same seam instance org's
+// (DemoOrgSubjectResolver in server.go -- the same seam instance org's
 // own caller-scoped endpoints use; notes' create handler resolves through
-// its own demoNotesSubjectResolver, which additionally accepts the
+// its own DemoNotesSubjectResolver, which additionally accepts the
 // verified Principal, its comment saying why notes alone gets that
 // second source). Every one
 // of the module's operations, the realtime stream included, refuses an
@@ -316,12 +316,12 @@ const billingRoutePath = "/api/v1/billing"
 // Handler performs no identity check of its own beyond resolving a creator
 // for the two create operations (see integration.SubjectResolver), which is
 // a different question from whether the CALLER may reach the route at all.
-// It is dispatched to guardIntegrationRoute, never demoPermissionFor, for
+// It is dispatched to guardIntegrationRoute, never DemoPermissionFor, for
 // the same class of reason pki's path needed its own permissionFor: this
 // module's permission strings carry THREE segments --
 // "integration:apikey:read"/"integration:apikey:manage" and
 // "integration:webhook:read"/"integration:webhook:manage", both pairs
-// sharing one mount path -- and neither demoPermissionFor's generic
+// sharing one mount path -- and neither DemoPermissionFor's generic
 // composition nor rbac.RequirePermissionFunc's own splitPermission
 // (go/rbac/middleware.go) can parse a string whose action half contains a
 // second colon. See
@@ -329,23 +329,23 @@ const billingRoutePath = "/api/v1/billing"
 // guardIntegrationRoute's for the sub-path dispatch that tells the two
 // permission pairs apart.
 var demoRouteGuards = map[string]string{
-	notesRoutePath:   notesResource,
+	notesRoutePath:   NotesResource,
 	storageRoutePath: storageResource,
 	// orgRouteSentinel, never a plain resource string -- see its own doc
 	// comment and guardOrgRoute's for why org's four permissions need their
-	// own dispatch rather than demoPermissionFor's generic read/write split.
+	// own dispatch rather than DemoPermissionFor's generic read/write split.
 	orgRoutePath: orgRouteSentinel,
 	// notification's path constant mirrors the module's unexported
 	// apiPath; naming it here through the local constant keeps the two in
 	// sync the way the config entries do.
 	notificationRoutePath: routePublic,
 	// authn's path constant lives in server.go, which mounts the whole
-	// authnAPIPath subtree on its own topMux branch -- outside the
+	// AuthnAPIPath subtree on its own topMux branch -- outside the
 	// tenancy-guarded mux this table gates (see that constant's doc
 	// comment for why authn never sits downstream of tenancy.Middleware);
 	// naming the path here through the same constant keeps the two in
 	// sync the way config's entries do.
-	authnAPIPath: routePublic,
+	AuthnAPIPath: routePublic,
 	// The config module's two pre-auth endpoints, named through its own
 	// exported constants so a rename cannot drift into a silently ungated
 	// path here.
@@ -366,20 +366,20 @@ var demoRouteGuards = map[string]string{
 	// these five owner-facing operations, leaving their enforcement to the
 	// host's authorization layer, exactly as go/sharing's own module.go
 	// Register doc comment states. It needs its own action selector rather
-	// than demoPermissionFor's generic read/write split, since a POST here
+	// than DemoPermissionFor's generic read/write split, since a POST here
 	// means either sharing:create (create) or sharing:revoke (revoke) --
 	// see sharingPermissionFor's own doc comment, the same pkiPermissionFor-
-	// style carve-out guardModuleRoute already makes for pki's path.
+	// style carve-out GuardModuleRoute already makes for pki's path.
 	sharingSharesRoutePath: sharingResource,
 	// pki's path is gated for real: pki mounts a fine-grained
 	// permission vocabulary (pki.PermissionRead/Issue/Rotate plus the two
 	// revoke permissions) and its handler performs no identity check of
 	// its own -- the storage-style shape this table's own doc comment
 	// describes, which normally means router gating -- and
-	// demoPermissionFor's binary read/write split cannot express distinct
+	// DemoPermissionFor's binary read/write split cannot express distinct
 	// permissions, so pkiRouteSentinel marks the path non-public and
-	// guardModuleRoute dispatches it to guardPkiRoute (never
-	// demoPermissionFor), whose pkiPermissionFor selects between pki's
+	// GuardModuleRoute dispatches it to guardPkiRoute (never
+	// DemoPermissionFor), whose pkiPermissionFor selects between pki's
 	// own Read and the two split revoke permissions by route, and whose
 	// subject resolver pins the signing-key revoke's evaluation to
 	// rbac.SystemDomain -- the platform-domain half of pki's permission
@@ -392,11 +392,11 @@ var demoRouteGuards = map[string]string{
 	// have no HTTP operation in the fragment at all (issuance and manual
 	// rotation stay Go-only per go/pki/api/openapi.yaml's own header), so
 	// there is nothing yet to gate for either.
-	pkiRoutePath: pkiRouteSentinel,
+	PkiRoutePath: pkiRouteSentinel,
 
 	// integration's path is one of the entries in this table whose value is
 	// never read as a plain "resource" (admin's, just below, is another,
-	// and pki's, just above, a third) -- guardModuleRoute special-cases it
+	// and pki's, just above, a third) -- GuardModuleRoute special-cases it
 	// to guardIntegrationRoute, which derives resource and action from this
 	// module's own three-segment permission names directly, never from
 	// rbac.Permission/splitPermission's "<resource>:<action>" round trip,
@@ -405,7 +405,7 @@ var demoRouteGuards = map[string]string{
 	// exists purely so this map stays exhaustive.
 	integrationRoutePath: integrationRouteSentinel,
 
-	// admin's path is the other such entry: guardModuleRoute special-cases
+	// admin's path is the other such entry: GuardModuleRoute special-cases
 	// it to guardAdminRoute (demo_admin.go), which gates by SUB-PATH
 	// (tenants, users, impersonation, audit-events), not by one resource's
 	// read/write split. adminRouteSentinel exists purely so this map
@@ -416,14 +416,14 @@ var demoRouteGuards = map[string]string{
 	// ai-gateway's path is gated for real, like storage's: the module's
 	// Handler performs no permission check of its own (see its own doc
 	// comment), leaving enforcement to the host's authorization layer. It
-	// needs its own action selector, not demoPermissionFor's generic
+	// needs its own action selector, not DemoPermissionFor's generic
 	// read/write split, since a non-GET request here means either
 	// aigateway:write (the tenant's own BYOK write) or
 	// aigateway:manage_platform (the platform-wide write) -- see
 	// aiGatewayPermissionFor's own doc comment, the same pkiPermissionFor/
 	// sharingPermissionFor-style carve-out this table already makes for
 	// those two paths.
-	aiGatewayRoutePath: aiGatewayResource,
+	AiGatewayRoutePath: aiGatewayResource,
 
 	// billing's path is gated for real, like storage's: the module's
 	// Handler performs no authorization of its own (go/billing's Handler
@@ -434,32 +434,32 @@ var demoRouteGuards = map[string]string{
 	// "<resource>:<action>"), and rbac.RequirePermissionFunc's own
 	// splitPermission refuses a string whose action half contains a
 	// second colon by design -- so this path can neither use
-	// demoPermissionFor's generic read/write composition nor the
+	// DemoPermissionFor's generic read/write composition nor the
 	// permissionFor substitution pki's and sharing's paths use. See
 	// billingRouteSentinel's and guardBillingRoute's own doc comments
 	// for the shape that replaces it.
-	billingRoutePath: billingRouteSentinel,
+	BillingRoutePath: billingRouteSentinel,
 }
 
-// adminRouteSentinel marks demoRouteGuards' one entry that guardModuleRoute
+// adminRouteSentinel marks demoRouteGuards' one entry that GuardModuleRoute
 // dispatches to guardAdminRoute instead of the generic
-// demoPermissionFor(resource) gate. It is a value distinct from
+// DemoPermissionFor(resource) gate. It is a value distinct from
 // routePublic and from any real resource string, so a reader (and
-// guardModuleRoute's own switch) cannot confuse it with either.
+// GuardModuleRoute's own switch) cannot confuse it with either.
 const adminRouteSentinel = "ADMIN_SPECIAL_CASED_ROUTE"
 
 // pkiRouteSentinel marks demoRouteGuards' pki entry, dispatched by
-// guardModuleRoute to guardPkiRoute -- the same sentinel shape
+// GuardModuleRoute to guardPkiRoute -- the same sentinel shape
 // adminRouteSentinel uses, for the same reason: pki's signing-key revoke
 // must be evaluated under rbac.SystemDomain (see guardPkiRoute), a domain
-// shift no generic demoPermissionFor(resource) gate can express.
+// shift no generic DemoPermissionFor(resource) gate can express.
 const pkiRouteSentinel = "PKI_SPECIAL_CASED_ROUTE"
 
 // orgRouteSentinel marks demoRouteGuards' entry for go/org's mounted
-// route. guardModuleRoute dispatches it to guardOrgRoute instead of the
-// generic demoPermissionFor(resource) gate, for the same class of reason
+// route. GuardModuleRoute dispatches it to guardOrgRoute instead of the
+// generic DemoPermissionFor(resource) gate, for the same class of reason
 // pki's and integration's own sentinel-dispatched paths need one:
-// demoPermissionFor's binary read/write split cannot express org's four
+// DemoPermissionFor's binary read/write split cannot express org's four
 // declared permissions (org:read/manage/invite_member/remove_member), and
 // unlike pki/sharing/ai-gateway (a custom permissionFor plugged into the
 // ordinary rbac.RequirePermissionFunc gate), one org operation --
@@ -469,8 +469,8 @@ const pkiRouteSentinel = "PKI_SPECIAL_CASED_ROUTE"
 const orgRouteSentinel = "ORG_ROUTE_PER_OPERATION_PERMISSION"
 
 // integrationRouteSentinel marks demoRouteGuards' entry for go/integration's
-// mounted spec-generated fragments. guardModuleRoute dispatches it to
-// guardIntegrationRoute instead of the generic demoPermissionFor(resource)
+// mounted spec-generated fragments. GuardModuleRoute dispatches it to
+// guardIntegrationRoute instead of the generic DemoPermissionFor(resource)
 // gate.
 //
 // # Why this needs its own dispatch, not just its own permissionFor (unlike pki)
@@ -511,26 +511,26 @@ const orgRouteSentinel = "ORG_ROUTE_PER_OPERATION_PERMISSION"
 // independently of it.
 const integrationRouteSentinel = "INTEGRATION_ROUTE_THREE_SEGMENT_PERMISSION"
 
-// notesResource is the resource half of notes' permission strings. It is
+// NotesResource is the resource half of notes' permission strings. It is
 // derived from the module's own exported constants rather than retyped, so
 // this example cannot drift from the permissions notes actually declares.
-var notesResource = mustResourceOf(notes.PermissionRead, notes.PermissionWrite)
+var NotesResource = MustResourceOf(notes.PermissionRead, notes.PermissionWrite)
 
 // storageResource is the resource half of storage's permission strings,
-// derived from its own exported constants the same way notesResource is
+// derived from its own exported constants the same way NotesResource is
 // derived from notes' -- so this example cannot drift from the
 // permissions storage actually declares either.
-var storageResource = mustResourceOf(storage.PermissionRead, storage.PermissionWrite)
+var storageResource = MustResourceOf(storage.PermissionRead, storage.PermissionWrite)
 
 // pkiSigningKeyRevokePrefix is the request-path prefix of the ONE pki
 // operation whose permission must be evaluated in the platform domain --
 // POST /api/v1/pki/signing-keys/{kid}/revoke. Its subject (below) pins the
 // tenant to rbac.SystemDomain for exactly this prefix and nothing else.
-const pkiSigningKeyRevokePrefix = pkiRoutePath + "/signing-keys/"
+const pkiSigningKeyRevokePrefix = PkiRoutePath + "/signing-keys/"
 
 // pkiPermissionFor selects the permission a pki request must hold, from the
 // request's route alone -- never a header, query parameter or body field,
-// for the same reason demoPermissionFor's own doc comment gives. Of pki's
+// for the same reason DemoPermissionFor's own doc comment gives. Of pki's
 // declared permissions, only PermissionRead and the two revoke permissions
 // have an HTTP operation in the fragment at all (go/pki/api/openapi.yaml):
 // the three GET operations export a JWKS or a CRL (PermissionRead), and
@@ -551,14 +551,14 @@ func pkiPermissionFor(r *http.Request) string {
 	if strings.HasPrefix(r.URL.Path, pkiSigningKeyRevokePrefix) {
 		return pki.PermissionRevokeSigningKey
 	}
-	if strings.HasPrefix(r.URL.Path, pkiRoutePath+"/certificates/") {
+	if strings.HasPrefix(r.URL.Path, PkiRoutePath+"/certificates/") {
 		return pki.PermissionRevokeCertificate
 	}
 	return ""
 }
 
 // pkiSubjectResolverFor returns the subject resolver guardPkiRoute plugs
-// into rbac.WithSubjectResolver: the demo subject (demoSubjectResolverFor)
+// into rbac.WithSubjectResolver: the demo subject (DemoSubjectResolverFor)
 // with one deliberate mutation -- a request against the signing-key revoke
 // operation has its subject's tenant pinned to rbac.SystemDomain.
 //
@@ -579,7 +579,7 @@ func pkiPermissionFor(r *http.Request) string {
 // platform-staff account holding the owner role under SystemDomain
 // (seedDemoPlatformStaff, demo_admin.go) can.
 func pkiSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subject, bool) {
-	resolve := demoSubjectResolverFor(headerDisabled)
+	resolve := DemoSubjectResolverFor(headerDisabled)
 	return func(r *http.Request) (rbac.Subject, bool) {
 		sub, ok := resolve(r)
 		if !ok {
@@ -596,7 +596,7 @@ func pkiSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subjec
 // gate, in the same shape guardAdminRoute (demo_admin.go) wraps admin's:
 // rbac.RequirePermissionFunc with pki's own per-route permission selector
 // and pki's own subject resolver (the SystemDomain pin above), instead of
-// the generic demoPermissionFor gate this table's doc comment describes.
+// the generic DemoPermissionFor gate this table's doc comment describes.
 func guardPkiRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled bool) http.Handler {
 	return rbac.RequirePermissionFunc(az, pkiPermissionFor,
 		rbac.WithSubjectResolver(pkiSubjectResolverFor(demoHeaderDisabled)),
@@ -612,11 +612,11 @@ func guardPkiRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled 
 // surface -- its GET/HEAD reads gate on integration.PermissionWebhookRead
 // and its four mutations (create, update, delete, restore) on
 // integration.PermissionWebhookManage, a method-only split like
-// demoPermissionFor's since the webhook fragment's two read operations are
+// DemoPermissionFor's since the webhook fragment's two read operations are
 // both GETs -- and anything else under the mount is the API-key
 // surface, gated on integration.PermissionRead/PermissionManage the same
 // way. See integrationRouteSentinel's own doc comment for why neither
-// demoPermissionFor's generic composition nor rbac.RequirePermissionFunc
+// DemoPermissionFor's generic composition nor rbac.RequirePermissionFunc
 // itself can be used for either pair, and guardIntegrationRoute's for why
 // the sub-path check is safe to gate on.
 func integrationPermissionFor(r *http.Request) string {
@@ -638,7 +638,7 @@ func integrationPermissionFor(r *http.Request) string {
 
 // guardIntegrationRoute wraps go/integration's mounted fragment routes in
 // rbac's permission gate, reproducing rbac.RequirePermissionFunc's own
-// fail-closed shape (nil-safety aside -- az and demoSubjectResolver are both
+// fail-closed shape (nil-safety aside -- az and DemoSubjectResolver are both
 // always non-nil in this app's own wiring, unlike the general-purpose
 // middleware) by hand instead of calling it, for the reason
 // integrationRouteSentinel's own doc comment gives in full: this module's
@@ -664,7 +664,7 @@ func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler, demoHeaderD
 		}
 		resource, action := permission[:idx], permission[idx+1:]
 
-		sub, ok := demoResolveSubject(r, demoHeaderDisabled)
+		sub, ok := DemoResolveSubject(r, demoHeaderDisabled)
 		if !ok {
 			writeIntegrationError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
 			return
@@ -694,7 +694,7 @@ var integrationErrInternal = apperr.Internal("integration.internal_error")
 // produces -- a stable code plus structured parameters, never localized text
 // (backend coding standard §6.2). It is the one error writer shared by the
 // integration gate above (guardIntegrationRoute) and the
-// integrationWhoamiPath handler (integration_authenticate.go), which
+// IntegrationWhoamiPath handler (integration_authenticate.go), which
 // translate coded integration/rbac errors into HTTP responses.
 func writeIntegrationError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
@@ -712,16 +712,16 @@ func writeIntegrationError(w http.ResponseWriter, err error) {
 
 // sharingResource is the resource half of sharing's owner-facing permission
 // strings, derived from its own exported constants the same way
-// notesResource and storageResource are -- so this example cannot drift
+// NotesResource and storageResource are -- so this example cannot drift
 // from the permissions sharing actually declares. Unlike pkiResource,
 // sharing's own three permissions (read/create/revoke) all genuinely share
-// one resource half, so all three feed mustResourceOf here.
-var sharingResource = mustResourceOf(sharing.PermissionRead, sharing.PermissionCreate, sharing.PermissionRevoke)
+// one resource half, so all three feed MustResourceOf here.
+var sharingResource = MustResourceOf(sharing.PermissionRead, sharing.PermissionCreate, sharing.PermissionRevoke)
 
 // sharingPermissionFor selects the permission a sharingSharesRoutePath
 // request must hold, mirroring pkiPermissionFor's own reasoning: sharing's
 // three-permission vocabulary (read/create/revoke) is not the generic
-// read/write pair demoPermissionFor assumes, and unlike pki's own two
+// read/write pair DemoPermissionFor assumes, and unlike pki's own two
 // HTTP-reachable permissions, sharing's create and revoke operations are
 // BOTH POST requests that a method-only split cannot tell apart --
 // sharing_createShare (POST /api/v1/sharing/shares) and sharing_revokeShare
@@ -742,15 +742,15 @@ func sharingPermissionFor(r *http.Request) string {
 
 // aiGatewayResource is the resource half of ai-gateway's permission
 // strings, derived from its own exported constants the same way
-// notesResource and storageResource are -- so this example cannot drift
+// NotesResource and storageResource are -- so this example cannot drift
 // from the permissions ai-gateway actually declares. All three of its
 // permissions genuinely share one resource half ("ai-gateway"), unlike
 // integration's two-entity vocabulary.
-var aiGatewayResource = mustResourceOf(aigateway.PermissionRead, aigateway.PermissionWrite, aigateway.PermissionManagePlatform)
+var aiGatewayResource = MustResourceOf(aigateway.PermissionRead, aigateway.PermissionWrite, aigateway.PermissionManagePlatform)
 
 // billingRouteSentinel marks demoRouteGuards' entry for go/billing's
-// mounted route. guardModuleRoute dispatches it to guardBillingRoute
-// instead of the generic demoPermissionFor(resource) gate, for the same
+// mounted route. GuardModuleRoute dispatches it to guardBillingRoute
+// instead of the generic DemoPermissionFor(resource) gate, for the same
 // class of reason integrationRouteSentinel's own dispatch exists:
 // billing's permission strings carry THREE segments ("billing:credit:
 // read", "billing:credit:manage"), and rbac.RequirePermissionFunc's own
@@ -758,14 +758,14 @@ var aiGatewayResource = mustResourceOf(aigateway.PermissionRead, aigateway.Permi
 // colon by design (see splitPermission's own doc comment in go/rbac) --
 // so no permissionFor substitution can ride that middleware at all. The
 // sentinel value is distinct from routePublic and from any real resource
-// string, so a reader (and guardModuleRoute's own dispatch) cannot
+// string, so a reader (and GuardModuleRoute's own dispatch) cannot
 // confuse it with either.
 const billingRouteSentinel = "BILLING_ROUTE_THREE_SEGMENT_PERMISSION"
 
-// aiGatewayPermissionFor selects the permission an aiGatewayRoutePath
+// aiGatewayPermissionFor selects the permission an AiGatewayRoutePath
 // request must hold, mirroring pkiPermissionFor's and sharingPermissionFor's
 // own reasoning: ai-gateway's three-permission vocabulary (read/write/
-// manage_platform) is not the generic read/write pair demoPermissionFor
+// manage_platform) is not the generic read/write pair DemoPermissionFor
 // assumes. A GET is aigateway:read (aiGateway_getCredential); a PUT whose
 // path ends in "/platform" is aigateway:manage_platform
 // (aiGateway_setPlatformCredential), the materially more privileged
@@ -785,7 +785,7 @@ func aiGatewayPermissionFor(r *http.Request) string {
 	return aigateway.PermissionWrite
 }
 
-// billingPermissionFor selects the permission a billingRoutePath request
+// billingPermissionFor selects the permission a BillingRoutePath request
 // must hold, mirroring pkiPermissionFor's method-only split but naming
 // billing's own three-segment permission strings directly. The module's
 // fragment is read-only -- both operations are GETs answered
@@ -793,7 +793,7 @@ func aiGatewayPermissionFor(r *http.Request) string {
 // gates nothing over HTTP yet; see go/billing/api/openapi.yaml's own
 // header for the read-only decision) -- so the GET/HEAD read branch is the
 // one any real request takes;
-// the default branch stays the strict direction demoPermissionFor itself
+// the default branch stays the strict direction DemoPermissionFor itself
 // adopts, demanding the manage permission from any method this example
 // never thought about rather than guessing.
 //
@@ -841,7 +841,7 @@ func guardBillingRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisab
 		}
 		resource, action := permission[:idx], permission[idx+1:]
 
-		sub, ok := demoResolveSubject(r, demoHeaderDisabled)
+		sub, ok := DemoResolveSubject(r, demoHeaderDisabled)
 		if !ok {
 			writeBillingAuthzError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
 			return
@@ -891,7 +891,7 @@ const (
 
 // orgAcceptPath is the full path of org_acceptInvitation (POST
 // /api/v1/org/invitations/accept) -- the one org operation this app's
-// tenancy.Middleware allowlist names (server.go's buildServer) and the one
+// tenancy.Middleware allowlist names (server.go's BuildServer) and the one
 // org operation guardOrgRoute's permission gate lets through ungated.
 // Composed here, in the same file that owns the path's three components,
 // so server.go's allowlist entry and guardOrgRoute's bypass can never drift
@@ -900,7 +900,7 @@ const orgAcceptPath = orgRoutePath + orgInvitationsSubPath + orgAcceptSuffix
 
 // orgPermissionFor selects the org:* permission a request against
 // orgRoutePath must hold, from its path and method alone -- never a header,
-// a query parameter or a body field, the same rule demoPermissionFor's own
+// a query parameter or a body field, the same rule DemoPermissionFor's own
 // doc comment states.
 //
 // org's four permissions are distinguished by SUB-RESOURCE (tree vs.
@@ -963,21 +963,21 @@ func isOrgAcceptInvitationRequest(r *http.Request) bool {
 		r.URL.Path == orgRoutePath+orgInvitationsSubPath+orgAcceptSuffix
 }
 
-// orgRouteGuardDeps bundles the org-module runtime state guardOrgRoute's
+// OrgRouteGuardDeps bundles the org-module runtime state guardOrgRoute's
 // node-scope check (enforceOrgNodeScope) needs to resolve a request's
 // TARGET node to its materialized path and to translate OrgRemoveMember's
 // target user into the node their membership binds them to -- org's own
-// Scope and MemberService, the exact instances buildServer's orgModule
-// wires. Bundled into one struct so guardModuleRoute's signature grows by
+// Scope and MemberService, the exact instances BuildServer's orgModule
+// wires. Bundled into one struct so GuardModuleRoute's signature grows by
 // one parameter every OTHER module's dispatch branch simply ignores,
 // rather than by two.
-type orgRouteGuardDeps struct {
+type OrgRouteGuardDeps struct {
 	scope   org.Scope
 	members *org.MemberService
 }
 
 // guardOrgRoute wraps org's mounted route in rbac's permission gate, keyed
-// by orgPermissionFor rather than demoPermissionFor's generic resource
+// by orgPermissionFor rather than DemoPermissionFor's generic resource
 // split -- the same per-operation-selector shape pki's, sharing's and
 // ai-gateway's own routes already use -- with two differences org's shape
 // needs that theirs does not:
@@ -992,7 +992,7 @@ type orgRouteGuardDeps struct {
 //     once the coarse rbac.RequirePermissionFunc gate has already let it
 //     through, narrowing a subtree-scoped grant to its own subtree -- see
 //     that function's own doc comment.
-func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps orgRouteGuardDeps, demoHeaderDisabled bool) http.Handler {
+func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps OrgRouteGuardDeps, demoHeaderDisabled bool) http.Handler {
 	scopeChecked := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if appErr := enforceOrgNodeScope(r.Context(), az, deps, r); appErr != nil {
 			writeRBACGateError(w, appErr)
@@ -1001,7 +1001,7 @@ func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps orgRouteGuardD
 		handler.ServeHTTP(w, r)
 	})
 	permissionGated := rbac.RequirePermissionFunc(az, orgPermissionFor,
-		rbac.WithSubjectResolver(demoSubjectResolverFor(demoHeaderDisabled)),
+		rbac.WithSubjectResolver(DemoSubjectResolverFor(demoHeaderDisabled)),
 	)(scopeChecked)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1170,7 +1170,7 @@ func peekJSONBody(r *http.Request, dst any) bool {
 // silently truncated answer. A real per-row filter would need org.Handler
 // itself to consult DataScope, which is a change to go/org, not this
 // reference app's router gate; recorded here rather than half-built.
-func enforceOrgNodeScope(ctx context.Context, az rbac.Authorizer, deps orgRouteGuardDeps, r *http.Request) *apperr.Error {
+func enforceOrgNodeScope(ctx context.Context, az rbac.Authorizer, deps OrgRouteGuardDeps, r *http.Request) *apperr.Error {
 	sub, ok := rbac.SubjectFromContext(ctx)
 	if !ok {
 		// Unreachable in practice: rbac.RequirePermissionFunc, which wraps
@@ -1181,7 +1181,7 @@ func enforceOrgNodeScope(ctx context.Context, az rbac.Authorizer, deps orgRouteG
 		return rbac.ErrPermissionDenied
 	}
 	permission := orgPermissionFor(r)
-	resource, action, ok := splitDemoPermission(permission)
+	resource, action, ok := SplitDemoPermission(permission)
 	if !ok {
 		return rbac.ErrPermissionDenied.WithParam("permission", permission)
 	}
@@ -1264,7 +1264,7 @@ func writeRBACGateError(w http.ResponseWriter, err *apperr.Error) {
 	_ = json.NewEncoder(w).Encode(envelope)
 }
 
-// mustResourceOf returns the shared resource half of the given permission
+// MustResourceOf returns the shared resource half of the given permission
 // strings, and panics when they do not agree on one.
 //
 // A panic is right here and only here: this runs at package
@@ -1272,10 +1272,10 @@ func writeRBACGateError(w http.ResponseWriter, err *apperr.Error) {
 // permission constants this file gates on are not the ones it thinks they
 // are -- an unrecoverable startup condition, which is the one case the
 // backend coding standard's no-panic rule exempts.
-func mustResourceOf(permissions ...string) string {
+func MustResourceOf(permissions ...string) string {
 	var shared string
 	for _, permission := range permissions {
-		resource, _, ok := splitDemoPermission(permission)
+		resource, _, ok := SplitDemoPermission(permission)
 		if !ok {
 			panic(fmt.Sprintf("reference-app: %q is not a <resource>:<action> permission", permission))
 		}
@@ -1290,12 +1290,12 @@ func mustResourceOf(permissions ...string) string {
 	return shared
 }
 
-// splitDemoPermission divides "<resource>:<action>" the way rbac's own
+// SplitDemoPermission divides "<resource>:<action>" the way rbac's own
 // gate does. rbac keeps its splitter unexported -- a consumer composes
 // permissions with rbac.Permission and rarely takes one apart -- so this
 // example carries the four lines rather than asking for a public API it is
 // the only caller of.
-func splitDemoPermission(permission string) (resource, action string, ok bool) {
+func SplitDemoPermission(permission string) (resource, action string, ok bool) {
 	resource, action, found := strings.Cut(permission, ":")
 	if !found || resource == "" || action == "" {
 		return "", "", false
@@ -1303,7 +1303,7 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 	return resource, action, true
 }
 
-// demoSubjectResolver is what this example plugs into
+// DemoSubjectResolver is what this example plugs into
 // rbac.WithSubjectResolver: the seam through which the authenticating side
 // hands rbac an identity, without either module importing the other.
 //
@@ -1316,7 +1316,7 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 //     accepting a caller-supplied tenant_id is the single most common
 //     horizontal-privilege-escalation bug in multi-tenant systems, and
 //     forbidden here outright.
-//   - The USER comes from one of two sources. demoUserHeader comes first,
+//   - The USER comes from one of two sources. DemoUserHeader comes first,
 //     and that order is deliberate: the header is the affordance the
 //     pre-auth demo flows were built around (it names which seeded demo
 //     actor is acting -- its own comment spells out the trade-off), and
@@ -1333,24 +1333,24 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 // The header's precedence over the Principal is the remaining scaffold:
 // it is still an unauthenticated claim, and it still overrides a proven
 // identity when both are present. It is a demo affordance only, and it
-// goes away together with the header itself (see demoUserHeader).
+// goes away together with the header itself (see DemoUserHeader).
 //
-// demoUserHeader's own doc comment names the real kill switch for
+// DemoUserHeader's own doc comment names the real kill switch for
 // exactly that precedence problem (disableDemoUserHeaderEnv,
 // APP_DISABLE_DEMO_USER_HEADER): this function keeps the unconditional
-// header-first behavior -- demo_subject_test.go pins it -- while
-// production wiring goes through demoSubjectResolverFor below, which is
+// header-first behavior -- cmd/server/demo_subject_test.go pins it -- while
+// production wiring goes through DemoSubjectResolverFor below, which is
 // what actually honors the switch.
 //
 // It fails closed: no tenant, no user (from either source), or an
 // incomplete pair reports (Subject{}, false), and rbac's gate turns that
 // into a 403.
-func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
-	return demoResolveSubject(r, false)
+func DemoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
+	return DemoResolveSubject(r, false)
 }
 
-// demoResolveSubject is demoSubjectResolver's implementation, parameterized
-// by headerDisabled so the kill switch demoUserHeader's doc comment
+// DemoResolveSubject is DemoSubjectResolver's implementation, parameterized
+// by headerDisabled so the kill switch DemoUserHeader's doc comment
 // describes can turn the header off without touching the header-enabled
 // behavior at all. headerDisabled=false is the header-enabled body (the
 // header read first, the Principal read only when the header is absent);
@@ -1359,9 +1359,9 @@ func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 //
 // The TENANT half is untouched by headerDisabled either way -- it always
 // comes from the request context (tenancy.Middleware's resolution), never
-// from anything the caller controls, per demoSubjectResolver's own doc
+// from anything the caller controls, per DemoSubjectResolver's own doc
 // comment.
-func demoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, bool) {
+func DemoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, bool) {
 	tenantID, ok := pkgcore.TenantFromContext(r.Context())
 	if !ok || tenantID == "" {
 		return rbac.Subject{}, false
@@ -1369,7 +1369,7 @@ func demoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, boo
 
 	var userID string
 	if !headerDisabled {
-		userID = r.Header.Get(demoUserHeader)
+		userID = r.Header.Get(DemoUserHeader)
 	}
 	if userID == "" {
 		principal, ok := authn.PrincipalFromContext(r.Context())
@@ -1386,29 +1386,29 @@ func demoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, boo
 	return sub, true
 }
 
-// demoSubjectResolverFor returns the rbac.SubjectResolver production wiring
-// (guardIntegrationRoute, guardOrgRoute, guardModuleRoute's default branch)
+// DemoSubjectResolverFor returns the rbac.SubjectResolver production wiring
+// (guardIntegrationRoute, guardOrgRoute, GuardModuleRoute's default branch)
 // plugs into rbac.WithSubjectResolver, chosen by headerDisabled -- the value
-// buildServer threads from cfg.DisableDemoUserHeader, itself read from
+// BuildServer threads from cfg.DisableDemoUserHeader, itself read from
 // disableDemoUserHeaderEnv (APP_DISABLE_DEMO_USER_HEADER, server.go).
 //
-// headerDisabled=false (the default) returns demoSubjectResolver itself,
+// headerDisabled=false (the default) returns DemoSubjectResolver itself,
 // so every demo journey and test that depends on the header winning keeps
 // working unchanged. headerDisabled=true returns a resolver that never
 // reads
-// demoUserHeader at all -- the kill switch demoUserHeader's own doc comment
+// DemoUserHeader at all -- the kill switch DemoUserHeader's own doc comment
 // describes, for a deployment where a real, non-demo user might reach this
 // binary.
-func demoSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subject, bool) {
+func DemoSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subject, bool) {
 	if !headerDisabled {
-		return demoSubjectResolver
+		return DemoSubjectResolver
 	}
 	return func(r *http.Request) (rbac.Subject, bool) {
-		return demoResolveSubject(r, true)
+		return DemoResolveSubject(r, true)
 	}
 }
 
-// demoPermissionFor chooses the permission a request must hold, from the
+// DemoPermissionFor chooses the permission a request must hold, from the
 // resource its route is guarded by and its HTTP method.
 //
 // It depends on the ROUTE and nothing else -- never a header, a query
@@ -1417,22 +1417,22 @@ func demoSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subje
 // not a read method requires the write permission, which is deliberately
 // the strict direction: a method this example never thought about (PATCH,
 // an exotic verb) demands more authority rather than less.
-func demoPermissionFor(resource string) func(*http.Request) string {
+func DemoPermissionFor(resource string) func(*http.Request) string {
 	return func(r *http.Request) string {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead:
-			return rbac.Permission(resource, demoActionRead)
+			return rbac.Permission(resource, DemoActionRead)
 		default:
-			return rbac.Permission(resource, demoActionWrite)
+			return rbac.Permission(resource, DemoActionWrite)
 		}
 	}
 }
 
-// guardModuleRoute wraps one mounted module route in rbac's permission
+// GuardModuleRoute wraps one mounted module route in rbac's permission
 // gate, or returns it untouched when demoRouteGuards marks the path
-// public. A path the table does not name is an error, so buildServer fails
+// public. A path the table does not name is an error, so BuildServer fails
 // to start rather than serving it ungated.
-func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, orgDeps orgRouteGuardDeps, demoHeaderDisabled bool) (http.Handler, error) {
+func GuardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) (http.Handler, error) {
 	resource, declared := demoRouteGuards[path]
 	if !declared {
 		return nil, fmt.Errorf(
@@ -1449,7 +1449,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		// pki's own gate, not the generic action-selector branch below:
 		// the signing-key revoke must be evaluated under
 		// rbac.SystemDomain, a subject-domain shift no generic
-		// demoPermissionFor(resource) gate can express. See guardPkiRoute.
+		// DemoPermissionFor(resource) gate can express. See guardPkiRoute.
 		return guardPkiRoute(az, handler, demoHeaderDisabled), nil
 	}
 	if resource == integrationRouteSentinel {
@@ -1475,19 +1475,19 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		return guardOrgRoute(az, handler, orgDeps, demoHeaderDisabled), nil
 	}
 	// sharing and ai-gateway need their own action selector, not
-	// demoPermissionFor's generic read/write split -- see
+	// DemoPermissionFor's generic read/write split -- see
 	// sharingPermissionFor's and aiGatewayPermissionFor's own doc comments.
 	// pki, integration, billing and org never reach this branch: their
 	// sentinels' dispatch above already returned their own gates.
-	permissionFor := demoPermissionFor(resource)
+	permissionFor := DemoPermissionFor(resource)
 	switch path {
 	case sharingSharesRoutePath:
 		permissionFor = sharingPermissionFor
-	case aiGatewayRoutePath:
+	case AiGatewayRoutePath:
 		permissionFor = aiGatewayPermissionFor
 	}
 	return rbac.RequirePermissionFunc(az, permissionFor,
-		rbac.WithSubjectResolver(demoSubjectResolverFor(demoHeaderDisabled)),
+		rbac.WithSubjectResolver(DemoSubjectResolverFor(demoHeaderDisabled)),
 	)(handler), nil
 }
 
@@ -1501,7 +1501,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 // OWN tenant context -- roles and bindings are tenant data, and nothing
 // here reads or writes across a tenant boundary.
 //
-// The demo users seeded here are the fixed header ids of demoUserHeader,
+// The demo users seeded here are the fixed header ids of DemoUserHeader,
 // with no database row behind them -- which is exactly why they cannot
 // sign in, and why demo_users.go additionally registers real accounts
 // whose memberships and grants mirror this same model. A real deployment
@@ -1547,20 +1547,20 @@ func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]p
 			userID  string
 			roleKey string
 		}{
-			{userID: demoOwnerUserID, roleKey: rbac.BuiltinRoleOwner},
-			{userID: demoReaderUserID, roleKey: demoReaderRoleKey},
-			// demoAIGatewayTenantWriterUserID is granted in EVERY tenant,
-			// like demoReaderUserID: the two-tier gate this actor
+			{userID: DemoOwnerUserID, roleKey: rbac.BuiltinRoleOwner},
+			{userID: DemoReaderUserID, roleKey: demoReaderRoleKey},
+			// DemoAIGatewayTenantWriterUserID is granted in EVERY tenant,
+			// like DemoReaderUserID: the two-tier gate this actor
 			// demonstrates (tenant BYOK write allowed, platform write
 			// refused) is a property of its role's permission set, not of
 			// any one tenant.
-			{userID: demoAIGatewayTenantWriterUserID, roleKey: demoAIGatewayTenantWriterRoleKey},
+			{userID: DemoAIGatewayTenantWriterUserID, roleKey: demoAIGatewayTenantWriterRoleKey},
 		}
-		if tenantID == demoSingleTenantID {
+		if tenantID == DemoSingleTenantID {
 			grants = append(grants, struct {
 				userID  string
 				roleKey string
-			}{userID: demoSingleTenantUserID, roleKey: demoReaderRoleKey})
+			}{userID: DemoSingleTenantUserID, roleKey: demoReaderRoleKey})
 		}
 		for _, grant := range grants {
 			sub := rbac.Subject{TenantID: tenantID, UserID: grant.userID}
@@ -1603,11 +1603,11 @@ func seedDemoReaderRole(ctx context.Context, svc *rbac.Service) error {
 // The role carries exactly aigateway.PermissionRead and
 // aigateway.PermissionWrite -- the tenant-scoped half of the two-tier
 // gate -- and DELIBERATELY NOT aigateway.PermissionManagePlatform.
-// demoOwnerUserID (BuiltinRoleOwner) holds every declared permission, so it
+// DemoOwnerUserID (BuiltinRoleOwner) holds every declared permission, so it
 // cannot demonstrate the platform write being refused; this role is the
 // tenant-writer that can set its own tenant's BYOK credential over HTTP and
 // is refused the platform-wide write, which is the distinction the two
-// permissions exist to enforce (see demoAIGatewayTenantWriterUserID's own
+// permissions exist to enforce (see DemoAIGatewayTenantWriterUserID's own
 // comment and go/ai-gateway/module.go's doc comment on the two constants).
 func seedDemoAIGatewayTenantWriterRole(ctx context.Context, svc *rbac.Service) error {
 	_, err := svc.DefineRole(ctx, rbac.RoleDefinition{

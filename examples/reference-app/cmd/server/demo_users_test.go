@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -22,10 +24,10 @@ import (
 // accounts through authn's real register route, grants each its membership
 // and rbac role under the user id authn assigned, and those grants are then
 // reachable from a browser-shaped request -- a bearer token and no
-// demoUserHeader at all -- because demoSubjectResolver falls back to the
+// DemoUserHeader at all -- because DemoSubjectResolver falls back to the
 // verified Principal. The second test pins the restart half of the seed's
 // idempotence story: the memberships live in org's own memberships table
-// (authn's sign-in path reads them through sign_in_memberships.go), so a
+// (authn's sign-in path reads them through internal/app/sign_in_memberships.go), so a
 // second boot against the same database finds the accounts already
 // registered, re-asserts their grants under the ids authn assigned the
 // first time, and every sign-in that worked under boot one -- the demo
@@ -42,27 +44,27 @@ import (
 const demoSeedPassword = "demo users seed passphrase"
 
 // demoPlatformStaffSeedPassword is the test passphrase the suites that seed
-// the demo platform-staff account (demo_admin.go's seedDemoPlatformStaff)
+// the demo platform-staff account (internal/app/demo_admin.go's seedDemoPlatformStaff)
 // set its OWN config field to -- deliberately a DIFFERENT value from
 // demoSeedPassword, mirroring the runtime split between
 // APP_DEMO_USERS_PASSWORD and APP_DEMO_PLATFORM_STAFF_PASSWORD
-// (demo_admin.go). It must satisfy go/authn's password policy for the same
+// (internal/app/demo_admin.go). It must satisfy go/authn's password policy for the same
 // registration-through-the-real-route reason demoSeedPassword documents.
 const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
 
-// buildSeededUsersTestServer composes buildServer's real output the way
+// buildSeededUsersTestServer composes BuildServer's real output the way
 // buildTestServer does, with the demo-user seed switched on: the boot runs
 // seedDemoUsers, which the plain testConfig's empty password never does.
 // (config_public_endpoint_gates_test.go's own buildSeededTestServer seeds config values
 // instead; the two names keep the two different seeds apart.)
-func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server, serverConfig) {
+func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	cfg.DemoUsersPassword = password
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -175,7 +177,7 @@ func assertNoMembershipRefusal(t *testing.T, srv *httptest.Server, accessToken, 
 // TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal signs the
 // seeded accounts in and drives the notes gate with NO demo header at all:
 // the tenant comes from the access token's claim, the acting user from the
-// verified Principal demoSubjectResolver falls back to, and the decision
+// verified Principal DemoSubjectResolver falls back to, and the decision
 // falls against the grants the seed attached to the user id authn assigned
 // at registration. Each account stands in for one property: the owner for
 // full access, the reader for the gate closing on a real, correctly
@@ -186,7 +188,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	srv, _ := buildSeededUsersTestServer(t, demoSeedPassword)
 
 	// The seeded owner may write and read.
-	status, code, ownerToken := demoLogin(t, srv, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -208,7 +210,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	}()
 
 	// The seeded reader may list notes...
-	status, code, readerToken := demoLogin(t, srv, demoReaderEmail, demoSeedPassword, "tenant-acme")
+	status, code, readerToken := demoLogin(t, srv, app.DemoReaderEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -232,7 +234,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// proves the credentials the globex control refuses below are right
 	// and yields the bearer the login-history read after the control needs
 	// (history is the one place a refusal's real reason survives).
-	status, code, acmeOnlyToken := demoLogin(t, srv, demoAcmeOnlyEmail, demoSeedPassword, "tenant-acme")
+	status, code, acmeOnlyToken := demoLogin(t, srv, app.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded acme-only account in its own tenant: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -246,7 +248,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// not disclose that to an anonymous caller (the answer was deliberately
 	// unified: the specific reason is recorded in the login history, never
 	// the response).
-	status, code, _ = demoLogin(t, srv, demoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
+	status, code, _ = demoLogin(t, srv, app.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 401 %q",
 			status, code, "authn.invalid_credentials")
@@ -293,22 +295,22 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 	// Both demo seed variables are set, each to its OWN passphrase, exactly
 	// as an operator enabling the full demo would (the platform-staff
 	// account is seeded from APP_DEMO_PLATFORM_STAFF_PASSWORD alone, never
-	// from the demo users' variable -- demo_admin.go).
+	// from the demo users' variable -- internal/app/demo_admin.go).
 	boot := func() (*httptest.Server, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
 		cfg.DemoUsersPassword = demoSeedPassword
 		cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
-		handler, cleanup, _, err := buildServer(context.Background(), cfg)
+		handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 		if err != nil {
-			t.Fatalf("buildServer: %v", err)
+			t.Fatalf("BuildServer: %v", err)
 		}
 		return httptest.NewServer(handler), cleanup
 	}
 
 	// Boot one seeds every demo account and proves the seed works.
 	srv1, cleanup1 := boot()
-	status, code, ownerToken := demoLogin(t, srv1, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv1, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-one login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -341,7 +343,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		}
 	}()
 
-	status, code, ownerToken2 := demoLogin(t, srv2, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken2 := demoLogin(t, srv2, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the seeded owner: status = %d, code = %q, want %d "+
 			"(a demo account's org membership row must survive a restart)",
@@ -356,12 +358,12 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		}
 	}()
 
-	status, code, _ = demoLogin(t, srv2, demoReaderEmail, demoSeedPassword, "tenant-acme")
+	status, code, _ = demoLogin(t, srv2, app.DemoReaderEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
 
-	status, code, _ = demoLogin(t, srv2, demoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, _ = demoLogin(t, srv2, app.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the platform-staff account: status = %d, code = %q, want %d "+
 			"(the staff account's SystemDomain membership must survive a restart)",
@@ -370,7 +372,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 }
 
 // TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly pins that
-// registerDemoUser distinguishes authn's register
+// RegisterDemoUser distinguishes authn's register
 // rate-limit answer from the other fatal answers honestly -- naming the
 // public per-IP register budget (limitRegisterByIP,
 // go/authn/ratelimit.go) and its remedy -- rather than folding it into the
@@ -378,15 +380,15 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 // misconfiguration. The budget here is one boot's own in-memory KVStore:
 // the test exhausts the register route's no-client-address bucket with 10
 // in-process register POSTs (the identical in-process, recorder-based
-// shape registerDemoUser itself uses, so every POST lands on the same
-// bucket the seed's own POSTs land on), then drives registerDemoUser
+// shape RegisterDemoUser itself uses, so every POST lands on the same
+// bucket the seed's own POSTs land on), then drives RegisterDemoUser
 // itself and asserts the refusal is named as the rate limit -- and that an
 // ordinary policy refusal (the control) never carries that name.
 func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T) {
 	cfg := testConfig(t)
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -397,7 +399,7 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 	ctx := context.Background()
 
 	// postRegister posts one register payload in-process, exactly the
-	// shape registerDemoUser uses (no client address, so the POST debits
+	// shape RegisterDemoUser uses (no client address, so the POST debits
 	// the same no-address bucket the seed's own POSTs debit), and returns
 	// the status.
 	postRegister := func(email, password string) int {
@@ -405,7 +407,7 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 		if err != nil {
 			t.Fatalf("marshal register body: %v", err)
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, authnAPIPath+"/register", bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, app.AuthnAPIPath+"/register", bytes.NewReader(payload))
 		if err != nil {
 			t.Fatalf("build register request: %v", err)
 		}
@@ -418,9 +420,9 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 	// Control first, while the budget still has room: a policy refusal (a
 	// password too short for authn's policy) must keep flowing through the
 	// generic classification -- never mistaken for the rate limit.
-	_, _, policyErr := registerDemoUser(ctx, handler, "policy-refused@example.com", "x")
+	_, _, policyErr := app.RegisterDemoUser(ctx, handler, "policy-refused@example.com", "x")
 	if policyErr == nil {
-		t.Fatal("registerDemoUser with a policy-refused password: want error, got nil")
+		t.Fatal("RegisterDemoUser with a policy-refused password: want error, got nil")
 	}
 	if strings.Contains(policyErr.Error(), "rate limit") {
 		t.Fatalf("policy-refusal error names the rate limit: %v", policyErr)
@@ -435,11 +437,11 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 	}
 
 	// The 11th register POST (10 already debited) must answer 429, and
-	// registerDemoUser must name the answer as the public register rate
+	// RegisterDemoUser must name the answer as the public register rate
 	// limit with its remedy, not as the generic fatal refusal.
-	_, _, rateErr := registerDemoUser(ctx, handler, "rate-limited@example.com", demoSeedPassword)
+	_, _, rateErr := app.RegisterDemoUser(ctx, handler, "rate-limited@example.com", demoSeedPassword)
 	if rateErr == nil {
-		t.Fatal("registerDemoUser with an exhausted register budget: want error, got nil")
+		t.Fatal("RegisterDemoUser with an exhausted register budget: want error, got nil")
 	}
 	for _, want := range []string{"public register rate limit", authn.ErrRateLimited.Code, "retry after the sliding window"} {
 		if !strings.Contains(rateErr.Error(), want) {

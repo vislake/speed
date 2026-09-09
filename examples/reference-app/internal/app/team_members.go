@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/json"
@@ -78,12 +78,16 @@ import (
 // access (src/team-api.ts) and the demo server that stands in for this
 // whole composed stack in web suites (test-utils/demo-server.ts) -- the
 // same parity relationship clinic_name.go and tenant-name.ts hold, kept
-// honest by the flow test in team_members_test.go that drives this route
+// honest by the flow test in cmd/server/team_members_test.go that drives this route
 // through the real composed stack and by the web suites that drive the
 // surface over it.
-const teamMembersPath = "/api/reference-app/team-members"
 
-// teamMemberRow is one roster row's wire shape: the membership facts
+// TeamMembersPath is the URL of the membership-roster answer this file's
+// handler serves (the file's own doc comment above describes the full
+// surface).
+const TeamMembersPath = "/api/reference-app/team-members"
+
+// TeamMemberRow is one roster row's wire shape: the membership facts
 // org's own OrgMembership answer carries (the frontend's status and
 // joined columns render from them, and userId stays the row's identity
 // key -- the "You" naming of one's own row compares against it
@@ -92,7 +96,7 @@ const teamMembersPath = "/api/reference-app/team-members"
 // empty string when the account has none; the web renders displayName
 // when non-empty, email when only that exists, and its fallback label
 // when neither does.
-type teamMemberRow struct {
+type TeamMemberRow struct {
 	MembershipID string    `json:"membershipId"`
 	UserID       string    `json:"userId"`
 	NodeID       string    `json:"nodeId"`
@@ -102,54 +106,54 @@ type teamMemberRow struct {
 	Email        string    `json:"email"`
 }
 
-// teamMembersResponse is the 200 answer's wire shape.
-type teamMembersResponse struct {
-	Members []teamMemberRow `json:"members"`
+// TeamMembersResponse is the 200 answer's wire shape.
+type TeamMembersResponse struct {
+	Members []TeamMemberRow `json:"members"`
 }
 
 // teamMemberErrInternal folds an error that is not itself an *apperr.Error
-// into a stable code, the same fallback writeClinicNameError's own
+// into a stable code, the same fallback WriteClinicNameError's own
 // reference_app.internal_error applies -- a caller never sees raw Go error
 // text either way.
 var teamMemberErrInternal = apperr.Internal("reference_app.internal_error")
 
-// teamMemberError is the answer's failure shape, the same code-plus-params
+// TeamMemberError is the answer's failure shape, the same code-plus-params
 // envelope every module's generated handlers write (clinic_name.go's own
-// clinicNameError is the in-file precedent).
-type teamMemberError struct {
+// ClinicNameError is the in-file precedent).
+type TeamMemberError struct {
 	Code   string         `json:"code"`
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// writeTeamMemberError writes err as the envelope answer: an *apperr.Error
+// WriteTeamMemberError writes err as the envelope answer: an *apperr.Error
 // keeps its own code and status (org's coded storage errors pass through
 // as themselves, the same codes org's own routes answer), anything else
 // collapses to the internal fallback above.
-func writeTeamMemberError(w http.ResponseWriter, err error) {
+func WriteTeamMemberError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
 	if !ok {
 		appErr = teamMemberErrInternal
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(teamMemberError{Code: appErr.Code, Params: appErr.Params})
+	_ = json.NewEncoder(w).Encode(TeamMemberError{Code: appErr.Code, Params: appErr.Params})
 }
 
-// writeTeamMembersJSON writes the 200 answer. A nil slice answers the
+// WriteTeamMembersJSON writes the 200 answer. A nil slice answers the
 // empty array, never a null -- the wire shape org's own list answers
 // promise, which a roster reader treats as "no members", the same
 // convention the frontend's `?? []` relies on.
-func writeTeamMembersJSON(w http.ResponseWriter, members []teamMemberRow) {
+func WriteTeamMembersJSON(w http.ResponseWriter, members []TeamMemberRow) {
 	if members == nil {
-		members = []teamMemberRow{}
+		members = []TeamMemberRow{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(teamMembersResponse{Members: members})
+	_ = json.NewEncoder(w).Encode(TeamMembersResponse{Members: members})
 }
 
 // teamMembersDeps bundles the org-module and authn state serveTeamMembers
-// composes, mirroring orgRouteGuardDeps' own bundling shape (demo_subject.go):
+// composes, mirroring OrgRouteGuardDeps' own bundling shape (demo_subject.go):
 // one struct so wireTeamMembers' signature grows by one field rather than
 // by one parameter per service this composition reaches into.
 type teamMembersDeps struct {
@@ -166,12 +170,12 @@ type teamMembersDeps struct {
 	// accessor clinicRootNameFor reads through (self_service.go).
 	users *authn.UserRepository
 	// headerDisabled carries cfg.DisableDemoUserHeader into the subject
-	// resolver, exactly as guardModuleRoute threads it (demo_subject.go):
+	// resolver, exactly as GuardModuleRoute threads it (demo_subject.go):
 	// the demo header, when enabled, names who acts for the gate.
 	headerDisabled bool
 }
 
-// teamMembersPermissionFor selects the permission a teamMembersPath
+// teamMembersPermissionFor selects the permission a TeamMembersPath
 // request must hold: org's own read permission, the same permission the
 // org module route the web's roster reads gates its node-less
 // member listing on (orgPermissionFor, demo_subject.go). Only reads
@@ -195,7 +199,7 @@ func teamMembersPermissionFor(r *http.Request) string {
 	}
 }
 
-// wireTeamMembers mounts teamMembersPath on mux, behind the rbac gate
+// wireTeamMembers mounts TeamMembersPath on mux, behind the rbac gate
 // teamMembersPermissionFor selects -- rbac.RequirePermissionFunc with the
 // same demo subject resolver every module route uses, so a caller without
 // org:read is refused with the exact 403 rbac.permission_denied envelope
@@ -208,11 +212,11 @@ func teamMembersPermissionFor(r *http.Request) string {
 // or body.
 func wireTeamMembers(mux *http.ServeMux, deps teamMembersDeps) {
 	gated := rbac.RequirePermissionFunc(deps.az, teamMembersPermissionFor,
-		rbac.WithSubjectResolver(demoSubjectResolverFor(deps.headerDisabled)),
+		rbac.WithSubjectResolver(DemoSubjectResolverFor(deps.headerDisabled)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", http.MethodGet)
-			writeTeamMemberError(w, apperr.Invalid("reference_app.method_not_allowed"))
+			WriteTeamMemberError(w, apperr.Invalid("reference_app.method_not_allowed"))
 			return
 		}
 		// HEAD rides the GET answer exactly as every GET-only module
@@ -221,10 +225,10 @@ func wireTeamMembers(mux *http.ServeMux, deps teamMembersDeps) {
 		// this read needs.
 		serveTeamMembers(w, r, deps)
 	}))
-	mux.Handle(teamMembersPath, gated)
+	mux.Handle(TeamMembersPath, gated)
 }
 
-// serveTeamMembers answers teamMembersPath.
+// serveTeamMembers answers TeamMembersPath.
 //
 // The roster read mirrors org.Handler.OrgListMembers' own tenant-wide
 // shape exactly: the tenant's root node resolves first and the roster is
@@ -261,7 +265,7 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 		writeRBACGateError(w, rbac.ErrPermissionDenied)
 		return
 	}
-	resource, action, ok := splitDemoPermission(org.PermissionRead)
+	resource, action, ok := SplitDemoPermission(org.PermissionRead)
 	if !ok {
 		writeRBACGateError(w, rbac.ErrPermissionDenied.WithParam("permission", org.PermissionRead))
 		return
@@ -282,20 +286,20 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 	case orgCodeIs(err, org.ErrNodeNotFound.Code):
 		// A tenant with no org tree has no members to name: the empty
 		// roster, exactly as org's own handler answers it.
-		writeTeamMembersJSON(w, nil)
+		WriteTeamMembersJSON(w, nil)
 		return
 	default:
-		writeTeamMemberError(w, err)
+		WriteTeamMemberError(w, err)
 		return
 	}
 
 	members, err := deps.members.List(ctx, root.ID)
 	if err != nil {
-		writeTeamMemberError(w, err)
+		WriteTeamMemberError(w, err)
 		return
 	}
 
-	rows := make([]teamMemberRow, 0, len(members))
+	rows := make([]TeamMemberRow, 0, len(members))
 	for i := range members {
 		member := &members[i]
 		displayName, email := "", ""
@@ -313,7 +317,7 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 			displayName = strings.TrimSpace(user.DisplayName)
 			email = user.Email
 		}
-		rows = append(rows, teamMemberRow{
+		rows = append(rows, TeamMemberRow{
 			MembershipID: member.ID,
 			UserID:       member.UserID,
 			NodeID:       member.NodeID,
@@ -323,5 +327,5 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 			Email:        email,
 		})
 	}
-	writeTeamMembersJSON(w, rows)
+	WriteTeamMembersJSON(w, rows)
 }

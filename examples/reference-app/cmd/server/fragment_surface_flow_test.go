@@ -12,8 +12,8 @@ package main
 // source --
 // with the case list and detail answered by the cases fragment along the
 // way. Every leg goes through the handlers that implement the fragments'
-// generated ServerInterfaces (cmd/server/cases.go and cmd/server/
-// smilesim.go), so a request or response shape that drifted from the
+// generated ServerInterfaces (internal/app/cases.go and cmd/server/
+// internal/app/smilesim.go), so a request or response shape that drifted from the
 // spec would fail here even where the compile-time assertions cannot
 // see it (JSON-level drift is a runtime property).
 //
@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // TestFragmentSurface_CaseToSimulation_Journey is the end-to-end
@@ -53,7 +55,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	// read it back from the clinic-wide list (cases_listCases) and from
 	// the detail route (cases_getCase) -- the three cases operations the
 	// case web UI will call.
-	created := createCaseAs(t, srv, token, demoOwnerUserID, caseCreateBody{
+	created := createCaseAs(t, srv, token, app.DemoOwnerUserID, caseCreateBody{
 		PatientName:    "Fragment Journey Patient",
 		PatientRef:     "JRN-001",
 		PhotoObjectIDs: []string{completedPhoto.ID},
@@ -65,7 +67,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 		t.Fatalf("created case photos = %+v, want exactly the uploaded photo %q", created.Photos, completedPhoto.ID)
 	}
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, demoOwnerUserID, nil)
+	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, app.DemoOwnerUserID, nil)
 	listBody, err := io.ReadAll(listResp.Body)
 	listResp.Body.Close()
 	if err != nil {
@@ -91,7 +93,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 		t.Fatalf("created case %q missing from the caller's case list: %+v", created.ID, listOut.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, token, demoOwnerUserID, nil)
+	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, token, app.DemoOwnerUserID, nil)
 	defer detailResp.Body.Close()
 	detail, detailBody := decodeCasesResponse(t, detailResp)
 	if detailResp.StatusCode != http.StatusOK {

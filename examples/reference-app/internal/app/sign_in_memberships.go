@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -21,7 +21,7 @@ import (
 // (pkgcore.RegisterSystemPurpose is idempotent), and the grant itself is
 // taken through tenancy.WithSystemContext, whose
 // tenancy.system_context.entered event is the audit trail every use of
-// the escape hatch must carry. buildServer registers the purpose at the
+// the escape hatch must carry. BuildServer registers the purpose at the
 // same point it attaches the store's org-backed half.
 const signInTenantEnumerationPurpose pkgcore.SystemPurpose = "reference-app.sign_in_tenant_enumeration"
 
@@ -37,7 +37,7 @@ func orgCodeIs(err error, code string) bool {
 }
 
 // signInMemberships is the authn.MembershipReader this app wires authn's
-// WithMembershipReader seam to (buildServer), and therefore the answer to
+// WithMembershipReader seam to (BuildServer), and therefore the answer to
 // the two questions authn must ask about an account before it may act in a
 // tenant (go/authn/service.go's own MembershipReader doc comment): "is this
 // (user, tenant) pair an active membership" and "which tenants does this
@@ -81,7 +81,7 @@ func orgCodeIs(err error, code string) bool {
 // registers and grants (demo_admin.go) -- and that seed re-asserts the
 // grant on every boot, so the staff account's sign-in survives a restart
 // like everyone else's. Everything else ever granted here is test-only
-// shortcut (server_test.go's registerAndAuthenticate and friends), which
+// shortcut (cmd/server/server_test.go's registerAndAuthenticate and friends), which
 // is also what makes a customer-tenant entry in this roster mean: a test
 // rig has declared "this account may act in this tenant" without going
 // through org, and authn honors it only because org itself has no row for
@@ -109,9 +109,9 @@ type signInMemberships struct {
 	granted map[string][]pkgcore.TenantID
 
 	// org is the module service customer-tenant questions are asked of.
-	// Nil until buildServer calls attach -- a signInMemberships built
+	// Nil until BuildServer calls attach -- a signInMemberships built
 	// before that (testConfig's constructor) simply answers from granted
-	// alone, which is fine because buildServer always attaches before any
+	// alone, which is fine because BuildServer always attaches before any
 	// request can reach authn.
 	org *org.MemberService
 	// bus is the event bus the audited system-context grant for the
@@ -121,15 +121,15 @@ type signInMemberships struct {
 	bus pkgcore.EventBus
 }
 
-// newSignInMemberships returns an empty membership store.
-func newSignInMemberships() *signInMemberships {
+// NewSignInMemberships returns an empty membership store.
+func NewSignInMemberships() *signInMemberships {
 	return &signInMemberships{granted: make(map[string][]pkgcore.TenantID)}
 }
 
 // attach binds the org-backed half of the store: the MemberService whose
 // rows answer customer-tenant questions, and the bus every audited
 // system-context grant for the enumeration question is published on.
-// buildServer calls attach once, after Bootstrap has composed the module
+// BuildServer calls attach once, after Bootstrap has composed the module
 // set (the bus exists only then) and before any request -- or demo seed
 // sign-in -- can reach authn; until then the store answers from granted
 // alone.

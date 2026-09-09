@@ -7,7 +7,7 @@
 // the shape the patient page renders side by side), an unauthenticated
 // visitor (no token, no session, no demo header) opens that link and
 // receives both resources' real bytes through go/sharing's public access
-// route (cmd/server/sharing_resolver.go resolving each share's
+// route (internal/app/sharing_resolver.go resolving each share's
 // ResourceRef -- a go/storage object id -- to go/storage content), and a
 // share that has been revoked or has expired refuses the same visitor
 // honestly: the 404 sharing.not_accessible envelope, never bytes and
@@ -43,6 +43,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/sharing"
 )
@@ -116,7 +118,7 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 				t.Fatalf("marshal create body: %v", err)
 			}
 			createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-				token, demoOwnerUserID, "application/json", bytes.NewReader(body))
+				token, app.DemoOwnerUserID, "application/json", bytes.NewReader(body))
 			var share testCreateShareResponse
 			decodeSharingBody(t, createResp, http.StatusCreated, "create "+name+" simulation share", &share)
 			if share.Token == "" || share.Share.ID == "" {
@@ -159,7 +161,7 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 	// never the pre-sanitization upload bytes.
 	storageBefore := storageRequest(t, srv, http.MethodGet,
 		"/api/v1/storage/objects/"+photo.ObjectID+"/content",
-		token, demoOwnerUserID, "", nil)
+		token, app.DemoOwnerUserID, "", nil)
 	storageBeforeBytes, readErr := io.ReadAll(storageBefore.Body)
 	storageBefore.Body.Close()
 	if readErr != nil {
@@ -206,7 +208,7 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 	// and never a hint of which refusal reason applied.
 	revoke := func(shareID string) {
 		revokeResp := storageRequest(t, srv, http.MethodPost,
-			sharing.PathShares+"/"+shareID+"/revoke", token, demoOwnerUserID, "", nil)
+			sharing.PathShares+"/"+shareID+"/revoke", token, app.DemoOwnerUserID, "", nil)
 		decodeSharingBody(t, revokeResp, http.StatusOK, "revoke simulation share", &testSharingShare{})
 	}
 	for _, name := range []string{"before", "after"} {
@@ -259,7 +261,7 @@ func TestShareJourney_ExpiredShareRefusesHonestly(t *testing.T) {
 		t.Fatalf("marshal create body: %v", err)
 	}
 	createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-		acmeToken, demoOwnerUserID, "application/json", bytes.NewReader(createBody))
+		acmeToken, app.DemoOwnerUserID, "application/json", bytes.NewReader(createBody))
 	var created testCreateShareResponse
 	decodeSharingBody(t, createResp, http.StatusCreated, "create short-lived share", &created)
 

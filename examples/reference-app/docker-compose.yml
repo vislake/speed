@@ -16,7 +16,7 @@
 # service and layers extra environment onto it, composing real
 # implementations for the EventBus/KVStore/ObjectStore/Mailer seams while
 # staying on the identical SQLite file this base file already wires (this
-# app's own cmd/server/server.go hard-codes the SQLite dialect -- see that
+# app's own internal/app/server.go hard-codes the SQLite dialect -- see that
 # file's own comments on the deviation -- so no compose profile here
 # attempts a second dialect). Run both layered:
 #
@@ -80,7 +80,7 @@ services:
       APP_DEMO_PLATFORM_STAFF_PASSWORD: local-admin-demo-password
       #
       # APP_CONFIG_KEY / APP_ORG_INDEX_KEY / APP_NOTIFICATION_INDEX_KEY
-      # are DELIBERATELY UNSET here: cmd/server/server.go's own configFromEnv
+      # are DELIBERATELY UNSET here: internal/app/server.go's own configFromEnv
       # falls back to devConfigKey/devOrgIndexKey/devNotificationIndexKey --
       # fixed, non-secret, already-committed-and-documented byte sequences
       # meant for exactly this (zero-setup local development and demos),

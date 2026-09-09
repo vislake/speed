@@ -1,7 +1,7 @@
 // The reference app's demo glue for go/integration's outbound-
 // webhook DELIVERY surface: the EventMapping that turns org's real
 // "org.member.joined" domain event into a versioned public webhook payload.
-// webhook_flow_test.go drives delivery through the composed HTTP stack
+// cmd/server/webhook_flow_test.go drives delivery through the composed HTTP stack
 // against a real receiver process this app's own test controls.
 //
 // This file keeps the EventMapping machinery only -- the subscription-
@@ -9,7 +9,8 @@
 // fragment (go/integration/api/openapi.yaml, mounted under
 // /api/v1/integration) -- because no spec fragment can replace the mapping:
 // it is host-side code closing a Transform over org's own payload shape.
-package main
+
+package app
 
 import (
 	"context"

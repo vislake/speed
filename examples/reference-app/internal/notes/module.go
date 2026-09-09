@@ -42,7 +42,7 @@ const (
 	// the permission catalog go/rbac freezes after Bootstrap, and cmd/server
 	// wraps this module's route in rbac's permission gate: a GET of
 	// /api/v1/notes requires PermissionRead and anything that writes
-	// requires PermissionWrite (see cmd/server/demo_subject.go, which
+	// requires PermissionWrite (see internal/app/demo_subject.go, which
 	// derives the resource half from these very constants rather than
 	// retyping it).
 	//

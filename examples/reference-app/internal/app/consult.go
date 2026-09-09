@@ -1,6 +1,6 @@
 // The reference app's demo glue for go/ai-gateway: the one hand-written
 // route that demonstrates the module's Gateway.Chat end to end.
-// consult_flow_test.go drives it through the composed HTTP stack against an
+// cmd/server/consult_flow_test.go drives it through the composed HTTP stack against an
 // httptest.Server standing in for the OpenAI-compatible endpoint.
 //
 // ai-gateway itself ships no HTTP surface for chat, so there is no spec
@@ -10,7 +10,8 @@
 // it is deliberately outside demoRouteGuards' table too: it is mounted
 // directly on mux rather than through reg.Routes/mountModuleRoutes, so it
 // never needs (and cannot silently skip) an entry there.
-package main
+
+package app
 
 import (
 	"encoding/json"
@@ -21,11 +22,11 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 )
 
-// consultSuggestPath is the consult module's one hand-written route: POST
+// ConsultSuggestPath is the consult module's one hand-written route: POST
 // it with a JSON body naming an existing note of the caller's own tenant
 // ({"note_id": "..."}), and the response carries a short AI-generated
 // consultation-suggestion summary of that note's text.
-const consultSuggestPath = "/api/v1/consult/suggest"
+const ConsultSuggestPath = "/api/v1/consult/suggest"
 
 // consultErrInternal folds any error consult.Service.Suggest returns that
 // is not itself an *apperr.Error into a stable code, the same fallback
@@ -33,7 +34,7 @@ const consultSuggestPath = "/api/v1/consult/suggest"
 // never sees raw Go error text either way.
 var consultErrInternal = apperr.Internal("consult.internal_error")
 
-// wireConsult mounts consultSuggestPath on mux, backed by svc.
+// wireConsult mounts ConsultSuggestPath on mux, backed by svc.
 //
 // The route takes no subject and checks no permission of its own -- the
 // identical choice demo_notification.go's own demo patient-message route
@@ -48,7 +49,7 @@ var consultErrInternal = apperr.Internal("consult.internal_error")
 // permission model requires; the Suggest call itself is all ai-gateway
 // asks of it.
 func wireConsult(mux *http.ServeMux, svc *consult.Service) {
-	mux.HandleFunc(http.MethodPost+" "+consultSuggestPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(http.MethodPost+" "+ConsultSuggestPath, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			NoteID string `json:"note_id"`
 		}

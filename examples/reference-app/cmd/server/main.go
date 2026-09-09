@@ -13,6 +13,8 @@ import (
 	"time"
 
 	obs "github.com/vislake/speed/go/observability"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // healthcheckArg is the first os.Args element that diverts main into
@@ -34,9 +36,9 @@ const healthcheckArg = "healthcheck"
 const healthcheckTimeout = 3 * time.Second
 
 // observabilityOptions assembles the options run passes to obs.Init from
-// the bootstrap configuration configFromEnv already resolved: the service
+// the bootstrap configuration ConfigFromEnv already resolved: the service
 // name always, plus obs.WithOTLPEndpoint exactly when cfg.OTLPEndpoint is
-// non-empty (see otlpEndpointEnv's own doc comment in server.go for what
+// non-empty (see otlpEndpointEnv's own doc comment in internal/app/server.go for what
 // the variable changes). The endpoint option is conditional rather than
 // unconditional because WithOTLPEndpoint("") and its absence are
 // deliberately different in meaning: supplying an explicitly empty option
@@ -46,9 +48,9 @@ const healthcheckTimeout = 3 * time.Second
 // separate, package-level function rather than inline in run so
 // main_test.go can pin the conditional without invoking Init (Init with a
 // non-empty endpoint builds real OTLP exporters -- the exporter/otlp
-// blank import in server.go registers the factory -- which is behaviour
+// blank import in internal/app/server.go registers the factory -- which is behaviour
 // for a real boot, not a unit test).
-func observabilityOptions(cfg serverConfig) []obs.Option {
+func observabilityOptions(cfg app.ServerConfig) []obs.Option {
 	opts := []obs.Option{obs.WithServiceName("reference-app")}
 	if cfg.OTLPEndpoint != "" {
 		opts = append(opts, obs.WithOTLPEndpoint(cfg.OTLPEndpoint))
@@ -58,7 +60,7 @@ func observabilityOptions(cfg serverConfig) []obs.Option {
 
 // main is deliberately thin process-lifecycle glue (signal handling,
 // http.Server start/stop) with two independently testable seams beyond
-// buildServer (server.go, covered by server_test.go): observabilityOptions
+// BuildServer (internal/app/server.go, covered by server_test.go): observabilityOptions
 // above and runHealthcheck below, both covered directly by main_test.go.
 // This file's own end-to-end behavior is additionally proven by literally
 // running it and curling it (see this example's README.md), which is why
@@ -80,7 +82,8 @@ func main() {
 	// logger gets constructed by hand (see WithLogger's own doc comment in
 	// go/observability/logger.go) -- process startup, before any request
 	// or trace context exists for obs.FromContext to derive one from.
-	// Every log call below and throughout run and server.go goes through
+	// Every log call below, throughout run and throughout the app
+	// package's assembly (internal/app/server.go) goes through
 	// obs.FromContext(ctx) rather than touching this logger (or
 	// slog.Default()) directly, so it, and every trace_id/tenant_id
 	// FromContext adds automatically once a request is in flight, all
@@ -101,7 +104,7 @@ func main() {
 		// pkgcore.ConfigItem{Key: ...} -> pkgcore.validateConfigItem, whose
 		// own doc comment guarantees it names only the Key, never a
 		// Sensitive item's value, in any error it returns -> up through
-		// Module.Register/Kernel.Bootstrap/buildServer/run to here. CodeQL's
+		// Module.Register/Kernel.Bootstrap/BuildServer/run to here. CodeQL's
 		// heuristic matched the identifier "secretKey" as if it held a
 		// secret; it holds a schema key name. Separately, obs.FromContext's
 		// logger passes every attribute through go/observability's
@@ -131,12 +134,12 @@ func run(baseCtx context.Context) error {
 	ctx, stop := signal.NotifyContext(baseCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := configFromEnv()
+	cfg, err := app.ConfigFromEnv()
 	if err != nil {
 		return fmt.Errorf("reference-app: load configuration: %w", err)
 	}
 
-	// buildServer performs the whole composition -- the Kernel's
+	// BuildServer performs the whole composition -- the Kernel's
 	// deployment mode, the optional Redis-backed EventBus APP_REDIS_ADDR
 	// requests, every other seam from the Preset -- and Bootstrap's
 	// capability validation of that composition runs inside it, so it is
@@ -145,19 +148,19 @@ func run(baseCtx context.Context) error {
 	// and the shortfall. Network-class faults are the one thing assembly
 	// cannot catch -- RedisEventBus starts no goroutine and touches no
 	// network until the first Subscribe, so an unreachable APP_REDIS_ADDR
-	// passes Bootstrap and fails loudly at first use instead. buildServer
+	// passes Bootstrap and fails loudly at first use instead. BuildServer
 	// must run before obs.Init because Init takes no deployment mode and
 	// therefore refuses none: this ordering is the only place a bad
 	// composition fails before telemetry starts, and its error is the
 	// accurate one. Since
 	// nothing starts listening until after both calls below succeed,
 	// deferring obs.Init to second costs nothing.
-	// buildServer's fourth return value, the wired *compliance.Module, is
+	// BuildServer's fourth return value, the wired *compliance.Module, is
 	// the reach compliance_flow_test.go needs into the retention/erasure/
 	// export services; the real process has nothing to do with it -- the
 	// compliance module's own registered jobs handler drives its sweep on
 	// the queue this app starts below.
-	handler, cleanup, _, err := buildServer(ctx, cfg)
+	handler, cleanup, _, err := app.BuildServer(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -172,9 +175,9 @@ func run(baseCtx context.Context) error {
 	// exits -- the same reason srv.Shutdown below is given a bounded
 	// context instead of just letting the process die. The option set is
 	// observabilityOptions(cfg): an APP_OTLP_ENDPOINT resolved by
-	// configFromEnv is handed over through obs.WithOTLPEndpoint, the
+	// ConfigFromEnv is handed over through obs.WithOTLPEndpoint, the
 	// APP_REDIS_ADDR-shaped wiring that decides between the OTLP exporters
-	// (exporter/otlp blank-imported in server.go) and the local ones.
+	// (exporter/otlp blank-imported in internal/app/server.go) and the local ones.
 	obsShutdown, err := obs.Init(ctx, observabilityOptions(cfg)...)
 	if err != nil {
 		return fmt.Errorf("reference-app: init observability: %w", err)
@@ -185,10 +188,10 @@ func run(baseCtx context.Context) error {
 		}
 	}()
 
-	// obs.Middleware wraps OUTSIDE buildServer's own authn+tenancy
+	// obs.Middleware wraps OUTSIDE BuildServer's own authn+tenancy
 	// middleware wiring.
 	//
-	// The chain buildServer composes deliberately runs authn.Middleware
+	// The chain BuildServer composes deliberately runs authn.Middleware
 	// before tenancy.Middleware (see its own doc comment on the handler
 	// chain for why: a tenancy.Resolver cannot carry a verified JWT's
 	// claims to anything downstream, so the reverse order would force
@@ -208,7 +211,7 @@ func run(baseCtx context.Context) error {
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           instrumented,
-		ReadHeaderTimeout: readHeaderTimeout,
+		ReadHeaderTimeout: app.ReadHeaderTimeout,
 		// BaseContext hands baseCtx -- not ctx -- as the ancestor of every
 		// incoming request's context, so obs.FromContext(r.Context())
 		// inside a handler finds the JSON logger main attached via
@@ -241,7 +244,7 @@ func run(baseCtx context.Context) error {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), app.ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("reference-app: graceful shutdown: %w", err)
@@ -250,20 +253,20 @@ func run(baseCtx context.Context) error {
 	return nil
 }
 
-// runHealthcheck probes this same server's own healthzPath over loopback and
+// runHealthcheck probes this same server's own HealthzPath over loopback and
 // reports whether it answered http.StatusOK -- see healthcheckArg's own doc
 // comment for why this exists and who calls it (this example's Dockerfile's
 // HEALTHCHECK, exec-form, re-invoking this binary with that argument rather
 // than shelling out to a probe tool the distroless/static runtime image does
-// not have). port mirrors configFromEnv's own PORT handling (empty falls
-// back to defaultPort) rather than calling configFromEnv itself, since a
+// not have). port mirrors ConfigFromEnv's own PORT handling (empty falls
+// back to DefaultPort) rather than calling ConfigFromEnv itself, since a
 // healthcheck invocation must never pay for -- or fail on -- the full
 // configuration load (the master keys, the optional Redis/S3/SMTP
-// composition) buildServer's own caller needs; the port is the one fact
+// composition) BuildServer's own caller needs; the port is the one fact
 // this probe actually requires, and the running server already bound it.
 func runHealthcheck(ctx context.Context, port string) error {
 	if port == "" {
-		port = defaultPort
+		port = app.DefaultPort
 	}
 	// #nosec G704 -- gosec's taint analysis flags this as SSRF because port
 	// is a parameter, but the host part of the URL is the literal constant
@@ -271,19 +274,19 @@ func runHealthcheck(ctx context.Context, port string) error {
 	// port only ever widens which LOCAL port this same process's own
 	// listener is probed on. Its value comes from the PORT environment
 	// variable an operator (or this example's Dockerfile ENV) sets, exactly
-	// like configFromEnv's own identical PORT handling for the listener
+	// like ConfigFromEnv's own identical PORT handling for the listener
 	// itself, never from a request this binary serves.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+healthzPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+app.HealthzPath, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- see the request construction above
 	if err != nil {
-		return fmt.Errorf("request %s: %w", healthzPath, err)
+		return fmt.Errorf("request %s: %w", app.HealthzPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %d, want %d", healthzPath, resp.StatusCode, http.StatusOK)
+		return fmt.Errorf("%s answered %d, want %d", app.HealthzPath, resp.StatusCode, http.StatusOK)
 	}
 	return nil
 }

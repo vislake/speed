@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -18,20 +18,20 @@ import (
 // startup -- the real, first-consumer proof of go/admin's console
 // surface.
 
-// demoPlatformStaffEmail is the real account this app registers to
-// demonstrate the admin console end to end. Unlike demoOwnerUserID and
+// DemoPlatformStaffEmail is the real account this app registers to
+// demonstrate the admin console end to end. Unlike DemoOwnerUserID and
 // friends (demo_subject.go), there is no bare-header twin for this actor:
 // admin's own routes read the caller's identity from the verified
 // authn.Principal only (Handler's own doc comment), never from
-// demoUserHeader, so a real registered-and-signed-in account is the only
+// DemoUserHeader, so a real registered-and-signed-in account is the only
 // way to reach them at all.
-const demoPlatformStaffEmail = "demo-platform-staff@example.com"
+const DemoPlatformStaffEmail = "demo-platform-staff@example.com"
 
 // demoPlatformStaffPasswordEnv gates the boot-time demo platform-staff
 // account seed (seedDemoPlatformStaff below). Unset -- the default `go run
 // ./cmd/server` ships with -- means no platform-staff account is
 // registered at all. Setting it to a passphrase registers
-// demoPlatformStaffEmail on every boot (and re-asserts its SystemDomain
+// DemoPlatformStaffEmail on every boot (and re-asserts its SystemDomain
 // membership and owner role on boots that find it already registered), so
 // an operator can sign admin's own demo account in with a real account and
 // a real grant -- no header involved.
@@ -59,7 +59,7 @@ const demoPlatformStaffPasswordEnv = "APP_DEMO_PLATFORM_STAFF_PASSWORD"
 
 // adminRoutePath mirrors notesRoutePath's own situation: admin keeps its
 // mount-point constant unexported, so this app names it again here to
-// keep demoRouteGuards and guardModuleRoute in step with it.
+// keep demoRouteGuards and GuardModuleRoute in step with it.
 const adminRoutePath = "/api/v1/admin"
 
 // The admin sub-paths adminPermissionFor tells apart. admin mounts
@@ -67,7 +67,7 @@ const adminRoutePath = "/api/v1/admin"
 // wraps the WHOLE subtree in one guard), so distinguishing which
 // permission a specific request needs is this app's own job, done by
 // inspecting the request's own path and method -- never a header, a query
-// parameter or a body field, for the same reason demoPermissionFor's own
+// parameter or a body field, for the same reason DemoPermissionFor's own
 // doc comment gives.
 //
 // adminAuditEventsExportPath MUST be checked before adminAuditEventsPath
@@ -84,14 +84,14 @@ const (
 	adminAuditEventsExportPath        = adminRoutePath + "/audit-events/export"
 	adminAuditEventsPath              = adminRoutePath + "/audit-events"
 	adminRolesPath                    = adminRoutePath + "/roles"
-	adminUsageSummaryPath             = adminRoutePath + "/usage-summary"
+	AdminUsageSummaryPath             = adminRoutePath + "/usage-summary"
 	adminNotificationsSendRecordsPath = adminRoutePath + "/notifications/send-records"
 )
 
 // adminPermissionFor chooses the admin:* permission a request against
 // admin's mounted subtree must hold, from its path and method alone.
 //
-// This is deliberately NOT the generic demoPermissionFor(resource)
+// This is deliberately NOT the generic DemoPermissionFor(resource)
 // read/write split every other gated module route uses: admin's
 // permissions are distinguished by SUB-RESOURCE (tenants, users,
 // impersonation, audit-events read vs. export, roles, usage, notification
@@ -123,7 +123,7 @@ func adminPermissionFor(r *http.Request) string {
 		return admin.PermissionAuditRead
 	case strings.HasPrefix(path, adminRolesPath):
 		return admin.PermissionRolesManage
-	case strings.HasPrefix(path, adminUsageSummaryPath):
+	case strings.HasPrefix(path, AdminUsageSummaryPath):
 		return admin.PermissionUsageRead
 	case strings.HasPrefix(path, adminNotificationsSendRecordsPath):
 		return admin.PermissionNotificationsRead
@@ -133,11 +133,11 @@ func adminPermissionFor(r *http.Request) string {
 }
 
 // adminSubjectResolver is admin's OWN subject resolver -- deliberately NOT
-// demoSubjectResolver: every admin:* permission is evaluated in
+// DemoSubjectResolver: every admin:* permission is evaluated in
 // rbac.SystemDomain, because admin's own route does NOT go through
 // ordinary tenancy.Middleware tenant resolution, so TenantID here is
 // HARD-CODED to rbac.SystemDomain rather than read from
-// pkgcore.TenantFromContext the way demoSubjectResolver does for every
+// pkgcore.TenantFromContext the way DemoSubjectResolver does for every
 // other module's route.
 //
 // Reading the ambient tenant would be wrong in both directions:
@@ -154,13 +154,13 @@ func adminPermissionFor(r *http.Request) string {
 //     global catalog -- a real cross-tenant-isolation break, not a
 //     hypothetical one.
 //
-// This also never reads demoUserHeader (unlike demoSubjectResolver): this
+// This also never reads DemoUserHeader (unlike DemoSubjectResolver): this
 // file's own header comment already documents that admin's routes accept
 // only a verified authn.Principal, never the header. And unlike
-// demoSubjectResolver, it is safe regardless of what tenancy.Middleware or
+// DemoSubjectResolver, it is safe regardless of what tenancy.Middleware or
 // admin.ImpersonationMiddleware may or may not have done to the request
-// context, because buildServer mounts admin's own route entirely outside
-// both of them (see buildServer's own composition comment) -- this
+// context, because BuildServer mounts admin's own route entirely outside
+// both of them (see BuildServer's own composition comment) -- this
 // resolver reads ONLY the caller's real, unsubstituted Principal.
 func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 	principal, ok := authn.PrincipalFromContext(r.Context())
@@ -178,7 +178,7 @@ func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 // keyed by adminPermissionFor rather than a single resource -- the one
 // mounted path this app gates differently from every other module's route,
 // per adminPermissionFor's own doc comment. It uses adminSubjectResolver,
-// never demoSubjectResolver -- see that resolver's own doc comment for
+// never DemoSubjectResolver -- see that resolver's own doc comment for
 // why sharing the generic one was a privilege-escalation bug.
 func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 	return rbac.RequirePermissionFunc(az, adminPermissionFor,
@@ -186,8 +186,8 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 	)(handler)
 }
 
-// seedDemoPlatformStaff registers demoPlatformStaffEmail through the
-// composed handler's real register route (mirroring registerDemoUser in
+// seedDemoPlatformStaff registers DemoPlatformStaffEmail through the
+// composed handler's real register route (mirroring RegisterDemoUser in
 // demo_users.go exactly), grants it membership in rbac.SystemDomain ALONE
 // -- never in any customer tenant, so its access token's tenant claim
 // resolves unambiguously to "system" with no tenant_id request needed at
@@ -227,7 +227,7 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // operator may have revoked; the membership half cannot be revoked from
 // anywhere but this seed.
 //
-// buildServer calls it only when the operator set
+// BuildServer calls it only when the operator set
 // demoPlatformStaffPasswordEnv (APP_DEMO_PLATFORM_STAFF_PASSWORD) -- NEVER
 // with cfg.DemoUsersPassword, the three demo accounts' own variable: the
 // platform administrator must have its own credential source, per that
@@ -237,7 +237,7 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *signInMemberships, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
 	logger := obs.FromContext(ctx)
 
-	userID, alreadyExists, err := registerDemoUserIfAbsent(ctx, handler, authnService, demoPlatformStaffEmail, password)
+	userID, alreadyExists, err := registerDemoUserIfAbsent(ctx, handler, authnService, DemoPlatformStaffEmail, password)
 	if err != nil {
 		return "", err
 	}

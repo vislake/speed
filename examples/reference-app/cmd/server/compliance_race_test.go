@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
@@ -29,7 +31,7 @@ import (
 // orchestrators raced.
 //
 // The race is driven for real, in both directions, over real notes rows
-// and through the wired compliance module buildServer returns. Each
+// and through the wired compliance module BuildServer returns. Each
 // direction interleaves the two actors deterministically around the only
 // observable phase boundary the loser's callback exposes: the candidate
 // LIST precedes its first HardDelete, and the first row-count drop can
@@ -126,7 +128,7 @@ func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t
 	// delete): the erasure's HardDelete of an already-removed row must not
 	// surface ErrErasurePartialFailure.
 	t.Run("erasure racing a concurrent sweep-shaped removal converges clean", func(t *testing.T) {
-		const creator = demoNotesCreatorUserID
+		const creator = app.DemoNotesCreatorUserID
 		backdatedSoftDeleteCreatorNotes(creator)
 
 		type outcome struct {

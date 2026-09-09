@@ -3,7 +3,7 @@ info:
   title: cases
   description: >-
     The reference app's case-domain HTTP surface (internal/cases, mounted
-    by the app in cmd/server/cases.go): upload a patient photo (a
+    by the app in internal/app/cases.go): upload a patient photo (a
     one-shot op that runs go/storage's create/upload/complete protocol
     in-process and yields the object id a case create references), create
     a case (a clinic staff member naming a patient and the photos already

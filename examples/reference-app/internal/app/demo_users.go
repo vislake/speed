@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -18,7 +18,7 @@ import (
 
 // demoUsersPasswordEnv gates the boot-time demo-user seed. Unset -- the
 // default `go run ./cmd/server` ships with -- means no demo accounts are
-// registered and demoUserHeader remains the only way to act as a demo
+// registered and DemoUserHeader remains the only way to act as a demo
 // user. Setting it to a passphrase
 // registers the three demo accounts below on every boot, so a browser
 // visitor can sign in as any of them with a real account, a real
@@ -27,13 +27,13 @@ import (
 // The passphrase is not secret in the same sense as the config keys are,
 // but it is also not a hardcoded default: it exists to gate a DEMO
 // affordance behind an operator's deliberate choice, and the constant
-// shape (APP_*_PASSWORD) mirrors the config-key pair configFromEnv
+// shape (APP_*_PASSWORD) mirrors the config-key pair ConfigFromEnv
 // reads for the same reason -- an env var is visible, auditable and
 // per-deployment in a way a compiled-in default is not.
 //
 // This variable seeds EXACTLY the three accounts below, and nothing else:
 // the demo platform-staff account (demo_admin.go's
-// demoPlatformStaffEmail, the rbac.SystemDomain platform administrator)
+// DemoPlatformStaffEmail, the rbac.SystemDomain platform administrator)
 // deliberately has its own APP_DEMO_PLATFORM_STAFF_PASSWORD variable and
 // is never seeded from this one -- see that constant's own doc comment for
 // why the two credential sources must stay apart.
@@ -53,19 +53,19 @@ const demoUsersPasswordEnv = "APP_DEMO_USERS_PASSWORD"
 // memberships and roles are granted under the user id authn assigns at
 // registration.
 const (
-	// demoOwnerEmail is the real account behind demoOwnerUserID's grant
+	// DemoOwnerEmail is the real account behind DemoOwnerUserID's grant
 	// model: membership and the built-in owner role in every configured
 	// tenant, so a browser signed in as it can do everything the demo
 	// header user can.
-	demoOwnerEmail = "demo-owner@example.com"
+	DemoOwnerEmail = "demo-owner@example.com"
 
-	// demoReaderEmail is the real account behind demoReaderUserID's grant
+	// DemoReaderEmail is the real account behind DemoReaderUserID's grant
 	// model: notes:read and nothing else, in every configured tenant.
-	demoReaderEmail = "demo-reader@example.com"
+	DemoReaderEmail = "demo-reader@example.com"
 
-	// demoAcmeOnlyEmail is the real account behind demoSingleTenantUserID's
-	// grant model: notes:read in demoSingleTenantID and nowhere else.
-	demoAcmeOnlyEmail = "demo-acme-only@example.com"
+	// DemoAcmeOnlyEmail is the real account behind DemoSingleTenantUserID's
+	// grant model: notes:read in DemoSingleTenantID and nowhere else.
+	DemoAcmeOnlyEmail = "demo-acme-only@example.com"
 )
 
 // demoSeedAccount pairs one demo account (registered as a real authn user)
@@ -81,8 +81,8 @@ type demoSeedAccount struct {
 	// email is what the account is registered with.
 	email string
 	// inEveryTenant grants the account in every configured tenant. False
-	// restricts it to demoSingleTenantID, mirroring how seedDemoGrants
-	// restricts demoSingleTenantUserID.
+	// restricts it to DemoSingleTenantID, mirroring how seedDemoGrants
+	// restricts DemoSingleTenantUserID.
 	inEveryTenant bool
 	// roleKey is the role assigned wherever the account is granted,
 	// mirroring the twin actor id's role in seedDemoGrants.
@@ -93,12 +93,12 @@ type demoSeedAccount struct {
 // over real accounts. seedDemoGrants keeps seeding the fixed header ids --
 // the pre-auth flows still act through them -- and this table is what
 // makes the same demonstrations reachable through real sign-ins; when the
-// header goes away (see demoUserHeader), only the seedDemoGrants half is
+// header goes away (see DemoUserHeader), only the seedDemoGrants half is
 // deleted and this table remains.
 var demoSeedAccounts = []demoSeedAccount{
-	{actor: demoOwnerUserID, email: demoOwnerEmail, inEveryTenant: true, roleKey: rbac.BuiltinRoleOwner},
-	{actor: demoReaderUserID, email: demoReaderEmail, inEveryTenant: true, roleKey: demoReaderRoleKey},
-	{actor: demoSingleTenantUserID, email: demoAcmeOnlyEmail, inEveryTenant: false, roleKey: demoReaderRoleKey},
+	{actor: DemoOwnerUserID, email: DemoOwnerEmail, inEveryTenant: true, roleKey: rbac.BuiltinRoleOwner},
+	{actor: DemoReaderUserID, email: DemoReaderEmail, inEveryTenant: true, roleKey: demoReaderRoleKey},
+	{actor: DemoSingleTenantUserID, email: DemoAcmeOnlyEmail, inEveryTenant: false, roleKey: demoReaderRoleKey},
 }
 
 // seedDemoUsers registers demoSeedAccounts through the composed handler's
@@ -107,7 +107,7 @@ var demoSeedAccounts = []demoSeedAccount{
 // tenant context (roles and bindings are tenant data -- nothing here reads
 // or writes across a tenant boundary).
 //
-// buildServer calls it AFTER seedDemoGrants, which is what guarantees the
+// BuildServer calls it AFTER seedDemoGrants, which is what guarantees the
 // roles this function AssignRole-s are already defined in every tenant. It
 // runs only when the operator set APP_DEMO_USERS_PASSWORD; an empty
 // password skips the seed, leaving the demo headers as the only demo
@@ -186,7 +186,7 @@ func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *auth
 // /api/v1/authn/register. This is what keeps a restart from debiting the
 // public register budget for accounts a previous boot already created
 // (seedDemoUsers' own doc comment gives the budget reasoning in full);
-// registerDemoUser itself still treats an unexpected already-registered
+// RegisterDemoUser itself still treats an unexpected already-registered
 // conflict answer -- a concurrent first boot that registered the account
 // between this boot's lookup and its POST -- as alreadyExists and recovers
 // the assigned id, so a first-boot race between
@@ -205,7 +205,7 @@ func registerDemoUserIfAbsent(ctx context.Context, handler http.Handler, authnSe
 		return existingID, true, nil
 	}
 
-	userID, alreadyExists, err = registerDemoUser(ctx, handler, email, password)
+	userID, alreadyExists, err = RegisterDemoUser(ctx, handler, email, password)
 	if err != nil {
 		return "", false, err
 	}
@@ -258,7 +258,7 @@ func registeredDemoUserID(ctx context.Context, authnService *authn.Service, emai
 	return users[0].ID, nil
 }
 
-// registerDemoUser registers one demo account by POSTing the register
+// RegisterDemoUser registers one demo account by POSTing the register
 // payload to the composed handler -- in-process, through the same
 // authn.Middleware + tenancy allowlist + mux + handler stack a browser
 // request traverses -- and returns the user id authn assigned, or
@@ -284,12 +284,12 @@ func registeredDemoUserID(ctx context.Context, authnService *authn.Service, emai
 // operator-actionable state, not a misconfiguration the generic message
 // would send an operator hunting for. It therefore names the limit and
 // the remedy.
-func registerDemoUser(ctx context.Context, handler http.Handler, email, password string) (userID string, alreadyExists bool, err error) {
+func RegisterDemoUser(ctx context.Context, handler http.Handler, email, password string) (userID string, alreadyExists bool, err error) {
 	payload, err := json.Marshal(map[string]string{"email": email, "password": password})
 	if err != nil {
 		return "", false, fmt.Errorf("reference-app: marshal demo register body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authnAPIPath+"/register", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, AuthnAPIPath+"/register", bytes.NewReader(payload))
 	if err != nil {
 		return "", false, fmt.Errorf("reference-app: build demo register request: %w", err)
 	}
@@ -338,7 +338,7 @@ func registerDemoUser(ctx context.Context, handler http.Handler, email, password
 // rbac, each under the tenant's own context. Which tenants an account
 // reaches is the account's own decision (inEveryTenant), never "all
 // tenants map iteration happens to visit" -- the same reason seedDemoGrants
-// pins demoSingleTenantID as a literal.
+// pins DemoSingleTenantID as a literal.
 //
 // Every step is repeatable, which is what lets seedDemoUsers re-run this
 // on a boot that finds the account already registered: the org seat is
@@ -349,7 +349,7 @@ func registerDemoUser(ctx context.Context, handler http.Handler, email, password
 func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID string, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
-		if !account.inEveryTenant && tenantID != demoSingleTenantID {
+		if !account.inEveryTenant && tenantID != DemoSingleTenantID {
 			continue
 		}
 		if _, done := seeded[tenantID]; done {

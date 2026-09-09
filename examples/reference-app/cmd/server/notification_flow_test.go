@@ -2,17 +2,17 @@ package main
 
 // notification_flow_test.go drives go/notification end to end through the
 // composed HTTP stack: the authn+tenancy middleware chain, the module's
-// real handler on its mounted route (demo_subject.go's
+// real handler on its mounted route (internal/app/demo_subject.go's
 // demoRouteGuards names it routePublic -- the module resolves and requires
 // its own caller identity per operation), a real temp-file SQLite database
 // and the real standalone queue. Three legs cover the module's acceptance
 // shape:
 //
-//   - the user-delivery leg: a note created by demoNotesCreatorUserID
-//     publishes notes.note.created; demo_notification.go's subscription
+//   - the user-delivery leg: a note created by DemoNotesCreatorUserID
+//     publishes notes.note.created; internal/app/demo_notification.go's subscription
 //     dispatches it back to the creator; the module resolves the
 //     creator's channels and addresses at send time (the email lands on
-//     demoUserAddresses' address), the inbox row lands on the creator's
+//     DemoUserAddresses' address), the inbox row lands on the creator's
 //     own message list, and preference opt-outs steer later deliveries --
 //     down to a full opt-out that stops the type's deliveries entirely.
 //
@@ -33,7 +33,7 @@ package main
 // posture server_test.go's testNote and org_flow_test.go's orgNode take.
 // Captured messages are the only assertions on what went out: mails are
 // read back from org_flow_test.go's capturingMailer and SMS from the
-// locked buffer injected through cfg.SMSOutput (server.go defaults the
+// locked buffer injected through cfg.SMSOutput (internal/app/server.go defaults the
 // writer to os.Stdout, so a test that wants to observe SMS must override
 // it, exactly as cfg.Mailer overrides the mailer seam).
 
@@ -50,6 +50,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -71,7 +73,7 @@ var notifCodePattern = regexp.MustCompile(`\b\d{6}\b`)
 // test can read back instead of the console. cfg is returned alongside so
 // the caller can reach cfg.Memberships the way registerAndAuthenticate
 // expects.
-func buildNotifTestServer(t *testing.T) (*httptest.Server, serverConfig, *capturingMailer, *lockedBuffer) {
+func buildNotifTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *capturingMailer, *lockedBuffer) {
 	t.Helper()
 
 	cfg := testConfig(t)
@@ -80,9 +82,9 @@ func buildNotifTestServer(t *testing.T) (*httptest.Server, serverConfig, *captur
 	sms := &lockedBuffer{}
 	cfg.SMSOutput = sms
 
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -190,7 +192,7 @@ type (
 )
 
 // notifRequest issues method against srv.URL+path with a bearer token, the
-// acting subject (the X-Demo-User-Id header demoOrgSubjectResolver reads;
+// acting subject (the X-Demo-User-Id header DemoOrgSubjectResolver reads;
 // empty omits it) and an optional JSON body, and requires the response to
 // carry wantStatus, decoding it into out (nil to skip decoding, for empty
 // responses like the 204s and the demo route's 202). The envelope of every
@@ -218,7 +220,7 @@ func notifRequest(t *testing.T, srv *httptest.Server, method, path, token, subje
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if subjectUserID != "" {
-		req.Header.Set(demoOrgUserHeader, subjectUserID)
+		req.Header.Set(app.DemoOrgUserHeader, subjectUserID)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -325,11 +327,11 @@ func equalStrings(got, want []string) bool {
 
 // TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd drives the
 // canonical user-recipient flow through the composed HTTP stack: creating
-// a note publishes notes.note.created, demo_notification.go's
+// a note publishes notes.note.created, internal/app/demo_notification.go's
 // subscription dispatches the same type back to the note's creator
-// (demoNotesCreatorUserID), and the notification module delivers over the
+// (DemoNotesCreatorUserID), and the notification module delivers over the
 // creator's resolved channels -- an inbox row on the creator's own message
-// list and an email to the address demoUserAddresses holds for the creator
+// list and an email to the address DemoUserAddresses holds for the creator
 // -- with the delivery re-read at send time, never frozen into the event.
 // The second half of the test drives the preference surface: each channel
 // the creator switches off stops arriving (the email stops while the inbox
@@ -338,8 +340,8 @@ func equalStrings(got, want []string) bool {
 // leg lives in the external-contact test below).
 func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	srv, cfg, mailer, _ := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demoSingleTenantID, "notif-owner")
-	subject := demoNotesCreatorUserID
+	token := registerAndAuthenticate(t, srv, cfg, app.DemoSingleTenantID, "notif-owner")
+	subject := app.DemoNotesCreatorUserID
 	const noteTypeKey = "notes.note.created"
 
 	// The first note: its creation publishes the event whose dispatch this
@@ -483,9 +485,9 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// demo.patient_reminder type below may not, and its refusal leg lives
 	// in the next test). Four types answer: go/admin registers its
 	// own admin.impersonation_started security notification alongside
-	// notes' and demo's two (see demo_admin.go's wiring in server.go, and
+	// notes' and demo's two (see internal/app/demo_admin.go's wiring in internal/app/server.go, and
 	// demo's own module.go for demo.simulation_ready, the smilesim
-	// completion notification demo_notification.go's own
+	// completion notification internal/app/demo_notification.go's own
 	// EventSimulationCompleted subscription dispatches).
 	var types notifListTypes
 	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/types", token, subject, nil, http.StatusOK, &types)
@@ -525,7 +527,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 
 // TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd drives the
 // external-recipient leg through the demo patient-message route
-// (demo_notification.go): a contact joins the tenant's roster through
+// (internal/app/demo_notification.go): a contact joins the tenant's roster through
 // double opt-in, and only a VERIFIED contact receives anything -- a
 // dispatch to the still-pending contact is refused by the module's
 // send-time gate and the queue dead-letters it after the bounded retry
@@ -535,8 +537,8 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 // and is only re-read for its code here.
 func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	srv, cfg, mailer, sms := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demoSingleTenantID, "notif-clinic")
-	subject := demoNotesCreatorUserID
+	token := registerAndAuthenticate(t, srv, cfg, app.DemoSingleTenantID, "notif-clinic")
+	subject := app.DemoNotesCreatorUserID
 	const contactEmail = "flow-patient@example.com"
 
 	// Double opt-in, half one: the contact is created pending, and the
@@ -648,8 +650,8 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 // not the code's.
 func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 	srv, cfg, mailer, _ := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demoSingleTenantID, "notif-ratelimit")
-	subject := demoNotesCreatorUserID
+	token := registerAndAuthenticate(t, srv, cfg, app.DemoSingleTenantID, "notif-ratelimit")
+	subject := app.DemoNotesCreatorUserID
 	const contactEmail = "rate-patient@example.com"
 
 	var contact notifContact

@@ -3,9 +3,9 @@ package main
 // apikey_flow_test.go is go/integration's API-key surface's
 // mandatory-first-consumer proof. It drives the module's own
 // spec-generated HTTP surface --
-// server.go's integrationModule wiring, mounted through the generic
+// internal/app/server.go's integrationModule wiring, mounted through the generic
 // mountModuleRoutes loop exactly like every other module's fragment, gated
-// by demo_subject.go's guardIntegrationRoute -- through the composed
+// by internal/app/demo_subject.go's guardIntegrationRoute -- through the composed
 // HTTP stack: create (capturing the plaintext key, shown exactly once),
 // list (confirming it never reappears), rotate (confirming the predecessor
 // is revoked and the replacement works) and revoke.
@@ -22,6 +22,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
 // testCreatedAPIKey is the wire shape of IntegrationCreatedAPIKey --
@@ -63,10 +65,10 @@ type testListAPIKeysResponse struct {
 // "/api/v1/integration/apikeys..." route) on srv as the acting user, in the
 // tenant the given bearer token resolves -- the identical shape
 // storageRequest and notesRequestAs both use. A non-empty user additionally
-// sends X-Demo-User-Id (demoNotesCreatorUserID, this app's one shared
+// sends X-Demo-User-Id (DemoNotesCreatorUserID, this app's one shared
 // creator-attribution identity): integration_createAPIKey attributes the
 // new key's CreatedBy through integration.SubjectResolver
-// (demoOrgSubjectResolver in server.go, the identical seam instance org's
+// (DemoOrgSubjectResolver in internal/app/server.go, the identical seam instance org's
 // and notification's own caller-scoped endpoints already share), which
 // reads that same header. list, rotate and revoke never read it at all --
 // see integration.SubjectResolver's own doc comment for why only Create
@@ -82,8 +84,8 @@ func apikeyRequest(t *testing.T, srv *httptest.Server, method, path, token, user
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(demoUserHeader, user)
-		req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+		req.Header.Set(app.DemoUserHeader, user)
+		req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
 	}
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -150,7 +152,7 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the rbac gate decides the request
-	// against (demo_subject.go's seedDemoGrants) -- the owner role carries
+	// against (internal/app/demo_subject.go's seedDemoGrants) -- the owner role carries
 	// every permission any module declared, integration:apikey:* included.
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-flow")
 
@@ -160,7 +162,7 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 	// comment) -- this app's own integration.NewModule wiring never wires
 	// one, so a zero-scope key request is the only legal shape end to
 	// end.
-	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
+	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
 	if created.ID == "" {
 		t.Fatal("created key carries no id")
@@ -168,15 +170,15 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 	if created.Key == "" {
 		t.Fatal("created key carries no raw key -- the one and only place it is ever available")
 	}
-	if created.CreatedBy != demoNotesCreatorUserID {
-		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", created.CreatedBy, demoNotesCreatorUserID)
+	if created.CreatedBy != app.DemoNotesCreatorUserID {
+		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", created.CreatedBy, app.DemoNotesCreatorUserID)
 	}
 
 	// List: exactly the one key just created, and -- decoded through a raw
 	// map, not testAPIKeySummary, so an unexpected field cannot hide behind
 	// a struct that simply never declared it -- with no key or hash
 	// anywhere on the wire.
-	listResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, demoOwnerUserID)
+	listResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	listBody, err := io.ReadAll(listResp.Body)
 	listResp.Body.Close()
 	if err != nil {
@@ -208,7 +210,7 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 	// as the new one, and rotating the (now revoked) predecessor again
 	// reports the already-revoked conflict rather than a further
 	// replacement.
-	rotateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, demoOwnerUserID)
+	rotateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, app.DemoOwnerUserID)
 	rotated := decodeCreatedAPIKey(t, rotateResp, http.StatusOK, "rotate")
 	if rotated.ID == created.ID {
 		t.Fatal("rotated id equals the predecessor's -- Rotate must create-new-then-revoke-old, never rewrite in place")
@@ -217,13 +219,13 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 		t.Fatal("rotated key must be a fresh raw value, never empty and never the predecessor's")
 	}
 	assertAPIKeyError(t,
-		apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, demoOwnerUserID),
+		apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, app.DemoOwnerUserID),
 		http.StatusConflict, "integration.key_already_revoked", "rotate the already-revoked predecessor")
 
 	// The predecessor is revoked, not deleted: integration_listAPIKeys
 	// still lists the row (predecessor + replacement both present below),
 	// the difference living in the Revoked flag, not the row's presence.
-	postRotateListResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, demoOwnerUserID)
+	postRotateListResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	postRotateList := decodeListAPIKeys(t, postRotateListResp, http.StatusOK, "list after rotate")
 	if len(postRotateList.APIKeys) != 2 {
 		t.Fatalf("list after rotate = %d keys, want exactly 2 (predecessor + replacement); %+v", len(postRotateList.APIKeys), postRotateList.APIKeys)
@@ -247,16 +249,16 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 	// Revoke the replacement. A second revoke reports the already-revoked
 	// conflict; revoking an id that never existed at all reports not-found
 	// -- the two refusals are distinct codes, never conflated.
-	revokeResp := apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, demoOwnerUserID)
+	revokeResp := apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, app.DemoOwnerUserID)
 	revokeResp.Body.Close()
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke: status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
 	}
 	assertAPIKeyError(t,
-		apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, demoOwnerUserID),
+		apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, app.DemoOwnerUserID),
 		http.StatusConflict, "integration.key_already_revoked", "revoke the already-revoked replacement")
 	assertAPIKeyError(t,
-		apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/no-such-id", acmeToken, demoOwnerUserID),
+		apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/no-such-id", acmeToken, app.DemoOwnerUserID),
 		http.StatusNotFound, "integration.key_not_found", "revoke an id that never existed")
 }
 
@@ -286,7 +288,7 @@ func decodeListAPIKeys(t *testing.T, resp *http.Response, wantStatus int, what s
 // no integration:apikey:* permission at all -- so both the read and manage
 // directions of this module's gate must refuse it, while the owner passes.
 // This is also the proof that guardIntegrationRoute
-// (demo_subject.go) genuinely evaluates a real permission rather than the
+// (internal/app/demo_subject.go) genuinely evaluates a real permission rather than the
 // generic gate silently passing everything through: a router bug that
 // let every request past would make this test the one that fails.
 func TestBuildServer_APIKeyPermissionGate_EnforcesTheAPIKeyPermissions(t *testing.T) {
@@ -296,19 +298,19 @@ func TestBuildServer_APIKeyPermissionGate_EnforcesTheAPIKeyPermissions(t *testin
 	// The reader may neither list nor create: both directions of the
 	// integration:apikey:read / integration:apikey:manage gate are closed.
 	assertAPIKeyError(t,
-		apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, demoReaderUserID),
+		apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, app.DemoReaderUserID),
 		http.StatusForbidden, "rbac.permission_denied", "reader list")
 	assertAPIKeyError(t,
-		apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoReaderUserID),
+		apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoReaderUserID),
 		http.StatusForbidden, "rbac.permission_denied", "reader create")
 
 	// The owner, holding every permission any module declared, passes both.
-	ownerCreateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
+	ownerCreateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	created := decodeCreatedAPIKey(t, ownerCreateResp, http.StatusCreated, "owner create")
 	if created.ID == "" {
 		t.Fatal("owner create returned no id")
 	}
-	ownerListResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, demoOwnerUserID)
+	ownerListResp := apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
 	ownerListResp.Body.Close()
 	if ownerListResp.StatusCode != http.StatusOK {
 		t.Fatalf("owner list: status = %d, want %d", ownerListResp.StatusCode, http.StatusOK)

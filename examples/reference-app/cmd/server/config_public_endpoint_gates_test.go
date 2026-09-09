@@ -5,7 +5,7 @@ package main
 // handler and its DomainResolver, the frozen schema the notes module's
 // Register declarations folded into Attach, and the real SQLite database
 // the module polls and reads. The notes-side CRUD proof lives in
-// server_test.go; these tests cover the other half of buildServer's wiring
+// server_test.go; these tests cover the other half of BuildServer's wiring
 // -- the pre-auth display surface, where the tenancy rules are the inverse
 // of the CRUD side (unmatched hosts must still render platform defaults,
 // never 403), which is exactly what the fail-closed behavior that
@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -41,7 +43,7 @@ import (
 var orgDefaultFlags = []string{org.FeatureInvitationEmail, org.FeatureInvitations}
 
 // configSeed is one row to insert into the configs table behind a test
-// server. buildServer hands out neither its *gorm.DB nor the config
+// server. BuildServer hands out neither its *gorm.DB nor the config
 // Service, so the raw table is the only reach a test has into the module's
 // storage -- which is fine, because the tier resolution the endpoints run
 // on (tenant row -> system row -> schema default) is exactly what these
@@ -54,7 +56,7 @@ type configSeed struct {
 	value    string
 }
 
-// buildSeededTestServer builds the real buildServer stack over a fresh
+// buildSeededTestServer builds the real BuildServer stack over a fresh
 // temp-file database, inserts seeds into the configs table through a
 // second connection to the same SQLite file, and returns the running
 // server. Every request after seeding is the first this process has made
@@ -66,13 +68,13 @@ type configSeed struct {
 // has already cached the same (key, scope, tenant) triple would not be
 // seen until the 30s anti-loss poller swept them in. Every test here seeds
 // before its first request, so the cache starts cold.
-func buildSeededTestServer(t *testing.T, seeds ...configSeed) (*httptest.Server, serverConfig) {
+func buildSeededTestServer(t *testing.T, seeds ...configSeed) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
 	cfg := testConfig(t)
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
@@ -94,7 +96,7 @@ func buildSeededTestServer(t *testing.T, seeds ...configSeed) (*httptest.Server,
 // time.Time so the driver serializes it in exactly the layout the server's
 // reads parse back -- symmetric with the module's own writes rather than a
 // hand-typed text format that could drift from what gorm expects.
-func seedConfigRows(t *testing.T, cfg serverConfig, seeds []configSeed) {
+func seedConfigRows(t *testing.T, cfg app.ServerConfig, seeds []configSeed) {
 	t.Helper()
 
 	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
@@ -345,7 +347,7 @@ func TestSystemFeatures_EnabledFlagChain_ResolvesDependencies(t *testing.T) {
 // half of the middleware allowlist actually reaches the config handlers:
 // net/http serves HEAD off the mux for every path, but tenancy.Middleware
 // only lets allowlisted methods through (its own doc comment: allowlist
-// http.MethodHead explicitly if HEAD must work) -- buildServer allowlists
+// http.MethodHead explicitly if HEAD must work) -- BuildServer allowlists
 // GET and HEAD for both config paths, so both must answer 200 with an
 // empty body.
 func TestPublicConfigEndpoints_Head_Returns200WithoutBody(t *testing.T) {

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	obs "github.com/vislake/speed/go/observability"
 )
 
@@ -19,7 +21,7 @@ import (
 // obs.RegisterMountedRoutes exists precisely so a host can hand the route
 // label limiter every obs.Middleware constructs its REAL route table
 // before any request traffic arrives, and this app is the mandatory first
-// consumer of that API -- buildServer's wiring below (server.go) calls
+// consumer of that API -- BuildServer's wiring below (internal/app/server.go) calls
 // it with the module route table reg.Routes.Routes() holds plus the two
 // host-level routes mounted directly on the mux. Without that call, the
 // limiter's distinct-value budget (obs.MaxRouteLabelValues) is
@@ -30,7 +32,7 @@ import (
 // per-route metrics gone even though no bound was violated.
 //
 // The test drives the exact composed stack main.go's run serves --
-// buildServer's authn+tenancy chain wrapped in obs.Middleware behind a
+// BuildServer's authn+tenancy chain wrapped in obs.Middleware behind a
 // real HTTP server, after obs.Init arms the local /metrics scrape -- and
 // replays the attack window: obs.MaxRouteLabelValues+100 distinct
 // unauthenticated garbage paths (each a normal pre-auth 403, the shape
@@ -55,9 +57,9 @@ import (
 // mechanism itself.
 func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 	cfg := testConfig(t)
-	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -68,10 +70,10 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 	// obs.Init arms the local pull-based metrics reader the /metrics
 	// route serves; the init() side effect registering it
 	// (go/observability/exporter/prometheus) is already in this binary via
-	// server.go's blank import. Must run before obs.Middleware below is
+	// internal/app/server.go's blank import. Must run before obs.Middleware below is
 	// constructed, so the instruments the middleware builds bind to THIS
 	// test's MeterProvider and this test's scrape can see them -- the same
-	// buildServer -> Init -> Middleware order main.go's run uses.
+	// BuildServer -> Init -> Middleware order main.go's run uses.
 	shutdown, err := obs.Init(context.Background())
 	if err != nil {
 		t.Fatalf("obs.Init: %v", err)
@@ -82,7 +84,7 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 		}
 	})
 
-	// obs.Middleware snapshots the routes buildServer registered (the call
+	// obs.Middleware snapshots the routes BuildServer registered (the call
 	// that is this test's subject) at construction -- a registration made
 	// after this line would not reach this handler, mirroring
 	// RegisterMountedRoutes' own "register before constructing the
@@ -122,15 +124,15 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 	// fail-closed 403 (server_test.go's TestBuildServer_Unauthenticated_
 	// FailsClosed pins it). Both must still be recorded under their own
 	// route labels, not the overflow bucket.
-	healthzResp, err := client.Get(srv.URL + healthzPath)
+	healthzResp, err := client.Get(srv.URL + app.HealthzPath)
 	if err != nil {
-		t.Fatalf("GET %s after the garbage flood: %v", healthzPath, err)
+		t.Fatalf("GET %s after the garbage flood: %v", app.HealthzPath, err)
 	}
 	healthzBody, _ := io.ReadAll(healthzResp.Body)
 	_ = healthzResp.Body.Close()
 	if healthzResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s after the garbage flood: status = %d, want %d (body: %s)",
-			healthzPath, healthzResp.StatusCode, http.StatusOK, healthzBody)
+			app.HealthzPath, healthzResp.StatusCode, http.StatusOK, healthzBody)
 	}
 
 	const notesListPath = "/api/v1/notes"
@@ -145,27 +147,27 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 			notesListPath, notesResp.StatusCode, http.StatusForbidden)
 	}
 
-	metricsResp, err := client.Get(srv.URL + metricsPath)
+	metricsResp, err := client.Get(srv.URL + app.MetricsPath)
 	if err != nil {
-		t.Fatalf("GET %s: %v", metricsPath, err)
+		t.Fatalf("GET %s: %v", app.MetricsPath, err)
 	}
 	scrapeBody, _ := io.ReadAll(metricsResp.Body)
 	_ = metricsResp.Body.Close()
 	if metricsResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s: status = %d, want %d (body: %s)", metricsPath, metricsResp.StatusCode, http.StatusOK, scrapeBody)
+		t.Fatalf("GET %s: status = %d, want %d (body: %s)", app.MetricsPath, metricsResp.StatusCode, http.StatusOK, scrapeBody)
 	}
 	series := parseRequestCountSeries(t, scrapeBody)
 
 	// /healthz answered normally (200, asserted above) AND kept its own
 	// series: one request, under its own label, not the overflow bucket.
-	healthzSeries, ok := series[healthzPath]
+	healthzSeries, ok := series[app.HealthzPath]
 	if !ok {
 		t.Fatalf("no http.server.request.count series labeled http.route=%q in the scrape after %d garbage paths: the real route collapsed to %q (the unseeded limiter's first-come-first-served budget was exhausted before this route was ever requested). Series present: %v",
-			healthzPath, garbagePaths, obs.RouteLabelOverflowValue, series)
+			app.HealthzPath, garbagePaths, obs.RouteLabelOverflowValue, series)
 	}
 	if got := healthzSeries["200"]; got != 1 {
 		t.Fatalf("http.route=%q recorded %d successful requests, want exactly 1 (the one GET %s above); series: %v",
-			healthzPath, got, healthzPath, healthzSeries)
+			app.HealthzPath, got, app.HealthzPath, healthzSeries)
 	}
 
 	// The module-table half of the seed: /api/v1/notes is registered by

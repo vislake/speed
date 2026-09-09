@@ -4,12 +4,12 @@ package main
 // go/billing's CreditService, reserved and settled by
 // internal/smilesim's own wiring (internal/smilesim/service.go's "Credit
 // accounting" section), driven through the REAL composed HTTP stack -- the
-// same buildServer/httptest.Server rig smilesim_flow_test.go's own suite
+// same BuildServer/httptest.Server rig smilesim_flow_test.go's own suite
 // uses -- across the three scenarios the credit leg of the billing
 // surface requires:
 //
 //   - a tenant with a sufficient granted balance (the demo seed
-//     cmd/server/demo_credits.go's seedDemoCredits grants tenant-acme at
+//     internal/app/demo_credits.go's seedDemoCredits grants tenant-acme at
 //     boot, unconditionally, before any test runs) generates an image
 //     successfully and is genuinely debited afterward -- read back through
 //     a real CreditService.Balance call over a SECOND database connection
@@ -29,7 +29,7 @@ package main
 // actual credit-pack purchase through a real Stripe/Alipay/WeChat sandbox.
 // No live credentials for any of the three providers exist in this
 // environment, so that leg stays explicitly out of scope --
-// cmd/server/demo_credits.go's seedDemoCredits is the deliberate,
+// internal/app/demo_credits.go's seedDemoCredits is the deliberate,
 // documented stand-in (a Grant, never a payment) that gives this suite
 // something real to reserve against.
 
@@ -41,6 +41,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app"
+
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -51,15 +53,15 @@ import (
 
 // openBillingCredits opens a SECOND dbkit connection to cfg.SQLitePath and
 // returns the billing.CreditService reached through it -- the identical
-// "buildServer hands out neither its *gorm.DB nor a module's own service,
+// "BuildServer hands out neither its *gorm.DB nor a module's own service,
 // so a second connection is the only reach a test has into storage"
 // pattern server_test.go's own TestBuildServer_NoteCreate_PersistsAuditEvent
 // documents for go/dbkit/audit's table, applied here to go/billing's own
 // tables instead. No migration call is needed on this second connection:
-// buildServer's own migrationRegistry.Apply already applied go/billing's
+// BuildServer's own migrationRegistry.Apply already applied go/billing's
 // migrations to cfg.SQLitePath before this test's server ever started
 // serving.
-func openBillingCredits(t *testing.T, cfg serverConfig) *billing.CreditService {
+func openBillingCredits(t *testing.T, cfg app.ServerConfig) *billing.CreditService {
 	t.Helper()
 
 	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
@@ -82,7 +84,7 @@ func openBillingCredits(t *testing.T, cfg serverConfig) *billing.CreditService {
 // creditBalanceFor reads tenantID's real billing.CreditBalance through a
 // fresh second connection (openBillingCredits) -- never trusted from the
 // job's own reported status.
-func creditBalanceFor(t *testing.T, cfg serverConfig, tenantID pkgcore.TenantID) billing.CreditBalance {
+func creditBalanceFor(t *testing.T, cfg app.ServerConfig, tenantID pkgcore.TenantID) billing.CreditBalance {
 	t.Helper()
 
 	bal, err := openBillingCredits(t, cfg).Balance(pkgcore.WithTenant(context.Background(), tenantID))
@@ -119,17 +121,17 @@ func newAlwaysFailingImageServer(t *testing.T) *newAlwaysFailingImageServerResul
 
 // auditEventsForTenant opens a SECOND dbkit connection to cfg.SQLitePath
 // and reads tenantID's audit trail back through a real
-// audit.Repository.ListByTenant call -- the identical "buildServer hands
+// audit.Repository.ListByTenant call -- the identical "BuildServer hands
 // out neither its *gorm.DB nor a module's own service, so a second
 // connection is the only reach a test has into storage" pattern
 // openBillingCredits above and server_test.go's own
 // TestBuildServer_NoteCreate_PersistsAuditEvent both already use, applied
 // here to prove go/billing's own audit.Emit wiring rather than notes'. No migration call is needed on this second
-// connection: buildServer's own migrationRegistry.Apply already applied
+// connection: BuildServer's own migrationRegistry.Apply already applied
 // go/dbkit/audit's migrations (auditModule shares this app's one database
-// connection -- see server.go's own auditModule construction comment)
+// connection -- see internal/app/server.go's own auditModule construction comment)
 // before this test's server ever started serving.
-func auditEventsForTenant(t *testing.T, cfg serverConfig, tenantID pkgcore.TenantID) []audit.AuditEvent {
+func auditEventsForTenant(t *testing.T, cfg app.ServerConfig, tenantID pkgcore.TenantID) []audit.AuditEvent {
 	t.Helper()
 
 	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
@@ -181,7 +183,7 @@ func findAuditEvent(events []audit.AuditEvent, action, resourceID string) (audit
 // already covers that narrower unit-level claim). This is deliberately
 // the same "explicit audit.Emit call, not dbkit's AuditBus write-capture
 // plugin" wiring choice notes' own TestBuildServer_NoteCreate_
-// PersistsAuditEvent proves for notes -- see server.go's auditModule
+// PersistsAuditEvent proves for notes -- see internal/app/server.go's auditModule
 // construction comment and the known same-file SQLITE_BUSY limitation
 // for why: billingModule and auditModule share one database
 // connection, and audit.Emit's own write only ever runs after
@@ -230,7 +232,7 @@ func TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents(t *testing
 	// credit_transaction id, which is also this test's own txID.
 	events := auditEventsForTenant(t, cfg, tenantID)
 
-	// The demo seed at boot (cmd/server/demo_credits.go's seedDemoCredits)
+	// The demo seed at boot (internal/app/demo_credits.go's seedDemoCredits)
 	// is itself a real CreditService.Grant call, so a Grant-actioned row
 	// for tenant-acme is expected to exist too -- this test only asserts
 	// on the reserve/confirm pair a genuine transaction id ties together,
@@ -267,9 +269,9 @@ func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T)
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-refund-audit-key"
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -523,9 +525,9 @@ func TestSmileSimulation_FailedGeneration_RefundsReservation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-fail-key"
-	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("BuildServer: %v", err)
 	}
 	t.Cleanup(func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
