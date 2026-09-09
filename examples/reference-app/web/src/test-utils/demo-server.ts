@@ -28,11 +28,13 @@
  * reads it) and -- behind the `reader` option -- the read-only member
  * (DEMO_READER_IDENTIFIER, the web mirror of the demo-reader@example.com
  * seed): its sign-in answers a principal of its own user and session,
- * the notes list serves it like any member's (the Go suite pins a
- * reader's list as served, demo_users_test.go:143-153), and a note
- * create from that principal answers the 403 the write gate gives a
- * caller without notes:write (rbac.permission_denied, asserted at
- * flowtests/server_test.go:438-440). The platform-staff shape is the configured
+ * the notes list serves it like any member's (the Go suite pins the
+ * seeded reader's list as served: demo_users_test.go:212-224
+ * (TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal)),
+ * and a note create from that principal answers the 403 the write
+ * gate gives a caller without notes:write (rbac.permission_denied,
+ * asserted at flowtests/server_test.go:438-440). The platform-staff
+ * shape is the configured
  * account itself signed into the system pseudo-tenant -- the fixture's
  * tenantId option set to SYSTEM_PSEUDO_TENANT_ID ('system', the value
  * the Go seed grants demo-platform-staff@example.com its sole
@@ -59,13 +61,16 @@
  * that named none falls back to REGISTERED_CLINIC_DEFAULT_NAME -- the
  * fixture's en-US mirror of the real catalog default (the zh-CN value
  * is a CJK literal no test file here may carry). The
- * named-tenant refusal keeps its shape for what it always meant: the
- * real server refuses a sign-in naming a tenant the account holds no
- * membership in (authn.tenant_membership_required, the shape pinned at
- * demo_users_test.go:170-181 by the acme-only account asking for
- * tenant-globex) -- a refusal no journey drives, since the switch and
- * sign-in surfaces a browser reaches never ask for a tenant it was not
- * granted. Registering twice answers the same 409
+ * named-tenant refusal stays a live mirror: the real server refuses a
+ * sign-in naming a tenant the account holds no membership in with the
+ * unified 401 authn.invalid_credentials answer a wrong password also
+ * gets, its no-membership reason surviving in the login history, never
+ * the response (the acme-only account asking for tenant-globex:
+ * demo_users_test.go:251-255, the history read at :262, both in
+ * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal) -- a
+ * refusal no journey drives, since the switch and sign-in surfaces a
+ * browser reaches never ask for a tenant it was not granted.
+ * Registering twice answers the same 409
  * authn.email_already_registered a real handler answers
  * (go/authn/errors.go's ErrEmailAlreadyRegistered).
  *
@@ -203,9 +208,11 @@
  * stays on notes, the exact surface where the seed's grant asymmetry
  * lives: the list served like any member's, a create refused with
  * the rbac write gate's 403 -- the answers the Go suite pins for the
- * read-only member (its list served, demo_users_test.go:143-153, its
- * create refused, flowtests/server_test.go:438-440). The read-denied refusal of a
- * caller without notes:read is the denyNotesRead switch's answer, a
+ * read-only member (its list served, demo_users_test.go:212-224,
+ * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal; its
+ * create refused, flowtests/server_test.go:438-440). The read-denied
+ * refusal of a caller without notes:read is the denyNotesRead switch's
+ * answer, a
  * shape no seeded account carries.
  *
  * Anything else fails the test loudly: an unpinned request means the
