@@ -1,4 +1,17 @@
-package otlp_test
+// This file lives in package unittest — this module's dedicated unit-test
+// directory for unit-tier suites with no single source file as their target
+// (the backend coding standard's testing-layout rule). This regression
+// composes obs.Init, obs.Middleware and the exporter/otlp package across
+// package boundaries — no single source — and it must run from outside
+// package observability and outside exporter/otlp alike: it black-box
+// imports both, exactly as a host wires them (the blank otlp import below
+// registers the exporter with Init).
+//
+// The exporter's own directory is deliberately left without this test:
+// exporter/prometheus's otlp_not_registered_test.go pins a test binary
+// that never imports exporter/otlp, so no file importing it may share that
+// directory — see that file's own doc comment for the SHAPE reasoning.
+package unittest
 
 import (
 	"context"
