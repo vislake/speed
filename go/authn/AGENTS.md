@@ -523,14 +523,6 @@ own module option, so registration machinery would serve nobody, and this
 module's distributed-mode requirement above is the wiring-time enforcement
 that stays here.
 
-Promoting the seam was a deliberate breaking change under lockstep
-versioning: this module's `SMS` type, `SMSSender` interface,
-`NewConsoleSMSSender` and `NewHTTPSMSSender` (and the carrier subpackages
-that used to live under `go/authn/sms/`) moved to pkgcore, so a host that
-referenced them under the `authn` import path names `pkgcore` instead;
-`WithSMSSender`'s parameter is now `pkgcore.SMSSender`, and
-`ErrMissingDistributedSMSSender` is unchanged.
-
 ### The three carrier adapters (aliyun, tencent, twilio)
 
 This seam has three real carrier adapters, each in its own subpackage of
@@ -629,8 +621,8 @@ present (`ALIYUN_SMS_*`, `TENCENT_SMS_*`, `TWILIO_SMS_*` — names recorded in
 each leg's package doc), otherwise it skips itself with a note saying exactly
 which variables are missing and where they come from. Each leg sends ONE
 real, billable message (roughly CNY 0.045 for the two Chinese carriers,
-USD 0.008 for Twilio) — the round deliberately does not run them; see Known
-limitations for the standing boundary.
+USD 0.008 for Twilio) — none of it runs without those credentials; see
+Known limitations for the standing boundary.
 
 ### Verification codes and recovery codes are hashed, not argon2id'd
 
@@ -1060,5 +1052,6 @@ rather than trying to synchronize on the exact step boundary.
 | The Aliyun and Tencent adapters can only send through a template the operator's own account registers: Aliyun one whose single variable is named by `Config.TemplateParamName` (default `content`), Tencent one declaring exactly one positional variable; Twilio sends free text. | The seam delivers already-rendered text, and Aliyun/Tencent have no free-text send; the adapters map the whole message onto the account's template variable(s) exactly as each package doc records. The template itself is account data this codebase cannot provision or verify — a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
 | `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA), which has not been made. |
 | MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow); the shipped shape is enrollment, recovery and step-up only. |
-| Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options carry; the binding is unbuilt (see the dynamic-config row above). || The `otpauth://` provisioning URI is rendered as a plain string; no QR image is generated server-side. | Deliberate — see `internal/totp`'s own doc comment. QR rendering is display logic and belongs on the frontend, which already owns every other rendering decision in this codebase. A QR-generation dependency was weighed and rejected for the same reason `pquerna/otp` was: every dependency added here lands in every consumer's build. |
+| Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options carry; the binding is unbuilt (see the dynamic-config row above).
+| The `otpauth://` provisioning URI is rendered as a plain string; no QR image is generated server-side. | Deliberate — see `internal/totp`'s own doc comment. QR rendering is display logic and belongs on the frontend, which already owns every other rendering decision in this codebase. A QR-generation dependency was weighed and rejected for the same reason `pquerna/otp` was: every dependency added here lands in every consumer's build. |
 | Members who sign in through the enterprise relying party (`SSOService.Callback`) produce no audit row, and tenant SSO configuration has no HTTP surface. | Configuration WRITES and replay responses are covered from the service layer: `AuditActionSSOConfigure` is emitted by `SSOService.SaveConfig` after every committed create and update (`oidc.go`'s `emitConfigSavedAudit`, its registrar wired by `module.go`'s `Register`), recording the writing operator (the `pkgcore.Actor` the caller's ctx attests) and the written configuration (issuer, client id, enabled, allowed domains) without the client secret; a detected replay is recorded by `SessionManager.handleReplay`'s `emitReplayAudit` (`session.go`) under `AuditActionSessionRevoke` with `Result{Success: false, FailureReason: RevokeReasonReplay}` — the 401 the replayed refresh answers, `RevokeReasonReplay` the same vocabulary the revoked session row stores in `revoke_reason` — attributed to the account owner and stamped with the revoked session's tenant. Every declared audit action has a live emit site: the handler-layer ones through `recordAudit` (`handler.go`) — `session.revoke` among them, whose replay responses are the manager-layer site just described, so an `authn.session.revoke` row records either an owner-initiated revocation (`Success=true`) or the theft response, told apart by the Result — and `AuditActionSSOConfigure` from the service layer; emission belongs where the write commits, not where an HTTP handler would be. An SSO-config HTTP surface, were one mounted, would add only its own `recordAudit` call, never new mechanism. See this file's Testing section for the proofs. The sign-in half of the gap stays open for the same structural reason: `SSOService.Callback` runs with no handler-layer funnel, and no HTTP surface exists to host one; it closes with that surface. |

@@ -622,7 +622,8 @@ proofs.
   lock, its deadlock avoidance refusing the upgrade rather than consulting
   the busy handler, so no `busy_timeout` setting changes the outcome (the
   WARN's ~13 ms `duration_ms` is that immediacy; the boundary is spelled
-  out and pinned in `go/dbkit/dialect/sqlite/busy_timeout_test.go`). This
+  out and pinned in `go/dbkit/dialect/sqlite/dialect_sqlite_test.go`'s
+  busy-timeout suite). This
   is not the write-capture plugin's same-goroutine self-deadlock shape
   either (that one is a separate limitation recorded in go/dbkit's own
   docs), but it shares that one's property that a busy timeout cannot cure

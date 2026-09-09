@@ -18,8 +18,8 @@ dead-letter counters on `worker.go`'s real execution path), the
 `go/metering`, `go/billing` (invoice transitions and open-dwell at the
 module root, webhook-verify outcomes in each gateway provider) and
 `go/ai-gateway` (per-provider calls/errors/duration plus rate-limit
-hits) -- see each module's own `metrics.go` for its row's mapping and
-its recorded, deliberate halves. The domain table is each owning
+hits) -- the instrumentation lives inline at those sites, never in a
+`metrics.go` of this package. The domain table is each owning
 module's obligation, never a reason for this package to speculatively
 build their instrumentation for them.
 

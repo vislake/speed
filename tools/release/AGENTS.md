@@ -1,18 +1,16 @@
-# tools/release — the lockstep release machinery (M0)
+# tools/release — the lockstep release machinery
 
 `docs/internal/02-repo-and-release.md` and `docs/internal/18-cicd.md`
 define the lockstep release: every Go module and every npm package shares
 ONE version number and releases together, and a single command must be
-able to publish all of them at that version (the M0 exit condition,
-`docs/internal/15-roadmap.md`). This directory is the M0 deliverable for
-that command, and it is deliberately an OFFLINE, verification-only round:
+able to publish all of them at that version. This directory holds that
+command, deliberately OFFLINE and verification-only:
 
 - `lockstep-release.py` — the coordinator. Derives the publishable set at
   runtime (go.work use entries under `go/` for the Go half;
   `web/packages/*` for the npm half), prints the full one-version plan in
-  its default mode, and exits 0 only when the plan is consistent. Real
-  publishing is scheduled for the v1.0 release at M4; no mode of the
-  coordinator (or of `release.yml`) can publish for real.
+  its default mode, and exits 0 only when the plan is consistent. No
+  mode of the coordinator (or of `release.yml`) can publish for real.
 - `test_lockstep_release.py` — the coordinator's unittest suite, run by
   `--self-test`, by `python3 -m unittest discover -s tools/release`, or
   directly. Its sandbox proof builds a scratch git repository from the
@@ -42,15 +40,14 @@ The root `Taskfile.yml`'s `release:plan` task wraps the first form;
   engine (`first_release_replace_cleanup`) is exercised only against the
   fixtures under `testdata/`. The live tree keeps its pre-release
   transition state (sibling `replace` lines, `0.0.0` and zero
-  pseudo-versions) until the first real release at M4, which is when the
-  cleanup runs for real.
+  pseudo-versions); the cleanup engine runs only against those fixtures.
 - **Never edit a module go.mod replace line or a web package.json
-  version field.** The tree is deliberately transitional until M4; a
-  premature cleanup or bump breaks `go mod tidy` consumers or publishes
-  nothing while pretending otherwise.
+  version field.** The tree is deliberately transitional (pre-release);
+  a premature cleanup or bump breaks `go mod tidy` consumers or
+  publishes nothing while pretending otherwise.
 - **Never pass `--apply` without `--allow-local-tag-creation`, and never
   use the hatched mode against anything but a scratch checkout.** The
-  tags it creates are local and never pushed; pushing is M4's job.
+  tags it creates are local and never pushed.
 - **Never hand-maintain a module or package list.** The go.work use
   block is the Go source of truth and `web/packages/*` plus
   `web/.changeset/config.json` the npm one; lists derived anywhere else
@@ -68,8 +65,8 @@ The root `Taskfile.yml`'s `release:plan` task wraps the first form;
   `web/.changeset/config.json` in the same change — the coordinator's
   coverage check fails loudly otherwise.
 - **The module count changes:** nothing in this directory hard-codes it;
-  the closing aggregate line of the plan ("21 Go modules + 5 packages ->
-  v0.3.0") derives from the runtime discovery.
+  the closing aggregate line of the plan ("N Go modules + M packages ->
+  vX.Y.Z") derives from the runtime discovery.
 - **A release-version rule changes:** the pattern
   `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$` is
   contract language with two executable copies that must stay in step --

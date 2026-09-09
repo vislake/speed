@@ -614,13 +614,6 @@ requirement is the strictest of the two: `Register` refuses to boot without
 a wired sender (`ErrSMSSenderRequired`), where authn's refusal applies only
 under the distributed deployment mode.
 
-The promotion was a deliberate breaking change under lockstep versioning:
-`WithSMSSender`'s parameter type is now `pkgcore.SMSSender`, and this
-module's former `SMS` type, `SMSSender` interface and
-`NewConsoleSMSSender` constructor are gone -- a host that wired this
-module's own console constructor names `pkgcore.NewConsoleSMSSender`
-instead.
-
 ### External contacts render in the platform default locale
 
 A `Dispatch` carries the recipient's negotiated locale, which the caller
