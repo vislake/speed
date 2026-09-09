@@ -132,10 +132,10 @@ cd go/authn && go build ./... && go vet ./...
 
 ## Next steps
 
-- [Reference app walkthrough](walkthrough-reference-app/) — drive a
+- [Reference app walkthrough](../walkthrough-reference-app/) — drive a
   fully wired, demo-seeded product over real HTTP to see sign-in,
   permissions and tenant isolation behave.
-- [Operating a generated project](operating/) — deployment modes in
+- [Operating a generated project](../operating/) — deployment modes in
   brief, and the `upgrade`/`db migrate`/`config print` commands that
   maintain a project day to day.
 - [User guides](/docs/user-guide/) — read by domain: identity and

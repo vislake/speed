@@ -6,7 +6,7 @@ description: The day-to-day of a saasctl-generated project — the two deploymen
 
 # Operating a generated project
 
-Once a [starter project](quickstart/) is generated and booting, three
+Once a [starter project](../quickstart/) is generated and booting, three
 operations recur: applying the schema ahead of a boot, moving the
 project onto a new speed release, and understanding what it would
 boot on. All three go through `saasctl`, run from a speed checkout as
@@ -116,13 +116,13 @@ release will be consumed through.
 
 ## Next steps
 
-- [Reference app walkthrough](walkthrough-reference-app/) — the fully
+- [Reference app walkthrough](../walkthrough-reference-app/) — the fully
   wired, demo-seeded composition, driven over real HTTP.
-- [Error code index](error-codes/) — the codes a running service can
+- [Error code index](../error-codes/) — the codes a running service can
   answer with when something refuses.
 - [Module index](/docs/modules/) — every Go module and npm package a
   project can require, with its own `AGENTS.md`/`README.md`.
-- [Quickstart](quickstart/) — generating the project this page operates.
+- [Quickstart](../quickstart/) — generating the project this page operates.
 
 ## Source
 

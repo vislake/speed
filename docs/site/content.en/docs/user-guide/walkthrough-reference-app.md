@@ -170,12 +170,12 @@ seed and your notes survive.
 
 ## Next steps
 
-- [Error code index](error-codes/) — every code a speed-based API can
+- [Error code index](../error-codes/) — every code a speed-based API can
   answer with, its status, locale message and triggering condition.
-- [Identity and access](domains/identity-access/) — the middleware
+- [Identity and access](../domains/identity-access/) — the middleware
   order this walkthrough exercised, and how to wire the same chain in
   your own project.
-- [Operating a generated project](operating/) — deployment modes and
+- [Operating a generated project](../operating/) — deployment modes and
   the day-to-day `saasctl` commands.
 
 ## Source

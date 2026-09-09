@@ -130,7 +130,7 @@ own cadence.
 - Side-effect publishes (completion event, derive enqueue, delete
   event) warn rather than fail their calls.
 - Coded errors: see the [error code
-  index](../../error-codes/#storage) — `storage.type_not_allowed`,
+  index](../../../error-codes/#storage) — `storage.type_not_allowed`,
   `storage.size_mismatch`, `storage.object_not_found`,
   `storage.store_unavailable` and the rest.
 
@@ -138,4 +138,4 @@ own cadence.
 
 - [go/storage/AGENTS.md](https://github.com/vislake/speed/blob/main/go/storage/AGENTS.md) — the authoritative document (lifecycle, revalidation pipeline, key grammar, known limitations, deferred list)
 - Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
-- Related pages: [Platform services](../), [notification](notification/), the domain guide [Storage, sharing and AI](../../domains/storage-sharing-and-ai/)
+- Related pages: [Platform services](../), [notification](../notification/), the domain guide [Storage, sharing and AI](../../../domains/storage-sharing-and-ai/)

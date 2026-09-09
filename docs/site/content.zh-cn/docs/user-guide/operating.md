@@ -6,7 +6,7 @@ description: saasctl 生成项目的日常维护——它可以运行的两种�
 
 # 生成项目的运维
 
-[起始项目](quickstart/)生成并跑起来之后,有三种操作会反复出现:在启动
+[起始项目](../quickstart/)生成并跑起来之后,有三种操作会反复出现:在启动
 前先准备好数据库 schema、把项目迁到新的 speed 发布版本、弄清它启动时
 会用什么配置以及为什么。三者都走 `saasctl`,从 speed checkout 以
 `go run ./go/saasctl <command>` 运行;每个命令都以目标项目的
@@ -93,13 +93,13 @@ checkout 对构建保持权威;这条命令就是第一个发布被消费时走�
 
 ## 接下来
 
-- [参考应用演练](walkthrough-reference-app/)——完全接好线、预置演示
+- [参考应用演练](../walkthrough-reference-app/)——完全接好线、预置演示
   数据的组装体,用真实 HTTP 驱动。
-- [错误码索引](error-codes/)——运行中的服务拒绝请求时可能应答的
+- [错误码索引](../error-codes/)——运行中的服务拒绝请求时可能应答的
   错误码。
 - [模块索引](/zh-cn/docs/modules/)——项目可以 require 的每个 Go
   模块与 npm 包,各自链接自己的 `AGENTS.md`/`README.md`。
-- [快速开始](quickstart/)——生成本页所运维的那个项目。
+- [快速开始](../quickstart/)——生成本页所运维的那个项目。
 
 ## Source
 

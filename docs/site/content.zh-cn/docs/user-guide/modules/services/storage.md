@@ -118,4 +118,4 @@ finalized, err := svc.Complete(ctx, created.ID)
 
 - [go/storage/AGENTS.md](https://github.com/vislake/speed/blob/main/go/storage/AGENTS.md)——权威文档(生命周期、复验流水线、键文法、已知限制、未实现清单)
 - 设计依据:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
-- 相关页面:[平台服务](../)、[notification](notification/)、域指南[存储、分享与 AI](../../domains/storage-sharing-and-ai/)
+- 相关页面:[平台服务](../)、[notification](../notification/)、域指南[存储、分享与 AI](../../../domains/storage-sharing-and-ai/)

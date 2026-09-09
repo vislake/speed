@@ -125,7 +125,7 @@ is built later, in `Attach`, after `Bootstrap` returns.
   `WithWebhookHTTPClient`) exist for offline tests only — a
   production host must never wire them.
 - Coded errors: see the [error code
-  index](../../error-codes/#integration) — `integration.authentication_failed`,
+  index](../../../error-codes/#integration) — `integration.authentication_failed`,
   `integration.rate_limited`, `integration.webhook_url_blocked`,
   `integration.scope_not_held_by_creator` and the rest.
 
@@ -133,4 +133,4 @@ is built later, in `Attach`, after `Bootstrap` returns.
 
 - [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md) — the authoritative document (key lifecycle, seams, webhook pipeline, adjudications, limitations)
 - Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
-- Related pages: [Platform services](../), [pki](pki/), [notification](notification/)
+- Related pages: [Platform services](../), [pki](../pki/), [notification](../notification/)

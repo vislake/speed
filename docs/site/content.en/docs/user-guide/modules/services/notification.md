@@ -121,7 +121,7 @@ create/verify/resend) plus the hand-mounted stream.
   resolver must return verified addresses — the module cannot detect
   a host that serves unverified ones).
 - Coded errors: see the [error code
-  index](../../error-codes/#notification) — the preference group, the
+  index](../../../error-codes/#notification) — the preference group, the
   contact group (code, consent, bounce, rate-limit refusals), the
   dispatch and inbox groups, and the six `Err*Required` wiring
   sentinels.
@@ -130,4 +130,4 @@ create/verify/resend) plus the hand-mounted stream.
 
 - [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md) — the authoritative document (delivery pipeline, consent machine, host seams, rules, not-implemented list)
 - Design rationale: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
-- Related pages: [Platform services](../), the domain guide [Jobs and notifications](../../domains/jobs-and-notifications/)
+- Related pages: [Platform services](../), the domain guide [Jobs and notifications](../../../domains/jobs-and-notifications/)

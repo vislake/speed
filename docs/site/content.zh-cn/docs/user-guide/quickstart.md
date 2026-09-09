@@ -121,9 +121,9 @@ cd go/authn && go build ./... && go vet ./...
 
 ## 接下来
 
-- [参考应用演练](walkthrough-reference-app/)——驱动一个完全接好线、
+- [参考应用演练](../walkthrough-reference-app/)——驱动一个完全接好线、
   预置了演示数据的应用走真实 HTTP,看登录、权限与租户隔离的实际行为。
-- [生成项目的运维](operating/)——部署形态简述,以及日常维护项目的
+- [生成项目的运维](../operating/)——部署形态简述,以及日常维护项目的
   `upgrade`/`db migrate`/`config print` 命令。
 - [用户指南](/zh-cn/docs/user-guide/)——按领域阅读:身份与访问、多租户
   与组织、计费、通知等。

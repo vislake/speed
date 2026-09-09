@@ -104,4 +104,4 @@ m := notification.NewModule(db,
 
 - [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md)——权威文档(投递流水线、同意状态机、宿主接缝、规则、未实现清单)
 - 设计依据:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)
-- 相关页面:[平台服务](../)、域指南[任务与通知](../../domains/jobs-and-notifications/)
+- 相关页面:[平台服务](../)、域指南[任务与通知](../../../domains/jobs-and-notifications/)

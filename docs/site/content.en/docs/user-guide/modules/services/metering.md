@@ -116,7 +116,7 @@ and the billing-grade ingest.
 - **Coded errors** (`metering.missing_tenant_id`,
   `metering.invalid_quantity`, `metering.field_too_long`,
   `metering.usage_summaries_unconfigured`, ...) — see the [error code
-  index](../../error-codes/#metering). There is deliberately no
+  index](../../../error-codes/#metering). There is deliberately no
   `metering.unknown_feature`: metering has no feature catalog — that
   belongs to billing.
 
@@ -137,4 +137,4 @@ and the billing-grade ingest.
 
 - [go/metering/AGENTS.md](https://github.com/vislake/speed/blob/main/go/metering/AGENTS.md) — the authoritative document (tiers, outbox semantics, aggregation, known limitations)
 - Design rationale: [docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
-- Related pages: [Platform services](../), the domain guide [Billing and metering](../../domains/billing-metering/)
+- Related pages: [Platform services](../), the domain guide [Billing and metering](../../../domains/billing-metering/)

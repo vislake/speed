@@ -159,11 +159,11 @@ curl -s -i localhost:8080/api/v1/notes -H 'Authorization: Bearer not-a-real-toke
 
 ## 接下来
 
-- [错误码索引](error-codes/)——speed 系 API 可能应答的每个错误码,
+- [错误码索引](../error-codes/)——speed 系 API 可能应答的每个错误码,
   及其状态、locale 消息与触发条件。
-- [身份与访问](domains/identity-access/)——本演练走过的中间件顺序,
+- [身份与访问](../domains/identity-access/)——本演练走过的中间件顺序,
   以及如何在自己的项目里接出同样的链。
-- [生成项目的运维](operating/)——部署形态与日常 `saasctl` 命令。
+- [生成项目的运维](../operating/)——部署形态与日常 `saasctl` 命令。
 
 ## Source
 
