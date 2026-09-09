@@ -12,20 +12,25 @@ for the rest).
 
 ## Current state: real content, real machinery
 
-The site is being restructured, in content batches merged to `main`
-progressively, from a flat six-page set into two main sections with
-site-level pages around them: **User guides** (`docs/user-guide/`, for
-teams using speed modules in their own product — overall introduction,
-domain-by-domain fast starts, and a complete per-module usage reference
-for every Go module and npm package) and **Developer docs**
-(`docs/developer-docs/`, for developers working on speed itself —
-architecture, design principles, and per-module design deep dives
-explaining the rationale). The site-level `ai-agents`/`about` pages and
-`static/llms.txt` serve the AI-agent audience; llms.txt stays a single
-root-level file hand-maintained to mirror the current page set. When a
-batch lands, `tools/check_docs_site.py`'s required-page list is updated
-to the batch's actual page set in the same change — the list and the
-content tree never drift apart. This round (Hugo migration) made the
+The site is fully restructured into two main sections with site-level
+pages around them: **User guides** (`docs/user-guide/`, for teams using
+speed modules in their own product — overall introduction,
+domain-by-domain fast starts (the eight `domains/` pages), and a
+complete per-module usage reference for every Go module and npm
+package, grouped by dependency layer under `modules/`) and **Developer
+docs** (`docs/developer-docs/`, for developers working on speed itself
+— architecture, design principles, and per-module design deep dives,
+grouped the same way under `modules/`, explaining the rationale). The
+site-level `ai-agents`/`about` pages and `static/llms.txt` serve the
+AI-agent audience; llms.txt stays a single root-level file
+hand-maintained to mirror the current page set. The former flat pages
+`docs/quickstart.md`, `docs/modules.md` and `docs/status.md` migrated
+into the sections; their old URLs are served by Hugo alias pages from
+the new homes (`/docs/user-guide/quickstart/`,
+`/docs/user-guide/modules/`, `/docs/developer-docs/status/`).
+`tools/check_docs_site.py`'s required-page list names the skeleton
+pages of the finished structure; every other page is covered by its
+full-link scan. This round (Hugo migration) made the
 machinery decision
 docs/internal/13-documentation-standards.md had deliberately deferred to
 milestone M4, brought forward at the user's explicit request — the same
@@ -220,23 +225,21 @@ Hugo's output directory (`docs/site/public`), not `docs/site/` itself.
 - `docs/developer-docs/_index.md` — the Developer-docs hub: what the
   section covers and how the design pages relate to the repository's
   internal documents.
-- `docs/quickstart.md` — generating a starter project with
-  `saasctl new`, the four `saasctl` commands, and how to run Go
-  commands in this repository's workspace layout (migrating to
-  `user-guide/`; keep the alias in sync with the move).
-- `docs/modules.md` — the module index: every `go/` module and
-  `web/packages/*` package (plus the reference-app web host), each
-  linking to its own `AGENTS.md`/`README.md` (being superseded by the
-  per-module user-guide pages).
+- `docs/developer-docs/modules/` — the per-module design section, one
+  page per Go module and npm package under group directories
+  (`core/`, `services/`, `identity/`, `capabilities/`, `tools/`,
+  `web/`), each with responsibility/boundary, design rationale,
+  mechanisms, and a Source section back to `docs/internal/` and the
+  module's `AGENTS.md`.
 - `docs/ai-agents.md` — an explicit AI-agent orientation: what to read
   first, the architecture rules that most often matter, and where the
   authoritative implementation status lives.
 - `docs/about.md` — what speed is, how its documentation is
   distributed.
-- `docs/status.md` — a coarse, verified-against-the-repository
-  snapshot; points at the repository root CLAUDE.md's Repository Status
-  section as the authoritative, current source of truth rather than
-  duplicating its per-module detail (migrating to `developer-docs/`).
+- `static/llms.txt` — the llms.txt convention's entry point for
+  crawlers and AI agents fetching this site directly, copied verbatim
+  to the built site's root; hand-maintained to mirror the current
+  page set, with real `speed.vislake.com` URLs.
 - `static/llms.txt` — the llms.txt convention's entry point for
   crawlers and AI agents fetching this site directly, copied verbatim
   to the built site's root; hand-maintained to mirror the current page

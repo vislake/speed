@@ -71,5 +71,5 @@ from the [pki](/docs/user-guide/modules/services/pki/) module of the
 services group; the frontend counterparts — session management,
 sign-in screens, tenant switching — are the `@speed` packages of the
 web workspace, documented in a later section of this reference. Start
-with the [Quickstart](/docs/quickstart/): the generated starter
+with the [Quickstart](/docs/user-guide/quickstart/): the generated starter
 project wires these three modules for you.

@@ -30,7 +30,7 @@ The group is ordered by dependency, as the left navigation shows:
 five expect a working core group underneath — a `Registry` with the
 infrastructure seams resolved, a `jobs.Queue` for asynchronous work —
 so read the core group's pages first if you are assembling a host from
-scratch, then the [Quickstart](/docs/quickstart/), which generates a
+scratch, then the [Quickstart](/docs/user-guide/quickstart/), which generates a
 starter project that already wires most of the floor.
 
 ## Pages in this group

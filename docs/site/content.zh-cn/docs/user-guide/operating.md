@@ -97,7 +97,7 @@ checkout 对构建保持权威;这条命令就是第一个发布被消费时走�
   数据的组装体,用真实 HTTP 驱动。
 - [错误码索引](../error-codes/)——运行中的服务拒绝请求时可能应答的
   错误码。
-- [模块索引](/zh-cn/docs/modules/)——项目可以 require 的每个 Go
+- [模块索引](/zh-cn/docs/user-guide/modules/)——项目可以 require 的每个 Go
   模块与 npm 包,各自链接自己的 `AGENTS.md`/`README.md`。
 - [快速开始](../quickstart/)——生成本页所运维的那个项目。
 

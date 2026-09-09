@@ -12,7 +12,7 @@ aliases: ["/docs/quickstart"]
 
 > [!NOTE]
 > **目前还没有任何发布物。** speed 的第一个正式 tag 要到里程碑 M4 才会
-> 出现(见[实现状态](/zh-cn/docs/status/));在那之前不存在
+> 出现(见[实现状态](/zh-cn/docs/developer-docs/status/));在那之前不存在
 > `go get github.com/vislake/speed/...`,也不存在从任何 registry
 > `npm install @speed/...`。下面这条路径——本地 checkout 加 `go run`
 > ——就是当下试用 speed 真实、现行的方法。生成项目因此带着过渡态的形态:
@@ -56,7 +56,7 @@ go run ./go/saasctl new ../my-app --speed-root .
 `authn` 会被拒绝,并点名隐含需要的 `authn`。没有 `--without`:不列出
 某个模块就是不接入它。`go/pki` 不是第四个选项——只要选了 `authn`,它
 就会作为 authn 的签名密钥来源悄悄随行;每种选择实际产生的 require
-集合见[模块索引](/zh-cn/docs/modules/)。
+集合见[模块索引](/zh-cn/docs/user-guide/modules/)。
 
 ```sh
 # 默认:完整的 {authn, rbac, org} 组合

@@ -17,7 +17,7 @@ title: speed
 带可运行示例的逐模块完整参考。
 
 - [用户指南](/zh-cn/docs/user-guide/)——从这里开始。
-- [快速开始](/zh-cn/docs/quickstart/)——五分钟生成一个启动项目。
+- [快速开始](/zh-cn/docs/user-guide/quickstart/)——五分钟生成一个启动项目。
 - [错误码索引](/zh-cn/docs/user-guide/error-codes/)——speed 系 API
   可能应答的全部错误码清单。
 

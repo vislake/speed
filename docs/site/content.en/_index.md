@@ -20,7 +20,7 @@ start, domain-by-domain tutorials, and a complete per-module reference
 with runnable examples.
 
 - [User guides](/docs/user-guide/) — start here.
-- [Quickstart](/docs/quickstart/) — a starter project in five minutes.
+- [Quickstart](/docs/user-guide/quickstart/) — a starter project in five minutes.
 - [Error code index](/docs/user-guide/error-codes/) — the complete
   list of codes a speed-based API can answer with.
 

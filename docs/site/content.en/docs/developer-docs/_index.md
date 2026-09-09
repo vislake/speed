@@ -12,24 +12,21 @@ and why each module is designed the way it is.
 
 ## Structure
 
-- **Architecture** — the modular monolith, the module dependency
-  direction, the deployment mode / implementation composition axes,
-  and the module wiring contract.
-- **Design principles** — the discipline every module obeys: module
-  boundaries, multi-tenant isolation, spec-first API contract,
-  asynchronous work, testing tiers — and why.
-- **Per-module design** — one page per Go module and npm package: the
-  module's responsibility and boundary (including what it deliberately
-  does **not** do), the design decisions and trade-offs behind its
-  shape, its key mechanisms, and what of it is a frozen public API.
-  The left navigation mirrors the module dependency order, so pages
-  read top to bottom as the design story.
-- **Status** — where implementation genuinely stands today; the
-  repository root CLAUDE.md's Repository Status section is the
-  authoritative source of truth.
-
-Pages in this section land as the site's content batches complete
-them; the left navigation is the always-current map.
+- [**Architecture**](architecture/) — the modular monolith, the module
+  dependency direction, the deployment mode / implementation
+  composition axes, and the module wiring contract.
+- [**Design principles**](design-principles/) — the discipline every
+  module obeys: module boundaries, multi-tenant isolation, spec-first
+  API contract, asynchronous work, testing tiers — and why.
+- [**Per-module design**](modules/) — one page per Go module and npm
+  package: the module's responsibility and boundary (including what it
+  deliberately does **not** do), the design decisions and trade-offs
+  behind its shape, its key mechanisms, and what of it is a frozen
+  public API. The section mirrors the module dependency order, so
+  pages read top to bottom as the design story.
+- [**Status**](status/) — where implementation genuinely stands
+  today; the repository root CLAUDE.md's Repository Status section is
+  the authoritative source of truth.
 
 The design pages are distilled from the repository's internal design
 documents (`docs/internal/`) and each module's `AGENTS.md` — every page

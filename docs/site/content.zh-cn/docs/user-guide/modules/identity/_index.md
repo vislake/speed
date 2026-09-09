@@ -57,5 +57,5 @@ flowchart LR
 这三个模块应答的每个码。authn 令牌验签所用的签名密钥来自 services 组的
 [pki](/zh-cn/docs/user-guide/modules/services/pki/) 模块;前端对应物——
 会话管理、登录界面、租户切换——是 web workspace 的 `@speed` 包,在本参
-考文的后段另有文档。还没组装过宿主的话,从 [Quickstart](/zh-cn/docs/quickstart/)
+考文的后段另有文档。还没组装过宿主的话,从 [Quickstart](/zh-cn/docs/user-guide/quickstart/)
 开始:生成的起始项目已经替你接好这三个模块。

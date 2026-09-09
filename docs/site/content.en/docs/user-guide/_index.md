@@ -15,7 +15,7 @@ speed's Go modules and npm packages in their own product.
   product need end to end (identity and access, tenancy and
   organizations, notifications, billing, AI, ...): which modules are
   involved, the minimal integration steps, an example, and where to go
-  next. Start with the [Quickstart](/docs/quickstart/), then follow the
+  next. Start with the [Quickstart](/docs/user-guide/quickstart/), then follow the
   domains your product needs.
 - **By module** — the complete reference. Every Go module and npm
   package has its own page: what it is for, when to choose it, how to

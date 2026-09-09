@@ -13,7 +13,7 @@ it. You need a Go toolchain and nothing else.
 
 > [!NOTE]
 > **Nothing is published yet.** speed's first tagged release lands at
-> milestone M4 (see [Status](/docs/status/)); until then there is no
+> milestone M4 (see [Status](/docs/developer-docs/status/)); until then there is no
 > `go get github.com/vislake/speed/...` and no `npm install @speed/...`
 > from a registry. The local-checkout path below — clone plus `go run`
 > — is the real, current way to try speed. Generated projects carry
@@ -63,7 +63,7 @@ without `authn` is refused, naming `authn` as implied. There is no
 `--without`: closing a module means not listing it.
 `go/pki` is not a fourth choice — it rides along silently whenever
 `authn` is selected, as authn's signing-key source; the concrete
-require set each selection produces is in the [module index](/docs/modules/).
+require set each selection produces is in the [module index](/docs/user-guide/modules/).
 
 ```sh
 # the default: the full {authn, rbac, org} selection

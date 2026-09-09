@@ -2,6 +2,7 @@
 title: 模块参考
 weight: 0
 description: "用户指南的按模块读法——每个 Go 模块一页:做什么、何时选用、怎么接线、核心概念与边界。"
+aliases: ["/docs/modules"]
 ---
 
 # 模块参考
@@ -46,6 +47,6 @@ speed 不是一个你直接运行的应用,而是你可以拉进自己产品、�
 模块页回答「我要集成模块 X:完整用法」。两者从相反方向指向同一批
 事实;每个模块应答的错误码统一收录在[错误码索引](../error-codes/)。
 
-还没构建过 speed 服务,先走[快速开始](/zh-cn/docs/quickstart/);
+还没构建过 speed 服务,先走[快速开始](/zh-cn/docs/user-guide/quickstart/);
 [演练](../walkthrough-reference-app/)与
 [运维](../operating/)页覆盖本栏分解之前的组装形态。

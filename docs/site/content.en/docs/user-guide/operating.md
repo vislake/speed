@@ -120,7 +120,7 @@ release will be consumed through.
   wired, demo-seeded composition, driven over real HTTP.
 - [Error code index](../error-codes/) — the codes a running service can
   answer with when something refuses.
-- [Module index](/docs/modules/) — every Go module and npm package a
+- [Module index](/docs/user-guide/modules/) — every Go module and npm package a
   project can require, with its own `AGENTS.md`/`README.md`.
 - [Quickstart](../quickstart/) — generating the project this page operates.
 

@@ -2,6 +2,7 @@
 title: Module reference
 weight: 0
 description: "The by-module reading of the user guides — one page per Go module: what it is for, when to choose it, how to wire it, its core concepts and its boundaries."
+aliases: ["/docs/modules"]
 ---
 
 # Module reference
@@ -54,7 +55,7 @@ integrating module X: full usage". Both point at the same facts from
 opposite directions; the error codes every module answers with are
 listed once in the [error code index](../error-codes/).
 
-Start with the [Quickstart](/docs/quickstart/) if you have not built a
+Start with the [Quickstart](/docs/user-guide/quickstart/) if you have not built a
 speed-based service yet; the [walkthrough](../walkthrough-reference-app/)
 and [operating](../operating/) pages cover the assembled shape this
 section decomposes.

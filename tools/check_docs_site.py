@@ -64,22 +64,19 @@ from pathlib import Path
 # Pages every language's build must produce, relative to that
 # language's own root in the built tree (en: docs/site/public/<page>;
 # zh-cn: docs/site/public/zh-cn/<page>) -- one entry per page the site
-# ships, matching hugo.toml's BookSection='docs' layout (home page
-# outside docs/; under it the two section branches user-guide/ and
-# developer-docs/ plus the site-level leaves quickstart/modules/
-# ai-agents/about/status, the last three of which migrate into the
-# branches as the site's content batches complete).
+# ships, matching hugo.toml's BookSection='docs' layout: the home page
+# outside docs/, the two section branches user-guide/ and
+# developer-docs/ (each with its landing page; the error-codes page is
+# the generated one), and the two site-level leaves under docs/.
+# Content pages beyond these are covered by the full-link scan.
 REQUIRED_PAGES_PER_LANGUAGE = [
     "index.html",
     "docs/index.html",
     "docs/user-guide/index.html",
     "docs/user-guide/error-codes/index.html",
     "docs/developer-docs/index.html",
-    "docs/quickstart/index.html",
-    "docs/modules/index.html",
     "docs/ai-agents/index.html",
     "docs/about/index.html",
-    "docs/status/index.html",
 ]
 
 # The zh-cn build lands under this prefix inside the built tree

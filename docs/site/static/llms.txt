@@ -29,21 +29,37 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 
 ## User guides (using speed in your product)
 
-- [User guides](https://speed.vislake.com/docs/user-guide/): section index — domain-by-domain fast starts and the
-  complete per-module usage reference.
-- [Quickstart](https://speed.vislake.com/docs/quickstart/): generate a starter project with `saasctl new`, the four
-  `saasctl` commands (`new`, `upgrade`, `db migrate`, `config print`), and how to run Go
-  commands in this repository's workspace layout.
+- [User guides](https://speed.vislake.com/docs/user-guide/): section index — the overall introduction, the
+  domain-by-domain fast starts, and the complete per-module usage reference.
+- [Domain guides](https://speed.vislake.com/docs/user-guide/domains/): eight fast-start pages, one per product
+  domain (identity and access, tenancy and organizations, data and configuration, billing
+  and metering, jobs and notifications, storage sharing and AI, observability and
+  operations, building the frontend), each with minimal integration steps and an example.
+- [Quickstart](https://speed.vislake.com/docs/user-guide/quickstart/): generate a starter project with `saasctl new`, the
+  four `saasctl` commands (`new`, `upgrade`, `db migrate`, `config print`), and how to
+  run Go commands in this repository's workspace layout.
+- [Module reference](https://speed.vislake.com/docs/user-guide/modules/): one usage page per Go module and npm package
+  (21 + 12), grouped by dependency layer — what it is for, when to choose it, how to wire
+  it, runnable examples, known limitations.
 - [Error code index](https://speed.vislake.com/docs/user-guide/error-codes/): every structured error code a speed-based API
   can answer with — HTTP status, locale message, triggering condition and source,
   grouped by module.
 
 ## Developer docs (developing speed itself)
 
-- [Developer docs](https://speed.vislake.com/docs/developer-docs/): section index — architecture, design principles and
-  per-module design deep dives explaining the rationale behind each module's shape.
-- [Status](https://speed.vislake.com/docs/status/): a coarse, verified-against-the-repository snapshot of
-  implementation status, pointing at CLAUDE.md for the authoritative detail.
+- [Developer docs](https://speed.vislake.com/docs/developer-docs/): section index — architecture, design principles,
+  per-module design deep dives explaining the rationale behind each module's shape,
+  API-contract and release mechanics, and contributing guidance.
+- [Module design](https://speed.vislake.com/docs/developer-docs/modules/): one design page per Go module and npm package
+  (21 + 12): responsibility and boundary, design rationale and trade-offs, key
+  mechanisms, frozen public API — with mermaid diagrams.
+- [Architecture](https://speed.vislake.com/docs/developer-docs/architecture/): the modular monolith, module dependency
+  direction, the deployment mode / implementation composition axes, and the wiring
+  contract.
+- [Design principles](https://speed.vislake.com/docs/developer-docs/design-principles/): the discipline every module obeys and
+  why, with where each rule is enforced.
+- [Status](https://speed.vislake.com/docs/developer-docs/status/): a coarse, verified-against-the-repository snapshot
+  of implementation status, pointing at CLAUDE.md for the authoritative detail.
 
 ## Site pages
 
@@ -51,8 +67,10 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 - [Documentation](https://speed.vislake.com/docs/): the section hub linking both main sections.
 - [About](https://speed.vislake.com/docs/about/): what speed is, how the pieces fit together, how its
   documentation is distributed.
-- [Modules](https://speed.vislake.com/docs/modules/): the 21 Go modules and 11 npm packages (plus the reference
-  app's web host) a consumer project can pull in, each linking to its own docs.
+- [For AI Agents](https://speed.vislake.com/docs/ai-agents/): what to read first as a coding agent (also listed under
+  Start here above).
+- [Design decisions](https://speed.vislake.com/docs/developer-docs/design-decisions/): the repository's ADR record,
+  surfaced.
 
 ## Module documentation (go/ — repository assets, per-module discipline)
 
