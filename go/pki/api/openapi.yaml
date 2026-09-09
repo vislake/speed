@@ -24,16 +24,17 @@ info:
     (pki_signing_keys, pki_authorities) that has no tenant at all; the
     caller's tenant, if any, plays no part in them.
 
-    Merging this fragment into the application-wide build/openapi/speed.yaml
-    stays future work, the identical deferral org's and storage's own
-    fragments already record (docs/internal/21-api-contract.md's
-    implementation-status note): as of the X.509-consumer round pki has an
-    in-workspace consumer for the revoke-certificate and CRL-fetch
-    operations (the reference app's AI-output attestation flow,
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk (docs/internal/
+    21-api-contract.md's spec-organization and merging section). The
+    revoke-certificate and CRL-fetch operations have an in-workspace HTTP
+    caller (the reference app's AI-output attestation flow,
     attestation_flow_test.go, drives both over the wire; the signing-key
     revoke is driven by pki_revoke_gate_flow_test.go), while the two JWKS
-    read operations -- key-lifecycle and authority-chain -- still have no
-    HTTP caller.
+    read operations -- key-lifecycle and authority-chain -- have no HTTP
+    caller.
   version: 0.0.0
 paths:
   /api/v1/pki/signing-keys/{kid}/revoke:

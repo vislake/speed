@@ -3,14 +3,13 @@
  * (build/openapi/speed.yaml), run after every merge:
  *
  * redocly's `join` keeps the FIRST input document's `info` block, so
- * the merged application-wide document inherits the notes fragment's
- * identity: title "notes" and a description whose closing sentence
- * ("Merging this fragment into an application-wide
- * build/openapi/speed.yaml stays future work ...") contradicts the
- * merged document it now lives inside. redocly join has no CLI way to
- * override info, so this script stamps the block deterministically
- * after every join -- an application-level title and description,
- * keeping the joined version line. The stamp is load-bearing beyond
+ * the merged application-wide document would inherit the notes
+ * fragment's own title and description -- a per-fragment identity
+ * that does not describe the application-wide surface it now lives
+ * inside. redocly join has no CLI way to override info, so this
+ * script stamps the block deterministically after every join -- an
+ * application-level title and description, keeping the joined
+ * version line. The stamp is load-bearing beyond
  * the document itself: orval's DO-NOT-EDIT header in the generated
  * @speed/api-sdk entry stamps `// Source: <info.title>`, which would
  * otherwise read "notes" for the whole application surface.

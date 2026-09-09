@@ -89,8 +89,8 @@ name: api-contract
 #     web/scripts/redocly-join-fixup.mjs stamps the merged document's
 #     info block (join keeps the FIRST fragment's info; without the
 #     stamp the application-wide document -- and through orval's header
-#     the generated SDK -- would carry notes' title and a description
-#     claiming the merge is still future work), then the result is
+#     the generated SDK -- would carry the first fragment's own title
+#     and description), then the result is
 #     `lint`ed against redocly.yaml's naming rules (operationId,
 #     component schema-name and tag formats, the conventions that keep
 #     fragments from colliding under the merge), then the porcelain gate
@@ -656,10 +656,11 @@ jobs:
       - name: Stamp the merged document's info block (deterministic post-join fixup)
         # redocly's join keeps the FIRST input's info block, so without
         # this stamp the merged application-wide document inherits the
-        # notes fragment's title and a description whose closing sentence
-        # claims the merge is still future work -- and orval's generated
-        # header would read "Source: notes" for the whole application
-        # surface. The same command as Taskfile.yml's api:merge task --
+        # first fragment's own title and description -- notes', whose
+        # per-fragment identity does not describe the whole surface --
+        # and orval's generated header would read "Source: notes" for
+        # the whole application. The same command as Taskfile.yml's
+        # api:merge task --
         # keep the two in lockstep. The stamp fails loudly (exit non-zero)
         # if the info block is ever not exactly title/description/version.
         run: node web/scripts/redocly-join-fixup.mjs
