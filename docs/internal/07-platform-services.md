@@ -189,7 +189,7 @@ type VerifiedContact struct {
 - **站内信一等渠道**：已落地——`in_app_messages` 表（跳转链接、过期时间字段随模型）与未读计数、单个/全部标记已读、按类型筛选读取的 HTTP 面；实时推送是 SSE `GET /api/v1/notifications/stream`（行先落库、后发 `notification.inbox.created` 事件，订阅者可读回而不与写者竞争；模块 `Register` 订阅自己的该事件扇出给本副本的连接，多副本经总线扇出由集成层 Redis 腿证明）。前端 `@speed/notification-ui`（铃铛、未读角标、偏好矩阵页面）未交付。
 - **触发方式**：事件驱动原则照落地，但**接线在 host 而不是映射表订阅**——业务模块只声明类型、发领域事件；host 订阅自己的事件并调 `Deliveries().Dispatch`（notification 的 `Register` 只订阅自身的 inbox-created 事件），通知模块保持依赖图叶子位置，host 也因此能决定"什么事件发什么通知"而不改业务代码。**验证码例外**只留给外部联系人验证消息（notification 自己同步发出）；`authn` 不依赖 notification——登录验证码走 authn 自己的短信发送器（与上文"`authn` 对 `notification` 的依赖要在依赖图中显式标注"的设计不同）。
 - **异步投递与发送记录**：已落地——一次 `Dispatch` 每个收件人每渠道一个 `jobs` 队列任务，渲染后投递；`send_records` 记录每次尝试（渠道、状态、耗时、错误、供应商回执 id——`provider_receipt_id` 列已留），投递键由业务事件 + 收件人 + 渠道派生，`UNIQUE (tenant_id, idempotency_key)` 限定记录集，尽力而至多一次的收敛以"先查记录、再尝试、再落账"实现。同类通知的**聚合与限频尚未实现**（`go/notification/AGENTS.md` 的延期清单）。
-- **每通道多套实现**：站内信落库零外部依赖（任何组装可用）；邮件走 pkgcore `Mailer` seam（host 注入，`WithMailFrom` 必填）；短信是包内 `SMSSender` seam 的 `NewConsoleSMSSender`（单进程装配与测试双用）——短信未升格为 pkgcore 级 seam（`go/notification/AGENTS.md` 的延期清单）。
+- **每通道多套实现**：站内信落库零外部依赖（任何组装可用）；邮件走 pkgcore `Mailer` seam（host 注入，`WithMailFrom` 必填）；短信走 pkgcore 的共享 `SMSSender` seam（`go/pkgcore/sms.go`，与 authn 的登录码共用，无内核座位、各模块经自己的 `WithSMSSender` 注入；根包有 `pkgcore.NewConsoleSMSSender`/`NewHTTPSMSSender` 两套实现，运营商适配器在 `pkgcore/sms/`，见 [03 部署模式](03-deployment-modes.md)）——`go/notification/AGENTS.md` 的延期清单中已无短信项。
 
 ## 对外集成：API 开放与外发 Webhook（integration）
 
