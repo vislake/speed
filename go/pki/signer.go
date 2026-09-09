@@ -31,8 +31,12 @@ import (
 // round trip). LocalSigner is neither -- its "envelope" is dbkit's own
 // field-level encryption and the decrypted key lives only inside one Sign
 // call's stack, but the boundary it protects is a database column, not a
-// separate service. The vault and kmsaws implementations are true envelope
-// and direct-sign implementations respectively.
+// separate service. The vault and kmsaws implementations are true instances
+// of both strategies: each registers one name per mode -- signer.vault and
+// signer.aws-kms for envelope mode, signer.vault-direct and
+// signer.aws-kms-direct for direct-sign mode. Two names per provider are
+// required because a registered name carries one fixed capability, and only
+// the direct-sign names can claim pkgcore.KeyNeverLeavesBoundary.
 type Signer interface {
 	// GenerateKey creates a new key for algorithm and returns an opaque
 	// keyRef plus its public key. algorithm is one of the Algorithm
