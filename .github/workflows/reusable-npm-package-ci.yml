@@ -115,7 +115,7 @@ jobs:
         run: pnpm typecheck
       - name: Test with the coverage gate
         working-directory: ${{ inputs.package }}
-        run: pnpm test -- --coverage
+        run: pnpm test --coverage
       - name: Build
         working-directory: ${{ inputs.package }}
         run: pnpm build
