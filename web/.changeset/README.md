@@ -13,9 +13,10 @@ committed and verified.
   `@speed/ui-kit`), `access: public`, `baseBranch: main`. This is
   configuration only, no version bookkeeping.
 - This README. There are deliberately **no changeset entries** — a
-  changeset entry is a request for a version bump, and M0 ships no bump:
-  every package sits at `0.0.0`, in the same transition state as the Go
-  half's `go.mod` files (see the repository release doc).
+  changeset entry is a request for a version bump. The v0.0.1 release
+  (2026-09-10) bumped the twelve packages straight to `0.0.1` without
+  the changesets flow, which is still not enabled; the Go half's
+  transition state is its own (see the repository release doc).
 
 ## The fixed group and why it is the only mode
 
@@ -55,9 +56,11 @@ python3 tools/release/lockstep-release.py v1.2.0   # offline verification
 - changesets itself is **not installed** in `web/` (no `@changesets/cli`
   dependency, no version/changelog script) — nothing in this repository
   runs changesets today, and this M0 round never calls it.
-- No `.changeset/*.md` entries exist, and no `CHANGELOG.md` files: there
-  has been no release, so there is nothing to record. The release round
-  at M4 (the v1.0 release) adds the changesets invocation, generates the
-  per-package changelogs, and publishes to the npm registry — wiring
-  `publishConfig`, provenance and the `npm publish` step together with
-  the Go half's release in the same pipeline.
+- No `.changeset/*.md` entries exist, and no `CHANGELOG.md` files: the
+  v0.0.1 release went out by direct version bump, never through the
+  changesets flow, so there is nothing for changesets to record. The
+  release round at M4 (the v1.0 release) adds the changesets
+  invocation, generates the per-package changelogs, and publishes to
+  the npm registry — wiring `publishConfig`, provenance and the `npm
+  publish` step together with the Go half's release in the same
+  pipeline.
