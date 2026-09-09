@@ -9,13 +9,14 @@
 #
 # The module's generated surface is regenerated with oapi-codegen v2.8.0,
 # pinned at exactly that version in the three commands that must move
-# together: Taskfile.yml's api:gen task command,
-# .github/workflows/api-contract.yml's regeneration step and this file's
-# output -- both run the same `go run .../cmd/oapi-codegen@v2.8.0
-# -config oapi-codegen.yaml openapi.yaml` from this directory, passing
-# this file as their config. The generated file's header records the
-# generator version, so any regeneration with a different tool version
-# shows up as drift in CI's regenerate-then-diff check.
+# together: Taskfile.yml's api:gen:app task command,
+# .github/workflows/full-check.yml's reference-app job's regeneration
+# step and this file's output -- both run the same
+# `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
+# openapi.yaml` from this directory, passing this file as their config.
+# The generated file's header records the generator version, so any
+# regeneration with a different tool version shows up as drift in CI's
+# regenerate-then-diff check.
 #
 # generate.std-http-server emits the pure net/http ServerInterface -- plain
 # (w http.ResponseWriter, r *http.Request) method signatures with path

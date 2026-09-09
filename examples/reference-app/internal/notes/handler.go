@@ -115,7 +115,7 @@ var ErrNoteNotFound = apperr.NotFound("notes.note_not_found")
 
 // Handler serves notes' HTTP endpoints by implementing the spec-generated
 // api.ServerInterface (see api/notes-server.gen.go, regenerated from this
-// module's api/openapi.yaml by task api:gen -- the compile-time assertion
+// module's api/openapi.yaml by task api:gen:app -- the compile-time assertion
 // at the bottom of this file is what makes "spec changed, handler not" a
 // compile failure instead of a runtime surprise). It must run downstream
 // of tenancy.Middleware on a non-allowlisted path: every method reads the

@@ -242,7 +242,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // OpenAPI fragment, embedded from api/openapi.yaml. That fragment is the
 // single source of this module's API surface -- the api package's
 // generated types and ServerInterface (api/notes-server.gen.go, regenerated
-// by task api:gen) derive from it, and Handler implements that interface
+// by task api:gen:app) derive from it, and Handler implements that interface
 // (see handler.go) -- the spec-first decision.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
