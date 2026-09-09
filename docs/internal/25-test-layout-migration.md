@@ -236,7 +236,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 
 ## 迁移后的引用重定向记录
 
-2b 只移动了文件本身;仓库散文对这批套件的旧 `cmd/server/<文件>_test.go` 归属的引用仍残留约 68 处,分布在根 CLAUDE.md 普查、模块 AGENTS/README、`docs/internal` 各实现对照、reference-app 内部包注释与 web 侧测试工具注释里。本记录逐项重定向到 `flowtests/`(全仓库 `cmd/server/<47 个迁走文件>` 前缀引用为零命中):
+2b 只移动了文件本身;仓库散文对这批套件的旧 `cmd/server/<文件>_test.go` 归属的引用仍残留 102 处(91d6cb95 上实测:落于 98 行、跨 41 个文件),分布在根 CLAUDE.md 普查、模块 AGENTS/README、`docs/internal` 各实现对照、reference-app 内部包注释与 web 侧测试工具注释里。本记录逐项重定向到 `flowtests/`(全仓库 `cmd/server/<47 个迁走文件>` 前缀引用为零命中):
 
 - **形态随句子原有路径保留**:原 `examples/reference-app/cmd/server/X_test.go` 改为 `examples/reference-app/flowtests/X_test.go`,原短式 `cmd/server/X_test.go` 改为 `flowtests/X_test.go`;裸文件名引用(前文已点名 reference-app 的句子)补 `flowtests/` 前缀。
 - **按行为重定向拆分文件**:引用 `server_test.go` 时若所指行为随机械拆分到了 `server_config_test.go`(ConfigFromEnv/根密钥/特征开关族)或 `server_guards_test.go`(healthz/metrics allowlist、分布式装配拒绝族),则指向分片所在文件;web 侧对 `server_test.go:443-445`(notes 写门 403 钉)等行号引用同步到新家 `flowtests/server_test.go:438-440` 的实际行。`periodic_scheduler_flow_test.go` 的两 boot 过期清扫/保留腿仍在同名文件,引用保持不变式地指向 `flowtests/` 同名文件。
