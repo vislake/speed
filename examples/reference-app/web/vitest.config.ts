@@ -100,10 +100,16 @@ export default defineConfig({
     // never count toward this app's numbers; text-summary for local
     // runs, json-summary for the per-package coverage gate, whose floor
     // is 80% statements and 80% branches: the CI test leg runs with
-    // --coverage, so dropping below either fails this app's job.
+    // --coverage, so dropping below either fails this app's job. The one
+    // file left out of src/** is src/app-api/index.ts, the orval-
+    // generated app-owned SDK output (its DO-NOT-EDIT header), which
+    // @speed/api-sdk's own coverage config excludes the same way for its
+    // generated src/index.ts -- the floor measures hand-written code, so
+    // the hand-written src/app-api/runtime.ts seam stays measured.
     coverage: {
       provider: 'v8',
       include: ['src/**'],
+      exclude: ['src/app-api/index.ts'],
       reporter: ['text-summary', 'json-summary'],
       thresholds: {
         statements: 80,
