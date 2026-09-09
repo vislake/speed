@@ -143,3 +143,44 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 2. 迁移目录形态建议:同模块内专有目录(如 `examples/reference-app/cmd/servertest/` 或参考模块 `integration_test/` 命名惯例),随迁文件仅保留 `package …_test`;CI 矩阵(reference-app job 的 `go test` 路径)同步;若采纳"测试装配入口"文件,确认 fast-check/full-check 的 lint/vet 对新导出面无告警。
 3. 前端侧组合流当前都在单元层(脚本化 fetch,无真服务器),不属本迁移;Playwright e2e 已在 `e2e/`。
 4. 验收:迁移后 reference-app 全套件在普通单元运行与 `-race` 下绿;除 (iii) 登记外,`cmd/server/` 源码目录不再出现组合 HTTP/装配流测试;本文档表格与实际情况收敛后,把类别样板(conformance 驱动留根目录、流套件入应用级测试目录)回填后端技能 §13 的示例清单。
+
+
+## 批次 2a 处置记录(套件并入回退)
+
+批次 2a 把一批"行为命名测试文件"逐文件裁定为并入或保留。判据沿用本文开头布局规则与后端技能 §13:套件映射单一主导源 → 并入该源既有测试文件;真双源交互或跨包结构约束 → 保留行为命名文件;并入使目标越过 ~1000 行 → 机械拆分并保留目标名前缀。
+
+### 已并入
+
+| 文件 | 去向 | 备注 |
+|---|---|---|
+| go/org/email_index_column_drift_test.go | go/org/invitation_test.go | EmailIndexColumn 单一源 invitation.go |
+| go/jobs/queue/asynq/metric_registration_failure_test.go | go/jobs/queue/asynq/queue_test.go | registerJobMetrics/registerQueueDepthGauge 属 queue.go |
+| go/jobs/queue/asynq/unreachable_redis_test.go | go/jobs/queue/asynq/queue_test.go | 不可达后端错误面属 queue.go |
+| go/dbkit/dialect/sqlite/busy_timeout_test.go | go/dbkit/dialect/sqlite/dialect_sqlite_test.go | busy_timeout 契约属 dialect_sqlite.go |
+| go/dbkit/audit/append_only_test.go | go/dbkit/audit/repository_test.go | append-only 应用层属 repository.go 的 insert-only 方法集 |
+| go/storage/sweep_window_test.go | go/storage/cleanup_test.go | expiry-sweep 窗口与幂等键属 cleanup.go |
+| go/saasctl/internal/template/preauth_exemption_test.go | go/saasctl/internal/template/embed_test.go | 唯一源 embed.go |
+| go/saasctl/internal/template/readme_consistency_test.go | go/saasctl/internal/template/embed_test.go | 唯一源 embed.go |
+| go/billing/poll_window_test.go | go/billing/job_test.go | poll 窗口与幂等键属 job.go |
+| go/compliance/retention_sweep_window_test.go | go/compliance/retention_test.go;并入后 config 接线族拆至 retention_config_test.go | 目标文件越过 ~1000 行,机械拆分保留 retention_ 前缀 |
+| examples/reference-app/internal/smilesim/disconnect_robustness_test.go | 并入 service 测试族;credit-settlement 族与断连套件拆至 service_settlement_test.go | 目标文件越过 ~1000 行,机械拆分保留 service_ 前缀 |
+| go/jobs/option_validation_test.go | go/jobs/standalone_queue_test.go;并入后 cancel-race 族拆至 standalone_queue_cancel_test.go | 目标文件越过 ~1000 行,机械拆分保留 standalone_queue_ 前缀 |
+| go/dbkit/soft_delete_unique_index_test.go | go/dbkit/soft_delete_test.go | partial unique index 属 soft_delete.go |
+
+### 裁定保留(行为命名文件合法,记录理由)
+
+| 文件 | 保留理由 |
+|---|---|
+| go/jobs/queue/asynq/job_outcome_metrics_recording_test.go | 真双源交互:worker.go 的 processTaskUncancelled/handleErrorAttempt 与 queue.go 的 registerJobMetrics 一起被测 |
+| go/jobs/queue/asynq/marker_fail_closed_test.go | 真双源交互:worker.go 的 dispatchAfterMarkerRead/handleErrorAttempt 与 queue.go 的 readCancelMarker 一起被测 |
+| go/notification/address_index_column_test.go | 双源交互:AddressIndexColumn 钉 VerifiedContact(contact.go)与 PlatformBlacklist(blacklist.go)两模型的 gorm tag 与迁移列;contact_test.go 已超行 |
+| go/notification/hub_http_test.go | 双源交互:handler.go 的 handleStream 经 hub.go 的订阅在真实 HTTP 服务器上被测,handler_test.go 只覆盖无 socket 半 |
+| go/observability/factory_vars_test.go | 白盒/黑盒包边界:测 init.go 的未导出 otlpFactory/metricsReaderFactory,必须留 package observability;init_test.go 是黑盒 observability_test,两者不可同文件,按技能 §13 白盒机械例外命名 |
+| go/observability/exporter/otlp/invalid_utf8_export_test.go | 跨包组合:obs.Init + obs.Middleware + 本包导出器一起被测,非单一源;该目录无其它非 example 测试文件可并入 |
+| go/observability/exporter/prometheus/otlp_not_registered_test.go | 依赖"本测试二进制从不导入 exporter/otlp"的二进制形态;并入 prometheus_test.go 不改变被测语义,文件自述此归属理由 |
+| go/dbkit/tenant_scope_tenantmodel_test.go | 双源交互:TenantModel(tenant_scope.go)经 repository.go 的 Repository[T] 被测;并入 tenant_scope_test.go 会使其 1521+257 超行,并入 repository_test.go 会错置被测对象 |
+
+### conformance 驱动裁定
+
+五个根目录 `*_conformance_test.go` 驱动(pkgcore 四个、jobs 一个)维持原状:它们是钉住 pkgcore/jobs 根包自有内建实现的外部包薄驱动,与被测实现同目录即"紧邻被测代码"的单元层姿态(无外部依赖、普通单元运行执行),共享契约套件本身已住在可导入支撑包(eventbustest/kvstoretest/mailertest/objectstoretest/queuetest),驱动文件只是"实现自证契约"的最后一跳;把驱动塞进支撑包会颠倒归属(支撑包是契约的家,不是任一实现的测试家)。此裁定作为该类别样板,回填进后端技能 §13 示例清单的后续修订。
+
