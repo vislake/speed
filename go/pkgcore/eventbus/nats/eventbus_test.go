@@ -505,26 +505,15 @@ func (c *fakeConsumer) Consume(handler jetstream.MessageHandler, opts ...jetstre
 	return c.consumeCtx, nil
 }
 
-// fakeConsumeContext is a jetstream.ConsumeContext recording how often Stop
-// was called; concurrent Stop calls (Close racing the reader goroutine's own
-// stop) are serialized by the mutex.
+// fakeConsumeContext is a jetstream.ConsumeContext standing in for a real
+// one on reader-teardown paths: the bus calls Stop on a reader's consume
+// context, which the embedded nil interface could not answer, so the
+// concrete override keeps that call safe.
 type fakeConsumeContext struct {
 	jetstream.ConsumeContext
-	mu        sync.Mutex
-	stopCalls int
 }
 
-func (c *fakeConsumeContext) Stop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.stopCalls++
-}
-
-func (c *fakeConsumeContext) stopCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.stopCalls
-}
+func (c *fakeConsumeContext) Stop() {}
 
 // TestEventBus_Publish_FakeJetStream_StreamEnsuredOnceAndMessageStamped pins
 // the publish half end to end over the fake: the first publish of a type

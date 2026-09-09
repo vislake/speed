@@ -127,7 +127,8 @@ func TestKVStore_GetSetDelete_OverMiniredis(t *testing.T) {
 		t.Fatalf("Get after Set = (%q, %v, %v), want (\"v1\", true, nil)", got, ok, err)
 	}
 
-	if err := store.Set(ctx, "k", []byte{0x00, 0xff}, 0); err != nil {
+	err = store.Set(ctx, "k", []byte{0x00, 0xff}, 0)
+	if err != nil {
 		t.Fatalf("second Set() error = %v, want nil", err)
 	}
 	got, ok, err = store.Get(ctx, "k")
@@ -202,10 +203,12 @@ func TestKVStore_IncrByFloat_OverMiniredis(t *testing.T) {
 		t.Errorf("fresh-key TTL = %v, want 0 (no expiry)", got)
 	}
 
-	if err := store.Set(ctx, "n", []byte("10"), 45*time.Minute); err != nil {
+	err = store.Set(ctx, "n", []byte("10"), 45*time.Minute)
+	if err != nil {
 		t.Fatalf("Set() error = %v, want nil", err)
 	}
-	if result, err := store.IncrByFloat(ctx, "n", 5); err != nil || result != 15 {
+	result, err = store.IncrByFloat(ctx, "n", 5)
+	if err != nil || result != 15 {
 		t.Fatalf("IncrByFloat on a live key = (%v, %v), want (15, nil)", result, err)
 	}
 	if ttl := mini.TTL("n"); ttl <= 44*time.Minute || ttl > 45*time.Minute {
@@ -240,8 +243,8 @@ func TestKVStore_IncrByFloatWithTTL_OverMiniredis(t *testing.T) {
 	if _, err := store.IncrByFloatWithTTL(ctx, "n", 3, ttl); err != nil {
 		t.Fatalf("IncrByFloatWithTTL on a fresh key error = %v, want nil", err)
 	}
-	if ttl := mini.TTL("n"); ttl <= 44*time.Minute || ttl > 45*time.Minute {
-		t.Errorf("fresh-key TTL = %v, want roughly 45m", ttl)
+	if got := mini.TTL("n"); got <= 44*time.Minute || got > 45*time.Minute {
+		t.Errorf("fresh-key TTL = %v, want roughly 45m", got)
 	}
 
 	if err := store.Set(ctx, "n", []byte("7"), 45*time.Minute); err != nil {
@@ -250,8 +253,8 @@ func TestKVStore_IncrByFloatWithTTL_OverMiniredis(t *testing.T) {
 	if result, err := store.IncrByFloatWithTTL(ctx, "n", 1, 10*time.Second); err != nil || result != 8 {
 		t.Fatalf("IncrByFloatWithTTL on a live key = (%v, %v), want (8, nil)", result, err)
 	}
-	if ttl := mini.TTL("n"); ttl <= 44*time.Minute || ttl > 45*time.Minute {
-		t.Errorf("TTL after a ttl-argued increment of a live key = %v, want the key's own expiry, never the ttl argument", ttl)
+	if got := mini.TTL("n"); got <= 44*time.Minute || got > 45*time.Minute {
+		t.Errorf("TTL after a ttl-argued increment of a live key = %v, want the key's own expiry, never the ttl argument", got)
 	}
 
 	if err := store.Set(ctx, "bad", []byte("not-a-number"), 0); err != nil {
@@ -291,7 +294,8 @@ func TestKVStore_CompareAndSwap_OverMiniredis(t *testing.T) {
 		t.Error("a mismatched set-if-absent created the key")
 	}
 
-	if err := store.Set(ctx, "k", []byte("old"), 45*time.Minute); err != nil {
+	err = store.Set(ctx, "k", []byte("old"), 45*time.Minute)
+	if err != nil {
 		t.Fatalf("Set() error = %v, want nil", err)
 	}
 	before := mini.TTL("k")

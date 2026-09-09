@@ -235,7 +235,8 @@ func TestFakeSMTPServer_Hang_NeverRepliesToCommands(t *testing.T) {
 		t.Fatalf("net.Dial(%q) error = %v, want nil", srv.Addr(), err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+	err = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	if err != nil {
 		t.Fatalf("SetDeadline() error = %v, want nil", err)
 	}
 	br := bufio.NewReader(conn)

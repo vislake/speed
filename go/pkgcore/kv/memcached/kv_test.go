@@ -534,7 +534,8 @@ func TestKVStore_GetSetDelete_OverFakeServer(t *testing.T) {
 		t.Fatal("server holds nothing for the key, want the envelope the store set")
 	}
 
-	if err := store.Set(ctx, "k", []byte{0x00, 0xff}, 0); err != nil {
+	err = store.Set(ctx, "k", []byte{0x00, 0xff}, 0)
+	if err != nil {
 		t.Fatalf("second Set() error = %v, want nil", err)
 	}
 	got, ok, err = store.Get(ctx, "k")
@@ -647,8 +648,8 @@ func TestKVStore_IncrByFloat_OverFakeServer(t *testing.T) {
 		if raw == nil {
 			t.Fatal("row e disappeared from the server before its logical expiry")
 		}
-		_, expiresAt, ok := decodeEnvelope(raw)
-		if ok && !expiresAt.IsZero() && time.Now().After(expiresAt) {
+		_, expiry, ok := decodeEnvelope(raw)
+		if ok && !expiry.IsZero() && time.Now().After(expiry) {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -361,10 +361,9 @@ func TestExpiryFromTTL(t *testing.T) {
 type fakeKeyValue struct {
 	jetstream.KeyValue
 
-	mu    sync.Mutex
-	seq   uint64
-	rows  map[string]*fakeKVRow
-	order []string // insertion order, for deterministic iteration when needed
+	mu   sync.Mutex
+	seq  uint64
+	rows map[string]*fakeKVRow
 
 	// Scripted behaviour.
 	statusCfg              jetstream.KeyValueConfig
@@ -563,7 +562,8 @@ func TestKVStore_GetSetDelete_OverFakeBucket(t *testing.T) {
 	}
 
 	// Set replaces the prior value.
-	if err := store.Set(ctx, "k", []byte{0x00, 0xff}, 0); err != nil {
+	err = store.Set(ctx, "k", []byte{0x00, 0xff}, 0)
+	if err != nil {
 		t.Fatalf("second Set() error = %v, want nil", err)
 	}
 	got, ok, err = store.Get(ctx, "k")
@@ -750,7 +750,8 @@ func TestKVStore_IncrByFloat_OverFakeBucket(t *testing.T) {
 		t.Fatalf("encodeEnvelope() error = %v, want nil", err)
 	}
 	fake.seedRow(encodeKey("n"), liveRaw)
-	if result, err := store.IncrByFloat(ctx, "n", 5); err != nil || result != 15 {
+	result, err = store.IncrByFloat(ctx, "n", 5)
+	if err != nil || result != 15 {
 		t.Fatalf("IncrByFloat on a live key = (%v, %v), want (15, nil)", result, err)
 	}
 	payload, expiresAt, err = decodeEnvelope(fake.valueOf(encodeKey("n")))
@@ -772,7 +773,8 @@ func TestKVStore_IncrByFloat_OverFakeBucket(t *testing.T) {
 		t.Fatalf("encodeEnvelope() error = %v, want nil", err)
 	}
 	fake.seedRow(encodeKey("n"), staleRaw)
-	if result, err := store.IncrByFloat(ctx, "n", 1); err != nil || result != 1 {
+	result, err = store.IncrByFloat(ctx, "n", 1)
+	if err != nil || result != 1 {
 		t.Fatalf("IncrByFloat on an expired row = (%v, %v), want (1, nil): the value restarts from zero", result, err)
 	}
 	payload, expiresAt, err = decodeEnvelope(fake.valueOf(encodeKey("n")))
@@ -825,7 +827,8 @@ func TestKVStore_IncrByFloatWithTTL_OverFakeBucket(t *testing.T) {
 		t.Fatalf("encodeEnvelope() error = %v, want nil", err)
 	}
 	fake.seedRow(encodeKey("n"), liveRaw)
-	if result, err := store.IncrByFloatWithTTL(ctx, "n", 1, 10*time.Second); err != nil || result != 8 {
+	result, err := store.IncrByFloatWithTTL(ctx, "n", 1, 10*time.Second)
+	if err != nil || result != 8 {
 		t.Fatalf("IncrByFloatWithTTL on a live key = (%v, %v), want (8, nil)", result, err)
 	}
 	_, expiresAt, err = decodeEnvelope(fake.valueOf(encodeKey("n")))
@@ -842,7 +845,8 @@ func TestKVStore_IncrByFloatWithTTL_OverFakeBucket(t *testing.T) {
 		t.Fatalf("encodeEnvelope() error = %v, want nil", err)
 	}
 	fake.seedRow(encodeKey("n"), staleRaw)
-	if result, err := store.IncrByFloatWithTTL(ctx, "n", 2, ttl); err != nil || result != 2 {
+	result, err = store.IncrByFloatWithTTL(ctx, "n", 2, ttl)
+	if err != nil || result != 2 {
 		t.Fatalf("IncrByFloatWithTTL over an expired row = (%v, %v), want (2, nil)", result, err)
 	}
 	_, expiresAt, err = decodeEnvelope(fake.valueOf(encodeKey("n")))
@@ -1011,10 +1015,11 @@ func TestKVStore_CompareAndSwap_OverFakeBucket(t *testing.T) {
 		fake.seedRow(encodeKey("k"), staleRaw)
 		store := &kvStore{kv: fake}
 
-		if swapped, err := store.CompareAndSwap(ctx, "k", []byte("stale"), []byte("new")); err != nil || swapped {
+		swapped, err := store.CompareAndSwap(ctx, "k", []byte("stale"), []byte("new"))
+		if err != nil || swapped {
 			t.Errorf("swap of an expired row against its stale value = (%v, %v), want (false, nil): the old value is gone", swapped, err)
 		}
-		swapped, err := store.CompareAndSwap(ctx, "k", nil, []byte("fresh"))
+		swapped, err = store.CompareAndSwap(ctx, "k", nil, []byte("fresh"))
 		if err != nil || !swapped {
 			t.Fatalf("swap of an expired row against the empty old = (%v, %v), want (true, nil)", swapped, err)
 		}
@@ -1199,7 +1204,8 @@ func TestKVStore_SetWithPositiveTTL_AttachesTheExpiry(t *testing.T) {
 		t.Errorf("Set-with-ttl expiry = %v, want roughly now+%v", expiresAt, ttl)
 	}
 
-	if err := store.Set(ctx, "k", []byte("v"), 0); err != nil {
+	err = store.Set(ctx, "k", []byte("v"), 0)
+	if err != nil {
 		t.Fatalf("Set without a ttl error = %v, want nil", err)
 	}
 	_, expiresAt, err = decodeEnvelope(fake.valueOf(encodeKey("k")))
