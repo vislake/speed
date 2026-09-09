@@ -33,10 +33,12 @@ name: scaffold-verify
 # TRIGGERS: a daily schedule (03:00 UTC, offset from security.yml's own
 # 05:37 UTC daily run so the two do not contend for the same runner
 # capacity) plus workflow_dispatch for an on-demand run. The post-release
-# trigger is deliberately NOT wired: release.yml carries no publish
-# credential (permissions: contents: read) and nothing in this repository
-# publishes, so there is no real "post-release" event to hook a
-# verification gate onto -- wiring one would be dead configuration.
+# trigger is deliberately still NOT wired. A real publish event exists
+# from v0.0.1 on (a release.yml dispatch pushes the go/<module>/<version>
+# tags and publishes the twelve npm packages to GitHub Packages under its
+# publish job's contents: write / packages: write permissions), but
+# hooking a post-release verification gate onto that event stays deferred
+# with v1.0 (M4), per docs/internal/24-deferral-roadmap.md chapter 5.
 
 on:
   workflow_dispatch:
