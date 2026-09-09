@@ -44,10 +44,16 @@ name: npm-package-ci
 #   2. pnpm typecheck
 #                    tsc --noEmit under the strict web/tsconfig.base.json
 #                    settings (each package's tsconfig extends it).
-#   3. pnpm test      the package's vitest unit suite. No e2e or
-#                    component-preview legs exist (see DELIBERATELY NOT
-#                    WIRED below); a package's tests are its only runtime
-#                    checks.
+#   3. pnpm test      the package's vitest unit suite, run with
+#                    --coverage so the per-package gate in the package's
+#                    vitest.config.ts enforces the web coverage floor of
+#                    docs/internal/20-quality-and-security.md -- 80%
+#                    statements and 80% branches over the package's own
+#                    src/** -- and a package below either fails its job
+#                    (vitest exits non-zero on a missed threshold). No
+#                    e2e or component-preview legs exist (see
+#                    DELIBERATELY NOT WIRED below); a package's tests
+#                    are its only runtime checks.
 #   4. pnpm build     emits dist/ via each package's project build. The
 #                    package.json exports map to those emitted files, so a
 #                    build that stops compiling fails here before any
@@ -107,9 +113,9 @@ jobs:
       - name: Typecheck
         working-directory: ${{ inputs.package }}
         run: pnpm typecheck
-      - name: Test
+      - name: Test with the coverage gate
         working-directory: ${{ inputs.package }}
-        run: pnpm test
+        run: pnpm test -- --coverage
       - name: Build
         working-directory: ${{ inputs.package }}
         run: pnpm build

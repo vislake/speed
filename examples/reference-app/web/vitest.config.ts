@@ -98,11 +98,17 @@ export default defineConfig({
     exclude: ['e2e/**', '**/node_modules/**', '**/dist/**'],
     // Coverage: v8 over the host src/** only, so aliased sibling sources
     // never count toward this app's numbers; text-summary for local
-    // runs, json-summary for the per-package coverage gate.
+    // runs, json-summary for the per-package coverage gate, whose floor
+    // is 80% statements and 80% branches: the CI test leg runs with
+    // --coverage, so dropping below either fails this app's job.
     coverage: {
       provider: 'v8',
       include: ['src/**'],
       reporter: ['text-summary', 'json-summary'],
+      thresholds: {
+        statements: 80,
+        branches: 80,
+      },
     },
   },
 })

@@ -16,12 +16,18 @@ export default defineConfig({
     // json-summary for the per-package coverage gate. The one file left
     // out of src/** is src/index.ts, the orval-generated output (its
     // DO-NOT-EDIT header); the hand-written src/runtime.ts seam stays
-    // measured.
+    // measured, and the gate's floor -- 80% statements and 80% branches,
+    // enforced by the CI test leg running with --coverage -- applies to
+    // that measured set.
     coverage: {
       provider: 'v8',
       include: ['src/**'],
       exclude: ['src/index.ts'],
       reporter: ['text-summary', 'json-summary'],
+      thresholds: {
+        statements: 80,
+        branches: 80,
+      },
     },
   },
 })
