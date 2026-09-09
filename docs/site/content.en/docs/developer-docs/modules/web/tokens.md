@@ -108,12 +108,6 @@ semantics listed above — no-input-mutation, copy-on-write, skip
 `undefined`, replace arrays, later wins, faithful base copy. Package
 exports are data and types only.
 
-## Source
-
-- Design: [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)
-  (package layers and the theme path)
-- Package contract: [web/packages/tokens/README.md](https://github.com/vislake/speed/blob/main/web/packages/tokens/README.md)
-
 ## Related pages
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/)

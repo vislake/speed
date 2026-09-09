@@ -47,14 +47,6 @@ package page below returns to. The division of labour, in layer order:
   read surface over the generated billing operations — the pattern a
   domain read surface follows.
 
-The four foundation pages carry full design pages in this group:
-[tokens](/docs/developer-docs/modules/web/tokens/),
-[i18n](/docs/developer-docs/modules/web/i18n/),
-[ui-kit](/docs/developer-docs/modules/web/ui-kit/) and
-[layout-kit](/docs/developer-docs/modules/web/layout-kit/). The
-remaining eight packages' design pages land as the site's content
-batches complete them; the left navigation is the always-current map.
-
 ## How the web group relates to the Go side
 
 The frontend never sees a Go module — it consumes the backend's

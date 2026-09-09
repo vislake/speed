@@ -233,7 +233,6 @@ Built-in permission sets are a function of the frozen catalog.
 
 ## Source
 
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md) — the RBAC section and its implementation-correction note (the Casbin decision), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)
 - [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md) — the frozen semantics, reaps, soft-delete and Known limitations
 
 ## Related pages

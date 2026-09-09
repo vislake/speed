@@ -63,7 +63,6 @@ flowchart LR
 
 ## Source
 
-- 设计:[docs/internal/09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md)(技术栈选择、结构化日志规则、必埋指标表、高基数规则)、[03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)(导出器拆分)
 - 模块纪律:[go/observability/AGENTS.md](https://github.com/vislake/speed/blob/main/go/observability/AGENTS.md)
 
 ## 相关页

@@ -185,7 +185,6 @@ part of its own stable surface.
 
 ## Source
 
-- Design: [docs/internal/03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md) (the queue seam, subpackage split, measured cost), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md) (graph position), [09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md) (the queue row of the must-instrument table)
 - Module discipline: [go/jobs/AGENTS.md](https://github.com/vislake/speed/blob/main/go/jobs/AGENTS.md)
 
 ## Related pages

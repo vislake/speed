@@ -188,7 +188,6 @@ and starve everything after it — and a partial pass reports
 
 ## Source
 
-- Design: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md) (media storage section), [03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md) (the `ObjectStore` seam), [04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md) (tenant data domains)
 - Module discipline: [go/storage/AGENTS.md](https://github.com/vislake/speed/blob/main/go/storage/AGENTS.md)
 
 ## Related pages

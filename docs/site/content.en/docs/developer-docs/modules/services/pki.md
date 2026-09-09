@@ -192,7 +192,6 @@ matches the attested digest.
 
 ## Source
 
-- Design: [docs/internal/22-pki.md](https://github.com/vislake/speed/blob/main/docs/internal/22-pki.md), [03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md) (implementation composition and capability bits)
 - Module discipline: [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md)
 
 ## Related pages

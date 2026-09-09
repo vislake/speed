@@ -72,7 +72,6 @@ flowchart TB
 
 ## Source
 
-- 设计:[docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)(数据分域、信任边界、三重防护、逃生舱、删除语义)、[01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)(图内位置)、[10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)(字段加密、盲索引)
 - 模块纪律:[go/dbkit/AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/AGENTS.md)
 
 ## 相关页

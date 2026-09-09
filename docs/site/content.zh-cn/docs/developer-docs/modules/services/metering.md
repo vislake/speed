@@ -131,7 +131,6 @@ pending 行的后台进程;作用域仓储没有跨租户读路径,而受审计�
 
 ## Source
 
-- 设计:[docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)(可靠性分级与 outbox 决策)、[04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)(平台数据域)
 - 模块纪律:[go/metering/AGENTS.md](https://github.com/vislake/speed/blob/main/go/metering/AGENTS.md)
 
 ## 相关页

@@ -89,8 +89,6 @@ authorization 头——是读面的 in-form 消费证明;尚无工作区消费�
 
 ## Source
 
-- [web/packages/billing-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/billing-ui/README.md)——契约、错误白名单与 Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)——前端包分层(本包消费的生成 hooks 读层)
 - [billing 模块设计](/zh-cn/docs/developer-docs/modules/capabilities/billing/)——表面背后的 Invoice 模型与只读片段
 
 ## 相关页

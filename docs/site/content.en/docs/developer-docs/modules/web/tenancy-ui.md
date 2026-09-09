@@ -114,12 +114,6 @@ in-form consumer proof: one login and three switch attempts over a
 real `@speed/api-client`, pinned in order with each switch's bearer
 token and `{tenant_id}` body asserted.
 
-## Source
-
-- [web/packages/tenancy-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/tenancy-ui/README.md) — the contract, prop table, error whitelist and Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) — the frontend package layers and the tenancy-ui implementation notes
-- [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md) — the identity design behind tenant switching and the membership checks the switch answers report
-
 ## Related pages
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — the package layers and the no-tenant-header rule that makes switching a token operation

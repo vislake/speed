@@ -119,10 +119,7 @@ default 280, `sx`); `RouteGuard` and its props (`status`,
 
 ## Source
 
-- Design: [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)
-  (package tiers, controlled components, bilingual text)
-- Package contract: [web/packages/layout-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/README.md)
-  and [web/packages/layout-kit/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/AGENTS.md)
+- Package contract: [web/packages/layout-kit/AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/AGENTS.md)
 
 ## Related pages
 

@@ -178,7 +178,6 @@ compensating runnable example.
 
 ## Source
 
-- Design: [docs/internal/10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)
 - Module discipline: [go/compliance/AGENTS.md](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md)
 
 ## Related

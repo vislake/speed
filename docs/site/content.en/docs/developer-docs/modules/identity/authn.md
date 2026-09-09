@@ -220,7 +220,6 @@ tenant some act inside comes from the token's own claim.
 
 ## Source
 
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md) (the identity-domain design; the session-revocation conflict, federation rules and implementation comparisons live here), [22-pki.md](https://github.com/vislake/speed/blob/main/docs/internal/22-pki.md) (the key-source lifecycle authn consumes)
 - [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md) — Rules, decision surface and Known limitations
 
 ## Related pages

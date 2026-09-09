@@ -144,7 +144,6 @@ flowchart TD
 
 ## Source
 
-- 设计:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)(integration 一节)、[11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md)(限流)
 - 模块纪律:[go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md)
 
 ## 相关页

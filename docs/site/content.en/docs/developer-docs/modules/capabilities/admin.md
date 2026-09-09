@@ -186,7 +186,6 @@ integration may still reshape it.
 
 ## Source
 
-- Design: [docs/internal/23-admin.md](https://github.com/vislake/speed/blob/main/docs/internal/23-admin.md)
 - Module discipline: [go/admin/AGENTS.md](https://github.com/vislake/speed/blob/main/go/admin/AGENTS.md)
 
 ## Related

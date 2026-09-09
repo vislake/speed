@@ -188,7 +188,7 @@ suites of `tenancytest`.
 
 ## Source
 
-- Design: [docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md) (data domains, trust boundary, the escape hatch), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md) (graph position, middleware order), [ADR 0002](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
+- Design: [ADR 0002](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 - Module discipline: [go/tenancy/AGENTS.md](https://github.com/vislake/speed/blob/main/go/tenancy/AGENTS.md)
 
 ## Related pages

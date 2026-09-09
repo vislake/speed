@@ -124,12 +124,6 @@ pair and `onBound`; `MfaSection` takes the session — plus the
 list and the bilingual `ACCOUNT_UI_NAMESPACE`/`accountUiResources`
 pair.
 
-## Source
-
-- [web/packages/account-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/account-ui/README.md) — the contract, prop tables, error whitelist and Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) — the account-ui implementation notes (generated-hooks tier, MFA by behaviour)
-- [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md) — the identity design behind the surface: sessions and revocation, MFA and step-up, social binding rules
-
 ## Related pages
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — the layers and the two data tiers

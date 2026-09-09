@@ -108,7 +108,6 @@ flowchart TD
 
 ## Source
 
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)——组织模型一节及其实现落地更正(物化路径、哨兵、成员关系)
 - [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md)——裁定、并发纪律、软删与 Known limitations
 
 ## 相关页

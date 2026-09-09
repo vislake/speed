@@ -68,7 +68,6 @@ sequenceDiagram
 
 ## Source
 
-- 设计:[docs/internal/08-ai-gateway.md](https://github.com/vislake/speed/blob/main/docs/internal/08-ai-gateway.md)
 - 模块纪律:[go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md)
 
 ## 相关

@@ -181,7 +181,6 @@ the `config.*` error-code family.
 
 ## Source
 
-- Design: [docs/internal/11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md) (bootstrap/dynamic separation, scope tiers, hot update, feature-flag tiers), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md) (graph position)
 - Module discipline: [go/config/AGENTS.md](https://github.com/vislake/speed/blob/main/go/config/AGENTS.md)
 
 ## Related pages

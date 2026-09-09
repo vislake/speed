@@ -67,7 +67,6 @@ sequenceDiagram
 
 ## Source
 
-- 设计:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)(sharing 一节)、[10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)
 - 模块纪律:[go/sharing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md)
 
 ## 相关

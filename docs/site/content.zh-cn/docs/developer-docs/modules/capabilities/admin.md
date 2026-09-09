@@ -57,7 +57,6 @@ sequenceDiagram
 
 ## Source
 
-- 设计:[docs/internal/23-admin.md](https://github.com/vislake/speed/blob/main/docs/internal/23-admin.md)
 - 模块纪律:[go/admin/AGENTS.md](https://github.com/vislake/speed/blob/main/go/admin/AGENTS.md)
 
 ## 相关

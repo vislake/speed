@@ -66,7 +66,7 @@ flowchart TD
 
 ## Source
 
-- 设计:[docs/internal/01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)(模块图、装配契约、中间件顺序)、[03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)(两条轴、注册表、preset、能力校验、契约测试)、[04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)(租户上下文)、[ADR 0002](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)、[11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md)(消息目录与 go-i18n)
+- 设计:[ADR 0002](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 - 模块纪律:[go/pkgcore/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pkgcore/AGENTS.md)
 
 ## 相关页

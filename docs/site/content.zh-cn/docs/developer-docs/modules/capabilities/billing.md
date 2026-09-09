@@ -62,7 +62,6 @@ flowchart LR
 
 ## Source
 
-- 设计:[docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
 - 模块纪律:[go/billing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md)、[go/billing/gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/gateway/AGENTS.md)
 
 ## 相关

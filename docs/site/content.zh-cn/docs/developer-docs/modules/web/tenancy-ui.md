@@ -84,12 +84,6 @@ example 是 `authn_switchTenant` 操作的 in-form 消费证明:一次登录
 加三次切换尝试跑在真实 `@speed/api-client` 上,按序钉死,逐次断言
 bearer token 与 `{tenant_id}` body。
 
-## Source
-
-- [web/packages/tenancy-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/tenancy-ui/README.md)——契约、prop 表、错误白名单与 Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)——前端包分层与 tenancy-ui 实现注记
-- [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)——租户切换与切换回答上报的成员检查背后的身份设计
-
 ## 相关页
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——包分层与"无租户请求头"规则(它让切换成为令牌操作)

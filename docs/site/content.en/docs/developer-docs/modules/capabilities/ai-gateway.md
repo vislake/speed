@@ -173,7 +173,6 @@ image jobs are recorded deferrals, each with its stated reason.
 
 ## Source
 
-- Design: [docs/internal/08-ai-gateway.md](https://github.com/vislake/speed/blob/main/docs/internal/08-ai-gateway.md)
 - Module discipline: [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md)
 
 ## Related

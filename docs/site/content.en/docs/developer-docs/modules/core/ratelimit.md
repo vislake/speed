@@ -162,7 +162,6 @@ the caller to classify.
 
 ## Source
 
-- Design: [docs/internal/11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md) (rate limiting: independent module, single dimension, no business semantics), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md) (graph position)
 - Module discipline: [go/ratelimit/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ratelimit/AGENTS.md)
 
 ## Related pages

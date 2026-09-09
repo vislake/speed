@@ -151,7 +151,6 @@ flowchart TD
 
 ## Source
 
-- 设计:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)(通知一节)、[04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)(租户与平台数据域)
 - 模块纪律:[go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md)
 
 ## 相关页

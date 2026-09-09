@@ -21,8 +21,8 @@ The user guide's [modules](/docs/user-guide/modules/) pages answer
 things it refuses to do), the design reasoning behind its mechanisms,
 the trade-offs that were weighed, and the stable surface consumers may
 depend on. The two views complement each other and link back and
-forth; a design claim that surprises you can be verified against the
-internal document named in that page's Source section.
+forth; a design claim that surprises you can be verified against the source
+document named in that page's Source section.
 
 ## Reading order
 
@@ -38,8 +38,7 @@ The module space is grouped the way the user guide groups it:
 
 - **core** — the dependency floor every binary composes: the assembly
   contract, the data layer, tenant resolution, observability, dynamic
-  configuration, the job queue and rate limiting. Landed with this
-  batch.
+  configuration, the job queue and rate limiting.
 - **services** — the platform's business-shaped services (object
   storage, notifications, and the modules above them).
 - **identity** — authentication and authorization: who a caller is,
@@ -48,19 +47,14 @@ The module space is grouped the way the user guide groups it:
   surfaces built on them.
 - **tools** — the developer- and operator-facing tooling.
 
-Pages land as the site's content batches complete them, exactly as the
-[Developer docs](/docs/developer-docs/) hub records for this whole
-section; the left navigation is the always-current map.
-
 ## The Source convention
 
 Every page in this section is a distillation, never a copy: the raw
-material is the repository's internal design documents
-(`docs/internal/`, written in Chinese) and each module's own
-`AGENTS.md` — the module-level discipline document that ships with the
-module to consuming projects. Internal deliberation, unresolved
-tracking items and release scheduling stay out of these pages; each
-page carries a Source section linking back to the originals, so any
-claim can be checked against the underlying document, and a Related
-pages section linking its neighbours in this section and the
-corresponding user-guide page.
+material is each module's own `AGENTS.md` — the module-level
+discipline document that ships with the module to consuming projects.
+Internal deliberation, unresolved tracking items and release
+scheduling stay out of these pages; each page carries a Source section
+linking back to the module's own AGENTS.md, so any claim can be
+checked against the underlying document, and a Related pages section
+linking its neighbours in this section and the corresponding
+user-guide page.

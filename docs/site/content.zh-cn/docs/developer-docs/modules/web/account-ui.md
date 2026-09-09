@@ -90,12 +90,6 @@ step-up 码、`authn.rate_limited` 与 `client.*` 传输码;其余一律渲
 `SocialProvider`/`SocialProviderConfig` 与双语
 `ACCOUNT_UI_NAMESPACE`/`accountUiResources` 对。
 
-## Source
-
-- [web/packages/account-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/account-ui/README.md)——契约、prop 表、错误白名单与 Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)——account-ui 实现注记(生成 hooks 层、按行为的 MFA)
-- [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)——表面背后的身份设计:会话与撤销、MFA 与 step-up、社交绑定规则
-
 ## 相关页
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——分层与两种数据层

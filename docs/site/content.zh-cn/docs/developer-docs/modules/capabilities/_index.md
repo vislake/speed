@@ -18,7 +18,7 @@ description: "依赖图顶层五个能力模块——billing、ai-gateway、shar
 
 合起来读,五页贯穿一条连续的设计主线。前两个——billing 与 ai-gateway——坐在同一依赖层,共享本组的核心纪律:同层模块永不互相 import,它们的连接是结构类型化的接缝(`billing` 的 `Entitlements.Check` 判定与 `metering` 的用量记录以镜像接口的形状进入 ai-gateway 的调用路径,而非以 import 的形式——两页各自解释自己为什么长成能互相咬合的样子)。compliance 直接坐在它们之上,**可以** import 它要编排的对象——包括为导出投递真实 import `go/sharing`,与下方同层接缝纪律形成刻意对比。admin 坐在最顶端,是本组唯一被认可的例外:它直接 import 其下每个模块的具体包,因为它是所有这些模块的运营操作面。页面之间也互相引用:sharing 的过期策略服务 compliance 的导出投递;compliance 的 `AuditQuery` 服务 admin 的审计壳;admin 写下的双身份审计记录,正是 compliance 的查询维度读回来的东西。
 
-按模块依赖序展开的设计故事,在本节其余组(core、services、identity、tools)继续,随站点内容批次陆续落地;[开发者文档](/zh-cn/docs/developer-docs/)hub 是永远最新的地图。[总体架构](/zh-cn/docs/developer-docs/architecture/)页是本组的地基——五页假设的模块接线契约、数据分域与部署轴线。每页设计文档都带 Source 一节,链回内部设计文档与该模块自己的 `AGENTS.md`,每条论断都可对照原文核实。
+按模块依赖序展开的设计故事,在本节其余组(core、services、identity、tools)继续;[开发者文档](/zh-cn/docs/developer-docs/)hub 是永远最新的地图。[总体架构](/zh-cn/docs/developer-docs/architecture/)页是本组的地基——五页假设的模块接线契约、数据分域与部署轴线。每页设计文档都带 Source 一节,链回该模块自己的 `AGENTS.md`,每条论断都可对照原文核实。
 
 ## 页面
 
@@ -30,5 +30,4 @@ description: "依赖图顶层五个能力模块——billing、ai-gateway、shar
 
 ## Source
 
-- 内部设计:[06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)、[08-ai-gateway.md](https://github.com/vislake/speed/blob/main/docs/internal/08-ai-gateway.md)、[10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)、[23-admin.md](https://github.com/vislake/speed/blob/main/docs/internal/23-admin.md)
 - 模块纪律:[go/billing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md)、[go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md)、[go/sharing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md)、[go/compliance/AGENTS.md](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md)、[go/admin/AGENTS.md](https://github.com/vislake/speed/blob/main/go/admin/AGENTS.md)

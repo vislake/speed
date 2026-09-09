@@ -113,12 +113,6 @@ are the composed pieces only: layout-kit, auth-ui, auth-core and
 i18n. No routing, state or query library is required — `children`
 bring their own.
 
-## Source
-
-- [web/packages/product-shell/README.md](https://github.com/vislake/speed/blob/main/web/packages/product-shell/README.md) — the three-branch machine, the host checklist and the recorded boundaries
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) — the frontend package layers and the shell/session-gate implementation notes
-- [web/packages/layout-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/README.md) — the `AppShell` frame and `RouteGuard` contracts this shell composes
-
 ## Related pages
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — the package layers and the assembly tier

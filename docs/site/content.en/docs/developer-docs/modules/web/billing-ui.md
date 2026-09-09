@@ -116,8 +116,6 @@ browser-and-real-server leg, recorded as such.
 
 ## Source
 
-- [web/packages/billing-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/billing-ui/README.md) — the contract, the error whitelist and Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) — the frontend package layers (the generated-hooks read tier this package consumes)
 - The [billing module design](/docs/developer-docs/modules/capabilities/billing/) — the Invoice model and read-only fragment behind the surface
 
 ## Related pages

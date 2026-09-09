@@ -143,8 +143,7 @@ on failure and `refresh()`'s resolve-don't-reject semantics.
 
 ## Source
 
-- Package contract and decisions: [web/packages/auth-core/README.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/README.md), [AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md)
-- Design: [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) (session mechanism notes, permission-list attachment), [21-api-contract.md](https://github.com/vislake/speed/blob/main/docs/internal/21-api-contract.md) (the generated authn surface it consumes)
+- Package contract and decisions: [AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md)
 
 ## Related pages
 

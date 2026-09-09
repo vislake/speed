@@ -67,7 +67,6 @@ Register/Attach 接缝(`ErrAlreadyAttached`/`ErrCipherRequired`/`ErrServiceNotAt
 
 ## Source
 
-- 设计:[docs/internal/11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md)(引导/动态分离、作用域层级、热更新、开关分层)、[01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)(图内位置)
 - 模块纪律:[go/config/AGENTS.md](https://github.com/vislake/speed/blob/main/go/config/AGENTS.md)
 
 ## 相关页

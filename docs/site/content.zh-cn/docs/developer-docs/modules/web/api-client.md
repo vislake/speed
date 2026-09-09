@@ -105,9 +105,8 @@ trace id——降级成合成的 `client.http.401`。
 
 ## Source
 
-- 包契约与决策:[web/packages/api-client/README.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/README.md)、[AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md)
+- 包契约与决策:[AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md)
 - 执行规则的实现:[web/eslint-rules/](https://github.com/vislake/speed/tree/main/web/eslint-rules)(`speed/no-direct-http`)
-- 设计:[docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)(令牌落位、刷新缝、no-direct-http 的机制笔记)
 
 ## 相关页
 

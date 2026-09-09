@@ -152,7 +152,6 @@ flowchart LR
 
 ## Source
 
-- 设计:[docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md)(媒体存储一节)、[03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)(`ObjectStore` 缝)、[04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md)(租户数据域)
 - 模块纪律:[go/storage/AGENTS.md](https://github.com/vislake/speed/blob/main/go/storage/AGENTS.md)
 
 ## 相关页

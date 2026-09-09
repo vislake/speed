@@ -42,11 +42,6 @@ flowchart LR
 
 `SpeedTokens` 类型及其 section 词汇(角色、斜坡步、槽位);`defaultTokens` 的装配形态与取值,冻结;`TokensOverride`/`DeepPartial` 差异类型;以及上文列全的 `deepMerge` 语义——不改输入、copy-on-write、跳过 `undefined`、数组整体替换、后者胜、忠实复制基座。包导出只有数据与类型。
 
-## Source
-
-- 设计:[docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)(包分层与主题路径)
-- 包契约:[web/packages/tokens/README.md](https://github.com/vislake/speed/blob/main/web/packages/tokens/README.md)
-
 ## 相关页
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——令牌树在层图中的位置

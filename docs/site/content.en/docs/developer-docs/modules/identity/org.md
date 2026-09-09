@@ -239,7 +239,6 @@ context, never from the surface.
 
 ## Source
 
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md) — the organization-model section and its implementation-correction notes (materialized path, the sentinel, memberships)
 - [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md) — the adjudications, concurrency discipline, soft deletion and Known limitations
 
 ## Related pages

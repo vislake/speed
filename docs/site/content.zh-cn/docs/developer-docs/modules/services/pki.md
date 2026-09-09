@@ -148,7 +148,6 @@ X.509 层补上自签平台所需的一切:固定 subject 幂等建链(重启永
 
 ## Source
 
-- 设计:[docs/internal/22-pki.md](https://github.com/vislake/speed/blob/main/docs/internal/22-pki.md)、[03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)(实现组装与能力位)
 - 模块纪律:[go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md)
 
 ## 相关页

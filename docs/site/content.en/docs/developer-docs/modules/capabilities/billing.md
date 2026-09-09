@@ -176,7 +176,6 @@ may still reshape.
 
 ## Source
 
-- Design: [docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md)
 - Module discipline: [go/billing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md), [go/billing/gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/gateway/AGENTS.md)
 
 ## Related

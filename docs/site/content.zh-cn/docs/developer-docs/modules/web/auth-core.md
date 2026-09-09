@@ -110,8 +110,7 @@ flowchart TD
 
 ## Source
 
-- 包契约与决策:[web/packages/auth-core/README.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/README.md)、[AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md)
-- 设计:[docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)(会话机制笔记、权限列表挂载)、[21-api-contract.md](https://github.com/vislake/speed/blob/main/docs/internal/21-api-contract.md)(它所消费的生成 authn 面)
+- 包契约与决策:[AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md)
 
 ## 相关页
 

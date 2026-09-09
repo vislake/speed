@@ -62,7 +62,6 @@ flowchart LR
 
 ## Source
 
-- 设计:[docs/internal/11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md)(限流:独立模块、单一维度、无业务语义)、[01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)(图内位置)
 - 模块纪律:[go/ratelimit/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ratelimit/AGENTS.md)
 
 ## 相关页

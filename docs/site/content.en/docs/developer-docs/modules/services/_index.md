@@ -13,8 +13,8 @@ X.509 certificates), `go/integration` (a tenant's outward-facing API)
 and `go/metering` (usage recording). Each page states the module's
 responsibility and boundary, the design decisions behind its shape,
 its key mechanisms and why they are built that way, and which of its
-surface is a stable public API. Every claim traces to the internal
-design document and the module's own `AGENTS.md` named in Source.
+surface is a stable public API. Every claim traces to the module's own
+`AGENTS.md` named in Source.
 
 ## The group and its boundary with the core floor
 

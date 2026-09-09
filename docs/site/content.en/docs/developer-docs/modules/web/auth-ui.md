@@ -117,12 +117,6 @@ component text. `@speed/api-sdk` is a type-only dependency; no direct
 HTTP exists in `src/`, enforced by the workspace's `no-direct-http`
 rule.
 
-## Source
-
-- [web/packages/auth-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/auth-ui/README.md) — the contract, prop tables, error whitelist and Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) — the frontend package layers and the auth-ui implementation notes
-- [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md) — the identity design behind the session contract: revocation, social channels, MFA
-
 ## Related pages
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — the package layers and the controlled-component contract

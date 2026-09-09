@@ -61,7 +61,6 @@ flowchart LR
 
 ## Source
 
-- 设计:[docs/internal/10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)
 - 模块纪律:[go/compliance/AGENTS.md](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md)
 
 ## 相关

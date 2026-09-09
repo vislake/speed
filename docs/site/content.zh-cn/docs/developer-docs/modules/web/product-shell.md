@@ -89,12 +89,6 @@ namespace,任何包都不能:i18n 实例是宿主在渲染前、bootstrap 时创
 组装的部件:layout-kit、auth-ui、auth-core 与 i18n。不要求任何路
 由、状态或查询库——`children` 自带。
 
-## Source
-
-- [web/packages/product-shell/README.md](https://github.com/vislake/speed/blob/main/web/packages/product-shell/README.md)——三分支机器、宿主清单与记录的边界
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)——前端包分层与壳/会话门禁实现注记
-- [web/packages/layout-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/README.md)——本壳组装的 `AppShell` 框架与 `RouteGuard` 契约
-
 ## 相关页
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——包分层与组装层

@@ -79,9 +79,7 @@ orval 固定在 8.17.0,从不进入工作区 lockfile:按需经 `pnpm dlx` 拉
 输入是 `contracts/speed.yaml`——固定版本 redocly `join` 十个平台模
 块片段(admin、ai-gateway、authn、billing、integration、
 notification、org、pki、sharing、storage)的产物。成员资格由模块驱
-动,政策记录在
-[docs/internal/21-api-contract.md](https://github.com/vislake/speed/blob/main/docs/internal/21-api-contract.md):
-每个带 HTTP 片段的平台模块都是成员,而参考应用自己的片段(notes、
+动:每个带 HTTP 片段的平台模块都是成员,而参考应用自己的片段(notes、
 cases、smilesim)刻意不是——它们是应用自己的 API,由 app 自有生成
 腿生成进应用 web 宿主导入的 app 自有 SDK(`src/app-api`)。因此平台片
 段只有进入合并才能到达本包;每个模块的组带同样的形状——react-query
@@ -98,9 +96,8 @@ react-query v5)是宿主组合所依据的共享 QueryClient 契约。
 
 ## Source
 
-- 包契约:[web/packages/api-sdk/README.md](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/README.md)、[AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/AGENTS.md)
+- 包契约:[AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/AGENTS.md)
 - 生成器接线:[web/orval.config.ts](https://github.com/vislake/speed/blob/main/web/orval.config.ts)、[web/scripts/orval-nodenext-fixup.mjs](https://github.com/vislake/speed/blob/main/web/scripts/orval-nodenext-fixup.mjs)
-- 设计:[docs/internal/21-api-contract.md](https://github.com/vislake/speed/blob/main/docs/internal/21-api-contract.md)(生成腿、合并政策、产物门)、[12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)
 
 ## 相关页
 

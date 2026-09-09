@@ -20,8 +20,8 @@ through the middleware chain.
 Where the [user guide's identity
 pages](/docs/user-guide/modules/identity/) tell you how to wire and
 use the modules, these pages tell you why each is shaped the way it
-is — every claim traces to the internal design document and the
-module's own `AGENTS.md` named in Source.
+is — every claim traces to the module's own `AGENTS.md` named in
+Source.
 
 ## Three modules, one question each
 
@@ -162,7 +162,6 @@ operationally.
 
 ## Source
 
-- Design: [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)
 - [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md), [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md), [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md)
 - This page (the group hub); [architecture](/docs/developer-docs/architecture/), [design principles](/docs/developer-docs/design-principles/)
 - User guide: [identity modules](/docs/user-guide/modules/identity/), [identity and access domain](/docs/user-guide/domains/identity-access/)

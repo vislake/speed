@@ -11,7 +11,7 @@ description: "services 组设计导览:storage、notification、pki、integratio
 `go/integration`(租户的对外 API 面)与 `go/metering`(用量计量)。
 每个模块页陈述其职责与边界、形态背后的设计取舍、核心机制及其
 设计理由,并指出哪部分表面是冻结的公开 API。每一条论断都能回溯
-到 Source 小节点名的内部设计文档与模块自己的 `AGENTS.md`。
+到 Source 小节点名的模块自己的 `AGENTS.md`。
 
 ## 本组与 core 底座的分界
 

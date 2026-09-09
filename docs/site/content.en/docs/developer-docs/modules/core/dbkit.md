@@ -208,7 +208,6 @@ string fields) every model must honour.
 
 ## Source
 
-- Design: [docs/internal/04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md) (data domains, trust boundary, the three-layer defense, the escape hatch, delete semantics), [01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md) (graph position), [10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md) (field encryption, blind indexes)
 - Module discipline: [go/dbkit/AGENTS.md](https://github.com/vislake/speed/blob/main/go/dbkit/AGENTS.md)
 
 ## Related pages

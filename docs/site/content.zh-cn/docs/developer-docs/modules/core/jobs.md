@@ -64,7 +64,6 @@ standalone 侧的生命周期刻意两阶段:派发时刻认领把行翻成 `run
 
 ## Source
 
-- 设计:[docs/internal/03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md)(队列 seam、子包拆分、实测代价)、[01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)(图内位置)、[09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md)(必埋指标表中的队列行)
 - 模块纪律:[go/jobs/AGENTS.md](https://github.com/vislake/speed/blob/main/go/jobs/AGENTS.md)
 
 ## 相关页

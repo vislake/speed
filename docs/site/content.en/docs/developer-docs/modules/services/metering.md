@@ -169,7 +169,6 @@ the moment its window opens whatever the arrival rate.
 
 ## Source
 
-- Design: [docs/internal/06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md) (reliability tiers, the outbox decision), [04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md) (platform data domains)
 - Module discipline: [go/metering/AGENTS.md](https://github.com/vislake/speed/blob/main/go/metering/AGENTS.md)
 
 ## Related pages

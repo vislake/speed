@@ -14,8 +14,6 @@ description: "web 组设计导览——十二个 @speed 包分五层:每包一�
 - **组装**——`@speed/product-shell`,三分支视图机(登出、登入、会话已死),把外壳、登录族与会话钩子组装在一起。
 - **业务只读面**——`@speed/billing-ui`,基于生成 billing 操作的账单文档只读面——领域只读面的范式。
 
-其中四个地基包在本组已有完整设计页:[tokens](/zh-cn/docs/developer-docs/modules/web/tokens/)、[i18n](/zh-cn/docs/developer-docs/modules/web/i18n/)、[ui-kit](/zh-cn/docs/developer-docs/modules/web/ui-kit/)、[layout-kit](/zh-cn/docs/developer-docs/modules/web/layout-kit/)。其余八个包的设计页随站点内容批次落地;左侧导航始终是当前地图。
-
 ## web 组与 Go 一侧的关系
 
 前端永远看不到 Go 模块——它只消费后端的契约,而且只有两种形态。绝大多数流量走合并后的 OpenAPI 文档:十个平台模块的片段并入一份 spec,`@speed/api-sdk`(平台操作)与每个产品自己的 app-owned SDK(产品自有操作)都由它生成——[API 契约](/zh-cn/docs/developer-docs/api-contract/)页解释这条分工与生成机制。没有片段的场合(config 的两个 pre-auth 端点),由类型化手写封装承载调用。包到模块的对应:authn 模块的操作支撑会话族,config 的端点支撑 `fetchPublicConfig`/`useFeature`,billing 的读操作支撑 `billing-ui`——逐面的映射在[前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)页。

@@ -118,12 +118,6 @@ contract and `REQUIRED_ERROR_KEY`; the `headingLevel`/
 `emptyHeadingLevel` obligation; and the recorded adapter decisions the
 factory's tests pin.
 
-## Source
-
-- Design: [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)
-  (theme path, controlled-component contract, bilingual text)
-- Package contract: [web/packages/ui-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/README.md)
-
 ## Related pages
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/)

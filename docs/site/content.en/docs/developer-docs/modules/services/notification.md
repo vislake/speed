@@ -191,7 +191,6 @@ flowchart TD
 
 ## Source
 
-- Design: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md) (notification section), [04-data-and-tenancy.md](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md) (tenant and platform data domains)
 - Module discipline: [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md)
 
 ## Related pages

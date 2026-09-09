@@ -176,10 +176,6 @@ deliberate, documented reductions.
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md) —
   the authoritative contract for all four commands; this page's
   primary source.
-- [docs/internal/02-repo-and-release.md](https://github.com/vislake/speed/blob/main/docs/internal/02-repo-and-release.md) —
-  lockstep versioning and the CLI's place in the consumer story.
-- [19-dev-workflow.md](https://github.com/vislake/speed/blob/main/docs/internal/19-dev-workflow.md) —
-  the CLI in the developer workflow.
 - [scaffold-verify.yml](https://github.com/vislake/speed/blob/main/.github/workflows/scaffold-verify.yml) —
   the daily end-to-end proof against real generated projects.
 - [saasctl user guide](/docs/user-guide/modules/tools/saasctl/) — the

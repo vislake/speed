@@ -188,7 +188,6 @@ flowchart TD
 
 ## Source
 
-- Design: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md) (integration section), [11-cross-cutting.md](https://github.com/vislake/speed/blob/main/docs/internal/11-cross-cutting.md) (rate limiting)
 - Module discipline: [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md)
 
 ## Related pages

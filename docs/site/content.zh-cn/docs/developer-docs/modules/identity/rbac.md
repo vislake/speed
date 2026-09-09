@@ -93,7 +93,6 @@ flowchart TD
 
 ## Source
 
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)——RBAC 一节与其实现落地更正(Casbin 决定)、[01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)
 - [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md)——冻结语义、收割、软删与 Known limitations
 
 ## 相关页

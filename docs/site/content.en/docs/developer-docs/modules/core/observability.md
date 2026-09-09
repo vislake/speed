@@ -165,7 +165,6 @@ never-a-metric-label rule for `tenant_id`.
 
 ## Source
 
-- Design: [docs/internal/09-observability.md](https://github.com/vislake/speed/blob/main/docs/internal/09-observability.md) (stack choice, structured-logging rules, the must-instrument table, the high-cardinality rule), [03-deployment-modes.md](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md) (exporter split)
 - Module discipline: [go/observability/AGENTS.md](https://github.com/vislake/speed/blob/main/go/observability/AGENTS.md)
 
 ## Related pages

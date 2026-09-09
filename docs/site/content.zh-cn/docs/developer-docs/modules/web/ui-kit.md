@@ -42,11 +42,6 @@ flowchart LR
 
 `createAppTheme` 及其两个可选令牌层;`AppTheme`(合并令牌树加无 locale 主题);`AppThemeProvider` 及其 props(i18n 实例、令牌层、children);七个组件按文档的 prop 契约;`UI_KIT_NAMESPACE` 常量与 `uiKitResources` 包;校验错误文本契约与 `REQUIRED_ERROR_KEY`;`headingLevel`/`emptyHeadingLevel` 义务;以及工厂测试钉住的已记录适配决定。
 
-## Source
-
-- 设计:[docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)(主题路径、受控组件契约、双语文本)
-- 包契约:[web/packages/ui-kit/README.md](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/README.md)
-
 ## 相关页
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——本包所源的受控组件线索

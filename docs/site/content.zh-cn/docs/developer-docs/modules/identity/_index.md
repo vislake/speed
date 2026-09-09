@@ -8,7 +8,7 @@ description: "身份与访问三模块——authn 认证、rbac 授权、org 给
 
 Go 侧有三个模块扛起 speed 产品的身份与访问面,它们把同一个问题切成三段:**谁在调用**(`authn`)、**他能不能做这件事**(`rbac`)、**在组织的哪一片里能做**(`org`)。本页是这次切分的地图——三个模块之间的关系,以及每条边界为什么落在现在的位置。随后的模块设计页逐个讲每份设计的故事:`authn` 在前(谁),`rbac` 其次(能不能),`org` 殿后(给授权提供边界的树与名册)——这个顺序同时镜像模块依赖图与一个请求穿过中间件链的路径。
 
-[用户指南的 identity 页](/zh-cn/docs/user-guide/modules/identity/)讲怎么接线、怎么用;这些页面讲每个模块为什么长成现在的样子——每一条论断都能回溯到 Source 里点名的内部设计文档与该模块自己的 `AGENTS.md`。
+[用户指南的 identity 页](/zh-cn/docs/user-guide/modules/identity/)讲怎么接线、怎么用;这些页面讲每个模块为什么长成现在的样子——每一条论断都能回溯到 Source 里点名的模块自己的 `AGENTS.md`。
 
 ## 三个模块,各答一问
 
@@ -68,7 +68,6 @@ flowchart LR
 
 ## Source
 
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)、[01-architecture.md](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md)
 - [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md)、[go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md)、[go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md)
 - 本页(组内 hub);[总体架构](/zh-cn/docs/developer-docs/architecture/)、[设计原则](/zh-cn/docs/developer-docs/design-principles/)
 - 用户指南:[identity 组模块](/zh-cn/docs/user-guide/modules/identity/)、[身份与访问域页](/zh-cn/docs/user-guide/domains/identity-access/)

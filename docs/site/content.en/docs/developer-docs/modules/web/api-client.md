@@ -131,9 +131,8 @@ defaulting to `false` while loading or on error, never throwing.
 
 ## Source
 
-- Package contract and decisions: [web/packages/api-client/README.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/README.md), [AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md)
+- Package contract and decisions: [AGENTS.md](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md)
 - The enforcing rule: [web/eslint-rules/](https://github.com/vislake/speed/tree/main/web/eslint-rules) (`speed/no-direct-http`)
-- Design: [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md) (mechanism notes: token placement, refresh seam, no-direct-http)
 
 ## Related pages
 

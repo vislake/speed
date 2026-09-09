@@ -60,15 +60,13 @@ dual-identity audit records admin writes are exactly what compliance's
 query dimension reads back.
 
 The per-module dependency-order design story continues in this
-section's sibling groups (core, services, identity, tools), which land
-as the site's content batches complete; the
+section's sibling groups (core, services, identity, tools); the
 [developer-docs hub](/docs/developer-docs/) is the always-current map.
 The [architecture](/docs/developer-docs/architecture/) page is this
 group's foundation — the module wiring contract, the data domains and
 the deployment axes the five pages assume. Each design page carries a
-Source section linking back to the internal design document and the
-module's own `AGENTS.md`, so every claim is verifiable against the
-original.
+Source section linking back to the module's own `AGENTS.md`, so every
+claim is verifiable against the original.
 
 ## The pages
 
@@ -93,5 +91,4 @@ original.
 
 ## Source
 
-- Internal designs: [06-billing-and-metering.md](https://github.com/vislake/speed/blob/main/docs/internal/06-billing-and-metering.md), [08-ai-gateway.md](https://github.com/vislake/speed/blob/main/docs/internal/08-ai-gateway.md), [10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md), [23-admin.md](https://github.com/vislake/speed/blob/main/docs/internal/23-admin.md)
 - Module discipline: [go/billing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md), [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md), [go/sharing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md), [go/compliance/AGENTS.md](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md), [go/admin/AGENTS.md](https://github.com/vislake/speed/blob/main/go/admin/AGENTS.md)

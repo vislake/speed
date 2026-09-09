@@ -82,7 +82,6 @@ TOTP 只用标准库实现,钉在 RFC 4226/6238 官方测试向量上;开通发�
 
 ## Source
 
-- 设计:[docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)(身份域设计;会话撤销冲突、联合规则与实现对照都在此)、[22-pki.md](https://github.com/vislake/speed/blob/main/docs/internal/22-pki.md)(authn 消费的密钥源生命周期)
 - [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md)——Rules、决策面与 Known limitations
 
 ## 相关页

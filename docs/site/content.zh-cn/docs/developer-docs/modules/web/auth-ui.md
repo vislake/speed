@@ -89,12 +89,6 @@ key,缺失翻译也绝不会漏出另一种语言。分类器把非 `ApiError` �
 `@speed/api-sdk` 只是 type-only 依赖;`src/` 里没有任何直连 HTTP,
 由工作区的 `no-direct-http` 规则强制。
 
-## Source
-
-- [web/packages/auth-ui/README.md](https://github.com/vislake/speed/blob/main/web/packages/auth-ui/README.md)——契约、prop 表、错误白名单与 Known limitations
-- [docs/internal/12-frontend.md](https://github.com/vislake/speed/blob/main/docs/internal/12-frontend.md)——前端包分层与 auth-ui 实现注记
-- [docs/internal/05-identity-and-access.md](https://github.com/vislake/speed/blob/main/docs/internal/05-identity-and-access.md)——会话契约背后的身份设计:撤销、社交渠道、MFA
-
 ## 相关页
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——包分层与受控组件契约

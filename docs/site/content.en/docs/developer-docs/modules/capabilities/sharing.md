@@ -165,7 +165,6 @@ delivery window against sharing's ceiling.
 
 ## Source
 
-- Design: [docs/internal/07-platform-services.md](https://github.com/vislake/speed/blob/main/docs/internal/07-platform-services.md) (sharing section), [10-compliance-and-audit.md](https://github.com/vislake/speed/blob/main/docs/internal/10-compliance-and-audit.md)
 - Module discipline: [go/sharing/AGENTS.md](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md)
 
 ## Related

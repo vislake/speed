@@ -143,10 +143,6 @@ tidy` 与 `go build`,迁移一个全新数据库,启动并对组装好的 HTTP �
 
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md) —
   四个命令的权威契约;本页的主要来源。
-- [docs/internal/02-repo-and-release.md](https://github.com/vislake/speed/blob/main/docs/internal/02-repo-and-release.md) —
-  锁步版本制与 CLI 在业务方故事里的位置。
-- [19-dev-workflow.md](https://github.com/vislake/speed/blob/main/docs/internal/19-dev-workflow.md) —
-  CLI 在开发者工作流中的位置。
 - [scaffold-verify.yml](https://github.com/vislake/speed/blob/main/.github/workflows/scaffold-verify.yml) —
   针对真实生成项目的每日端到端证明。
 - [saasctl 用户指南](/zh-cn/docs/user-guide/modules/tools/saasctl/) — 四
