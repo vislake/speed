@@ -38,9 +38,9 @@ disablePathToLower = true
 # default/primary language per docs/internal/13's English-first rule for
 # this directory; defaultContentLanguageInSubdir is left at Hugo's own
 # default (false), so English pages render unprefixed
-# (https://vislake.github.io/speed/...) and zh-cn pages render under an
+# (https://speed.vislake.com/...) and zh-cn pages render under an
 # explicit /zh-cn/ prefix
-# (https://vislake.github.io/speed/zh-cn/...) -- verified against a real
+# (https://speed.vislake.com/zh-cn/...) -- verified against a real
 # `hugo --minify` build's public/ output, not assumed.
 defaultContentLanguage = 'en'
 defaultContentLanguageInSubdir = false

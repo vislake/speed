@@ -40,8 +40,10 @@ name: docs-check
 #     install -- so this job needs no setup step. ubuntu-latest ships
 #     the Python >= 3.11 the checker needs (tomllib).
 #   * error-code index drift: python3 tools/gen_error_code_index.py
-#     --check from the repository root, failing when docs/error-codes.md
-#     is not what the generator renders from the current Go tree --
+#     --check from the repository root, failing when the documentation
+#     site's error-codes page (docs/site/content.en/docs/user-guide/error-codes.md,
+#     served at /docs/user-guide/error-codes/) is not what the generator
+#     renders from the current Go tree --
 #     every code constructed in Go source under go/ and examples/ with a
 #     literal code argument (test and generated files excluded), named
 #     declaration or inline construction alike, each with its own

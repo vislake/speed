@@ -2,7 +2,8 @@
 """Independent error-code index coverage checker.
 
 The blind-spot mirror of tools/gen_error_code_index.py's own --check.
-That gate compares the committed docs/error-codes.md against the
+That gate compares the committed index page
+(docs/site/content.en/docs/user-guide/error-codes.md) against the
 generator's output -- both sides derive from the same scanner, so a
 construction form the scanner does not index is invisible to it: this
 check exists so an extractor blind spot shows as a real diff. It derives
@@ -63,11 +64,11 @@ construction site) and every unindexable construction (with its site),
 so the printed list is directly comparable against an independent probe
 of the tree. Exit codes follow this directory's convention: 0 clean /
 1 findings / 2 usage or environment error. Nothing is written; the
-generator alone writes docs/error-codes.md.
+generator alone writes the index page.
 
 Usage:
     python3 tools/check_error_code_index_coverage.py
-    python3 tools/check_error_code_index_coverage.py --roots go examples --index docs/error-codes.md
+    python3 tools/check_error_code_index_coverage.py --roots go examples --index docs/site/content.en/docs/user-guide/error-codes.md
 """
 
 from __future__ import annotations
@@ -403,7 +404,7 @@ def collect_findings(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--roots", nargs="+", default=["go", "examples"], help="Directories to scan for *.go files (relative to the repo root).")
-    parser.add_argument("--index", default="docs/error-codes.md", help="The committed error-code index to check (relative to the repo root).")
+    parser.add_argument("--index", default="docs/site/content.en/docs/user-guide/error-codes.md", help="The committed error-code index page to check (relative to the repo root).")
     args = parser.parse_args()
 
     repo_root = pathlib.Path(__file__).resolve().parent.parent

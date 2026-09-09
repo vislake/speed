@@ -65,10 +65,16 @@ from pathlib import Path
 # language's own root in the built tree (en: docs/site/public/<page>;
 # zh-cn: docs/site/public/zh-cn/<page>) -- one entry per page the site
 # ships, matching hugo.toml's BookSection='docs' layout (home page
-# outside docs/, the five reference pages under it).
+# outside docs/; under it the two section branches user-guide/ and
+# developer-docs/ plus the site-level leaves quickstart/modules/
+# ai-agents/about/status, the last three of which migrate into the
+# branches as the site's content batches complete).
 REQUIRED_PAGES_PER_LANGUAGE = [
     "index.html",
     "docs/index.html",
+    "docs/user-guide/index.html",
+    "docs/user-guide/error-codes/index.html",
+    "docs/developer-docs/index.html",
     "docs/quickstart/index.html",
     "docs/modules/index.html",
     "docs/ai-agents/index.html",

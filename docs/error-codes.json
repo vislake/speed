@@ -1200,19 +1200,19 @@
     },
     {
       "code": "cases.internal_error",
-      "file": "examples/reference-app/cmd/server/cases.go",
+      "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesErrInternal",
       "kind": "declared",
-      "line": 55,
+      "line": 58,
       "module": "cases",
       "status": 500
     },
     {
       "code": "cases.invalid_request_body",
-      "file": "examples/reference-app/cmd/server/cases.go",
+      "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesInvalidRequestBody",
       "kind": "declared",
-      "line": 62,
+      "line": 65,
       "module": "cases",
       "status": 400
     },
@@ -1263,37 +1263,37 @@
     },
     {
       "code": "cases.photo_content_invalid",
-      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentInvalid",
       "kind": "declared",
-      "line": 78,
+      "line": 79,
       "module": "cases",
       "status": 400
     },
     {
       "code": "cases.photo_content_required",
-      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentRequired",
       "kind": "declared",
-      "line": 73,
+      "line": 74,
       "module": "cases",
       "status": 400
     },
     {
       "code": "cases.photo_content_too_large",
-      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentTooLarge",
       "kind": "declared",
-      "line": 85,
+      "line": 86,
       "module": "cases",
       "status": 400
     },
     {
       "code": "cases.photo_not_found",
-      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoNotFound",
       "kind": "declared",
-      "line": 100,
+      "line": 101,
       "module": "cases",
       "status": 404
     },
@@ -1317,10 +1317,10 @@
     },
     {
       "code": "cases.photo_rejected",
-      "file": "examples/reference-app/cmd/server/cases_photos.go",
+      "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoRejected",
       "kind": "declared",
-      "line": 93,
+      "line": 94,
       "module": "cases",
       "status": 400
     },
@@ -1623,28 +1623,28 @@
     },
     {
       "code": "consult.internal_error",
-      "file": "examples/reference-app/cmd/server/consult.go",
+      "file": "examples/reference-app/internal/app/consult.go",
       "ident": "consultErrInternal",
       "kind": "declared",
-      "line": 34,
+      "line": 35,
       "module": "consult",
       "status": 500
     },
     {
       "code": "consult.invalid_request_body",
-      "file": "examples/reference-app/cmd/server/consult.go",
+      "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 56,
+      "line": 57,
       "module": "consult",
       "status": 400
     },
     {
       "code": "consult.note_id_required",
-      "file": "examples/reference-app/cmd/server/consult.go",
+      "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 60,
+      "line": 61,
       "module": "consult",
       "status": 400
     },
@@ -1821,7 +1821,7 @@
     },
     {
       "code": "integration.internal_error",
-      "file": "examples/reference-app/cmd/server/demo_subject.go",
+      "file": "examples/reference-app/internal/app/demo_subject.go",
       "ident": "integrationErrInternal",
       "kind": "declared",
       "line": 690,
@@ -3072,19 +3072,19 @@
     },
     {
       "code": "reference_app.internal_error",
-      "file": "examples/reference-app/cmd/server/team_members.go",
+      "file": "examples/reference-app/internal/app/team_members.go",
       "ident": "teamMemberErrInternal",
       "kind": "declared",
-      "line": 114,
+      "line": 118,
       "module": "reference_app",
       "status": 500
     },
     {
       "code": "reference_app.method_not_allowed",
-      "file": "examples/reference-app/cmd/server/clinic_name.go",
+      "file": "examples/reference-app/internal/app/clinic_name.go",
       "ident": "",
       "kind": "inline",
-      "line": 76,
+      "line": 81,
       "module": "reference_app",
       "status": 400
     },
@@ -3189,64 +3189,64 @@
     },
     {
       "code": "smilesim.internal_error",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrInternal",
       "kind": "declared",
-      "line": 52,
+      "line": 55,
       "module": "smilesim",
       "status": 500
     },
     {
       "code": "smilesim.invalid_request_body",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrInvalidRequestBody",
       "kind": "declared",
-      "line": 63,
+      "line": 66,
       "module": "smilesim",
       "status": 400
     },
     {
       "code": "smilesim.output_not_found",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrOutputNotFound",
       "kind": "declared",
-      "line": 88,
+      "line": 91,
       "module": "smilesim",
       "status": 404
     },
     {
       "code": "smilesim.output_not_ready",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrOutputNotReady",
       "kind": "declared",
-      "line": 83,
+      "line": 86,
       "module": "smilesim",
       "status": 404
     },
     {
       "code": "smilesim.photo_object_id_required",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrPhotoObjectIDRequired",
       "kind": "declared",
-      "line": 67,
+      "line": 70,
       "module": "smilesim",
       "status": 400
     },
     {
       "code": "smilesim.recipient_not_in_tenant",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrRecipientNotInTenant",
       "kind": "declared",
-      "line": 479,
+      "line": 482,
       "module": "smilesim",
       "status": 400
     },
     {
       "code": "smilesim.simulation_not_found",
-      "file": "examples/reference-app/cmd/server/smilesim.go",
+      "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrSimulationNotFound",
       "kind": "declared",
-      "line": 79,
+      "line": 82,
       "module": "smilesim",
       "status": 404
     },

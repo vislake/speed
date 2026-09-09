@@ -215,9 +215,11 @@ compare `.Code`, never a raw string. The most commonly reached ones:
 | `notification.sms_sender_required` / `notification.mail_from_required` / `notification.contact_email_indexer_required` / `notification.contact_phone_indexer_required` / `notification.delivery_queue_required` / `notification.user_address_resolver_required` | `Register` refused to boot: one of the six required `Option`s above was never applied | Add the missing `With*` option to `NewModule`'s call |
 
 The full, generated index of every error code across every implemented
-module (not just this one) lives at `docs/error-codes.md` (repository
-root), produced by `tools/gen_error_code_index.py` -- see that script's own
-header for how to regenerate it.
+module (not just this one) lives on the documentation site at
+`/docs/user-guide/error-codes/` (source:
+`docs/site/content.en/docs/user-guide/error-codes.md`), produced by
+`tools/gen_error_code_index.py` -- see that script's own header for how
+to regenerate it.
 
 ## FAQ
 

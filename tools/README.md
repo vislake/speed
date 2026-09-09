@@ -16,7 +16,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_coverage_baseline.py` | Checker | docs/internal/20-quality-and-security.md's coverage rule for every released module (the 21 go/ modules with a go.mod plus examples/reference-app): the measured unit-suite statement coverage -- generated files (.gen.go) excluded from the census -- must clear the 80% floor (the 2026-09 product decision) and must not sit more than the documented tolerance below its committed `tools/coverage-baselines.json` row (the earlier foundation-modules no-decline rule, kept); `--update` records new baselines by real measurement (a deliberate decline must ride the same change that records it, with the reason in the commit, and a sub-floor measurement refuses to be recorded -- the floor is not re-baselineable); `--selfcheck` keeps the baseline file itself complete and current (every row a live gated module, every gated module with a row) so a stale row cannot silently exempt a module | 0 clean / 1 floor or decline breach, stale/missing row, or toolchain moved / 2 usage error |
 | `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
-| `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in `docs/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
+| `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in the committed index page `docs/site/content.en/docs/user-guide/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
 | `affected_go_modules.py` | Scope helper | Computes which Go modules a set of changes affects -- changed modules plus their downstream dependents, the dependency edges derived from each module go.mod's require lines (never a hand-maintained table) -- the computation behind the Taskfile `test` task's diff-aware scoping | 0 scope printed (one module dir per line, or the token ALL) / 1 git plumbing failed / 2 usage error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new speed Go module under `go/<name>` (go.mod + doc.go + AGENTS.md) with `--category go`, or the canonical `@speed/<name>` package skeleton under `web/packages/<name>` (package.json, the tsconfig pair, a doc-comment index.ts plus its wiring test, README and AGENTS.md) with `--category npm`, and prints the category's registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 | `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
@@ -512,9 +512,9 @@ row winning over an inline site's.
 Usage:
 
 ```
-python3 tools/gen_error_code_index.py                          # writes docs/error-codes.md
-python3 tools/gen_error_code_index.py --check                  # exit 1 if docs/error-codes.md is stale
-python3 tools/gen_error_code_index.py --roots go examples --out docs/error-codes.md
+python3 tools/gen_error_code_index.py                          # writes the site page docs/site/content.en/docs/user-guide/error-codes.md
+python3 tools/gen_error_code_index.py --check                  # exit 1 if that page is stale
+python3 tools/gen_error_code_index.py --roots go examples --out docs/site/content.en/docs/user-guide/error-codes.md
 ```
 
 Cross-checked, at generation time, against the 34-code reachable-error
@@ -539,7 +539,8 @@ the real Go tree with its own implementation of the same coverage domain
 bounded multi-line window so a continuation-line literal the generator
 cannot see turns red, helper discovery by body evidence: a function that
 builds an `*apperr.Error` from one of its own parameters) and compares the
-codes it finds against the rows of the committed `docs/error-codes.md` --
+codes it finds against the rows of the committed index page
+`docs/site/content.en/docs/user-guide/error-codes.md` --
 the semgrep_fixture_check shape of comparing a tool's artifact against
 the real tree, so an extractor blind spot shows as a real diff instead of
 silent agreement between the file and the generator. It additionally
@@ -558,7 +559,7 @@ Usage:
 
 ```
 python3 tools/check_error_code_index_coverage.py                # exit 1 on any missing/unindexable code
-python3 tools/check_error_code_index_coverage.py --roots go examples --index docs/error-codes.md
+python3 tools/check_error_code_index_coverage.py --roots go examples --index docs/site/content.en/docs/user-guide/error-codes.md
 ```
 
 ## new_module.py — Go module stub generator
@@ -841,8 +842,10 @@ either re-runs the checks that consume it.
 `tools/gen_error_code_index.py --check` runs in the docs-check pipeline
 (`.github/workflows/docs-check.yml`) as a plain-python3 step alongside
 the i18n key-set parity checker -- no setup step -- failing the job when
-docs/error-codes.md is not what the generator renders from the current
-tree. It landed there once the committed index had drifted 271 codes
+the documentation site's error-codes page
+(docs/site/content.en/docs/user-guide/error-codes.md, served at
+/docs/user-guide/error-codes/) is not what the generator renders from the
+current tree. It landed there once the committed index had drifted 271 codes
 behind the 359 the tool rendered (later rounds added codes with no
 regeneration), retiring the row docs-check.yml's own DELIBERATELY NOT
 WIRED list used to carry.

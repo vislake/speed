@@ -4,26 +4,40 @@ title: speed
 
 # speed
 
-speed 是一组以库形式分发的模块化单体：业务方通过 `go get` / `npm install`
-接入的一系列独立发布、版本锁步的 Go module 和 npm 包，最终编译进同一个
-二进制文件。
+以库分发的模块化单体:独立发布的 Go 模块与 npm 包,业务项目通过
+`go get` / `npm install` 拉入并编译进一个二进制。挑你的 SaaS 需要的
+模块——身份、多租户、通知、计费、AI、合规——通过一次内核组装把它们
+组合起来,而不是自己从零搭建每一层。
 
-{{<button href="docs/quickstart/">}}快速开始{{</button>}}
-{{<button href="docs/modules/">}}模块索引{{</button>}}
+本站有两个主要栏目。
 
-## 本站导航
+## 用 speed 搭建你的 SaaS
 
-- [快速开始](docs/quickstart/) —— 用 `saasctl new` 生成一个可运行的
-  起始项目，以及 `saasctl` 的四个命令。
-- [模块索引](docs/modules/) —— 业务方项目可以接入的 Go module 与
-  npm 包的完整清单，每一项都链接到它自己的文档。
-- [面向 AI Agent](docs/ai-agents/) —— 应该先读什么，以及当 AI 编码
-  工具负责接入时最容易踩坑的架构纪律。
-- [关于 speed](docs/about/) —— 这个项目是什么、各部分如何组合、
-  文档如何分发。
-- [实现状态](docs/status/) —— 当前实现真实进展到哪一步。
+给**使用** speed 模块做自己产品的团队:快速开始、按领域的教程,以及
+带可运行示例的逐模块完整参考。
 
-本站基于 [Hugo](https://gohugo.io) 与 [hugo-book](https://github.com/alex-shpak/hugo-book)
-主题构建 —— 机制选型的理由与仍然推迟的部分见[关于](docs/about/)。
-站点根部有一份机器可读的 [llms.txt](/llms.txt)，每一页的页眉都有语言切换
-（English / 中文）。
+- [用户指南](/zh-cn/docs/user-guide/)——从这里开始。
+- [快速开始](/zh-cn/docs/quickstart/)——五分钟生成一个启动项目。
+- [错误码索引](/zh-cn/docs/user-guide/error-codes/)——speed 系 API
+  可能应答的全部错误码清单。
+
+## 开发 speed 本身
+
+给**在 speed 上工作的开发者**:总体架构、背后的设计原则,以及解释
+每个模块为什么长成这样的逐模块设计深入。
+
+- [开发者文档](/zh-cn/docs/developer-docs/)——从这里开始;本栏涵盖
+  总体架构(模块化单体、模块依赖方向、部署模式与实现组装两条正交轴)、
+  设计原则与逐模块设计深入。
+
+## 面向 AI Agent
+
+作为编码 agent 阅读本站?从
+[面向 AI Agent](/zh-cn/docs/ai-agents/)开始了解先读什么;本站根部的
+[/llms.txt](/llms.txt) 提供全部页面的机器可读索引。仓库自己的
+[根 `AGENTS.md`](https://github.com/vislake/speed/blob/main/AGENTS.md)
+仍是仓库工作的权威向导。
+
+本站由 [Hugo](https://gohugo.io) 与
+[hugo-book](https://github.com/alex-shpak/hugo-book) 主题构建。每页
+头部都有语言切换器(English / 中文)。
