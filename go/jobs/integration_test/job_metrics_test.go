@@ -16,7 +16,7 @@ import (
 // This file proves, against a real asynq.Server dequeuing from a real
 // Redis, that the asynq.Queue emits the jobs.job.duration /
 // jobs.job.attempts / jobs.job.dead_letter outcome metrics on a real
-// run -- the integration half of go/jobs/queue/asynq's job_metrics_test.go
+// run -- the integration half of go/jobs/queue/asynq's job_outcome_metrics_recording_test.go
 // unit suite. The unit suite covers the failure-side recording site
 // (handleErrorAttempt) and the registration, which need no Redis; the
 // success-side site (processTaskUncancelled) needs a real ResultWriter and
