@@ -84,8 +84,9 @@ func applyPKIMigrations(t *testing.T, db *gorm.DB) {
 	}
 }
 
-// newTestService returns a Service wired the way cmd/server wires the
-// app's own (server.go): pki's migrations applied, the app's CA chain
+// newTestService returns a Service wired the way internal/app's
+// BuildServer wires the app's own (internal/app/server.go): pki's
+// migrations applied, the app's CA chain
 // ensured, and every pki call running against real rows and real key
 // material. Only content comes from the caller-supplied opener, since
 // the tests count opens instead of reading storage bytes.
@@ -172,11 +173,11 @@ func TestEnsureAttested_AttestsAnOutputOnceThenShortCircuitsEveryLaterObservatio
 // the gate's one-error shape at its certificate stage: an object whose
 // attestation row names a revoked certificate is refused, and the refusal
 // satisfies ErrAttestationFailed exactly like every other refusal stage
-// -- the sentinel the cmd/server sharing gate matches before it logs the
-// wrapped reason (sharing_resolver.go), so a revoked certificate must
-// answer the same shape as a tampered digest, never a distinguishable
-// fault. The refusing stage's own coded error stays reachable through
-// the wrap, for the log.
+// -- the sentinel internal/app's sharing gate matches before it logs the
+// wrapped reason (internal/app/sharing_resolver.go), so a revoked
+// certificate must answer the same shape as a tampered digest, never a
+// distinguishable fault. The refusing stage's own coded error stays
+// reachable through the wrap, for the log.
 func TestCheckContent_RevokedCertificate_AnswersErrAttestationFailed(t *testing.T) {
 	svc := newTestService(t, &recordingContentOpener{})
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
@@ -283,7 +284,7 @@ type attestationFixture struct {
 // per-test SQLite database: pki's own migrations applied from zero (via
 // the same dbkit.MigrationRegistry the app's startup uses), the local key
 // serializer registered, the app's CA chain ensured and its schema
-// created -- the exact boot order cmd/server's buildServer runs. The
+// created -- the exact boot order internal/app's BuildServer runs. The
 // service is ready for attestation writes on acme's context.
 func newAttestationFixture(t *testing.T) *attestationFixture {
 	t.Helper()

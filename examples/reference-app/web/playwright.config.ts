@@ -28,7 +28,7 @@
  *      SQLite file this config places in the OS temp directory under a
  *      run-unique name. The freshness matters: demo-account seeding is
  *      deliberately skipped for an account a previous boot already
- *      created (cmd/server/demo_users.go's own "leaving it unseeded so it
+ *      created (internal/app/demo_users.go's own "leaving it unseeded so it
  *      fails closed" branch), so a reused database would hand the suite
  *      accounts with no memberships.
  *   2. the app's own vite dev server (vite.config.ts), which serves the
@@ -247,7 +247,7 @@ export const SERVER_LOG_PATH = process.env.E2E_SERVER_LOG_PATH
 
 /**
  * The passphrase that gates demo-account seeding
- * (cmd/server/demo_users.go's APP_DEMO_USERS_PASSWORD). NOT a secret: it
+ * (internal/app/demo_users.go's APP_DEMO_USERS_PASSWORD). NOT a secret: it
  * exists only so a throwaway server boots with the three demo accounts
  * the specs sign in as, and it is regenerated on nobody's behalf -- the
  * same shape as the repository's other documented, non-secret
@@ -419,7 +419,7 @@ export default defineConfig({
           // and warns about implementations that do not survive a
           // restart through slog.Default() -- it cannot do otherwise,
           // being the module every other one sits on, so it can never
-          // import observability -- and this app runs buildServer, which
+          // import observability -- and this app runs BuildServer, which
           // is where Bootstrap happens, deliberately BEFORE obs.Init
           // (main.go says why). So those lines are Go's default text
           // format on stderr while everything a gate reads here is the

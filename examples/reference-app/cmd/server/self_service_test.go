@@ -320,7 +320,7 @@ type failOnceProvisioning struct {
 	attempts int
 }
 
-// fail implements the failSelfServiceProvision hook: the first attempt
+// fail implements the FailSelfServiceProvision hook: the first attempt
 // fails, later ones (the retry job's) succeed.
 func (f *failOnceProvisioning) fail(userID string) error {
 	f.mu.Lock()

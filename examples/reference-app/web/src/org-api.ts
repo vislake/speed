@@ -16,7 +16,8 @@
  * shape is this host's own -- see share-api.ts's header for the same
  * relationship on go/sharing). The path literals are hand-kept in step
  * with the module's own mounted route (/api/v1/org --
- * demo_subject.go's orgRoutePath), and the wire shapes mirror
+ * internal/app/demo_subject.go's orgRoutePath), and the wire shapes
+ * mirror
  * go/org/api/openapi.yaml's schemas field-for-field, never the
  * generator's Go types.
  *
@@ -24,7 +25,8 @@
  * caller-scoped operations (create and accept an invitation) resolve
  * who is acting server-side, and the demo wiring's DemoOrgSubjectResolver
  * falls back to the verified access-token Principal when no demo header
- * rides along (server.go's wiring) -- so the calls below carry only the
+ * rides along (internal/app/server.go's wiring) -- so the calls below
+ * carry only the
  * bearer the client attaches, never a header of their own, exactly like
  * a delivered consumer's calls would.
  */

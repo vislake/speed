@@ -46,10 +46,10 @@ services:
       # Named volume, not a bind mount: this demo's whole point is "does
       # the SQLite file survive a container restart", which a named volume
       # answers regardless of the host filesystem, and it is what
-      # server.go's own comments mean by "a persistent one when the host
-      # injects its own" -- see server.go's dbkit.Open call site doc
-      # comment on the throwaway-vs-persistent ObjectStore split for the
-      # identical distinction applied to a different seam.
+      # internal/app/server.go's own comments mean by "a persistent one
+      # when the host injects its own" -- see that file's dbkit.Open call
+      # site doc comment on the throwaway-vs-persistent ObjectStore split
+      # for the identical distinction applied to a different seam.
       - reference-app-db:/data
     environment:
       # Mirrors .env.example's own documented variables and defaults --
@@ -64,15 +64,17 @@ services:
       # and `docker compose down` (without `-v`) rather than living in the
       # container's throwaway writable layer.
       APP_DB_PATH: /data/reference-app.db
-      # Gates the boot-time demo-user seed (demo_users.go) exactly as
+      # Gates the boot-time demo-user seed (internal/app/demo_users.go)
+      # exactly as
       # .env.example documents; this is a local-demo passphrase, not a
       # security secret -- README.md's own "Try it" section already
       # publishes an equivalent example passphrase in its curl walkthrough.
       # Set to empty (or delete this line) to skip seeding and use the
       # X-Demo-User header path instead.
       APP_DEMO_USERS_PASSWORD: local-demo-password
-      # Gates the boot-time demo platform-staff seed (demo_admin.go) under
-      # its OWN variable, exactly as .env.example documents: the
+      # Gates the boot-time demo platform-staff seed
+      # (internal/app/demo_admin.go) under its OWN variable, exactly as
+      # .env.example documents: the
       # rbac.SystemDomain platform administrator (which holds every
       # admin:* permission) must never share the demo users' passphrase
       # above, so this compose demo gives it its own local-demo one. Set
@@ -80,8 +82,8 @@ services:
       APP_DEMO_PLATFORM_STAFF_PASSWORD: local-admin-demo-password
       #
       # APP_CONFIG_KEY / APP_ORG_INDEX_KEY / APP_NOTIFICATION_INDEX_KEY
-      # are DELIBERATELY UNSET here: internal/app/server.go's own configFromEnv
-      # falls back to devConfigKey/devOrgIndexKey/devNotificationIndexKey --
+      # are DELIBERATELY UNSET here: internal/app/server.go's own ConfigFromEnv
+      # falls back to DevConfigKey/DevOrgIndexKey/DevNotificationIndexKey --
       # fixed, non-secret, already-committed-and-documented byte sequences
       # meant for exactly this (zero-setup local development and demos),
       # never for anything a real deployment serves. An illustrative

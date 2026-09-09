@@ -36,7 +36,7 @@
 //
 // This file closes that gap by making replica B's own worker
 // STRUCTURALLY incapable of ever processing a job: replica B boots with
-// APP_DISABLE_QUEUE_WORKER=true (server.go's cfg.DisableQueueWorker),
+// APP_DISABLE_QUEUE_WORKER=true (internal/app/server.go's cfg.DisableQueueWorker),
 // which skips standaloneQueue.Start entirely on that replica -- no
 // dispatcher, no worker goroutines, ever, on B, no matter how long it
 // runs. With B's worker disabled, replica A is the ONLY process that can
@@ -107,7 +107,8 @@
 // belong to this tenant", answers customer-tenant questions from that
 // table, live -- and org's rows live in the SHARED database, so an
 // account the boot-time seed registered and placed during replica A's
-// boot (APP_DEMO_USERS_PASSWORD, demo_users.go) is visible to replica B's
+// boot (APP_DEMO_USERS_PASSWORD, internal/app/demo_users.go) is visible to
+// replica B's
 // OWN, separate reader instance too: a fresh, successful login against
 // replica B for that account would resolve its membership from the same
 // rows A's seed wrote. This file's scenario is nevertheless shaped the
@@ -157,7 +158,8 @@
 // examples/reference-app/internal/notes/module.go) means the SAME note
 // creation that drives the "eventbus"/"kv" proof ALSO drives a real
 // delivery attempt over the "mailer" seam (the creator has an email
-// address in demo_notification.go's demoUserAddresses; no phone, so SMS is
+// address in internal/app/demo_notification.go's DemoUserAddresses; no
+// phone, so SMS is
 // skipped, an ordinary no-address outcome, never a failure) -- so this file
 // verifies that real send too, as a bonus assertion over Mailpit's own HTTP
 // API, rather than leaving "mailer" a capability declared but never really
@@ -218,21 +220,20 @@ const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 // dedicated module is run.
 const mailhogImage = "axllent/mailpit:v1.31"
 
-// distributedNoteCreatorUserID is demo_notification.go's
-// demoNotesCreatorUserID copied byte for byte (cmd/server owns the real
-// declaration; this file cannot import package main). It is the user id
-// notes' own creator-subject resolver assigns when the X-Demo-User-Id
-// header names it, and the ONLY demo user demoUserAddresses maps to a real
-// address ("user-creator-1@demo.example"), which is why this file's note is
-// always created under this header.
+// distributedNoteCreatorUserID mirrors internal/app/demo_notification.go's
+// DemoNotesCreatorUserID byte for byte. It is the user id notes' own
+// creator-subject resolver assigns when the X-Demo-User-Id header names
+// it, and the ONLY demo user DemoUserAddresses maps to a real address
+// ("user-creator-1@demo.example"), which is why this file's note is always
+// created under this header.
 const distributedNoteCreatorUserID = "user-creator-1"
 
-// distributedNoteCreatorEmail is demo_notification.go's demoUserAddresses
-// entry for distributedNoteCreatorUserID, copied byte for byte -- the
-// address this file's bonus MailHog assertion looks for.
+// distributedNoteCreatorEmail is internal/app/demo_notification.go's
+// DemoUserAddresses entry for distributedNoteCreatorUserID, copied byte
+// for byte -- the address this file's bonus MailHog assertion looks for.
 const distributedNoteCreatorEmail = "user-creator-1@demo.example"
 
-// demoUserIDHeader is internal/app/server.go's demoOrgUserHeader copied byte
+// demoUserIDHeader is internal/app/server.go's DemoOrgUserHeader copied byte
 // for byte: notes' own creator-subject resolver AND notification's own
 // subject resolver both read the acting user from this header, distinct
 // from demoUserHdr ("X-Demo-User", redis_eventbus_composition_test.go's own
@@ -818,8 +819,8 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 
 	// Create one note through replica A's real HTTP stack, attributed to
 	// distributedNoteCreatorUserID -- notes.note.created's DefaultChannels
-	// dispatch back to that same id over in_app and email (demoNotesCreatorUserID
-	// has an email address in demoUserAddresses, no phone, so sms is
+	// dispatch back to that same id over in_app and email (DemoNotesCreatorUserID
+	// has an email address in DemoUserAddresses, no phone, so sms is
 	// skipped as an ordinary no-address outcome).
 	const noteText = "buy milk across two real distributed replicas"
 	noteBody, err := json.Marshal(map[string]string{"text": noteText})
@@ -879,8 +880,8 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	// notification.inbox.created announcement must arrive on REPLICA B's
 	// own SSE stream. Replica B's queue worker is disabled, so it cannot
 	// have produced this announcement itself -- the only path is a real
-	// cross-process delivery over the "eventbus" seam server.go's wiring
-	// composes over Redis.
+	// cross-process delivery over the "eventbus" seam internal/app/server.go's
+	// wiring composes over Redis.
 	var gotFrame bool
 	deadline := time.After(20 * time.Second)
 	for !gotFrame {
@@ -968,7 +969,7 @@ type bootFailureCase struct {
 
 // TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot is the
 // negative proof, run through the REAL BINARY rather than an
-// in-process buildServer call (server_test.go's own
+// in-process BuildServer call (server_test.go's own
 // TestBuildServer_DistributedDeploymentMode_* tests already cover that
 // in-process form) -- proving that an operator who requests the
 // distributed deployment mode without genuinely composing every seam gets
@@ -991,8 +992,8 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 		{
 			// Nothing configured at all -- the naive operator mistake.
 			// authn.NewModule's own wiring-time validation runs BEFORE
-			// Kernel.Bootstrap in buildServer (see server.go's authn
-			// wiring comment), so THIS is the first thing that fails
+			// Kernel.Bootstrap in BuildServer (see internal/app/server.go's
+			// authn wiring comment), so THIS is the first thing that fails
 			// closed: no SMS sender for a distributed deployment.
 			name:       "nothing configured",
 			extraEnv:   nil,
@@ -1004,7 +1005,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			// defaults -- Kernel.Bootstrap's OWN capability validation is
 			// what fails, naming the first seam it resolves in its
 			// fixed order: "eventbus". That seam's in-process memory bus
-			// reaches Bootstrap through buildServer's own injection
+			// reaches Bootstrap through BuildServer's own injection
 			// (WithEventBus, the pre-built bus; see
 			// server_test.go's TestBuildServer_DistributedDeploymentMode_
 			// FailsCapabilityValidation comment), never through the Preset,

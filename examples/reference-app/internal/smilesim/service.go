@@ -13,9 +13,9 @@
 // /api/v1/smile-simulation/jobs/{id}, and GET
 // /api/v1/smile-simulation/photos/{photoObjectID}/simulations, the
 // per-photo enumeration that is the smile gallery's data source) are
-// mounted by hand in cmd/server (internal/app/smilesim.go), the same pattern
-// consult.go and the notification module's own demo patient-message route
-// establish in this app.
+// mounted by hand in internal/app (internal/app/smilesim.go), the same
+// pattern internal/app/consult.go and the notification module's own demo
+// patient-message route establish in this app.
 //
 // # Completion notification
 //
@@ -28,7 +28,7 @@
 // business module publishes a fact, notification consumes it" shape --
 // notifications are event-driven): Simulate
 // remembers the caller-supplied recipient against the job it started, and
-// NotifyOnCompletion -- called by cmd/server's existing job-status poll
+// NotifyOnCompletion -- called by internal/app's existing job-status poll
 // route on every read, which a real client already does to learn when a
 // generation is done -- publishes the event exactly once, the first time
 // it observes that job at a terminal status. This adds no new job type
@@ -38,11 +38,12 @@
 // OnFailure exists, and this is not a failure path).
 //
 // The recipient/notified bookkeeping is a plain in-memory map, matching
-// this app's other demo-only, single-process conveniences (cmd/server/
-// demo_notification.go's own demoUserAddresses table): it does not survive
-// a process restart, which is an acceptable limitation for a reference
-// app's own demo feature, never for a real deployment's own notification
-// pipeline. It is also bounded, not a log of every job ever simulated:
+// this app's other demo-only, single-process conveniences
+// (internal/app/demo_notification.go's own DemoUserAddresses table): it
+// does not survive a process restart, which is an acceptable limitation
+// for a reference app's own demo feature, never for a real deployment's
+// own notification pipeline. It is also bounded, not a log of every job
+// ever simulated:
 // NotifyOnCompletion deletes both entries once a job's terminal outcome is
 // fully processed, so the maps hold only outstanding (undelivered or
 // still-pending) notifications -- see NotifyOnCompletion's own doc comment
@@ -242,7 +243,7 @@ import (
 // image-side mirror of consult.LogicalModel's identical rule (see
 // aigateway.ImageRequest.Model's own doc comment). The host wires
 // aigateway.WithModelRoute for this exact key onto whatever image provider
-// should actually answer it (internal/app/server.go's buildServer).
+// should actually answer it (internal/app/server.go's BuildServer).
 const LogicalModel = "image:smile-simulation"
 
 // CreditsPerSimulation is the flat credit cost Simulate reserves for one
@@ -323,14 +324,14 @@ type Service struct {
 	// and settleCredit never calls Confirm/Refund -- the same
 	// optional-seam convention go/ai-gateway's own Entitlements option
 	// follows for a host that leaves it unwired (it then enforces no
-	// quota rather than panicking). cmd/server wires BOTH seams for
+	// quota rather than panicking). internal/app wires BOTH seams for
 	// real -- a real *billing.CreditService here and the
 	// WithEntitlements closure over billingModule.Entitlements() there
-	// (server.go's own construction call at NewService, judged against
-	// the demo subscriptions demo_entitlements.go seeds at boot) -- so
-	// the nil states these field comments describe belong to other
-	// hosts and to this package's standalone unit tests, never to this
-	// app's booted wiring.
+	// (internal/app/server.go's own construction call at NewService,
+	// judged against the demo subscriptions internal/app/demo_entitlements.go
+	// seeds at boot) -- so the nil states these field comments describe
+	// belong to other hosts and to this package's standalone unit tests,
+	// never to this app's booted wiring.
 	credits *billing.CreditService
 
 	// store durably persists the job-id-to-CreditTransaction-idempotency-key
@@ -363,9 +364,9 @@ type Service struct {
 	// same nil-legal convention the credits field above documents, where
 	// an unwired optional dependency enforces nothing rather than
 	// panicking (go/ai-gateway's own Entitlements option is the same
-	// shape for a host that leaves it unwired). cmd/server's booted
-	// Service passes a real one (reg.EventBus(), server.go's own
-	// construction call at NewService), so a nil bus, like a nil
+	// shape for a host that leaves it unwired). internal/app's booted
+	// Service passes a real one (reg.EventBus(), internal/app/server.go's
+	// own construction call at NewService), so a nil bus, like a nil
 	// credits, describes other hosts and standalone unit tests, never
 	// this app.
 	bus pkgcore.EventBus
@@ -419,7 +420,7 @@ type Service struct {
 // Simulate then skips the pre-flight; see Service's own doc comment on the
 // entitlements field for why a wired one must be the very seam gateway was
 // built with). Constructing one performs no I/O; call each store's own
-// EnsureSchema once, separately, before first use (cmd/server's wiring does
+// EnsureSchema once, separately, before first use (internal/app's wiring does
 // this).
 func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore, simulations *SimulationStore, entitlements aigateway.Entitlements) *Service {
 	return &Service{
@@ -726,7 +727,7 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 // returns an error), so a refused delivery stays retryable by the next
 // poll of this job instead of being skipped forever as "already
 // notified". That retryability matters because this method's callers log
-// and swallow its error: cmd/server's job-status route (this app's one
+// and swallow its error: internal/app's job-status route (this app's one
 // caller) must not turn a status read into an error response over the
 // notification side channel, so a publish failure is invisible to the
 // caller -- and an attempt-only latch would make that invisible failure
@@ -756,7 +757,7 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 // (undelivered or still-pending) notifications instead of growing with
 // every job ever simulated (see Service's field comment on mu).
 //
-// Callers that poll job status -- cmd/server's job-status route is this
+// Callers that poll job status -- internal/app's job-status route is this
 // app's one caller -- call this after every read they make, terminal or
 // not; the method itself decides whether there is anything to do. See the
 // package doc comment's "Completion notification" section for why this

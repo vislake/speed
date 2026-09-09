@@ -8,8 +8,9 @@
  * boot-configured tenants are named by the app's own static copy
  * (demo-tenants.ts -- no roster endpoint exists), and a tenant that did
  * not exist at boot -- the clinic a self-service registration provisions,
- * naming its org root after the name the registrant gave (self_service.go
- * and clinic_name.go) -- has no copy anywhere in the app. The frame's
+ * naming its org root after the name the registrant gave
+ * (internal/app/self_service.go and internal/app/clinic_name.go) -- has
+ * no copy anywhere in the app. The frame's
  * tenant switcher and the work-area clinic line must still name it, and
  * this request is how they learn the name: through the app's own
  * api-client RequestFn (the same transport every generated call rides --

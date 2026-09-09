@@ -44,8 +44,9 @@
 # /app/web/dist with APP_WEB_DIST naming it -- the deployed product URL
 # serves its own frontend (see internal/app/frontend.go for the serving
 # design and why the dist is read from disk rather than go:embed'd). The
-# go build deliberately does NOT depend on the frontend stage: frontend.go
-# resolves its directory at runtime, so the two stages build in parallel
+# go build deliberately does NOT depend on the frontend stage:
+# internal/app/frontend.go resolves its directory at runtime, so the two
+# stages build in parallel
 # and either half can change without invalidating the other's cache.
 FROM golang:1.26.8-bookworm AS builder
 
@@ -174,8 +175,9 @@ COPY --from=builder /out/reference-app-server ./reference-app-server
 COPY --from=builder --chown=65532:65532 /data /data
 
 # The built frontend, produced by the frontend stage above, and the
-# APP_WEB_DIST variable that makes the server serve it (cmd/server's
-# frontend.go -- the static surface never enters the authn/tenancy
+# APP_WEB_DIST variable that makes the server serve it
+# (internal/app/frontend.go -- the static surface never enters the
+# authn/tenancy
 # middleware chain, and this ENV is what a plain `docker run` of this
 # image inherits; docker-compose.yml's own environment merges over, not
 # under, the image's ENV, so neither compose file needs its own copy).
@@ -195,8 +197,9 @@ EXPOSE 8080
 # to curl/wget: this image has neither, nor a shell for a CMD-shell-form
 # HEALTHCHECK to run in, which is exactly why the exec form below is
 # mandatory here, not a style choice. runHealthcheck (main.go) probes this
-# same process's own /healthz (server.go's healthzPath, confirmed to
-# answer 200 "ok" with no tenant required) over loopback and exits 0/1
+# same process's own /healthz (internal/app/server.go's HealthzPath,
+# confirmed to answer 200 "ok" with no tenant required) over loopback and
+# exits 0/1
 # accordingly.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD ["/app/reference-app-server", "healthcheck"]

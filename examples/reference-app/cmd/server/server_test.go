@@ -1123,13 +1123,14 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 		t.Fatal("ReadFlyClientIP = true, want false (the default: no vendor header is read, authn's fail-closed shape)")
 	}
 	if cfg.FailSelfServiceProvision != nil {
-		t.Fatal("failSelfServiceProvision armed with an unset APP_FAIL_SELF_SERVICE_PROVISION: an absent variable must leave the self-service provisioning untouched (production behaviour unchanged)")
+		t.Fatal("FailSelfServiceProvision armed with an unset APP_FAIL_SELF_SERVICE_PROVISION: an absent variable must leave the self-service provisioning untouched (production behaviour unchanged)")
 	}
 }
 
 // TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics pins
 // APP_FAIL_SELF_SERVICE_PROVISION's parse contract (see
-// failSelfServiceProvisionEnv's own doc comment): absent or "0" leaves the
+// failSelfServiceProvisionEnv's own doc comment in internal/app/server.go):
+// absent or "0" leaves the
 // self-service provisioning uninjected, a positive integer N arms an
 // injection whose first N provisioning attempts of each account fail and
 // whose later attempts of the same account succeed, and anything else
@@ -1149,7 +1150,7 @@ func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *test
 			t.Fatalf("ConfigFromEnv() error = %v", err)
 		}
 		if cfg.FailSelfServiceProvision != nil {
-			t.Fatal("failSelfServiceProvision armed with the variable at 0, want the disabled default")
+			t.Fatal("FailSelfServiceProvision armed with the variable at 0, want the disabled default")
 		}
 	})
 	t.Run("a positive count arms the injection with exactly that budget", func(t *testing.T) {
@@ -1159,7 +1160,7 @@ func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *test
 			t.Fatalf("ConfigFromEnv() error = %v", err)
 		}
 		if cfg.FailSelfServiceProvision == nil {
-			t.Fatal("failSelfServiceProvision nil with the variable at 2, want the armed injection")
+			t.Fatal("FailSelfServiceProvision nil with the variable at 2, want the armed injection")
 		}
 		// The first two provisioning attempts of one account fail...
 		if err := cfg.FailSelfServiceProvision("budget-account"); err == nil {
@@ -1266,7 +1267,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 		t.Fatalf("ConfigKey = %x, want the decoded APP_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
 	}
 	if cfg.FailSelfServiceProvision == nil {
-		t.Fatal("failSelfServiceProvision nil with APP_FAIL_SELF_SERVICE_PROVISION=2, want the armed injection")
+		t.Fatal("FailSelfServiceProvision nil with APP_FAIL_SELF_SERVICE_PROVISION=2, want the armed injection")
 	}
 	// The variable's value is the number of attempts to fail: with N=2 the
 	// first two attempts of one account fail and the third succeeds.

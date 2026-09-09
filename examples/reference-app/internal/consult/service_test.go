@@ -95,7 +95,7 @@ var _ aigateway.ChatProvider = (*fakeChatProvider)(nil)
 
 // newTestService returns a Service backed by a fresh, per-test SQLite
 // database carrying BOTH notes' and ai-gateway's real migrations, sharing
-// one connection -- exactly as internal/app/server.go's buildServer wires the
+// one connection -- exactly as internal/app/server.go's BuildServer wires the
 // two in production -- with provider registered as the sole
 // ChatProviderRegistry entry LogicalModel routes to (isolated from the
 // real, process-global aigateway.ChatProviderRegistry). It also returns the

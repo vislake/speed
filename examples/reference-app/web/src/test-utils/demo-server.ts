@@ -36,7 +36,8 @@
  * account itself signed into the system pseudo-tenant -- the fixture's
  * tenantId option set to SYSTEM_PSEUDO_TENANT_ID ('system', the value
  * the Go seed grants demo-platform-staff@example.com its sole
- * membership in, demo_admin.go) -- the web mirror of an account whose
+ * membership in, internal/app/demo_admin.go) -- the web mirror of an
+ * account whose
  * admin:* grants live under rbac.SystemDomain.
  *
  * Registration answers 201 and PROVISIONS the account's own clinic --
@@ -252,7 +253,7 @@ export const DEMO_READER_SESSION_ID = 'session-4'
 export const FIRST_REGISTERED_USER_ID = 'user-9'
 /** The clinic tenant the FIRST registered account's registration
  * provisions: 'tenant-' + its user id, the web mirror of the composed
- * stack's deterministic tenant derivation (self_service.go's
+ * stack's deterministic tenant derivation (internal/app/self_service.go's
  * ClinicTenantOf). A journey that signs the first registered account in
  * asserts the frame names this tenant. */
 export const FIRST_REGISTERED_CLINIC_TENANT_ID = `tenant-${FIRST_REGISTERED_USER_ID}`
@@ -1244,9 +1245,9 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // registration gave the clinic: the display name the register body
   // carried (the name a practice types at signup), or the fixture's
   // default when it carried none -- the mirror of the real
-  // provisioner's root naming (self_service.go's clinicRootNameFor,
-  // which reads the registrant's authn display name back and falls back
-  // to the catalog default).
+  // provisioner's root naming (internal/app/self_service.go's
+  // clinicRootNameFor, which reads the registrant's authn display name
+  // back and falls back to the catalog default).
   const clinicNamesByTenant = new Map<string, string>()
   // The id counters for registered accounts: their user ids start after
   // the seeded rows (the demo accounts own user-1..user-8) and their
@@ -1397,7 +1398,8 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           }
           // Registration provisions the account's clinic -- its own user
           // id and its own tenant, derived from that id the way the real
-          // server derives it (self_service.go's ClinicTenantOf) -- so
+          // server derives it (internal/app/self_service.go's
+          // ClinicTenantOf) -- so
           // the 201 the register form shows answers for an account a
           // later sign-in can actually enter.
           const user_id = `user-${nextRegisteredUserNumber}`

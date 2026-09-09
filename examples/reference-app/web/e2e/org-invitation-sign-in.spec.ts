@@ -23,7 +23,7 @@
  * acceptance and the sign-in into the invited organization after, are
  * both driven through the browser. Before acceptance the invitee's
  * registration has already provisioned a clinic of its own
- * (self-service signup, cmd/server/self_service.go), so the account can
+ * (self-service signup, internal/app/self_service.go), so the account can
  * sign in from the moment it exists -- what it cannot do yet is enter
  * the ORGANIZATION that invited it, and the pre-acceptance leg asserts
  * exactly that.
@@ -57,7 +57,7 @@ test('an invited colleague accepts and can then sign in to that organization', a
 
   // The invitee registers, the way a person following an invitation link
   // does. Registration provisions the registrant a clinic of its own
-  // (self-service signup, cmd/server/self_service.go), so the account
+  // (self-service signup, internal/app/self_service.go), so the account
   // can sign in from the moment it exists -- what it cannot do yet is
   // enter the ORGANIZATION that invited it. This pre-acceptance leg
   // asserts exactly that: the browser-shaped sign-in lands in the

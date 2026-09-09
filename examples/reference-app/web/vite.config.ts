@@ -7,7 +7,7 @@
  * delivered consumer project shapes its own tooling exactly this way.
  * The server-side half of that question is settled: the reference-app
  * Dockerfile builds this directory's dist/ into the image and the Go
- * server serves it from disk, not go:embed (cmd/server/frontend.go,
+ * server serves it from disk, not go:embed (internal/app/frontend.go,
  * APP_WEB_DIST -- the dist is gitignored build output, so a compile-time
  * embed would force generated assets into the committed tree). This
  * file's own `base` stays vite's default "/", which is what
@@ -35,8 +35,8 @@
  * /api/v1/* plus the two pre-auth config endpoints /api/config/public
  * and /api/system/features (@speed/api-client's fetchPublicConfig /
  * fetchSystemFeatures). In dev those calls proxy to the reference-app
- * backend, defaulting to its own default port (cmd/server/server.go's
- * defaultPort; PORT=8080 in the app's .env.example) and overridable
+ * backend, defaulting to its own default port (internal/app/server.go's
+ * DefaultPort; PORT=8080 in the app's .env.example) and overridable
  * through REFERENCE_APP_API_PROXY. The Host header is passed through
  * unchanged, so the backend's host->tenant DomainResolver sees a host
  * it does not map and serves platform defaults -- the pre-auth login

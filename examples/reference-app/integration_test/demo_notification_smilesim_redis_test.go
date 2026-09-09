@@ -34,12 +34,16 @@
 // same-process subscriber -- there is no JSON round-trip to get wrong.
 // Reproducing that same pipeline against a genuinely cross-instance
 // subscriber would need a second full reference-app replica wired to the
-// same fake AI-image vendor, but cmd/server's own
-// serverConfig.AIGatewayImageBaseURL/AIGatewayImageAPIKey fields (the
-// test-only override buildServer's callers use) are never read from an
-// environment variable by configFromEnv -- there is no way to point a
-// real `go build ./cmd/server` subprocess at a fake vendor at all, and
-// adding one would be a production-code change to server.go.
+// same fake AI-image vendor. Booting one at a fake vendor is possible --
+// ConfigFromEnv reads APP_AI_GATEWAY_IMAGE_BASE_URL and
+// APP_AI_GATEWAY_IMAGE_API_KEY into ServerConfig.AIGatewayImageBaseURL
+// and AIGatewayImageAPIKey (those env vars' doc comment in
+// internal/app/server.go) -- but such a replica's pipeline half would add
+// no coverage this file needs: the smilesim journey that ends in this
+// publish is already driven end to end in-process by
+// cmd/server/smilesim_flow_test.go, and the only thing a separate bus
+// instance changes is the delivery, which is exactly the shape under
+// test.
 //
 // So this test does the one thing that actually isolates the shape: it
 // plays the role of "a completed simulation job" by
@@ -79,9 +83,9 @@ import (
 // (redis_eventbus_composition_test.go's acmeTenantID/demoOwnerEmail doc
 // comment).
 //
-// smilesimDemoRecipientUserID is demo_notification.go's
-// demoSmileSimRecipientUserID, and smilesimDemoRecipientPhone is that same
-// id's entry in demoUserAddresses -- a static table the resolver reads
+// smilesimDemoRecipientUserID is internal/app/demo_notification.go's
+// DemoSmileSimRecipientUserID, and smilesimDemoRecipientPhone is that same
+// id's entry in DemoUserAddresses -- a static table the resolver reads
 // with no user account or membership needed, which is why this test never
 // registers or signs in as anyone: RecipientClassUser dispatch only needs
 // a recipient id the resolver recognizes.

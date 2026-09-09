@@ -11,8 +11,9 @@
 # section for the general pattern this extends to all four seams at once):
 #
 #   - Redis (redis:7-alpine)   backs BOTH the "eventbus" seam (Redis
-#     Streams) AND the "kv" seam (one client, two seams -- server.go's own
-#     APP_REDIS_ADDR doc comment explains why one address suffices).
+#     Streams) AND the "kv" seam (one client, two seams --
+#     internal/app/server.go's own APP_REDIS_ADDR doc comment explains why
+#     one address suffices).
 #   - RustFS (rustfs/rustfs, https://github.com/rustfs/rustfs, the same
 #     release pin examples/reference-app/integration_test/distributed_mode_test.go
 #     already uses) backs the "objectstore" seam (S3-compatible). RustFS

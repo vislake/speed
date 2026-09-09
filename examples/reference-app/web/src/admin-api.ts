@@ -90,8 +90,9 @@ export const ADMIN_USAGE_SUMMARY_PATH = '/api/v1/admin/usage-summary'
  * in go/admin/api/openapi.yaml): a feature's summed quantity over one
  * calendar period. The feature keys the composed app records are go/
  * ai-gateway's usage dimensions (ai.chat_tokens, ai.image_count,
- * ai.image_steps -- the dimensions server.go's usage-recorder wiring
- * reports), the vocabulary admin-usage-view renders through the bundle.
+ * ai.image_steps -- the dimensions internal/app/server.go's
+ * usage-recorder wiring reports), the vocabulary admin-usage-view renders
+ * through the bundle.
  */
 export interface AdminUsageFeatureSummary {
   readonly feature: string

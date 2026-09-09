@@ -228,7 +228,7 @@ type SelfServiceProvisioner struct {
 	// registered on (wireSelfService). Always set by wireSelfService.
 	queue *jobs.StandaloneQueue
 	// failProvision is the failure-injection point
-	// (ServerConfig.failSelfServiceProvision, consulted at the top of
+	// (ServerConfig.FailSelfServiceProvision, consulted at the top of
 	// provision): when non-nil it fails a provisioning attempt it is
 	// asked about by returning an error, so a failure can be placed on
 	// the synchronous delivery and the retry watched converging the same
@@ -782,7 +782,7 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // against a database a previous boot provisioned clinics into needs no
 // re-discovery pass and keeps every clinic owner's sign-in working.
 // failProvision is the failure-injection hook
-// ServerConfig.failSelfServiceProvision carries (nil under the production
+// ServerConfig.FailSelfServiceProvision carries (nil under the production
 // default; ConfigFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION,
 // and a test may arm it on its own ServerConfig before calling
 // BuildServer), handed to the provisioner it builds.

@@ -1,9 +1,10 @@
 // Package demo hosts the reference app's demo notification types: the
 // patient-facing appointment reminder ("demo.patient_reminder") that
-// cmd/server's demo patient-message route dispatches to a verified external
-// contact, and the smile-simulation-ready SMS
-// (smilesim.EventSimulationCompleted) that cmd/server's smilesim completion
-// glue dispatches to the user who started the simulation -- both wired end
+// internal/app's demo patient-message route dispatches to a verified
+// external contact, and the smile-simulation-ready SMS
+// (smilesim.EventSimulationCompleted) that internal/app's smilesim
+// completion glue dispatches to the user who started the simulation -- both
+// wired end
 // to end as the notification module's consumers (see
 // internal/app/demo_notification.go and the module's own notification_flow_test/
 // smilesim_flow_test suites).
@@ -45,7 +46,7 @@ const (
 	// module declares: a transactional, opt-out-resistant appointment
 	// reminder for a verified external contact (an email or SMS address
 	// whose owner consented, go/notification's verified_contacts ledger).
-	// cmd/server's demo patient-message route dispatches it and reads this
+	// internal/app's demo patient-message route dispatches it and reads this
 	// constant rather than retyping the string.
 	//
 	// The type's Unsubscribable: false is the deliberate contrast notes
@@ -61,7 +62,7 @@ const (
 	// TypeKeySimulationReady is the Key of the second notification type
 	// this module declares: a transactional SMS telling a tenant member
 	// their smile-simulation image has finished generating.
-	// cmd/server's smilesim completion glue (demo_notification.go's
+	// internal/app's smilesim completion glue (internal/app/demo_notification.go's
 	// EventSimulationCompleted subscription) dispatches it and reads this
 	// constant rather than retyping the string.
 	//

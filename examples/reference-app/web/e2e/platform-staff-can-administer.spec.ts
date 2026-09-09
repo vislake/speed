@@ -15,7 +15,8 @@
  *
  * Not a dentist. The account is `demo-platform-staff@example.com`,
  * seeded only when the operator sets APP_DEMO_PLATFORM_STAFF_PASSWORD
- * (demo_admin.go), holding a system-domain grant no clinic user has.
+ * (internal/app/demo_admin.go), holding a system-domain grant no clinic
+ * user has.
  * So this surface must NOT appear for an ordinary owner: a clinic that
  * can see the platform's tenant ledger is a cross-tenant disclosure, and
  * this gate asserts that absence as firmly as it asserts the presence.

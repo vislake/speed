@@ -192,7 +192,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		// Unreachable in normal operation: apiPath is never allowlisted
-		// (see internal/app/server.go's buildServer), so tenancy.Middleware
+		// (see internal/app/server.go's BuildServer), so tenancy.Middleware
 		// already rejected any request that could reach here without a
 		// resolved tenant. Handled anyway, rather than assumed away,
 		// because a handler must never rely solely on a lower layer's
@@ -347,7 +347,7 @@ func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note, creato
 		// id-only by documented design (see SubjectResolver at the bottom
 		// of this file), and in this app the creator is frequently not an
 		// account at all: the demo flows attribute creates to
-		// X-Demo-User-Id header values like demoNotesCreatorUserID, which
+		// X-Demo-User-Id header values like DemoNotesCreatorUserID, which
 		// have no user row behind them, and even a verified-Principal
 		// creator (authn.Principal) carries no display name in the token
 		// (go/authn/token.go). Filling the label would require the seam
@@ -616,7 +616,7 @@ func writeError(w http.ResponseWriter, err error) {
 //
 // The implementation is the host's to supply: in the reference app, the
 // demo identity layer reads the demo acting user's id from the request
-// (cmd/server's demo_subject.go); in a host running the authn module,
+// (internal/app/demo_subject.go); in a host running the authn module,
 // whatever connects a verified principal to the request answers here. The
 // module itself never reads the creator's identity from a header, the
 // context or the request body, and it never imports an authenticating

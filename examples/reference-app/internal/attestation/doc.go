@@ -41,8 +41,9 @@
 //
 // # The gate
 //
-// cmd/server's sharing resolver (sharing_resolver.go) calls CheckContent
-// before serving any share whose resource it opened. An object with no
+// internal/app's sharing resolver (internal/app/sharing_resolver.go) calls
+// CheckContent before serving any share whose resource it opened. An
+// object with no
 // attestation row -- an uploaded patient photo, any non-AI object -- is
 // served exactly as before; an attested object is refused unless every
 // check passes: the certificate verifies against its full chain (a

@@ -4,7 +4,7 @@
  *
  * The reference-app gates its notes routes on real rbac permissions
  * (notes:read / notes:write, granted per demo account in
- * cmd/server/demo_users.go), so this spec is the browser-level proof of
+ * internal/app/demo_users.go), so this spec is the browser-level proof of
  * the two properties that matter to a dental practice with staff of
  * different seniority: a hygienist can read the chart and cannot write
  * it, and the refusal explains itself rather than looking like a bug.

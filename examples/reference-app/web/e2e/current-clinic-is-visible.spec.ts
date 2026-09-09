@@ -47,7 +47,7 @@ const SIGNUP_PASSWORD = 'e2e-new-clinic-2026'
 /**
  * What a tenant id looks like when nothing has given it a name: this
  * host derives a self-service clinic's tenant id from the registrant's
- * user id (cmd/server/self_service.go's clinicTenantOf), so an
+ * user id (internal/app/self_service.go's ClinicTenantOf), so an
  * unnamed clinic surfaces as exactly this shape.
  */
 const RAW_TENANT_ID = /^tenant-[0-9a-f-]{8,}$/i
@@ -117,7 +117,7 @@ test(
   'a clinic a practice just created for itself is named, not left as an id',
   // @budget, not in the default run: the clinic a registration creates
   // is answered by its own org root name (go/org's MemberService.
-  // TenantsOf behind the sign-in store, cmd/server/self_service.go
+  // TenantsOf behind the sign-in store, internal/app/self_service.go
   // naming the root after the registrant's display name, the frame
   // reading it from /api/reference-app/clinic-name) -- verified, like
   // its two siblings above, and only the sign-in budget keeps it out of

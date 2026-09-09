@@ -201,7 +201,7 @@ func newTestCreditService(t *testing.T) *billing.CreditService {
 // settleCredit settles. entitlements, when given (at most one), is wired
 // BOTH into the built gateway's WithEntitlements gate and into the
 // Service's own pre-flight seam -- the same one-seam-for-both shape
-// cmd/server's own wiring uses -- so the entitlement-refusal regressions
+// internal/app's own wiring uses -- so the entitlement-refusal regressions
 // can drive the refusal through the same composition production runs
 // under. This is the ordinary case, one fresh database per Service; see
 // newTestServiceWithDB for the "same database, two Service instances"
@@ -946,7 +946,7 @@ func TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow(t *testing.T) {
 
 	// A seam that denies every request, the way a tenant with no Active
 	// subscription answers -- wired into both the gateway's gate and the
-	// Service's pre-flight by newTestService, exactly as cmd/server's own
+	// Service's pre-flight by newTestService, exactly as internal/app's own
 	// one-closure-for-both wiring does.
 	denied := aigateway.EntitlementsFunc(func(context.Context, string, int64) (aigateway.Decision, error) {
 		return aigateway.Decision{Allowed: false, Reason: "no_subscription"}, nil

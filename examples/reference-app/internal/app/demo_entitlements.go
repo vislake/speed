@@ -11,10 +11,10 @@
 // confirm the subscription" flow cannot be built here without fabricating
 // one. What this file ships instead is the mechanism's OTHER end -- a tenant
 // whose subscription is Active, exactly the state a real payment-channel
-// confirmation would have left behind -- so cmd/server's wiring of
+// confirmation would have left behind -- so internal/app's wiring of
 // aigateway.WithEntitlements over billingModule.Entitlements() (see
-// server.go's own construction comment) has something real to judge
-// against: a demo tenant's chat and image routes pass the gateway's
+// internal/app/server.go's own construction comment) has something real to
+// judge against: a demo tenant's chat and image routes pass the gateway's
 // entitlement gate (go/ai-gateway's checkEntitlement, key
 // "model:"+logicalModel), while a tenant with no Active subscription is
 // refused with ErrEntitlementDenied before any provider is reached --

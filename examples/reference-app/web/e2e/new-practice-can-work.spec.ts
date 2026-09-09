@@ -6,10 +6,11 @@
  *
  * Every gate in core-journey.pending.spec.ts signs in as a SEEDED demo
  * account. Boot-time seeding gives the demo tenants their entitlement
- * (cmd/server/demo_entitlements.go) and their credits (demo_credits.go);
+ * (internal/app/demo_entitlements.go) and their credits
+ * (internal/app/demo_credits.go);
  * a clinic created at run time by self-service registration receives the
  * same subscription and credit seed through its own path
- * (cmd/server/self_service.go). A gate that only ever signs in as a
+ * (internal/app/self_service.go). A gate that only ever signs in as a
  * seeded account cannot see whether that grant is real -- whether a
  * practice that registers, opens a case, attaches the photograph, picks
  * the smile it wants and presses the button gets past the plan and

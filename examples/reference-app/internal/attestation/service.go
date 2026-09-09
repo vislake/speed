@@ -33,13 +33,14 @@ const (
 
 // MaxAttestedBytes is the largest object this package attests (and the
 // gate serves through an attestation): 20 MiB, mirroring the photo serve
-// bound cmd/server's own surfaces already enforce (cases_photos.go's
-// maxPhotoBytes) -- an honest simulation output stays far below it, and a
-// larger object is refused rather than buffered in full. An attestation
-// requires the whole content in memory twice (once to digest at signing,
-// once at the gate's serve-time digest), which is exactly why the bound
-// exists. Exported so cmd/server's gate read (sharing_resolver.go) caps
-// itself with the very same bound the signing path attests under.
+// bound internal/app's own surfaces already enforce
+// (internal/app/cases_photos.go's MaxPhotoBytes) -- an honest simulation
+// output stays far below it, and a larger object is refused rather than
+// buffered in full. An attestation requires the whole content in memory
+// twice (once to digest at signing, once at the gate's serve-time
+// digest), which is exactly why the bound exists. Exported so
+// internal/app's gate read (internal/app/sharing_resolver.go) caps itself
+// with the very same bound the signing path attests under.
 const MaxAttestedBytes = 20 << 20
 
 // Service attests smile-simulation outputs through go/pki's X.509 layer

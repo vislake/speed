@@ -457,7 +457,7 @@ regression from its own impatience.
 
 **A fresh database per run is mandatory, not hygiene.** Demo-account
 seeding deliberately skips an account a previous boot already created
-(`cmd/server/demo_users.go`), so a reused database hands the suite
+(`internal/app/demo_users.go`), so a reused database hands the suite
 accounts with no memberships. `playwright.config.ts` puts the SQLite file
 in the OS temp directory under a run-unique name.
 
@@ -885,7 +885,7 @@ one to watch: `c5290a10` replaced the app's literal list with
 (`go/org/module.go`, currently returning exactly those three) and the
 app can no longer drift from org's own view of what it audits. The
 condition therefore watches `AuditableModels()`'s return, not a list in
-`server.go`.
+`internal/app/server.go`.
 
 A round that widens it -- especially onto the notes write shape, where
 the deadlock was originally seen -- invalidates this green rather than

@@ -33,9 +33,10 @@ replace github.com/vislake/speed/go/metering => ../../go/metering
 
 replace github.com/vislake/speed/go/billing => ../../go/billing
 
-// go/jobs and go/storage are imported directly by this app: buildServer
+// go/jobs and go/storage are imported directly by this app: BuildServer
 // wires the storage module's asynchronous object work onto a
-// jobs.StandaloneQueue sharing the app's own database (see server.go).
+// jobs.StandaloneQueue sharing the app's own database (see
+// internal/app/server.go).
 // Like every other workspace-local module they carry no published version,
 // so this app's own go.mod needs its own replace for them too -- root
 // CLAUDE.md's per-module standalone-build rule (`GOWORK=off go build`)
@@ -45,9 +46,9 @@ replace github.com/vislake/speed/go/jobs => ../../go/jobs
 
 replace github.com/vislake/speed/go/storage => ../../go/storage
 
-// go/notification is imported directly by this app: buildServer wires
-// the module's mandatory-first-consumer proof through it (see server.go
-// and demo_notification.go). Like every other
+// go/notification is imported directly by this app: BuildServer wires
+// the module's mandatory-first-consumer proof through it (see
+// internal/app/server.go and internal/app/demo_notification.go). Like every other
 // workspace-local module it carries no published version, so this app's
 // own go.mod needs its own replace for it too -- root CLAUDE.md's
 // per-module standalone-build rule (`GOWORK=off go build`) means
@@ -64,18 +65,19 @@ replace github.com/vislake/speed/go/notification => ../../go/notification
 // transitive, without relying on the workspace.
 replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
 
-// go/sharing is imported directly by this app: buildServer wires it as the
-// module's mandatory-first-consumer proof (see server.go, sharing_resolver.go
-// and sharing_flow_test.go). Like every other workspace-local module it
+// go/sharing is imported directly by this app: BuildServer wires it as
+// the module's mandatory-first-consumer proof (see internal/app/server.go,
+// internal/app/sharing_resolver.go and cmd/server/sharing_flow_test.go). Like every other workspace-local module it
 // carries no published version, so this app's own go.mod needs its own
 // replace for it too -- root CLAUDE.md's per-module standalone-build rule
 // (`GOWORK=off go build`) means `go mod tidy` must resolve every
 // dependency without relying on the workspace.
 replace github.com/vislake/speed/go/sharing => ../../go/sharing
 
-// go/compliance and go/admin are imported directly by this app: buildServer
-// wires them as go/admin's mandatory-first-consumer proof (see
-// server.go, demo_admin.go and admin_flow_test.go). Like every other
+// go/compliance and go/admin are imported directly by this app:
+// BuildServer wires them as go/admin's mandatory-first-consumer proof
+// (see internal/app/server.go, internal/app/demo_admin.go and
+// cmd/server/admin_flow_test.go). Like every other
 // workspace-local module they carry no published version, so this app's
 // own go.mod needs its own replace for them too -- root CLAUDE.md's
 // per-module standalone-build rule (`GOWORK=off go build`) means
@@ -85,8 +87,9 @@ replace github.com/vislake/speed/go/compliance => ../../go/compliance
 
 replace github.com/vislake/speed/go/admin => ../../go/admin
 
-// go/integration is imported directly by this app: buildServer wires the
-// outbound-webhook consumer proof (see server.go and webhooks.go). Like
+// go/integration is imported directly by this app: BuildServer wires the
+// outbound-webhook consumer proof (see internal/app/server.go and
+// internal/app/webhooks.go). Like
 // every other workspace-local module it carries no published version, so
 // this app's own go.mod needs its own replace for it too -- root
 // CLAUDE.md's per-module standalone-build rule (`GOWORK=off go build`)

@@ -16,20 +16,20 @@ package referenceapp_test
 // end to end: a standalone-deployment-mode reference app whose events
 // cross a real Redis server.
 //
-// The app is booted as a REAL SUBPROCESS, not imported: the module's
-// wiring lives in cmd/server's package main, which Go refuses to import
-// ("is a program, not an importable package"), and the integration
-// directory must stay physically separate from the unit suite -- so the
-// test builds the actual binary with "go build ./cmd/server" and runs it
-// on a real TCP port, exercising main -> configFromEnv -> buildServer in
-// the child exactly as a production launch would, healthz-polls it, POSTs
-// a note through its real HTTP stack, and stops it with SIGTERM, asserting
-// the graceful-shutdown exit code.
+// The app is booted as a REAL SUBPROCESS: the integration directory must
+// stay physically separate from the unit suite, and a real binary on a
+// real TCP port exercises the child's own main -> ConfigFromEnv ->
+// BuildServer path (the assembly internal/app composes) exactly as a
+// production launch would -- so the test builds the actual binary with
+// "go build ./cmd/server" and runs it on a real TCP port, healthz-polls
+// it, POSTs a note through its real HTTP stack, and stops it with SIGTERM,
+// asserting the graceful-shutdown exit code.
 //
 // Authentication is as real as a subprocess can make it, and genuinely
 // real end to end since go/pki's integration: the child is booted with
-// APP_DEMO_USERS_PASSWORD set, so cmd/server's own boot-time seed
-// (demo_users.go) registers demoOwnerEmail as a real account with real
+// APP_DEMO_USERS_PASSWORD set, so the child's own boot-time seed
+// (internal/app/demo_users.go) registers demoOwnerEmail as a real account
+// with real
 // tenant-acme membership before this test ever sends a request, and the
 // note request's access token comes from a genuine
 // POST /api/v1/authn/login/password against the child's own HTTP stack
@@ -45,7 +45,7 @@ package referenceapp_test
 // request acts inside comes from the token's claim, never from a Host
 // header; rbac's demo gate still reads the acting user from the
 // X-Demo-User header, exactly as the unit suite's createNoteAs does
-// (demo_subject.go's demoSubjectResolver).
+// (internal/app/demo_subject.go's DemoSubjectResolver).
 //
 // The observer half lives in THIS process: a second RedisEventBus
 // instance, subscribed to the audit.event.recorded stream through a
@@ -96,8 +96,8 @@ import (
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
 	// so this file's own dbkit.Open call (the second connection reading the
 	// audit row back) has a driver to build from -- this test binary is a
-	// separate package from cmd/server, so server.go's own blank import
-	// does not reach it.
+	// separate package from the child, so internal/app/server.go's own
+	// blank import does not reach it.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
@@ -262,7 +262,7 @@ type testListNotesResponse struct {
 // createNoteAs doc).
 //
 // demoUserHdr/demoOwner name WHO is acting for rbac's demo gate:
-// demoSubjectResolver (internal/app/demo_subject.go) reads the acting user
+// DemoSubjectResolver (internal/app/demo_subject.go) reads the acting user
 // from the header -- a placeholder for the access token's subject claim
 // that the demo wiring keeps while authn supplies the tenant half -- so
 // these requests carry both the token and the header, exactly like the
@@ -270,15 +270,16 @@ type testListNotesResponse struct {
 //
 // acmeTenantID/demoUserHdr/demoOwner: demoUserHdr/demoOwner name WHO is
 // acting for rbac's demo gate (see the doc comment above), and
-// demoUsersPassword gates cmd/server's own boot-time demo-account seed
-// (demo_users.go's demoUsersPasswordEnv) -- set in the child's env below,
-// it makes the child itself register demoOwnerEmail as a real account with
-// real tenant-acme membership before this test signs in as it.
+// demoUsersPassword gates the child's own boot-time demo-account seed
+// (internal/app/demo_users.go's demoUsersPasswordEnv) -- set in the
+// child's env below, it makes the child itself register demoOwnerEmail as
+// a real account with real tenant-acme membership before this test signs
+// in as it.
 const (
 	acmeTenantID = "tenant-acme"
 	demoUserHdr  = "X-Demo-User"
 	demoOwner    = "demo-owner"
-	// demoOwnerEmail is internal/app/demo_users.go's demoOwnerEmail, copied
+	// demoOwnerEmail is internal/app/demo_users.go's DemoOwnerEmail, copied
 	// byte for byte: the real account behind the demoOwner header identity,
 	// granted membership (and the built-in owner role) in every configured
 	// tenant, tenant-acme included, once demoUsersPassword seeds it.
@@ -441,7 +442,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 		}
 	})
 
-	// Wait for the child to finish booting: buildServer (SQLite migrations,
+	// Wait for the child to finish booting: BuildServer (SQLite migrations,
 	// module registration, kernel bootstrap with the injected Redis bus)
 	// all happen before anything listens, so a 200 from /healthz means the
 	// composition is genuinely up -- with the app's audit persister

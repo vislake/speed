@@ -8,9 +8,9 @@
 // It deliberately does not go through the OpenAPI machinery: ai-gateway
 // itself ships no HTTP surface for chat, so there is no spec fragment for
 // a route calling it to grow into. Its one route (POST
-// /api/v1/consult/suggest) is mounted by hand in cmd/server
-// (internal/app/consult.go), the same pattern the notification module's own
-// demo patient-message route establishes in this app
+// /api/v1/consult/suggest) is mounted by hand in internal/app
+// (internal/app/consult.go), the same pattern the notification module's
+// own demo patient-message route establishes in this app
 // (internal/app/demo_notification.go's package comment).
 package consult
 
@@ -27,7 +27,7 @@ import (
 // aigateway.ChatRequest.Model's own doc comment for why business code never
 // sees or hardcodes one). The host wires aigateway.WithModelRoute for this
 // exact key onto whatever provider should actually answer it
-// (internal/app/server.go's buildServer).
+// (internal/app/server.go's BuildServer).
 const LogicalModel = "chat:default"
 
 // systemPrompt primes every request this service sends: a short,

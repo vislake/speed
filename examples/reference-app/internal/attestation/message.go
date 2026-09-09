@@ -60,9 +60,10 @@ func parseMessage(message []byte) (attestedMessage, error) {
 // one), the signature over the stored message did not verify with the
 // leaf's public key, the message named a different object or tenant than
 // the one being served, or the live content digest differed from the
-// attested one. It is deliberately a single shape -- the cmd/server
-// sharing gate (sharing_resolver.go) hands it back as the resolver error
-// the sharing module answers with sharing.resource_unavailable, and
+// attested one. It is deliberately a single shape -- internal/app's
+// sharing gate (internal/app/sharing_resolver.go) hands it back as the
+// resolver error the sharing module answers with
+// sharing.resource_unavailable, and
 // nothing about WHY an output stopped being vouchable is something a
 // visitor holding a link should be able to probe. The stage that refused
 // is carried in the wrapped error a caller logs, never on the wire.

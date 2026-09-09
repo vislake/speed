@@ -30,7 +30,7 @@ import (
 // its system-context gate, which is where the cross-tenant non-erasure
 // property of an Erase comes from at this layer.
 //
-// The host (cmd/server's buildServer) constructs this participant with a
+// The host (internal/app's BuildServer) constructs this participant with a
 // Repository over the very dbkit.Open *gorm.DB the notes Module already
 // uses -- share the connection, never a second pool -- and registers it on
 // the kernel's pkgcore.Registry.Retention seat during Bootstrap.
