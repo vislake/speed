@@ -46,7 +46,7 @@ export interface NotesListNotesResponse {
 export type NotesErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface NotesError {
   code?: string;
@@ -142,7 +142,7 @@ export interface CasesPhotoContent {
 export type CasesErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface CasesError {
   code?: string;
@@ -310,7 +310,7 @@ export interface SmilesimSimulationContent {
 export type SmilesimErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface SmilesimError {
   code?: string;
@@ -318,7 +318,7 @@ export interface SmilesimError {
 }
 
 /**
- * The tenant is always the one tenancy.Middleware already resolved from the request; there is no tenant_id field anywhere on this request, by design (root CLAUDE.md's multi-tenant isolation rule).
+ * The tenant is always the one tenancy.Middleware already resolved from the request; there is no tenant_id field anywhere on this request -- the tenant comes from the resolved request context, never from anything the caller sends.
  * @summary Create a note for the caller's tenant.
  */
 export const notesCreateNote = (
@@ -476,7 +476,7 @@ export function useNotesListNotes<TData = Awaited<ReturnType<typeof notesListNot
 
 
 /**
- * The tenant is always the one tenancy.Middleware already resolved from the request, and the note id names a note belonging to that tenant alone -- never a tenant_id request field, by design (root CLAUDE.md's multi-tenant isolation rule). The delete is a mark-delete (dbkit.SoftDeletable): the row stays in place with deleted_at/deleted_by set, hidden from the list operation, and restorable through notes_restoreNote until a retention sweep physically reaps it. Deleting an already-deleted note answers 404 exactly like an unknown or another tenant's id -- the refusal is uniform, so a caller cannot learn which case it hit.
+ * The tenant is always the one tenancy.Middleware already resolved from the request, and the note id names a note belonging to that tenant alone -- never a tenant_id request field: the tenant comes from the resolved request context, never from anything the caller sends. The delete is a mark-delete (dbkit.SoftDeletable): the row stays in place with deleted_at/deleted_by set, hidden from the list operation, and restorable through notes_restoreNote until a retention sweep physically reaps it. Deleting an already-deleted note answers 404 exactly like an unknown or another tenant's id -- the refusal is uniform, so a caller cannot learn which case it hit.
  * @summary Mark a note as deleted for the caller's tenant.
  */
 export const notesDeleteNote = (
@@ -1021,7 +1021,7 @@ export function useCasesGetCase<TData = Awaited<ReturnType<typeof casesGetCase>>
 
 
 /**
- * The photo must be an existing, completed go/storage object of the caller's own tenant; the job itself is async -- the 202 answer carries only its job id, and the job-status route below is how its outcome is observed. Options are optional: an absent options object (or an absent field inside it) inherits the service's documented default for that dimension, while an explicitly present out-of-vocabulary or out-of-range value is refused with its coded smilesim.* 400 before anything is reserved or enqueued. A recipient_user_id, when given, receives a completion notification once the job reaches a terminal status. There is deliberately no tenant_id field anywhere on this request: the tenant is the one tenancy.Middleware already resolved into the request context (root CLAUDE.md's multi-tenant isolation rule).
+ * The photo must be an existing, completed go/storage object of the caller's own tenant; the job itself is async -- the 202 answer carries only its job id, and the job-status route below is how its outcome is observed. Options are optional: an absent options object (or an absent field inside it) inherits the service's documented default for that dimension, while an explicitly present out-of-vocabulary or out-of-range value is refused with its coded smilesim.* 400 before anything is reserved or enqueued. A recipient_user_id, when given, receives a completion notification once the job reaches a terminal status. There is deliberately no tenant_id field anywhere on this request: the tenant is the one tenancy.Middleware already resolved into the request context -- never a caller-supplied value.
  * @summary Enqueue one smile-simulation job for a completed photo.
  */
 export const smilesimSimulate = (

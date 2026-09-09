@@ -115,7 +115,7 @@ func (e SmilesimSimulationOptionsToothShade) Valid() bool {
 	}
 }
 
-// SmilesimError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog.
+// SmilesimError The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
 type SmilesimError struct {
 	// Code Example: smilesim.invalid_request_body
 	Code   *string                 `json:"code,omitempty"`

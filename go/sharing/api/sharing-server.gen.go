@@ -63,9 +63,9 @@ type SharingCreateShareResponse struct {
 	Token string `json:"token"`
 }
 
-// SharingError defines model for SharingError.
+// SharingError The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
 type SharingError struct {
-	// Code The structured error code, one of this module's error index entries.
+	// Code The structured code naming this failure.
 	Code string `json:"code"`
 
 	// Params Structured parameters for the code, when any apply.

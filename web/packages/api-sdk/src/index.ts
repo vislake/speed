@@ -187,7 +187,7 @@ export interface AuthnListLoginHistoryResponse {
 export type AuthnErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented on each operation above.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface AuthnError {
   code?: string;
@@ -382,7 +382,7 @@ export interface NotificationVerifyContactRequest {
 export type NotificationErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface NotificationError {
   code?: string;
@@ -498,7 +498,7 @@ export interface BillingListInvoicesResponse {
 export type BillingErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface BillingError {
   code: string;
@@ -717,7 +717,7 @@ export interface AdminListSendRecordsResponse {
 export type AdminErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md).
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface AdminError {
   code?: string;
@@ -749,7 +749,7 @@ export interface AiGatewaySetCredentialRequest {
 export type AiGatewayErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2) -- a client resolves code through its own i18n catalog. This module renders no user-facing text of its own (go/ai-gateway/module.go's Locales doc comment), so a client resolves these codes through its own catalog exactly as it does for every other structured error this module returns from its non-HTTP surface.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface AiGatewayError {
   code?: string;
@@ -907,7 +907,7 @@ export interface IntegrationListWebhookDeliveriesResponse {
 export type IntegrationErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface IntegrationError {
   code?: string;
@@ -966,7 +966,7 @@ export interface OrgListNodesResponse {
  */
 export interface OrgMembership {
   membershipId?: string;
-  /** An id in authn's users table, carried as an opaque string -- org stores no other identity data about the user (root CLAUDE.md's module-boundary rule). */
+  /** An id in authn's users table, carried as an opaque string -- org stores no other identity data about the user and never treats the id as anything but a reference. */
   userId?: string;
   nodeId?: string;
   /** One of "active", "invited", "suspended". */
@@ -1010,7 +1010,7 @@ export interface OrgListInvitationsResponse {
 export type OrgErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface OrgError {
   code?: string;
@@ -1084,7 +1084,7 @@ export interface PkiJwks {
 export type PkiErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface PkiError {
   code?: string;
@@ -1170,8 +1170,11 @@ export interface SharingListAccessLogResponse {
  */
 export type SharingErrorParams = { [key: string]: unknown };
 
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
+ */
 export interface SharingError {
-  /** The structured error code, one of this module's error index entries. */
+  /** The structured code naming this failure. */
   code: string;
   /** Structured parameters for the code, when any apply. */
   params?: SharingErrorParams;
@@ -1251,7 +1254,7 @@ export interface StorageListObjectsResponse {
 export type StorageErrorParams = { [key: string]: unknown };
 
 /**
- * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
  */
 export interface StorageError {
   code?: string;
@@ -3512,7 +3515,7 @@ export function useBillingGetCreditBalance<TData = Awaited<ReturnType<typeof bil
 
 
 /**
- * The recent window of the tenant's append-only credit ledger: at most limit rows (1-100, default 50), newest first. Every balance movement the tenant ever experienced is a row here and only here: a grant (type "grant", status "confirmed") is a top-up, an expire (type "expire", status "confirmed") a single-phase deduction, and a deduct row is the two-phase reservation lifecycle itself -- status "pending" while its credits sit in the balance's reserved bucket, "confirmed" once the reservation became a permanent spend, "refunded" once it was released back to available. A refund is therefore observable as that one deduct row's status transition (plus the balance delta the balance route reports), never as a row that silently disappears or a balance-only change with no ledger trace. The window is served from the module's full newest-first listing; a keyset-paginated read over the whole ledger is future work (see go/billing/AGENTS.md's Known limitations) -- a credit view needs the recent rows, and the ledger itself is reconstructable in full service-side today.
+ * The recent window of the tenant's append-only credit ledger: at most limit rows (1-100, default 50), newest first. Every balance movement the tenant ever experienced is a row here and only here: a grant (type "grant", status "confirmed") is a top-up, an expire (type "expire", status "confirmed") a single-phase deduction, and a deduct row is the two-phase reservation lifecycle itself -- status "pending" while its credits sit in the balance's reserved bucket, "confirmed" once the reservation became a permanent spend, "refunded" once it was released back to available. A refund is therefore observable as that one deduct row's status transition (plus the balance delta the balance route reports), never as a row that silently disappears or a balance-only change with no ledger trace. The window is served from the module's full newest-first listing; a keyset-paginated read over the whole ledger is future work -- a credit view needs the recent rows, and the ledger itself is reconstructable in full service-side today.
  * @summary List the caller's tenant's recent credit transactions, newest first.
  */
 export const billingListCreditTransactions = (
@@ -3583,7 +3586,7 @@ export function useBillingListCreditTransactions<TData = Awaited<ReturnType<type
 
 
 /**
- * The tenant's billing documents, newest first -- every Invoice row the module's plain-Go lifecycle wrote for the tenant (invoice.go's CreateInvoice/MarkPaid/Void; nothing writes invoices over HTTP, so this read and the lifecycle can never disagree about what exists). At most limit rows (1-100, default 50). Newest first is creation order, the same ordering key the credit-transactions listing uses -- never the period an invoice bills, since a voided document and its replacement need not share cycle dates. Status is the lifecycle's own closed vocabulary: "open" awaiting payment, "paid" settled in full, "void" canceled before payment. A tenant that has never been issued an invoice answers an empty array, never an error, so the invoice page renders an empty state rather than a missing-resource refusal. The window is served from the module's full newest-first listing; a keyset-paginated read over a whole history is future work (see go/billing/AGENTS.md's Known limitations) -- an invoice page needs the recent documents, and the full history stays reconstructable service-side today.
+ * The tenant's billing documents, newest first -- every Invoice row the module's plain-Go lifecycle wrote for the tenant (invoice.go's CreateInvoice/MarkPaid/Void; nothing writes invoices over HTTP, so this read and the lifecycle can never disagree about what exists). At most limit rows (1-100, default 50). Newest first is creation order, the same ordering key the credit-transactions listing uses -- never the period an invoice bills, since a voided document and its replacement need not share cycle dates. Status is the lifecycle's own closed vocabulary: "open" awaiting payment, "paid" settled in full, "void" canceled before payment. A tenant that has never been issued an invoice answers an empty array, never an error, so the invoice page renders an empty state rather than a missing-resource refusal. The window is served from the module's full newest-first listing; a keyset-paginated read over a whole history is future work -- an invoice page needs the recent documents, and the full history stays reconstructable service-side today.
  * @summary List the caller's tenant's invoices, newest first.
  */
 export const billingListInvoices = (
@@ -4401,7 +4404,7 @@ export function useAdminListAuditEvents<TData = Awaited<ReturnType<typeof adminL
 
 
 /**
- * Wraps compliance.ExportService.Export, which gathers every registered participant's data for the tenant, stores it and delivers it as a short-lived, single-view go/sharing link. This is necessarily asynchronous -- the handler enqueues one go/jobs task and returns immediately with its id, never running Export synchronously inside the request (root CLAUDE.md's asynchronous- work discipline).
+ * Wraps compliance.ExportService.Export, which gathers every registered participant's data for the tenant, stores it and delivers it as a short-lived, single-view go/sharing link. This is necessarily asynchronous -- the handler enqueues one go/jobs task and returns immediately with its id, never running Export synchronously inside the request.
  * @summary Kick off an asynchronous audit-event export for one tenant (D7's export leg).
  */
 export const adminExportAuditEvents = (

@@ -24,7 +24,7 @@ type AiGatewayCredential struct {
 	Scope string `json:"scope"`
 }
 
-// AiGatewayError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2) -- a client resolves code through its own i18n catalog. This module renders no user-facing text of its own (go/ai-gateway/module.go's Locales doc comment), so a client resolves these codes through its own catalog exactly as it does for every other structured error this module returns from its non-HTTP surface.
+// AiGatewayError The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
 type AiGatewayError struct {
 	// Code Example: aigateway.credential_not_found
 	Code   *string                 `json:"code,omitempty"`

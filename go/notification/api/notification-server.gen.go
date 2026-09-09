@@ -128,7 +128,7 @@ type NotificationCreateContactRequest struct {
 // NotificationCreateContactRequestChannel The address's channel.
 type NotificationCreateContactRequestChannel string
 
-// NotificationError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
+// NotificationError The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
 type NotificationError struct {
 	// Code Example: notification.contact_code_invalid
 	Code   *string                 `json:"code,omitempty"`

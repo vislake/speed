@@ -40,7 +40,7 @@ type OrgCreateNodeRequest struct {
 	ParentID *string `json:"parentId,omitempty"`
 }
 
-// OrgError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+// OrgError The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
 type OrgError struct {
 	// Code Example: org.node_not_found
 	Code   *string                 `json:"code,omitempty"`
@@ -82,7 +82,7 @@ type OrgMembership struct {
 	// Status One of "active", "invited", "suspended".
 	Status *string `json:"status,omitempty"`
 
-	// UserID An id in authn's users table, carried as an opaque string -- org stores no other identity data about the user (root CLAUDE.md's module-boundary rule).
+	// UserID An id in authn's users table, carried as an opaque string -- org stores no other identity data about the user and never treats the id as anything but a reference.
 	UserID *string `json:"userId,omitempty"`
 }
 

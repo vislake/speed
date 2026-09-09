@@ -89,7 +89,7 @@ type AdminDefineRoleRequest struct {
 	TenantID       string   `json:"tenantId"`
 }
 
-// AdminError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md).
+// AdminError The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
 type AdminError struct {
 	// Code Example: admin.tenant_not_found
 	Code   *string                 `json:"code,omitempty"`
