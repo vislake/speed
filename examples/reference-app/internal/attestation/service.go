@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pki"
 )
 
@@ -363,7 +363,13 @@ func (s *Service) activeCertificateForTenant(ctx context.Context) (string, error
 func (s *Service) certificateUsable(ctx context.Context, certificateID string) (bool, error) {
 	certificate, err := s.certificates.FindByID(ctx, certificateID)
 	if err != nil {
-		if errors.Is(err, dbkit.ErrRecordNotFound) {
+		// The repository's record-not-found answer arrives decorated (the
+		// id WithParam dbkit adds -- see dbkit/repository.go's FindByID), so
+		// it is matched by Code rather than by identity, exactly as
+		// notes' hardDeleteSaysGone matches its own decorated not-found
+		// (retention_participant.go): apperr.WithParam always derives a new
+		// *apperr.Error, and pointer identity is not stable across it.
+		if appErr, ok := apperr.As(err); ok && appErr.Code == dbkit.ErrRecordNotFound.Code {
 			return false, nil
 		}
 		return false, err

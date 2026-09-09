@@ -12,9 +12,9 @@ import (
 )
 
 // newTestStore returns an AttestationStore over a fresh SQLite database
-// with its schema ensured -- the store-only fixture store tests need
-// (message verification and the full service path are covered by
-// message_test.go and the composed flow tests in cmd/server).
+// with its schema ensured -- the store-only fixture these tests need
+// (message verification lives in message_test.go and the full service
+// path, bootstrapped against the real pki CA, in service_test.go).
 func newTestStore(t *testing.T) *AttestationStore {
 	t.Helper()
 	store := NewAttestationStore(dbtest.NewSQLite(t))
