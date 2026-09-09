@@ -241,7 +241,7 @@ func moduleRoot(t *testing.T) string {
 // testNote and testListNotesResponse mirror the response shapes of notes'
 // HTTP API. They are declared here rather than shared because the module's
 // API structs live in internal/notes, which only cmd/server's package main
-// may import; server_test.go's copies are just as local.
+// may import; flowtests/server_test.go's copies are just as local.
 type testNote struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
@@ -258,7 +258,7 @@ type testListNotesResponse struct {
 // acmeTenantID is the tenant the note is created in and read back under.
 // The token's tenant claim -- not a Host header -- is what selects it
 // (authn.NewPrincipalResolver), mirroring the unit suite, where the bearer
-// token is "the ONLY thing that selects the tenant" (server_test.go's
+// token is "the ONLY thing that selects the tenant" (flowtests/server_test.go's
 // createNoteAs doc).
 //
 // demoUserHdr/demoOwner name WHO is acting for rbac's demo gate:

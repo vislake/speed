@@ -257,7 +257,7 @@ const demoUserIDHeader = "X-Demo-User-Id"
 // copy cmd/server identifiers this file structurally cannot import.
 const distributedNoteCreatedTypeKey = "notes.note.created"
 
-// notifMessages mirrors notification_flow_test.go's own wire shape for
+// notifMessages mirrors flowtests/notification_flow_test.go's own wire shape for
 // GET /api/v1/notifications/messages (this file cannot import package
 // main, so it is declared again here, field-named after the same JSON the
 // module's generated handler serves).
@@ -969,7 +969,7 @@ type bootFailureCase struct {
 
 // TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot is the
 // negative proof, run through the REAL BINARY rather than an
-// in-process BuildServer call (server_test.go's own
+// in-process BuildServer call (flowtests/server_test.go's own
 // TestBuildServer_DistributedDeploymentMode_* tests already cover that
 // in-process form) -- proving that an operator who requests the
 // distributed deployment mode without genuinely composing every seam gets
@@ -1007,7 +1007,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			// fixed order: "eventbus". That seam's in-process memory bus
 			// reaches Bootstrap through BuildServer's own injection
 			// (WithEventBus, the pre-built bus; see
-			// server_test.go's TestBuildServer_DistributedDeploymentMode_
+			// flowtests/server_test.go's TestBuildServer_DistributedDeploymentMode_
 			// FailsCapabilityValidation comment), never through the Preset,
 			// so the capability error names it as implementation
 			// "<injected>" -- an injected seam has no registry name to

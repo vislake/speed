@@ -15,10 +15,12 @@
 // outside the command could import the code under test. internal/app is
 // that assembly's importable home. The command runs it -- cmd/server's
 // main.go boots it as the thin process shell -- and the app's test
-// surfaces import it: the assembly-flow suites live beside the command in
-// cmd/server and exercise the package through the command's tests, and the
-// dedicated app-level test directory the test-layout rule assigns
-// assembly-flow suites to can import it the same way.
+// surfaces import it: the assembly-flow suites exercise the composed
+// server from the app-level test directory the test-layout rule assigns
+// them (examples/reference-app/flowtests, package flowtests), while the
+// suites that remain in cmd/server are the command's own main-shell tests
+// plus the recorded white-box and unit-level exceptions that exercise
+// this package from the command's package.
 //
 // # The exported surface is the test-entry surface
 //

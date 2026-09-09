@@ -24,7 +24,7 @@
 //
 // The positive, in-process proof that a REAL smile-simulation job's
 // completion publishes smilesim.EventSimulationCompleted and reaches this
-// exact subscription exists: cmd/server/smilesim_flow_test.go's
+// exact subscription exists: flowtests/smilesim_flow_test.go's
 // TestSmileSimulation_CompletionNotifiesTheNamedRecipient drives the whole
 // pipeline (storage upload, go/ai-gateway's async image job against a
 // scripted OpenAI-compatible endpoint, NotifyOnCompletion's publish) over
@@ -41,7 +41,7 @@
 // internal/app/server.go) -- but such a replica's pipeline half would add
 // no coverage this file needs: the smilesim journey that ends in this
 // publish is already driven end to end in-process by
-// cmd/server/smilesim_flow_test.go, and the only thing a separate bus
+// flowtests/smilesim_flow_test.go, and the only thing a separate bus
 // instance changes is the delivery, which is exactly the shape under
 // test.
 //
@@ -54,7 +54,7 @@
 // from a bus instance that is not the subprocess's own, which is what
 // makes the delivery genuinely cross-instance (pkgcore/eventbus/redis's
 // deliverRemote path, JSON-decoded to map[string]any) rather than the
-// local synchronous delivery smilesim_flow_test.go's own in-process test
+// local synchronous delivery flowtests/smilesim_flow_test.go's own in-process test
 // exercises. The one real reference-app subprocess this test boots runs
 // the actual, unmodified wireDemoNotification subscription -- the exact
 // code under test -- and its own console SMS sender's stdout is the

@@ -184,3 +184,52 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 
 五个根目录 `*_conformance_test.go` 驱动(pkgcore 四个、jobs 一个)维持原状:它们是钉住 pkgcore/jobs 根包自有内建实现的外部包薄驱动,与被测实现同目录即"紧邻被测代码"的单元层姿态(无外部依赖、普通单元运行执行),共享契约套件本身已住在可导入支撑包(eventbustest/kvstoretest/mailertest/objectstoretest/queuetest),驱动文件只是"实现自证契约"的最后一跳;把驱动塞进支撑包会颠倒归属(支撑包是契约的家,不是任一实现的测试家)。此裁定作为该类别样板,回填进后端技能 §13 示例清单的后续修订。
 
+
+## 批次 2b 处置记录:组合 HTTP/装配流套件迁入应用级测试目录
+
+2b 依上文侦察表执行装配流套件的目录迁移。前置(2b-i)已把 `cmd/server` 的装配代码整体移入可导入的 `examples/reference-app/internal/app`(包 `app`),`cmd/server` 只剩 `main.go` 薄壳,内部 app 的导出面即测试入口面;本记录(2b-ii)移动测试文件本身,`cmd/server` 的 `_test.go` 从 55 个减到 9 个。
+
+### 目标目录设计
+
+新目录为 **`examples/reference-app/flowtests/`**,包名 **`flowtests`**,纯测试目录(全部文件为 `_test.go`,无 build tag,普通单元运行执行——与 `integration_test/`(Docker 层,`-tags=integration`)互不混淆)。
+
+- 位置取应用级而非 `cmd/` 之下:它是应用装配的测试面,不属于命令;`internal/app` 的 Go internal 导入规则要求目录位于 `examples/reference-app/` 之下,此位置满足。
+- 包名取 `flowtests` 而非 `<pkg>_test` 外部式:目录内没有可配对的基础包,外部式命名是虚构配对;迁移文件的机械改动因此只有一行 package 子句。
+- 迁移后 flowtests 套件驱动内部 app 导出的 `BuildServer`/`ServerConfig`/demo 身份与常量面,经真实 HTTP 与真实 SQLite 跑组合装配,与迁移前行为逐字节一致(断言未动,仅 package/导入行变更)。
+
+### 迁移清单(46 + 1 文件)与侦察表逐项对齐
+
+侦察表 (i) 19 文件、(ii) 27 文件(含基座 server_test.go)全部随迁,夹具 `fragment_wire_paths_test.go` 随流迁。文件级处置与侦察表一致,无重分档;仅两处按规则做了行数驱动的机械拆分:
+
+| 原文件 | 拆分 | 分片与内容 |
+|---|---|---|
+| server_test.go(2091 行) | 3 片 | `server_test.go`(基座辅助 + 笔记/权限/隔离/未认证/租户提示/审计装配流,886 行)、`server_config_test.go`(ConfigFromEnv 族 + 根密钥派生 + 特征开关/社交渠道旗标单元,~800 行)、`server_guards_test.go`(预认证端点守卫 + healthz/metrics allowlist + distributed 装配拒绝,~435 行) |
+| periodic_scheduler_flow_test.go(1185 行) | 2 片 | `periodic_scheduler_flow_test.go`(过期/保留清扫两腿,~816 行)、`periodic_scheduler_flow_clinic_test.go`(自注册诊所腿与共享辅助,~383 行,文件头承接原文件头中该腿的叙述) |
+
+### 留包文件复核与例外登记(8 文件)
+
+2b-i 把被测代码移入内部 app 后,侦察表"留包/白盒"栏的原始前提(与 package main 同包直测未导出符号)已不成立——cmd/server 已无未导出生产代码可测,8 个文件现都只经内部 app 的导出面工作。按侦察表处置保留,理由按现状登记:
+
+- `main_test.go`:唯一真正的命令包单元测试(run/runHealthcheck/observabilityOptions/healthcheckArg 直测),留包前提完好。
+- `demo_subject_test.go`、`demo_notification_test.go`、`clinic_name_test.go`:纯单元钉(解析器/守卫族、payload 提取器、诊所名 handler 与错误辅助),各自无跨包辅助依赖;被测对象现居内部 app,后续批次可把它们移到被测代码旁(内部 app 的 `*_test.go`)。
+- `demo_admin_test.go`、`demo_users_test.go`:(iii) 之外按侦察表留包的消费证明套件,仍经种子装配跑组合 HTTP;留包意味着 `cmd/server` 仍有少量装配流测试,与验收线"除 (iii) 登记外不再出现"的出入按本表登记。
+- `self_service_test.go`、`demo_user_header_kill_switch_test.go`:(iii) 白盒例外按侦察表保留;复核确认其"直测未导出"前提已随 2b-i 消失(全部经导出面),现为纯逻辑单元钉与组合 HTTP 旅程的混合,留包理由按现状更新,待后续批次重新裁定。
+- 与 2b-i 的 doc.go 表述衔接:`internal/app/doc.go` 现述 flowtests 为装配流套件的目录。
+
+### 跨包辅助镜像(Go 测试辅助不可跨包导入的代价)
+
+侦察表预告的"留在包内的必须迁走或重造"双向兑现,各建一个支撑文件,内容从原定义逐字节抽取(仅剔去指代源文件自身的表述),头部注明镜像关系与保持同步的要求:
+
+- `cmd/server/test_support_test.go`:镜像迁走的基座辅助(testConfig/buildTestServer/registerAndAuthenticate/notesRequestAs/assertPermissionDenied/note 线型与辅助)与 cases/notification 请求辅助及 `casesPath` 常量,供留包的 demo/自服务/kill-switch 套件使用。
+- `flowtests/test_support_test.go`:镜像留包套件里的 demo 身份与自服务旅程辅助(demoLogin、种子口令、browserSignIn、registerFreshAccount、自服务常量、failOnceProvisioning、waitForClinicMembership),供随迁的 admin/pki/团队/自服务/诊所邀请套件使用。
+
+### 导出增补
+
+无。2b-i 的导出面覆盖 46+1 个迁移文件与 8 个留包文件的实际引用(编译即证,未新增任何内部 app 导出)。
+
+### 验证记录
+
+- 普通单元运行(`go test ./...`,examples/reference-app):cmd/server 4.97s、flowtests 164.10s,全绿;`-race` 同套件绿。
+- `go vet ./...`、`golangci-lint run ./...` 0 issues、gofmt 干净(与 CI 形态一致)。
+- 应用二进制 `go build ./cmd/server` 通过;`tools/scan_cjk.py` 全树干净;reference-app web 侧未触及。
+- 装配流套件仍属无外部依赖的普通单元运行,留在单元套件内(CI 的 `go test ./...` 自动覆盖新目录,工作流无需改动)。
