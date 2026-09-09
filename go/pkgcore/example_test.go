@@ -502,6 +502,45 @@ func ExampleNewSMTPMailer() {
 	// mailer wired; the first Send dials the relay
 }
 
+// ExampleNewConsoleSMSSender shows the zero-external-dependency SMS
+// transport: it prints every message to the writer it was given as one
+// record per send, instead of delivering it -- the standalone deployment
+// mode's sender, and the test double code written against SMSSender asserts
+// on. go/authn's phone-login flow and go/notification's sms channel both
+// receive it through their own sender options.
+func ExampleNewConsoleSMSSender() {
+	sender := pkgcore.NewConsoleSMSSender(os.Stdout)
+
+	err := sender.Send(context.Background(), pkgcore.SMS{
+		To:   "+8613800000000",
+		Text: "your verification code is 123456",
+	})
+	fmt.Println(err)
+
+	// Output:
+	// SMS to +8613800000000: your verification code is 123456
+	// <nil>
+}
+
+// ExampleNewHTTPSMSSender shows the operator-gateway SMS transport: a JSON
+// POST to the endpoint in the argument, the counterpart of the console
+// sender of ExampleNewConsoleSMSSender. Nothing is dialed at construction --
+// the gateway is contacted on the first Send -- and the endpoint must be
+// https: a plaintext one is refused by the first Send, before any request
+// leaves the process (the pkgcore/safehttp scheme policy).
+func ExampleNewHTTPSMSSender() {
+	sender := pkgcore.NewHTTPSMSSender("https://sms-gateway.example.com/send")
+	//nolint:staticcheck // QF1011: the assertion doubles as written doc that
+	// this constructor satisfies the SMSSender interface -- the console
+	// sender's counterpart in ExampleNewConsoleSMSSender -- so it is kept
+	// rather than inlined, which would leave the value unused.
+	var _ pkgcore.SMSSender = sender
+
+	fmt.Println("sender wired; the first Send posts to the gateway")
+	// Output:
+	// sender wired; the first Send posts to the gateway
+}
+
 // exampleLocalObjectStore creates a throwaway local object store for the
 // examples that need one, along with the cleanup that removes it. The
 // standalone implementation doubles as the test double for the ObjectStore
