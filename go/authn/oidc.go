@@ -77,7 +77,7 @@ type TenantSSOConfig struct {
 	// Issuer is the identity provider's OpenID Connect issuer URL. It is
 	// typed by a tenant administrator, which makes every outbound request
 	// derived from it a server-side request forgery candidate -- see
-	// internal/safehttp.
+	// pkgcore/safehttp.
 	Issuer string `gorm:"column:issuer;size:512;not null"`
 
 	// ClientID is the relying-party client identifier the provider issued.

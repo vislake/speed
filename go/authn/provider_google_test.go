@@ -13,7 +13,7 @@ import (
 // Both base URLs are overridden and a plain HTTP client is injected: the test
 // server listens on loopback, which the module's SSRF-guarded default client
 // correctly refuses. That refusal is proven separately in
-// internal/safehttp/safehttp_test.go.
+// pkgcore/safehttp.safehttp_test.go.
 func newGoogleProvider(t *testing.T, server *testutil.OIDCServer) *GoogleProvider {
 	t.Helper()
 	return NewGoogleProvider("google-client-id", "google-client-secret",

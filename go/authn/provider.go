@@ -263,7 +263,7 @@ func doJSON(ctx context.Context, client *http.Client, req *http.Request, out any
 	}
 	// #nosec G704 -- gosec's taint analysis cannot see that newProviderConfig's
 	// default client is safehttp.NewClient(), which resolves and dials the
-	// exact validated IP (internal/safehttp), rejecting private/loopback/
+	// exact validated IP (pkgcore/safehttp), rejecting private/loopback/
 	// link-local/CGNAT ranges and defeating DNS rebinding. A caller who
 	// overrides it via WithProviderHTTPClient does so explicitly -- tests use
 	// this to point at an httptest server, the one legitimate reason to

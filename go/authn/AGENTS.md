@@ -18,7 +18,7 @@ file is the discipline that ships with the module to consuming projects.
 | Tenant switching within one session | Memberships, the organization tree (`org`) |
 | Social login (Google, GitHub, WeChat, DingTalk, Feishu) and enterprise OIDC single sign-on | SAML, WebAuthn/passkeys — not implemented |
 | Account-binding management (list, bind, unbind) | QQ / Weibo / Alipay and other providers — not implemented |
-| Phone-plus-SMS-code sign-in on the existing blind index, plus the real carrier adapters — Aliyun, Tencent Cloud and Twilio under `go/authn/sms/` | Proving the carrier adapters against each vendor's real gateway, which needs live account credentials: the env-gated integration legs self-skip without them (see "The three carrier adapters" below) |
+| Phone-plus-SMS-code sign-in on the existing blind index, plus the real carrier adapters — Aliyun, Tencent Cloud and Twilio under `go/pkgcore/sms/` | Proving the carrier adapters against each vendor's real gateway, which needs live account credentials: the env-gated integration legs self-skip without them (see "The three carrier adapters" below) |
 | TOTP enrollment, confirmation, recovery codes, step-up re-verification | WebAuthn/passkeys — not implemented |
 | Sliding-window plus progressive-lockout rate limiting on login/register/code-send/code-verify/step-up | Anomalous-login detection (new device/region) — not implemented; it needs GeoIP, which no resolver supplies |
 **`rbac` must never import this package.** Authorization takes a tenant and a
@@ -116,7 +116,7 @@ there is no intent for the module to enforce.
 | Symbol | Purpose |
 |---|---|
 | `SocialProvider`, `ExternalIdentity` | The channel interface and what a channel reports about the person who authorized. Every field of `ExternalIdentity` is untrusted third-party input. |
-| `NewGoogleProvider`, `NewGitHubProvider`, `NewWeChatProvider`, `NewDingTalkProvider`, `NewFeishuProvider` | The five shipped channels. Each takes injectable base URLs and an injectable `*http.Client`, defaulting to the channel's production hosts and a `safehttp`-guarded client. |
+| `NewGoogleProvider`, `NewGitHubProvider`, `NewWeChatProvider`, `NewDingTalkProvider`, `NewFeishuProvider` | The five shipped channels. Each takes injectable base URLs and an injectable `*http.Client`, defaulting to the channel's production hosts and a `pkgcore/safehttp`-guarded client. |
 | `WithSocialProviders`, `WithTrustedProviders`, `WithRedirectAllowlist`, `WithOAuthStateTTL`, `WithFederationHTTPClient` | `NewService`/`NewModule` options wiring the channels a deployment offers, which of them may auto-link, where a flow may return to, and (enterprise SSO only) the HTTP client the relying party uses. |
 | `Service.SocialAuthorizeURL`, `Service.SocialCallback` | The social sign-in and account-binding flow. |
 | `Service.Identities`, `Service.ListIdentities`, `Service.UnbindIdentity` | Binding management. |
@@ -129,11 +129,9 @@ there is no intent for the module to enforce.
 
 | Symbol | Purpose |
 |---|---|
-| `SMS`, `SMSSender` | The message and the delivery seam. Authn's own — it is not a `pkgcore` primitive, since not every module needs it. |
-| `NewConsoleSMSSender(w)`, `NewHTTPSMSSender(endpoint, opts...)` | The standalone (writes to `w`) and distributed (SSRF-guarded JSON POST) transports — the dual-implementation rule applied to this module's own seam. |
-| `aliyun.NewSender(cfg, opts...)`, `tencent.NewSender(cfg, opts...)`, `twilio.NewSender(cfg, opts...)` (under `go/authn/sms/`) | The three real carrier adapters, each performing its vendor's official signing and request shape (Aliyun Dysmsapi RPC HMAC-SHA1, Tencent Cloud SendSms TC3-HMAC-SHA256, Twilio Messages REST with Basic auth), stdlib-only — see "The three carrier adapters" below. |
+| The SMS seam is pkgcore's: `pkgcore.SMS`, `pkgcore.SMSSender`, `pkgcore.NewConsoleSMSSender(w)`, `pkgcore.NewHTTPSMSSender(endpoint, opts...)`, carriers under `pkgcore/sms/` | The message, the delivery seam and every implementation live on the dependency floor, shared with go/notification's sms channel — see "The SMS seam is pkgcore's" below. This module contributes only the wiring option `WithSMSSender` and the wiring-time sentinel below; its former in-package `SMS`/`SMSSender`/constructors are gone, a deliberate breaking change under lockstep versioning. |
 | `Service.RequestSMSCode`, `Service.LoginWithSMSCode` | Issue-and-deliver, then verify-and-sign-in. Both never disclose whether a phone number is registered. |
-| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired. |
+| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired (see "A distributed deployment must wire an `SMSSender`" below). |
 
 ### TOTP, recovery codes, step-up
 
@@ -495,29 +493,56 @@ configuration change rather than a migration: existing hashes keep verifying, an
 `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` is how a host tells
 `NewModule`/`NewService` which deployment mode it is being wired for, solely
 so construction can enforce that a distributed deployment supplies an
-explicit `SMSSender` (`WithSMSSender`) rather than silently defaulting to
-`NewConsoleSMSSender`, which prints to a writer nobody in a distributed
-replica pool is reading. This mirrors `pkgcore.ErrMissingDistributedMailer`
-exactly, and it is the ONE piece of deployment-mode awareness this module
-carries. It lives entirely in `newOptions`' validation — never in `Service`'s
-business logic — for the same reason `pkgcore.Kernel`'s own `resolveMailer`
-and `resolveObjectStore` live in kernel wiring: deployment-mode differences
-govern behavior selection inside a request, not a once-at-construction-time
-checked precondition. Omitting `WithDeploymentMode` — every standalone
-deployment — is equivalent to standalone and keeps working with the console
-default.
+explicit SMS sender (`WithSMSSender`) rather than silently defaulting to
+`pkgcore.NewConsoleSMSSender`, which prints to a writer nobody in a
+distributed replica pool is reading. It is the ONE piece of deployment-mode
+awareness this module carries, and it lives in `newOptions`' validation —
+never in `Service`'s business logic — because the pkgcore SMS seam has no
+kernel seat that could enforce the requirement (see `pkgcore.SMSSender`'s
+doc comment): the kernel resolves no SMS sender, so the module that needs a
+real one in a distributed deployment says so at wiring time, the same
+moment `newOptions` validates `WithKeySource` and `WithBlindIndexKey`.
+Omitting `WithDeploymentMode` — every standalone deployment — is equivalent
+to standalone and keeps working with the console default.
+
+### The SMS seam is pkgcore's
+
+The delivery seam phone-login verification codes go out on is pkgcore's own
+(`pkgcore.SMS` and `pkgcore.SMSSender`, mirroring the `Mail`/`Mailer`
+contract), shared with go/notification's sms channel: notification sits
+below this module in the dependency graph, so a seam this module owned
+could not serve it, and a host wiring both modules now hands ONE
+implementation to both `WithSMSSender` options. The implementations are
+pkgcore's too: `pkgcore.NewConsoleSMSSender(w)` (the standalone console
+transport, which doubles as the test double), `pkgcore.NewHTTPSMSSender`
+(an operator-run JSON gateway, SSRF-guarded through `pkgcore/safehttp`),
+and the three real carrier adapters under `pkgcore/sms/` (next section).
+The seam deliberately has no registry, preset or capability seat in
+pkgcore's kernel machinery — every consumer resolves its sender through its
+own module option, so registration machinery would serve nobody, and this
+module's distributed-mode requirement above is the wiring-time enforcement
+that stays here.
+
+Promoting the seam was a deliberate breaking change under lockstep
+versioning: this module's `SMS` type, `SMSSender` interface,
+`NewConsoleSMSSender` and `NewHTTPSMSSender` (and the carrier subpackages
+that used to live under `go/authn/sms/`) moved to pkgcore, so a host that
+referenced them under the `authn` import path names `pkgcore` instead;
+`WithSMSSender`'s parameter is now `pkgcore.SMSSender`, and
+`ErrMissingDistributedSMSSender` is unchanged.
 
 ### The three carrier adapters (aliyun, tencent, twilio)
 
 This seam has three real carrier adapters, each in its own subpackage of
-this module — `go/authn/sms/aliyun`, `go/authn/sms/tencent`,
-`go/authn/sms/twilio` — so a host wires whichever carrier it has an account
-with, exactly as it wires the console or HTTP-gateway transport: construct
-with the package's `NewSender`, hand the result to `WithSMSSender`. The
-subpackage split is the same
-packaging answer `go/billing/gateway` gives for payment channels: an authn
-consumer that never wires a carrier imports none of the three, and none of
-the three adds a single `require` to this module's `go.mod`.
+pkgcore — `go/pkgcore/sms/aliyun`, `go/pkgcore/sms/tencent`,
+`go/pkgcore/sms/twilio` — so a host wires whichever carrier it has an
+account with, exactly as it wires the console or HTTP-gateway transport:
+construct with the package's `NewSender`, hand the result to `WithSMSSender`
+(here, or to go/notification's). The subpackage split is the same packaging
+answer `go/billing/gateway` gives for payment channels: a consumer that
+never wires a carrier imports none of the three, and none of the three adds
+a third-party `require` to pkgcore's `go.mod` (each adapter is
+stdlib-only; the measured cost of the official SDKs is recorded below).
 
 Each adapter implements its vendor's REAL signing and request shape, verified
 offline where the vendor's signing is deterministic:
@@ -554,10 +579,11 @@ offline where the vendor's signing is deterministic:
   unit tier pins the entire wire shape offline.
 
 **No vendor SDK is used — raw signed HTTP throughout, and the choice is
-measured, not assumed.** This module tracks dependency cost with the
+measured, not assumed.** pkgcore tracks dependency cost with the
 repository's own method (a bare consumer, `GOWORK=off go mod tidy`, count
-`// indirect` entries); measured for the three official Go SDKs in the
-round's own throwaway modules: the official Aliyun dysmsapi Tea SDK
+`// indirect` entries); measured for the three official Go SDKs in
+throwaway modules of the work that adopted the raw-HTTP shape: the
+official Aliyun dysmsapi Tea SDK
 (`alibabacloud-go/dysmsapi-20170525/v2`) costs 16 indirect entries, the
 legacy `aliyun/alibaba-cloud-sdk-go` costs 6, Tencent's `tencentcloud-sdk-go`
 sms submodule costs 1 (its `common` pinned to the same version train as every
@@ -566,12 +592,13 @@ adapter's signing is a small, deterministic, officially documented algorithm
 (an RPC canonical form, the TC3 chain, or Basic auth) implementable in
 well-understood stdlib code — the SDKs' real surface (credential chains,
 retries, whole-product client trees) far exceeds the one action this seam
-needs, and even a subpackage-scoped SDK dependency would land in this
-module's `go.mod` and every workspace member's build. The adapters therefore
-add +0 dependencies and keep the seam light; the offline vectors pin the
-algorithms against values no Go code produced, so the usual SDK benefit —
-"the vendor maintains the signature" — is replaced by a maintained,
-test-pinned transcription of the vendor's published specification.
+needs, and even a subpackage-scoped SDK dependency would land in the
+owning module's `go.mod` and every workspace member's build. The adapters
+therefore add +0 dependencies and keep the seam light; the offline vectors
+pin the algorithms against values no Go code produced, so the usual SDK
+benefit — "the vendor maintains the signature" — is replaced by a
+maintained, test-pinned transcription of the vendor's published
+specification.
 
 Three boundaries bind every adapter, each documented in its package doc:
 
@@ -592,9 +619,9 @@ Three boundaries bind every adapter, each documented in its package doc:
 - **Credentials.** `Config` is validated eagerly in `NewSender`, which
   returns an error naming the missing field — never its value; no error or
   log path in any adapter echoes a secret, and all three talk TLS to fixed
-  gateway constants through the module's `internal/safehttp` guarded client
-  by default (`WithClient` exists for tests pointing at a loopback server,
-  mirroring `NewHTTPSMSSender`'s own option).
+  gateway constants through the `pkgcore/safehttp` guarded client by default
+  (`WithClient` exists for tests pointing at a loopback server, mirroring
+  `pkgcore.NewHTTPSMSSender`'s own option).
 
 Every adapter's `integration_test/` carries an env-gated live leg (the alipay
 sandbox-leg precedent): it runs only when the operator's own credentials are
@@ -967,8 +994,8 @@ real-database proof.
 `handler_test.go` exercises every operation through the actual composed
 `Handler` (`httptest`, never calling `Service` methods directly), including
 the mandatory deployment-mode-consistency suite: the same request
-sequence run against a `Handler` wired with `NewConsoleSMSSender` and again
-against one wired with `NewHTTPSMSSender` (an `httptest` server standing in
+sequence run against a `Handler` wired with `pkgcore.NewConsoleSMSSender` and again
+against one wired with `pkgcore.NewHTTPSMSSender` (an `httptest` server standing in
 for a distributed gateway), asserting identical status codes and error codes
 on both. `history_test.go` covers the same session/history operations at the
 `Service` layer directly — ordering, the no-existence-disclosure answer for
@@ -991,7 +1018,7 @@ endpoints, backed by a freshly generated RSA key — so the Google channel and
 the enterprise relying party are proven against a real signed, real-verified
 ID token with no network call. The five social channels each get injectable
 base URLs and an injectable `*http.Client`, pointed at `httptest.NewServer` in
-every test; `internal/safehttp/safehttp_test.go` separately proves the
+every test; pkgcore/safehttp's own tests separately prove the
 production default client actually refuses loopback and every other
 non-public range, including under a DNS-rebinding resolver stub.
 
@@ -1029,7 +1056,7 @@ rather than trying to synchronize on the exact step boundary.
 | A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (an `org` subscriber reacting to `authn.user.created`, or a host-side grant) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
 | The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`. | Only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/cmd/server/demo_users.go`'s `seedDemoUsers`, through the real composed register route) and grants each its org membership and rbac role per configured tenant — the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` — while an unset variable leaves only the demo header actors (`demo_subject.go`), which carry grants but no database row and cannot sign in. The membership half is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). `Taskfile.yml`'s `seed` task remains a stub with no loader; what remains unbuilt is a Taskfile `seed` loader that generates demo data outside boot, a tooling item, not authn's. |
 | QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or a design decision this module has not made. |
-| The Aliyun/Tencent Cloud/Twilio adapters (`go/authn/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent. Until an operator runs one, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
+| The Aliyun/Tencent Cloud/Twilio adapters (`go/pkgcore/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent. Until an operator runs one, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
 | The Aliyun and Tencent adapters can only send through a template the operator's own account registers: Aliyun one whose single variable is named by `Config.TemplateParamName` (default `content`), Tencent one declaring exactly one positional variable; Twilio sends free text. | The seam delivers already-rendered text, and Aliyun/Tencent have no free-text send; the adapters map the whole message onto the account's template variable(s) exactly as each package doc records. The template itself is account data this codebase cannot provision or verify — a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
 | `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA), which has not been made. |
 | MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow); the shipped shape is enrollment, recovery and step-up only. |

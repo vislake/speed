@@ -20,7 +20,7 @@ const ssoRedirectURI = "https://app.example.com/sso/callback"
 
 // newSSOFixture assembles a Service whose enterprise relying party talks to
 // server with no SSRF guard in front of it. The guard is proven separately in
-// internal/safehttp and in TestSSOService_SaveConfig_RefusesAnSSRFCandidateIssuer;
+// pkgcore/safehttp.and in TestSSOService_SaveConfig_RefusesAnSSRFCandidateIssuer;
 // every other test here is about what happens once a tenant's issuer has
 // already been accepted.
 func newSSOFixture(t *testing.T, server *testutil.OIDCServer) *serviceFixture {
@@ -110,7 +110,7 @@ func TestSSOService_SaveConfig_RequiresTenantContext(t *testing.T) {
 }
 
 // TestSSOService_SaveConfig_RefusesAnSSRFCandidateIssuer is the write-time
-// half of internal/safehttp's contract: a tenant administrator's issuer URL
+// half of pkgcore/safehttp's contract: a tenant administrator's issuer URL
 // is validated BEFORE it is ever stored, so the server-side request forgery
 // candidate never reaches the database, let alone a later fetch.
 func TestSSOService_SaveConfig_RefusesAnSSRFCandidateIssuer(t *testing.T) {
