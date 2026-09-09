@@ -167,6 +167,4 @@ curl -s -i localhost:8080/api/v1/notes -H 'Authorization: Bearer not-a-real-toke
 
 ## Source
 
-- [reference-app README](https://github.com/vislake/speed/blob/main/examples/reference-app/README.md)——本演练的命令与应答的原始出处。
-- [reference-app DEPLOY.md](https://github.com/vislake/speed/blob/main/examples/reference-app/DEPLOY.md)——把同一套应用部署到真实主机。
 - [authn AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md)——上述应答背后的令牌、会话与中间件契约。

@@ -87,9 +87,8 @@ saasctl upgrade --version v1.0.0 ../my-app/go.mod
 `--version` 必填并按发布版本号语法校验;对已重写过的文件再运行一次
 是无操作。该命令只重写 Go 的 `go.mod` 文件。
 
-快速开始页的现状说明在这里同样适用:里程碑 M4 之前没有任何发布物,
-今天没有真实发布版本可迁,生成 `go.mod` 里的 `replace` 指令也让本地
-checkout 对构建保持权威;这条命令就是第一个发布被消费时走的那条机制。
+快速开始页的现状说明在这里同样适用:今天没有真实发布版本可迁,生成
+`go.mod` 里的 `replace` 指令让本地 checkout 对构建保持权威。
 
 ## 接下来
 
@@ -98,7 +97,7 @@ checkout 对构建保持权威;这条命令就是第一个发布被消费时走�
 - [错误码索引](../error-codes/)——运行中的服务拒绝请求时可能应答的
   错误码。
 - [模块索引](/zh-cn/docs/user-guide/modules/)——项目可以 require 的每个 Go
-  模块与 npm 包,各自链接自己的 `AGENTS.md`/`README.md`。
+  模块与 npm 包,各自链接自己的 `AGENTS.md`。
 - [快速开始](../quickstart/)——生成本页所运维的那个项目。
 
 ## Source
@@ -106,5 +105,3 @@ checkout 对构建保持权威;这条命令就是第一个发布被消费时走�
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md)——
   `upgrade`、`db migrate`、`config print` 的权威契约,含退出码与拒绝
   形态。
-- [reference-app README](https://github.com/vislake/speed/blob/main/examples/reference-app/README.md)——
-  在跑遍每个模块的应用上演示部署形态与基础设施接线。

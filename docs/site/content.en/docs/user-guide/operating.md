@@ -108,11 +108,9 @@ the file's own requires. `--version` is required and validated against
 the release-version grammar; a second run over an already-rewritten
 file is a no-op. The command rewrites Go `go.mod` files only.
 
-The quickstart's present-state note applies: nothing publishes until
-milestone M4, so no release version exists to move to today and a
-generated `go.mod`'s `replace` directives keep the local checkout
-authoritative for its build; the command is the mechanism the first
-release will be consumed through.
+The quickstart's present-state note applies here: no release version
+exists to move to yet, so a generated `go.mod`'s `replace` directives
+keep the local checkout authoritative for its build.
 
 ## Next steps
 
@@ -121,7 +119,7 @@ release will be consumed through.
 - [Error code index](../error-codes/) — the codes a running service can
   answer with when something refuses.
 - [Module index](/docs/user-guide/modules/) — every Go module and npm package a
-  project can require, with its own `AGENTS.md`/`README.md`.
+  project can require, with its own `AGENTS.md`.
 - [Quickstart](../quickstart/) — generating the project this page operates.
 
 ## Source
@@ -129,6 +127,3 @@ release will be consumed through.
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md) —
   the authoritative contract for `upgrade`, `db migrate` and `config
   print`, including exit codes and refusal shapes.
-- [reference-app README](https://github.com/vislake/speed/blob/main/examples/reference-app/README.md) —
-  deployment modes and infrastructure wiring demonstrated on the app
-  that exercises every module.

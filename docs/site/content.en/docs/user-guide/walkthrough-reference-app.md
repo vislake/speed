@@ -180,9 +180,5 @@ seed and your notes survive.
 
 ## Source
 
-- [reference-app README](https://github.com/vislake/speed/blob/main/examples/reference-app/README.md) —
-  this walkthrough's commands and answers in their original form.
-- [reference-app DEPLOY.md](https://github.com/vislake/speed/blob/main/examples/reference-app/DEPLOY.md) —
-  deploying the same app to a real host.
 - [authn AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md) —
   the token, session and middleware contracts behind the answers above.

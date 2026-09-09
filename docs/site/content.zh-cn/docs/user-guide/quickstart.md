@@ -11,13 +11,11 @@ aliases: ["/docs/quickstart"]
 并启动它。只需要一个 Go 工具链,别无他物。
 
 > [!NOTE]
-> **目前还没有任何发布物。** speed 的第一个正式 tag 要到里程碑 M4 才会
-> 出现(见[实现状态](/zh-cn/docs/developer-docs/status/));在那之前不存在
-> `go get github.com/vislake/speed/...`,也不存在从任何 registry
-> `npm install @speed/...`。下面这条路径——本地 checkout 加 `go run`
-> ——就是当下试用 speed 真实、现行的方法。生成项目因此带着过渡态的形态:
-> require 停在占位版本,`replace` 指令指向 speed checkout,`go.sum`
-> 要等第一次消费方 `go mod tidy` 才会生成。
+> **目前还没有任何发布物。** speed 尚未发布到任何 registry——不存在
+> `go get github.com/vislake/speed/...`,也不存在 `npm install @speed/...`。
+> 下面这条本地 checkout 路径(克隆加 `go run`)是当前唯一真实的方式。
+> 生成的起始项目处于过渡形态:require 停在占位版本,`replace` 指令
+> 指向该 checkout,`go.sum` 要等第一次消费侧 `go mod tidy` 才会生成。
 
 ## 1. 获取 checkout
 
