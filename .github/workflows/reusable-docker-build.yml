@@ -38,10 +38,11 @@ name: docker-build
 #     own built-in `GITHUB_TOKEN` -- see NOT YET below for why this is
 #     not a new credential.
 #   * Docker layer caching via actions/cache, keyed on every input that
-#     changes a layer -- the Dockerfile plus the files it COPYs into the
-#     image (go.work, go.work.sum, go/**, examples/reference-app/**) --
-#     plus the runner OS plus the architecture (each architecture's
-#     layers are cached separately -- they are not interchangeable).
+#     changes a layer -- the Dockerfile, .dockerignore and the files the
+#     Dockerfile COPYs into the image (go.work, go.work.sum, go/**,
+#     examples/reference-app/**, tools/configrefgen/**, web/**) -- plus
+#     the runner OS plus the architecture (each architecture's layers are
+#     cached separately -- they are not interchangeable).
 #
 # NOT YET:
 #   * The registry namespace used here (this repository's own
@@ -58,12 +59,14 @@ name: docker-build
 #     not wired (release.yml's own header).
 #   * No caller wires this into e2e/release/nightly yet -- those three
 #     stay gated stubs in their own right (see each file's own header).
-#     The only live caller is docker-image-ci.yml, workflow_dispatch-
-#     only, proving this reusable genuinely works end to end.
+#     The only live caller is docker-image-ci.yml, which runs this
+#     reusable automatically on every build-input change (that file's
+#     own path set) and on manual dispatch, proving this reusable
+#     genuinely works end to end.
 #   * trivy image scanning (security.yml's own DEFERRED note) still has
-#     nothing to scan from a live per-PR pipeline -- this workflow builds
-#     an image on manual dispatch only, not on every PR, so it does not
-#     by itself give trivy a standing target.
+#     nothing to scan routinely -- this workflow builds an image only on
+#     a build-input change or manual dispatch, not on every PR, so it
+#     does not by itself give trivy a standing target.
 
 on:
   workflow_call:
@@ -180,26 +183,29 @@ jobs:
       # Docker layer cache -- keyed on every input that can change a
       # layer, the runner OS AND the architecture: amd64 and arm64 layers
       # are never interchangeable, so they never share a cache slot.
-      # The layer inputs are exactly what this Dockerfile COPYs into the
-      # image: go.work, go.work.sum, the whole go/ tree (workspace mode
-      # needs a real go.mod at every one of go.work's `use` entries to
-      # resolve at all -- the Dockerfile's own header says the same) and
-      # examples/reference-app/. The build context is the repository
-      # root (the one caller, docker-image-ci.yml, passes "."), which
-      # contains far more -- web/, docs/, .github/, tools/ -- but the
-      # Dockerfile never copies those into any layer, so hashing them
-      # would only churn the key without a layer change. If the
-      # Dockerfile ever COPYs more, extend this pattern list. Not
-      # covered by any source hash: the base images are tag-pinned
-      # (golang:1.26.8-bookworm, distroless static-debian12) rather than
-      # digest-pinned, so upstream base-image drift can move a layer
-      # under an unchanged key -- the honest residual, recorded at the
-      # cache-swap step below.
+      # The layer inputs are exactly what this Dockerfile reads: the
+      # Dockerfile itself, .dockerignore (it decides what enters the
+      # context every COPY reads), go.work, go.work.sum, the whole go/
+      # tree (workspace mode needs a real go.mod at every one of
+      # go.work's `use` entries to resolve at all -- the Dockerfile's own
+      # header says the same), examples/reference-app/,
+      # tools/configrefgen/ (go.work's other non-go/ `use` entry) and
+      # web/ (the frontend stage builds the app's web bundle from the
+      # web/ tree). The build context is the repository root (the one
+      # caller, docker-image-ci.yml, passes "."), which contains far
+      # more -- docs/, .github/, the rest of tools/ -- but nothing else
+      # is read by any layer, so hashing it would only churn the key
+      # without a layer change. If the Dockerfile ever reads more,
+      # extend this pattern list. Not covered by any source hash: the
+      # base images are tag-pinned (golang:1.26.8-bookworm, distroless
+      # static-debian12) rather than digest-pinned, so upstream base-
+      # image drift can move a layer under an unchanged key -- the
+      # honest residual, recorded at the cache-swap step below.
       - name: Cache Docker layers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ matrix.arch }}-${{ runner.os }}-${{ hashFiles(inputs.dockerfile, 'go.work', 'go.work.sum', 'go/**', 'examples/reference-app/**') }}
+          key: docker-buildx-${{ matrix.arch }}-${{ runner.os }}-${{ hashFiles(inputs.dockerfile, '.dockerignore', 'go.work', 'go.work.sum', 'go/**', 'examples/reference-app/**', 'tools/configrefgen/**', 'web/**') }}
           restore-keys: |
             docker-buildx-${{ matrix.arch }}-${{ runner.os }}-
 
