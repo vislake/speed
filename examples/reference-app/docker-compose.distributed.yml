@@ -6,14 +6,15 @@
 #
 # from examples/reference-app/. This demonstrates the distributed-mode-
 # shaped seam composition internal/app/server.go's own env-var wiring
-# supports (see that file's redisAddrEnv/s3*Env/smtp*Env/smsGatewayURLEnv
-# doc comments, and README.md's "Real Redis inside a standalone topology"
-# section for the general pattern this extends to all four seams at once):
+# supports (see the RedisAddr/S3*/SMTP*/SMSGatewayURL field doc comments in
+# internal/app/bootstrap.go, and README.md's "Real Redis inside a
+# standalone topology" section for the general pattern this extends to all
+# four seams at once):
 #
 #   - Redis (redis:7-alpine)   backs BOTH the "eventbus" seam (Redis
 #     Streams) AND the "kv" seam (one client, two seams --
-#     internal/app/server.go's own APP_REDIS_ADDR doc comment explains why
-#     one address suffices).
+#     internal/app/bootstrap.go's own RedisAddr field doc comment explains
+#     why one address suffices).
 #   - RustFS (rustfs/rustfs, https://github.com/rustfs/rustfs, the same
 #     release pin examples/reference-app/integration_test/distributed_mode_test.go
 #     already uses) backs the "objectstore" seam (S3-compatible). RustFS

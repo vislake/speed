@@ -889,7 +889,8 @@ type ServerConfig struct {
 	// WebDistDir names the directory holding this app's built frontend
 	// (the dist/ examples/reference-app/web's `pnpm build` emits) when
 	// this process should serve that frontend itself -- see frontend.go's
-	// own package doc comment for the full serving design. ConfigFromEnv
+	// own package doc comment for this app's wiring and pkgcore/spa's for
+	// the full serving contract. ConfigFromEnv
 	// sets it from APP_WEB_DIST; the empty default (the zero-external-
 	// dependency `go run ./cmd/server` experience, and every test's
 	// config) leaves the composed handler serving no static files at all.
@@ -3068,7 +3069,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// needs, while every request the frontend does not answer (the whole
 	// /api surface, /healthz, /metrics, and any non-GET/HEAD method)
 	// reaches the composed chain unchanged -- see
-	// frontend.go's package doc comment for the full interception rules.
+	// frontend.go's package doc comment for this app's wiring and
+	// pkgcore/spa's for the full interception rules.
 	if cfg.WebDistDir != "" {
 		handler = withFrontend(cfg.WebDistDir, handler)
 	}

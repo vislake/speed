@@ -138,7 +138,8 @@ type hostConfig struct {
 	// WebDist names APP_WEB_DIST: the directory holding this app's built
 	// frontend (the dist/ examples/reference-app/web's `pnpm build` emits) when
 	// this process should serve that frontend itself -- see frontend.go's own
-	// package doc comment for the full serving design. Empty -- the default,
+	// package doc comment for this app's wiring and pkgcore/spa's for the
+	// full serving contract. Empty -- the default,
 	// and what every caller of BuildServer without a frontend gets -- leaves
 	// the composed handler serving no static files at all.
 	WebDist string `config:"env=APP_WEB_DIST"`

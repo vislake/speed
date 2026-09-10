@@ -4,10 +4,10 @@ package flowtests
 // of the acceptance blocker they discharge (an anonymous GET / answering
 // the app's page instead of a tenancy refusal, a built asset answering its
 // bytes, an unknown non-API path answering the SPA fallback, API behavior
-// byte-identical), plus the serving rules internal/app/frontend.go's package doc
-// comment pins: opt-in via cfg.WebDistDir, asset misses as real 404s, the
-// cache policy split, HEAD support, and path-traversal confinement to the
-// configured directory.
+// byte-identical), plus the serving rules internal/app/frontend.go wires and
+// pkgcore/spa's package doc comment pins: opt-in via cfg.WebDistDir, asset
+// misses as real 404s, the cache policy split, HEAD support, and
+// path-traversal confinement to the configured directory.
 //
 // The fixture dist directory mirrors the real vite build output shape:
 // examples/reference-app/web/index.html (whose body carries the
