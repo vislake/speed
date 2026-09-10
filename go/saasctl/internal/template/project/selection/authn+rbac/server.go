@@ -294,7 +294,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 				Port:     cfg.SMTPPort,
 				Username: cfg.SMTPUsername,
 				Password: cfg.SMTPPassword,
-			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+			}), pkgcore.MultiReplicaSafe|pkgcore.Stateless))
 	}
 	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, configModule, rbacModule)
 	if err != nil {
