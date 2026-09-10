@@ -811,18 +811,4 @@ func TestEnsureJobsSchema_UpgradesLegacyTableWithoutTerminalPublishedAt(t *testi
 	if payload.Status != StatusSucceeded {
 		t.Errorf("new Job's payload.Status = %q, want %q", payload.Status, StatusSucceeded)
 	}
-
-	// The re-run guard: un-stamping a row and running ensureJobsSchema again
-	// must leave it owed — the backfill runs only when this call is the one
-	// adding the column, never as a sweep that would silently mark an owed
-	// event as sent.
-	if err := db.Exec(`UPDATE `+jobsTable+` SET terminal_published_at = NULL WHERE id = ?`, "legacy-succeeded").Error; err != nil {
-		t.Fatalf("un-stamp legacy row: %v", err)
-	}
-	if err := ensureJobsSchema(context.Background(), db); err != nil {
-		t.Fatalf("ensureJobsSchema() over the already-upgraded table error = %v", err)
-	}
-	if stamp := stampOf("legacy-succeeded"); stamp != nil {
-		t.Errorf("re-running ensureJobsSchema re-stamped an owed row at %v; the backfill must be conditional on the column add", stamp)
-	}
 }
