@@ -566,10 +566,10 @@ func TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSi
 // pins the retry job's terminal signal: when a provisioning retry job
 // exhausts its budget and dead-letters, the host must log an Error naming
 // the account (user_id), its clinic (tenant_id, carried by the worker
-// context the queue rebuilt for the hook) and the consequence -- the
-// account cannot sign in until it is provisioned by hand. Before the fix
-// the only terminal record was the queue's generic dead-letter log, which
-// names the job (job_id/job_type), never the account.
+// context the queue rebuilt for the hook) and the terminal condition --
+// the clinic needs manual provisioning. The queue's own generic
+// dead-letter log names the job (job_id/job_type), never the account, so
+// this host line is what makes the dead letter actionable.
 //
 // The regression drives the REAL handler and a REAL queue to a genuine
 // exhaustion: an always-failing provision injection, a fast retry
@@ -674,10 +674,10 @@ func TestSelfServiceProvisionRetry_DeadLetter_LogsTheTerminalSignalByUserAndTena
 
 	// The terminal signal: the host's Error line, naming the account
 	// (user_id), its clinic (tenant_id, carried by the worker context the
-	// queue rebuilt for the hook) and the consequence. Failing before the
-	// fix, the only terminal record was the queue's generic dead-letter
-	// line, which names the job, never the account.
-	signal := "reference-app: clinic provisioning exhausted its retries and dead-lettered; the account cannot sign in until it is provisioned by hand"
+	// queue rebuilt for the hook) and the terminal condition -- the clinic
+	// needs manual provisioning. The queue's generic dead-letter line
+	// names the job, never the account.
+	signal := "reference-app: clinic provisioning exhausted its retries and dead-lettered; the clinic needs manual provisioning"
 	out := logBuf.String()
 	if !strings.Contains(out, signal) {
 		t.Fatalf("the exhausted provisioning never logged its terminal signal naming the account; logs:\n%s", out)

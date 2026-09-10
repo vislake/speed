@@ -134,21 +134,22 @@ import (
 // cause on its row and in the log -- and the retry handler's OnFailure
 // (the jobs.FailureHook mechanism go/jobs' handler.go documents) adds
 // the host's own terminal signal, an Error naming the registrant and the
-// clinic whose sign-in a provisioning that outlived every automatic
-// attempt has stranded -- the operator signal that this provisioning
-// needs a human rather than another attempt.
+// clinic a provisioning that outlived every automatic attempt has left
+// incomplete -- the operator signal that this provisioning needs a human
+// rather than another attempt.
 //
 // The 201 semantics that result are the honest ones: register answers 201
 // exactly when the account exists. The clinic is already there whenever
 // the synchronous attempt succeeded -- the path every normal registration
 // takes -- so "register, then sign in" keeps its gap-free shape. After a
 // failed synchronous attempt the 201 still answers, and a sign-in in the
-// window before the retry converges answers the memberless refusal
+// window before the retry converges meets the state the failed attempt
+// left: when the seat landed -- the failure was a later hop -- the
+// sign-in lands in the clinic and the retry finishes the remaining hops
+// moments later; before the seat landed it is the memberless refusal
 // folded into the unified 401 authn.invalid_credentials, identical to a
-// wrong password's -- no-membership logins are indistinguishable from
-// wrong-password ones by design; the retry
-// converges the clinic moments later and the same sign-in then lands in
-// it. The browser-shaped e2e gate
+// wrong password's (no-membership logins are indistinguishable from
+// wrong-password ones by design). The browser-shaped e2e gate
 // (self-service-signup.spec.ts) never sees that window, because it signs
 // in after a registration whose synchronous attempt succeeded; a recovery
 // gate drives it on purpose through the env switch
@@ -313,8 +314,8 @@ func (p *SelfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.
 		// in authn. The Error line is the operator signal and
 		// scheduleProvisionRetry is the recovery: the retry job re-runs
 		// this same provision until it succeeds, so a failed synchronous
-		// attempt never strands the account -- its sign-in refuses only
-		// until the retry converges the clinic (the file doc's # Failure
+		// attempt never strands the account -- the retry completes
+		// whichever hops the failure left out (the file doc's # Failure
 		// semantics).
 		log.Error("reference-app: self-service clinic provisioning failed synchronously; scheduling the retry that converges it",
 			"user_id", userID, "tenant_id", clinic, "error", err)
@@ -424,16 +425,22 @@ func (h *SelfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.J
 // attempt's failure path only, once the retry budget is exhausted and the
 // job has genuinely dead-lettered. This is the terminal half of the
 // failure semantics this file's own doc comment describes -- a
-// provisioning that outlived every automatic attempt strands its account
-// (register already answered 201 and the event never fires again), so the
-// operator signal must say WHOSE sign-in is broken. The queue's own
-// dead-letter records name the job (job_id/job_type on the row and in its
-// log line), never the account; this hook's Error is the host's own
-// terminal signal, naming the registrant (user_id, decoded from the same
-// payload Handle decodes) and the consequence -- "the account cannot sign
-// in until it is provisioned by hand", the exact consequence the file's
-// other three failure paths (scheduleProvisionRetry's queue-nil, marshal
-// and Enqueue failures) already name.
+// provisioning that outlived every automatic attempt leaves its clinic
+// incomplete for good (register already answered 201 and the event never
+// fires again), so the operator signal must say WHOSE clinic needs the
+// manual provisioning. The queue's own dead-letter records name the job
+// (job_id/job_type on the row and in its log line), never the account;
+// this hook's Error is the host's own terminal signal, naming the
+// registrant (user_id, decoded from the same payload Handle decodes) and
+// the clinic left incomplete rather than a consequence: what a
+// dead-lettered clinic is missing depends on the hop that failed -- a
+// failure before the seat landed refuses sign-in (the memberless 401
+// folded into the unified authn.invalid_credentials), a missing role or
+// owner grant is a sign-in without authority, and a missing subscription
+// or credit balance is a sign-in whose gated AI routes are refused
+// (aigateway.entitlement_denied) -- so the line states the condition an
+// operator must repair and leaves the failed hop to the cause error it
+// also logs, rather than promising one outcome for every hop.
 //
 // The clinic tenant rides on the worker context the queue rebuilt for
 // this hook (go/jobs' FailureHook contract: "OnFailure receives the same
@@ -442,16 +449,17 @@ func (h *SelfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.J
 // context carries it. Whatever this hook logs is not retried or otherwise
 // observed by the queue. A payload that no longer decodes (a task this
 // app itself never enqueues) cannot name the account; the log then names
-// the clinic and the cause and says the same consequence.
+// the clinic and the cause and states the same incomplete-clinic
+// condition.
 func (h *SelfServiceProvisionJobHandler) OnFailure(ctx context.Context, job *jobs.Job, cause error) {
 	log := obs.FromContext(ctx)
 	var task SelfServiceProvisionTask
 	if err := json.Unmarshal(job.Payload, &task); err != nil || task.UserID == "" {
-		log.Error("reference-app: clinic provisioning retry dead-lettered with a task payload that names no account; the account cannot sign in until it is provisioned by hand",
+		log.Error("reference-app: clinic provisioning retry dead-lettered with a task payload that names no account; the clinic needs manual provisioning",
 			"error", cause)
 		return
 	}
-	log.Error("reference-app: clinic provisioning exhausted its retries and dead-lettered; the account cannot sign in until it is provisioned by hand",
+	log.Error("reference-app: clinic provisioning exhausted its retries and dead-lettered; the clinic needs manual provisioning",
 		"user_id", task.UserID, "error", cause)
 }
 
@@ -471,7 +479,7 @@ func (h *SelfServiceProvisionJobHandler) OnFailure(ctx context.Context, job *job
 func (p *SelfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, userID string, clinic pkgcore.TenantID) {
 	log := obs.FromContext(ctx)
 	if p.queue == nil {
-		log.Error("reference-app: no job queue to retry the clinic provisioning on; the account cannot sign in until it is provisioned by hand",
+		log.Error("reference-app: no job queue to retry the clinic provisioning on; the clinic needs manual provisioning",
 			"user_id", userID, "tenant_id", clinic)
 		return
 	}
