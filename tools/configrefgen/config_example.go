@@ -87,7 +87,10 @@ type exampleBootstrapConfig struct {
 	// lowercases to exactly the last segment of a declared key path, so the
 	// nested field maps to the dotted key (Authn.Blind_Index_Key is
 	// authn.blind_index_key -- env SPEED_AUTHN__BLIND_INDEX_KEY, flag
-	// --authn.blind_index_key).
+	// --authn.blind_index_key). A segment that carries an underscore is
+	// spelled with it: the loader lowercases the field name verbatim into
+	// the key path, so it is the only spelling that reaches the key, and
+	// each such field carries a staticcheck exception stating exactly that.
 	Authn        exampleKeyAuthn
 	Config       exampleKeyConfig
 	Notification exampleKeyNotification
@@ -96,23 +99,29 @@ type exampleBootstrapConfig struct {
 }
 
 type exampleKeyConfig struct {
+	//nolint:staticcheck // the field name must lowercase to the dotted key config.master_key that config.example.yaml spells.
 	Master_Key string
 }
 
 type exampleKeyAuthn struct {
+	//nolint:staticcheck // the field name must lowercase to the dotted key authn.blind_index_key that config.example.yaml spells.
 	Blind_Index_Key string
-	PII_Cipher_Key  string
+	//nolint:staticcheck // the field name must lowercase to the dotted key authn.pii_cipher_key that config.example.yaml spells.
+	PII_Cipher_Key string
 }
 
 type exampleKeyNotification struct {
+	//nolint:staticcheck // the field name must lowercase to the dotted key notification.contact_index_key that config.example.yaml spells.
 	Contact_Index_Key string
 }
 
 type exampleKeyOrg struct {
+	//nolint:staticcheck // the field name must lowercase to the dotted key org.invitation_email_index_key that config.example.yaml spells.
 	Invitation_Email_Index_Key string
 }
 
 type exampleKeyPki struct {
+	//nolint:staticcheck // the field name must lowercase to the dotted key pki.local_key_cipher_key that config.example.yaml spells.
 	Local_Key_Cipher_Key string
 }
 

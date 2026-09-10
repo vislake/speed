@@ -61,6 +61,8 @@ authn:
   # every already-stored index becomes unfindable.
   #   env:  SPEED_AUTHN__BLIND_INDEX_KEY=...
   #   flag: --authn.blind_index_key=...
+  # A real deployment injects this key from a secret store, or derives it
+  # from one 32-byte root key; see docs/config-reference.md.
   blind_index_key: REPLACE_WITH_64_HEX_CHARS
 
   # AES key sealing authn's encrypted PII columns (email, phone, TOTP
@@ -68,6 +70,8 @@ authn:
   # and from the blind-index key above.
   #   env:  SPEED_AUTHN__PII_CIPHER_KEY=...
   #   flag: --authn.pii_cipher_key=...
+  # A real deployment injects this key from a secret store, or derives it
+  # from one 32-byte root key; see docs/config-reference.md.
   pii_cipher_key: REPLACE_WITH_64_HEX_CHARS
 
 config:
@@ -76,6 +80,8 @@ config:
   # table, so it comes from the host's process-start input.
   #   env:  SPEED_CONFIG__MASTER_KEY=...
   #   flag: --config.master_key=...
+  # A real deployment injects this key from a secret store, or derives it
+  # from one 32-byte root key; see docs/config-reference.md.
   master_key: REPLACE_WITH_64_HEX_CHARS
 
 notification:
@@ -84,6 +90,8 @@ notification:
   # whose canonical forms are disjoint.
   #   env:  SPEED_NOTIFICATION__CONTACT_INDEX_KEY=...
   #   flag: --notification.contact_index_key=...
+  # A real deployment injects this key from a secret store, or derives it
+  # from one 32-byte root key; see docs/config-reference.md.
   contact_index_key: REPLACE_WITH_64_HEX_CHARS
 
 org:
@@ -92,6 +100,8 @@ org:
   # HMAC key.
   #   env:  SPEED_ORG__INVITATION_EMAIL_INDEX_KEY=...
   #   flag: --org.invitation_email_index_key=...
+  # A real deployment injects this key from a secret store, or derives it
+  # from one 32-byte root key; see docs/config-reference.md.
   invitation_email_index_key: REPLACE_WITH_64_HEX_CHARS
 
 pki:
@@ -99,6 +109,8 @@ pki:
   # access tokens are ultimately signed with.
   #   env:  SPEED_PKI__LOCAL_KEY_CIPHER_KEY=...
   #   flag: --pki.local_key_cipher_key=...
+  # A real deployment injects this key from a secret store, or derives it
+  # from one 32-byte root key; see docs/config-reference.md.
   local_key_cipher_key: REPLACE_WITH_64_HEX_CHARS
 
 # --- A host's own keys, demonstration only ---------------------------------
