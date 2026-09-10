@@ -210,6 +210,22 @@ type FeatureGate interface {
 	IsEnabled(ctx context.Context, key string) (bool, error)
 }
 
+// FeatureGateFunc adapts a plain function to FeatureGate, the same
+// func-to-interface adapter shape http.HandlerFunc popularized, so a host
+// need not declare a named type just to wire this seam. The config module's
+// lazy Handle satisfies the gate through a method value alone
+// (authn.FeatureGateFunc(handle.IsEnabled)); a host whose reader needs a
+// guard of its own passes a closure instead.
+type FeatureGateFunc func(ctx context.Context, key string) (bool, error)
+
+// IsEnabled implements FeatureGate.
+func (f FeatureGateFunc) IsEnabled(ctx context.Context, key string) (bool, error) {
+	return f(ctx, key)
+}
+
+// compile-time check that FeatureGateFunc satisfies FeatureGate.
+var _ FeatureGate = FeatureGateFunc(nil)
+
 // options accumulates everything NewService and NewModule can be configured
 // with.
 type options struct {

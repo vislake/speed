@@ -530,3 +530,41 @@ func ExampleService_SearchUsers() {
 	// found by prefix: 1
 	// empty query error: authn.search_criteria_required
 }
+
+// ExampleFeatureGateFunc wires authn's feature-flag seam with a closure: the
+// adapter gives a plain (ctx, key) (bool, error) function the IsEnabled
+// method WithFeatureGate takes, so a host needs no type declaration -- and
+// a reader that already has that exact signature, such as the config
+// module's lazy Handle, converts as a plain method value
+// (authn.FeatureGateFunc(handle.IsEnabled)). Without a gate every channel
+// behaves as enabled; with one, each sign-in channel consults it before it
+// lets a request through.
+func ExampleFeatureGateFunc() {
+	hostFlags := map[string]bool{
+		authn.FeatureFlagPasswordLogin: true,
+		authn.FeatureFlagSocialGoogle:  false,
+	}
+	gate := authn.FeatureGateFunc(func(_ context.Context, key string) (bool, error) {
+		enabled, ok := hostFlags[key]
+		if !ok {
+			return false, fmt.Errorf("no such flag: %s", key)
+		}
+		return enabled, nil
+	})
+
+	ctx := context.Background()
+	password, err := gate.IsEnabled(ctx, authn.FeatureFlagPasswordLogin)
+	if err != nil {
+		panic(err)
+	}
+	google, err := gate.IsEnabled(ctx, authn.FeatureFlagSocialGoogle)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("password_login:", password)
+	fmt.Println("social.google:", google)
+
+	// Output:
+	// password_login: true
+	// social.google: false
+}

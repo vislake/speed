@@ -38,7 +38,7 @@ import in the other direction is a merge blocker rather than a style note.
 | `RegisterPIISerializer(cipher) error` | Registers the field-encryption serializer under `SerializerName`. **Call before opening the `*gorm.DB`.** |
 | `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. The former static-key options (`WithSigningKeys` and the `KeySet` API) do not exist in this version — breaking, with no back-compat path; `WithKeySource` is the only way in (see "Tokens and passwords" below). |
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
-| `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally. See "Feature flags are enforced through a host-supplied gate" below. |
+| `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally, and `FeatureGateFunc` adapts a closure or a method value to the seam. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. `WithRevocationMode(RevocationModeImmediate)` needs no companion middleware wiring — enforcement is default — see "Immediate revocation is enforced by default, not by host ceremony". |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
 | `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
@@ -63,9 +63,11 @@ the config module's pre-authentication features endpoint.
 
 The gate is structurally satisfied by `*config.Service` -- authn never imports
 config. **A host that has the config module in its deployment should wire its
-service here** (read lazily at call time, the `OrgFeatureGate` trick in the
-reference app's `internal/app/server.go` is the canonical shape, since
-`configModule.Attach` produces the service only after `Bootstrap` returns). A
+service here** (read lazily at call time: `FeatureGateFunc` over the config
+module's lazy `Handle`, `authn.FeatureGateFunc(configModule.Handle().IsEnabled)`,
+is the canonical shape, since `configModule.Attach` produces the service only
+after `Bootstrap` returns and the handle reports the config module's own
+not-attached refusal until then). A
 nil gate -- the no-config-module deployment -- leaves every channel enabled:
 there is no feature store for an operator to have disabled anything in, so
 there is no intent for the module to enforce.

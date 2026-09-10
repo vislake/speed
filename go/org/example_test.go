@@ -522,6 +522,42 @@ func ExampleSubjectResolverFunc() {
 	// Output: u-42 true
 }
 
+// ExampleFeatureGateFunc wires org's feature-flag seam with a closure: the
+// adapter gives a plain (ctx, key) (bool, error) function the IsEnabled
+// method WithFeatureGate takes, so a host needs no type declaration -- and
+// a reader that already has that exact signature, such as the config
+// module's lazy Handle, converts as a plain method value
+// (org.FeatureGateFunc(handle.IsEnabled)).
+func ExampleFeatureGateFunc() {
+	hostFlags := map[string]bool{
+		org.FeatureInvitations:     true,
+		org.FeatureInvitationEmail: false,
+	}
+	gate := org.FeatureGateFunc(func(_ context.Context, key string) (bool, error) {
+		enabled, ok := hostFlags[key]
+		if !ok {
+			return false, fmt.Errorf("no such flag: %s", key)
+		}
+		return enabled, nil
+	})
+
+	ctx := context.Background()
+	invitations, err := gate.IsEnabled(ctx, org.FeatureInvitations)
+	if err != nil {
+		panic(err)
+	}
+	email, err := gate.IsEnabled(ctx, org.FeatureInvitationEmail)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("invitations:", invitations)
+	fmt.Println("invitation_email:", email)
+
+	// Output:
+	// invitations: true
+	// invitation_email: false
+}
+
 // ExampleRegisterEmailSerializer registers the Invitation.Email column's
 // cipher through the module's own registrar and builds the matching blind
 // indexer through the module's own constructor: the module owns both the
