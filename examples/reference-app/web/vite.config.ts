@@ -15,12 +15,14 @@
  * touches the Go server or any image path.
  *
  * Resolution: every @speed/* specifier -- subpaths included -- maps onto
- * the workspace sibling's live src through the same alias list the
- * tsconfig paths and the vitest config use (prefix-ordered: a subpath
- * entry must come before the entry that is its prefix). A sibling's
- * published exports resolve against its dist/, which is never committed
- * and may not exist when this app's dev server or build runs, so both
- * legs stay on source exactly like the test leg.
+ * the workspace sibling's live src through the workspace's single
+ * package map (web/scripts/speed-aliases.mjs), the same map the vitest
+ * config imports and the app's tsconfig paths section mirrors. A
+ * sibling's published exports resolve against its dist/, which is never
+ * committed and may not exist when this app's dev server or build runs,
+ * so every leg stays on source exactly like the test leg. Keeping the
+ * map in one place is what keeps the three legs from drifting: a
+ * specifier is added or moved there, never in this file.
  *
  * JSX: tsconfig.json sets "jsx": "react-jsx" and vite's esbuild transform
  * reads that setting (the same transform pipeline the vitest suites
@@ -30,18 +32,19 @@
  * edit falls back to a full-page reload, fine for this minimal host.
  *
  * Proxy: the app talks to the same origin it is served from (the api
- * client's baseUrl is window.location.origin -- main.tsx), and every
- * path it uses sits under /api: the generated operations under
- * /api/v1/* plus the two pre-auth config endpoints /api/v1/config/public
- * and /api/v1/config/features (@speed/api-client's fetchPublicConfig /
- * fetchSystemFeatures). In dev those calls proxy to the reference-app
- * backend, defaulting to its own default port (internal/app/server.go's
- * DefaultPort; PORT=8080 in the app's .env.example) and overridable
- * through REFERENCE_APP_API_PROXY. The Host header is passed through
- * unchanged, so the backend's host->tenant DomainResolver sees a host
- * it does not map and serves platform defaults -- the pre-auth login
- * page shape, correct for a dev server. (With the backend down, only
- * /api calls fail; serving the page itself never touches the proxy.)
+ * client's baseUrl is window.location.origin -- the assembly's default,
+ * main.tsx), and every path it uses sits under /api: the generated
+ * operations under /api/v1/* plus the two pre-auth config endpoints
+ * /api/v1/config/public and /api/v1/config/features
+ * (@speed/api-client's fetchPublicConfig / fetchSystemFeatures). In dev
+ * those calls proxy to the reference-app backend, defaulting to its own
+ * default port (internal/app/server.go's DefaultPort; PORT=8080 in the
+ * app's .env.example) and overridable through REFERENCE_APP_API_PROXY.
+ * The Host header is passed through unchanged, so the backend's
+ * host->tenant DomainResolver sees a host it does not map and serves
+ * platform defaults -- the pre-auth login page shape, correct for a dev
+ * server. (With the backend down, only /api calls fail; serving the
+ * page itself never touches the proxy.)
  *
  * fs.allow: setting it replaces vite's default (the workspace root
  * search -- vite's docs warn the default is dropped, not extended, when
@@ -54,6 +57,7 @@
  */
 import { fileURLToPath } from 'node:url'
 import { defineConfig, searchForWorkspaceRoot } from 'vite'
+import { speedAliases } from '../../../web/scripts/speed-aliases.mjs'
 
 /** Resolves a workspace-relative path from this config file's own
  * location (examples/reference-app/web), the same depth the vitest
@@ -66,64 +70,7 @@ const siblingPackages = sibling('../../../web/packages')
 
 export default defineConfig({
   resolve: {
-    alias: [
-      {
-        find: '@speed/api-sdk/runtime',
-        replacement: sibling('../../../web/packages/api-sdk/src/runtime.ts'),
-      },
-      {
-        find: '@speed/api-sdk',
-        replacement: sibling('../../../web/packages/api-sdk/src/index.ts'),
-      },
-      {
-        find: '@speed/api-client/react',
-        replacement: sibling('../../../web/packages/api-client/src/react.ts'),
-      },
-      {
-        find: '@speed/api-client',
-        replacement: sibling('../../../web/packages/api-client/src/index.ts'),
-      },
-      {
-        find: '@speed/auth-core',
-        replacement: sibling('../../../web/packages/auth-core/src/index.ts'),
-      },
-      {
-        find: '@speed/auth-ui',
-        replacement: sibling('../../../web/packages/auth-ui/src/index.ts'),
-      },
-      {
-        find: '@speed/tenancy-ui',
-        replacement: sibling('../../../web/packages/tenancy-ui/src/index.ts'),
-      },
-      {
-        find: '@speed/account-ui',
-        replacement: sibling('../../../web/packages/account-ui/src/index.ts'),
-      },
-      {
-        find: '@speed/product-shell',
-        replacement: sibling('../../../web/packages/product-shell/src/index.ts'),
-      },
-      {
-        find: '@speed/layout-kit',
-        replacement: sibling('../../../web/packages/layout-kit/src/index.ts'),
-      },
-      {
-        find: '@speed/i18n/mui-locale',
-        replacement: sibling('../../../web/packages/i18n/src/mui-locale.ts'),
-      },
-      {
-        find: '@speed/i18n',
-        replacement: sibling('../../../web/packages/i18n/src/index.ts'),
-      },
-      {
-        find: '@speed/tokens',
-        replacement: sibling('../../../web/packages/tokens/src/index.ts'),
-      },
-      {
-        find: '@speed/ui-kit',
-        replacement: sibling('../../../web/packages/ui-kit/src/index.ts'),
-      },
-    ],
+    alias: speedAliases(),
   },
   server: {
     fs: {

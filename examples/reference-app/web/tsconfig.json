@@ -27,12 +27,16 @@
     //
     // Every @speed specifier the transitive graph can import must be
     // mapped here: ui-kit's own sources import @speed/tokens and
-    // @speed/i18n/mui-locale, api-sdk's runtime subpath is what hosts
-    // bind, and the sibling packages resolve their own @speed imports
-    // through their own node_modules -- which exist only after install.
-    // Keep this in lockstep with what src/ imports. List order matters:
-    // a subpath entry must be tried before the entry that is its prefix
-    // (first match wins in paths).
+    // @speed/i18n/mui-locale, the bootstrap and api-sdk runtime
+    // subpaths are what hosts import and bind, and the sibling
+    // packages resolve their own @speed imports through their own
+    // node_modules -- which exist only after install. This section
+    // mirrors the workspace's single package map
+    // (web/scripts/speed-aliases.mjs) -- which the vite and vitest
+    // configs import directly -- and src/alias-manifest.test.ts pins
+    // it against the map, because tsconfig cannot import. List order
+    // matters: a subpath entry must be tried before the entry that is
+    // its prefix (first match wins in paths).
     "jsx": "react-jsx",
     "paths": {
       "@speed/api-sdk/runtime": ["../../../web/packages/api-sdk/src/runtime.ts"],
@@ -41,8 +45,10 @@
       "@speed/api-client": ["../../../web/packages/api-client/src/index.ts"],
       "@speed/auth-core": ["../../../web/packages/auth-core/src/index.ts"],
       "@speed/auth-ui": ["../../../web/packages/auth-ui/src/index.ts"],
+      "@speed/billing-ui": ["../../../web/packages/billing-ui/src/index.ts"],
       "@speed/tenancy-ui": ["../../../web/packages/tenancy-ui/src/index.ts"],
       "@speed/account-ui": ["../../../web/packages/account-ui/src/index.ts"],
+      "@speed/product-shell/bootstrap": ["../../../web/packages/product-shell/src/bootstrap.tsx"],
       "@speed/product-shell": ["../../../web/packages/product-shell/src/index.ts"],
       "@speed/layout-kit": ["../../../web/packages/layout-kit/src/index.ts"],
       "@speed/i18n/mui-locale": ["../../../web/packages/i18n/src/mui-locale.ts"],

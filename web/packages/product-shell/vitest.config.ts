@@ -1,76 +1,23 @@
 /**
  * product-shell test configuration: jsdom DOM environment with the shared
- * jest-dom matcher setup, plus the workspace-sibling source aliases that
- * mirror tsconfig.json's paths.
+ * jest-dom matcher setup, plus the workspace source aliases.
  *
- * The aliases point @speed/* specifiers at the siblings' src entry files
- * so tests run against live sources (a sibling's dist/ is never committed
- * and not guaranteed to exist when tests run). src/ resolves @speed/
- * auth-core, @speed/auth-ui, @speed/i18n and @speed/layout-kit; the
- * journey suites also compose @speed/tenancy-ui's TenantSwitcher (a
- * test-only import, in devDependencies); test-utils/ imports the ui-kit
- * theme providers --
- * whose own sources import @speed/tokens and @speed/i18n/mui-locale,
- * aliased below for the same reason -- and drives sessions through the
- * api-client and api-sdk seam. Aliases match by prefix, so a subpath
- * entry must come before the entry that is its prefix:
- * "@speed/i18n/mui-locale" before "@speed/i18n", and
- * "@speed/api-sdk/runtime" before "@speed/api-sdk".
+ * The aliases come from the workspace's single package map
+ * (web/scripts/speed-aliases.mjs) instead of a list hand-copied here:
+ * every @speed/* specifier -- subpaths included -- resolves onto its
+ * sibling's live src entry, because a sibling's dist/ is never
+ * committed and not guaranteed to exist when tests run, and the map is
+ * the one place a specifier is added or moved, so this list cannot
+ * drift from what src/ and test-utils/ import. The map keeps subpath
+ * entries before their prefixes, which both alias matching (first
+ * match wins) and tsconfig paths resolution need.
  */
-import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
-
-const sibling = (path: string): string =>
-  fileURLToPath(new URL(path, import.meta.url))
+import { speedAliases } from '../../scripts/speed-aliases.mjs'
 
 export default defineConfig({
   resolve: {
-    alias: [
-      {
-        find: '@speed/auth-core',
-        replacement: sibling('../auth-core/src/index.ts'),
-      },
-      {
-        find: '@speed/auth-ui',
-        replacement: sibling('../auth-ui/src/index.ts'),
-      },
-      {
-        find: '@speed/layout-kit',
-        replacement: sibling('../layout-kit/src/index.ts'),
-      },
-      {
-        find: '@speed/tenancy-ui',
-        replacement: sibling('../tenancy-ui/src/index.ts'),
-      },
-      {
-        find: '@speed/i18n/mui-locale',
-        replacement: sibling('../i18n/src/mui-locale.ts'),
-      },
-      {
-        find: '@speed/i18n',
-        replacement: sibling('../i18n/src/index.ts'),
-      },
-      {
-        find: '@speed/tokens',
-        replacement: sibling('../tokens/src/index.ts'),
-      },
-      {
-        find: '@speed/ui-kit',
-        replacement: sibling('../ui-kit/src/index.ts'),
-      },
-      {
-        find: '@speed/api-client',
-        replacement: sibling('../api-client/src/index.ts'),
-      },
-      {
-        find: '@speed/api-sdk/runtime',
-        replacement: sibling('../api-sdk/src/runtime.ts'),
-      },
-      {
-        find: '@speed/api-sdk',
-        replacement: sibling('../api-sdk/src/index.ts'),
-      },
-    ],
+    alias: speedAliases(),
   },
   test: {
     environment: 'jsdom',
