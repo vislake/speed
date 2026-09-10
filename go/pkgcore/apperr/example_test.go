@@ -129,3 +129,22 @@ func ExampleAs() {
 	// 403 rbac.permission_denied billing:write
 	// false
 }
+
+// ExampleHasCode shows classification by code: a decorated error is a derived
+// instance rather than the sentinel it came from, so a caller asks whether the
+// chain carries the code instead of comparing against the declared value.
+func ExampleHasCode() {
+	err := fmt.Errorf("charging invoice inv_7: %w",
+		apperr.Forbidden("rbac.permission_denied").WithParam("permission", "billing:write"))
+
+	fmt.Println(apperr.HasCode(err, "rbac.permission_denied"))
+	fmt.Println(apperr.HasCode(err, "rbac.storage_error"))
+	fmt.Println(apperr.HasCode(nil, "rbac.permission_denied"))
+	fmt.Println(apperr.HasCode(errors.New("boom"), "rbac.permission_denied"))
+
+	// Output:
+	// true
+	// false
+	// false
+	// false
+}

@@ -177,7 +177,7 @@ These are two orthogonal axes: deployment mode declares topology -- how many rep
 
 `type Error struct { Code string; Params map[string]any; Status int }` with `Error()`, `Unwrap()`, `WithParam(key, value) *Error`, `WithSensitiveParam(key, value) *Error`, `SensitiveParams() map[string]any`, `WithCause(error) *Error`.
 
-Constructors and the status each suggests: `Invalid` 400, `Unauthorized` 401, `Forbidden` 403, `NotFound` 404, `Conflict` 409, `Internal` 500. `func As(error) (*Error, bool)` recovers one from a wrapped chain.
+Constructors and the status each suggests: `Invalid` 400, `Unauthorized` 401, `Forbidden` 403, `NotFound` 404, `Conflict` 409, `Internal` 500. `func As(error) (*Error, bool)` recovers one from a wrapped chain, and `func HasCode(error, string) bool` is its predicate form: it reports whether the chain's outermost `*Error` carries exactly that code -- the way to classify a decorated error, since `WithParam`/`WithCause` never hand back the sentinel a caller might compare against with `==` or `errors.Is`.
 
 `WithParam`, `WithSensitiveParam` and `WithCause` return a *derived* `*Error` and leave the receiver untouched, so a package-level error value can be shared and decorated per request.
 

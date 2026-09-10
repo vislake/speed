@@ -239,6 +239,20 @@ func As(err error) (*Error, bool) {
 	return nil, false
 }
 
+// HasCode reports whether err is, or wraps, an *Error carrying exactly code.
+// It is the predicate form of the matching rule the Error doc comment states:
+// decorating an error derives a new instance, so a decorated error is never
+// the sentinel it was derived from and classification compares the Code --
+// through As, never with == or errors.Is against the declared value.
+//
+// A nil err and an err that is not an *Error both report false. When the
+// chain carries more than one *Error, the outermost one is the one compared,
+// exactly as As returns it.
+func HasCode(err error, code string) bool {
+	appErr, ok := As(err)
+	return ok && appErr.Code == code
+}
+
 // newError builds an *Error with the given code and suggested HTTP status.
 func newError(code string, status int) *Error {
 	return &Error{Code: code, Status: status}

@@ -351,6 +351,106 @@ func TestAs_PreservesCodeStatusAndParams(t *testing.T) {
 	}
 }
 
+func TestHasCode(t *testing.T) {
+	sentinel := NotFound(testCode)
+	decorated := sentinel.WithParam("id", "sub_01HZ").WithCause(errSentinel)
+	nested := Internal("billing.charge_failed").WithCause(NotFound(testCode))
+
+	tests := []struct {
+		name string
+		err  error
+		code string
+		want bool
+	}{
+		{
+			name: "direct apperr with the code",
+			err:  sentinel,
+			code: testCode,
+			want: true,
+		},
+		{
+			name: "decorated error still matches by code",
+			err:  decorated,
+			code: testCode,
+			want: true,
+		},
+		{
+			name: "error wrapped by a caller still matches",
+			err:  fmt.Errorf("service layer: %w", decorated),
+			code: testCode,
+			want: true,
+		},
+		{
+			name: "double wrap still matches",
+			err:  fmt.Errorf("handler: %w", fmt.Errorf("service layer: %w", sentinel)),
+			code: testCode,
+			want: true,
+		},
+		{
+			name: "same code spelled on a different sentinel matches",
+			err:  Internal(testCode),
+			code: testCode,
+			want: true,
+		},
+		{
+			name: "different code does not match",
+			err:  decorated,
+			code: "billing.charge_failed",
+			want: false,
+		},
+		{
+			name: "an empty code matches no coded error",
+			err:  decorated,
+			code: "",
+			want: false,
+		},
+		{
+			name: "plain error does not match",
+			err:  errors.New("boom"),
+			code: testCode,
+			want: false,
+		},
+		{
+			name: "wrapped unrelated error type does not match",
+			err:  fmt.Errorf("service layer: %w", otherError{}),
+			code: testCode,
+			want: false,
+		},
+		{
+			name: "nil error does not match",
+			err:  nil,
+			code: testCode,
+			want: false,
+		},
+		{
+			name: "nil error with an empty code does not match",
+			err:  nil,
+			code: "",
+			want: false,
+		},
+		{
+			name: "nested apperr is classified by the outermost code",
+			err:  nested,
+			code: testCode,
+			want: false,
+		},
+		{
+			name: "nested apperr still matches its own code",
+			err:  nested,
+			code: "billing.charge_failed",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasCode(tt.err, tt.code); got != tt.want {
+				t.Errorf("HasCode(%v, %q) = %t, want %t", tt.err, tt.code, got, tt.want)
+			}
+		})
+	}
+}
+
 // errSubscriptionNotFound is the package-level sentinel the repository's naming
 // standard pushes module authors towards ("error values are Err<Reason>"). It
 // exists in the test suite so the builders are exercised exactly the way a
