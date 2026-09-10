@@ -51,7 +51,8 @@ func newBuiltinMailerRegistry() *SeamRegistry[Mailer] {
 // even called, rather than letting that constructor's own panic (its
 // unrecoverable-wiring-error convention for a caller that built an SMTPConfig
 // by hand) surface through a SeamRegistry.Build call that is documented to
-// return an error, never to panic.
+// return an error, never to panic. A numeric port outside 1..65535 is
+// refused for the same reason -- the constructor would panic over it.
 func smtpMailerFromConfig(cfg Config) (Mailer, error) {
 	host := cfg["host"]
 	if host == "" {
@@ -63,6 +64,9 @@ func smtpMailerFromConfig(cfg Config) (Mailer, error) {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
 			return nil, fmt.Errorf("pkgcore: builtin mailer.smtp seam: invalid \"port\" %q: %w", raw, err)
+		}
+		if parsed < 1 || parsed > 65535 {
+			return nil, fmt.Errorf("pkgcore: builtin mailer.smtp seam: invalid \"port\" %q: must be in 1..65535", raw)
 		}
 		port = parsed
 	}
