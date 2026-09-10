@@ -1394,7 +1394,16 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// onto it and creates its tables, and Start launches the pool, both
 	// after Bootstrap (only then do Register's declarations exist), and
 	// cleanup's Close stops the pool before the shared database closes.
-	standaloneQueue = jobs.NewStandaloneQueue(db)
+	//
+	// jobs.WithEventBus hands the queue the same bus reg.EventBus()
+	// resolves to, which is what makes the queue publish the
+	// jobs.job.terminal signal: every Job that reaches a terminal status
+	// (succeeded, dead-lettered or cancelled) owes exactly one publish of
+	// that signal on this bus, and internal/smilesim's subscription
+	// (wireSmilesimTerminalSignal, at its own assembly site below) is what
+	// settles the job's credit reservation and publishes its completion
+	// notification the moment that signal lands.
+	standaloneQueue = jobs.NewStandaloneQueue(db, jobs.WithEventBus(bus))
 
 	// pki owns authn's signing-key lifecycle: LocalSigner (its own
 	// zero-external-dependency default) generates and stores the key in
@@ -2659,6 +2668,19 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// through the same instance the cases photo routes drive (see
 	// wireSmileSim's own doc comment).
 	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService(), attestationService)
+
+	// wireSmilesimTerminalSignal subscribes smileSimService to the queue's
+	// terminal signal (jobs.job.terminal): a simulation's credit
+	// reservation then settles the moment its job reaches a terminal
+	// status -- no client poll of the job-status route above, no
+	// reconciliation-sweep interval -- and a named recipient's completion
+	// notification publishes then too, through the same once-only latch
+	// the route's own NotifyOnCompletion call uses (the second leg kept in
+	// place there). The publisher half of the mechanism is this file's own
+	// jobs.WithEventBus(bus) on the standaloneQueue construction above;
+	// smilesim_terminal.go's doc comment carries the install's full
+	// contract.
+	wireSmilesimTerminalSignal(reg, smileSimService)
 
 	// WireClinicName mounts this host's own tenant-identity answer
 	// (clinic_name.go): the org root name of the tenant the
