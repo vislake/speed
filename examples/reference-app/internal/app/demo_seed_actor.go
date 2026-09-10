@@ -10,12 +10,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// demoSeedActorID is the audit Actor id the app's boot-time demo and
-// platform-staff seeds attribute their rbac role writes to
-// (pkgcore.ActorTypeSystem): rbac emits an audit row for every role it
-// defines or grants, and boot-time seeding has no operator session behind
-// it, so the rows name the seed itself.
-const demoSeedActorID = "reference-app-demo-seed"
+// DemoSeedActorID is the audit Actor id the app's demo seeds attribute
+// their audited writes to (pkgcore.ActorTypeSystem): the rbac role writes
+// of the boot-time demo and platform-staff seeds, and the demo credit
+// grant (demo_credits.go). No operator session stands behind those
+// writes, so the rows name the seed itself. Exported so the flow tests
+// can assert the attribution against the same value the seeds use.
+const DemoSeedActorID = "reference-app-demo-seed"
 
 // demoSeedCtx returns a copy of ctx carrying the demo seed's system Actor.
 //
@@ -29,5 +30,5 @@ const demoSeedActorID = "reference-app-demo-seed"
 // fixed actor -- the same shape the boot-time ai-gateway credential write
 // uses ("reference-app-boot" in server.go).
 func demoSeedCtx(ctx context.Context) context.Context {
-	return pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: demoSeedActorID})
+	return pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: DemoSeedActorID})
 }

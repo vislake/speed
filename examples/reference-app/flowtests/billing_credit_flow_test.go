@@ -336,6 +336,28 @@ func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T)
 	}
 }
 
+// TestDemoSeedCreditGrant_AttributedToTheSeedActor pins the audit
+// attribution of the demo seed's credit grant: seedDemoCredits' boot-time
+// Grant (internal/app/demo_credits.go) is a real CreditService.Grant and
+// records a real billing.credit.grant row, and that row must name the
+// demo seed's system Actor (internal/app/demo_seed_actor.go) -- the
+// attribution every audited boot-time demo write carries, which is what
+// lets the trail answer who granted a tenant's starting balance.
+func TestDemoSeedCreditGrant_AttributedToTheSeedActor(t *testing.T) {
+	_, cfg, _ := buildTestServer(t)
+
+	const tenantID pkgcore.TenantID = "tenant-acme"
+	events := auditEventsForTenant(t, cfg, tenantID)
+	grantEvt, ok := findFirstCreditAuditEvent(events, billing.AuditActionCreditGrant)
+	if !ok {
+		t.Fatalf("no %s audit event for tenant %q; events = %+v", billing.AuditActionCreditGrant, tenantID, events)
+	}
+	if actor := grantEvt.Actor(); actor.Type != pkgcore.ActorTypeSystem || actor.ID != app.DemoSeedActorID {
+		t.Errorf("the boot seed grant's AuditEvent.Actor() = %+v, want {Type: %q, ID: %q}: a seed grant recorded under an actor-less context would land with a blank attribution",
+			actor, pkgcore.ActorTypeSystem, app.DemoSeedActorID)
+	}
+}
+
 // findFirstCreditAuditEvent returns the first event in events whose
 // Action is action, and true -- or the zero value and false when none
 // does. Used only for AuditActionCreditDeductReserve above, where the

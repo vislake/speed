@@ -26,8 +26,8 @@ func TestDemoSeedCtxAttachesTheSeedSystemActorOverTheTenant(t *testing.T) {
 	if actor.Type != pkgcore.ActorTypeSystem {
 		t.Errorf("Actor.Type = %q, want %q", actor.Type, pkgcore.ActorTypeSystem)
 	}
-	if actor.ID != demoSeedActorID {
-		t.Errorf("Actor.ID = %q, want the seed's fixed id %q", actor.ID, demoSeedActorID)
+	if actor.ID != DemoSeedActorID {
+		t.Errorf("Actor.ID = %q, want the seed's fixed id %q", actor.ID, DemoSeedActorID)
 	}
 
 	gotTenant, ok := pkgcore.TenantFromContext(seedCtx)

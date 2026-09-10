@@ -602,6 +602,11 @@ func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// the same service), the balance the clinic's first smile simulations
 	// reserve against. The balance-zero guard inside the grant makes this
 	// step converge on a retry whose earlier attempt already landed it.
+	// The grant's audit row carries the demo seed's system Actor rather
+	// than the registering user: the attribution belongs to the shared
+	// seed write itself (demo_credits.go), not to whichever path invoked
+	// it -- unlike the two rbac writes above, whose actor is layered HERE
+	// because the host is what knows the registrant.
 	if err := grantDemoCredits(tenantCtx, p.credits, clinic); err != nil {
 		return fmt.Errorf("reference-app: seed the clinic's credit balance: %w", err)
 	}

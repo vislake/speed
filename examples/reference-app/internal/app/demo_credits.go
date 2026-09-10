@@ -44,14 +44,18 @@ const DemoCreditGrantReason = "demo:seed"
 
 // grantDemoCredits grants DemoSimulationCreditGrant credits to ONE tenant,
 // via a real billing.CreditService.Grant call under the tenant's own
-// context -- never a direct database write. Both of this app's paths that
-// give a tenant a starting balance converge on this call:
-// seedDemoCredits' boot-time loop grants every demo tenant (cfg.HostTenants)
-// this way, and self_service.go's provision grants each newly created
-// clinic the same amount, for the same reason, right after subscribing it
-// -- a clinic whose registration seeded no balance would find its first
-// smile simulation refused at the credit reservation (smilesim's own
-// "Credit accounting" section) the moment its first request arrived.
+// context, carrying the demo seed's system Actor (demoSeedCtx,
+// demo_seed_actor.go) -- never a direct database write. The grant's own
+// billing.credit.grant audit row is attributed to that Actor, the same
+// attribution every other audited boot-time demo write carries. Both of
+// this app's paths that give a tenant a starting balance converge on this
+// call: seedDemoCredits' boot-time loop grants every demo tenant
+// (cfg.HostTenants) this way, and self_service.go's provision grants each
+// newly created clinic the same amount, for the same reason, right after
+// subscribing it -- a clinic whose registration seeded no balance would
+// find its first smile simulation refused at the credit reservation
+// (smilesim's own "Credit accounting" section) the moment its first
+// request arrived.
 //
 // The grant is idempotent only up to a point, and the point is deliberate,
 // the identical stance seedDemoUsers' own doc comment (demo_users.go)
@@ -74,7 +78,10 @@ const DemoCreditGrantReason = "demo:seed"
 // acceptable for a real deployment's own credit-pack purchase flow,
 // which this file is explicitly NOT.
 func grantDemoCredits(ctx context.Context, credits *billing.CreditService, tenantID pkgcore.TenantID) error {
-	tenantCtx := pkgcore.WithTenant(ctx, tenantID)
+	// The grant runs under the tenant and the demo seed's Actor at once:
+	// the tenant scopes the ledger write, the Actor attributes the audit
+	// row the granted transaction emits (demo_seed_actor.go).
+	tenantCtx := demoSeedCtx(pkgcore.WithTenant(ctx, tenantID))
 	bal, err := credits.Balance(tenantCtx)
 	if err != nil {
 		return fmt.Errorf("reference-app: read the credit balance of %q before the seed grant: %w", tenantID, err)
