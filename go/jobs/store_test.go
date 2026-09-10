@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit/dbtest"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
@@ -1400,16 +1401,17 @@ func TestCompleteDeadLetter_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	prevDefault := slog.Default()
+	// The capture logger rides the call's own context (obs.WithLogger),
+	// never the process-global slog default: the buffer belongs to this
+	// test alone, so no other goroutine in the binary can reach it.
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	ctx := obs.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&buf, nil)))
 
 	// The recorded cause is unbounded handler error text (worker.go's
 	// settleFailedAttempt stores cause.Error()): 1500 characters past the
 	// column's 4000-character width.
 	longCause := strings.Repeat("x", 5500)
-	moved, err := completeDeadLetter(context.Background(), db, testWriterOwner, rec.ID, longCause, time.Now())
+	moved, err := completeDeadLetter(ctx, db, testWriterOwner, rec.ID, longCause, time.Now())
 	if err != nil || !moved {
 		t.Fatalf("completeDeadLetter() = (%v, %v), want (true, nil): the terminal transition must never be refused because the cause is overlong", moved, err)
 	}
@@ -1441,14 +1443,15 @@ func TestCompleteRetrying_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	prevDefault := slog.Default()
+	// The capture logger rides the call's own context (obs.WithLogger),
+	// never the process-global slog default: the buffer belongs to this
+	// test alone, so no other goroutine in the binary can reach it.
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	ctx := obs.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&buf, nil)))
 
 	next := time.Now().Add(10 * time.Second).UTC().Truncate(time.Second)
 	longCause := strings.Repeat("x", 5500)
-	moved, err := completeRetrying(context.Background(), db, testWriterOwner, rec.ID, longCause, next, time.Now())
+	moved, err := completeRetrying(ctx, db, testWriterOwner, rec.ID, longCause, next, time.Now())
 	if err != nil || !moved {
 		t.Fatalf("completeRetrying() = (%v, %v), want (true, nil): the retry transition must never be refused because the cause is overlong", moved, err)
 	}
@@ -1482,16 +1485,17 @@ func TestUpdateProgress_OverlongMessage_TruncatedToColumnWidth(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	prevDefault := slog.Default()
+	// The capture logger rides the call's own context (obs.WithLogger),
+	// never the process-global slog default: the buffer belongs to this
+	// test alone, so no other goroutine in the binary can reach it.
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	ctx := obs.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&buf, nil)))
 
 	// 1500 multi-byte runes (4500 UTF-8 bytes): the cut must land on a
 	// rune boundary, never split a character, and must fit the column's
 	// 1000-character width however wide the bytes are.
 	longMsg := strings.Repeat("é", 1500)
-	if err := updateProgress(context.Background(), db, testWriterOwner, rec.ID, 42, longMsg); err != nil {
+	if err := updateProgress(ctx, db, testWriterOwner, rec.ID, 42, longMsg); err != nil {
 		t.Fatalf("updateProgress() error = %v", err)
 	}
 
