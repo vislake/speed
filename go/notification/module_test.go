@@ -74,6 +74,7 @@ func testModuleOptions(t *testing.T) []Option {
 	return []Option{
 		WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
+		WithReplyTo(testMailReplyTo),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
 		WithDeliveryQueue(&stubQueue{}),
@@ -292,6 +293,12 @@ func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
 	}
 	if contacts.mailFrom != testMailFrom {
 		t.Errorf("Contacts() mail From = %q, want the option's %q", contacts.mailFrom, testMailFrom)
+	}
+	if contacts.mailReplyTo != testMailReplyTo {
+		t.Errorf("Contacts() mail ReplyTo = %q, want the option's %q", contacts.mailReplyTo, testMailReplyTo)
+	}
+	if deliv := module.Deliveries(); deliv.mailReplyTo != testMailReplyTo {
+		t.Errorf("Deliveries() mail ReplyTo = %q, want the option's %q", deliv.mailReplyTo, testMailReplyTo)
 	}
 	if contacts.emailIndexer == nil {
 		t.Error("Contacts() carries no email blind indexer after Register")

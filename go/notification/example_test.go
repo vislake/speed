@@ -233,6 +233,9 @@ func ExamplePreferenceService() {
 	module := notification.NewModule(db,
 		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
 		notification.WithMailFrom("notifications@example.com"),
+		// Optional: replies to the no-reply From above land here instead.
+		// Without it the composed mails carry no Reply-To header.
+		notification.WithReplyTo("support@example.com"),
 		notification.WithContactEmailIndexer(emailIndexer),
 		notification.WithContactPhoneIndexer(phoneIndexer),
 		notification.WithDeliveryQueue(jobs.NewStandaloneQueue(db)),

@@ -386,6 +386,7 @@ type ContactService struct {
 	repo         *VerifiedContactRepository
 	sms          pkgcore.SMSSender
 	mailFrom     string
+	mailReplyTo  string
 	emailIndexer *dbkit.BlindIndexer
 	phoneIndexer *dbkit.BlindIndexer
 	host         contactHost
@@ -953,6 +954,7 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact,
 		if err := mailer.Send(ctx, pkgcore.Mail{
 			From:    s.mailFrom,
 			To:      []string{contact.Address},
+			ReplyTo: s.mailReplyTo,
 			Subject: subject,
 			Text:    body,
 		}); err != nil {

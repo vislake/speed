@@ -361,13 +361,15 @@ type DeliveryService struct {
 	queue jobs.Queue
 
 	// resolver supplies a user recipient's addresses (see
-	// UserAddressResolver); sms and mailFrom are the module's outbound
-	// transports for the SMS and email channels; host is the registry
+	// UserAddressResolver); sms, mailFrom and mailReplyTo are the module's
+	// outbound transports for the SMS and email channels (mailReplyTo the
+	// optional Reply-To address, empty writing none); host is the registry
 	// slice attached during Register (see deliveryHost).
-	resolver UserAddressResolver
-	sms      pkgcore.SMSSender
-	mailFrom string
-	host     deliveryHost
+	resolver    UserAddressResolver
+	sms         pkgcore.SMSSender
+	mailFrom    string
+	mailReplyTo string
+	host        deliveryHost
 
 	// deliveryCount and deliveryDuration back the
 	// "notification.delivery.count"/"notification.delivery.duration"
@@ -1202,8 +1204,9 @@ func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string
 
 // sendMail sends one rendered email through the host's mailer. The rendered
 // parts come from renderContent, so parts["subject"] and parts["body_text"]
-// are always present when render succeeded. The From address is the
-// module's own, fixed at wiring time (WithMailFrom), never a recipient's.
+// are always present when render succeeded. The From and Reply-To addresses
+// are the module's own, fixed at wiring time (WithMailFrom, WithReplyTo),
+// never a recipient's.
 func (s *DeliveryService) sendMail(ctx context.Context, parts map[string]string, to []string) error {
 	if s.host == nil || s.host.Mailer() == nil {
 		return errors.New("notification: delivery has no mailer")
@@ -1211,6 +1214,7 @@ func (s *DeliveryService) sendMail(ctx context.Context, parts map[string]string,
 	return s.host.Mailer().Send(ctx, pkgcore.Mail{
 		From:    s.mailFrom,
 		To:      to,
+		ReplyTo: s.mailReplyTo,
 		Subject: parts["subject"],
 		Text:    parts["body_text"],
 	})

@@ -103,7 +103,9 @@ type Module struct {
 	// run on, filled by the With* options. sms is the SMSSender
 	// verification codes go out on when the contact's channel is sms (and
 	// the delivery pipeline's SMS channel uses); mailFrom the From address
-	// of every email this module composes; emailIndexer and phoneIndexer
+	// of every email this module composes and mailReplyTo the optional
+	// Reply-To address of the same mails (WithReplyTo; empty writes no
+	// Reply-To header); emailIndexer and phoneIndexer
 	// the blind indexers that make contact addresses queryable without
 	// ever storing them in plaintext. Register refuses to boot the module
 	// without any of them (ErrSMSSenderRequired, ErrMailFromRequired,
@@ -112,6 +114,7 @@ type Module struct {
 	// imitating org's Register-time validation of its own required seams.
 	sms          pkgcore.SMSSender
 	mailFrom     string
+	mailReplyTo  string
 	emailIndexer *dbkit.BlindIndexer
 	phoneIndexer *dbkit.BlindIndexer
 
@@ -172,6 +175,15 @@ func WithSMSSender(sender pkgcore.SMSSender) Option {
 // WithMailFrom is required on the same terms).
 func WithMailFrom(from string) Option {
 	return func(m *Module) { m.mailFrom = from }
+}
+
+// WithReplyTo sets the Reply-To address of every outbound mail this module
+// composes, so replies to a notification sent from a no-reply From land
+// somewhere a person reads. It is OPTIONAL: without it (or with an empty
+// value) the composed mails carry no Reply-To header, and the transport's
+// own default applies where it has one.
+func WithReplyTo(replyTo string) Option {
+	return func(m *Module) { m.mailReplyTo = replyTo }
 }
 
 // WithContactEmailIndexer injects the blind indexer email contact addresses
@@ -270,6 +282,7 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m.deliveries.resolver = m.resolver
 	m.deliveries.sms = m.sms
 	m.deliveries.mailFrom = m.mailFrom
+	m.deliveries.mailReplyTo = m.mailReplyTo
 	m.hub = NewHub()
 	return m
 }
@@ -428,6 +441,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// belongs here, next to the validation that gates it.
 	m.contacts.sms = m.sms
 	m.contacts.mailFrom = m.mailFrom
+	m.contacts.mailReplyTo = m.mailReplyTo
 	m.contacts.emailIndexer = m.emailIndexer
 	m.contacts.phoneIndexer = m.phoneIndexer
 	if err := reg.Events.Publishes(inboxEventDecls...); err != nil {

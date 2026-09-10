@@ -36,6 +36,7 @@ const (
 	testEmailIndexKey = "abcdef0123456789abcdef0123456789"
 	testPhoneIndexKey = "3456789abcdef0123456789abcdef015"
 	testMailFrom      = "notifications@example.com"
+	testMailReplyTo   = "support@example.com"
 )
 
 // testPhone is the fixture E.164 number this file's SMS tests message.
@@ -225,6 +226,7 @@ func newContactEnv(t *testing.T) *contactEnv {
 	}
 	env.svc.sms = pkgcore.NewConsoleSMSSender(env.smsBuf)
 	env.svc.mailFrom = testMailFrom
+	env.svc.mailReplyTo = testMailReplyTo
 	env.svc.emailIndexer = testEmailIndexer(t)
 	env.svc.phoneIndexer = testPhoneIndexer(t)
 	env.svc.host = env.host
@@ -560,6 +562,9 @@ func TestContact_CreateDoubleOptIn_Email_RendersAndStoresHash(t *testing.T) {
 	}
 	if mails[0].From != testMailFrom {
 		t.Errorf("mail From = %q, want %q", mails[0].From, testMailFrom)
+	}
+	if mails[0].ReplyTo != testMailReplyTo {
+		t.Errorf("mail ReplyTo = %q, want the module's fixed %q", mails[0].ReplyTo, testMailReplyTo)
 	}
 	if len(mails[0].To) != 1 || mails[0].To[0] != "ada@example.com" {
 		t.Errorf("mail To = %v, want the normalized address", mails[0].To)

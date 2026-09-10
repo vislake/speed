@@ -169,6 +169,7 @@ func newDeliveryEnv(t *testing.T) *deliveryEnv {
 	}
 	contacts.sms = sms
 	contacts.mailFrom = testMailFrom
+	contacts.mailReplyTo = testMailReplyTo
 	contacts.emailIndexer = testEmailIndexer(t)
 	contacts.phoneIndexer = testPhoneIndexer(t)
 	contacts.host = host
@@ -179,6 +180,7 @@ func newDeliveryEnv(t *testing.T) *deliveryEnv {
 	svc.resolver = resolver
 	svc.sms = sms
 	svc.mailFrom = testMailFrom
+	svc.mailReplyTo = testMailReplyTo
 	svc.host = host
 
 	return &deliveryEnv{
@@ -400,6 +402,9 @@ func TestDelivery_OneAttemptDeliversEveryResolvedChannelAndWritesAgreeingRows(t 
 	}
 	if mails[0].From != testMailFrom {
 		t.Errorf("mail From = %q, want the module's fixed %q", mails[0].From, testMailFrom)
+	}
+	if mails[0].ReplyTo != testMailReplyTo {
+		t.Errorf("mail ReplyTo = %q, want the module's fixed %q", mails[0].ReplyTo, testMailReplyTo)
 	}
 	if len(mails[0].To) != 1 || mails[0].To[0] != deliveryAddresses.Email {
 		t.Errorf("mail To = %v, want the resolved email address alone", mails[0].To)

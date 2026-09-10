@@ -79,7 +79,8 @@ module must import.
 ### Files
 
 - `module.go` -- the `Module` (`NewModule(db, options...)`, `Register(reg)`),
-  the six required host options and the optional `WithSubjectResolver`, the
+  the six required host options and the optional `WithReplyTo`/
+  `WithSubjectResolver`, the
   exported service accessors `Preferences()`, `Contacts()`,
   `Deliveries()`. Compile-time `var _ pkgcore.Module` pin.
 - `types.go` -- the closed channel vocabulary (`ChannelInApp`/`ChannelEmail`/
@@ -291,6 +292,12 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
   re-checked at send time"). A host whose addresses are statically held can
   wire the module's own `staticaddr` subpackage (`staticaddr.New`); a host
   whose addresses change implements the interface over its own store.
+
+`WithReplyTo` is OPTIONAL, not part of that required six: it sets the
+Reply-To address of every mail the module composes (the delivery pipeline's
+email channel and the contact verification code alike), so replies to a
+no-reply sender land somewhere a person reads. Empty -- the default --
+writes no Reply-To header, leaving any transport-level default to apply.
 
 The host also supplies structural, no-import seams the module consumes as
 interfaces it declares -- never as imported packages: `SubjectResolver` (the
