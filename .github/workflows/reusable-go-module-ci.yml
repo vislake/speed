@@ -72,11 +72,15 @@ name: go-module-ci
 #                                app's unit suite is full-check-only, so
 #                                its measurement belongs beside it).
 #   4. go build ./...            module build in workspace context.
-#   5. GOWORK=off go build ./... standalone build proving the module's
-#                                go.mod/go.sum suffice outside the
-#                                workspace. The standalone build guards
-#                                (go/pkgcore, go/tenancy) stay for local
-#                                runs and still execute under leg 3 on CI.
+#   5. GOWORK=off go build ./... standalone build and test type-check, with
+#      GOWORK=off go vet ./...    the workspace disabled: the module's own
+#                                 go.mod/go.sum must suffice outside the
+#                                 workspace, and vet loads _test.go files,
+#                                 so a test consuming a symbol no released
+#                                 dependency version carries fails this
+#                                 leg. The standalone build guards
+#                                 (go/pkgcore, go/tenancy) stay for local
+#                                 runs and still execute under leg 3 on CI.
 #
 # jobs.timeout-minutes bounds every run; the caller additionally cancels
 # stale runs via concurrency.
@@ -138,3 +142,12 @@ jobs:
         env:
           GOWORK: "off"
         run: go build ./...
+      - name: Vet standalone outside the workspace (GOWORK=off, test files included)
+        # vet loads _test.go files, so with the workspace disabled this step
+        # type-checks every test file against the module's own go.mod/go.sum
+        # alone. The standalone build above proves the non-test packages
+        # resolve; this step adds the test-file half of the same guarantee.
+        working-directory: ${{ inputs.module }}
+        env:
+          GOWORK: "off"
+        run: go vet ./...
