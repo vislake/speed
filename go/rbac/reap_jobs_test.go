@@ -25,8 +25,9 @@ import (
 // would silently keep a role the removal should have ended.
 //
 // The worker-based tests below start a real jobs.StandaloneQueue over the
-// same SQLite file the Service's own tables live in -- the queue's Start
-// creates its own schema there -- and drive the real composed flow:
+// same SQLite file the Service's own tables live in -- jobs.Wire creates
+// the queue's own schema there, and each test's own startQueue launches
+// the workers when it wants them -- and drive the real composed flow:
 // publish the org event on the registry's bus, the subscriber enqueues,
 // the queue's worker executes the task. Waiting is bounded by a deadline
 // loop over the observable end state (the binding rows), never by a fixed
@@ -116,32 +117,12 @@ func startQueue(t *testing.T, q *jobs.StandaloneQueue) {
 	})
 }
 
-// createJobsSchema materializes the queue's own schema (the jobs table)
-// without leaving any worker behind: a throwaway queue is started and
-// closed, which is the only path that creates the schema, and once closed
-// its goroutines are gone for good. The tests that must observe the
-// enqueued-but-not-yet-executed state use it before publishing: Enqueue
-// needs the table to exist, and the observation needs no worker to exist,
-// and a queue's Start is one-shot -- so the schema comes from a queue the
-// test never enqueues through, and the queue that will execute the task
-// is started only after the observation.
-func createJobsSchema(t *testing.T, db *gorm.DB) {
-	t.Helper()
-	q := jobs.NewStandaloneQueue(db)
-	if err := q.Start(context.Background()); err != nil {
-		t.Fatalf("starting the schema queue: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := q.Close(ctx); err != nil {
-		t.Fatalf("closing the schema queue: %v", err)
-	}
-}
-
 // newQueueTestService attaches a Service with a queue wired over db, in
 // the host's real order: build the queue first, construct the module with
 // WithQueue, let Attach install the reap-task handlers on the registry,
-// then drain them onto the queue.
+// then jobs.Wire them onto the queue -- which also creates the queue's
+// schema, so a test may Enqueue before any worker exists and observe the
+// enqueued-but-not-yet-executed state before its own startQueue call.
 //
 // The queue's Start is deliberately NOT called here -- each test decides
 // when a worker may exist. The worker tests that observe the transient
@@ -184,14 +165,8 @@ func newQueueTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *
 		jobs.WithPollInterval(time.Millisecond),
 		jobs.WithBackoff(jobs.DefaultBackoffBase, jobs.DefaultBackoffMax))
 	svc, reg := attachTestService(t, db, append(opts, WithQueue(q))...)
-	for jobType, handler := range reg.Jobs.Handlers() {
-		jobsHandler, ok := handler.(jobs.Handler)
-		if !ok {
-			t.Fatalf("registry job handler %q is not a jobs.Handler", jobType)
-		}
-		if err := q.RegisterHandler(jobsHandler); err != nil {
-			t.Fatalf("registering %s on the queue: %v", jobType, err)
-		}
+	if err := jobs.Wire(context.Background(), q, reg.Jobs); err != nil {
+		t.Fatalf("wiring the registry's handlers onto the queue: %v", err)
 	}
 	return svc, reg, q
 }
@@ -220,7 +195,6 @@ func jobRows(t *testing.T, db *gorm.DB, jobType string) []map[string]any {
 
 func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *testing.T) {
 	db := newRBACTestDB(t)
-	createJobsSchema(t, db) // the jobs table must exist before Enqueue; see that helper
 	svc, reg, q := newQueueTestService(t, db)
 
 	removed := Subject{TenantID: "tenant-a", UserID: "user-gone"}
@@ -296,7 +270,6 @@ func TestService_NodeDeletionReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *test
 	// one node-reap task, and the worker revokes every binding scoped to
 	// either deleted node.
 	db := newRBACTestDB(t)
-	createJobsSchema(t, db) // the jobs table must exist before Enqueue; see that helper
 	svc, reg, q := newQueueTestService(t, db)
 
 	holder := Subject{TenantID: "tenant-a", UserID: "user-1"}
