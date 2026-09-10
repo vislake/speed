@@ -51,6 +51,25 @@ var ErrDuplicateAuditAction = errors.New("pkgcore: duplicate audit action")
 // registrations share the same Name.
 var ErrDuplicateRetentionParticipant = errors.New("pkgcore: duplicate retention participant")
 
+// ErrDuplicatePeriodicTask is returned when two PeriodicTask registrations
+// share the same Type. Two modules owning one task type is a bug rather
+// than a merge -- the type selects the handler that runs the task, and a
+// single type with two schedules would enqueue one queue row for two
+// modules' work.
+var ErrDuplicatePeriodicTask = errors.New("pkgcore: duplicate periodic task type")
+
+// ErrInvalidPeriodicTask is returned when a registered periodic task's
+// fields contradict one another: an empty Type, a non-positive Every, an
+// unknown Scope, an empty KeyPrefix, a Platform-scope declaration without
+// its PlatformTenant sentinel, or a PerTenant declaration carrying one. A
+// declaration shaped like that could never be enqueued coherently -- an
+// empty type would dead-letter every window, a zero window would widen the
+// key every tick, a scope typo would leave the declaration silently
+// unscheduled -- so it is refused at registration rather than accepted and
+// discovered at tick time. Nothing is registered when the call returns
+// this error.
+var ErrInvalidPeriodicTask = errors.New("pkgcore: invalid periodic task")
+
 // ErrNilRetentionSweep is returned when a RetentionParticipant is registered
 // without its Sweep callback. Sweep is mandatory at registration: the
 // retention sweep calls each registered participant's Sweep once per
@@ -578,6 +597,108 @@ type RetentionRegistrar interface {
 	Participants() []RetentionParticipant
 }
 
+// PeriodicScope names which tenants a periodic task is scheduled for.
+type PeriodicScope string
+
+const (
+	// PeriodicScopePlatform declares a task that runs once per window for
+	// the platform as a whole, under the sentinel tenant
+	// PeriodicTask.PlatformTenant -- the shape a task over platform data
+	// (signing keys, authorities) needs, since there is no single real
+	// tenant to enqueue it for.
+	PeriodicScopePlatform PeriodicScope = "platform"
+
+	// PeriodicScopePerTenant declares a task that runs once per window per
+	// tenant, expanded from the host's tenant lister at tick time -- the
+	// shape every task whose work is tenant data needs.
+	PeriodicScopePerTenant PeriodicScope = "per_tenant"
+)
+
+// PeriodicTask is one periodic task a module declares it owns: a job type
+// plus the window, the tenant scope and the key material a scheduler needs
+// to enqueue it on a cadence.
+//
+// # Declaring means scheduled
+//
+// A declaration on this seat IS the schedule. A host that runs a
+// jobs.Scheduler over the Registry's declarations enqueues every
+// declaration on that declaration's own cadence, and the host's single
+// switch is whether it starts a scheduler at all -- there is no
+// per-declaration approval step and no separate enable flag a host could
+// forget to set. A module therefore declares a task exactly where it also
+// registers that task's handler (the Jobs seat), so every declaration has
+// an executor in the composition that made it; a composition in which the
+// task must not run is wired without the queue that handler registration
+// needs, and the declaration is not made at all.
+//
+// A declaration says WHAT runs periodically, WHEN (Every) and FOR WHOM
+// (Scope); it carries no payload and no enqueue options, because the task's
+// handler reads everything it needs at run time and every enqueue of the
+// seven sites this seat was shaped against wants the queue's defaults.
+type PeriodicTask struct {
+	// Type is the job type the task is enqueued under: the Type() of the
+	// jobs.Handler the declaring module registers for it, and the type its
+	// own Enqueue* method enqueues.
+	Type string
+
+	// Every is the period one schedule window covers, and doubles as the
+	// enqueue cadence's floor: the scheduler enqueues the task at most
+	// once per Every per subject (once per platform run, or once per
+	// tenant), because the enqueue's idempotency key is scoped to the
+	// Every-sized window (jobs.ScheduleWindowStart) the tick falls in --
+	// same-window ticks collapse onto one job, and a later window resolves
+	// a fresh key and runs again. It must be positive.
+	Every time.Duration
+
+	// Scope selects which tenants the task is enqueued for:
+	// PeriodicScopePlatform (once, under PlatformTenant) or
+	// PeriodicScopePerTenant (once per tenant the host's tenant lister
+	// returns, each under that tenant's own context).
+	Scope PeriodicScope
+
+	// KeyPrefix is the prefix of the idempotency key every enqueue of this
+	// task is made under -- the site's own established prefix, which is
+	// deliberately not always the task type ("storage.sweep:" for the
+	// "storage.expiry_sweep" task). The scheduler composes each enqueue's
+	// key as KeyPrefix + the tenant segment + the window start (UTC RFC
+	// 3339), and the module's own Enqueue* path must resolve the very same
+	// string for the same (type, tenant, window): a scheduler tick and a
+	// manual enqueue landing in one window are duplicates of one run and
+	// must dedupe onto a single job. It must be non-empty.
+	KeyPrefix string
+
+	// PlatformTenant is the fixed sentinel tenant (the "_pki_platform_scan"
+	// kind, never a real tenant) a PeriodicScopePlatform task is enqueued
+	// under: jobs.Task requires a non-empty TenantID, and a platform-wide
+	// task belongs to no single tenant. One sentinel per task type keeps
+	// the two platform tasks' Job rows distinguishable wherever they are
+	// listed by tenant. It is required for PeriodicScopePlatform and must
+	// be empty for PeriodicScopePerTenant, whose tenant each enqueue
+	// expands.
+	PlatformTenant TenantID
+}
+
+// PeriodicTaskRegistrar collects the periodic tasks modules declare -- the
+// seat go/jobs's Scheduler reads its schedule from (a host starts one over
+// the finished Registry's declarations; see PeriodicTask's own doc comment
+// for the declaring-means-scheduled semantics).
+type PeriodicTaskRegistrar interface {
+	// Add registers periodic tasks, validating every declaration first. A
+	// declaration whose fields contradict one another -- an empty Type, a
+	// non-positive Every, an unknown Scope, an empty KeyPrefix, a
+	// Platform-scope declaration with an empty PlatformTenant, or a
+	// PerTenant declaration carrying one -- is rejected with an error
+	// wrapping ErrInvalidPeriodicTask, because such a declaration could
+	// never be scheduled coherently. A Type already registered (by an
+	// earlier call, or twice within this one) is rejected with an error
+	// wrapping ErrDuplicatePeriodicTask. Nothing is registered when the
+	// call returns an error.
+	Add(decls ...PeriodicTask) error
+	// Declarations returns every periodic task registered so far, in
+	// declaration order.
+	Declarations() []PeriodicTask
+}
+
 // Registry aggregates every registration surface a module can contribute to.
 // New cross-cutting mechanisms are added as a field here rather than as a
 // method on Module, so that adding one does not force all modules to
@@ -614,6 +735,11 @@ type Registry struct {
 	// data-export participants modules register (go/compliance owns the
 	// orchestration over this seat).
 	Retention RetentionRegistrar
+	// Schedules receives the periodic tasks modules declare (go/jobs's
+	// Scheduler is started over this seat's declarations by the host that
+	// wants them run; see PeriodicTask's doc comment for what declaring
+	// means).
+	Schedules PeriodicTaskRegistrar
 
 	// kv is the KVStore the registry was built with. EventBus is derived from
 	// the Events registrar because Events.Subscribe must install handlers on
@@ -690,6 +816,7 @@ func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry {
 		Events:        &memoryEventRegistrar{bus: bus, types: make(map[string]struct{})},
 		AuditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
 		Retention:     &memoryRetentionRegistrar{names: make(map[string]struct{})},
+		Schedules:     &memoryScheduleRegistrar{types: make(map[string]struct{})},
 		kv:            kv,
 		mailer:        mailer,
 	}
@@ -1032,6 +1159,75 @@ func (r *memoryRetentionRegistrar) Participants() []RetentionParticipant {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.items)
+}
+
+// memoryScheduleRegistrar is the in-memory default implementation of
+// PeriodicTaskRegistrar, mirroring memoryRetentionRegistrar's shape (a
+// type-uniqueness map plus an append-only, declaration-ordered slice).
+type memoryScheduleRegistrar struct {
+	mu    sync.Mutex
+	types map[string]struct{}
+	decls []PeriodicTask
+}
+
+func (r *memoryScheduleRegistrar) Add(decls ...PeriodicTask) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Validation comes before the duplicate check so a contradictory
+	// declaration reports itself as invalid rather than as a collision with
+	// whatever an earlier caller registered under the same Type. Either way
+	// the whole call registers nothing.
+	for _, decl := range decls {
+		if err := validatePeriodicTask(decl); err != nil {
+			return err
+		}
+	}
+	keyOf := func(decl PeriodicTask) string { return decl.Type }
+	if err := checkUnique(r.types, decls, keyOf, ErrDuplicatePeriodicTask); err != nil {
+		return err
+	}
+	for _, decl := range decls {
+		r.types[decl.Type] = struct{}{}
+		r.decls = append(r.decls, decl)
+	}
+	return nil
+}
+
+func (r *memoryScheduleRegistrar) Declarations() []PeriodicTask {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.decls)
+}
+
+// validatePeriodicTask reports whether decl describes one coherent periodic
+// schedule: a non-empty Type, a positive Every, one of the two declared
+// scopes, a non-empty KeyPrefix, and a PlatformTenant exactly where the
+// scope needs it. See ErrInvalidPeriodicTask's doc comment for why each
+// contradiction is refused at registration.
+func validatePeriodicTask(decl PeriodicTask) error {
+	if decl.Type == "" {
+		return fmt.Errorf("%w: empty task type", ErrInvalidPeriodicTask)
+	}
+	if decl.Every <= 0 {
+		return fmt.Errorf("%w: task %q has Every %s, want a positive window", ErrInvalidPeriodicTask, decl.Type, decl.Every)
+	}
+	if decl.KeyPrefix == "" {
+		return fmt.Errorf("%w: task %q has no key prefix", ErrInvalidPeriodicTask, decl.Type)
+	}
+	switch decl.Scope {
+	case PeriodicScopePlatform:
+		if decl.PlatformTenant == "" {
+			return fmt.Errorf("%w: platform-scope task %q has no platform sentinel tenant", ErrInvalidPeriodicTask, decl.Type)
+		}
+	case PeriodicScopePerTenant:
+		if decl.PlatformTenant != "" {
+			return fmt.Errorf("%w: per-tenant task %q carries platform sentinel tenant %q", ErrInvalidPeriodicTask, decl.Type, decl.PlatformTenant)
+		}
+	default:
+		return fmt.Errorf("%w: task %q has scope %q, want %q or %q",
+			ErrInvalidPeriodicTask, decl.Type, decl.Scope, PeriodicScopePlatform, PeriodicScopePerTenant)
+	}
+	return nil
 }
 
 // Kernel assembles modules into a running application for one deployment

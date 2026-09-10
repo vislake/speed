@@ -1032,3 +1032,56 @@ func ExampleMountedRoute_access() {
 	// /api/v1/notes true false notes:read
 	// /api/v1/config/public true true true
 }
+
+// ExamplePeriodicTask shows the periodic-schedule seat. A module declares
+// every periodic task it owns here, exactly where it registers the task's
+// handler: declaring means scheduled, so a host that runs a jobs.Scheduler
+// over the finished registry's declarations enqueues them all, and the
+// host's single switch is whether a scheduler runs. Each declaration
+// carries the window size, the tenant scope, and the idempotency-key
+// prefix the scheduler composes a window-scoped key from.
+func ExamplePeriodicTask() {
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+
+	// A per-tenant task: once per window for every tenant the host's
+	// tenant lister returns.
+	err := reg.Schedules.Add(pkgcore.PeriodicTask{
+		Type:      "storage.expiry_sweep",
+		Every:     time.Hour,
+		Scope:     pkgcore.PeriodicScopePerTenant,
+		KeyPrefix: "storage.sweep:",
+	})
+	fmt.Println("add:", err)
+
+	// A platform task runs once per window for the platform as a whole: its
+	// task belongs to no single tenant, so it carries the sentinel tenant
+	// its Job rows are enqueued under.
+	err = reg.Schedules.Add(pkgcore.PeriodicTask{
+		Type:           "pki.expiry_scan",
+		Every:          time.Hour,
+		Scope:          pkgcore.PeriodicScopePlatform,
+		KeyPrefix:      "pki.expiry_scan:",
+		PlatformTenant: pkgcore.TenantID("_pki_platform_scan"),
+	})
+	fmt.Println("add platform:", err)
+
+	for _, decl := range reg.Schedules.Declarations() {
+		fmt.Println(decl.Type, decl.Every, decl.Scope)
+	}
+
+	// A platform-scope declaration with no sentinel tenant could never be
+	// enqueued, so it is refused at registration -- as is a second
+	// declaration of an already owned task type.
+	err = reg.Schedules.Add(pkgcore.PeriodicTask{Type: "pki.crl_regenerate", Every: time.Hour, Scope: pkgcore.PeriodicScopePlatform, KeyPrefix: "pki.crl_regenerate:"})
+	fmt.Println("tenantless platform task:", errors.Is(err, pkgcore.ErrInvalidPeriodicTask))
+	err = reg.Schedules.Add(pkgcore.PeriodicTask{Type: "pki.expiry_scan", Every: time.Hour, Scope: pkgcore.PeriodicScopePlatform, KeyPrefix: "pki.expiry_scan:", PlatformTenant: "_pki_platform_scan"})
+	fmt.Println("duplicate:", errors.Is(err, pkgcore.ErrDuplicatePeriodicTask))
+
+	// Output:
+	// add: <nil>
+	// add platform: <nil>
+	// storage.expiry_sweep 1h0m0s per_tenant
+	// pki.expiry_scan 1h0m0s platform
+	// tenantless platform task: true
+	// duplicate: true
+}

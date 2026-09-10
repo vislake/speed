@@ -164,6 +164,12 @@ func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
 	if reg.AuditActions == nil {
 		t.Error("AuditActions registrar is nil")
 	}
+	if reg.Retention == nil {
+		t.Error("Retention registrar is nil")
+	}
+	if reg.Schedules == nil {
+		t.Error("Schedules registrar is nil")
+	}
 	if reg.EventBus() != bus {
 		t.Errorf("EventBus() = %v, want the bus NewRegistry was given", reg.EventBus())
 	}
@@ -2590,5 +2596,162 @@ func TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes(t *testi
 	}
 	if !strings.Contains(exportDoc, "manifest") {
 		t.Errorf("RetentionParticipant.Export field doc does not warn that the error text must never reach the export manifest")
+	}
+}
+
+func TestScheduleRegistrar_Add_DeclaresInOrder(t *testing.T) {
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+
+	perTenantSweep := PeriodicTask{
+		Type:      "storage.expiry_sweep",
+		Every:     time.Hour,
+		Scope:     PeriodicScopePerTenant,
+		KeyPrefix: "storage.sweep:",
+	}
+	platformScan := PeriodicTask{
+		Type:           "pki.expiry_scan",
+		Every:          time.Hour,
+		Scope:          PeriodicScopePlatform,
+		KeyPrefix:      "pki.expiry_scan:",
+		PlatformTenant: TenantID("_pki_platform_scan"),
+	}
+	if err := reg.Schedules.Add(perTenantSweep, platformScan); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	decls := reg.Schedules.Declarations()
+	if len(decls) != 2 {
+		t.Fatalf("Declarations() returned %d declarations, want 2", len(decls))
+	}
+	if decls[0] != perTenantSweep || decls[1] != platformScan {
+		t.Errorf("Declarations() = %+v, want the two declarations in registration order", decls)
+	}
+
+	// A declaration read is a copy: mutating it changes nothing.
+	decls[0].Type = "hijacked"
+	if got := reg.Schedules.Declarations()[0].Type; got != perTenantSweep.Type {
+		t.Errorf("mutating the returned slice changed the registry: type = %q, want %q", got, perTenantSweep.Type)
+	}
+}
+
+func TestScheduleRegistrar_Add_RejectsDuplicateType(t *testing.T) {
+	wellFormed := func(taskType string) PeriodicTask {
+		return PeriodicTask{
+			Type:      taskType,
+			Every:     time.Hour,
+			Scope:     PeriodicScopePerTenant,
+			KeyPrefix: "sweep:",
+		}
+	}
+
+	tests := []struct {
+		name       string
+		seed       []PeriodicTask // registered before the call under test
+		call       []PeriodicTask // the call under test
+		wantStored int
+	}{
+		{
+			name:       "a type declared twice within one call registers nothing",
+			call:       []PeriodicTask{wellFormed("storage.expiry_sweep"), wellFormed("storage.expiry_sweep")},
+			wantStored: 0,
+		},
+		{
+			name:       "a type already registered by an earlier call is refused and the seed survives",
+			seed:       []PeriodicTask{wellFormed("storage.expiry_sweep")},
+			call:       []PeriodicTask{wellFormed("storage.expiry_sweep")},
+			wantStored: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			if len(tt.seed) > 0 {
+				if err := reg.Schedules.Add(tt.seed...); err != nil {
+					t.Fatalf("seeding: Add(%v) = %v, want nil", tt.seed, err)
+				}
+			}
+
+			err := reg.Schedules.Add(tt.call...)
+			if !errors.Is(err, ErrDuplicatePeriodicTask) {
+				t.Fatalf("Add(%v) = %v, want an error wrapping ErrDuplicatePeriodicTask", tt.call, err)
+			}
+			if got := len(reg.Schedules.Declarations()); got != tt.wantStored {
+				t.Errorf("stored declarations after the failed call = %d, want %d", got, tt.wantStored)
+			}
+		})
+	}
+}
+
+func TestScheduleRegistrar_Add_RejectsContradictoryDeclaration(t *testing.T) {
+	wellFormed := func(taskType string) PeriodicTask {
+		return PeriodicTask{
+			Type:      taskType,
+			Every:     time.Hour,
+			Scope:     PeriodicScopePerTenant,
+			KeyPrefix: "sweep:",
+		}
+	}
+
+	tests := []struct {
+		name string
+		seed []PeriodicTask // registered before the call under test
+		call []PeriodicTask // the call under test
+	}{
+		{
+			name: "empty task type",
+			call: []PeriodicTask{{Type: "", Every: time.Hour, Scope: PeriodicScopePerTenant, KeyPrefix: "sweep:"}},
+		},
+		{
+			name: "zero window",
+			call: []PeriodicTask{{Type: "storage.expiry_sweep", Every: 0, Scope: PeriodicScopePerTenant, KeyPrefix: "sweep:"}},
+		},
+		{
+			name: "negative window",
+			call: []PeriodicTask{{Type: "storage.expiry_sweep", Every: -time.Minute, Scope: PeriodicScopePerTenant, KeyPrefix: "sweep:"}},
+		},
+		{
+			name: "unknown scope",
+			call: []PeriodicTask{{Type: "storage.expiry_sweep", Every: time.Hour, Scope: PeriodicScope("weekly"), KeyPrefix: "sweep:"}},
+		},
+		{
+			name: "empty key prefix",
+			call: []PeriodicTask{{Type: "storage.expiry_sweep", Every: time.Hour, Scope: PeriodicScopePerTenant, KeyPrefix: ""}},
+		},
+		{
+			name: "platform scope without a sentinel tenant",
+			call: []PeriodicTask{{Type: "pki.expiry_scan", Every: time.Hour, Scope: PeriodicScopePlatform, KeyPrefix: "pki.expiry_scan:"}},
+		},
+		{
+			name: "per-tenant scope carrying a sentinel tenant",
+			call: []PeriodicTask{{Type: "storage.expiry_sweep", Every: time.Hour, Scope: PeriodicScopePerTenant, KeyPrefix: "sweep:", PlatformTenant: TenantID("_pki_platform_scan")}},
+		},
+		{
+			name: "a contradictory declaration reports itself before a later item's duplicate",
+			seed: []PeriodicTask{wellFormed("storage.expiry_sweep")},
+			call: []PeriodicTask{
+				wellFormed("storage.expiry_sweep"),
+				{Type: "compliance.retention_sweep", Every: 0, Scope: PeriodicScopePerTenant, KeyPrefix: "compliance.retention_sweep:"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			if len(tt.seed) > 0 {
+				if err := reg.Schedules.Add(tt.seed...); err != nil {
+					t.Fatalf("seeding: Add(%v) = %v, want nil", tt.seed, err)
+				}
+			}
+
+			err := reg.Schedules.Add(tt.call...)
+			if !errors.Is(err, ErrInvalidPeriodicTask) {
+				t.Fatalf("Add(%v) = %v, want an error wrapping ErrInvalidPeriodicTask", tt.call, err)
+			}
+			if got := len(reg.Schedules.Declarations()); got != len(tt.seed) {
+				t.Errorf("stored declarations after the failed call = %d, want %d (the seed alone)", got, len(tt.seed))
+			}
+		})
 	}
 }
