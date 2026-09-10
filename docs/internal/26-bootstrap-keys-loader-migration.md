@@ -323,7 +323,6 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - Q3 `config.example.yaml` 是否值得在步骤二后补一份 `APP_` 拼写族示例(现只有 `SPEED_` 族):现状已能表达格式,补一份是文档体验增强,不阻塞迁移,随站点文案轮评估。
 - Q4 **步骤一落地时的版本钉子**:普通语义下"模块同轮消费新 pkgcore API"需要该 API 已发布——`Registry.Bootstrap`/`BootstrapKey` 在两阶段设计写就时尚未进入任何已发布版本,而 v0.0.1 之后的模块 `go.mod` 已按发布后的形态钉真实 tag(`go-module-ci` 第 5 腿的 `GOWORK=off go build` 因此会红)。伪版本不是出路:v0.0.1 已在代理上,v0.0.1 之后的提交在 MVS 里排在 `v0.0.1` 之下,`go mod tidy` 会把钉子升回已发布版本,模块拿不到新 API。因此本轮对五个声明模块(authn、org、notification、pki、config)采用仓库此前的过渡形态——`replace github.com/vislake/speed/go/pkgcore => ../pkgcore`(依赖方的 replace 对消费者无效,只影响模块自身的独立构建)。下一次 lockstep 发布需执行同类清理:删除五行 replace,把 require 提升到与新平台同版发布的 tag(与 `first_release_replace_cleanup` 同一清点方式);漏做则该模块的新代码在本仓库之外不可用,因为消费者会按 require 里的旧 tag 解析 pkgcore。这个清理随**下一个版本号的发布**执行,不能寄望 v0.0.1 重发:v0.0.1 的 21 个模块 tag 已从远端与本地删除,而 Go module proxy 对已服务过的版本不可撤回——缓存仍在且内容不可改写,删 tag 只让 v0.0.1 在仓库里不可再生,代理上那份依旧按原样解析,因此该版本号已经作废,既不能再发布也不能被新内容复用;下一次发布必须换一个新版本号,五行 replace 的删除与 require 的同版抬升随之落在该版本上。
 
-
 ## 9 步骤二落地记录(2026-09-10)
 
 ### 9.1 用户裁定 A:平台产物不含宿主变量节
@@ -344,7 +343,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - **healthcheck**:`cmd/server` 的 healthcheck 分支与主进程共用同一份 loader 结果(`app.ConfigFromEnv` 的 `cfg.Port`),`cmd/server` 直读清零。
 - **等价性 pin**:`flowtests/server_config_equivalence_test.go` 以"迁移前的直读实现"为 oracle,对同一份 env 注入集逐一断言新旧两条路径产出同一 `ServerConfig`(dev default、root 派生、individual 覆盖、空串、各类拒绝);有意的行为差异(见 §9.3)单独 pin,不进等价表。
 - **值语义核对**:`APP_S3_USE_SSL`、`APP_READ_FLY_CLIENT_IP`、`APP_SMTP_PORT`、`APP_FAIL_SELF_SERVICE_PROVISION` 四枚 int/bool 键的空串注入点(测试/CI/compose)改为"显式值或不设";测试面用 `internal/testutil.ClearBootstrapEnv` 统一清理。附带一条同族语义:SMTP 端口现在以 0 为"未设"(`0` 本就不是可用 SMTP 端口)。
-- **生成器换源**:`bootstrap.go` 只保留两层面世规则(`overlappingKeys`);`document.go` 的 bootstrap 节渲染"机制陈述 + per-module 声明表 + 零声明条款";`--check` 产物四件;新增渲染键集 ↔ 声明集双向测试。`docs-check.yml` 的覆盖说明与 PATH SET 随之收窄(移除 `examples/reference-app/internal/app/**` 触发条目——参考面已不读它),`docs/site/static/llms.txt` 的配置参考描述同步。
+- **生成器换源**:`bootstrap.go` 只保留两层互斥规则(`overlappingKeys`);`document.go` 的 bootstrap 节渲染"机制陈述 + per-module 声明表 + 零声明条款";`--check` 产物四件;新增渲染键集 ↔ 声明集双向测试。`docs-check.yml` 的覆盖说明与 PATH SET 随之收窄(移除 `examples/reference-app/internal/app/**` 触发条目——参考面已不读它),`docs/site/static/llms.txt` 的配置参考描述同步。
 - **设计文档维护**:§1、§4、§5 内凡"文件:行号"式引用一律改为符号名优先(行号随步骤一/二落地已失效)。
 
 ### 9.3 有意行为差异与本轮未做
