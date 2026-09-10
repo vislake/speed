@@ -279,6 +279,49 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 	}
 }
 
+// TestModule_Register_DeclaresBothPeriodicSchedules pins the module's
+// periodic declarations: a queue-wired Register puts exactly the
+// expiry-scan and CRL-regeneration schedules on the registry's Schedules
+// seat -- declaring means scheduled, so a host running a jobs.Scheduler
+// over the finished registry scans for expiry and regenerates CRLs at the
+// tasks' own windows. A queue-less module declares neither, the same gate
+// its handler registration uses: no declaration may outlive its executor.
+func TestModule_Register_DeclaresBothPeriodicSchedules(t *testing.T) {
+	reg := pkgcore.NewRegistry(
+		pkgcore.NewMemoryEventBus(),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewConsoleMailer(),
+	)
+	m := NewModule(newTestDB(t), WithQueue(&recordingQueue{}))
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	want := []pkgcore.PeriodicTask{m.service.expiryScanSchedule(), m.ca.crlRegenerateSchedule()}
+	decls := reg.Schedules.Declarations()
+	if len(decls) != len(want) {
+		t.Fatalf("Register declared %d schedules (%+v), want exactly the scan and the CRL regeneration", len(decls), decls)
+	}
+	for i := range want {
+		if decls[i] != want[i] {
+			t.Errorf("declaration %d = %+v, want %+v", i, decls[i], want[i])
+		}
+	}
+
+	// A queue-less module registers no handlers, so it declares nothing.
+	queueless := pkgcore.NewRegistry(
+		pkgcore.NewMemoryEventBus(),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewConsoleMailer(),
+	)
+	if err := NewModule(newTestDB(t)).Register(queueless); err != nil {
+		t.Fatalf("Register without a queue: %v", err)
+	}
+	if decls := queueless.Schedules.Declarations(); len(decls) != 0 {
+		t.Errorf("a queue-less Register declared %+v, want none -- no declaration may outlive its executor", decls)
+	}
+}
+
 // assertContainsAll fails the test for every want element missing from got.
 func assertContainsAll(t *testing.T, got []string, want []string) {
 	t.Helper()

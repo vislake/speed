@@ -56,6 +56,14 @@ func expiryScanWindowStart(now time.Time, window time.Duration) time.Time {
 	return now.Truncate(window)
 }
 
+// expiryScanKeyPrefix is the prefix of every expiry-scan idempotency key.
+// It is a named constant because two derivations must agree on it byte for
+// byte: expiryScanIdempotencyKey below, and the declaration
+// (Service.expiryScanSchedule) a jobs.Scheduler composes keys from with
+// its own window derivation -- one window must resolve one key through
+// both paths.
+const expiryScanKeyPrefix = "pki.expiry_scan:"
+
 // expiryScanIdempotencyKey derives the jobs idempotency key of one
 // expiry-scan window, per the rule that an idempotency key derives from
 // the business operation, never random: the operation one key names is
@@ -64,12 +72,29 @@ func expiryScanWindowStart(now time.Time, window time.Duration) time.Time {
 // storage's expirySweepIdempotencyKey and compliance's
 // retentionSweepIdempotencyKey document for their own sweeps). windowStart
 // is the DefaultExpiryScanWindow window start the enqueue belongs to
-// (expiryScanWindowStart). The "pki.expiry_scan:" prefix keeps the key
-// inside the task's own namespace within the shared queue store, and the
-// RFC 3339 window stamp keeps the key readable in DeadLetterJobs while
-// staying unambiguous.
+// (expiryScanWindowStart). The expiryScanKeyPrefix keeps the key inside
+// the task's own namespace within the shared queue store, and the RFC
+// 3339 window stamp keeps the key readable in DeadLetterJobs while staying
+// unambiguous.
 func expiryScanIdempotencyKey(windowStart time.Time) string {
-	return "pki.expiry_scan:" + windowStart.UTC().Format(time.RFC3339)
+	return expiryScanKeyPrefix + windowStart.UTC().Format(time.RFC3339)
+}
+
+// expiryScanSchedule is the module's declaration of the expiry scan on the
+// pkgcore.Registry.Schedules seat: one platform-wide task per window,
+// under the standard sentinel tenant, at the service's configured scan
+// window (WithExpiryScanWindow included) and keyed with the same prefix
+// and window function the manual EnqueueExpiryScan path uses -- so a
+// scheduler tick and a manual enqueue landing in one window resolve one
+// key and dedupe onto one job.
+func (s *Service) expiryScanSchedule() pkgcore.PeriodicTask {
+	return pkgcore.PeriodicTask{
+		Type:           taskTypeExpiryScan,
+		Every:          s.expiryScanWindow,
+		Scope:          pkgcore.PeriodicScopePlatform,
+		KeyPrefix:      expiryScanKeyPrefix,
+		PlatformTenant: platformScanTenantID,
+	}
 }
 
 // platformScanTenantID is the fixed jobs.Task.TenantID every expiry-scan

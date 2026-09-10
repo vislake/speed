@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // This file pins the window semantics of the two platform-wide periodic
@@ -399,5 +400,76 @@ func TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	wantNextWindow := crlRegenerateIdempotencyKey(nextStart)
 	if queue.tasks[2].IdempotencyKey != wantNextWindow {
 		t.Errorf("next-window key = %q, want %q -- each window must name its own key", queue.tasks[2].IdempotencyKey, wantNextWindow)
+	}
+}
+
+// TestExpiryScanKeyMatchesTheSchedulerDerivation pins the schedule
+// migration's key identity: the same (task type, window) must resolve one
+// idempotency key through the module's own schedule point and through the
+// jobs.Scheduler's derivation over the module's declaration, or a
+// scheduler tick and a manual enqueue landing in one window would run the
+// scan twice. The key literal below is the pinned string.
+func TestExpiryScanKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	svc := newTestService(t)
+	queue := &recordingQueue{}
+	svc.attachQueue(queue)
+
+	windowStart := windowA.Truncate(svc.expiryScanWindow)
+	svc.now = func() time.Time { return windowStart.Add(time.Minute) }
+	if err := svc.EnqueueExpiryScan(context.Background()); err != nil {
+		t.Fatalf("EnqueueExpiryScan: %v", err)
+	}
+	if len(queue.tasks) != 1 {
+		t.Fatalf("Enqueue was called %d times, want 1", len(queue.tasks))
+	}
+	manual := queue.tasks[0].IdempotencyKey
+	if want := "pki.expiry_scan:2026-09-07T10:00:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	decl := svc.expiryScanSchedule()
+	if decl.Type != taskTypeExpiryScan || decl.Every != svc.expiryScanWindow {
+		t.Errorf("declaration = %+v, want the site's own type %q and the configured window %s", decl, taskTypeExpiryScan, svc.expiryScanWindow)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePlatform || decl.PlatformTenant != platformScanTenantID {
+		t.Errorf("declaration = %+v, want platform scope under the scan sentinel %q", decl, platformScanTenantID)
+	}
+	if got := jobs.SchedulePlatformIdempotencyKey(decl.KeyPrefix, windowStart); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
+	}
+}
+
+// TestCRLRegenerateKeyMatchesTheSchedulerDerivation is the CRL task's twin
+// of TestExpiryScanKeyMatchesTheSchedulerDerivation: the same (task type,
+// window) resolves one key through the module's own schedule point and
+// through the scheduler's derivation over the declaration. The key literal
+// below is the pinned string.
+func TestCRLRegenerateKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	ca := newTestCAService(t)
+	queue := &recordingQueue{}
+	ca.attachQueue(queue)
+
+	windowStart := windowA.Truncate(ca.crlRegenerateWindow)
+	ca.now = func() time.Time { return windowStart.Add(time.Minute) }
+	if err := ca.EnqueueCRLRegenerate(context.Background()); err != nil {
+		t.Fatalf("EnqueueCRLRegenerate: %v", err)
+	}
+	if len(queue.tasks) != 1 {
+		t.Fatalf("Enqueue was called %d times, want 1", len(queue.tasks))
+	}
+	manual := queue.tasks[0].IdempotencyKey
+	if want := "pki.crl_regenerate:2026-09-07T10:00:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	decl := ca.crlRegenerateSchedule()
+	if decl.Type != taskTypeCRLRegenerate || decl.Every != ca.crlRegenerateWindow {
+		t.Errorf("declaration = %+v, want the site's own type %q and the configured window %s", decl, taskTypeCRLRegenerate, ca.crlRegenerateWindow)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePlatform || decl.PlatformTenant != platformCRLRegenerateTenantID {
+		t.Errorf("declaration = %+v, want platform scope under the CRL sentinel %q", decl, platformCRLRegenerateTenantID)
+	}
+	if got := jobs.SchedulePlatformIdempotencyKey(decl.KeyPrefix, windowStart); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
 	}
 }

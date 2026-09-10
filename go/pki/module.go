@@ -534,6 +534,17 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		if err := reg.Jobs.Handle(taskTypeCRLRegenerate, crlRegenerateHandler{ca: m.ca}); err != nil {
 			return err
 		}
+		// Declare both periodic schedules alongside their handlers:
+		// declaring means scheduled, so a host that runs a
+		// jobs.Scheduler over the registry's declarations scans for
+		// expiry and regenerates CRLs at the tasks' own windows without
+		// writing schedule points of its own. They are declared exactly
+		// where their handlers are registered -- a composition that wires
+		// no queue registers neither, so no declaration can outlive its
+		// executor.
+		if err := reg.Schedules.Add(m.service.expiryScanSchedule(), m.ca.crlRegenerateSchedule()); err != nil {
+			return err
+		}
 	}
 
 	m.handler = NewHandler(m.service, m.ca, reg.Events.Bus(), reg.AuditActions)
