@@ -307,6 +307,65 @@ func ExampleWire() {
 	// result: Hello, wire!
 }
 
+// ExampleRegisterHandlers demonstrates the drain primitive Wire composes,
+// for a host whose job declarations do not live on a pkgcore registry: one
+// call hands the queue a plain map keyed by job type -- a host-owned
+// handler, or declarations collected from anywhere else. A map entry that
+// is not a jobs.Handler would be refused by job type instead, the same
+// refusal Wire applies to a registry's declarations.
+func ExampleRegisterHandlers() {
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:jobs_example_register_handlers?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	err = jobs.RegisterHandlers(queue, map[string]any{"greet": exampleGreeter{}})
+	if err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+	err = queue.Start(ctx)
+	if err != nil {
+		fmt.Println("start:", err)
+		return
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = queue.Close(shutdownCtx)
+	}()
+
+	id, err := queue.Enqueue(ctx, jobs.Task{
+		Type:     "greet",
+		TenantID: pkgcore.TenantID("acme"),
+		Payload:  []byte("handlers"),
+	})
+	if err != nil {
+		fmt.Println("enqueue:", err)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "acme")
+	job, err := waitForTerminal(tenantCtx, queue, id, time.Now().Add(2*time.Second))
+	if err != nil {
+		fmt.Println("get:", err)
+		return
+	}
+
+	fmt.Println("status:", job.Status)
+	fmt.Println("result:", string(job.Result.Data))
+
+	// Output:
+	// status: succeeded
+	// result: Hello, handlers!
+}
+
 // The distributed deployment mode's own Queue implementation lives in its
 // own subpackage, go/jobs/queue/asynq, precisely so a consumer that only
 // ever runs jobs.StandaloneQueue (the standalone deployment mode) never

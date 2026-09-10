@@ -3,7 +3,6 @@ package jobs
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -26,14 +25,11 @@ import (
 // contract, so a host that does start workers may call Wire and Start in
 // either order.
 //
-// Every entry in reg's handler map must be a jobs.Handler; an entry of any
-// other type is a wiring bug between a module and the queue contract, and
-// Wire stops at the first one, naming the job type, rather than
-// mis-registering it. Registration is not transactional: handlers registered
-// before a failing entry stay registered.
-//
-// Wire wires a queue once. A second call over the same queue fails with
-// RegisterHandler's own ErrDuplicateHandlerType (wrapped, naming the job
+// The drain itself, every entry's must-be-a-jobs.Handler rule, its
+// ascending-order determinism and its non-transactional registration are
+// RegisterHandlers' contract; Wire hands it reg.Handlers(). A second call
+// over the same queue therefore fails with RegisterHandler's own
+// ErrDuplicateHandlerType (wrapped by RegisterHandlers, naming the job
 // type), because the queue already holds that Type -- the map a registry
 // exposes cannot itself carry a duplicate, so a duplicate at this layer
 // means the same declaration is being wired twice, which is a host bug
@@ -53,14 +49,8 @@ func Wire(ctx context.Context, q *StandaloneQueue, reg pkgcore.JobHandlerRegistr
 		return errors.New("jobs: Wire requires a non-nil context")
 	}
 
-	for jobType, handler := range reg.Handlers() {
-		h, ok := handler.(Handler)
-		if !ok {
-			return fmt.Errorf("jobs: registry job handler %q is a %T, not a jobs.Handler", jobType, handler)
-		}
-		if err := q.RegisterHandler(h); err != nil {
-			return fmt.Errorf("jobs: register registry job handler %q: %w", jobType, err)
-		}
+	if err := RegisterHandlers(q, reg.Handlers()); err != nil {
+		return err
 	}
 
 	return ensureJobsSchema(ctx, q.db)
