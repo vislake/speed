@@ -919,6 +919,35 @@ export differently while the stored reasons stay verbatim.
 
 ---
 
+### `demoseed` seeds demo accounts, and only demo accounts
+
+`authn/demoseed` (`NewSeeder`, `(*Seeder).Register`) is the shared shape behind a
+host's boot-time demo seeding: register a demo account through the composed
+handler's real register route — so the password hashing, the password policy and
+the per-IP register budget a demo exercises are the real ones — after asking
+`authn.Service.SearchUsers` (passed as the `SearchUsers` method value) whether
+the account already exists. Only a genuinely absent account is POSTed, which is
+what keeps a restart from debiting the public register budget for accounts a
+previous boot created (under the distributed deployment mode that budget lives
+in a shared store and accumulates across restarts), and the register answer is
+classified by code: the already-registered conflict is recovered into the id
+authn assigned, the rate-limit refusal is named with its limit and remedy, every
+other non-201 fails loudly.
+
+**It exists for demonstration and development deployments only; production code
+must not import it.** Registering accounts at boot from an operator-set password
+is not a provisioning flow, and the lookup it recovers ids with is the
+platform-operator search. The package carries that stance in its shape, not only
+in prose: the package name and every symbol say "demo", `NewSeeder` refuses to
+construct without a caller-declared demo email domain, and `Register` refuses —
+before any lookup and before any request — an email outside that domain, so a
+production call site either writes the contradiction down (a real domain
+declared as its demo domain) or fails loudly on its first call.
+`examples/reference-app` is the first consumer (`internal/app/demo_users.go`'s
+`seedDemoUsers` and `internal/app/demo_admin.go`'s `seedDemoPlatformStaff`).
+
+---
+
 ## Testing
 
 ```
@@ -1050,7 +1079,7 @@ rather than trying to synchronize on the exact step boundary.
 | The dynamic-config item `authn.session_revocation_immediate` does not exist. | It was declared-but-never-read: its description promised that setting it enforces immediate revocation, and no code read it — and no runtime read could ever deliver what the description promised, because the revocation mode is fixed at `SessionManager` construction and gates which revocations are even recorded, so a value read at request time cannot retrofit enforcement onto a natural-mode manager. The mode's one real selector is the `WithRevocationMode` construction option ("Immediate revocation is enforced by default, not by host ceremony" above). Reintroducing a dynamic switch would require the typed-config read-through binding the row above records as unbuilt, plus a mode that can change at runtime without contradicting natural mode's zero-cost model. |
 | The generated authn surface of `@speed/api-sdk` has no browser-driven, real-server end-to-end consumer. | In-form runtime consumption exists: `@speed/auth-ui`'s `src/usage-example.test.tsx` compiles and executes the composed sign-in family over a real `@speed/api-client` — `createClient` with a memory access-token store and an injectable fetch whose stand-in answers genuine `Response` objects, bound through the same `bindRequestFn` seam a host's client binds — driving a password sign-in, a silent credential-less refresh (the retried request carries the fresh token), and a server-side session death whose refused refresh converges the snapshot to anonymous, six requests pinned in order. The generated half stays compile-consumed in-workspace by `@speed/auth-core`; `@speed/auth-ui`'s public `RegisterForm` callback (the generated `AuthnUser`) adds a second type-level consumer. What remains is the browser-and-real-server leg. |
 | A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (an `org` subscriber reacting to `authn.user.created`, or a host-side grant) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `flowtests/authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
-| The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`. | Only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/internal/app/demo_users.go`'s `seedDemoUsers`, through the real composed register route) and grants each its org membership and rbac role per configured tenant — the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` — while an unset variable leaves only the demo header actors (`internal/app/demo_subject.go`), which carry grants but no database row and cannot sign in. The membership half is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). `Taskfile.yml`'s `seed` task remains a stub with no loader; what remains unbuilt is a Taskfile `seed` loader that generates demo data outside boot, a tooling item, not authn's. |
+| The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`. | Only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/internal/app/demo_users.go`'s `seedDemoUsers`, through the real composed register route, over this module's own `demoseed` helper) and grants each its org membership and rbac role per configured tenant — the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` — while an unset variable leaves only the demo header actors (`internal/app/demo_subject.go`), which carry grants but no database row and cannot sign in. The membership half is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). `Taskfile.yml`'s `seed` task remains a stub with no loader; what remains unbuilt is a Taskfile `seed` loader that generates demo data outside boot, a tooling item, not authn's. |
 | QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or a design decision this module has not made. |
 | The Aliyun/Tencent Cloud/Twilio adapters (`go/pkgcore/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent. Until an operator runs one, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
 | The Aliyun and Tencent adapters can only send through a template the operator's own account registers: Aliyun one whose single variable is named by `Config.TemplateParamName` (default `content`), Tencent one declaring exactly one positional variable; Twilio sends free text. | The seam delivers already-rendered text, and Aliyun/Tencent have no free-text send; the adapters map the whole message onto the account's template variable(s) exactly as each package doc records. The template itself is account data this codebase cannot provision or verify — a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
