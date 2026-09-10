@@ -12,13 +12,16 @@ a starter project with `saasctl new`, migrate its database and boot
 it. You need a Go toolchain and nothing else.
 
 > [!NOTE]
-> **Nothing is published yet.** speed has not been released to any
-> registry — there is no `go get github.com/vislake/speed/...` and no
-> `npm install @speed/...`. The local-checkout path below — clone plus
+> **No usable release exists yet.** v0.0.1's Go modules were published —
+> 21 module tags served by the Go module proxy — then the tags were
+> deleted and the version voided; the npm packages never published. The
+> proxy cache is immutable, so v0.0.1 still resolves through it, but it
+> is voided and unsupported. The local-checkout path below — clone plus
 > `go run` — is the only real way to try speed today. Generated starter
-> projects carry the transition-state shape this implies:
-> placeholder-version requires, `replace` directives to the checkout,
-> and no `go.sum` until the first consumer-side `go mod tidy`.
+> projects carry the transition-state shape this implies: version
+> strings overridden by `replace` directives to the checkout (zero
+> pseudo-versions and the few real versions mixed), and no `go.sum`
+> until the first consumer-side `go mod tidy`.
 
 ## 1. Get a checkout
 

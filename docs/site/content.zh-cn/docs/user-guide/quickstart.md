@@ -11,11 +11,13 @@ aliases: ["/docs/quickstart"]
 并启动它。只需要一个 Go 工具链,别无他物。
 
 > [!NOTE]
-> **目前还没有任何发布物。** speed 尚未发布到任何 registry——不存在
-> `go get github.com/vislake/speed/...`,也不存在 `npm install @speed/...`。
+> **还没有可用的发布版本。** v0.0.1 的 Go 模块曾发布——21 个模块 tag 由
+> Go module proxy 服务——随后 tag 被删除、该版本作废;npm 包从未发布。
+> 代理缓存不可改写,v0.0.1 在代理上仍可解析,但它已作废、不受支持。
 > 下面这条本地 checkout 路径(克隆加 `go run`)是当前唯一真实的方式。
-> 生成的起始项目处于过渡形态:require 停在占位版本,`replace` 指令
-> 指向该 checkout,`go.sum` 要等第一次消费侧 `go mod tidy` 才会生成。
+> 生成的起始项目处于过渡形态:require 的版本串由指向该 checkout 的
+> `replace` 指令覆盖(零占位版本与个别真实版本并存),`go.sum` 要等
+> 第一次消费侧 `go mod tidy` 才会生成。
 
 ## 1. 获取 checkout
 

@@ -114,9 +114,9 @@
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个 tag(dispatch 落地)构成首个可对基线;oasdiff 接线仍未做,随 v1.0(M4) |
-| 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个 tag(dispatch 落地)构成首个可对基线;oasdiff 接线仍未做,随 v1.0(M4) |
-| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个 tag(dispatch 落地)构成首个可对基线;oasdiff 接线仍未做,随 v1.0(M4) |
+| 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废(git 侧不可达);基线取自 Go module proxy 缓存的 v0.0.1 模块产物(spec 片段随模块分发、代理缓存不可改写),下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
+| 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废(git 侧不可达);基线取自 Go module proxy 缓存的 v0.0.1 模块产物(spec 片段随模块分发、代理缓存不可改写),下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
+| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废(git 侧不可达);基线取自 Go module proxy 缓存的 v0.0.1 模块产物(spec 片段随模块分发、代理缓存不可改写),下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
 | 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | 部分:api-sdk 发布期打包随 v0.0.1 直接 bump 发布落地(不经 changesets/发布期再生成——生成物已提交);oasdiff 基线门与浏览器腿仍随 v1.0(M4) |
 
 ### 5.3 发布机制装配(publint 与 changesets)
