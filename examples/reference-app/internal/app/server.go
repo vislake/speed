@@ -2246,18 +2246,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		})
 	}
 	if cfg.S3Endpoint != "" {
-		preset = preset.With("objectstore", pkgcore.SeamPreset{
-			Implementation: "objectstore.s3",
-			Config: pkgcore.Config{
-				"endpoint":      cfg.S3Endpoint,
-				"bucket":        cfg.S3Bucket,
-				"access_key":    cfg.S3AccessKey,
-				"secret_key":    cfg.S3SecretKey,
-				"region":        cfg.S3Region,
-				"use_ssl":       strconv.FormatBool(cfg.S3UseSSL),
-				"bucket_lookup": cfg.S3BucketLookup,
-			},
-		})
+		preset = preset.With("objectstore", s3ObjectStoreSeamPreset(cfg))
 	}
 	kernelOptions = append(kernelOptions, pkgcore.WithPreset(preset))
 	if cfg.ObjectStoreRoot != "" {
