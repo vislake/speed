@@ -542,14 +542,6 @@ func integrationPermissionFor(r *http.Request) string {
 	}
 }
 
-// sharingResource is the resource half of sharing's owner-facing permission
-// strings, derived from its own exported constants the same way
-// NotesResource and storageResource are -- so this example cannot drift
-// from the permissions sharing actually declares. Unlike pkiResource,
-// sharing's own three permissions (read/create/revoke) all genuinely share
-// one resource half, so all three feed MustResourceOf here.
-var sharingResource = MustResourceOf(sharing.PermissionRead, sharing.PermissionCreate, sharing.PermissionRevoke)
-
 // sharingPermissionFor selects the permission a sharingSharesRoutePath
 // request must hold, mirroring pkiPermissionFor's own reasoning: sharing's
 // three-permission vocabulary (read/create/revoke) is not the generic
@@ -571,14 +563,6 @@ func sharingPermissionFor(r *http.Request) string {
 	}
 	return sharing.PermissionCreate
 }
-
-// aiGatewayResource is the resource half of ai-gateway's permission
-// strings, derived from its own exported constants the same way
-// NotesResource and storageResource are -- so this example cannot drift
-// from the permissions ai-gateway actually declares. All three of its
-// permissions genuinely share one resource half ("ai-gateway"), unlike
-// integration's two-entity vocabulary.
-var aiGatewayResource = MustResourceOf(aigateway.PermissionRead, aigateway.PermissionWrite, aigateway.PermissionManagePlatform)
 
 // aiGatewayPermissionFor selects the permission an AiGatewayRoutePath
 // request must hold, mirroring pkiPermissionFor's and sharingPermissionFor's
