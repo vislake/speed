@@ -8,6 +8,7 @@ import (
 	"github.com/vislake/speed/go/org/api"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
 // jsonContentType is the Content-Type every response below writes, matching
@@ -99,13 +100,11 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 }
 
 // decodeJSON decodes r's body into dst, writing ErrInvalidRequestBody and
-// reporting false on any decode failure.
+// reporting false on any decode failure. The body is decoded without a size
+// bound (see pkgcore/httpapi's DecodeJSON): this surface's operations
+// declare no body limit.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeError(w, ErrInvalidRequestBody.WithCause(err))
-		return false
-	}
-	return true
+	return httpapi.DecodeJSON(w, r, 0, dst, ErrInvalidRequestBody)
 }
 
 // OrgListNodes implements api.ServerInterface: GET /api/v1/org/nodes. With
@@ -490,23 +489,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeError writes err to w as a JSON {code, params} body -- the
-// spec-generated api.OrgError, the same structured-error envelope notes' and
-// config's own writeError produce. An err that is not an *apperr.Error --
-// meaning something below this handler did not classify it -- is folded
-// into ErrInternal so a caller never sees raw Go error text.
+// writeError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else -- something below this handler did not classify it -- is
+// folded into ErrInternal so a caller never sees raw Go error text either
+// way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrInternal
-	}
-	envelope := api.OrgError{Code: &appErr.Code}
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, ErrInternal)
 }
 
 // compile-time check that *Handler implements the api.ServerInterface
