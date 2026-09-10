@@ -191,6 +191,14 @@ describe('PreferencesSection', () => {
     expect(i18n.language).toBe('zh-CN')
   })
 
+  // This test's cost is the engine's own timezone list: ~418 zones
+  // rendered into the open select menu twice (the pick and the clear)
+  // and two option queries by accessible name over the whole list --
+  // ~1.2s on a quiet machine under the coverage gate, and past the
+  // default 5s budget on loaded shared runners. The explicit 20s budget
+  // (the same bound the usage-example journey carries for this package's
+  // render-heavy class) covers that loaded-runner cost with headroom; a
+  // genuinely stuck write still fails at this bound.
   it('PATCHes a timezone choice and the cleared empty string', async () => {
     const { respond, stored } = makePreferencesResponder({
       timezone: 'Asia/Tokyo',
@@ -225,7 +233,7 @@ describe('PreferencesSection', () => {
     expect(patches[1]?.body).toEqual({
       timezone: '',
     })
-  })
+  }, 20000)
 
   it('adds a stored timezone the engine list omits as its own option', async () => {
     // The engine's list is narrowed for this test: the stored value is
