@@ -979,3 +979,12 @@ func TestWithBackoff_ZeroOrNegative_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.backoff_max_zero", func() { WithBackoff(DefaultBackoffBase, 0) })
 	assertOptionPanics(t, "jobs.backoff_max_zero", func() { WithBackoff(DefaultBackoffBase, -1*time.Second) })
 }
+
+// TestWithEventBus_Nil_Refused pins the WithEventBus(nil) refusal: omitting
+// the option already means "publish nothing", so an explicit nil can only be
+// a caller belief that a bus is wired when none is, and the two must not
+// silently collapse -- the queue would look signal-wired while publishing
+// nothing.
+func TestWithEventBus_Nil_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.event_bus_nil", func() { WithEventBus(nil) })
+}

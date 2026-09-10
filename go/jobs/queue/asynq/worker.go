@@ -125,6 +125,44 @@ func attemptDuration(err error) (time.Duration, bool) {
 	return 0, false
 }
 
+// publishTerminal publishes one jobs.job.terminal event on the bus
+// WithEventBus configured, at whichever of this Queue's three terminal
+// points the caller sits: processTaskUncancelled's success site,
+// handleErrorAttempt's archive-bound dead-letter site, and Cancel (queue.go)
+// after the cancellation marker is durably written. Without a bus it is a
+// no-op, so an unconfigured Queue pays nothing at any of the three.
+//
+// The publish runs on context.WithoutCancel(ctx): the terminal transition
+// the event announces has already happened (the cancellation marker is
+// durable; the attempt succeeded; asynq will archive this attempt the
+// moment this hook returns), and neither the failed attempt's own
+// cancellation -- live on the ctx handleError received -- nor a caller's
+// deadline may be allowed to silently drop the notification before it
+// reaches the bus. Trace values still ride through WithoutCancel, so the
+// delivery keeps its correlation either way.
+//
+// A failed Publish is logged and dropped, never returned and never retried
+// here: this leg has no outbox, and its at-least-once direction comes from
+// asynq's own redelivery converting a crash into a repeated terminal
+// arrival rather than a lost one (see WithEventBus's doc comment and
+// jobs.EventJobTerminal's consumer contract). The payload's Event.TenantID
+// is the task's own tenant header, the same field every tenant rebuild in
+// this file reads -- including a platform-scoped task's sentinel value.
+func (q *Queue) publishTerminal(ctx context.Context, tenantID pkgcore.TenantID, evt jobs.JobTerminalEvent) {
+	if q.bus == nil {
+		return
+	}
+	pubCtx := context.WithoutCancel(ctx)
+	if err := q.bus.Publish(pubCtx, pkgcore.Event{
+		Type:     jobs.EventJobTerminal,
+		TenantID: tenantID,
+		Payload:  evt,
+	}); err != nil {
+		obs.FromContext(pubCtx).Warn("jobs: publishing terminal event failed",
+			"job_id", string(evt.JobID), "job_type", evt.JobType, "status", string(evt.Status), "error", err)
+	}
+}
+
 // recordFailedAttempt records one failed attempt's outcome on the
 // jobs.job.attempts Counter (and, when the attempt's duration was
 // measured, the jobs.job.duration Histogram) at the point asynq's own
@@ -291,23 +329,29 @@ func (q *Queue) handleError(ctx context.Context, t *asynqlib.Task, err error) {
 			cancelledAt = c
 		}
 	}
-	q.handleErrorAttempt(t, err, retried, maxRetry, taskID, cancelledAt, log)
+	q.handleErrorAttempt(ctx, t, err, retried, maxRetry, taskID, cancelledAt, log)
 }
 
-// handleErrorAttempt is handleError's ctx-free core: everything handleError
-// needs from ctx (retried, maxRetry, taskID -- asynqlib.GetRetryCount/
-// GetMaxRetry/GetTaskID, all backed by an internal, package-private context
-// key this package cannot fabricate on its own) is passed in explicitly
-// instead, plus cancelledAt (the cancellation marker handleError read back
-// for a terminal attempt, nil when no Cancel has landed) and the
-// ctx-derived logger, so this logic -- the archive-boundary replication,
-// the Cancel-wins-over-the-terminal-failure check and the FailureHook
-// invocation itself -- is unit-testable without a real asynq server ever
-// having dequeued anything; see worker_test.go. Only handleError's own
-// three GetXxx(ctx) calls and the marker read are, correctly, untested at
-// the unit level: they are asynq's own accessors plus a Redis read, not
-// this package's logic.
-func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetry int, taskID string, cancelledAt *time.Time, log *slog.Logger) {
+// handleErrorAttempt is handleError's asynq-accessor-free core: everything
+// handleError needs from asynq's own ctx (retried, maxRetry, taskID --
+// asynqlib.GetRetryCount/GetMaxRetry/GetTaskID, all backed by an internal,
+// package-private context key this package cannot fabricate on its own) is
+// passed in explicitly instead, plus cancelledAt (the cancellation marker
+// handleError read back for a terminal attempt, nil when no Cancel has
+// landed) and the ctx-derived logger, so this logic -- the archive-boundary
+// replication, the Cancel-wins-over-the-terminal-failure check, the
+// terminal event's publish and the FailureHook invocation itself -- is
+// unit-testable without a real asynq server ever having dequeued anything;
+// see worker_test.go. Only handleError's own three GetXxx(ctx) calls and
+// the marker read are, correctly, untested at the unit level: they are
+// asynq's own accessors plus a Redis read, not this package's logic.
+//
+// ctx is the failed attempt's own context, taken unchanged from handleError
+// and used for exactly one thing: the terminal event's publish
+// (publishTerminal, which strips its cancellation and deadline). It is not
+// an asynq accessor channel -- every value this function needs from ctx is
+// still a parameter.
+func (q *Queue) handleErrorAttempt(ctx context.Context, t *asynqlib.Task, err error, retried, maxRetry int, taskID string, cancelledAt *time.Time, log *slog.Logger) {
 	if retried < maxRetry {
 		// More retries remain; asynq will retry, not archive. The one thing
 		// recorded here is the retrying outcome of a genuine failed
@@ -382,6 +426,28 @@ func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetr
 	// archive write itself, exactly like the FailureHook call below; see
 	// recordJobMetrics' own doc comment for the ordering concession.
 	q.recordFailedAttempt(t.Type(), jobs.StatusDeadLetter, err)
+
+	// The terminal signal's dead-letter point: this archive-bound branch is
+	// the one place that knows asynq will dead-letter the task the moment
+	// this hook returns, so the event is published here -- for a genuine
+	// terminal failure and for an archive-bound bounce alike, exactly like
+	// the dead-letter record above (a bounce that archives IS a dead
+	// letter). The ordering concession is the same one OnFailure and the
+	// metrics already document: this runs BEFORE asynq's own archive write,
+	// and CompletedAt carries this moment, the closest honest value the
+	// before-archive position allows. The cancellation check above already
+	// returned, so a Cancel that raced this attempt publishes
+	// nothing from here (its cancellation event went out at Cancel); the
+	// same row-is-truth clause covers the residual where a cancellation
+	// landed but its marker could not be read.
+	q.publishTerminal(ctx, pkgcore.TenantID(t.Headers()[headerTenantID]), jobs.JobTerminalEvent{
+		JobID:       jobs.JobID(taskID),
+		JobType:     t.Type(),
+		Status:      jobs.StatusDeadLetter,
+		Error:       err.Error(),
+		Attempts:    retried + 1,
+		CompletedAt: time.Now(),
+	})
 
 	h := q.handler(t.Type())
 	hook, ok := h.(jobs.FailureHook)
@@ -634,6 +700,24 @@ func (q *Queue) processTaskUncancelled(ctx context.Context, t *asynqlib.Task, ta
 	// attempt's measured duration on the jobs.job.duration Histogram and
 	// the StatusSucceeded row of the jobs.job.attempts Counter.
 	q.recordJobMetrics(t.Type(), jobs.StatusSucceeded, duration)
+	// The terminal signal's success point. One residual this position
+	// carries, recorded here rather than silently: a Cancel that landed
+	// while this attempt ran and whose interruption the handler ignored
+	// (Handle returned nil anyway) publishes StatusSucceeded here -- before
+	// asynq's own completion write -- while Get() reports StatusCancelled
+	// from the marker, the same bounded cancel-racing-an-outcome residual
+	// the success metric record above already carries, and the row-is-truth
+	// clause of the consumer contract (jobs.EventJobTerminal) is what
+	// covers it. No marker re-read is added for the event: it would cost a
+	// Redis round trip on every success, and the cancellation remains
+	// authoritative on every read-back either way.
+	q.publishTerminal(ctx, tenantID, jobs.JobTerminalEvent{
+		JobID:       jobs.JobID(taskID),
+		JobType:     t.Type(),
+		Status:      jobs.StatusSucceeded,
+		Attempts:    job.Attempts,
+		CompletedAt: time.Now(),
+	})
 	return nil
 }
 

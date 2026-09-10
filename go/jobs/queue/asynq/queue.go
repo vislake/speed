@@ -66,6 +66,12 @@ type Queue struct {
 	handlersMu sync.RWMutex
 	handlers   map[string]jobs.Handler
 
+	// bus is the EventBus this Queue publishes jobs.job.terminal events on,
+	// set by WithEventBus. nil (the option omitted) means the queue
+	// publishes nothing: no publish call is made at any of the three
+	// terminal points, exactly the pre-signal behavior.
+	bus pkgcore.EventBus
+
 	tenantMu         sync.Mutex
 	runningPerTenant map[pkgcore.TenantID]int
 
@@ -341,6 +347,40 @@ func WithRetryDelayFunc(fn asynqlib.RetryDelayFunc) Option {
 		panic(apperr.Invalid("jobs.retry_delay_func_nil"))
 	}
 	return func(q *Queue) { q.businessRetryDelayFunc = fn }
+}
+
+// WithEventBus sets the pkgcore.EventBus this Queue publishes its
+// jobs.job.terminal events on (jobs.EventJobTerminal, payload
+// jobs.JobTerminalEvent). Omitted, the Queue publishes nothing and behaves
+// exactly as it did before the signal existed -- no publish call is made at
+// any terminal point, at no extra cost. Given a bus, the Queue publishes
+// directly at its three terminal points (worker.go's success and
+// archive-bound dead-letter sites, queue.go's Cancel after the
+// cancellation marker is durably written), with no outbox on this leg:
+// asynq's own redelivery converts a crash between publish and asynq's
+// completion/archive write into a repeated terminal arrival -- a duplicate
+// event, never a lost one (jobs.EventJobTerminal's first contract clause is
+// written for exactly this), so the at-least-once direction already holds
+// without a second store.
+//
+// A failed Publish is logged, never retried here and never propagated: the
+// terminal transition it announces has already happened (or, for the
+// publish-before-archive ordering this leg shares with
+// FailureHook.OnFailure, is happening), and a notification failure must not
+// alter it. The completeness of a subscriber that cannot tolerate a lost
+// notification is its own reconciliation net's job, per the contract.
+//
+// A nil bus is refused at option time with a coded panic
+// (jobs.event_bus_nil), the same refusal jobs.WithEventBus makes and for
+// the same reason: omitting the option already means "publish nothing", so
+// an explicit nil can only be a caller belief that a bus is wired when none
+// is. The two implementations of the jobs.Queue seam validate alike by
+// declaration, per this Option type's own rule.
+func WithEventBus(bus pkgcore.EventBus) Option {
+	if bus == nil {
+		panic(apperr.Invalid("jobs.event_bus_nil"))
+	}
+	return func(q *Queue) { q.bus = bus }
 }
 
 // WithTaskCheckInterval sets asynqlib.Config.TaskCheckInterval: how often
@@ -909,9 +949,33 @@ func (q *Queue) Cancel(ctx context.Context, id jobs.JobID) error {
 		return nil // idempotent: already otherwise terminal.
 	}
 
-	if merr := q.writeCancelMarker(ctx, string(id)); merr != nil {
+	now := time.Now().UTC()
+	if merr := q.writeCancelMarker(ctx, string(id), now); merr != nil {
 		return fmt.Errorf("jobs: record cancellation: %w", merr)
 	}
+	// The terminal signal's cancellation point, strictly after the marker
+	// write above: the marker is this Queue's authoritative cancelled state,
+	// so a marker that landed is a real terminal transition and owes its
+	// event -- the early returns above are the "no transition, no event"
+	// cases (an idempotent re-Cancel, or an already Completed/Archived Job
+	// whose success / dead-letter event went out at its own point). The
+	// publish precedes the best-effort CancelProcessing signal below
+	// deliberately: the notification's ordering is anchored to the durable
+	// marker, never to an interrupt that may or may not land. Error carries
+	// the task's LastErr exactly as Get() reports it for a cancelled Job
+	// (a cancellation after a failed attempt keeps the message for
+	// diagnostic visibility), Attempts uses the same per-state formula
+	// Get() reports, and CompletedAt is the marker's own timestamp -- the
+	// cancellation's encoded moment on this implementation, pinning
+	// jobs.JobTerminalEvent.CompletedAt for the cancelled status.
+	q.publishTerminal(ctx, tenantID, jobs.JobTerminalEvent{
+		JobID:       id,
+		JobType:     info.Type,
+		Status:      jobs.StatusCancelled,
+		Error:       info.LastErr,
+		Attempts:    attemptsFromTaskInfo(info),
+		CompletedAt: now,
+	})
 
 	if info.State == asynqlib.TaskStateActive {
 		if cerr := q.inspector.CancelProcessing(string(id)); cerr != nil {
@@ -999,11 +1063,14 @@ func (q *Queue) findTaskInfo(id string) (*asynqlib.TaskInfo, error) {
 // redis.UniversalClient.
 func cancelMarkerKey(id string) string { return "asynqjobs:cancelled:" + id }
 
-// writeCancelMarker records that id has been cancelled, expiring after
-// q.cancelledRetention -- see DefaultCancelledRetention's own doc comment
-// for why this is bounded rather than permanent.
-func (q *Queue) writeCancelMarker(ctx context.Context, id string) error {
-	return q.rdb.Set(ctx, cancelMarkerKey(id), time.Now().UTC().Format(time.RFC3339Nano), q.cancelledRetention).Err()
+// writeCancelMarker records that id has been cancelled at at, expiring
+// after q.cancelledRetention -- see DefaultCancelledRetention's own doc
+// comment for why this is bounded rather than permanent. The caller passes
+// the timestamp so the value it encodes and the value the terminal event
+// reports (Cancel's publish, strictly after this write) are the same
+// instant rather than two nearby readings of the clock.
+func (q *Queue) writeCancelMarker(ctx context.Context, id string, at time.Time) error {
+	return q.rdb.Set(ctx, cancelMarkerKey(id), at.UTC().Format(time.RFC3339Nano), q.cancelledRetention).Err()
 }
 
 // readCancelMarker reports id's cancellation time, or nil if it was never

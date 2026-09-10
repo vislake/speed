@@ -203,7 +203,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		}
 		task := asynqlib.NewTaskWithHeaders("always-fails", []byte("payload"), map[string]string{headerTenantID: "tenant-a"})
 
-		q.handleErrorAttempt(task, errors.New("attempt failed"), 1 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
+		q.handleErrorAttempt(context.Background(), task, errors.New("attempt failed"), 1 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 0 {
 			t.Errorf("OnFailure called %d times, want 0: retried(1) < maxRetry(3), asynq will retry rather than archive", len(h.calls))
@@ -221,7 +221,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 			headerIdempotencyKey: "op-1",
 		})
 
-		q.handleErrorAttempt(task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
+		q.handleErrorAttempt(context.Background(), task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 1 {
 			t.Fatalf("OnFailure called %d times, want exactly 1", len(h.calls))
@@ -244,7 +244,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 	t.Run("no registered handler: no panic, no hook call", func(t *testing.T) {
 		q := newTestQueue(t)
 		task := asynqlib.NewTaskWithHeaders("unregistered-type", nil, map[string]string{headerTenantID: "tenant-a"})
-		q.handleErrorAttempt(task, errors.New("boom"), 3, 3, "job-1", nil, obs.FromContext(context.Background())) // must not panic.
+		q.handleErrorAttempt(context.Background(), task, errors.New("boom"), 3, 3, "job-1", nil, obs.FromContext(context.Background())) // must not panic.
 	})
 
 	t.Run("handler without FailureHook: no panic, no hook call", func(t *testing.T) {
@@ -256,7 +256,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 			t.Fatalf("RegisterHandler() error = %v", err)
 		}
 		task := asynqlib.NewTaskWithHeaders("plain", nil, map[string]string{headerTenantID: "tenant-a"})
-		q.handleErrorAttempt(task, errors.New("boom"), 3, 3, "job-1", nil, obs.FromContext(context.Background())) // must not panic.
+		q.handleErrorAttempt(context.Background(), task, errors.New("boom"), 3, 3, "job-1", nil, obs.FromContext(context.Background())) // must not panic.
 	})
 
 	t.Run("tenant-at-capacity bounce with retries remaining: FailureHook must not fire", func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		// retried(1) < maxRetry(3): asynq will bounce again, not archive --
 		// a bounce with retries remaining is never a dead-letter-worthy
 		// event and must not fire compensation.
-		q.handleErrorAttempt(task, errTenantAtCapacity, 1 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
+		q.handleErrorAttempt(context.Background(), task, errTenantAtCapacity, 1 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 0 {
 			t.Errorf("OnFailure called %d times, want 0 for a throttle bounce with retries remaining", len(h.calls))
@@ -296,7 +296,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		// fire exactly like any other terminal failure's: a bounce that
 		// short-circuited before the archive-boundary check would let the
 		// Job archive with zero compensation, which fails this test.
-		q.handleErrorAttempt(task, errTenantAtCapacity, 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
+		q.handleErrorAttempt(context.Background(), task, errTenantAtCapacity, 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 1 {
 			t.Fatalf("OnFailure called %d times, want exactly 1 for an archive-bound terminal bounce", len(h.calls))
@@ -330,7 +330,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		// dead-lettered -- must not fire. Fails if the guard is removed:
 		// OnFailure fires for the cancelled Job anyway.
 		cancelledAt := time.Now()
-		q.handleErrorAttempt(task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", &cancelledAt, obs.FromContext(context.Background()))
+		q.handleErrorAttempt(context.Background(), task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", &cancelledAt, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 0 {
 			t.Errorf("OnFailure called %d times, want 0: a concurrent Cancel already settled the Job as StatusCancelled, so its final failure's compensation must be discarded", len(h.calls))
@@ -356,7 +356,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 					t.Fatalf("handleErrorAttempt let OnFailure's panic escape instead of recovering it: %v", r)
 				}
 			}()
-			q.handleErrorAttempt(task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, log)
+			q.handleErrorAttempt(context.Background(), task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, log)
 		}()
 
 		if h.calls != 1 {

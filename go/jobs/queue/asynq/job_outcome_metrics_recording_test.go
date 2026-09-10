@@ -80,7 +80,7 @@ func TestQueue_JobMetrics_RetryableFailure_RecordsRetryingOutcome(t *testing.T) 
 	}
 	task := asynqlib.NewTaskWithHeaders("flaky", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, wrapFailedAttempt(errors.New("attempt failed"), 250*time.Millisecond), 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, wrapFailedAttempt(errors.New("attempt failed"), 250*time.Millisecond), 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	if len(h.calls) != 0 {
 		t.Errorf("OnFailure called %d times, want 0 for a retryable failure", len(h.calls))
@@ -117,7 +117,7 @@ func TestQueue_JobMetrics_TerminalFailure_RecordsDeadLetterOutcome(t *testing.T)
 	}
 	task := asynqlib.NewTaskWithHeaders("always-fails", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, wrapFailedAttempt(errors.New("permanent failure"), 900*time.Millisecond), 3 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, wrapFailedAttempt(errors.New("permanent failure"), 900*time.Millisecond), 3 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	if len(h.calls) != 1 {
 		t.Errorf("OnFailure called %d times, want exactly 1", len(h.calls))
@@ -160,7 +160,7 @@ func TestQueue_JobMetrics_TerminalAttemptBounce_RecordsDeadLetterWithoutDuration
 	}
 	task := asynqlib.NewTaskWithHeaders("contended", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, errTenantAtCapacity, 3 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, errTenantAtCapacity, 3 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	if len(h.calls) != 1 {
 		t.Errorf("OnFailure called %d times, want exactly 1 for an archive-bound terminal bounce", len(h.calls))
@@ -194,7 +194,7 @@ func TestQueue_JobMetrics_RetryableBounce_RecordsNothing(t *testing.T) {
 	}
 	task := asynqlib.NewTaskWithHeaders("contended", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, errTenantAtCapacity, 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, errTenantAtCapacity, 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	if got := counterValueOrAbsent(t, reader, jobAttemptsMetricName, "contended", string(jobs.StatusRetrying)); got != 0 {
 		t.Errorf("%s{job_type=contended,status=retrying} = %d, want no record for a retryable bounce", jobAttemptsMetricName, got)
@@ -228,7 +228,7 @@ func TestQueue_JobMetrics_CancelWinsOverTerminalFailure_RecordsNothing(t *testin
 	task := asynqlib.NewTaskWithHeaders("always-fails", nil, map[string]string{headerTenantID: "tenant-a"})
 	cancelledAt := time.Now()
 
-	q.handleErrorAttempt(task, wrapFailedAttempt(errors.New("permanent failure"), time.Second), 3 /* retried */, 3 /* maxRetry */, "job-1", &cancelledAt, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, wrapFailedAttempt(errors.New("permanent failure"), time.Second), 3 /* retried */, 3 /* maxRetry */, "job-1", &cancelledAt, obs.FromContext(context.Background()))
 
 	if len(h.calls) != 0 {
 		t.Errorf("OnFailure called %d times, want 0: a concurrent Cancel already settled the Job as StatusCancelled", len(h.calls))
@@ -259,7 +259,7 @@ func TestQueue_JobMetrics_UnwrappedFailure_RecordsAttemptWithoutDuration(t *test
 	}
 	task := asynqlib.NewTaskWithHeaders("panicky", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, errors.New("panic: boom"), 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, errors.New("panic: boom"), 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	attempts := testutil.CollectMetric(t, reader, jobAttemptsMetricName)
 	if got := testutil.CounterValue(t, attempts, "panicky", string(jobs.StatusRetrying)); got != 1 {
@@ -293,7 +293,7 @@ func TestQueue_JobMetrics_UnregisteredHandler_ErrorSurvivesWrapAndRecords(t *tes
 		t.Fatalf("processTaskUncancelled() error = %v, want ErrHandlerNotRegistered (code %q) through the duration wrapper", err, jobs.ErrHandlerNotRegistered.Code)
 	}
 
-	q.handleErrorAttempt(task, err, 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, err, 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	attempts := testutil.CollectMetric(t, reader, jobAttemptsMetricName)
 	if got := testutil.CounterValue(t, attempts, "no-such-type", string(jobs.StatusRetrying)); got != 1 {

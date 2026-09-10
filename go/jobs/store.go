@@ -70,6 +70,18 @@ type jobRecord struct {
 	UpdatedAt   time.Time  `gorm:"column:updated_at;not null"`
 	StartedAt   *time.Time `gorm:"column:started_at"`
 	CompletedAt *time.Time `gorm:"column:completed_at"`
+
+	// TerminalPublishedAt is the row-level outbox marker for this Job's
+	// jobs.job.terminal event (events.go): a row whose Status is terminal
+	// with a NULL TerminalPublishedAt owes exactly one publish, and the
+	// publish pass (worker.go's runTerminalPublisher) stamps this column
+	// only after Publish returned nil. Written by that pass and nowhere
+	// else; NULL for every non-terminal row and for every terminal row
+	// whose event has not been published yet. A row that reached terminal
+	// before this column existed was stamped at the column's own add
+	// (ensureJobsTerminalPublishedAtColumn), so historical terminal states
+	// are never republished -- the signal's contract begins at the change.
+	TerminalPublishedAt *time.Time `gorm:"column:terminal_published_at"`
 }
 
 // TableName pins jobRecord to jobsTable, so it does not depend on GORM's
@@ -134,7 +146,8 @@ const createJobsTableSQLSQLite = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
 	created_at      TIMESTAMP NOT NULL,
 	updated_at      TIMESTAMP NOT NULL,
 	started_at      TIMESTAMP,
-	completed_at    TIMESTAMP
+	completed_at    TIMESTAMP,
+	terminal_published_at TIMESTAMP
 )`
 
 // createJobsTableSQLPostgres is the PostgreSQL spelling of
@@ -162,7 +175,8 @@ const createJobsTableSQLPostgres = `CREATE TABLE IF NOT EXISTS ` + jobsTable + `
 	created_at      TIMESTAMP NOT NULL,
 	updated_at      TIMESTAMP NOT NULL,
 	started_at      TIMESTAMP,
-	completed_at    TIMESTAMP
+	completed_at    TIMESTAMP,
+	terminal_published_at TIMESTAMP
 )`
 
 // progressMsgColumnRunes and errorMessageColumnRunes are the character
@@ -204,6 +218,24 @@ const createJobsDispatchIndexSQL = `CREATE INDEX IF NOT EXISTS idx_jobs_dispatch
 // check-then-insert race.
 const createJobsIdempotencySQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_tenant_idempotency
 	ON ` + jobsTable + ` (tenant_id, idempotency_key) WHERE idempotency_key != ''`
+
+// createJobsTerminalPendingIndexSQL supports the publish pass's pending scan
+// (pendingTerminalRecords, and with it the once-per-poll-interval read that
+// runs for the queue's whole lifetime): without an index that scan degrades
+// with the jobs table's terminal history, which on this deployment mode is
+// never deleted, so a pass would walk O(terminal rows) every tick to find
+// the handful -- normally zero -- still owed a publish. The index is
+// PARTIAL on terminal_published_at IS NULL, so it carries exactly the
+// non-published set: live rows plus any terminal rows whose event has not
+// been published yet, and nothing at all once the pass has drained (the
+// stamp removes each entry). Both dbkit dialects support a WHERE clause on
+// CREATE INDEX -- the idempotency index above relies on the same feature,
+// so this is not a PostgreSQL-only construct. The index must be created
+// AFTER the terminal_published_at column exists; ensureJobsSchema orders it
+// so, and this is why it is not one of that function's CREATE TABLE/index
+// statements (which run before the column-add step).
+const createJobsTerminalPendingIndexSQL = `CREATE INDEX IF NOT EXISTS idx_jobs_terminal_pending
+	ON ` + jobsTable + ` (completed_at) WHERE terminal_published_at IS NULL`
 
 // queueWritersTable is the single-row table through which StandaloneQueue
 // enforces "one live writer per jobs table". StandaloneQueue.Start registers
@@ -381,14 +413,16 @@ func releaseWriterRegistration(ctx context.Context, db *gorm.DB, owner string) e
 func newWriterOwner() string { return uuid.NewString() }
 
 // ensureJobsSchema creates the jobs table and its indexes if they do not
-// already exist, adds the claimed_by column to a jobs table an older
-// release created without it, creates the queue_writers single-writer
-// table, and adds the stale_at column to a queue_writers table an older
-// release created without it (ensureQueueWritersStaleAtColumn). Safe to
-// call every time Start runs. The CREATE TABLE statement is chosen by dialect
-// (createJobsTableSQL): the byte columns' type differs between SQLite
-// (BLOB) and PostgreSQL (BYTEA), so there is no single-statement spelling
-// of the table.
+// already exist, brings a jobs table an older release created up to the
+// current shape -- adding the claimed_by column and the
+// terminal_published_at column, the latter with its one-time backfill
+// (ensureJobsTerminalPublishedAtColumn) -- creates the publisher's pending
+// index and the queue_writers single-writer table, and adds the stale_at
+// column to a queue_writers table an older release created without it
+// (ensureQueueWritersStaleAtColumn). Safe to call every time Start runs.
+// The CREATE TABLE statement is chosen by dialect (createJobsTableSQL): the
+// byte columns' type differs between SQLite (BLOB) and PostgreSQL (BYTEA),
+// so there is no single-statement spelling of the table.
 func ensureJobsSchema(ctx context.Context, db *gorm.DB) error {
 	for _, stmt := range [...]string{createJobsTableSQL(db.Name()), createJobsDispatchIndexSQL, createJobsIdempotencySQL} {
 		if err := db.WithContext(ctx).Exec(stmt).Error; err != nil {
@@ -397,6 +431,15 @@ func ensureJobsSchema(ctx context.Context, db *gorm.DB) error {
 	}
 	if err := ensureJobsClaimedByColumn(ctx, db); err != nil {
 		return err
+	}
+	if err := ensureJobsTerminalPublishedAtColumn(ctx, db); err != nil {
+		return err
+	}
+	// Strictly after the terminal_published_at add above: this index's
+	// partial predicate names that column, so against a table this release
+	// just upgraded it can only run once the add has committed.
+	if err := db.WithContext(ctx).Exec(createJobsTerminalPendingIndexSQL).Error; err != nil {
+		return fmt.Errorf("jobs: ensure schema: %w", err)
 	}
 	if err := db.WithContext(ctx).Exec(createQueueWritersTableSQL).Error; err != nil {
 		return fmt.Errorf("jobs: ensure schema: %w", err)
@@ -481,6 +524,92 @@ func ensureJobsClaimedByColumn(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
+// jobsColumnPresent reports whether the jobs table already carries a column
+// named column, portably across both dbkit dialects: SQLite answers from
+// PRAGMA table_info, PostgreSQL from information_schema.columns scoped to
+// the current schema. A table that does not exist at all reports absent (the
+// statements that create it run first in ensureJobsSchema), so the answer is
+// only ever consumed after the table is known to exist.
+func jobsColumnPresent(ctx context.Context, db *gorm.DB, column string) (bool, error) {
+	if db.Name() != "sqlite" {
+		// postgres (the only other dbkit dialect).
+		var probe struct {
+			Count int64 `gorm:"column:count"`
+		}
+		err := db.WithContext(ctx).
+			Raw(`SELECT COUNT(*) AS count FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, jobsTable, column).
+			Scan(&probe).Error
+		if err != nil {
+			return false, fmt.Errorf("jobs: probe jobs table columns: %w", err)
+		}
+		return probe.Count > 0, nil
+	}
+	var columns []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := db.WithContext(ctx).Raw(`PRAGMA table_info(` + jobsTable + `)`).Scan(&columns).Error; err != nil {
+		return false, fmt.Errorf("jobs: probe jobs table columns: %w", err)
+	}
+	for _, c := range columns {
+		if c.Name == column {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ensureJobsTerminalPublishedAtColumn brings a jobs table created by a
+// release predating the terminal_published_at column (see
+// jobRecord.TerminalPublishedAt) up to the current shape, and backfills the
+// upgrade's own moment onto every row already terminal at that instant: the
+// terminal signal's contract begins at the change, and a historical
+// terminal state is not represented as an owed publish.
+//
+// The add and the backfill run inside ONE transaction. DDL is
+// transactional on both dbkit dialects, so no crash window can leave the
+// column present but unstamped -- and that property is the point, not a
+// nicety: a column that existed unstamped would make every historical
+// terminal row look like a pending publish, and the next Start's publish
+// pass would republish the entire terminal history. The single transaction
+// is how the "stamped at the moment of the change" semantics are pinned on
+// both dialects, PostgreSQL's own DDL transaction boundary included.
+//
+// The column-absent probe doubles as the backfill's entry condition, and
+// the ALTER deliberately does NOT use the postgres ADD COLUMN IF NOT EXISTS
+// spelling its two sibling ensure* functions use: "was the column just
+// added by this call" is exactly what the backfill must know, and IF NOT
+// EXISTS cannot answer it. A concurrent Start that loses the race fails its
+// ALTER (duplicate column), the transaction rolls back whole, and its Start
+// reports the failure for the host to retry -- the retry reads the column
+// present and skips both statements. An unconditional backfill would be
+// worse than the race it avoids: a loser's re-run would stamp rows the
+// winner's publish pass had not published yet, silently dropping their
+// events. The WHERE ... terminal_published_at IS NULL guard makes the
+// backfill statement itself idempotent regardless.
+func ensureJobsTerminalPublishedAtColumn(ctx context.Context, db *gorm.DB) error {
+	present, err := jobsColumnPresent(ctx, db, "terminal_published_at")
+	if err != nil {
+		return err
+	}
+	if present {
+		return nil
+	}
+	now := time.Now()
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`ALTER TABLE ` + jobsTable + ` ADD COLUMN terminal_published_at TIMESTAMP`).Error; err != nil {
+			return fmt.Errorf("jobs: add terminal_published_at column: %w", err)
+		}
+		if err := tx.Exec(
+			`UPDATE `+jobsTable+` SET terminal_published_at = ? WHERE terminal_published_at IS NULL AND status IN (?, ?, ?)`,
+			now, string(StatusSucceeded), string(StatusDeadLetter), string(StatusCancelled),
+		).Error; err != nil {
+			return fmt.Errorf("jobs: backfill terminal_published_at: %w", err)
+		}
+		return nil
+	})
+}
+
 // newJobID generates a new, application-side JobID (backend coding
 // standard §5: ids are generated in the application, never
 // gen_random_uuid()).
@@ -529,6 +658,41 @@ func toJob(rec *jobRecord) *Job {
 		job.Result = &Result{Data: rec.Result}
 	}
 	return job
+}
+
+// terminalEventFor builds the jobs.job.terminal event for one terminal
+// record: the payload shape (JobTerminalEvent, events.go) populated straight
+// from the row, which is the truth the event notifies about, and
+// Event.TenantID from the row's own tenant_id -- the same field a worker
+// rebuilds a Handle context from, and the only tenant fact the background
+// publish pass has, since nothing about the enqueuing context survives to
+// publish time. A platform-scoped task's sentinel tenant (for example
+// "_pki_platform_scan") travels verbatim; consumers are told not to resolve
+// it as a real tenant (EventJobTerminal's own doc comment).
+//
+// CompletedAt is the row's completed_at, which every status except
+// StatusCancelled records at its terminal write; a cancelled row carries its
+// terminal moment in updated_at instead (markCancelled writes no
+// completed_at), which no later write moves -- see JobTerminalEvent's own
+// doc comment for the pin. The nil fallback therefore covers exactly the
+// cancelled shape, and a non-nil completed_at always wins.
+func terminalEventFor(rec jobRecord) pkgcore.Event {
+	completedAt := rec.UpdatedAt
+	if rec.CompletedAt != nil {
+		completedAt = *rec.CompletedAt
+	}
+	return pkgcore.Event{
+		Type:     EventJobTerminal,
+		TenantID: pkgcore.TenantID(rec.TenantID),
+		Payload: JobTerminalEvent{
+			JobID:       JobID(rec.ID),
+			JobType:     rec.Type,
+			Status:      Status(rec.Status),
+			Error:       rec.Error,
+			Attempts:    rec.Attempts,
+			CompletedAt: completedAt,
+		},
+	}
 }
 
 // insertRecord creates rec, or — when rec.IdempotencyKey is non-empty and
@@ -895,7 +1059,11 @@ func completeDeadLetter(ctx context.Context, db *gorm.DB, owner string, id strin
 // markCancelled conditionally transitions id to StatusCancelled from any
 // non-terminal status (Pending, Retrying or Running). It is idempotent:
 // RowsAffected == 0 (id already terminal) is reported as success, not an
-// error — see Queue.Cancel's own doc comment.
+// error — see Queue.Cancel's own doc comment. The updated_at stamp is also
+// the cancelled row's terminal moment as the terminal signal reports it
+// (JobTerminalEvent.CompletedAt's own doc comment pins why), and nothing
+// writes the row again after this transition, so the value the publish pass
+// reads is the cancellation's own instant.
 func markCancelled(ctx context.Context, db *gorm.DB, id string, now time.Time) error {
 	return db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status IN ?", id, []string{string(StatusPending), string(StatusRetrying), string(StatusRunning)}).
@@ -903,6 +1071,67 @@ func markCancelled(ctx context.Context, db *gorm.DB, id string, now time.Time) e
 			"status":     string(StatusCancelled),
 			"updated_at": now,
 		}).Error
+}
+
+// pendingTerminalRecordsSQL is the publish pass's read: every row owing a
+// jobs.job.terminal publish — terminal status, terminal_published_at still
+// NULL (the row-level outbox's own definition in jobRecord.TerminalPublishedAt's
+// doc comment) — oldest terminal transition first, capped at limit.
+// idx_jobs_terminal_pending (createJobsTerminalPendingIndexSQL) confines the
+// scan to exactly the owed rows.
+const pendingTerminalRecordsSQL = `
+	SELECT id, type, tenant_id, status, error_message, attempts, completed_at, updated_at
+	FROM ` + jobsTable + `
+	WHERE terminal_published_at IS NULL AND status IN (?, ?, ?)
+	ORDER BY COALESCE(completed_at, updated_at) ASC, id ASC
+	LIMIT ?
+`
+
+// pendingTerminalRecords returns up to limit records whose terminal
+// transition owes a publish, oldest transition first. The ordering key is
+// COALESCE(completed_at, updated_at) — the merged order a cancelled row
+// needs, since markCancelled records no completed_at and its terminal
+// moment lives in updated_at — and it is never NULL on either dialect
+// (updated_at is NOT NULL on both), so the order is total and
+// dialect-independent; the id tiebreak keeps it deterministic when one
+// instant carries several transitions. The order is what makes the pass
+// publish a backlog in the sequence the Jobs actually terminated.
+func pendingTerminalRecords(ctx context.Context, db *gorm.DB, limit int) ([]jobRecord, error) {
+	var recs []jobRecord
+	err := db.WithContext(ctx).
+		Raw(pendingTerminalRecordsSQL,
+			string(StatusSucceeded), string(StatusDeadLetter), string(StatusCancelled), limit).
+		Scan(&recs).Error
+	if err != nil {
+		return nil, fmt.Errorf("jobs: query pending terminal records: %w", err)
+	}
+	return recs, nil
+}
+
+// stampTerminalPublished records that id's jobs.job.terminal event has been
+// published — the row-level outbox's "sent" mark — and is the ONLY write in
+// this package that ever touches terminal_published_at. The publish pass
+// calls it strictly after Publish returned nil (publish-then-stamp: a bus
+// failure leaves the row owed for the next pass instead of marking a
+// never-sent event as sent), and its WHERE ... terminal_published_at IS
+// NULL guard makes a repeated stamp a no-op, so a duplicate stamp attempt
+// can neither re-open nor double-close anything.
+//
+// UpdateColumn is deliberate: the stamp must not move the row's updated_at.
+// A cancelled row's updated_at IS its terminal moment — the value the
+// payload reports as CompletedAt, pinned by JobTerminalEvent's own doc
+// comment — and TerminalPublishedAt is queue bookkeeping, not a change of
+// the Job the row describes, so UpdatedAt's "when any field of this Job
+// last changed" promise stays about the Job itself.
+//
+// A stamp whose own write fails leaves the row owed: the next pass
+// republishes it, producing a duplicate event, which is the only safe
+// direction for a failed mark — the consumer contract's first clause
+// (EventJobTerminal's own doc comment) is written for exactly this.
+func stampTerminalPublished(ctx context.Context, db *gorm.DB, id string, at time.Time) error {
+	return db.WithContext(ctx).Model(&jobRecord{}).
+		Where("id = ? AND terminal_published_at IS NULL", id).
+		UpdateColumn("terminal_published_at", at).Error
 }
 
 // resetInterruptedRecords recovers from an unclean process exit: any row

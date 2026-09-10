@@ -719,8 +719,8 @@ func TestDepthGaugeCallback_QueryFails_CollectReportsError(t *testing.T) {
 
 // TestWithJobTimeout_AppliedByConstruction covers the option's healthy
 // half -- WithJobTimeout's closure actually configuring the queue's
-// default timeout -- which construction-time panics (option_validation_test.go)
-// alone never exercise.
+// default timeout -- which the construction-time panic tests
+// (standalone_queue_test.go) alone never exercise.
 func TestWithJobTimeout_AppliedByConstruction(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t), WithJobTimeout(7*time.Second))
 	if q.defaultTimeout != 7*time.Second {

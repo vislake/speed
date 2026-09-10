@@ -164,6 +164,81 @@ func ExampleNewHandlerFunc() {
 	// result: ping
 }
 
+// ExampleWithEventBus shows the terminal signal end to end: a queue
+// configured with an EventBus publishes one jobs.job.terminal event per
+// terminal transition, so a subscriber learns a Job ended without polling
+// it — here a subscription on the shared in-memory bus, reduced to the one
+// payload field the printout uses. The subscriber clause the event's own
+// doc comment spells out (idempotency, the row as the truth, a
+// reconciliation net where completeness matters) is what a real subscriber
+// is written against; asynq.Queue (WithEventBus on that implementation)
+// publishes the same payload at its terminal points, with the
+// publish-before-archive ordering the event's doc comment records.
+func ExampleWithEventBus() {
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:jobs_example_terminal?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	bus := pkgcore.NewMemoryEventBus()
+	terminal := make(chan jobs.JobTerminalEvent, 1)
+	bus.Subscribe(jobs.EventJobTerminal, func(_ context.Context, evt pkgcore.Event) error {
+		payload := evt.Payload.(jobs.JobTerminalEvent)
+		select {
+		case terminal <- payload:
+		default:
+		}
+		return nil
+	})
+
+	queue := jobs.NewStandaloneQueue(db,
+		jobs.WithPollInterval(5*time.Millisecond),
+		jobs.WithEventBus(bus),
+	)
+	err = queue.RegisterHandler(exampleGreeter{})
+	if err != nil {
+		fmt.Println("register handler:", err)
+		return
+	}
+	err = queue.Start(ctx)
+	if err != nil {
+		fmt.Println("start:", err)
+		return
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = queue.Close(shutdownCtx)
+	}()
+
+	_, err = queue.Enqueue(ctx, jobs.Task{
+		Type:     "greet",
+		TenantID: pkgcore.TenantID("acme"),
+		Payload:  []byte("speed"),
+	})
+	if err != nil {
+		fmt.Println("enqueue:", err)
+		return
+	}
+
+	select {
+	case payload := <-terminal:
+		fmt.Println("job_type:", payload.JobType)
+		fmt.Println("status:", payload.Status)
+	case <-time.After(2 * time.Second):
+		fmt.Println("timed out waiting for the terminal event")
+	}
+
+	// Output:
+	// job_type: greet
+	// status: succeeded
+}
+
 // ExampleWire demonstrates the host-side wiring call, the shape every
 // host's assembly uses after Kernel.Bootstrap: the modules have declared
 // their handlers on the registry (the single Handle call stands in for a

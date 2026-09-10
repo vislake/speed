@@ -69,6 +69,23 @@ var _ Handler = handlerFunc{}
 // a Handler that needs compensation implements this interface itself,
 // alongside Handler, and the queue calls it as a hook, nothing more.
 //
+// FailureHook is not the queue's terminal signal, and the two surfaces are
+// deliberately not merged. FailureHook reaches one Handler about its own
+// Job's dead-letter, in-process, because that Handler's module owes the Job
+// a compensation step; EventJobTerminal (events.go) reaches every
+// subscriber the shared bus delivers to about any Job's terminal
+// transition — succeeded, dead-lettered or cancelled, whichever module
+// enqueued it. A module that needs "my Job failed for good, run my
+// compensation" implements this hook; a module that needs "tell me when a
+// Job ends, whoever enqueued it" subscribes to the event. Neither surface
+// carries business meaning: the event is a notification and not
+// compensation, and a subscriber that acts on a terminal event owns that
+// action entirely — the signal-side dual of the rule this hook states.
+// One boundary consequence worth stating where both surfaces are read: a
+// cancelled Job runs no OnFailure (the paragraphs below), and its
+// cancellation is instead observable through the terminal event's
+// StatusCancelled.
+//
 // OnFailure runs at most once per Job, on the final attempt's failure path
 // only, and never for a Job a concurrent Cancel already moved to
 // StatusCancelled while that final attempt was executing: the cancellation

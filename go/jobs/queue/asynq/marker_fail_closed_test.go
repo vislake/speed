@@ -78,7 +78,7 @@ func TestQueue_HandleErrorAttempt_TerminalMarkerUnreadableRefusal_FiresFailureHo
 	}
 	task := asynqlib.NewTaskWithHeaders("always-fails", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, errCancelMarkerUnreadable, 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, errCancelMarkerUnreadable, 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 	if len(h.calls) != 1 {
 		t.Errorf("OnFailure called %d times, want exactly 1 for an archive-bound terminal marker-unreadable refusal", len(h.calls))
@@ -97,7 +97,7 @@ func TestQueue_HandleErrorAttempt_MarkerUnreadableRefusalWithRetriesRemaining_Fi
 	}
 	task := asynqlib.NewTaskWithHeaders("always-fails", nil, map[string]string{headerTenantID: "tenant-a"})
 
-	q.handleErrorAttempt(task, errCancelMarkerUnreadable, 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
+	q.handleErrorAttempt(context.Background(), task, errCancelMarkerUnreadable, 1 /* retried */, 3 /* maxRetry */, "job-1", nil, obs.FromContext(context.Background()))
 
 	if len(h.calls) != 0 {
 		t.Errorf("OnFailure called %d times, want 0 for a marker-unreadable refusal with retries remaining", len(h.calls))

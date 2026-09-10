@@ -60,6 +60,14 @@ var errStandaloneHandlerPanicked = apperr.Internal("jobs.standalone_handler_pani
 // this is purely an internal batch size with one reasonable value.
 const claimBatchSize = 100
 
+// terminalPublishBatchSize bounds how many owed rows one publish pass
+// reads and publishes before yielding to the next tick. Same reasoning as
+// claimBatchSize: an internal batch size with one reasonable value, not a
+// deployment knob. A backlog larger than this drains over successive
+// passes; the ordering key (pendingTerminalRecords) keeps the sequence
+// correct across passes.
+const terminalPublishBatchSize = 100
+
 // jobContext rebuilds the context a Handler (and FailureHook) call
 // receives: pkgcore.WithTenant from the Job's own stored tenant, over a
 // freshly detached context.Background(). This is deliberately NOT derived
@@ -165,6 +173,88 @@ func (q *StandaloneQueue) heartbeat() {
 	}
 	if !ok {
 		obs.FromContext(ctx).Error("jobs: writer registration lost; another StandaloneQueue may have started against this database", "owner", q.owner)
+	}
+}
+
+// runTerminalPublisher is the terminal-signal publish pass's loop: it
+// publishes owed jobs.job.terminal events (a terminal row with
+// terminal_published_at still NULL, the row-level outbox definition in
+// store.go) every poll interval until Close, starting with an immediate
+// first pass. Start launches it only when WithEventBus configured a bus and
+// strictly after the writer registration was acquired, so the pass runs
+// exclusively under the same single-writer gate the dispatcher claims rows
+// under and a multi-replica race on the outbox is closed by construction.
+//
+// The immediate first pass is the crash catch-up: rows an earlier process
+// left owed -- it died between a terminal write and the stamp, or ran
+// without a bus -- are republished here, the same way
+// resetInterruptedRecords recovers interrupted rows for execution. There is
+// deliberately no flush at Close: a pass in flight when stopCh closes
+// finishes its current iteration (an unbounded bus call cannot be
+// interrupted -- the same residual Close documents for an in-flight Handle)
+// and the loop exits between rows; anything still owed is republished by
+// the next Start's first pass, not by a second shutdown path.
+//
+// A publish failure never touches the worker's terminal path -- the pass
+// shares nothing with execute/settleFailedAttempt but the database, which
+// it only reads plus the stamp write -- it is logged and the row stays
+// owed for the next pass. A stamp failure after a successful publish leaves
+// the row owed too, so the next pass republishes: duplicate delivery is the
+// only safe direction for a lost stamp, and the consumer contract's
+// idempotency clause (EventJobTerminal) is written for it.
+func (q *StandaloneQueue) runTerminalPublisher() {
+	defer q.wg.Done()
+	ticker := time.NewTicker(q.pollInterval)
+	defer ticker.Stop()
+	for {
+		q.terminalPublishOnce()
+		select {
+		case <-q.stopCh:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// terminalPublishOnce is one publish pass: read up to
+// terminalPublishBatchSize owed rows, oldest terminal transition first, and
+// publish each — stamping the row only after Publish returned nil
+// (publish-then-stamp). The pass runs on a bare context.Background(): it
+// belongs to the queue's own lifecycle, has no ambient tenant to inherit or
+// per-call caller to attribute, and deliberately attaches no tenant either
+// — the Job's tenant travels in the event's Event.TenantID field, and a
+// subscriber must rebuild its own context from it (the tenant trap's
+// publishing-side half, spelled out in EventJobTerminal's doc comment)
+// rather than rely on a context an in-process bus would happen to deliver
+// and a broker-backed bus would not.
+func (q *StandaloneQueue) terminalPublishOnce() {
+	ctx := context.Background()
+	recs, err := pendingTerminalRecords(ctx, q.db, terminalPublishBatchSize)
+	if err != nil {
+		obs.FromContext(ctx).Error("jobs: querying pending terminal events failed", "error", err)
+		return
+	}
+	log := obs.FromContext(ctx)
+	for _, rec := range recs {
+		select {
+		case <-q.stopCh:
+			// Shutting down between rows: the remaining owed rows are
+			// republished by the next Start's first pass; no flush here.
+			return
+		default:
+		}
+		if perr := q.bus.Publish(ctx, terminalEventFor(rec)); perr != nil {
+			log.Warn("jobs: publishing terminal event failed",
+				"job_id", rec.ID, "job_type", rec.Type, "status", rec.Status, "error", perr)
+			continue
+		}
+		if serr := stampTerminalPublished(ctx, q.db, rec.ID, time.Now()); serr != nil {
+			// The event went out; the mark did not land. The row stays
+			// owed and the next pass republishes it -- a duplicate, which
+			// the consumer contract covers -- never a silent loss.
+			log.Warn("jobs: stamping published terminal event failed; the event will be republished",
+				"job_id", rec.ID, "job_type", rec.Type, "error", serr)
+		}
 	}
 }
 

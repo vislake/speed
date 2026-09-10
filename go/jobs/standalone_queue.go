@@ -189,6 +189,31 @@ func WithBackoff(base, max time.Duration) Option {
 	return func(q *StandaloneQueue) { q.backoffBase, q.backoffMax = base, max }
 }
 
+// WithEventBus sets the pkgcore.EventBus this queue publishes its
+// jobs.job.terminal events on (EventJobTerminal, payload JobTerminalEvent).
+// Omitted, the queue publishes nothing and behaves exactly as it did before
+// the signal existed: no bus, no publishing, and no publish pass goroutine
+// at all -- a host that has no terminal-signal subscriber is not made to
+// carry a bus. Given a bus, Start (strictly after the writer gate has
+// proven this process the jobs table's live writer) launches the publish
+// pass alongside the dispatcher and workers, republishing any terminal rows
+// left owed by an earlier process before publishing each new terminal
+// transition; publish failures are logged and retried by the next pass,
+// and in NO case do they fail, block or otherwise alter the worker's own
+// terminal-transition path (see runTerminalPublisher's doc comment).
+//
+// A nil bus is refused at option time with a coded panic
+// (jobs.event_bus_nil): omitting the option already means "publish
+// nothing", so an explicit nil can only be a caller belief that a bus is
+// wired when none is, and the two must not silently collapse -- the same
+// refuse-the-unhonourable-value rule every option in this file follows.
+func WithEventBus(bus pkgcore.EventBus) Option {
+	if bus == nil {
+		panic(apperr.Invalid("jobs.event_bus_nil"))
+	}
+	return func(q *StandaloneQueue) { q.bus = bus }
+}
+
 // StandaloneQueue is the standalone deployment mode's Queue implementation:
 // an in-process worker pool backed by a SQLite-persisted task table that
 // survives a process restart -- task loss matters more than a briefly
@@ -211,6 +236,13 @@ type StandaloneQueue struct {
 	defaultTimeout    time.Duration
 	backoffBase       time.Duration
 	backoffMax        time.Duration
+
+	// bus is the EventBus this queue publishes jobs.job.terminal events on,
+	// set by WithEventBus. nil (the option omitted) means the queue
+	// publishes nothing: Start launches no publish pass and
+	// terminal_published_at is never written, exactly the pre-signal
+	// behavior.
+	bus pkgcore.EventBus
 
 	handlersMu sync.RWMutex
 	handlers   map[string]Handler
@@ -376,8 +408,9 @@ func (q *StandaloneQueue) handler(jobType string) Handler {
 // resetInterruptedRecords), wires the "jobs.queue.depth",
 // "jobs.job.duration", "jobs.job.attempts" and "jobs.job.dead_letter"
 // metrics, then launches the writer-registration heartbeat keeper
-// (worker.go's runWriterHeartbeat), the dispatcher and the worker
-// goroutines.
+// (worker.go's runWriterHeartbeat), the terminal-signal publisher
+// (worker.go's runTerminalPublisher, only when WithEventBus configured a
+// bus), the dispatcher and the worker goroutines.
 //
 // A Start that FAILED — a schema error, a writer-registration conflict, an
 // interrupted-row recovery failure — may be retried by calling Start again:
@@ -427,6 +460,17 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 	// so it is stopped only by Close, after wg.Wait, never by stopCh.
 	q.heartbeatWG.Add(1)
 	go q.runWriterHeartbeat()
+	// The terminal-signal publisher (worker.go's runTerminalPublisher)
+	// launches strictly behind the writer-registration acquisition above --
+	// publishing a row's jobs.job.terminal event is the live writer's
+	// privilege, the same gate the dispatcher claims rows under, so a
+	// multi-replica race on the outbox is closed by construction -- and only
+	// when a bus was configured: with a nil bus there is nothing to publish
+	// and no goroutine to run.
+	if q.bus != nil {
+		q.wg.Add(1)
+		go q.runTerminalPublisher()
+	}
 	q.wg.Add(1)
 	go q.runDispatcher(dispatch)
 	for i := 0; i < q.workerCount; i++ {

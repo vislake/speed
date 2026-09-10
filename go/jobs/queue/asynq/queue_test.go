@@ -218,6 +218,15 @@ func TestWithRetryDelayFunc_Nil_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.retry_delay_func_nil", func() { WithRetryDelayFunc(nil) })
 }
 
+// TestWithEventBus_Nil_Refused pins the WithEventBus(nil) refusal, shared
+// verbatim with the standalone half (jobs.WithEventBus): omitting the
+// option already means "publish nothing", so an explicit nil can only be a
+// caller belief that a bus is wired when none is, and the two must not
+// silently collapse.
+func TestWithEventBus_Nil_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.event_bus_nil", func() { WithEventBus(nil) })
+}
+
 // TestWithTaskCheckInterval_Negative_RefusedAndZeroDelegates pins the
 // negative-interval refusal (asynqlib.NewServer's own defaulting would
 // silently substitute its 1-second default for any non-positive value, so
@@ -573,7 +582,7 @@ func TestCancelMarkers_UnreachableBackend_ReportTheReadFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := q.writeCancelMarker(ctx, "job-1"); err == nil {
+	if err := q.writeCancelMarker(ctx, "job-1", time.Now()); err == nil {
 		t.Error("writeCancelMarker() error = nil, want the connection error")
 	}
 	if _, err := q.readCancelMarker(ctx, "job-1"); err == nil {
