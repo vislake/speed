@@ -1,6 +1,9 @@
 package config
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -939,6 +942,7 @@ func TestSourceString_NamesEverySourceAndTheUnknownFallback(t *testing.T) {
 		sourceFlag:    "command-line flags",
 		sourceEnv:     "environment variables",
 		sourceFile:    "the config file",
+		sourceDerived: "the root-key derivation",
 		sourceDefault: "the target struct",
 		source(99):    "an unknown source",
 	}
@@ -1300,7 +1304,7 @@ func TestParseTag_RejectsMalformedEnvOption(t *testing.T) {
 			t.Parallel()
 
 			sf := reflect.StructField{Name: "Port", Tag: reflect.StructTag(`config:"` + tt.tag + `"`)}
-			_, _, _, _, err := parseTag(sf)
+			_, _, _, _, _, err := parseTag(sf)
 			if !errors.Is(err, ErrInvalidTarget) {
 				t.Errorf("parseTag(%q) error = %v, want it to wrap ErrInvalidTarget", tt.tag, err)
 			}
@@ -1512,5 +1516,667 @@ func TestVerify_RejectsANonStructTarget(t *testing.T) {
 
 	if err := Verify(nil, []string{"port"}); !errors.Is(err, ErrInvalidTarget) {
 		t.Errorf("Verify(nil, ...) error = %v, want it to wrap ErrInvalidTarget", err)
+	}
+}
+
+// --- Key material ----------------------------------------------------------
+
+// testDevKey stands in for a host's package-level development default: the
+// recognizable constant a derive-tagged field can be pre-filled from. The
+// aliasing guard below exists because a decode that writes into a pre-filled
+// slice's own backing array would rewrite these bytes in place, silently
+// redefining the constant every later load falls back to.
+var testDevKey = []byte{
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+}
+
+// keyMaterialConfig is the derive-tagged target shape the key-material tests
+// share: two pinned key-material fields under one segment (so their key paths
+// are dotted), one more key-material field for single-key cases, and a plain
+// string for contrast. Every key-material field is pre-filled from testDevKey,
+// the shape a host's documented development defaults take.
+type keyMaterialConfig struct {
+	Key struct {
+		Cipher []byte `config:"env=CIPHER_KEY,derive"`
+		Index  []byte `config:"env=INDEX_KEY,derive"`
+	}
+	Fallback []byte `config:"env=FALLBACK_KEY,derive"`
+	Plain    string `config:"env=PLAIN_VALUE"`
+}
+
+func newKeyMaterialConfig() *keyMaterialConfig {
+	cfg := &keyMaterialConfig{}
+	cfg.Key.Cipher = testDevKey
+	cfg.Key.Index = testDevKey
+	cfg.Fallback = testDevKey
+	return cfg
+}
+
+// recordingDeriver is the stand-in derivation the tests install: deterministic
+// and recognizable (SHA-256 over the root key and the key path -- deliberately
+// not the platform composition, which this package cannot import, dbkit
+// sitting above pkgcore), recording every key path it is called with so a test
+// can pin which fields the loader left to derivation, and able to fail or
+// resize its result on demand.
+type recordingDeriver struct {
+	keyPaths []string
+	err      error
+	size     int
+}
+
+func (d *recordingDeriver) derive(rootKey []byte, keyPath string) ([]byte, error) {
+	d.keyPaths = append(d.keyPaths, keyPath)
+	if d.err != nil {
+		return nil, d.err
+	}
+	sum := sha256.Sum256(append(append([]byte{}, rootKey...), keyPath...))
+	size := len(sum)
+	if d.size != 0 {
+		size = d.size
+	}
+	return sum[:size], nil
+}
+
+// standInDerivedHex is the value recordingDeriver yields for one key path,
+// spelled the way the assertions compare fields.
+func standInDerivedHex(rootKey []byte, keyPath string) string {
+	out, _ := (&recordingDeriver{}).derive(rootKey, keyPath)
+	return hex.EncodeToString(out)
+}
+
+// TestLoad_DeriveTag_PriorityChain drives one key-material field through the
+// five-source chain: with every source present the flag wins, and each lower
+// source wins once the sources above it are removed, down to the struct
+// default standing alone.
+func TestLoad_DeriveTag_PriorityChain(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	flagValue := strings.Repeat("11", 32)
+	envValue := strings.Repeat("22", 32)
+	fileValue := strings.Repeat("3a", 32)
+	file := writeConfigFile(t, "key:\n  cipher: "+fileValue+"\n")
+
+	tests := []struct {
+		name     string
+		args     []string
+		environ  []string
+		file     string
+		withRoot bool
+		want     string
+	}{
+		{
+			name:     "all five sources: the flag wins",
+			args:     []string{"--key.cipher=" + flagValue},
+			environ:  []string{"CIPHER_KEY=" + envValue},
+			file:     file,
+			withRoot: true,
+			want:     flagValue,
+		},
+		{
+			name:     "the environment wins over the file, the derivation and the default",
+			environ:  []string{"CIPHER_KEY=" + envValue},
+			file:     file,
+			withRoot: true,
+			want:     envValue,
+		},
+		{
+			name:     "the file wins over the derivation and the default",
+			file:     file,
+			withRoot: true,
+			want:     fileValue,
+		},
+		{
+			name:     "the derivation wins over the default",
+			withRoot: true,
+			want:     standInDerivedHex(rootKey, "key.cipher"),
+		},
+		{
+			name: "the struct default stands when nothing supplies the key",
+			want: hex.EncodeToString(testDevKey),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := []Option{
+				WithArgs(tt.args),
+				WithEnviron(tt.environ),
+				WithConfigFile(tt.file),
+				WithKeyDerivation((&recordingDeriver{}).derive),
+			}
+			if tt.withRoot {
+				opts = append(opts, WithRootKey(rootKey))
+			}
+
+			cfg := newKeyMaterialConfig()
+			if err := New(opts...).Load(cfg); err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if got := hex.EncodeToString(cfg.Key.Cipher); got != tt.want {
+				t.Errorf("Key.Cipher = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoad_DeriveTag_EmptyValueReadsAsUnset pins the emptied-value rule for
+// key material: an emptied variable, and an empty file entry, count as no
+// value at all -- neither shadows a lower-priority source nor stops the
+// derivation -- exactly as "" reads as unset for the string fields around
+// them.
+func TestLoad_DeriveTag_EmptyValueReadsAsUnset(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	fileValue := strings.Repeat("3b", 32)
+	file := writeConfigFile(t, "key:\n  cipher: "+fileValue+"\n")
+	emptyEntryFile := writeConfigFile(t, "key:\n  cipher:\n")
+
+	tests := []struct {
+		name     string
+		environ  []string
+		file     string
+		withRoot bool
+		want     string
+	}{
+		{
+			name:    "an emptied variable does not shadow the file below it",
+			environ: []string{"CIPHER_KEY="},
+			file:    file,
+			want:    fileValue,
+		},
+		{
+			name:     "an emptied variable does not stop the derivation",
+			environ:  []string{"CIPHER_KEY="},
+			withRoot: true,
+			want:     standInDerivedHex(rootKey, "key.cipher"),
+		},
+		{
+			name:     "an empty file entry does not stop the derivation",
+			file:     emptyEntryFile,
+			withRoot: true,
+			want:     standInDerivedHex(rootKey, "key.cipher"),
+		},
+		{
+			name:    "an emptied variable with nothing below it leaves the default standing",
+			environ: []string{"CIPHER_KEY="},
+			want:    hex.EncodeToString(testDevKey),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := []Option{
+				WithArgs(nil),
+				WithEnviron(tt.environ),
+				WithConfigFile(tt.file),
+				WithKeyDerivation((&recordingDeriver{}).derive),
+			}
+			if tt.withRoot {
+				opts = append(opts, WithRootKey(rootKey))
+			}
+
+			cfg := newKeyMaterialConfig()
+			if err := New(opts...).Load(cfg); err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if got := hex.EncodeToString(cfg.Key.Cipher); got != tt.want {
+				t.Errorf("Key.Cipher = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoad_DeriveTag_MalformedExplicitValuesAreRefused pins the explicit-value
+// contract: text from a flag, the environment or the file must be exactly 64
+// hex characters, and a value that is not text at all is refused too. Every
+// refusal wraps ErrInvalidValue and names the key, the source the value came
+// from, and the derivation the field would otherwise have taken.
+func TestLoad_DeriveTag_MalformedExplicitValuesAreRefused(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	deriver := &recordingDeriver{}
+
+	tests := []struct {
+		name    string
+		environ []string
+		file    string
+		want    []string
+	}{
+		{
+			name:    "text shorter than 64 hex characters",
+			environ: []string{"CIPHER_KEY=00ff"},
+			want:    []string{"key.cipher", "CIPHER_KEY"},
+		},
+		{
+			name:    "64 characters that are not hex",
+			environ: []string{"CIPHER_KEY=" + strings.Repeat("zz", 32)},
+			want:    []string{"key.cipher", "CIPHER_KEY"},
+		},
+		{
+			name: "an unquoted config-file value YAML has read as a number",
+			file: writeConfigFile(t, "key:\n  cipher: "+strings.Repeat("33", 32)+"\n"),
+			want: []string{"key.cipher", "must be a string"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := New(
+				WithArgs(nil),
+				WithEnviron(tt.environ),
+				WithConfigFile(tt.file),
+				WithRootKey(rootKey),
+				WithKeyDerivation(deriver.derive),
+			).Load(newKeyMaterialConfig())
+			if !errors.Is(err, ErrInvalidValue) {
+				t.Fatalf("Load() error = %v, want it to wrap ErrInvalidValue", err)
+			}
+			for _, want := range append(tt.want, "the root-key derivation over declared key path key.cipher") {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoad_DeriveTag_AConfigFileValueMustStayText pins the config-file side of
+// the explicit-value contract: a YAML parser resolves an unquoted scalar by
+// content, so an all-digit key is read as a number -- and 64 digits do not
+// survive a float64, so accepting the number would silently derive from
+// truncated material. Quoting the same value keeps it the text the loader
+// decodes, which is the documented form for a config-file key material.
+func TestLoad_DeriveTag_AConfigFileValueMustStayText(t *testing.T) {
+	t.Parallel()
+
+	allDigits := strings.Repeat("33", 32)
+
+	cfg := newKeyMaterialConfig()
+	err := New(
+		WithArgs(nil),
+		WithEnviron(nil),
+		WithConfigFile(writeConfigFile(t, "key:\n  cipher: \""+allDigits+"\"\n")),
+	).Load(cfg)
+	if err != nil {
+		t.Fatalf("Load() with a quoted all-digit value error = %v, want nil", err)
+	}
+	if got := hex.EncodeToString(cfg.Key.Cipher); got != allDigits {
+		t.Errorf("Key.Cipher = %s, want the quoted value %s", got, allDigits)
+	}
+}
+
+// TestLoad_DeriveTag_DerivationFailuresAreRefused pins the derived tier's own
+// refusals: a deriver that errors and a deriver that returns material of the
+// wrong size both fail the load, wrapping ErrInvalidValue and naming the key
+// and the derivation source the loader was working from.
+func TestLoad_DeriveTag_DerivationFailuresAreRefused(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	sentinel := errors.New("stand-in derivation refused")
+
+	tests := []struct {
+		name    string
+		deriver *recordingDeriver
+		want    []string
+	}{
+		{
+			name:    "the deriver errors",
+			deriver: &recordingDeriver{err: sentinel},
+			want:    []string{"key.cipher", "the root-key derivation", sentinel.Error()},
+		},
+		{
+			name:    "the deriver returns material of the wrong size",
+			deriver: &recordingDeriver{size: 16},
+			want:    []string{"key.cipher", "the root-key derivation", "32 bytes, got 16"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := New(
+				WithArgs(nil),
+				WithEnviron(nil),
+				WithRootKey(rootKey),
+				WithKeyDerivation(tt.deriver.derive),
+			).Load(newKeyMaterialConfig())
+			if !errors.Is(err, ErrInvalidValue) {
+				t.Fatalf("Load() error = %v, want it to wrap ErrInvalidValue", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoad_DeriveTag_DerivesUnderTheFieldsKeyPath pins the identity contract
+// the derivation stands on: the deriver is called once per derive-tagged field
+// the text sources left alone, with the field's dotted key path -- the same
+// identifier flags and config files use, never the pinned variable name -- so
+// renaming a field (and with it the key path) rotates that field's material.
+func TestLoad_DeriveTag_DerivesUnderTheFieldsKeyPath(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	deriver := &recordingDeriver{}
+
+	cfg := newKeyMaterialConfig()
+	if err := New(WithArgs(nil), WithEnviron(nil), WithRootKey(rootKey), WithKeyDerivation(deriver.derive)).Load(cfg); err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	if want := []string{"key.cipher", "key.index", "fallback"}; !reflect.DeepEqual(deriver.keyPaths, want) {
+		t.Errorf("the deriver was called with %v, want exactly %v", deriver.keyPaths, want)
+	}
+	resolved := map[string][]byte{
+		"key.cipher": cfg.Key.Cipher,
+		"key.index":  cfg.Key.Index,
+		"fallback":   cfg.Fallback,
+	}
+	for keyPath, got := range resolved {
+		if want := standInDerivedHex(rootKey, keyPath); hex.EncodeToString(got) != want {
+			t.Errorf("material for %s = %x, want the stand-in derivation %s", keyPath, got, want)
+		}
+	}
+}
+
+// TestLoad_DeriveTag_RootKeyWithoutADeriverIsAWiringError pins the one wiring
+// combination that cannot run: a target that derives and a root key that
+// cannot be consumed because no deriver is installed. Without a root key the
+// same target loads on its defaults, and with both wired it derives.
+func TestLoad_DeriveTag_RootKeyWithoutADeriverIsAWiringError(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+
+	err := New(WithArgs(nil), WithEnviron(nil), WithRootKey(rootKey)).Load(newKeyMaterialConfig())
+	if !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("Load() error = %v, want it to wrap ErrInvalidTarget", err)
+	}
+	for _, want := range []string{tagDerive, "WithKeyDerivation", "root key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
+	}
+
+	if err := New(WithArgs(nil), WithEnviron(nil)).Load(newKeyMaterialConfig()); err != nil {
+		t.Errorf("Load() without a root key error = %v, want the defaults to load", err)
+	}
+	if err := New(
+		WithArgs(nil),
+		WithEnviron(nil),
+		WithRootKey(rootKey),
+		WithKeyDerivation((&recordingDeriver{}).derive),
+	).Load(newKeyMaterialConfig()); err != nil {
+		t.Errorf("Load() with both wired error = %v, want nil", err)
+	}
+}
+
+// TestLoad_RootKeyEnv_ReadsTheNamedVariable pins the environment root-key
+// source: a variable set to 64 hex characters is the root key; unset and
+// emptied alike mean no root key (the defaults stand, and the deriver is never
+// called); and a set-but-wrong value fails the load with ErrInvalidRootKey,
+// naming the variable so the operator knows what to fix.
+func TestLoad_RootKeyEnv_ReadsTheNamedVariable(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+
+	tests := []struct {
+		name    string
+		environ []string
+		want    string
+		derived bool // whether the deriver is expected to have run
+	}{
+		{
+			name:    "a valid root key derives every derive-tagged field",
+			environ: []string{"ROOT_KEY=" + hex.EncodeToString(rootKey)},
+			want:    standInDerivedHex(rootKey, "key.cipher"),
+			derived: true,
+		},
+		{
+			name: "an unset variable leaves the defaults",
+			want: hex.EncodeToString(testDevKey),
+		},
+		{
+			name:    "an emptied variable leaves the defaults",
+			environ: []string{"ROOT_KEY="},
+			want:    hex.EncodeToString(testDevKey),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deriver := &recordingDeriver{}
+			cfg := newKeyMaterialConfig()
+			err := New(
+				WithArgs(nil),
+				WithEnviron(tt.environ),
+				WithRootKeyEnv("ROOT_KEY"),
+				WithKeyDerivation(deriver.derive),
+			).Load(cfg)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if got := hex.EncodeToString(cfg.Key.Cipher); got != tt.want {
+				t.Errorf("Key.Cipher = %s, want %s", got, tt.want)
+			}
+			if called := len(deriver.keyPaths) > 0; called != tt.derived {
+				t.Errorf("the deriver was called with %v, want the derivation to run exactly when a root key is configured", deriver.keyPaths)
+			}
+		})
+	}
+
+	for name, value := range map[string]string{
+		"a value too short":      "00ff",
+		"64 characters, not hex": strings.Repeat("zz", 32),
+	} {
+		t.Run(name+" fails the load", func(t *testing.T) {
+			t.Parallel()
+
+			err := New(
+				WithArgs(nil),
+				WithEnviron([]string{"ROOT_KEY=" + value}),
+				WithRootKeyEnv("ROOT_KEY"),
+				WithKeyDerivation((&recordingDeriver{}).derive),
+			).Load(newKeyMaterialConfig())
+			if !errors.Is(err, ErrInvalidRootKey) {
+				t.Fatalf("Load() error = %v, want it to wrap ErrInvalidRootKey", err)
+			}
+			if !strings.Contains(err.Error(), "ROOT_KEY") {
+				t.Errorf("error = %q, want it to name the variable", err)
+			}
+		})
+	}
+}
+
+// TestLoad_WithRootKey_RejectsANon32ByteKey pins the direct root-key source's
+// shape check: a non-empty key that is not 32 bytes fails the load with
+// ErrInvalidRootKey naming the option, never quietly deriving from a secret of
+// the wrong size.
+func TestLoad_WithRootKey_RejectsANon32ByteKey(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []int{31, 33} {
+		err := New(
+			WithArgs(nil),
+			WithEnviron(nil),
+			WithRootKey(bytes.Repeat([]byte{0x5a}, size)),
+			WithKeyDerivation((&recordingDeriver{}).derive),
+		).Load(newKeyMaterialConfig())
+		if !errors.Is(err, ErrInvalidRootKey) {
+			t.Fatalf("Load() with a %d-byte root key error = %v, want it to wrap ErrInvalidRootKey", size, err)
+		}
+		if !strings.Contains(err.Error(), "WithRootKey") {
+			t.Errorf("error = %q, want it to name the option the key came from", err)
+		}
+	}
+}
+
+// TestNew_SecondRootKeyOptionPanics pins the one-source rule: every
+// combination of a second root-key option is a wiring error and panics where
+// the option is applied -- two secrets have no "the later one wins" reading --
+// and an empty variable name panics too.
+func TestNew_SecondRootKeyOptionPanics(t *testing.T) {
+	t.Parallel()
+
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	tests := []struct {
+		name string
+		opts []Option
+	}{
+		{name: "WithRootKey twice", opts: []Option{WithRootKey(rootKey), WithRootKey(rootKey)}},
+		{name: "WithRootKeyEnv twice", opts: []Option{WithRootKeyEnv("ONE"), WithRootKeyEnv("TWO")}},
+		{name: "WithRootKey then WithRootKeyEnv", opts: []Option{WithRootKey(rootKey), WithRootKeyEnv("ROOT_KEY")}},
+		{name: "WithRootKeyEnv then WithRootKey", opts: []Option{WithRootKeyEnv("ROOT_KEY"), WithRootKey(rootKey)}},
+		{name: "an empty variable name", opts: []Option{WithRootKeyEnv("")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				if recover() == nil {
+					t.Errorf("New(...) did not panic, want a wiring error")
+				}
+			}()
+			New(tt.opts...)
+		})
+	}
+}
+
+// The targets a derive option may not appear on: the option promises 32 bytes
+// of material, which only a []byte field can hold.
+type stringDeriveConfig struct {
+	Value string `config:"derive"`
+}
+
+type intDeriveConfig struct {
+	Value int `config:"derive"`
+}
+
+type pointerDeriveConfig struct {
+	Value *[]byte `config:"derive"`
+}
+
+type structDeriveConfig struct {
+	Value struct{ Inner string } `config:"derive"`
+}
+
+type repeatedDeriveConfig struct {
+	Value []byte `config:"derive,derive"`
+}
+
+// TestLoad_DeriveTag_RejectsFieldsThatCannotHoldKeyMaterial pins the tag
+// option's own refusals: a field of any other type, and a repeated token, both
+// fail the target description with ErrInvalidTarget naming the field.
+func TestLoad_DeriveTag_RejectsFieldsThatCannotHoldKeyMaterial(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target any
+		want   []string
+	}{
+		{name: "a string field", target: &stringDeriveConfig{}, want: []string{"Value", tagDerive, "string"}},
+		{name: "an int field", target: &intDeriveConfig{}, want: []string{"Value", tagDerive}},
+		{name: "a pointer-to-slice field", target: &pointerDeriveConfig{}, want: []string{"Value", tagDerive}},
+		{name: "a struct field", target: &structDeriveConfig{}, want: []string{"Value", tagDerive}},
+		{name: "a repeated derive token", target: &repeatedDeriveConfig{}, want: []string{"Value", "repeats"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := New(WithArgs(nil), WithEnviron(nil)).Load(tt.target)
+			if !errors.Is(err, ErrInvalidTarget) {
+				t.Fatalf("Load() error = %v, want it to wrap ErrInvalidTarget", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// aliasingGuardConfig is the target the guard below drives: one derive-tagged
+// field a host pre-fills from a package-level development default.
+type aliasingGuardConfig struct {
+	Cipher []byte `config:"env=CIPHER_KEY,derive"`
+}
+
+// TestLoad_DeriveTag_NeverWritesThroughAPreFilledSlice is the guard against
+// the text pipeline's in-place slice write: mapstructure decodes a value into
+// a non-nil []byte field through that slice's own backing array, so a field
+// pre-filled from a package-level default would silently redefine the constant
+// every later load falls back to -- an explicit APP_-style value would ASCII-
+// spray the default with hex text. The loader answers by keeping derive-tagged
+// keys out of the decode entirely and storing only freshly allocated slices,
+// and this test holds it to both halves: the default stays byte-identical
+// across an explicit-value load and a derived load, and a deriver that recycles
+// one buffer cannot mutate a loaded field after the fact.
+func TestLoad_DeriveTag_NeverWritesThroughAPreFilledSlice(t *testing.T) {
+	// Deliberately not parallel: the assertion is about a package-level
+	// variable, so it must not interleave with another test's load.
+	before := bytes.Clone(testDevKey)
+
+	explicit := strings.Repeat("ab", 32)
+	cfg := &aliasingGuardConfig{Cipher: testDevKey}
+	if err := New(WithArgs(nil), WithEnviron([]string{"CIPHER_KEY=" + explicit})).Load(cfg); err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if !bytes.Equal(testDevKey, before) {
+		t.Fatalf("the package-level default was rewritten in place: got %x, want it byte-identical to %x", testDevKey, before)
+	}
+	decoded, err := hex.DecodeString(explicit)
+	if err != nil {
+		t.Fatalf("DecodeString(%q) error = %v, want nil", explicit, err)
+	}
+	if !bytes.Equal(cfg.Cipher, decoded) {
+		t.Fatalf("Cipher = %x, want the decoded explicit value %x", cfg.Cipher, decoded)
+	}
+
+	// A deriver that reuses one buffer across calls: the loader must store its
+	// own copy, or a later call could rewrite a field already handed out.
+	rootKey := bytes.Repeat([]byte{0x5a}, 32)
+	buffer := make([]byte, 32)
+	recycling := func([]byte, string) ([]byte, error) {
+		for i := range buffer {
+			buffer[i] = byte(i)
+		}
+		return buffer, nil
+	}
+	derived := &aliasingGuardConfig{Cipher: testDevKey}
+	if err := New(WithArgs(nil), WithEnviron(nil), WithRootKey(rootKey), WithKeyDerivation(recycling)).Load(derived); err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if !bytes.Equal(testDevKey, before) {
+		t.Fatalf("the package-level default was rewritten in place by the derived load: got %x, want %x", testDevKey, before)
+	}
+	wantMaterial := make([]byte, 32)
+	for i := range wantMaterial {
+		wantMaterial[i] = byte(i)
+	}
+	for i := range buffer {
+		buffer[i] = 0xff
+	}
+	if !bytes.Equal(derived.Cipher, wantMaterial) {
+		t.Fatalf("Cipher = %x, want the loader's own copy %x, unaffected by the deriver reusing its buffer", derived.Cipher, wantMaterial)
 	}
 }

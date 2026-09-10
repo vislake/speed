@@ -4,6 +4,9 @@ package config_test
 // compiled and executed by `go test`.
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -159,6 +162,106 @@ func ExampleEnvName() {
 	// SPEED_AUTHN__PII_CIPHER_KEY
 	// SPEED_PORT
 	// APP_DATABASE__DSN
+}
+
+// ExampleWithKeyDerivation shows the derived source of the five-source chain. A
+// []byte field tagged derive holds one unit of key material: an explicit value
+// from a text source must be 64 hex characters and wins; with nothing explicit
+// supplied, the configured root key derives the field through the function
+// WithKeyDerivation installed; with no root key configured, the struct default
+// stands.
+func ExampleWithKeyDerivation() {
+	type hostConfig struct {
+		// Explicitly configured, or derived from the root key.
+		CipherKey []byte `config:"env=CIPHER_KEY,derive"`
+		// Nothing supplies this one, so the derivation fills it.
+		IndexKey []byte `config:"env=INDEX_KEY,derive"`
+	}
+
+	// The deriver is the host's to install. A real host wires the platform
+	// composition -- pkgcore.BootstrapKeyPurpose over the key path, then
+	// dbkit.DeriveKey over the root key and that purpose, in one call:
+	// dbkit.DeriveBootstrapKey. This example stands in a local function,
+	// because the example package must not import dbkit: dbkit sits above
+	// pkgcore, and importing it back from here would be a cycle. A deriver
+	// only has to be deterministic; the stand-in is deliberately not
+	// cryptography.
+	deriver := func(rootKey []byte, keyPath string) ([]byte, error) {
+		sum := sha256.Sum256(append(append([]byte{}, rootKey...), keyPath...))
+		return sum[:], nil
+	}
+
+	rootKey := bytes.Repeat([]byte{0x42}, 32)
+	explicit := strings.Repeat("ab", 32)
+
+	cfg := hostConfig{}
+	loader := config.New(
+		config.WithArgs(nil),
+		config.WithEnviron([]string{"CIPHER_KEY=" + explicit}),
+		config.WithRootKey(rootKey),
+		config.WithKeyDerivation(deriver),
+	)
+	if err := loader.Load(&cfg); err != nil {
+		fmt.Println("load:", err)
+		return
+	}
+	fmt.Println(hex.EncodeToString(cfg.CipherKey) == explicit)
+	fmt.Println(len(cfg.IndexKey) == 32 && !bytes.Equal(cfg.IndexKey, cfg.CipherKey))
+
+	// With no root key configured, no derivation runs: both fields keep the
+	// defaults the caller set before Load.
+	defaultKey := bytes.Repeat([]byte{0x01}, 32)
+	unconfigured := hostConfig{CipherKey: defaultKey, IndexKey: defaultKey}
+	if err := config.New(config.WithArgs(nil), config.WithEnviron(nil)).Load(&unconfigured); err != nil {
+		fmt.Println("load:", err)
+		return
+	}
+	fmt.Println(bytes.Equal(unconfigured.CipherKey, defaultKey) && bytes.Equal(unconfigured.IndexKey, defaultKey))
+
+	// Output:
+	// true
+	// true
+	// true
+}
+
+// ExampleWithRootKeyEnv shows the environment root-key source: the loader reads
+// the named variable in the same Load that derives from it, so a host that may
+// not read the environment itself still wires derivation. An unset variable --
+// or an emptied one -- means no root key, and the struct defaults stand.
+func ExampleWithRootKeyEnv() {
+	type hostConfig struct {
+		CipherKey []byte `config:"env=CIPHER_KEY,derive"`
+	}
+
+	// A stand-in deriver; see ExampleWithKeyDerivation for what a real host
+	// installs.
+	deriver := func(rootKey []byte, keyPath string) ([]byte, error) {
+		sum := sha256.Sum256(append(append([]byte{}, rootKey...), keyPath...))
+		return sum[:], nil
+	}
+	defaultKey := bytes.Repeat([]byte{0x01}, 32)
+	rootKeyText := hex.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+
+	for _, environ := range [][]string{
+		{"ROOT_KEY=" + rootKeyText}, // a configured root key: the field derives
+		nil,                         // unset: no root key, so the default stands
+	} {
+		cfg := hostConfig{CipherKey: defaultKey}
+		if err := config.New(
+			config.WithArgs(nil),
+			config.WithEnviron(environ),
+			config.WithRootKeyEnv("ROOT_KEY"),
+			config.WithKeyDerivation(deriver),
+		).Load(&cfg); err != nil {
+			fmt.Println("load:", err)
+			return
+		}
+		fmt.Println(bytes.Equal(cfg.CipherKey, defaultKey))
+	}
+
+	// Output:
+	// false
+	// true
 }
 
 // ExampleVerify shows the check a host runs once it knows which bootstrap keys

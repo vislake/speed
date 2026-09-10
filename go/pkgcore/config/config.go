@@ -11,7 +11,7 @@
 // # One key, one layer
 //
 // A configuration key belongs to exactly one layer. Bootstrap keys are process
-// startup input: they are resolved once on the four-source chain below and read
+// startup input: they are resolved once on the five-source chain below and read
 // no more, they have no tenant dimension, and a change takes effect at the next
 // start. Runtime configuration items are the dynamic values in the configs
 // table: stored per tenant or per platform, edited by an operator while the
@@ -23,20 +23,26 @@
 //
 // # Sources
 //
-// Values are resolved from four sources. Highest priority wins:
+// Values are resolved from five sources. Highest priority wins:
 //
 //  1. command-line flags   --database.dsn=postgres://...
 //  2. environment variables SPEED_DATABASE__DSN=postgres://...
 //  3. a config file        an optional YAML (or JSON) file
-//  4. struct defaults      whatever the caller already set on the target
+//  4. key derivation       a derive-tagged field, from the configured root key
+//  5. struct defaults      whatever the caller already set on the target
 //
-// The fourth source is implicit: Load only writes fields that some source
-// actually supplied, so a field left untouched keeps the value the caller
-// assigned before calling Load.
+// The fourth source serves derive-tagged key-material fields alone (see the
+// key-material section below); for every other field the chain is the four
+// sources around it. The struct-default source is implicit: Load only writes
+// fields that some source actually supplied, so a field left untouched keeps
+// the value the caller assigned before calling Load.
 //
 // The environment source is read under the loader's prefix, SPEED_ by default;
 // WithEnvPrefix replaces it, so a host whose variables carry another prefix
-// (APP_, say) drives the same loader without renaming a single variable.
+// (APP_, say) drives the same loader without renaming a single variable. The
+// one variable that is not read under the prefix is WithRootKeyEnv's root-key
+// variable, and that is what makes it work: it is read exactly as named, in
+// the same Load that derives from it.
 //
 // # Key mapping
 //
@@ -75,6 +81,48 @@
 // (ErrInvalidTarget, naming both fields), because a single variable cannot feed
 // two fields whose values the loader would then decide by traversal order.
 //
+// # Key material
+//
+// A field typed []byte may carry the bare derive tag option
+// (config:"env=APP_CONFIG_KEY,derive"), marking it as one unit of key
+// material: 32 bytes, the shape a bootstrap key's "hexkey" format spells as 64
+// hexadecimal characters. A derive field resolves through the five-source
+// chain above, with the derivation standing exactly where a struct default
+// would:
+//
+//   - An explicit value -- from a flag, the environment or the config file --
+//     must be exactly 64 hex characters, and the loader decodes it to the
+//     field's 32 bytes. Any other text is a load refusal naming the key and
+//     the source it came from; so is a value that is not text at all.
+//   - A value an emptied variable (or an empty file entry) would have
+//     supplied counts as no value at all, exactly as "" reads as unset for
+//     the string fields around it: it neither overrides a lower-priority
+//     source nor stops the derivation.
+//   - With nothing explicit supplied and a root key configured, the material
+//     is derived by the function WithKeyDerivation installed, from the root
+//     key and the field's dotted key path. That key path is the derivation's
+//     identity: renaming the field (and with it the key path) changes the
+//     material derived for it, so a rename is a rotation of that key's
+//     material and must ship as one.
+//   - With no root key configured, and nothing explicit supplied, the struct
+//     default stands like it does for every other field.
+//
+// The root key comes from exactly one source, declared by exactly one option:
+// WithRootKey (the 32 bytes themselves) or WithRootKeyEnv (the name of the
+// variable holding the key's 64-hex-character text, which the loader reads in
+// the same Load that derives from it -- the reason the option exists, since a
+// host forbidden from reading the environment itself cannot resolve the root
+// key and hand it over without a chicken-and-egg problem). A configured root
+// key that is not 32 bytes -- a variable set to anything but 64 hex
+// characters included -- fails Load with ErrInvalidRootKey naming the source.
+// A derive field with a root key configured but no deriver installed is a
+// wiring error rather than a runtime condition, so Load refuses the target
+// with ErrInvalidTarget.
+//
+// The derive option is deliberately narrow: the field must be typed exactly
+// []byte, the option takes no value, and nothing about it changes how any
+// other field resolves.
+//
 // # Verification
 //
 // Verify checks a list of declared keys against a target struct: every declared
@@ -99,6 +147,7 @@ package config
 
 import (
 	"encoding"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -152,9 +201,20 @@ const (
 	// tagEnvPrefix introduces the option that pins a field's exact environment
 	// variable name: config:"env=PORT".
 	tagEnvPrefix = "env="
+	// tagDerive marks a []byte field as one unit of key material the loader
+	// resolves (explicitly, derived or left at its default): config:"derive".
+	tagDerive = "derive"
 	// tagOptionSeparator splits a tag into its comma-separated options.
 	tagOptionSeparator = ","
 )
+
+// rootKeySize is the byte length of a root key, and equally of the material
+// every field tagged derive holds: 32 bytes (256 bits), the shape a bootstrap
+// key's "hexkey" format spells as 64 hexadecimal characters. Both root-key
+// sources are held to it -- WithRootKey's bytes directly, WithRootKeyEnv's
+// variable as its 64-character hex text -- and the derivation's output must
+// match it too, so a deriver cannot hand a field material of another shape.
+const rootKeySize = 32
 
 // Command-line flag syntax.
 const (
@@ -182,6 +242,14 @@ var (
 	// ErrSourceUnreadable reports that a configuration source could not be read
 	// at all, for example an unparseable config file or a malformed flag.
 	ErrSourceUnreadable = errors.New("config: unreadable source")
+
+	// ErrInvalidRootKey reports that a root-key source produced something that
+	// is not a 32-byte key: WithRootKey a non-empty key of another length, or
+	// WithRootKeyEnv a variable set to a non-empty value that is not 64 hex
+	// characters. The error names the source -- the option or the variable --
+	// so the operator knows which of the two to fix; a variable that is unset
+	// or empty is not an error, it is an unconfigured root key.
+	ErrInvalidRootKey = errors.New("config: invalid root key")
 )
 
 var (
@@ -189,6 +257,7 @@ var (
 	timeType            = reflect.TypeOf(time.Time{})
 	durationType        = reflect.TypeOf(time.Duration(0))
 	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
+	byteSliceType       = reflect.TypeOf([]byte(nil))
 )
 
 // source identifies which layer of the priority chain supplied a value.
@@ -196,6 +265,7 @@ type source int
 
 const (
 	sourceDefault source = iota
+	sourceDerived
 	sourceFile
 	sourceEnv
 	sourceFlag
@@ -210,6 +280,8 @@ func (s source) String() string {
 		return "environment variables"
 	case sourceFile:
 		return "the config file"
+	case sourceDerived:
+		return "the root-key derivation"
 	case sourceDefault:
 		return "the target struct"
 	default:
@@ -218,7 +290,8 @@ func (s source) String() string {
 }
 
 // Loader resolves bootstrap configuration from flags, the environment, an
-// optional config file and the defaults already present on the target struct.
+// optional config file, the root-key derivation of derive-tagged key-material
+// fields, and the defaults already present on the target struct.
 //
 // The zero value is not usable; construct one with New. A Loader holds no
 // mutable state once built, so a single Loader may be reused and is safe for
@@ -230,6 +303,16 @@ type Loader struct {
 	prefix     string
 	argsSet    bool
 	environSet bool
+	// rootKey and rootKeyEnv are the two mutually exclusive root-key sources
+	// (WithRootKey / WithRootKeyEnv); rootKeySet records that one of the two
+	// options was given, which is what makes a second one a wiring error.
+	rootKey    []byte
+	rootKeyEnv string
+	rootKeySet bool
+	// derivation is the function derive-tagged fields' material comes from
+	// (WithKeyDerivation). Nil means no deriver is installed, which is an
+	// error only when a root key is configured and the target derives.
+	derivation func(rootKey []byte, keyPath string) ([]byte, error)
 }
 
 // Option customises a Loader built by New.
@@ -296,7 +379,8 @@ func WithArgs(args []string) Option {
 // WithEnviron sets the environment to scan, in the "KEY=value" form returned by
 // os.Environ. It exists so that tests can inject variables without mutating the
 // real process environment; passing an empty slice disables the environment
-// source entirely.
+// source entirely. WithRootKeyEnv's root-key variable is read from this same
+// environment, so an injected environment supplies it too.
 func WithEnviron(environ []string) Option {
 	return func(l *Loader) {
 		l.environ = environ
@@ -304,17 +388,109 @@ func WithEnviron(environ []string) Option {
 	}
 }
 
+// WithRootKey installs rootKey as the loader's root secret: the 32-byte
+// high-entropy key every derive-tagged field's material is derived from when
+// no source supplies that field explicitly.
+//
+// A nil or empty key configures no root key, which is not an error: derive
+// fields then keep their struct defaults, the shape a host's documented
+// development defaults take. A non-empty key that is not exactly 32 bytes
+// fails Load with an error wrapping ErrInvalidRootKey, never quietly deriving
+// from a secret of the wrong size.
+//
+// Pass at most one root-key option. WithRootKey and WithRootKeyEnv name two
+// distinct sources of one secret, and two secrets have no "the later one
+// wins" reading -- which of two keys a host meant would be undecidable from
+// the call site alone -- so a second root-key option panics, whatever the
+// combination, the same option twice included.
+func WithRootKey(rootKey []byte) Option {
+	return func(l *Loader) {
+		if l.rootKeySet {
+			panic("config: a second root-key option was given; declare the root key once, with WithRootKey or WithRootKeyEnv")
+		}
+		l.rootKeySet = true
+		l.rootKey = rootKey
+	}
+}
+
+// WithRootKeyEnv makes the loader read its root secret from the named
+// environment variable, in the same Load that derives from it: the variable's
+// value is the key's 64-hex-character text, decoded to the 32 bytes the
+// derivation consumes. The name is read exactly as spelled -- no prefix is
+// applied, no case folding happens, and the name should be the host's own
+// (APP_ROOT_KEY, say), never a SPEED_-derived spelling it does not actually
+// set. An empty name is a wiring error and panics.
+//
+// The variable being unset -- or set to an empty value -- configures no root
+// key: derive-tagged fields keep their struct defaults, and the load
+// succeeds. A variable set to a non-empty value must hold exactly 64 hex
+// characters; anything else fails Load with an error wrapping
+// ErrInvalidRootKey, naming the variable.
+//
+// The option exists because the root key must be consumed in the same Load
+// that uses it, and a host may be unable (or forbidden by its own discipline)
+// to read the environment itself: reading the variable here is what lets such
+// a host wire derivation without a direct environment read of its own.
+//
+// Pass at most one root-key option; see WithRootKey for the panic rule two
+// sources share.
+func WithRootKeyEnv(name string) Option {
+	return func(l *Loader) {
+		if name == "" {
+			panic("config: WithRootKeyEnv requires a non-empty variable name")
+		}
+		if l.rootKeySet {
+			panic("config: a second root-key option was given; declare the root key once, with WithRootKey or WithRootKeyEnv")
+		}
+		l.rootKeySet = true
+		l.rootKeyEnv = name
+	}
+}
+
+// WithKeyDerivation installs fn as the function every derive-tagged field's
+// material is derived from. The loader calls fn once per field the five-source
+// chain leaves to derivation, passing the configured root key and the field's
+// dotted key path, and stores the returned bytes on the field; fn's result
+// must be exactly 32 bytes, or the load fails naming the key.
+//
+// The loader deliberately knows nothing about how a root key becomes key
+// material: fn is a plain function, so this package stays dependency-free and
+// the composition stays the host's to declare. The platform composition a
+// host wires is pkgcore.BootstrapKeyPurpose over the key path (the one
+// supported purpose spelling per declared bootstrap key path) followed by
+// dbkit.DeriveKey over the root key and that purpose -- dbkit.DeriveBootstrapKey
+// is exactly that pair in one call -- but neither package is a dependency of
+// this one, and a host is free to install a different function (a test's
+// stand-in, a service's own derivation) as long as it is deterministic.
+//
+// The key path passed to fn is the field's dotted key path, character for
+// character the identifier flags and config files use. That makes the key path
+// the derivation's identity: renaming a field changes the key path, which
+// changes what fn derives for it, so a rename is a rotation of that field's
+// key material and must ship as one.
+//
+// A target with derive-tagged fields and a configured root key but no deriver
+// installed fails Load with ErrInvalidTarget: the schema asks for a derivation
+// the wiring cannot deliver. With no root key configured, fn is never called
+// and the fields' struct defaults stand. Passing nil leaves the loader without
+// a deriver, exactly as not passing the option does.
+func WithKeyDerivation(fn func(rootKey []byte, keyPath string) ([]byte, error)) Option {
+	return func(l *Loader) { l.derivation = fn }
+}
+
 // Load resolves the configuration into target, which must be a non-nil pointer
 // to a struct. Fields that no source supplies keep the value they already hold,
 // which is how struct defaults participate as the lowest-priority source.
 //
 // Load returns an error wrapping ErrMissingValue if a field tagged as required
-// is still zero afterwards, ErrInvalidValue if a supplied value does not fit the
-// field it maps to, ErrSourceUnreadable if a source could not be read, and
-// ErrInvalidTarget if target is not a usable struct pointer. When Load returns
-// an error, target may already have been partially written and must not be
-// used; bootstrap configuration is meant to abort process startup, not to be
-// salvaged.
+// is still zero afterwards, ErrInvalidValue if a supplied value -- an explicit
+// one or a derived one -- does not fit the field it maps to,
+// ErrSourceUnreadable if a source could not be read, ErrInvalidRootKey if the
+// configured root key is not a 32-byte key, and ErrInvalidTarget if target is
+// not a usable struct pointer or its derivation wiring cannot serve it. When
+// Load returns an error, target may already have been partially written and
+// must not be used; bootstrap configuration is meant to abort process startup,
+// not to be salvaged.
 func (l *Loader) Load(target any) error {
 	schema, err := describe(target)
 	if err != nil {
@@ -322,6 +498,15 @@ func (l *Loader) Load(target any) error {
 	}
 	if err = l.resolveEnvNames(schema); err != nil {
 		return err
+	}
+
+	rootKey, err := l.resolveRootKey()
+	if err != nil {
+		return err
+	}
+	if rootKey != nil && schema.derives > 0 && l.derivation == nil {
+		return fmt.Errorf("%w: %d field(s) carry the %q tag option and a root key is configured, but no deriver is installed; build the loader with WithKeyDerivation, or drop the root key",
+			ErrInvalidTarget, schema.derives, tagDerive)
 	}
 
 	values, origins, err := l.collect(schema)
@@ -338,6 +523,15 @@ func (l *Loader) Load(target any) error {
 	// check above keeps its own error, which states the fault better than a
 	// parse failure would.
 	if err := l.coerceTextValues(schema, values, origins); err != nil {
+		return err
+	}
+
+	// Key-material fields are filled here, before the text pipeline below ever
+	// sees their keys (applyKeyMaterial removes them): they hold bytes, not
+	// decoded text, and the decoder would otherwise write into whatever slice
+	// they already carry -- a pre-filled package-level development default,
+	// say -- in place.
+	if err := l.applyKeyMaterial(target, schema, values, origins, rootKey); err != nil {
 		return err
 	}
 
@@ -368,6 +562,21 @@ func (l *Loader) collect(s *schema) (map[string]any, map[string]source, error) {
 			if !s.accepts(key) {
 				continue
 			}
+			if f, ok := s.byKey[key]; ok && f.derive {
+				// For a key-material field an empty value is no value: an
+				// emptied variable (or an empty file entry) is the shape a
+				// deployment leaves a secret in when it means to leave it
+				// unset, exactly as "" reads as unset for the string fields
+				// around it. Dropping it here, per source, keeps it from
+				// shadowing whatever a lower-priority source supplies, the
+				// derivation included.
+				if val == nil {
+					continue
+				}
+				if text, isText := val.(string); isText && text == "" {
+					continue
+				}
+			}
 			values[key] = val
 			origins[key] = src
 		}
@@ -392,6 +601,50 @@ func (l *Loader) collect(s *schema) (map[string]any, map[string]source, error) {
 	apply(flagValues, sourceFlag)
 
 	return values, origins, nil
+}
+
+// resolveRootKey resolves the loader's root secret from whichever source its
+// options named, returning nil when no root key is configured. WithRootKeyEnv
+// reads its variable here, inside Load, so the key is consumed in the same
+// load that derives from it and a host never has to read the environment
+// itself. A wrong-shaped result from either source is an error wrapping
+// ErrInvalidRootKey, naming the source; an unset or empty variable is not an
+// error, it is an unconfigured root key.
+func (l *Loader) resolveRootKey() ([]byte, error) {
+	if l.rootKeyEnv != "" {
+		environ := l.environ
+		if !l.environSet {
+			environ = os.Environ()
+		}
+		for _, entry := range environ {
+			name, value, ok := strings.Cut(entry, "=")
+			if !ok || name != l.rootKeyEnv {
+				continue
+			}
+			if value == "" {
+				return nil, nil
+			}
+			if len(value) != 2*rootKeySize {
+				return nil, fmt.Errorf("%w: environment variable %s must hold %d hex characters (a %d-byte root key), got %d",
+					ErrInvalidRootKey, l.rootKeyEnv, 2*rootKeySize, rootKeySize, len(value))
+			}
+			decoded, err := hex.DecodeString(value)
+			if err != nil {
+				return nil, fmt.Errorf("%w: environment variable %s: %w", ErrInvalidRootKey, l.rootKeyEnv, err)
+			}
+			return decoded, nil
+		}
+		return nil, nil
+	}
+
+	if len(l.rootKey) == 0 {
+		return nil, nil
+	}
+	if len(l.rootKey) != rootKeySize {
+		return nil, fmt.Errorf("%w: the root key handed to WithRootKey must be exactly %d bytes, got %d",
+			ErrInvalidRootKey, rootKeySize, len(l.rootKey))
+	}
+	return l.rootKey, nil
 }
 
 // readFile parses the optional config file into a flat map of key to value. A
@@ -600,11 +853,78 @@ func (l *Loader) checkRequired(target any, s *schema) error {
 	return errors.Join(missing...)
 }
 
+// applyKeyMaterial fills every derive-tagged field the text sources did not
+// explicitly supply -- and keeps every derive-tagged key out of the text
+// pipeline: an explicit value is decoded here, a field this step leaves alone
+// keeps its struct default, and the keys are dropped from values so the koanf
+// decode below never sees them. That removal is what protects a pre-filled
+// slice: mapstructure decodes a text value into a non-nil []byte field by
+// writing through the slice's own backing array, so a derive-tagged default a
+// host shares with a package-level constant would be silently rewritten in
+// place. Every value this step does store is either freshly decoded or a copy
+// of the deriver's result, never a buffer someone else still holds.
+func (l *Loader) applyKeyMaterial(target any, s *schema, values map[string]any, origins map[string]source, rootKey []byte) error {
+	root := reflect.ValueOf(target).Elem()
+	for i := range s.fields {
+		f := &s.fields[i]
+		if !f.derive {
+			continue
+		}
+
+		var material []byte
+		if raw, supplied := values[f.key]; supplied {
+			text, isText := raw.(string)
+			if !isText {
+				return fmt.Errorf("%w for key %q (supplied by %s): a key-material value must be a string of %d hex characters -- a config file's value may need quoting so its parser delivers text -- got %T; sources checked: %s",
+					ErrInvalidValue, f.key, origins[f.key], 2*rootKeySize, raw, l.sourcesFor(s, f.key))
+			}
+			if len(text) != 2*rootKeySize {
+				return fmt.Errorf("%w for key %q (supplied by %s): value must hold %d hex characters (a %d-byte key), got %d; sources checked: %s",
+					ErrInvalidValue, f.key, origins[f.key], 2*rootKeySize, rootKeySize, len(text), l.sourcesFor(s, f.key))
+			}
+			decoded, err := hex.DecodeString(text)
+			if err != nil {
+				return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
+					ErrInvalidValue, f.key, origins[f.key], err, l.sourcesFor(s, f.key))
+			}
+			material = decoded
+		} else if rootKey != nil {
+			derived, err := l.derivation(rootKey, f.key)
+			if err != nil {
+				return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
+					ErrInvalidValue, f.key, sourceDerived, err, l.sourcesFor(s, f.key))
+			}
+			if len(derived) != rootKeySize {
+				return fmt.Errorf("%w for key %q (supplied by %s): derived value must be %d bytes, got %d; sources checked: %s",
+					ErrInvalidValue, f.key, sourceDerived, rootKeySize, len(derived), l.sourcesFor(s, f.key))
+			}
+			// The field gets the loader's own copy, never the deriver's buffer,
+			// which the host is free to reuse across calls.
+			material = slices.Clone(derived)
+		} else {
+			continue
+		}
+
+		// Whether or not a source supplied this key, the text pipeline must not
+		// see it: an emptied variable's key was already dropped by collect, and
+		// an explicit value has just been decoded above.
+		delete(values, f.key)
+
+		leaf, ok := fieldValue(root, f.index)
+		if !ok {
+			return fmt.Errorf("%w for key %q: the field is unreachable through a nil pointer", ErrInvalidTarget, f.key)
+		}
+		leaf.SetBytes(material)
+	}
+	return nil
+}
+
 // sourcesFor lists, in priority order, every place the loader looked for a key,
 // so the reader of an error knows exactly where to put the missing value. The
 // environment name it names is the one this loader actually read -- a field's
 // pinned name when it has one, its prefix-derived name otherwise -- never a
-// hardcoded SPEED_ spelling.
+// hardcoded SPEED_ spelling. For a derive-tagged key the list also names the
+// derivation, which stands between the file and the struct default.
 func (l *Loader) sourcesFor(s *schema, key string) string {
 	parts := []string{
 		"command-line flag " + flagPrefix + key,
@@ -614,6 +934,9 @@ func (l *Loader) sourcesFor(s *schema, key string) string {
 		parts = append(parts, fmt.Sprintf("key %s in config file %s", key, l.configFile))
 	} else {
 		parts = append(parts, "no config file configured")
+	}
+	if f, ok := s.byKey[key]; ok && f.derive {
+		parts = append(parts, "the root-key derivation over declared key path "+key)
 	}
 	return strings.Join(append(parts, "the default set on the target struct"), ", ")
 }
@@ -644,13 +967,15 @@ type field struct {
 	typ      reflect.Type // the leaf's own type, which a supplied value must fit
 	pinned   string       // the exact environment variable name, tagged config:"env=NAME"; empty when derived
 	required bool         // tagged config:"required"
+	derive   bool         // tagged config:"derive": one []byte unit of key material
 	subKeys  bool         // a map-like leaf, so keys nested under it belong to it
 }
 
 // schema is the flattened description of a target struct.
 type schema struct {
-	fields []field
-	byKey  map[string]*field
+	fields  []field
+	byKey   map[string]*field
+	derives int // how many fields carry the derive tag option
 }
 
 // accepts reports whether a key from a source maps onto this target at all.
@@ -854,7 +1179,7 @@ func (s *schema) walk(t reflect.Type, prefix []string, index []int, visiting map
 			continue
 		}
 
-		name, pinned, required, skip, err := parseTag(sf)
+		name, pinned, required, derive, skip, err := parseTag(sf)
 		if err != nil {
 			return err
 		}
@@ -877,20 +1202,24 @@ func (s *schema) walk(t reflect.Type, prefix []string, index []int, visiting map
 			typ:      sf.Type,
 			pinned:   pinned,
 			required: required,
+			derive:   derive,
 			subKeys:  acceptsSubKeys(sf.Type),
 		})
+		if derive {
+			s.derives++
+		}
 	}
 	return nil
 }
 
 // parseTag reads a field's config tag, yielding its key segment, its pinned
-// environment variable name when the tag carries one, and the remaining
-// options.
-func parseTag(sf reflect.StructField) (name, pinned string, required, skip bool, err error) {
+// environment variable name when the tag carries one, the remaining options,
+// and whether the field is one the loader fills with key material.
+func parseTag(sf reflect.StructField) (name, pinned string, required, derive, skip bool, err error) {
 	name = strings.ToLower(sf.Name)
 	tag, ok := sf.Tag.Lookup(TagName)
 	if !ok {
-		return name, "", false, false, nil
+		return name, "", false, false, false, nil
 	}
 
 	for _, opt := range strings.Split(tag, tagOptionSeparator) {
@@ -898,23 +1227,36 @@ func parseTag(sf reflect.StructField) (name, pinned string, required, skip bool,
 		switch {
 		case opt == "":
 		case opt == tagSkip:
-			return "", "", false, true, nil
+			return "", "", false, false, true, nil
 		case opt == tagRequired:
 			required = true
+		case opt == tagDerive:
+			// A repeated token leaves what the first one meant undecidable, and
+			// a field of any other type cannot hold the 32 bytes the option
+			// promises, so both are refused with the target's own sentence.
+			if derive {
+				return "", "", false, false, false, fmt.Errorf("%w: field %s repeats the %s tag option; it takes no value and appears at most once",
+					ErrInvalidTarget, sf.Name, tagDerive)
+			}
+			if sf.Type != byteSliceType {
+				return "", "", false, false, false, fmt.Errorf("%w: field %s carries the %s tag option but is typed %s, and only a []byte field can hold key material",
+					ErrInvalidTarget, sf.Name, tagDerive, sf.Type)
+			}
+			derive = true
 		case strings.HasPrefix(opt, tagEnvPrefix):
 			// A pin without a name is a misspelling of the option itself, not a
 			// request to read an unnamed variable, so it is rejected here.
 			if pinned != "" || opt == tagEnvPrefix {
-				return "", "", false, false, fmt.Errorf("%w: field %s has a malformed or repeated %s tag option %q; it needs exactly one variable name, as in %sNAME",
+				return "", "", false, false, false, fmt.Errorf("%w: field %s has a malformed or repeated %s tag option %q; it needs exactly one variable name, as in %sNAME",
 					ErrInvalidTarget, sf.Name, TagName, opt, tagEnvPrefix)
 			}
 			pinned = strings.TrimPrefix(opt, tagEnvPrefix)
 		default:
-			return "", "", false, false, fmt.Errorf("%w: field %s has unknown %s tag option %q",
+			return "", "", false, false, false, fmt.Errorf("%w: field %s has unknown %s tag option %q",
 				ErrInvalidTarget, sf.Name, TagName, opt)
 		}
 	}
-	return name, pinned, required, false, nil
+	return name, pinned, required, derive, false, nil
 }
 
 // structType reports whether a field is a struct the loader should descend
