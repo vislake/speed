@@ -108,7 +108,7 @@ module
     the 2-statement floor makes the noise budget size-invariant, and
     the main tolerance still governs modules large enough that two
     statements are worth less than it (about 1334 statements and up;
-    authn's 2971-statement census keeps 0.15). The cost stays bounded
+    authn's 3076-statement census keeps 0.15). The cost stays bounded
     either way: the band is about four and a half statements in
     authn's census, while a single untested function of thirty
     statements costs authn about a point -- far below any decline that
