@@ -58,7 +58,7 @@ const (
 //
 // A host with its own pre-auth routes (a public share link, an
 // unauthenticated whoami endpoint) adds its own tenancy.WithAllowlist
-// entries beside this set -- ChainConfig.ExtraAllowlist is the place.
+// entries beside this set -- chain.Config.ExtraAllowlist is the place.
 // authn's own subtree is deliberately absent: it never sits behind
 // tenancy.Middleware at all -- a host's router dispatches AuthnAPIPath
 // onto a branch of its own (see that constant's doc comment), which is

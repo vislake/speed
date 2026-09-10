@@ -105,11 +105,11 @@ const viewReservationTimeout = 30 * time.Minute
 // tenant's configured default share expiry through -- the same
 // no-import-edge shape go/org's FeatureGate and go/org's Scope use to reach
 // go/config-shaped or go/org-shaped behavior without an import in either
-// direction. A host's adapter over *config.Service satisfies this
-// structurally (the reference app wires one, its SharingConfigReader);
-// sharing declares the config item (module.go's ConfigDefaultExpiry) but
-// never imports go/config itself, and without a wired reader Service falls
-// back to defaultShareExpiry.
+// direction. A host wires one over the config module's lazy read Handle
+// (the platform's app.ShareExpiryReader, go/app/bridges, is the shipped
+// adapter); sharing declares the config item (module.go's
+// ConfigDefaultExpiry) but never imports go/config itself, and without a
+// wired reader Service falls back to defaultShareExpiry.
 type TenantConfigReader interface {
 	// ShareDefaultExpiry returns tenant's configured default share expiry
 	// duration. ok is false when the tenant has configured none -- Service
