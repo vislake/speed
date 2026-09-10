@@ -112,8 +112,10 @@ name: release
 # is not done); post-release
 # scaffold-verify triggers (a real release event exists from v0.0.1 on;
 # the trigger wiring is not done); trivy image scanning (the image build
-# stays workflow_dispatch-only); and license-scan transitive-dependency
-# extension. Each stays scheduled with v1.0 (M4) in
+# runs on push to main behind a path set, plus manual dispatch, and
+# leaves run-scoped CI proof tags -- still no standing target to scan);
+# and license-scan transitive-dependency extension. Each stays scheduled
+# with v1.0 (M4) in
 # docs/internal/24-deferral-roadmap.md chapter 5.
 #
 # Pre-release channels ship v<version>-rc.N first (reference-app
