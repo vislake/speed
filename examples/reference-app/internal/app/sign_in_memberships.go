@@ -26,7 +26,7 @@ import (
 // MemberService.TenantsOf for the enumeration question. One source of
 // truth: an account that really accepted an org invitation through org's
 // own HTTP flow, a demo account the boot-time seed placed into org
-// (demo_users.go's addDemoOrgMembership), and a self-registered account
+// (demo/demo_users.go's addDemoOrgMembership), and a self-registered account
 // whose registration provisioned its own clinic (self_service.go), are
 // members because their rows exist -- in this process and in the next one.
 // A restart against the same database loses neither; an in-process roster
@@ -56,8 +56,8 @@ import (
 // design (the pseudo-tenant exists precisely because it is NOT a customer
 // organization). Those grants are the entire remaining content of the
 // in-process roster below. In a production-shaped boot they hold exactly
-// one entry -- the demo platform-staff account seedDemoPlatformStaff
-// registers and grants (demo_admin.go) -- and that seed re-asserts the
+// one entry -- the demo platform-staff account SeedDemoPlatformStaff
+// registers and grants (demo/demo_admin.go) -- and that seed re-asserts the
 // grant on every boot, so the staff account's sign-in survives a restart
 // like everyone else's. Everything else ever granted here is test-only
 // shortcut (flowtests/server_test.go's registerAndAuthenticate and friends),

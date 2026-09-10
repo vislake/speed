@@ -14,7 +14,7 @@
 // something real to reserve against. The credit-pack-purchase leg itself
 // stays unwired: a real charge is out of this demo's scope.
 
-package app
+package demo
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// DemoSimulationCreditGrant is the number of credits seedDemoCredits grants
+// DemoSimulationCreditGrant is the number of credits SeedDemoCredits grants
 // each demo tenant at boot -- enough for many multiples of
 // smilesim.CreditsPerSimulation (internal/smilesim/service.go) worth of smile
 // simulations, a round, memorable demo number rather than anything tied to
@@ -33,24 +33,24 @@ import (
 const DemoSimulationCreditGrant int64 = 1000
 
 // DemoCreditGrantReason is the free-text Reason (billing.GrantInput.Reason)
-// every grant demo_credits.go's shared per-tenant grant (grantDemoCredits)
-// issues -- the boot-time demo seed's (seedDemoCredits) and the
-// self-service clinic provisioning path's (self_service.go's provision)
+// every grant demo_credits.go's shared per-tenant grant (GrantDemoCredits)
+// issues -- the boot-time demo seed's (SeedDemoCredits) and the
+// self-service clinic provisioning path's (internal/app/self_service.go's provision)
 // alike -- so a read of the ledger (CreditService.Balance's own
 // transaction history, or a billing-history UI) can tell
 // this app's seed grant apart from a real purchase or an in-app spend at
 // a glance.
 const DemoCreditGrantReason = "demo:seed"
 
-// grantDemoCredits grants DemoSimulationCreditGrant credits to ONE tenant,
+// GrantDemoCredits grants DemoSimulationCreditGrant credits to ONE tenant,
 // via a real billing.CreditService.Grant call under the tenant's own
 // context, carrying the demo seed's system Actor (demoSeedCtx,
 // demo_seed_actor.go) -- never a direct database write. The grant's own
 // billing.credit.grant audit row is attributed to that Actor, the same
 // attribution every other audited boot-time demo write carries. Both of
 // this app's paths that give a tenant a starting balance converge on this
-// call: seedDemoCredits' boot-time loop grants every demo tenant
-// (cfg.HostTenants) this way, and self_service.go's provision grants each
+// call: SeedDemoCredits' boot-time loop grants every demo tenant
+// (cfg.HostTenants) this way, and internal/app/self_service.go's provision grants each
 // newly created clinic the same amount, for the same reason, right after
 // subscribing it -- a clinic whose registration seeded no balance would
 // find its first smile simulation refused at the credit reservation
@@ -58,7 +58,7 @@ const DemoCreditGrantReason = "demo:seed"
 // request arrived.
 //
 // The grant is idempotent only up to a point, and the point is deliberate,
-// the identical stance seedDemoUsers' own doc comment (demo_users.go)
+// the identical stance SeedDemoUsers' own doc comment (demo_users.go)
 // takes for its own restart limitation: CreditService.Grant is NOT
 // idempotent under retry (its CreditTransaction.ID is a fresh
 // uuid.NewString() every call, unlike PreDeduct's caller-supplied
@@ -77,7 +77,7 @@ const DemoCreditGrantReason = "demo:seed"
 // this reference app accepts, and a trade-off that would not be
 // acceptable for a real deployment's own credit-pack purchase flow,
 // which this file is explicitly NOT.
-func grantDemoCredits(ctx context.Context, credits *billing.CreditService, tenantID pkgcore.TenantID) error {
+func GrantDemoCredits(ctx context.Context, credits *billing.CreditService, tenantID pkgcore.TenantID) error {
 	// The grant runs under the tenant and the demo seed's Actor at once:
 	// the tenant scopes the ledger write, the Actor attributes the audit
 	// row the granted transaction emits (demo_seed_actor.go).
@@ -102,13 +102,13 @@ func grantDemoCredits(ctx context.Context, credits *billing.CreditService, tenan
 	return nil
 }
 
-// seedDemoCredits grants DemoSimulationCreditGrant credits to every tenant
-// named in tenants (cfg.HostTenants), one grantDemoCredits call per tenant
-// -- the same per-tenant grant self_service.go's clinic provisioning uses,
+// SeedDemoCredits grants DemoSimulationCreditGrant credits to every tenant
+// named in tenants (cfg.HostTenants), one GrantDemoCredits call per tenant
+// -- the same per-tenant grant internal/app/self_service.go's clinic provisioning uses,
 // so a clinic's starting balance is the SAME grant a demo tenant's boot
 // seed gives it. Two demo hosts mapping to the same tenant are granted
-// once, mirroring seedDemoGrants' own dedup (demo_subject.go).
-func seedDemoCredits(ctx context.Context, credits *billing.CreditService, tenants map[string]pkgcore.TenantID) error {
+// once, mirroring SeedDemoGrants' own dedup (demo_subject.go).
+func SeedDemoCredits(ctx context.Context, credits *billing.CreditService, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
 		if _, done := seeded[tenantID]; done {
@@ -116,7 +116,7 @@ func seedDemoCredits(ctx context.Context, credits *billing.CreditService, tenant
 		}
 		seeded[tenantID] = struct{}{}
 
-		if err := grantDemoCredits(ctx, credits, tenantID); err != nil {
+		if err := GrantDemoCredits(ctx, credits, tenantID); err != nil {
 			return err
 		}
 	}

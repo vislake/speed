@@ -6,7 +6,7 @@ package flowtests
 // aiGatewayPermissionFor's three-permission selector -- end to end through
 // the composed HTTP stack: the real authn+tenancy middleware chain, a real
 // temp-file SQLite database carrying ai-gateway's real migrations, and the
-// real rbac gate deciding the requests against seedDemoGrants' demo roles.
+// real rbac gate deciding the requests against SeedDemoGrants' demo roles.
 //
 // Three legs cover the surface's acceptance shape:
 //
@@ -44,7 +44,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 )
@@ -118,26 +118,26 @@ func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
-	// against (internal/app/demo_subject.go's seedDemoGrants). No AIGateway* config keys
+	// against (internal/app/demo/demo_subject.go's SeedDemoGrants). No AIGateway* config keys
 	// are set, so BuildServer writes no platform credential at boot -- the
 	// gate decides every request before the handler's own validation ever
 	// runs, which is exactly what this test isolates.
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-gate-owner")
 
-	credentialPath := app.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatible
+	credentialPath := demo.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatible
 	tenantPath := credentialPath + "/tenant"
 	platformPath := credentialPath + "/platform"
 
 	// The tenant-writer actor may write its OWN tenant's BYOK credential...
 	resp := aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken,
-		app.DemoAIGatewayTenantWriterUserID, `{"apiKey":"sk-acme-tenant-writer"}`)
+		demo.DemoAIGatewayTenantWriterUserID, `{"apiKey":"sk-acme-tenant-writer"}`)
 	assertAIGatewayCredentialAnswer(t, resp, "tenant BYOK write as the tenant-writer actor",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "")
 
 	// ...and may read which scope answers (GET carries no scope suffix --
 	// the read reports whichever scope Resolve actually answers with)...
 	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken,
-		app.DemoAIGatewayTenantWriterUserID, "")
+		demo.DemoAIGatewayTenantWriterUserID, "")
 	assertAIGatewayCredentialAnswer(t, resp, "read as the tenant-writer actor",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "")
 
@@ -146,20 +146,20 @@ func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
 	// gate answers with rbac's own 403 rather than with any ai-gateway
 	// error, proving the refusal is authorization, not validation.
 	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, platformPath, acmeToken,
-		app.DemoAIGatewayTenantWriterUserID, `{"apiKey":"sk-must-not-land","baseUrl":"https://platform.invalid/v1"}`)
+		demo.DemoAIGatewayTenantWriterUserID, `{"apiKey":"sk-must-not-land","baseUrl":"https://platform.invalid/v1"}`)
 	assertPermissionDenied(t, resp, "platform-wide write as the tenant-writer actor")
 
 	// The owner (BuiltinRoleOwner carries every declared permission) is not
 	// refused the platform-wide write.
 	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, platformPath, acmeToken,
-		app.DemoOwnerUserID, `{"apiKey":"sk-platform-owner","baseUrl":"https://platform.example.com/v1"}`)
+		demo.DemoOwnerUserID, `{"apiKey":"sk-platform-owner","baseUrl":"https://platform.example.com/v1"}`)
 	assertAIGatewayCredentialAnswer(t, resp, "platform-wide write as the owner",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeSystem), "https://platform.example.com/v1")
 
 	// The owner's tenant read still answers with the tenant's own BYOK row
 	// first -- the write above only set the platform fallback.
 	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken,
-		app.DemoOwnerUserID, "")
+		demo.DemoOwnerUserID, "")
 	assertAIGatewayCredentialAnswer(t, resp, "read as the owner",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "")
 }
@@ -185,7 +185,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 	const noteText = "Patient reports persistent discomfort under the new crown."
 	noteID := createNoteAs(t, srv, acmeToken, noteText)
 
-	credentialPath := app.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatible
+	credentialPath := demo.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatible
 	tenantPath := credentialPath + "/tenant"
 
 	// Leg one: with only the boot-time platform credential present, the
@@ -199,7 +199,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 		t.Fatalf("fake platform server saw Authorization %q, want the boot-time platform key %q on the wire",
 			fakePlatform.lastAuthorization, "Bearer sk-test-consult-key")
 	}
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, app.DemoOwnerUserID, "")
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, demo.DemoOwnerUserID, "")
 	assertAIGatewayCredentialAnswer(t, resp, "read before the tenant BYOK write",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeSystem), fakePlatform.URL)
 
@@ -209,7 +209,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 	// address the caller typed may be echoed back in the refusal's ip
 	// param -- zero disclosure.
 	const tenantKey = "sk-tenant-acme-byok-key"
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, app.DemoOwnerUserID,
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, demo.DemoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"`+fakeTenant.URL+`"}`)
 	assertAIGatewayCredentialRefused(t, resp, "tenant BYOK write naming a loopback endpoint",
 		http.StatusBadRequest, aigateway.ErrBaseURLBlocked.Code, map[string]any{"ip": "127.0.0.1"})
@@ -220,7 +220,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 	// as an internal-DNS reconnaissance oracle (ErrBaseURLBlocked's own doc
 	// comment).
 	localhostURL := strings.Replace(fakeTenant.URL, "127.0.0.1", "localhost", 1)
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, app.DemoOwnerUserID,
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, demo.DemoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"`+localhostURL+`"}`)
 	assertAIGatewayCredentialRefused(t, resp, "tenant BYOK write naming a blocked hostname",
 		http.StatusBadRequest, aigateway.ErrBaseURLBlocked.Code, nil)
@@ -239,7 +239,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 		t.Fatalf("fake tenant server saw Authorization %q, want no request at all -- a refused destination must never be dialed",
 			fakeTenant.lastAuthorization)
 	}
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, app.DemoOwnerUserID, "")
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, demo.DemoOwnerUserID, "")
 	assertAIGatewayCredentialAnswer(t, resp, "read after the refused tenant BYOK writes",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeSystem), fakePlatform.URL)
 
@@ -249,11 +249,11 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 	// uses -- now answers with the tenant's own row. (No consult call is
 	// made after this write: the public-shaped endpoint is never dialed in
 	// a test.)
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, app.DemoOwnerUserID,
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, demo.DemoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"https://93.184.216.34/v1"}`)
 	assertAIGatewayCredentialAnswer(t, resp, "tenant BYOK write naming a public-shaped endpoint",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, app.DemoOwnerUserID, "")
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, demo.DemoOwnerUserID, "")
 	assertAIGatewayCredentialAnswer(t, resp, "read after the public-shaped tenant BYOK write",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
 }
@@ -337,8 +337,8 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalImageBaseURLRefusedBySSRFGu
 	// server lives in that server's database, and this server's database
 	// never saw it.)
 	const tenantKey = "sk-tenant-acme-img-byok-key"
-	imageCredentialPath := app.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatibleImage
-	resp := aiGatewayCredentialRequest(t, srv, http.MethodPut, imageCredentialPath+"/tenant", acmeToken, app.DemoOwnerUserID,
+	imageCredentialPath := demo.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatibleImage
+	resp := aiGatewayCredentialRequest(t, srv, http.MethodPut, imageCredentialPath+"/tenant", acmeToken, demo.DemoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"`+fakeTenant.URL+`"}`)
 	assertAIGatewayCredentialRefused(t, resp, "image tenant BYOK write naming a loopback endpoint",
 		http.StatusBadRequest, aigateway.ErrBaseURLBlocked.Code, map[string]any{"ip": "127.0.0.1"})
@@ -372,11 +372,11 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalImageBaseURLRefusedBySSRFGu
 	// the read surface answers with the tenant's own row. (No further job
 	// is run after this write: the public-shaped endpoint is never dialed
 	// in a test.)
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, imageCredentialPath+"/tenant", acmeToken, app.DemoOwnerUserID,
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, imageCredentialPath+"/tenant", acmeToken, demo.DemoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"https://93.184.216.34/v1"}`)
 	assertAIGatewayCredentialAnswer(t, resp, "image tenant BYOK write naming a public-shaped endpoint",
 		aigateway.ProviderOpenAICompatibleImage, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, imageCredentialPath, acmeToken, app.DemoOwnerUserID, "")
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, imageCredentialPath, acmeToken, demo.DemoOwnerUserID, "")
 	assertAIGatewayCredentialAnswer(t, resp, "read after the public-shaped image BYOK write",
 		aigateway.ProviderOpenAICompatibleImage, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
 }

@@ -1,4 +1,4 @@
-package app
+package demo
 
 // demo_seed_actor_test.go pins demoSeedCtx's contract: the Actor it attaches
 // is the fixed system Actor every audited boot-time demo write is recorded

@@ -2,7 +2,7 @@ package flowtests
 
 // pki_revoke_gate_flow_test.go drives go/pki's signing-key revoke HTTP
 // operation -- POST /api/v1/pki/signing-keys/{kid}/revoke under
-// PkiRoutePath, gated by the pki entry of DemoRouteRules (internal/app/demo_subject.go,
+// PkiRoutePath, gated by the pki entry of DemoRouteRules (internal/app/demo/demo_subject.go,
 // pkiPermissionFor with pkiSubjectResolverFor's domain pin) -- through the
 // composed HTTP stack, and pins the platform-domain half of the
 // permission contract go/pki/module.go now records: revoking a row of
@@ -11,7 +11,7 @@ package flowtests
 //
 // The negative leg is the exploit shape, made concrete: the demo
 // owner role holds EVERY declared permission -- pki:revoke_signing_key
-// included -- in every demo tenant (seedDemoGrants), so a request acting
+// included -- in every demo tenant (SeedDemoGrants), so a request acting
 // as demo-owner in tenant-acme passes any tenant-domain evaluation of the
 // permission and would revoke the platform signing key every tenant's
 // tokens are verified under. The gate must refuse it anyway, because the
@@ -23,7 +23,7 @@ package flowtests
 //
 // The positive leg is the honest counterpart: a real platform-staff
 // account -- DemoPlatformStaffEmail, holding BuiltinRoleOwner under
-// rbac.SystemDomain (seedDemoPlatformStaff, internal/app/demo_admin.go) -- signs in
+// rbac.SystemDomain (SeedDemoPlatformStaff, internal/app/demo/demo_admin.go) -- signs in
 // with its own credential source and revokes the same key successfully.
 // Without this leg the gate could be broken-closed instead of domain-
 // shifted, and the demo would prove no way to reach the operation at all.
@@ -37,6 +37,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit"
@@ -74,11 +75,11 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	// relies on), so the key this test revokes is the app's real boot key,
 	// never a hand-seeded row. The owner's sign-in provides the tenant
 	// bearer token the negative leg rides on.
-	status, code, staffToken := demoLogin(t, srv, app.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, staffToken := demoLogin(t, srv, demo.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("platform-staff login: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	status, code, ownerToken := demoLogin(t, srv, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("demo-owner login: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -109,14 +110,14 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	if boot == nil {
 		t.Fatalf("purpose %q has no active signing key after the two sign-ins -- authn never bootstrapped it", authn.AccessTokenKeyPurpose)
 	}
-	revokePath := app.PkiRoutePath + "/signing-keys/" + boot.ID + "/revoke"
+	revokePath := demo.PkiRoutePath + "/signing-keys/" + boot.ID + "/revoke"
 
 	// Negative leg: demo-owner in tenant-acme holds pki:revoke_signing_key
 	// there (the owner role carries every declared permission), yet the
 	// revoke must be refused: the gate evaluates that permission under
 	// rbac.SystemDomain, where the header identity has no grant. This is
 	// the leg that an ungated route answers with a 200 that revokes the key.
-	ownerResp := storageRequest(t, srv, http.MethodPost, revokePath, ownerToken, app.DemoOwnerUserID, "application/json",
+	ownerResp := storageRequest(t, srv, http.MethodPost, revokePath, ownerToken, demo.DemoOwnerUserID, "application/json",
 		strings.NewReader(`{"reason":"tenant admin test revoke"}`))
 	defer ownerResp.Body.Close()
 	ownerBody, err := io.ReadAll(ownerResp.Body)

@@ -29,6 +29,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
 
@@ -47,7 +48,7 @@ func TestSmileSimulation_TerminalSignalSettlesWithoutAnyPoll(t *testing.T) {
 
 	before := creditBalanceFor(t, cfg, tenantID)
 	if before.Available < smilesim.CreditsPerSimulation {
-		t.Fatalf("tenant-acme's balance before simulating = %+v, want Available >= %d (seedDemoCredits should have granted it at boot)", before, smilesim.CreditsPerSimulation)
+		t.Fatalf("tenant-acme's balance before simulating = %+v, want Available >= %d (SeedDemoCredits should have granted it at boot)", before, smilesim.CreditsPerSimulation)
 	}
 
 	photo := jpegWithExif(t)
@@ -105,7 +106,7 @@ func TestSmileSimulation_CompletionNotifiesWithoutAnyPoll(t *testing.T) {
 	// -- the simulate surface's own recipient gate -- so the fixture is
 	// granted membership in tenant-acme, the tenant this test's caller
 	// signs into.
-	cfg.Memberships.Grant(app.DemoSmileSimRecipientUserID, "tenant-acme")
+	cfg.Memberships.Grant(demo.DemoSmileSimRecipientUserID, "tenant-acme")
 
 	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
@@ -129,7 +130,7 @@ func TestSmileSimulation_CompletionNotifiesWithoutAnyPoll(t *testing.T) {
 
 	simulateBody, err := json.Marshal(map[string]string{
 		"photo_object_id":   completedPhoto.ID,
-		"recipient_user_id": app.DemoSmileSimRecipientUserID,
+		"recipient_user_id": demo.DemoSmileSimRecipientUserID,
 	})
 	if err != nil {
 		t.Fatalf("marshal simulate request: %v", err)

@@ -28,7 +28,7 @@ package referenceapp_test
 // Authentication is as real as a subprocess can make it, and genuinely
 // real end to end since go/pki's integration: the child is booted with
 // APP_DEMO_USERS_PASSWORD set, so the child's own boot-time seed
-// (internal/app/demo_users.go) registers demoOwnerEmail as a real account
+// (internal/app/demo/demo_users.go) registers demoOwnerEmail as a real account
 // with real
 // tenant-acme membership before this test ever sends a request, and the
 // note request's access token comes from a genuine
@@ -45,7 +45,7 @@ package referenceapp_test
 // request acts inside comes from the token's claim, never from a Host
 // header; rbac's demo gate still reads the acting user from the
 // X-Demo-User header, exactly as the unit suite's createNoteAs does
-// (internal/app/demo_subject.go's DemoSubjectResolver).
+// (internal/app/demo/demo_subject.go's DemoSubjectResolver).
 //
 // The observer half lives in THIS process: a second RedisEventBus
 // instance, subscribed to the audit.event.recorded stream through a
@@ -262,7 +262,7 @@ type testListNotesResponse struct {
 // createNoteAs doc).
 //
 // demoUserHdr/demoOwner name WHO is acting for rbac's demo gate:
-// DemoSubjectResolver (internal/app/demo_subject.go) reads the acting user
+// DemoSubjectResolver (internal/app/demo/demo_subject.go) reads the acting user
 // from the header -- a placeholder for the access token's subject claim
 // that the demo wiring keeps while authn supplies the tenant half -- so
 // these requests carry both the token and the header, exactly like the
@@ -280,7 +280,7 @@ const (
 	acmeTenantID = "tenant-acme"
 	demoUserHdr  = "X-Demo-User"
 	demoOwner    = "demo-owner"
-	// demoOwnerEmail is internal/app/demo_users.go's DemoOwnerEmail, copied
+	// demoOwnerEmail is internal/app/demo/demo_users.go's DemoOwnerEmail, copied
 	// byte for byte: the real account behind the demoOwner header identity,
 	// granted membership (and the built-in owner role) in every configured
 	// tenant, tenant-acme included, once demoUsersPassword seeds it.
@@ -606,9 +606,9 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	if err != nil {
 		t.Fatalf("ListByTenant(%q): %v", acmeTenantID, err)
 	}
-	// tenant-acme's own audit trail is not notes' alone: seedDemoCredits'
+	// tenant-acme's own audit trail is not notes' alone: SeedDemoCredits'
 	// own boot-time Grant
-	// (internal/app/demo_credits.go) is itself a real CreditService.Grant
+	// (internal/app/demo/demo_credits.go) is itself a real CreditService.Grant
 	// call, which records its own "billing.credit.grant" AuditEvent
 	// for this same tenant (credit_service.go's emitCreditAudit).
 	// This test's own claim is narrower and unaffected: exactly

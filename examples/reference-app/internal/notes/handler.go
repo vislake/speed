@@ -591,7 +591,7 @@ func writeError(w http.ResponseWriter, err error) {
 //
 // The implementation is the host's to supply: in the reference app, the
 // demo identity layer reads the demo acting user's id from the request
-// (internal/app/demo_subject.go); in a host running the authn module,
+// (internal/app/demo/demo_subject.go); in a host running the authn module,
 // whatever connects a verified principal to the request answers here. The
 // module itself never reads the creator's identity from a header, the
 // context or the request body, and it never imports an authenticating

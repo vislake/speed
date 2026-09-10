@@ -35,7 +35,7 @@ package flowtests
 // deliberately do not duplicate.
 //
 // The system-domain operator driving the endpoint is the seeded
-// demo-platform-staff account (internal/app/demo_admin.go), the one account this app
+// demo-platform-staff account (internal/app/demo/demo_admin.go), the one account this app
 // grants admin:* permissions to under rbac.SystemDomain; demo-owner is
 // deliberately a tenant-domain owner whose admin access is pinned 403 by
 // TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole.
@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
 // The wire shapes this suite decodes, field-named after admin's own
@@ -115,7 +116,7 @@ func waitForUsageSummaryRow(t *testing.T, srv *httptest.Server, staffToken, want
 	var last adminUsageSummaryResponse
 	for time.Now().Before(deadline) {
 		last = adminUsageSummaryResponse{}
-		adminRequest(t, srv, http.MethodGet, app.AdminUsageSummaryPath, staffToken, nil, http.StatusOK, &last, nil)
+		adminRequest(t, srv, http.MethodGet, demo.AdminUsageSummaryPath, staffToken, nil, http.StatusOK, &last, nil)
 		for _, row := range last.Rows {
 			if row.MeteringSummaries == nil {
 				continue
@@ -142,8 +143,8 @@ func waitForUsageSummaryRow(t *testing.T, srv *httptest.Server, staffToken, want
 // see the test file's doc comment). It also pins the dimensions the wiring
 // added: meteringSummaries present on every ledger row (empty for a tenant
 // with no recorded usage, never absent), and the billing dimensions
-// (creditBalance, activeSubscription) present because seedDemoCredits and
-// seedDemoEntitlements gave the demo tenants real rows.
+// (creditBalance, activeSubscription) present because SeedDemoCredits and
+// SeedDemoEntitlements gave the demo tenants real rows.
 func TestUsageSummary_D9Endpoint_RealRecordedUsage(t *testing.T) {
 	const wantSuggestion = "Monitor the sensitivity and consider a desensitizing agent."
 	aiServer := newFakeOpenAICompatibleServer(t, wantSuggestion)
@@ -192,7 +193,7 @@ func TestUsageSummary_D9Endpoint_RealRecordedUsage(t *testing.T) {
 	// the tenant with no recorded usage shows an empty-but-present
 	// meteringSummaries rather than an absent field or an error.
 	final := adminUsageSummaryResponse{}
-	adminRequest(t, srv, http.MethodGet, app.AdminUsageSummaryPath, staffToken, nil, http.StatusOK, &final, nil)
+	adminRequest(t, srv, http.MethodGet, demo.AdminUsageSummaryPath, staffToken, nil, http.StatusOK, &final, nil)
 	rowsByTenant := map[string]adminUsageSummaryRow{}
 	for _, r := range final.Rows {
 		rowsByTenant[r.TenantID] = r
@@ -202,10 +203,10 @@ func TestUsageSummary_D9Endpoint_RealRecordedUsage(t *testing.T) {
 		t.Fatalf("usage summary rows = %+v, want a tenant-acme row", final.Rows)
 	}
 	if acme.CreditBalance == nil {
-		t.Error("tenant-acme row has no creditBalance, want non-nil since go/billing is wired (seedDemoCredits seeded a real balance)")
+		t.Error("tenant-acme row has no creditBalance, want non-nil since go/billing is wired (SeedDemoCredits seeded a real balance)")
 	}
 	if acme.ActiveSubscription == nil {
-		t.Error("tenant-acme row has no activeSubscription, want non-nil since seedDemoEntitlements subscribed the demo tenants")
+		t.Error("tenant-acme row has no activeSubscription, want non-nil since SeedDemoEntitlements subscribed the demo tenants")
 	}
 	globex, ok := rowsByTenant["tenant-globex"]
 	if !ok {

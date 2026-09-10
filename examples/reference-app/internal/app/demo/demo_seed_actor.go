@@ -2,7 +2,7 @@
 // demo writes are audited under, and demoSeedCtx, the constructor every one
 // of them runs on.
 
-package app
+package demo
 
 import (
 	"context"
@@ -28,7 +28,7 @@ const DemoSeedActorID = "reference-app-demo-seed"
 // The attribution shape is the app's boot-time one -- a write that is a
 // config-driven declaration re-affirmed identically on every restart under a
 // fixed actor -- the same shape the boot-time ai-gateway credential write
-// uses ("reference-app-boot" in server.go).
+// uses ("reference-app-boot" in internal/app/server.go).
 func demoSeedCtx(ctx context.Context) context.Context {
 	return pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: DemoSeedActorID})
 }

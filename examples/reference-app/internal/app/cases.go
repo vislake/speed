@@ -49,6 +49,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/storage"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	casesapi "github.com/vislake/speed/examples/reference-app/internal/cases/api"
 )
@@ -259,4 +260,4 @@ func writeCasesError(w http.ResponseWriter, err error) {
 // package's identical copy of the attribution seam (one host type, two
 // same-layer declarations -- see internal/cases's SubjectResolver doc
 // comment).
-var _ cases.SubjectResolver = DemoNotesSubjectResolver{}
+var _ cases.SubjectResolver = demo.DemoNotesSubjectResolver{}

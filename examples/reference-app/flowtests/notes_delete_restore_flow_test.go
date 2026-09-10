@@ -22,7 +22,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
 // noteMutationRequestAs issues method against a per-note path under
@@ -40,8 +40,8 @@ func noteMutationRequestAs(t *testing.T, srv *httptest.Server, method, token, no
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(app.DemoUserHeader, user)
-		req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+		req.Header.Set(demo.DemoUserHeader, user)
+		req.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	}
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -93,11 +93,11 @@ func TestNotesDeleteRestore_HTTPLifecycle(t *testing.T) {
 	// The not-yet-deleted refusal leg runs FIRST, while the note is live:
 	// restoring it now must answer the uniform 404 (a live note is not in
 	// the state restore needs), with no hint that the note exists.
-	resp := noteMutationRequestAs(t, srv, http.MethodPost, acmeToken, "/"+noteID+"/restore", app.DemoOwnerUserID)
+	resp := noteMutationRequestAs(t, srv, http.MethodPost, acmeToken, "/"+noteID+"/restore", demo.DemoOwnerUserID)
 	assertNoteNotFound(t, resp, "restore of a live note")
 
 	// Delete: 204, and the note leaves the tenant's list.
-	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/"+noteID, app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/"+noteID, demo.DemoOwnerUserID)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -110,11 +110,11 @@ func TestNotesDeleteRestore_HTTPLifecycle(t *testing.T) {
 	// mark-delete refuses to clobber the original deleted_at/deleted_by
 	// attribution with a second write, and the client cannot distinguish
 	// this case from an unknown id.
-	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/"+noteID, app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/"+noteID, demo.DemoOwnerUserID)
 	assertNoteNotFound(t, resp, "delete of the already-deleted note")
 
 	// Restore: 204, and the note is visible again with its text intact.
-	resp = noteMutationRequestAs(t, srv, http.MethodPost, acmeToken, "/"+noteID+"/restore", app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodPost, acmeToken, "/"+noteID+"/restore", demo.DemoOwnerUserID)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("restore status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -126,7 +126,7 @@ func TestNotesDeleteRestore_HTTPLifecycle(t *testing.T) {
 
 	// The restored note is deletable again -- a fresh mark, and the note
 	// leaves the list once more.
-	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/"+noteID, app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/"+noteID, demo.DemoOwnerUserID)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("second-lifecycle delete status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -139,16 +139,16 @@ func TestNotesDeleteRestore_HTTPLifecycle(t *testing.T) {
 	// ITS OWN tenant, so the rbac gate passes -- cannot delete tenant-acme's
 	// note, and the 404 it gets is the same uniform one (never a hint that
 	// the note exists, let alone whose it is).
-	resp = noteMutationRequestAs(t, srv, http.MethodDelete, globexToken, "/"+noteID, app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodDelete, globexToken, "/"+noteID, demo.DemoOwnerUserID)
 	assertNoteNotFound(t, resp, "another tenant's delete of acme's note")
 
 	// Unknown id: the same uniform 404.
-	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/00000000-0000-0000-0000-000000000000", app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodDelete, acmeToken, "/00000000-0000-0000-0000-000000000000", demo.DemoOwnerUserID)
 	assertNoteNotFound(t, resp, "delete of an unknown note id")
 
 	// Restoring another tenant's deleted note: tenant-globex cannot restore
 	// the note tenant-acme just deleted, uniform 404 again.
-	resp = noteMutationRequestAs(t, srv, http.MethodPost, globexToken, "/"+noteID+"/restore", app.DemoOwnerUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodPost, globexToken, "/"+noteID+"/restore", demo.DemoOwnerUserID)
 	assertNoteNotFound(t, resp, "another tenant's restore of acme's deleted note")
 }
 
@@ -164,10 +164,10 @@ func TestNotesDelete_RbacGate_AnswersForTheNewVerb(t *testing.T) {
 	readerToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-gate-reader")
 
 	noteID := createNoteAs(t, srv, ownerToken, "gate-probe note")
-	resp := noteMutationRequestAs(t, srv, http.MethodDelete, readerToken, "/"+noteID, app.DemoReaderUserID)
+	resp := noteMutationRequestAs(t, srv, http.MethodDelete, readerToken, "/"+noteID, demo.DemoReaderUserID)
 	assertPermissionDenied(t, resp, "demo-reader's delete of a note (notes:write missing)")
 
 	// The same reader's restore is refused identically.
-	resp = noteMutationRequestAs(t, srv, http.MethodPost, readerToken, "/"+noteID+"/restore", app.DemoReaderUserID)
+	resp = noteMutationRequestAs(t, srv, http.MethodPost, readerToken, "/"+noteID+"/restore", demo.DemoReaderUserID)
 	assertPermissionDenied(t, resp, "demo-reader's restore of a note (notes:write missing)")
 }

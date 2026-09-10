@@ -32,7 +32,7 @@ import (
 // most one delivery.
 //
 // The call cannot fail: reg.Events.Subscribe returns nothing, mirroring
-// wireDemoNotification's own no-error shape.
+// WireDemoNotification's own no-error shape.
 func wireSmilesimTerminalSignal(reg *pkgcore.Registry, svc *smilesim.Service) {
 	reg.Events.Subscribe(jobs.EventJobTerminal, svc.OnJobTerminal)
 }

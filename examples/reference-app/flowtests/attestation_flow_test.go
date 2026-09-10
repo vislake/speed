@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"gorm.io/gorm"
 
@@ -130,7 +131,7 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 			t.Fatalf("marshal create body: %v", marshalErr)
 		}
 		createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-			token, app.DemoOwnerUserID, "application/json", strings.NewReader(string(body)))
+			token, demo.DemoOwnerUserID, "application/json", strings.NewReader(string(body)))
 		var share testCreateShareResponse
 		decodeSharingBody(t, createResp, http.StatusCreated, "create share for "+resourceRef, &share)
 		return share
@@ -202,8 +203,8 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 	// pki.certificate_revoked, so the old signature vouches for nothing.
 	writeStoredObject(t, cfg, "tenant-acme", outputObjectID, imgServer.generatedPNG)
 	revokeResp := storageRequest(t, srv, http.MethodPost,
-		app.PkiRoutePath+"/certificates/"+attestationRow+"/revoke",
-		token, app.DemoOwnerUserID, "application/json",
+		demo.PkiRoutePath+"/certificates/"+attestationRow+"/revoke",
+		token, demo.DemoOwnerUserID, "application/json",
 		strings.NewReader(`{"reason":"simulation attestation key suspected compromised"}`))
 	revokeBody, _ := io.ReadAll(revokeResp.Body)
 	revokeResp.Body.Close()
@@ -268,8 +269,8 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 		t.Fatalf("GenerateCRL: %v", crlErr)
 	}
 	crlResp := storageRequest(t, srv, http.MethodGet,
-		app.PkiRoutePath+"/authorities/"+issuingAuthority.ID+"/crl",
-		token, app.DemoOwnerUserID, "", nil)
+		demo.PkiRoutePath+"/authorities/"+issuingAuthority.ID+"/crl",
+		token, demo.DemoOwnerUserID, "", nil)
 	crlBody, _ := io.ReadAll(crlResp.Body)
 	crlResp.Body.Close()
 	if crlResp.StatusCode != http.StatusOK {
@@ -563,7 +564,7 @@ func mintShareAs(t *testing.T, srv *httptest.Server, token string, resourceRef s
 		t.Fatalf("marshal create body: %v", err)
 	}
 	createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-		token, app.DemoOwnerUserID, "application/json", strings.NewReader(string(body)))
+		token, demo.DemoOwnerUserID, "application/json", strings.NewReader(string(body)))
 	var share testCreateShareResponse
 	decodeSharingBody(t, createResp, http.StatusCreated, "create share for "+resourceRef, &share)
 	return share

@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
 // TestFragmentSurface_CaseToSimulation_Journey is the end-to-end
@@ -55,7 +55,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	// read it back from the clinic-wide list (cases_listCases) and from
 	// the detail route (cases_getCase) -- the three cases operations the
 	// case web UI will call.
-	created := createCaseAs(t, srv, token, app.DemoOwnerUserID, caseCreateBody{
+	created := createCaseAs(t, srv, token, demo.DemoOwnerUserID, caseCreateBody{
 		PatientName:    "Fragment Journey Patient",
 		PatientRef:     "JRN-001",
 		PhotoObjectIDs: []string{completedPhoto.ID},
@@ -67,7 +67,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 		t.Fatalf("created case photos = %+v, want exactly the uploaded photo %q", created.Photos, completedPhoto.ID)
 	}
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, app.DemoOwnerUserID, nil)
+	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, demo.DemoOwnerUserID, nil)
 	listBody, err := io.ReadAll(listResp.Body)
 	listResp.Body.Close()
 	if err != nil {
@@ -93,7 +93,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 		t.Fatalf("created case %q missing from the caller's case list: %+v", created.ID, listOut.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, token, app.DemoOwnerUserID, nil)
+	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, token, demo.DemoOwnerUserID, nil)
 	defer detailResp.Body.Close()
 	detail, detailBody := decodeCasesResponse(t, detailResp)
 	if detailResp.StatusCode != http.StatusOK {

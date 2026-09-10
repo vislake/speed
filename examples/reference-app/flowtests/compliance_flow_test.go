@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"gorm.io/gorm"
 
@@ -136,7 +137,7 @@ func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testi
 	db := openSecondDB(t, cfg)
 	softDeleteAndBackdate(t, db, "tenant-acme", creatorDeletedID, time.Now())
 
-	subject := pkgcore.SubjectRef{TenantID: "tenant-acme", SubjectID: app.DemoNotesCreatorUserID}
+	subject := pkgcore.SubjectRef{TenantID: "tenant-acme", SubjectID: demo.DemoNotesCreatorUserID}
 	// The ctx must carry the subject's own tenant: Erase erases within
 	// the tenant ctx is scoped to -- the SubjectRef may only echo it back
 	// (go/compliance's Erase tenant gate) -- and enters its audited system
@@ -248,8 +249,8 @@ func TestComplianceExport_NotesParticipant_ExportsLiveNotesOnly(t *testing.T) {
 	if got.ID != liveID || got.Text != "live note content a subject would export" {
 		t.Fatalf("exported note = %+v, want the live note (id %s)", got, liveID)
 	}
-	if got.CreatorUserID != app.DemoNotesCreatorUserID {
-		t.Fatalf("exported note CreatorUserID = %q, want %q", got.CreatorUserID, app.DemoNotesCreatorUserID)
+	if got.CreatorUserID != demo.DemoNotesCreatorUserID {
+		t.Fatalf("exported note CreatorUserID = %q, want %q", got.CreatorUserID, demo.DemoNotesCreatorUserID)
 	}
 }
 
@@ -351,8 +352,8 @@ func createNoteAsByCreator(t *testing.T, srv *httptest.Server, token, creatorID,
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
-	req.Header.Set(app.DemoOrgUserHeader, creatorID)
+	req.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
+	req.Header.Set(demo.DemoOrgUserHeader, creatorID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {

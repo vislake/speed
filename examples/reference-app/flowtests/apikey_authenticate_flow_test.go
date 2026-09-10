@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/ratelimit"
 )
@@ -95,7 +96,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	// CRUD surface apikey_flow_test.go's own helpers drive -- the identical
 	// shape that test uses, since the inbound path changes nothing about how a key is
 	// issued.
-	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
+	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demo.DemoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
 	if created.Key == "" {
 		t.Fatal("created key carries no raw key")
@@ -128,7 +129,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	}
 
 	// Rotate through the ordinary CRUD surface.
-	rotateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, app.DemoOwnerUserID)
+	rotateResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath+"/"+created.ID+"/rotate", acmeToken, demo.DemoOwnerUserID)
 	rotated := decodeCreatedAPIKey(t, rotateResp, http.StatusOK, "rotate")
 
 	// The OLD raw key value is now refused as a bearer credential -- THE
@@ -147,7 +148,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	}
 
 	// Revoke the replacement through the ordinary CRUD surface.
-	revokeResp := apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, app.DemoOwnerUserID)
+	revokeResp := apikeyRequest(t, srv, http.MethodDelete, apikeyBasePath+"/"+rotated.ID, acmeToken, demo.DemoOwnerUserID)
 	revokeResp.Body.Close()
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke: status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -200,7 +201,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_
 
 	// Create a real key through the ordinary session-authenticated CRUD
 	// surface, the identical shape the rotate/revoke flow above uses.
-	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, app.DemoOwnerUserID)
+	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demo.DemoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
 	if created.Key == "" {
 		t.Fatal("created key carries no raw key")

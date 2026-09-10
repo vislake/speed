@@ -15,7 +15,7 @@ package flowtests
 // enabling enterprise OIDC for a real tenant would have silently needed a
 // code change in this file. Post-fix, topMux dispatches the whole
 // AuthnAPIPath subtree straight from authn.Middleware's own output (the
-// adminRoutePath branch's shape), tenancy never sees it, and authn's own
+// AdminRoutePath branch's shape), tenancy never sees it, and authn's own
 // Handler is the authority on who may call what.
 //
 // go/authn's enterprise relying party is service-level today -- no authn
@@ -36,8 +36,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
-
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/authn"
 )
 
@@ -62,7 +61,7 @@ func TestAuthnEnterpriseOIDCLoginStart_ReachesAuthnNotTenancy(t *testing.T) {
 	// "oidc:<tenant>" name (authn.ProviderOIDCPrefix + a tenant id) that no
 	// literal tenancy allowlist entry could ever enumerate -- the property
 	// that made the pre-fix composition a dead end for this path.
-	provider := url.PathEscape(authn.ProviderOIDCPrefix + string(app.DemoSingleTenantID))
+	provider := url.PathEscape(authn.ProviderOIDCPrefix + string(demo.DemoSingleTenantID))
 	authorizeURL := srv.URL + "/api/v1/authn/social/" + provider +
 		"/authorize?redirect_uri=" + url.QueryEscape("https://app.example.internal/callback")
 

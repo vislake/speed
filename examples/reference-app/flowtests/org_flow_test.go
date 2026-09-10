@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -157,7 +158,7 @@ type orgListMembersResponse struct {
 // identity must do (org_createNode).
 //
 // Every call also sends the rbac demo header (DemoUserHeader) naming
-// DemoOwnerUserID, the seeded identity seedDemoGrants grants BuiltinRoleOwner
+// DemoOwnerUserID, the seeded identity SeedDemoGrants grants BuiltinRoleOwner
 // in every configured tenant -- org's
 // route is gated per operation on its own declared permissions like every
 // other module's, and this
@@ -198,9 +199,9 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 	if reader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
 	if subjectUserID != "" {
-		req.Header.Set(app.DemoOrgUserHeader, subjectUserID)
+		req.Header.Set(demo.DemoOrgUserHeader, subjectUserID)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -399,7 +400,7 @@ func containsUserID(members []orgMembership, userID string) bool {
 func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t *testing.T) {
 	// The server is built by hand rather than through buildOrgTestServer
 	// because the rbac hook must be armed on the config BEFORE BuildServer
-	// runs (the hook fires inside it, right after seedDemoGrants) -- the
+	// runs (the hook fires inside it, right after SeedDemoGrants) -- the
 	// same shape TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly
 	// uses. The capturingMailer stands in for the console mailer exactly as
 	// buildOrgTestServer wires it, so the sent invitation can be observed.
@@ -455,7 +456,7 @@ func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t
 	}
 
 	// Grant the account the owner role in the tenant, under the tenant's
-	// own context exactly like seedDemoGrants grants its actors -- the
+	// own context exactly like SeedDemoGrants grants its actors -- the
 	// mirror of the demo seeding that gives the real demo-owner account its
 	// grants in a boot with APP_DEMO_USERS_PASSWORD set.
 	tenantCtx := pkgcore.WithTenant(context.Background(), tenant)

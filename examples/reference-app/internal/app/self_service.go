@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/jobs"
@@ -28,9 +29,9 @@ import (
 // user whose creation event carries a tenant, plus the tenant itself and
 // the owner grant the "what may this user do" half of the product needs.
 // Provisioning also subscribes the clinic to the demo entitlement Plan
-// and seeds its credit balance -- the same subscription (ensureDemoSubscription)
-// and the same grant (grantDemoCredits) the boot-time demo seeding gives
-// a demo tenant, demo_entitlements.go and demo_credits.go -- so the
+// and seeds its credit balance -- the same subscription (EnsureDemoSubscription)
+// and the same grant (GrantDemoCredits) the boot-time demo seeding gives
+// a demo tenant, demo/demo_entitlements.go and demo/demo_credits.go -- so the
 // product's gated AI routes are open and payable from the clinic's very
 // first request: a clinic whose registration granted neither would find
 // its first smile simulation refused with aigateway.entitlement_denied
@@ -40,7 +41,7 @@ import (
 // rbac ones (# Failure semantics).
 //
 // The provisioning follows the same assembly shapes the demo seeding
-// already established (demo_users.go's addDemoOrgMembership and
+// already established (demo/demo_users.go's addDemoOrgMembership and
 // grantDemoSeedAccount): org's TreeService and MemberService under the
 // tenant's own context, rbac's EnsureBuiltinRoles and AssignRole for the
 // grant, never a raw write and never a cross-module struct import. The
@@ -80,8 +81,8 @@ import (
 // on the app's own bus (reg.Events, the same bus every module subscribed
 // to during Bootstrap) AFTER the boot-time demo seeds have run their
 // registrations, which is the discriminator that keeps the demo path
-// byte-identical: an event published by seedDemoUsers' or
-// seedDemoPlatformStaff's own register POSTs (registration happens inside
+// byte-identical: an event published by SeedDemoUsers' or
+// SeedDemoPlatformStaff's own register POSTs (registration happens inside
 // BuildServer, before the subscription exists) provisions nothing, while
 // every registration that arrives once the server is up -- a browser's,
 // or a flow test's -- provisions. On the in-process bus the provisioning
@@ -118,10 +119,10 @@ import (
 // end this file exists to close. Every step of provision is idempotent --
 // the tenant is derived from the user id, org's EnsureRootSeat and
 // rbac's role and grant writes reconcile on a repeat, the billing
-// subscription step (ensureDemoSubscription, on
+// subscription step (EnsureDemoSubscription, on
 // SubscriptionService.EnsureActive) makes an already-subscribed clinic a
 // no-op, and the credit step's balance
-// guard (grantDemoCredits) never double-seeds -- which is what makes a
+// guard (GrantDemoCredits) never double-seeds -- which is what makes a
 // FAILED attempt retryable: the retry job scheduled on
 // the app's own job queue (scheduleProvisionRetry) re-runs the same
 // provision until it succeeds, converging the clinic exactly as a
@@ -187,11 +188,11 @@ type SelfServiceProvisioner struct {
 	orgModule *org.Module
 	// rbacService is the service the clinic's built-in roles and the
 	// owner grant are ensured through (EnsureBuiltinRoles then
-	// AssignRole, the same order seedDemoGrants uses).
+	// AssignRole, the same order SeedDemoGrants uses).
 	rbacService *rbac.Service
 	// plans is the billing.PlanService whose platform-wide demo Plan the
 	// clinic's subscription is created against: provision resolves it
-	// through demo_entitlements.go's demoEntitlementPlan (resolved-else-
+	// through demo/demo_entitlements.go's DemoEntitlementPlan (resolved-else-
 	// created, the very plan the boot-time demo seed subscribes its demo
 	// tenants to) on every provisioning attempt, so a clinic's
 	// subscription never depends on the demo seed having run first.
@@ -199,15 +200,15 @@ type SelfServiceProvisioner struct {
 	plans *billing.PlanService
 	// subscriptions is the billing.SubscriptionService the clinic's
 	// Active subscription to the demo Plan is ensured through
-	// (demo_entitlements.go's ensureDemoSubscription) -- the same service
-	// and the same subscription shape seedDemoEntitlements gives every
+	// (demo/demo_entitlements.go's EnsureDemoSubscription) -- the same service
+	// and the same subscription shape SeedDemoEntitlements gives every
 	// demo tenant, which is exactly what opens the app's gated AI routes
 	// (smilesim's entitlement pre-flight, internal/smilesim/service.go)
 	// to the clinic's own requests. Always set by wireSelfService.
 	subscriptions *billing.SubscriptionService
 	// credits is the billing.CreditService the clinic's starting credit
-	// balance is granted through (demo_credits.go's grantDemoCredits) --
-	// the same service, amount and reason seedDemoCredits gives every
+	// balance is granted through (demo/demo_credits.go's GrantDemoCredits) --
+	// the same service, amount and reason SeedDemoCredits gives every
 	// demo tenant, the balance smile simulations reserve against.
 	// Always set by wireSelfService.
 	credits *billing.CreditService
@@ -507,10 +508,10 @@ func (p *SelfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 // registrant's seat in it (org's one idempotent EnsureRootSeat call; the
 // root is named after the name the registrant gave at registration, or
 // the catalog default), the built-in roles, the owner grant, the
-// clinic's subscription to the demo entitlement Plan (ensureDemoSubscription,
+// clinic's subscription to the demo entitlement Plan (EnsureDemoSubscription,
 // the same Active subscription the demo seeding gives a demo tenant -- the
 // grant that opens the app's gated AI routes to the clinic) and its demo
-// credit seed (grantDemoCredits, the same starting balance a demo tenant's
+// credit seed (GrantDemoCredits, the same starting balance a demo tenant's
 // boot seed gets -- the balance a smile simulation reserves against). Every
 // step is idempotent and every step runs under the clinic tenant's own
 // context -- org's tree and membership rows, rbac's role and binding rows
@@ -551,7 +552,7 @@ func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, c
 	}
 
 	// The owner grant: roles are tenant rows, so the built-in roles are
-	// ensured before the grant names one -- the same order seedDemoGrants
+	// ensured before the grant names one -- the same order SeedDemoGrants
 	// uses. EnsureBuiltinRoles reconciles rather than recreates, and
 	// AssignRole is a no-op when the binding is already there, so both
 	// are safe to repeat on a redelivery.
@@ -574,7 +575,7 @@ func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, c
 
 	// The clinic's subscription to the demo entitlement Plan: the SAME
 	// Active subscription the demo seeding gives a demo tenant at boot
-	// (demo_entitlements.go's ensureDemoSubscription over the SAME demo
+	// (demo/demo_entitlements.go's EnsureDemoSubscription over the SAME demo
 	// Plan), resolved-else-created here rather than assumed seeded -- a
 	// clinic's subscription must never depend on the boot-time demo seed
 	// having run first. It is the grant the app's gated AI routes judge:
@@ -586,26 +587,26 @@ func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// variable AFTER provision's earlier if-init errs, and reusing the
 	// outer err there would turn those long-standing inner shadows into
 	// govet shadow reports.
-	plan, planErr := demoEntitlementPlan(tenantCtx, p.plans)
+	plan, planErr := demo.DemoEntitlementPlan(tenantCtx, p.plans)
 	if planErr != nil {
 		return fmt.Errorf("reference-app: resolve the clinic's entitlement plan: %w", planErr)
 	}
-	if err := ensureDemoSubscription(tenantCtx, p.subscriptions, plan, clinic); err != nil {
+	if err := demo.EnsureDemoSubscription(tenantCtx, p.subscriptions, plan, clinic); err != nil {
 		return fmt.Errorf("reference-app: subscribe the clinic to the demo entitlement plan: %w", err)
 	}
 
 	// The clinic's starting credit balance: the SAME grant the demo
-	// seeding gives a demo tenant at boot (demo_credits.go's
-	// grantDemoCredits -- the same amount, for the same reason, through
+	// seeding gives a demo tenant at boot (demo/demo_credits.go's
+	// GrantDemoCredits -- the same amount, for the same reason, through
 	// the same service), the balance the clinic's first smile simulations
 	// reserve against. The balance-zero guard inside the grant makes this
 	// step converge on a retry whose earlier attempt already landed it.
 	// The grant's audit row carries the demo seed's system Actor rather
 	// than the registering user: the attribution belongs to the shared
-	// seed write itself (demo_credits.go), not to whichever path invoked
+	// seed write itself (demo/demo_credits.go), not to whichever path invoked
 	// it -- unlike the two rbac writes above, whose actor is layered HERE
 	// because the host is what knows the registrant.
-	if err := grantDemoCredits(tenantCtx, p.credits, clinic); err != nil {
+	if err := demo.GrantDemoCredits(tenantCtx, p.credits, clinic); err != nil {
 		return fmt.Errorf("reference-app: seed the clinic's credit balance: %w", err)
 	}
 	return nil
@@ -651,7 +652,7 @@ func (p *SelfServiceProvisioner) clinicRootNameFor(userID string, tenantCtx cont
 // (its en-US value is the word "workspace", go/org/locales/{zh-CN,en-US}.toml)
 // and is referenced by its literal
 // string the same way this app's role seeding references rbac's
-// "rbac.role.member" description id (demo_subject.go's
+// "rbac.role.member" description id (demo/demo_subject.go's
 // seedDemoReaderRole) -- a coordination point between this host's glue
 // and the module that owns the message, never a new piece of copy living
 // in Go. The locale is the platform default (en-US), exactly org's own
@@ -722,9 +723,9 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // PlanService whose demo Plan the clinic subscribes to, subscriptions the
 // SubscriptionService the Active subscription is ensured through, and
 // credits the CreditService the clinic's starting balance is granted
-// through -- the same services, Plan and grant shape seedDemoEntitlements
-// and seedDemoCredits give the demo tenants at boot (demo_entitlements.go,
-// demo_credits.go). Nothing else needs wiring -- the clinic's org rows
+// through -- the same services, Plan and grant shape SeedDemoEntitlements
+// and SeedDemoCredits give the demo tenants at boot (demo/demo_entitlements.go,
+// demo/demo_credits.go). Nothing else needs wiring -- the clinic's org rows
 // and its billing subscription and credit rows are the whole of the
 // durable record, and the sign-in store reads them directly through
 // org's own cross-tenant query (sign_in_memberships.go), so a boot

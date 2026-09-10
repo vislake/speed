@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/org"
@@ -74,7 +75,7 @@ func postNoteWithDemoHeader(t *testing.T, srv *httptest.Server, bearerToken, dem
 	}
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(app.DemoUserHeader, demoUser)
+	req.Header.Set(demo.DemoUserHeader, demoUser)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -106,12 +107,12 @@ func TestDemoUserHeader_KillSwitch_ClosesThePrivilegeEscalationHole(t *testing.T
 	t.Run("switch at its default: the header still escalates (the confirmed bug, unchanged)", func(t *testing.T) {
 		srv := buildSeededUsersTestServerWithHeaderSwitch(t, demoSeedPassword, false)
 
-		status, code, readerToken := demoLogin(t, srv, app.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+		status, code, readerToken := demoLogin(t, srv, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
 		if status != http.StatusOK {
 			t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 		}
 
-		resp := postNoteWithDemoHeader(t, srv, readerToken, app.DemoOwnerUserID, "escalated note")
+		resp := postNoteWithDemoHeader(t, srv, readerToken, demo.DemoOwnerUserID, "escalated note")
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
 			body, _ := io.ReadAll(resp.Body)
@@ -125,12 +126,12 @@ func TestDemoUserHeader_KillSwitch_ClosesThePrivilegeEscalationHole(t *testing.T
 	t.Run("switch enabled: the header is ignored, the reader's own grant decides, and the write is refused", func(t *testing.T) {
 		srv := buildSeededUsersTestServerWithHeaderSwitch(t, demoSeedPassword, true)
 
-		status, code, readerToken := demoLogin(t, srv, app.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+		status, code, readerToken := demoLogin(t, srv, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
 		if status != http.StatusOK {
 			t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 		}
 
-		resp := postNoteWithDemoHeader(t, srv, readerToken, app.DemoOwnerUserID, "escalation attempt, switch enabled")
+		resp := postNoteWithDemoHeader(t, srv, readerToken, demo.DemoOwnerUserID, "escalation attempt, switch enabled")
 		assertPermissionDenied(t, resp, "POST as the reader with X-Demo-User: demo-owner, switch enabled")
 
 		// The reader's OWN permission (read) must still work unaffected --
@@ -156,10 +157,10 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 	const principalUserID = "real-unprivileged-user"
 
 	r := requestInTenant(http.MethodPost, "tenant-acme")
-	r.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	r.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
 	r = withTestPrincipal(r, principalUserID, "tenant-acme")
 
-	sub, ok := app.DemoResolveSubject(r, true)
+	sub, ok := demo.DemoResolveSubject(r, true)
 	if !ok {
 		t.Fatal("no subject for a request with a tenant, a verified principal and a demo header")
 	}
@@ -173,8 +174,8 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 	// Without a Principal at all, a header-disabled resolver must fail
 	// closed rather than fall back to the header it is disabling.
 	r2 := requestInTenant(http.MethodPost, "tenant-acme")
-	r2.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
-	if _, ok := app.DemoResolveSubject(r2, true); ok {
+	r2.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
+	if _, ok := demo.DemoResolveSubject(r2, true); ok {
 		t.Fatal("headerDisabled resolved a subject from the header alone with no verified Principal; it must fail closed")
 	}
 }
@@ -236,7 +237,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		// creator of a case nor key any list. (The header alone
 		// was honored, and the caller's own case vanished from its own
 		// "my cases" answer under a foreign id.)
-		createdWithForeignHeader := createCaseAs(t, srv, token, app.DemoNotesCreatorUserID, caseCreateBody{PatientName: "kill switch case two"})
+		createdWithForeignHeader := createCaseAs(t, srv, token, demo.DemoNotesCreatorUserID, caseCreateBody{PatientName: "kill switch case two"})
 		if createdWithForeignHeader.CreatorUserID != created.CreatorUserID {
 			t.Fatalf("create under a foreign X-Demo-User-Id was attributed to %q, want the caller's own %q -- the attribution header must not be read when the kill switch is on",
 				createdWithForeignHeader.CreatorUserID, created.CreatorUserID)
@@ -245,7 +246,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		// The clinic-wide list, whatever header rides along, answers the
 		// tenant's rows -- both principal-created cases -- never a list
 		// keyed to a header the switch has made inert.
-		resp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, app.DemoNotesCreatorUserID, nil)
+		resp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, demo.DemoNotesCreatorUserID, nil)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
@@ -308,7 +309,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 				ID string `json:"id"`
 			} `json:"messages"`
 		}
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, app.DemoNotesCreatorUserID, nil, http.StatusOK, &spoofed)
+		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, demo.DemoNotesCreatorUserID, nil, http.StatusOK, &spoofed)
 		if len(spoofed.Messages) != 0 {
 			t.Fatalf("inbox under a foreign X-Demo-User-Id = %d messages, want the principal's empty 0", len(spoofed.Messages))
 		}
@@ -346,11 +347,11 @@ func TestDemoOrgSubjectResolverFor_HeaderDisabled_UsesPrincipalIgnoresHeader(t *
 
 	withBoth := func() *http.Request {
 		r := requestInTenant(http.MethodGet, "tenant-acme")
-		r.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+		r.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 		return withTestPrincipal(r, principalUserID, "tenant-acme")
 	}
 
-	disabled := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(true, false))
+	disabled := org.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(true, false))
 	userID, ok := disabled.Subject(withBoth())
 	if !ok {
 		t.Fatal("the disabled resolver reported no subject for a request with a verified principal and a demo header")
@@ -363,21 +364,21 @@ func TestDemoOrgSubjectResolverFor_HeaderDisabled_UsesPrincipalIgnoresHeader(t *
 	// Without a Principal at all, the disabled resolver must fail closed
 	// rather than fall back to the header it is disabling.
 	headerOnly := requestInTenant(http.MethodGet, "tenant-acme")
-	headerOnly.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+	headerOnly.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	if _, has := disabled.Subject(headerOnly); has {
 		t.Fatal("the disabled resolver resolved a subject from the attribution header alone with no verified Principal; it must fail closed")
 	}
 
 	// The zero value stays identical to the header-only
 	// resolver: the header wins over the Principal...
-	got, ok := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, false)).Subject(withBoth())
-	if !ok || got != app.DemoNotesCreatorUserID {
+	got, ok := org.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(false, false)).Subject(withBoth())
+	if !ok || got != demo.DemoNotesCreatorUserID {
 		t.Fatalf("default org resolver = (%q, %v), want the header's %q -- the header-enabled default must be unchanged",
-			got, ok, app.DemoNotesCreatorUserID)
+			got, ok, demo.DemoNotesCreatorUserID)
 	}
 	// ...and a header-less, Principal-only request still fails closed.
 	principalOnly := withTestPrincipal(requestInTenant(http.MethodGet, "tenant-acme"), principalUserID, "tenant-acme")
-	if _, has := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, false)).Subject(principalOnly); has {
+	if _, has := org.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(false, false)).Subject(principalOnly); has {
 		t.Fatal("the default org resolver resolved a subject from the Principal alone; it must stay header-only")
 	}
 }
@@ -393,11 +394,11 @@ func TestDemoNotesSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *t
 
 	withBoth := func() *http.Request {
 		r := requestInTenant(http.MethodGet, "tenant-acme")
-		r.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+		r.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 		return withTestPrincipal(r, principalUserID, "tenant-acme")
 	}
 
-	disabled := app.DemoNotesSubjectResolver{HeaderDisabled: true}
+	disabled := demo.DemoNotesSubjectResolver{HeaderDisabled: true}
 	userID, ok := disabled.Subject(withBoth())
 	if !ok {
 		t.Fatal("the disabled resolver reported no subject for a request with a verified principal and a demo header")
@@ -410,7 +411,7 @@ func TestDemoNotesSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *t
 	// Without a Principal at all, the disabled resolver must fail closed
 	// rather than fall back to the header it is disabling.
 	headerOnly := requestInTenant(http.MethodGet, "tenant-acme")
-	headerOnly.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+	headerOnly.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	if _, has := disabled.Subject(headerOnly); has {
 		t.Fatal("the disabled resolver resolved a subject from the attribution header alone with no verified Principal; it must fail closed")
 	}
@@ -419,13 +420,13 @@ func TestDemoNotesSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *t
 	// header-then-Principal resolver: the header wins when both are
 	// present, and the Principal supplies the user only when no header
 	// rides along.
-	got, ok := (app.DemoNotesSubjectResolver{}).Subject(withBoth())
-	if !ok || got != app.DemoNotesCreatorUserID {
+	got, ok := (demo.DemoNotesSubjectResolver{}).Subject(withBoth())
+	if !ok || got != demo.DemoNotesCreatorUserID {
 		t.Fatalf("default notes resolver = (%q, %v), want the header's %q -- the header-first default must be unchanged",
-			got, ok, app.DemoNotesCreatorUserID)
+			got, ok, demo.DemoNotesCreatorUserID)
 	}
 	principalOnly := withTestPrincipal(requestInTenant(http.MethodGet, "tenant-acme"), principalUserID, "tenant-acme")
-	got, ok = (app.DemoNotesSubjectResolver{}).Subject(principalOnly)
+	got, ok = (demo.DemoNotesSubjectResolver{}).Subject(principalOnly)
 	if !ok || got != principalUserID {
 		t.Fatalf("default notes resolver with no header = (%q, %v), want the principal's %q",
 			got, ok, principalUserID)
@@ -440,7 +441,7 @@ func TestDemoNotesSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *t
 // nothing about the header-wins default.
 
 func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *testing.T) {
-	resolver := app.DemoSubjectResolverFor(false)
+	resolver := demo.DemoSubjectResolverFor(false)
 
 	cases := []struct {
 		name       string
@@ -448,25 +449,25 @@ func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *t
 		headerUser string
 		principal  string
 	}{
-		{name: "header only", tenant: "tenant-acme", headerUser: app.DemoOwnerUserID},
+		{name: "header only", tenant: "tenant-acme", headerUser: demo.DemoOwnerUserID},
 		{name: "principal only", tenant: "tenant-acme", principal: "real-seeded-user"},
-		{name: "header wins over principal", tenant: "tenant-acme", headerUser: app.DemoReaderUserID, principal: "real-seeded-user"},
+		{name: "header wins over principal", tenant: "tenant-acme", headerUser: demo.DemoReaderUserID, principal: "real-seeded-user"},
 		{name: "neither", tenant: "tenant-acme"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := requestInTenant(http.MethodGet, pkgcore.TenantID(tc.tenant))
 			if tc.headerUser != "" {
-				r.Header.Set(app.DemoUserHeader, tc.headerUser)
+				r.Header.Set(demo.DemoUserHeader, tc.headerUser)
 			}
 			if tc.principal != "" {
 				r = withTestPrincipal(r, tc.principal, tc.tenant)
 			}
 
 			gotSub, gotOK := resolver(r)
-			wantSub, wantOK := app.DemoSubjectResolver(r)
+			wantSub, wantOK := demo.DemoSubjectResolver(r)
 			if gotOK != wantOK || gotSub != wantSub {
-				t.Fatalf("DemoSubjectResolverFor(false)(r) = (%+v, %v), want app.DemoSubjectResolver(r) = (%+v, %v)",
+				t.Fatalf("DemoSubjectResolverFor(false)(r) = (%+v, %v), want demo.DemoSubjectResolver(r) = (%+v, %v)",
 					gotSub, gotOK, wantSub, wantOK)
 			}
 		})
@@ -485,7 +486,7 @@ func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *t
 func TestDemoOrgSubjectResolverFor_PrincipalFallback_UsesPrincipalWhenNoHeader(t *testing.T) {
 	const principalUserID = "real-signed-in-owner"
 
-	withFallback := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, true))
+	withFallback := org.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(false, true))
 
 	// Header-less, Principal-only: the browser shape -- resolved as the
 	// Principal, never refused.
@@ -500,12 +501,12 @@ func TestDemoOrgSubjectResolverFor_PrincipalFallback_UsesPrincipalWhenNoHeader(t
 	// addition for header-less callers, never a demotion of the pre-auth
 	// flows' affordance.
 	withBoth := requestInTenant(http.MethodGet, "tenant-acme")
-	withBoth.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+	withBoth.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	withBoth = withTestPrincipal(withBoth, principalUserID, "tenant-acme")
 	userID, ok = withFallback.Subject(withBoth)
-	if !ok || userID != app.DemoNotesCreatorUserID {
+	if !ok || userID != demo.DemoNotesCreatorUserID {
 		t.Fatalf("principalFallback resolver with a header = (%q, %v), want the header's %q",
-			userID, ok, app.DemoNotesCreatorUserID)
+			userID, ok, demo.DemoNotesCreatorUserID)
 	}
 
 	// Neither source: fail closed, exactly like the header-only shape.
@@ -516,7 +517,7 @@ func TestDemoOrgSubjectResolverFor_PrincipalFallback_UsesPrincipalWhenNoHeader(t
 
 	// The zero value stays header-only -- the pinned notification and
 	// integration contract untouched by org's exception.
-	zeroValue := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, false))
+	zeroValue := org.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(false, false))
 	if _, has := zeroValue.Subject(principalOnly); has {
 		t.Fatal("the zero-value org resolver resolved a subject from the Principal alone; principalFallback must be opt-in")
 	}

@@ -6,10 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
-
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit"
@@ -128,7 +127,7 @@ func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t
 	// delete): the erasure's HardDelete of an already-removed row must not
 	// surface ErrErasurePartialFailure.
 	t.Run("erasure racing a concurrent sweep-shaped removal converges clean", func(t *testing.T) {
-		const creator = app.DemoNotesCreatorUserID
+		const creator = demo.DemoNotesCreatorUserID
 		backdatedSoftDeleteCreatorNotes(creator)
 
 		type outcome struct {

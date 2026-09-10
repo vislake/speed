@@ -1,4 +1,4 @@
-package app
+package demo
 
 import (
 	"bytes"
@@ -29,7 +29,7 @@ import (
 // This file holds everything this example needs to demonstrate rbac end to
 // end: where a Subject comes from, which permission gates which route, and
 // the demo grants seeded at startup. It is deliberately a file of its own
-// rather than more of server.go.
+// rather than more of internal/app/server.go.
 //
 // The "where a Subject comes from" half: a request whose access token
 // verified is resolved from its Principal, the identity the authenticating
@@ -44,10 +44,10 @@ import (
 // THIS IS NOT AUTHENTICATION, and it is not a pattern to copy. An
 // unauthenticated header is a claim, not an identity: anyone who can reach
 // the server can set it to any value and become that user. It carries the
-// same warning DemoHostTenants and strictHostResolver carry in server.go.
+// same warning DemoHostTenants and strictHostResolver carry in internal/app/server.go.
 //
 // The flows built around the header (the permission-gate and isolation
-// tests, the actor model seedDemoGrants below seeds) use it to say which
+// tests, the actor model SeedDemoGrants below seeds) use it to say which
 // seeded demo actor is acting. DemoSubjectResolver therefore reads it
 // first, so those flows keep their meaning; a request carrying no demo
 // header is resolved from the verified Principal authn.Middleware put in
@@ -61,14 +61,14 @@ import (
 // merely holds a low-privilege session can set this header to a
 // higher-privileged demo actor's id and the resolver hands rbac that
 // actor's Subject instead of the caller's own, no token forgery required.
-// the DisableDemoUserHeader bootstrap field (bootstrap.go) is the escape
+// the DisableDemoUserHeader bootstrap field (internal/app/bootstrap.go) is the escape
 // hatch -- an operator
 // who deploys this reference app somewhere a real user might reach sets
 // APP_DISABLE_DEMO_USER_HEADER and every demo identity source is disabled
 // at once: DemoSubjectResolverFor makes every gated route resolve from the
 // verified Principal alone, this header not consulted at all, and
 // the SAME switch reaches the attribution header this app's other
-// resolver family reads (DemoOrgUserHeader, "X-Demo-User-Id", server.go)
+// resolver family reads (DemoOrgUserHeader, "X-Demo-User-Id", internal/app/server.go)
 // -- DemoOrgSubjectResolverFor and DemoNotesSubjectResolver are wired with
 // headerDisabled then, so notes' create handler, the cases surface, org's
 // caller-scoped endpoints and the notification surface resolve from the
@@ -102,7 +102,7 @@ const (
 	// const names): the latter names the seeded rbac grant the gate
 	// decides against (demo-owner and friends above), while the former
 	// names the user id notes' own SubjectResolver (DemoNotesSubjectResolver
-	// in server.go) attributes the CREATE to -- the value that lands in a
+	// in internal/app/server.go) attributes the CREATE to -- the value that lands in a
 	// note's CreatorUserID and in the NoteCreatedPayload event every
 	// subscriber reads. The value is a real-user-style id (org_flow_test's
 	// "user-owner-1" is the same shape), not an rbac demo identity, exactly
@@ -258,7 +258,7 @@ func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDis
 
 		// org's Handler performs no PERMISSION check of its own -- it
 		// resolves a caller's raw identity through SubjectResolver
-		// (DemoOrgSubjectResolverFor in server.go) for the two invitation
+		// (DemoOrgSubjectResolverFor in internal/app/server.go) for the two invitation
 		// operations, org_createInvitation and org_acceptInvitation, and
 		// reads only the tenant from context for every other operation --
 		// so this gate is where the example enforces org's four declared
@@ -290,7 +290,7 @@ func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDis
 
 		// notification's handler resolves and requires its own caller
 		// identity per operation through SubjectResolver
-		// (DemoOrgSubjectResolverFor in server.go -- the same seam
+		// (DemoOrgSubjectResolverFor in internal/app/server.go -- the same seam
 		// instance org's own caller-scoped endpoints use; notes' create
 		// handler resolves through its own DemoNotesSubjectResolver,
 		// which additionally accepts the verified Principal, its comment
@@ -307,7 +307,7 @@ func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDis
 		// authn's subtree never reaches this app's gated mux at all:
 		// BuildServer mounts every AuthnAPIPath request on its own topMux
 		// branch directly behind authn.Middleware's optional verification
-		// (server.go's composition comment), which is the only shape in
+		// (internal/app/server.go's composition comment), which is the only shape in
 		// which the enterprise-OIDC login-start path -- its provider
 		// value the dynamic "oidc:<tenant>" string no exact-match
 		// allowlist entry can enumerate -- can work. The entry stays
@@ -361,7 +361,7 @@ func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDis
 		// demo one: pkiSubjectResolverFor pins the signing-key revoke's
 		// evaluation to rbac.SystemDomain -- the platform-domain half of
 		// pki's permission contract (go/pki/module.go), without which a
-		// tenant's owner role (seedDemoGrants grants every declared
+		// tenant's owner role (SeedDemoGrants grants every declared
 		// permission in every demo tenant) would reach the platform
 		// signing key and stop token issuance for every tenant at once.
 		//
@@ -394,7 +394,7 @@ func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDis
 		// admin's route does not sit behind ordinary tenant resolution --
 		// see that resolver's own doc comment for the cross-tenant
 		// escalation it closes.
-		{Path: adminRoutePath, Access: pkgcore.RouteAccess{Permission: adminPermissionFor}, SubjectResolver: adminSubjectResolver},
+		{Path: AdminRoutePath, Access: pkgcore.RouteAccess{Permission: adminPermissionFor}, SubjectResolver: adminSubjectResolver},
 
 		// ai-gateway's handler performs no permission check of its own
 		// (see its own doc comment), leaving enforcement to the host's
@@ -479,10 +479,10 @@ func pkiPermissionFor(r *http.Request) string {
 // domain-shift adminSubjectResolver (demo_admin.go) applies to every
 // admin:* permission. The user half is untouched: the pin only relocates
 // where the user's grant must live, it never invents a user. A demo
-// header user therefore cannot revoke a signing key at all -- seedDemoGrants
+// header user therefore cannot revoke a signing key at all -- SeedDemoGrants
 // grants demo users only in their tenant domains -- and only a real
 // platform-staff account holding the owner role under SystemDomain
-// (seedDemoPlatformStaff, demo_admin.go) can.
+// (SeedDemoPlatformStaff, demo_admin.go) can.
 func pkiSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subject, bool) {
 	resolve := DemoSubjectResolverFor(headerDisabled)
 	return func(r *http.Request) (rbac.Subject, bool) {
@@ -625,15 +625,15 @@ const (
 	orgAcceptSuffix       = "/accept"
 )
 
-// orgAcceptPath is the full path of org_acceptInvitation (POST
+// OrgAcceptPath is the full path of org_acceptInvitation (POST
 // /api/v1/org/invitations/accept) -- the one org operation this app's
-// tenancy.Middleware allowlist names (server.go's BuildServer) and the one
+// tenancy.Middleware allowlist names (internal/app/server.go's BuildServer) and the one
 // org operation the org entry's Exemption lets through ungated.
 // Composed here, in the same file that owns the path's three components,
-// so server.go's allowlist entry and the org entry's Exemption can never
+// so internal/app/server.go's allowlist entry and the org entry's Exemption can never
 // drift
 // from orgPermissionFor's own sub-path switches.
-const orgAcceptPath = orgRoutePath + orgInvitationsSubPath + orgAcceptSuffix
+const OrgAcceptPath = orgRoutePath + orgInvitationsSubPath + orgAcceptSuffix
 
 // orgPermissionFor selects the org:* permission a request against
 // orgRoutePath must hold, from its path and method alone -- never a header,
@@ -713,8 +713,8 @@ func isOrgAcceptInvitationRequest(r *http.Request) bool {
 // wires. Bundled into one struct so the entry's Layer closure is built
 // from one value, rather than from two parameters.
 type OrgRouteGuardDeps struct {
-	scope   org.Scope
-	members *org.MemberService
+	Scope   org.Scope
+	Members *org.MemberService
 }
 
 // orgNodeScopeLayer is the Layer the org entry of DemoRouteRules names:
@@ -762,7 +762,7 @@ type orgNodeScopeTarget struct {
 	destinationNodeID string
 	// removeMemberUserID is set only for OrgRemoveMember, whose path names
 	// a USER, not a node -- enforceOrgNodeScope resolves it to the node
-	// their membership binds them to through deps.members before it has a
+	// their membership binds them to through deps.Members before it has a
 	// nodeID to check at all.
 	removeMemberUserID string
 }
@@ -800,7 +800,7 @@ func orgNodeScopeFor(r *http.Request) orgNodeScopeTarget {
 
 	case strings.HasPrefix(path, orgMembersSubPath+"/"):
 		// DELETE /members/{userId} (org_removeMember): the path names a
-		// USER; enforceOrgNodeScope resolves the node through deps.members.
+		// USER; enforceOrgNodeScope resolves the node through deps.Members.
 		userID := strings.TrimPrefix(path, orgMembersSubPath+"/")
 		return orgNodeScopeTarget{applicable: true, removeMemberUserID: userID}
 
@@ -878,7 +878,7 @@ func peekJSONBody(r *http.Request, dst any) bool {
 // A tenant-wide grant is untouched by this function: DataScope.TenantWide
 // short-circuits every branch below to "allowed" before orgNodeScopeFor is
 // even consulted, which is the overwhelmingly common case -- every demo
-// grant seedDemoGrants makes is tenant-wide (rbac.Scope{}), per its own
+// grant SeedDemoGrants makes is tenant-wide (rbac.Scope{}), per its own
 // doc comment. Denying happens ONLY when the subject's DataScope for this
 // exact action:resource is neither tenant-wide NOR includes the request's
 // target node's materialized path.
@@ -928,7 +928,7 @@ func enforceOrgNodeScope(ctx context.Context, az rbac.Authorizer, deps OrgRouteG
 
 	nodeID := target.nodeID
 	if target.removeMemberUserID != "" {
-		membership, memErr := deps.members.Get(ctx, target.removeMemberUserID)
+		membership, memErr := deps.Members.Get(ctx, target.removeMemberUserID)
 		if memErr != nil {
 			// No such membership (or one in another tenant, which reads
 			// identically): let the request through to org.Handler's own
@@ -943,10 +943,10 @@ func enforceOrgNodeScope(ctx context.Context, az rbac.Authorizer, deps OrgRouteG
 		return nil
 	}
 
-	if !nodeInScope(ctx, deps.scope, scope, nodeID) {
+	if !nodeInScope(ctx, deps.Scope, scope, nodeID) {
 		return rbac.ErrPermissionDenied.WithParam("permission", permission)
 	}
-	if target.destinationNodeID != "" && !nodeInScope(ctx, deps.scope, scope, target.destinationNodeID) {
+	if target.destinationNodeID != "" && !nodeInScope(ctx, deps.Scope, scope, target.destinationNodeID) {
 		return rbac.ErrPermissionDenied.WithParam("permission", permission)
 	}
 	return nil
@@ -1087,7 +1087,7 @@ func DemoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, boo
 // deliberately deviate, pki's and admin's), chosen by headerDisabled -- the value
 // BuildServer threads from cfg.DisableDemoUserHeader, itself resolved from
 // APP_DISABLE_DEMO_USER_HEADER (the DisableDemoUserHeader bootstrap field,
-// bootstrap.go).
+// internal/app/bootstrap.go).
 //
 // headerDisabled=false (the default) returns DemoSubjectResolver itself,
 // so every demo journey and test that depends on the header winning keeps
@@ -1125,7 +1125,7 @@ func DemoPermissionFor(resource string) func(*http.Request) string {
 	}
 }
 
-// seedDemoGrants gives every configured tenant its built-in roles and the
+// SeedDemoGrants gives every configured tenant its built-in roles and the
 // demo users their grants, so `go run ./cmd/server` demonstrates a
 // working gate with no setup at all.
 //
@@ -1141,7 +1141,7 @@ func DemoPermissionFor(resource string) func(*http.Request) string {
 // whose memberships and grants mirror this same model. A real deployment
 // does neither: roles are seeded when a tenant is created and grants are
 // made by an administrator through the admin console.
-func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
+func SeedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
 		if _, done := seeded[tenantID]; done {

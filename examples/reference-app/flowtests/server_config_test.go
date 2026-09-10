@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
@@ -70,7 +71,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 		t.Fatalf("ObjectStoreRoot = %q, want the empty default (Preset local-store directory)", cfg.ObjectStoreRoot)
 	}
 	if cfg.DisableDemoUserHeader {
-		t.Fatal("DisableDemoUserHeader = true, want false (the default: app.DemoUserHeader keeps winning, unchanged)")
+		t.Fatal("DisableDemoUserHeader = true, want false (the default: demo.DemoUserHeader keeps winning, unchanged)")
 	}
 	if cfg.ReadFlyClientIP {
 		t.Fatal("ReadFlyClientIP = true, want false (the default: no vendor header is read, authn's fail-closed shape)")
@@ -666,7 +667,7 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	if err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
-	cfg.HostTenants = app.DemoHostTenants
+	cfg.HostTenants = demo.DemoHostTenants
 	cfg.Memberships = app.NewSignInMemberships()
 
 	// ConfigKey: the exact mechanism go/config's Sensitive values are

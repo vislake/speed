@@ -22,7 +22,7 @@
 // real composed HTTP stack. The pay-and-confirm leg itself stays out of
 // this demo's scope.
 
-package app
+package demo
 
 import (
 	"context"
@@ -36,13 +36,13 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
 
-// DemoEntitlementPlanKey is the platform-wide Plan key seedDemoEntitlements
+// DemoEntitlementPlanKey is the platform-wide Plan key SeedDemoEntitlements
 // resolves-else-creates. Every demo tenant subscribes to this one platform
 // Plan; nothing in this file ever creates a tenant-custom Plan, since the
 // demo story needs no custom deal.
 const DemoEntitlementPlanKey = "demo"
 
-// demoEntitlementGrants is the Grant set seedDemoEntitlements stamps on the
+// demoEntitlementGrants is the Grant set SeedDemoEntitlements stamps on the
 // demo Plan, one Boolean grant (Value: true) per feature key this app's real
 // routes actually resolve through the wired entitlement seam. The keys are
 // derived the same way go/ai-gateway's own checkEntitlement derives them --
@@ -69,15 +69,15 @@ var demoEntitlementGrants = []billing.Grant{
 	{FeatureKey: "model:" + smilesim.LogicalModel, Value: true},
 }
 
-// demoEntitlementPlan resolves -- or, on a first boot against a fresh
+// DemoEntitlementPlan resolves -- or, on a first boot against a fresh
 // database, creates -- the platform-wide demo Plan granting
 // demoEntitlementGrants: the plan every subscription this file's own seed
-// (seedDemoEntitlements) and the self-service clinic provisioning path
-// (self_service.go's provision) subscribe their tenants to. Resolution is
+// (SeedDemoEntitlements) and the self-service clinic provisioning path
+// (internal/app/self_service.go's provision) subscribe their tenants to. Resolution is
 // key-based, so a re-boot finds the existing demo Plan and reuses it
 // as-is, never clobbering a later edit to its grants -- the mechanism's
 // own bounded idempotence, shared by both consumers.
-func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*billing.Plan, error) {
+func DemoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*billing.Plan, error) {
 	// pkgcore.TenantID("") makes PlanStore.Resolve run its platform-wide
 	// lookup alone (see go/billing/plan.go's Resolve doc comment).
 	// ErrPlanNotFound means no demo Plan exists yet -- create one,
@@ -104,10 +104,10 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 	return plan, nil
 }
 
-// ensureDemoSubscription gives ONE tenant an Active subscription to plan,
+// EnsureDemoSubscription gives ONE tenant an Active subscription to plan,
 // the demo Plan's subscription shape both of this app's paths converge
-// on: seedDemoEntitlements' boot-time loop subscribes every demo tenant
-// (cfg.HostTenants) this way, and self_service.go's provision subscribes
+// on: SeedDemoEntitlements' boot-time loop subscribes every demo tenant
+// (cfg.HostTenants) this way, and internal/app/self_service.go's provision subscribes
 // each newly created clinic the same way -- a clinic whose registration
 // granted no subscription would find every gated AI route refused
 // (aigateway.entitlement_denied) on its first request. All subscription
@@ -128,7 +128,7 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 // file's package doc comment. This wrapper adds only the app's policy:
 // which Plan, whose tenant context, and the error text the boot seed and
 // the provisioning chain report.
-func ensureDemoSubscription(ctx context.Context, subs *billing.SubscriptionService, plan *billing.Plan, tenantID pkgcore.TenantID) error {
+func EnsureDemoSubscription(ctx context.Context, subs *billing.SubscriptionService, plan *billing.Plan, tenantID pkgcore.TenantID) error {
 	tenantCtx := pkgcore.WithTenant(ctx, tenantID)
 	if _, err := subs.EnsureActive(tenantCtx, billing.CreateInput{PlanID: plan.ID}); err != nil {
 		return fmt.Errorf("reference-app: ensure the active subscription of tenant %q: %w", tenantID, err)
@@ -136,22 +136,22 @@ func ensureDemoSubscription(ctx context.Context, subs *billing.SubscriptionServi
 	return nil
 }
 
-// seedDemoEntitlements gives every tenant named in tenants
+// SeedDemoEntitlements gives every tenant named in tenants
 // (cfg.HostTenants) an Active subscription to the platform-wide demo Plan
-// (resolved-else-created by demoEntitlementPlan, subscribed per tenant by
-// ensureDemoSubscription -- the same per-tenant shape self_service.go's
+// (resolved-else-created by DemoEntitlementPlan, subscribed per tenant by
+// EnsureDemoSubscription -- the same per-tenant shape internal/app/self_service.go's
 // clinic provisioning uses, so a clinic and a demo clinic hold the SAME
 // subscription). Two demo hosts mapping to the same tenant are subscribed
-// once, mirroring seedDemoCredits' own dedup (demo_credits.go).
+// once, mirroring SeedDemoCredits' own dedup (demo_credits.go).
 //
 // This must run before the first demo chat/image request can arrive -- the
 // gateway's entitlement gate refuses every call for a tenant with no Active
-// subscription -- and server.go therefore calls it during boot, next to
-// seedDemoCredits, before any route can serve. A failure here fails the
+// subscription -- and internal/app/server.go therefore calls it during boot, next to
+// SeedDemoCredits, before any route can serve. A failure here fails the
 // boot: a demo app whose seeded subscriptions cannot be established should
 // not half-start with an entitlement seam that denies everything.
-func seedDemoEntitlements(ctx context.Context, plans *billing.PlanService, subs *billing.SubscriptionService, tenants map[string]pkgcore.TenantID) error {
-	plan, err := demoEntitlementPlan(ctx, plans)
+func SeedDemoEntitlements(ctx context.Context, plans *billing.PlanService, subs *billing.SubscriptionService, tenants map[string]pkgcore.TenantID) error {
+	plan, err := DemoEntitlementPlan(ctx, plans)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func seedDemoEntitlements(ctx context.Context, plans *billing.PlanService, subs 
 		}
 		subscribed[tenantID] = struct{}{}
 
-		if err := ensureDemoSubscription(ctx, subs, plan, tenantID); err != nil {
+		if err := EnsureDemoSubscription(ctx, subs, plan, tenantID); err != nil {
 			return fmt.Errorf("reference-app: seed demo subscriptions: %w", err)
 		}
 	}

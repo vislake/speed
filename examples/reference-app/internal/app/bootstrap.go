@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
@@ -309,7 +310,7 @@ type hostConfig struct {
 
 	// DemoUsersPassword names APP_DEMO_USERS_PASSWORD: the passphrase that,
 	// when non-empty, makes BuildServer seed the three demo accounts of
-	// demo_users.go at the end of its composition -- register each through the
+	// demo/demo_users.go at the end of its composition -- register each through the
 	// composed handler, then grant the membership and role its actor model
 	// declares -- so a browser visitor can sign in as demo-owner@example.com
 	// and friends with a real account, real membership and real rbac grants,
@@ -328,7 +329,7 @@ type hostConfig struct {
 
 	// DemoPlatformStaffPassword names APP_DEMO_PLATFORM_STAFF_PASSWORD: the
 	// passphrase that, when non-empty, makes BuildServer seed the demo
-	// platform-staff account of demo_admin.go (seedDemoPlatformStaff)
+	// platform-staff account of demo/demo_admin.go (SeedDemoPlatformStaff)
 	// INDEPENDENTLY of DemoUsersPassword: a boot seeds each demo account set
 	// from its own variable, never one from the other's. The platform
 	// administrator (BuiltinRoleOwner under rbac.SystemDomain, every admin:*
@@ -388,7 +389,7 @@ type hostConfig struct {
 
 	// DisableDemoUserHeader names APP_DISABLE_DEMO_USER_HEADER: when set to any
 	// non-empty value, BuildServer stops reading EVERY demo identity header
-	// this app ships -- DemoUserHeader (demo_subject.go's "X-Demo-User") AND
+	// this app ships -- DemoUserHeader (demo/demo_subject.go's "X-Demo-User") AND
 	// DemoOrgUserHeader ("X-Demo-User-Id", the attribution header
 	// DemoOrgSubjectResolverFor and DemoNotesSubjectResolver read) -- uniformly:
 	//
@@ -821,10 +822,10 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 		TrustedProxies:        splitTrustedProxies(hc.TrustedProxies),
 		ReadFlyClientIP:       readFlyClientIP,
 		WebDistDir:            hc.WebDist,
-		HostTenants:           DemoHostTenants,
+		HostTenants:           demo.DemoHostTenants,
 		PublicOrigin:          publicOrigin,
 		// Empty when unset: the demo-user seed is opt-in (its own doc comment
-		// in demo_users.go says why the default skips it). The platform-staff
+		// in demo/demo_users.go says why the default skips it). The platform-staff
 		// seed is read from its OWN variable, never this one -- see the
 		// field's own doc comment for why the platform administrator must not
 		// share the ordinary demo users' credential source.

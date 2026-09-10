@@ -11,7 +11,7 @@
 // /api/v1/consult/suggest) is mounted by hand in internal/app
 // (internal/app/consult.go), the same pattern the notification module's
 // own demo patient-message route establishes in this app
-// (internal/app/demo_notification.go's package comment).
+// (internal/app/demo/demo_notification.go's package comment).
 package consult
 
 import (

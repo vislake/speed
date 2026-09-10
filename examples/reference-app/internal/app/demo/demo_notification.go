@@ -11,12 +11,12 @@
 //     users of this app exist only as header values (demo_subject.go), with
 //     no address store behind them, so the notification module is wired
 //     with go/notification/staticaddr over this fixed table (see
-//     server.go's assembly site). A real resolver would read the address on
+//     internal/app/server.go's assembly site). A real resolver would read the address on
 //     file for the user id the delivery job asks about; staticaddr returns
 //     the table's entry, and its package doc carries the seam's obligation
 //     -- the table is the operator's declaration of verified addresses.
 //
-//   - wireDemoNotification's note-created subscription is the reference
+//   - WireDemoNotification's note-created subscription is the reference
 //     app's instance of the canonical event-driven flow: a business module
 //     (notes) publishes a domain event as a fact; the notification module
 //     consumes it as a dispatch trigger. notes publishes notes.note.created
@@ -47,7 +47,7 @@
 // interface go/notification declares, in the same no-import direction org's
 // own host seams observe -- the host implements, the module consumes.
 
-package app
+package demo
 
 import (
 	"context"
@@ -55,7 +55,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/vislake/speed/examples/reference-app/internal/demo"
+	demomodule "github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 	"github.com/vislake/speed/go/authn"
@@ -76,7 +76,7 @@ import (
 // Bootstrap: Service() is nil until authn's Register has run, and a
 // request can only reach the seam after that.
 type AuthnUserLocales struct {
-	authn *authn.Module
+	Authn *authn.Module
 }
 
 // UserLocale implements notification.UserLocaleResolver. A user the store
@@ -84,10 +84,10 @@ type AuthnUserLocales struct {
 // who never chose a language both answer ok=false: "nothing to confirm",
 // not an error -- the same contract the seam's own doc comment states.
 func (a AuthnUserLocales) UserLocale(ctx context.Context, userID string) (string, bool, error) {
-	if a.authn == nil {
+	if a.Authn == nil {
 		return "", false, nil
 	}
-	svc := a.authn.Service()
+	svc := a.Authn.Service()
 	if svc == nil {
 		return "", false, nil
 	}
@@ -138,7 +138,7 @@ var _ notification.UserLocaleResolver = AuthnUserLocales{}
 // also grants the fixture an ACTIVE MEMBERSHIP in the tenant its caller
 // operates in -- the demo shape of a real patient account in the clinic's
 // own tenant -- because the simulate surface refuses any recipient that is
-// not an active member of the caller's tenant (smilesim.go's
+// not an active member of the caller's tenant (internal/app/smilesim.go's
 // validateSimulateRecipient): a recipient id that belongs to another
 // tenant must never receive this tenant's notification.
 
@@ -191,7 +191,7 @@ var noteCreatedFieldKeys = struct {
 // key spellings through pkgcore.EventPayloadString. It returns ok=false
 // rather than an error for every unusable shape, because the subscription's
 // contract is to log and drop the event, never to fail the publisher (see
-// wireDemoNotification).
+// WireDemoNotification).
 func NoteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok bool) {
 	noteID, hasNote := pkgcore.EventPayloadString(payload, noteCreatedFieldKeys.noteID...)
 	creatorUserID, hasCreator := pkgcore.EventPayloadString(payload, noteCreatedFieldKeys.creator...)
@@ -240,7 +240,7 @@ var simulationCompletedFieldKeys = struct {
 // EventPayloadBool -- mirroring NoteCreatedFieldsFromPayload exactly, down
 // to returning ok=false rather than an error for every unusable shape (the
 // subscription's contract is to log and drop the event, never to fail the
-// publisher; see wireDemoNotification). imageJobID and recipientUserID must each be a
+// publisher; see WireDemoNotification). imageJobID and recipientUserID must each be a
 // non-empty string to count as present: recipientUserID matching
 // SimulationCompletedPayload.RecipientUserID's own "never empty" invariant,
 // and imageJobID because the dispatch below carries it in the delivery's
@@ -262,7 +262,7 @@ func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJo
 	return recipientUserID, imageJobID, succeeded, true
 }
 
-// wireDemoNotification mounts the reference app's demo glue for the
+// WireDemoNotification mounts the reference app's demo glue for the
 // notification module on mux: the subscription that turns notes'
 // note-created event into a notification dispatch for the note's creator,
 // and the demo patient-message route. bus is reg.EventBus() -- the same bus
@@ -272,7 +272,7 @@ func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJo
 //
 // The call cannot fail: subscribing to a bus returns no error, and mounting
 // a route on a *http.ServeMux cannot fail for a well-formed pattern.
-func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module, reg *pkgcore.Registry, userLocales AuthnUserLocales) {
+func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module, reg *pkgcore.Registry, userLocales AuthnUserLocales) {
 	// The note-created subscription: notes publishes notes.note.created as
 	// a fact (see internal/notes/handler.go's publishNoteCreated) whenever
 	// a note is created; this subscription dispatches the type of the same
@@ -404,7 +404,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 			locale, _ = i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
 		}
 		if _, err := module.Deliveries().Dispatch(r.Context(), notification.Dispatch{
-			TypeKey: demo.TypeKeyPatientReminder,
+			TypeKey: demomodule.TypeKeyPatientReminder,
 			Recipient: notification.DispatchRecipient{
 				Class:     notification.RecipientClassExternal,
 				ContactID: body.ContactID,
@@ -426,7 +426,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// comment's "Completion notification" section) once a requested smile
 	// simulation reaches a terminal status for a caller who named a
 	// recipient; this subscription dispatches the demo module's own
-	// demo.TypeKeySimulationReady type (a DIFFERENT string from the event
+	// demomodule.TypeKeySimulationReady type (a DIFFERENT string from the event
 	// type -- see that constant's own doc comment for why) to that
 	// recipient -- the identical "business fact published as a
 	// pkgcore.Event, notification consumes it as a dispatch trigger" shape
@@ -493,7 +493,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 			locale = i18n.LocaleENUS
 		}
 		if _, err := module.Deliveries().Dispatch(dispatchCtx, notification.Dispatch{
-			TypeKey: demo.TypeKeySimulationReady,
+			TypeKey: demomodule.TypeKeySimulationReady,
 			Recipient: notification.DispatchRecipient{
 				Class:  notification.RecipientClassUser,
 				UserID: recipientUserID,

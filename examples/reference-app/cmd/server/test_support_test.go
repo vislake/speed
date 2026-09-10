@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -57,7 +58,7 @@ func testConfig(t *testing.T) app.ServerConfig {
 		PKILocalKeyCipherKey: app.DevPKILocalKeyCipherKey,
 		AuthnBlindIndexKey:   app.DevBlindIndexKey,
 		AuthnPIICipherKey:    app.DevPIICipherKey,
-		HostTenants:          app.DemoHostTenants,
+		HostTenants:          demo.DemoHostTenants,
 		Memberships:          app.NewSignInMemberships(),
 	}
 }
@@ -193,8 +194,8 @@ func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user stri
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(app.DemoUserHeader, user)
-		req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+		req.Header.Set(demo.DemoUserHeader, user)
+		req.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -292,7 +293,7 @@ func casesRequestAs(t *testing.T, srv *httptest.Server, method, path, token, cre
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if creator != "" {
-		req.Header.Set(app.DemoOrgUserHeader, creator)
+		req.Header.Set(demo.DemoOrgUserHeader, creator)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -373,7 +374,7 @@ func notifRequest(t *testing.T, srv *httptest.Server, method, path, token, subje
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if subjectUserID != "" {
-		req.Header.Set(app.DemoOrgUserHeader, subjectUserID)
+		req.Header.Set(demo.DemoOrgUserHeader, subjectUserID)
 	}
 
 	resp, err := srv.Client().Do(req)

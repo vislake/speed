@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/go/org"
@@ -21,7 +22,7 @@ import (
 // it, the org entry of DemoRouteRules declaring the path public would let
 // ANY authenticated tenant member -- holding no org permission at all --
 // create, move, rename and cascade-delete nodes and remove arbitrary
-// members. See the org entry's doc comment in internal/app/demo_subject.go
+// members. See the org entry's doc comment in internal/app/demo/demo_subject.go
 // for the fixed shape this file exercises.
 
 // orgErrorBody is the {code, ...} envelope every refusal from either layer
@@ -64,7 +65,7 @@ func orgRequestStatus(t *testing.T, srv *httptest.Server, method, path, token, d
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if demoUser != "" {
-		req.Header.Set(app.DemoUserHeader, demoUser)
+		req.Header.Set(demo.DemoUserHeader, demoUser)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -105,7 +106,7 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if demoUser != "" {
-		req.Header.Set(app.DemoUserHeader, demoUser)
+		req.Header.Set(demo.DemoUserHeader, demoUser)
 	}
 
 	resp, err := srv.Client().Do(req)
@@ -126,12 +127,12 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 }
 
 // TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree is THE scenario:
-// DemoReaderUserID holds notes:read alone (seedDemoGrants' demoReaderRoleKey,
-// internal/app/demo_subject.go) and no org permission whatsoever, yet reaches org's
+// DemoReaderUserID holds notes:read alone (SeedDemoGrants' demoReaderRoleKey,
+// internal/app/demo/demo_subject.go) and no org permission whatsoever, yet reaches org's
 // routes -- tenancy.Middleware and the fixed authn+tenancy chain never
 // distinguish org's operations from any other tenant member's ordinary
 // traffic, so the per-operation permission gate (the org entry of
-// internal/app/demo_subject.go's DemoRouteRules) is the only layer that refuses this caller. Every case
+// internal/app/demo/demo_subject.go's DemoRouteRules) is the only layer that refuses this caller. Every case
 // below must fail: without the gate all of them would succeed (2xx) -- the
 // cascade-delete case would even delete the tree.
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
@@ -166,9 +167,9 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-caller")
 
 	// The rbac-level assertion the HTTP cases below are supposed to be a
-	// consequence of: demo-reader holds notes:read alone (seedDemoGrants'
-	// demoReaderRoleKey, internal/app/demo_subject.go), no org:* permission whatsoever.
-	readerSub := rbac.Subject{TenantID: "tenant-acme", UserID: app.DemoReaderUserID}
+	// consequence of: demo-reader holds notes:read alone (SeedDemoGrants'
+	// demoReaderRoleKey, internal/app/demo/demo_subject.go), no org:* permission whatsoever.
+	readerSub := rbac.Subject{TenantID: "tenant-acme", UserID: demo.DemoReaderUserID}
 	for _, perm := range []string{
 		org.PermissionRead, org.PermissionManage,
 		org.PermissionInviteMember, org.PermissionRemoveMember,
@@ -192,7 +193,7 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 	}
 
 	// Build a real node to target, as demo-owner (BuiltinRoleOwner, seeded
-	// tenant-wide by seedDemoGrants) -- orgRequest sends that identity
+	// tenant-wide by SeedDemoGrants) -- orgRequest sends that identity
 	// unconditionally (its own doc comment explains why).
 	var root orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
@@ -229,7 +230,7 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			status, body := orgRequestStatus(t, srv, tc.method, tc.path, token, app.DemoReaderUserID, tc.body)
+			status, body := orgRequestStatus(t, srv, tc.method, tc.path, token, demo.DemoReaderUserID, tc.body)
 			if status != http.StatusForbidden {
 				t.Fatalf("%s %s as demo-reader: status = %d, want %d (body = %+v)",
 					tc.method, tc.path, status, http.StatusForbidden, body)
@@ -285,7 +286,7 @@ func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
 
 	orgRequest(t, srv, http.MethodDelete, "/api/v1/org/nodes/"+child.ID+"?cascade=true", token, "", nil, nil)
 
-	status, _ := orgRequestStatus(t, srv, http.MethodGet, "/api/v1/org/nodes/"+child.ID, token, app.DemoOwnerUserID, nil)
+	status, _ := orgRequestStatus(t, srv, http.MethodGet, "/api/v1/org/nodes/"+child.ID, token, demo.DemoOwnerUserID, nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("GET the deleted child as demo-owner: status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -293,7 +294,7 @@ func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
 
 // TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly is item 3's
 // own proof: rbac's Authorizer.DataScope machinery's first REAL consumer
-// (enforceOrgNodeScope, internal/app/demo_subject.go). A role granted scoped to node A
+// (enforceOrgNodeScope, internal/app/demo/demo_subject.go). A role granted scoped to node A
 // (rbac.Scope{NodeID: nodeA.ID}, never the tenant root) lets its holder
 // manage exactly A's subtree -- and refuses the identical operation
 // against a SIBLING subtree and an ANCESTOR, even though Can() alone
@@ -342,7 +343,7 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 
 	// A role carrying every org permission, assigned to a fresh identity
 	// SCOPED TO NODE A ALONE -- never the tenant root, which is what makes
-	// this grant narrower than every seedDemoGrants grant in this app
+	// this grant narrower than every SeedDemoGrants grant in this app
 	// (every demo grant it seeds stays tenant-wide; this test's grant is
 	// the one exception).
 	const subtreeAdminRoleKey = "org-subtree-admin"

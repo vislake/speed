@@ -1,4 +1,4 @@
-package app
+package demo
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 )
 
-// The three demo accounts seedDemoUsers registers when
+// The three demo accounts SeedDemoUsers registers when
 // APP_DEMO_USERS_PASSWORD is set. Each is the real-account twin of the
 // demo_subject.go actor id its grant model mirrors: demo-owner /
 // demo-reader / demo-acme-only are header user ids with no database row
@@ -58,19 +58,19 @@ type demoSeedAccount struct {
 	// email is what the account is registered with.
 	email string
 	// inEveryTenant grants the account in every configured tenant. False
-	// restricts it to DemoSingleTenantID, mirroring how seedDemoGrants
+	// restricts it to DemoSingleTenantID, mirroring how SeedDemoGrants
 	// restricts DemoSingleTenantUserID.
 	inEveryTenant bool
 	// roleKey is the role assigned wherever the account is granted,
-	// mirroring the twin actor id's role in seedDemoGrants.
+	// mirroring the twin actor id's role in SeedDemoGrants.
 	roleKey string
 }
 
-// demoSeedAccounts is the three-actor model of seedDemoGrants expressed
-// over real accounts. seedDemoGrants keeps seeding the fixed header ids --
+// demoSeedAccounts is the three-actor model of SeedDemoGrants expressed
+// over real accounts. SeedDemoGrants keeps seeding the fixed header ids --
 // the pre-auth flows still act through them -- and this table is what
 // makes the same demonstrations reachable through real sign-ins; when the
-// header goes away (see DemoUserHeader), only the seedDemoGrants half is
+// header goes away (see DemoUserHeader), only the SeedDemoGrants half is
 // deleted and this table remains.
 var demoSeedAccounts = []demoSeedAccount{
 	{actor: DemoOwnerUserID, email: DemoOwnerEmail, inEveryTenant: true, roleKey: rbac.BuiltinRoleOwner},
@@ -78,7 +78,7 @@ var demoSeedAccounts = []demoSeedAccount{
 	{actor: DemoSingleTenantUserID, email: DemoAcmeOnlyEmail, inEveryTenant: false, roleKey: demoReaderRoleKey},
 }
 
-// seedDemoUsers registers demoSeedAccounts through authn's demoseed helper --
+// SeedDemoUsers registers demoSeedAccounts through authn's demoseed helper --
 // which POSTs the composed handler's real register route, so registration
 // runs the real handler, the real password policy, the real rate limiter and
 // the real users table rather than a second, parallel account-creation path
@@ -88,7 +88,7 @@ var demoSeedAccounts = []demoSeedAccount{
 // under its own tenant context (roles and bindings are tenant data --
 // nothing here reads or writes across a tenant boundary).
 //
-// BuildServer calls it AFTER seedDemoGrants, which is what guarantees the
+// BuildServer calls it AFTER SeedDemoGrants, which is what guarantees the
 // roles this function AssignRole-s are already defined in every tenant. It
 // runs only when the operator set APP_DEMO_USERS_PASSWORD; an empty
 // password skips the seed, leaving the demo headers as the only demo
@@ -104,7 +104,7 @@ var demoSeedAccounts = []demoSeedAccount{
 // created it left half-done -- a crash between registration and grants can
 // no longer strand a memberless demo account -- and a restart against the
 // same database loses none of the accounts' sign-in power.
-func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *authn.Service, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
+func SeedDemoUsers(ctx context.Context, handler http.Handler, authnService *authn.Service, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
 	logger := obs.FromContext(ctx)
 	// The lookup is authn's platform-operator search, appropriate here for
 	// the reason demoseed's doc comment gives: this is the operator's own
@@ -140,16 +140,16 @@ func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *auth
 }
 
 // grantDemoSeedAccount records the membership and role of one demo
-// account, mirroring seedDemoGrants' per-tenant model: the membership goes
+// account, mirroring SeedDemoGrants' per-tenant model: the membership goes
 // to org's own memberships table (addDemoOrgMembership, below) -- the same
 // table authn's sign-in path reads through signInMemberships, so this one
 // write is what makes the account's sign-in succeed -- and the role to
 // rbac, each under the tenant's own context. Which tenants an account
 // reaches is the account's own decision (inEveryTenant), never "all
-// tenants map iteration happens to visit" -- the same reason seedDemoGrants
+// tenants map iteration happens to visit" -- the same reason SeedDemoGrants
 // pins DemoSingleTenantID as a literal.
 //
-// Every step is repeatable, which is what lets seedDemoUsers re-run this
+// Every step is repeatable, which is what lets SeedDemoUsers re-run this
 // on a boot that finds the account already registered: the org seat is
 // ensured idempotently and AssignRole is idempotent (its own doc
 // comment), so a repeat never duplicates a row or a binding and never
@@ -179,7 +179,7 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 		}
 
 		sub := rbac.Subject{TenantID: tenantID, UserID: userID}
-		// A tenant-wide Scope, exactly as seedDemoGrants grants with:
+		// A tenant-wide Scope, exactly as SeedDemoGrants grants with:
 		// this example has no organization tree to scope roles to (only
 		// a bare root node, addDemoOrgMembership's own doc comment).
 		if err := svc.AssignRole(seedCtx, sub, account.roleKey, rbac.Scope{}); err != nil {
@@ -191,7 +191,7 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 
 // addDemoOrgMembership gives userID a real org.Membership row in the
 // caller's tenant (ctx) -- the row authn's sign-in path reads through
-// signInMemberships (server.go), go/admin's impersonation-target
+// signInMemberships (internal/app/server.go), go/admin's impersonation-target
 // membership check (validateTargetMembership) and every other
 // org.MemberService.Get caller consult. The rbac.AssignRole grant above
 // is a separate surface (rbac's own authorization decision); org knows

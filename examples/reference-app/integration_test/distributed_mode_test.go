@@ -107,7 +107,7 @@
 // belong to this tenant", answers customer-tenant questions from that
 // table, live -- and org's rows live in the SHARED database, so an
 // account the boot-time seed registered and placed during replica A's
-// boot (APP_DEMO_USERS_PASSWORD, internal/app/demo_users.go) is visible to
+// boot (APP_DEMO_USERS_PASSWORD, internal/app/demo/demo_users.go) is visible to
 // replica B's
 // OWN, separate reader instance too: a fresh, successful login against
 // replica B for that account would resolve its membership from the same
@@ -158,7 +158,7 @@
 // examples/reference-app/internal/notes/module.go) means the SAME note
 // creation that drives the "eventbus"/"kv" proof ALSO drives a real
 // delivery attempt over the "mailer" seam (the creator has an email
-// address in internal/app/demo_notification.go's DemoUserAddresses; no
+// address in internal/app/demo/demo_notification.go's DemoUserAddresses; no
 // phone, so SMS is
 // skipped, an ordinary no-address outcome, never a failure) -- so this file
 // verifies that real send too, as a bonus assertion over Mailpit's own HTTP
@@ -220,7 +220,7 @@ const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 // dedicated module is run.
 const mailhogImage = "axllent/mailpit:v1.31"
 
-// distributedNoteCreatorUserID mirrors internal/app/demo_subject.go's
+// distributedNoteCreatorUserID mirrors internal/app/demo/demo_subject.go's
 // DemoNotesCreatorUserID byte for byte. It is the user id notes' own
 // creator-subject resolver assigns when the X-Demo-User-Id header names
 // it, and the ONLY demo user DemoUserAddresses maps to a real address
@@ -228,7 +228,7 @@ const mailhogImage = "axllent/mailpit:v1.31"
 // created under this header.
 const distributedNoteCreatorUserID = "user-creator-1"
 
-// distributedNoteCreatorEmail is internal/app/demo_notification.go's
+// distributedNoteCreatorEmail is internal/app/demo/demo_notification.go's
 // DemoUserAddresses entry for distributedNoteCreatorUserID, copied byte
 // for byte -- the address this file's bonus MailHog assertion looks for.
 const distributedNoteCreatorEmail = "user-creator-1@demo.example"
@@ -240,7 +240,7 @@ const distributedNoteCreatorEmail = "user-creator-1@demo.example"
 // constant), which is rbac's demo permission gate's header. A note-creating
 // request in this file carries both: demoUserHdr so rbac's gate sees an
 // authorized actor (demoOwner, granted the built-in owner role by
-// seedDemoGrants), and demoUserIDHeader so the note (and the notification
+// SeedDemoGrants), and demoUserIDHeader so the note (and the notification
 // dispatched back to its creator) is attributed to
 // distributedNoteCreatorUserID. The stream request below carries only
 // demoUserIDHeader: notification mounts no permission gate of its own
@@ -765,8 +765,8 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 		"APP_DEMO_USERS_PASSWORD="+demoUsersPassword,
 	)
 
-	// Replica A boots first and fully (its own boot-time seedDemoGrants and
-	// seedDemoUsers steps, both real writes to the shared SQLite file, must
+	// Replica A boots first and fully (its own boot-time SeedDemoGrants and
+	// SeedDemoUsers steps, both real writes to the shared SQLite file, must
 	// complete before replica B's own boot-time writes begin -- see this
 	// file's package doc comment on why the two boots are staggered rather
 	// than concurrent). A keeps its queue worker: it is the only replica

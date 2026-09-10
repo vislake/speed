@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/storage"
 )
@@ -123,7 +124,7 @@ func TestCasesPhotos_UploadThenContentOnCase_Journey(t *testing.T) {
 		t.Fatal("served photo content still carries the EXIF profile the completion pipeline must strip")
 	}
 	storageContent := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects/"+uploaded.ObjectID+"/content",
-		acmeToken, app.DemoOwnerUserID, "", nil)
+		acmeToken, demo.DemoOwnerUserID, "", nil)
 	defer storageContent.Body.Close()
 	rawStorage, err := io.ReadAll(storageContent.Body)
 	if err != nil {

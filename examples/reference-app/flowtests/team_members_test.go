@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -176,7 +177,7 @@ func TestTeamMembersEndpoint_NamesEveryMemberOfTheTenantFromAuthn(t *testing.T) 
 	// all registered without a display name -- so their rows' identity is
 	// the email each account registered with, read from authn's users
 	// table, never a raw user id.
-	ownerToken := signInAsDemo(t, srv, app.DemoOwnerEmail, app.DemoSingleTenantID)
+	ownerToken := signInAsDemo(t, srv, demo.DemoOwnerEmail, demo.DemoSingleTenantID)
 	status, answer, _ := rosterRequest(t, srv, ownerToken)
 	if status != http.StatusOK {
 		t.Fatalf("GET %s as the demo owner: status %d, want 200", app.TeamMembersPath, status)
@@ -188,7 +189,7 @@ func TestTeamMembersEndpoint_NamesEveryMemberOfTheTenantFromAuthn(t *testing.T) 
 	expectNoRawIDAsIdentity(t, answer)
 
 	emails := rosterEmails(answer)
-	for _, email := range []string{app.DemoOwnerEmail, app.DemoReaderEmail, app.DemoAcmeOnlyEmail} {
+	for _, email := range []string{demo.DemoOwnerEmail, demo.DemoReaderEmail, demo.DemoAcmeOnlyEmail} {
 		if _, ok := emails[email]; !ok {
 			t.Errorf("tenant-acme roster names no row %q (rows: %v)", email, emails)
 		}
@@ -198,16 +199,16 @@ func TestTeamMembersEndpoint_NamesEveryMemberOfTheTenantFromAuthn(t *testing.T) 
 	// the enrichment can never reach past the tenant whose roster the org
 	// rows named -- demo-acme-only holds no seat in tenant-globex, so
 	// tenant-globex's roster must not name it.
-	globexToken := signInAsDemo(t, srv, app.DemoOwnerEmail, pkgcore.TenantID("tenant-globex"))
+	globexToken := signInAsDemo(t, srv, demo.DemoOwnerEmail, pkgcore.TenantID("tenant-globex"))
 	status, answer, _ = rosterRequest(t, srv, globexToken)
 	if status != http.StatusOK {
 		t.Fatalf("GET %s as the demo owner in tenant-globex: status %d, want 200", app.TeamMembersPath, status)
 	}
 	emails = rosterEmails(answer)
-	if _, ok := emails[app.DemoAcmeOnlyEmail]; ok {
+	if _, ok := emails[demo.DemoAcmeOnlyEmail]; ok {
 		t.Errorf("tenant-globex roster names demo-acme-only (%v), which holds no seat there", emails)
 	}
-	for _, email := range []string{app.DemoOwnerEmail, app.DemoReaderEmail} {
+	for _, email := range []string{demo.DemoOwnerEmail, demo.DemoReaderEmail} {
 		if _, ok := emails[email]; !ok {
 			t.Errorf("tenant-globex roster names no row %q (rows: %v)", email, emails)
 		}
@@ -221,7 +222,7 @@ func TestTeamMembersEndpoint_RefusesACallerWithoutOrgRead(t *testing.T) {
 	// else) in every tenant -- the shape whose roster read the org module
 	// route refuses with the rbac gate's 403, which is what closes the web
 	// team surface's gate to it. This answer must refuse it identically.
-	readerToken := signInAsDemo(t, srv, app.DemoReaderEmail, app.DemoSingleTenantID)
+	readerToken := signInAsDemo(t, srv, demo.DemoReaderEmail, demo.DemoSingleTenantID)
 	status, _, envelope := rosterRequest(t, srv, readerToken)
 	if status != http.StatusForbidden {
 		t.Fatalf("GET %s as the demo reader: status %d, want the rbac gate's 403", app.TeamMembersPath, status)
@@ -234,7 +235,7 @@ func TestTeamMembersEndpoint_RefusesACallerWithoutOrgRead(t *testing.T) {
 
 func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName(t *testing.T) {
 	srv, mailer := buildSeededTeamTestServer(t)
-	ownerToken := signInAsDemo(t, srv, app.DemoOwnerEmail, app.DemoSingleTenantID)
+	ownerToken := signInAsDemo(t, srv, demo.DemoOwnerEmail, demo.DemoSingleTenantID)
 
 	// The clinic's second employee: a self-registered account that typed a
 	// display name at registration -- the shape a colleague invited by a

@@ -5,7 +5,7 @@
 //
 // ai-gateway itself ships no HTTP surface for chat, so there is no spec
 // fragment for this route to live in -- it is mounted by hand, outside
-// the OpenAPI machinery, the same pattern demo_notification.go's own demo
+// the OpenAPI machinery, the same pattern demo/demo_notification.go's own demo
 // patient-message route establishes in this app. Like that route,
 // it is deliberately outside DemoRouteRules' table too: it is mounted
 // directly on mux rather than through reg.Routes/mountModuleRoutes, so it
@@ -51,7 +51,7 @@ const consultMaxRequestBodyBytes = 1 << 16
 // wireConsult mounts ConsultSuggestPath on mux, backed by svc.
 //
 // The route takes no subject and checks no permission of its own -- the
-// identical choice demo_notification.go's own demo patient-message route
+// identical choice demo/demo_notification.go's own demo patient-message route
 // makes, and its doc comment's reasoning applies here unchanged: in this
 // app every authenticated member of a tenant may ask for a consultation
 // suggestion, and svc.Suggest's own tenant scoping (through

@@ -32,11 +32,11 @@ import (
 const demoSeedPassword = "demo users seed passphrase"
 
 // demoPlatformStaffSeedPassword is the test passphrase the suites that seed
-// the demo platform-staff account (internal/app/demo_admin.go's seedDemoPlatformStaff)
+// the demo platform-staff account (internal/app/demo/demo_admin.go's SeedDemoPlatformStaff)
 // set its OWN config field to -- deliberately a DIFFERENT value from
 // demoSeedPassword, mirroring the runtime split between
 // APP_DEMO_USERS_PASSWORD and APP_DEMO_PLATFORM_STAFF_PASSWORD
-// (internal/app/demo_admin.go). It must satisfy go/authn's password policy for the same
+// (internal/app/demo/demo_admin.go). It must satisfy go/authn's password policy for the same
 // registration-through-the-real-route reason demoSeedPassword documents.
 const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
 

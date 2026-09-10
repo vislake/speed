@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit"
@@ -26,12 +27,12 @@ import (
 // policy default (go/authn/password.go) accepts it.
 const testPassword = "a perfectly fine passphrase"
 
-// DemoNotesCreatorUserID is declared in internal/app/demo_subject.go, next to the other
+// DemoNotesCreatorUserID is declared in internal/app/demo/demo_subject.go, next to the other
 // demo identity constants, because the running server's own glue reads it
-// too (internal/app/demo_notification.go's demo address table keys on it); the test
+// too (internal/app/demo/demo_notification.go's demo address table keys on it); the test
 // helpers here and in notification_flow_test.go reference the same constant
 // so a test's X-Demo-User-Id header always names the user the server's
-// subscription will dispatch to. See internal/app/demo_subject.go's comment there for
+// subscription will dispatch to. See internal/app/demo/demo_subject.go's comment there for
 // what the id means.
 
 // testConfig returns a ServerConfig backed by a fresh, per-test temp-file
@@ -64,7 +65,7 @@ func testConfig(t *testing.T) app.ServerConfig {
 		PKILocalKeyCipherKey: app.DevPKILocalKeyCipherKey,
 		AuthnBlindIndexKey:   app.DevBlindIndexKey,
 		AuthnPIICipherKey:    app.DevPIICipherKey,
-		HostTenants:          app.DemoHostTenants,
+		HostTenants:          demo.DemoHostTenants,
 		Memberships:          app.NewSignInMemberships(),
 	}
 }
@@ -193,7 +194,7 @@ type testListNotesResponse struct {
 //
 // Two demo headers ride along, each naming a different thing:
 //
-//   - X-Demo-User names WHO is acting for the rbac gate (internal/app/demo_subject.go's
+//   - X-Demo-User names WHO is acting for the rbac gate (internal/app/demo/demo_subject.go's
 //     DemoUserHeader). DemoOwnerUserID holds every permission, so these two
 //     helpers exercise the happy path; the tests that exercise the gate
 //     itself send other users, or none.
@@ -214,8 +215,8 @@ func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) string
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
-	req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+	req.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
+	req.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -248,7 +249,7 @@ func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -351,8 +352,8 @@ func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user stri
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if user != "" {
-		req.Header.Set(app.DemoUserHeader, user)
-		req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+		req.Header.Set(demo.DemoUserHeader, user)
+		req.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -410,33 +411,33 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
-	// against (internal/app/demo_subject.go's seedDemoGrants).
+	// against (internal/app/demo/demo_subject.go's SeedDemoGrants).
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-owner")
 
 	// The owner may write.
-	resp := notesRequestAs(t, srv, http.MethodPost, acmeToken, app.DemoOwnerUserID,
+	resp := notesRequestAs(t, srv, http.MethodPost, acmeToken, demo.DemoOwnerUserID,
 		strings.NewReader(`{"text":"owner note"}`))
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
 			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("POST as %s: status = %d, want %d; body = %s", app.DemoOwnerUserID, resp.StatusCode, http.StatusCreated, body)
+			t.Fatalf("POST as %s: status = %d, want %d; body = %s", demo.DemoOwnerUserID, resp.StatusCode, http.StatusCreated, body)
 		}
 	}()
 
 	// The reader may list...
-	resp = notesRequestAs(t, srv, http.MethodGet, acmeToken, app.DemoReaderUserID, nil)
+	resp = notesRequestAs(t, srv, http.MethodGet, acmeToken, demo.DemoReaderUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("GET as %s: status = %d, want %d; body = %s", app.DemoReaderUserID, resp.StatusCode, http.StatusOK, body)
+			t.Fatalf("GET as %s: status = %d, want %d; body = %s", demo.DemoReaderUserID, resp.StatusCode, http.StatusOK, body)
 		}
 	}()
 
 	// ...and may not create. This is the whole point of the gate.
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeToken, app.DemoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
+		notesRequestAs(t, srv, http.MethodPost, acmeToken, demo.DemoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
 		"POST as the read-only demo user")
 
 	// A user with no grant at all is refused in both directions.
@@ -483,36 +484,36 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-acme")
 	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "pg-globex")
 
-	resp := notesRequestAs(t, srv, http.MethodGet, acmeToken, app.DemoSingleTenantUserID, nil)
+	resp := notesRequestAs(t, srv, http.MethodGet, acmeToken, demo.DemoSingleTenantUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("GET in the tenant that granted %s: status = %d, want %d; body = %s",
-				app.DemoSingleTenantUserID, resp.StatusCode, http.StatusOK, body)
+				demo.DemoSingleTenantUserID, resp.StatusCode, http.StatusOK, body)
 		}
 	}()
 
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, globexToken, app.DemoSingleTenantUserID, nil),
+		notesRequestAs(t, srv, http.MethodGet, globexToken, demo.DemoSingleTenantUserID, nil),
 		"GET as the same user id in the tenant that never granted it")
 
 	// And the refusal is genuinely about the tenant rather than the user
 	// being unknown: the SAME tenant grants the same role to demo-reader.
-	resp = notesRequestAs(t, srv, http.MethodGet, globexToken, app.DemoReaderUserID, nil)
+	resp = notesRequestAs(t, srv, http.MethodGet, globexToken, demo.DemoReaderUserID, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET as %s in tenant-globex: status = %d, want %d; body = %s",
-			app.DemoReaderUserID, resp.StatusCode, http.StatusOK, body)
+			demo.DemoReaderUserID, resp.StatusCode, http.StatusOK, body)
 	}
 }
 
 // A no-Docker "positive" counterpart to the three tests above -- one that
 // composes every seam onto a fake, unreachable address and asserts
 // BuildServer succeeds -- was deliberately NOT added here, and this is a
-// real gap, not a silent one: this app's own seedDemoGrants
-// (internal/app/demo_subject.go), which every BuildServer call runs unconditionally
+// real gap, not a silent one: this app's own SeedDemoGrants
+// (internal/app/demo/demo_subject.go), which every BuildServer call runs unconditionally
 // after Bootstrap to seed the demo tenants' built-in roles, makes a
 // SYNCHRONOUS rbac.Service call that publishes on whatever EventBus
 // Bootstrap resolved -- eventbus/redis.EventBus.Publish genuinely appends
@@ -524,7 +525,7 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 // (assembly succeeds when every seam is genuinely satisfied) cannot be
 // proven at the unit tier without either standing up real infrastructure
 // (which belongs in a Docker-backed integration tier, not here) or
-// special-casing seedDemoGrants for tests (which would test a different
+// special-casing SeedDemoGrants for tests (which would test a different
 // wiring than main() runs, the exact anti-pattern BuildServer's own doc
 // comment warns against). The genuine, real-infrastructure proof is
 // examples/reference-app/integration_test/distributed_mode_test.go.
@@ -550,8 +551,8 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
-	req.Header.Set(app.DemoOrgUserHeader, app.DemoNotesCreatorUserID)
+	req.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
+	req.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -672,7 +673,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+globexToken)
-	req.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
 	req.Header.Set("X-Tenant-ID", "tenant-acme")
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -695,7 +696,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req2.Header.Set("Authorization", "Bearer "+globexToken)
-	req2.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	req2.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
 	resp2, err := srv.Client().Do(req2)
 	if err != nil {
 		t.Fatalf("GET with forged tenant_id query parameter: %v", err)
@@ -805,9 +806,9 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByTenant(%q): %v", tenantID, err)
 	}
-	// tenant-acme's own audit trail is not notes' alone: seedDemoCredits'
+	// tenant-acme's own audit trail is not notes' alone: SeedDemoCredits'
 	// own boot-time Grant
-	// (internal/app/demo_credits.go) is itself a real CreditService.Grant call, which
+	// (internal/app/demo/demo_credits.go) is itself a real CreditService.Grant call, which
 	// records its own "billing.credit.grant" AuditEvent for this same
 	// tenant (credit_service.go's emitCreditAudit) -- see
 	// billing_credit_flow_test.go's own audit tests for that surface's
@@ -844,9 +845,9 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	// Actor from ctx at emit time, and no middleware in the composed chain
 	// populates that carrier, so an empty actor_type/actor_id here means
 	// the audit trail cannot answer "who created this note".
-	if actor := got.Actor(); actor.Type != pkgcore.ActorTypeUser || actor.ID != app.DemoNotesCreatorUserID {
+	if actor := got.Actor(); actor.Type != pkgcore.ActorTypeUser || actor.ID != demo.DemoNotesCreatorUserID {
 		t.Fatalf("AuditEvent.Actor() = %+v, want {Type: %q, ID: %q}",
-			actor, pkgcore.ActorTypeUser, app.DemoNotesCreatorUserID)
+			actor, pkgcore.ActorTypeUser, demo.DemoNotesCreatorUserID)
 	}
 	if got.OccurredAt.IsZero() {
 		t.Fatal("AuditEvent.OccurredAt is zero, want a real timestamp")

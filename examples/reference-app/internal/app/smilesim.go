@@ -122,7 +122,7 @@ var (
 // the same store authn's MembershipReader reads) -- before Simulate
 // enqueues anything. That check exists because the completion
 // notification a named recipient triggers (internal/smilesim's
-// EventSimulationCompleted, dispatched by demo_notification.go's
+// EventSimulationCompleted, dispatched by demo/demo_notification.go's
 // subscription as a RecipientClassUser delivery under the caller's tenant)
 // would otherwise let a member of one tenant put an SMS on the phone of a
 // member of any other: go/notification resolves a user recipient's
@@ -490,7 +490,7 @@ var smilesimErrRecipientNotInTenant = apperr.Invalid("smilesim.recipient_not_in_
 // membership store (sign_in_memberships.go), the same org-rows-first,
 // roster-second answer authn's MembershipReader gives. "Active member of
 // the caller's tenant" is this app's model of a user its tenant may
-// legitimately notify: the completion delivery demo_notification.go's
+// legitimately notify: the completion delivery demo/demo_notification.go's
 // subscription dispatches goes out as a RecipientClassUser delivery under
 // the SIMULATE caller's tenant, and go/notification itself never checks
 // which tenant a user recipient belongs to -- that membership question is

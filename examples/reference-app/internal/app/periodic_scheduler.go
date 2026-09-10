@@ -92,7 +92,7 @@ type periodicTenantUniverse struct {
 	// configured is cfg.HostTenants: the host map whose VALUES are the
 	// configured tenants swept, deduplicated, because two hosts can map
 	// to one tenant and the sweep is per tenant, not per host (the same
-	// dedupe seedDemoGrants performs for grants).
+	// dedupe SeedDemoGrants performs for grants).
 	configured map[string]pkgcore.TenantID
 	// ledger is go/admin's D3 tenant-ledger service
 	// (adminModule.Tenants()). Its ListAllIDs names every ledger row --

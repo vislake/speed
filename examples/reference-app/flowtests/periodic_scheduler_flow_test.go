@@ -116,6 +116,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -319,28 +320,28 @@ func observeExpirySweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 	t.Helper()
 
 	expiringMetadata := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiringID, token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiringID, token, demo.DemoOwnerUserID, "", nil)
 	expiringMetadata.Body.Close()
 	if expiringMetadata.StatusCode != http.StatusNotFound {
 		return false, "expired object's metadata GET = " + http.StatusText(expiringMetadata.StatusCode) + ", want 404"
 	}
 
 	expiringContent := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiringID+"/content", token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiringID+"/content", token, demo.DemoOwnerUserID, "", nil)
 	expiringContent.Body.Close()
 	if expiringContent.StatusCode != http.StatusNotFound {
 		return false, "expired object's content GET = " + http.StatusText(expiringContent.StatusCode) + ", want 404"
 	}
 
 	survivorMetadata := storageRequest(t, srv, http.MethodGet,
-		"/api/v1/storage/objects/"+survivorID, token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+survivorID, token, demo.DemoOwnerUserID, "", nil)
 	survivorMetadata.Body.Close()
 	if survivorMetadata.StatusCode != http.StatusOK {
 		return false, "survivor's metadata GET = " + http.StatusText(survivorMetadata.StatusCode) + ", want 200"
 	}
 
 	listResp := storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		token, app.DemoOwnerUserID, "", nil)
+		token, demo.DemoOwnerUserID, "", nil)
 	var listed testStorageListResponse
 	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
 		listResp.Body.Close()
@@ -456,10 +457,10 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// comfortably past the completion below, and short enough that boot 1
 	// does not idle long before closing.
 	expiresAt := time.Now().Add(3 * time.Second).Format(time.RFC3339)
-	declared := declareUploadWithExpiry(t, boot1.srv, boot1Token, app.DemoOwnerUserID,
+	declared := declareUploadWithExpiry(t, boot1.srv, boot1Token, demo.DemoOwnerUserID,
 		int64(len(jpegBytes)), "image/jpeg", expiresAt)
-	uploadBytes(t, boot1.srv, boot1Token, app.DemoOwnerUserID, declared.ID, jpegBytes)
-	expiring := completeObject(t, boot1.srv, boot1Token, app.DemoOwnerUserID, declared.ID)
+	uploadBytes(t, boot1.srv, boot1Token, demo.DemoOwnerUserID, declared.ID, jpegBytes)
+	expiring := completeObject(t, boot1.srv, boot1Token, demo.DemoOwnerUserID, declared.ID)
 	if expiring.ExpiresAt == "" {
 		t.Fatalf("completed object lost its retention deadline: %+v", expiring)
 	}
@@ -515,20 +516,20 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// wired sweep runs.
 	for _, obj := range []testStorageObject{expiring, survivor} {
 		resp := storageRequest(t, boot1.srv, http.MethodGet, "/api/v1/storage/objects/"+obj.ID,
-			boot1Token, app.DemoOwnerUserID, "", nil)
+			boot1Token, demo.DemoOwnerUserID, "", nil)
 		got := decodeStorageObject(t, resp, http.StatusOK, "GET after the deadline passed, before boot 2")
 		if got.ID != obj.ID {
 			t.Fatalf("GET %s answered object %s", obj.ID, got.ID)
 		}
 	}
 	resp := storageRequest(t, boot1.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiring.ID+"/content", boot1Token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiring.ID+"/content", boot1Token, demo.DemoOwnerUserID, "", nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET content of the expired object before boot 2 = %d, want 200", resp.StatusCode)
 	}
 	listResp := storageRequest(t, boot1.srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		boot1Token, app.DemoOwnerUserID, "", nil)
+		boot1Token, demo.DemoOwnerUserID, "", nil)
 	before := decodeList(t, listResp, "GET list after the deadline passed, before boot 2")
 	if len(before.Objects) != 2 {
 		t.Fatalf("pre-boot-2 list = %+v, want exactly the two completed objects", before.Objects)
@@ -607,16 +608,16 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// helpers now that the state is terminal, so each property's failure
 	// names itself in the test output.
 	expiringMetadata := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiring.ID, boot2Token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiring.ID, boot2Token, demo.DemoOwnerUserID, "", nil)
 	assertStorageError(t, expiringMetadata, http.StatusNotFound, "storage.object_not_found",
 		"GET metadata of the sweep-expired object after boot 2")
 	expiringContent := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+expiring.ID+"/content", boot2Token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+expiring.ID+"/content", boot2Token, demo.DemoOwnerUserID, "", nil)
 	assertStorageError(t, expiringContent, http.StatusNotFound, "storage.object_not_found",
 		"GET content of the sweep-expired object after boot 2")
 
 	survivorMetadata := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+survivor.ID, boot2Token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+survivor.ID, boot2Token, demo.DemoOwnerUserID, "", nil)
 	survivorAfter := decodeStorageObject(t, survivorMetadata, http.StatusOK,
 		"GET the survivor after the sweep")
 	if survivorAfter.ID != survivor.ID {
@@ -627,13 +628,13 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 			survivor.ExpiresAt, survivorAfter.ExpiresAt)
 	}
 	survivorContent := storageRequest(t, boot2.srv, http.MethodGet,
-		"/api/v1/storage/objects/"+survivor.ID+"/content", boot2Token, app.DemoOwnerUserID, "", nil)
+		"/api/v1/storage/objects/"+survivor.ID+"/content", boot2Token, demo.DemoOwnerUserID, "", nil)
 	survivorContent.Body.Close()
 	if survivorContent.StatusCode != http.StatusOK {
 		t.Fatalf("GET content of the survivor after the sweep = %d, want 200", survivorContent.StatusCode)
 	}
 	listAfter := storageRequest(t, boot2.srv, http.MethodGet, "/api/v1/storage/objects?limit=10",
-		boot2Token, app.DemoOwnerUserID, "", nil)
+		boot2Token, demo.DemoOwnerUserID, "", nil)
 	final := decodeList(t, listAfter, "GET list after the sweep")
 	if len(final.Objects) != 1 || final.Objects[0].ID != survivor.ID {
 		t.Fatalf("post-sweep list = %+v, want only the survivor", final.Objects)

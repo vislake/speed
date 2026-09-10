@@ -2,7 +2,7 @@
 
 // This file is the reference app's distributed-mode regression for the
 // boot-time demo-user seed's register-budget behavior
-// (internal/app/demo_users.go):
+// (internal/app/demo/demo_users.go):
 // repeated seeded restarts within authn's register quota window must not
 // trip the register rate limit.
 //

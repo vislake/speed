@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
@@ -33,20 +33,20 @@ func requestInTenant(method string, tenantID pkgcore.TenantID) *http.Request {
 // header; the TENANT never is, under any header a caller can set.
 func TestDemoSubjectResolver_TakesTheTenantFromTheContextNotTheRequest(t *testing.T) {
 	r := requestInTenant(http.MethodGet, "tenant-acme")
-	r.Header.Set(app.DemoUserHeader, app.DemoOwnerUserID)
+	r.Header.Set(demo.DemoUserHeader, demo.DemoOwnerUserID)
 	// Everything a caller might try in order to steer the tenant.
 	r.Header.Set("X-Tenant-ID", "tenant-globex")
 	r.Header.Set("Tenant-ID", "tenant-globex")
 
-	sub, ok := app.DemoSubjectResolver(r)
+	sub, ok := demo.DemoSubjectResolver(r)
 	if !ok {
 		t.Fatal("the resolver reported no subject for a request with both a resolved tenant and a user")
 	}
 	if sub.TenantID != "tenant-acme" {
 		t.Fatalf("subject tenant = %q, want %q -- a client-supplied header must never steer the tenant", sub.TenantID, "tenant-acme")
 	}
-	if sub.UserID != app.DemoOwnerUserID {
-		t.Fatalf("subject user = %q, want %q", sub.UserID, app.DemoOwnerUserID)
+	if sub.UserID != demo.DemoOwnerUserID {
+		t.Fatalf("subject user = %q, want %q", sub.UserID, demo.DemoOwnerUserID)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 		tenant pkgcore.TenantID
 		user   string
 	}{
-		{name: "no tenant resolved", user: app.DemoOwnerUserID},
+		{name: "no tenant resolved", user: demo.DemoOwnerUserID},
 		{name: "no user header", tenant: "tenant-acme"},
 		{name: "neither"},
 		{name: "empty user header", tenant: "tenant-acme", user: ""},
@@ -67,9 +67,9 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := requestInTenant(http.MethodGet, tc.tenant)
 			if tc.user != "" {
-				r.Header.Set(app.DemoUserHeader, tc.user)
+				r.Header.Set(demo.DemoUserHeader, tc.user)
 			}
-			if _, ok := app.DemoSubjectResolver(r); ok {
+			if _, ok := demo.DemoSubjectResolver(r); ok {
 				t.Fatal("the resolver produced a subject; every incomplete identity must report none")
 			}
 		})
@@ -82,21 +82,21 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 // did -- the pre-auth flows send both a token and a header, and the header
 // is what they mean, so it must keep winning; only without a header does a
 // verified Principal in the request context supply the user, which is the
-// path the real accounts internal/app/demo_users.go seeds take.
+// path the real accounts internal/app/demo/demo_users.go seeds take.
 func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) {
 	principal := authn.Principal{UserID: "real-seeded-user", TenantID: "tenant-acme", SessionID: "session-1"}
 
 	t.Run("the demo header wins when both are present", func(t *testing.T) {
 		r := requestInTenant(http.MethodGet, "tenant-acme")
 		r = r.WithContext(authn.WithPrincipal(r.Context(), principal))
-		r.Header.Set(app.DemoUserHeader, app.DemoReaderUserID)
+		r.Header.Set(demo.DemoUserHeader, demo.DemoReaderUserID)
 
-		sub, ok := app.DemoSubjectResolver(r)
+		sub, ok := demo.DemoSubjectResolver(r)
 		if !ok {
 			t.Fatal("no subject for a request with a tenant, a verified principal and a demo header")
 		}
-		if sub.UserID != app.DemoReaderUserID {
-			t.Fatalf("subject user = %q, want the header's %q -- the header names who acts", sub.UserID, app.DemoReaderUserID)
+		if sub.UserID != demo.DemoReaderUserID {
+			t.Fatalf("subject user = %q, want the header's %q -- the header names who acts", sub.UserID, demo.DemoReaderUserID)
 		}
 	})
 
@@ -104,7 +104,7 @@ func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) 
 		r := requestInTenant(http.MethodGet, "tenant-acme")
 		r = r.WithContext(authn.WithPrincipal(r.Context(), principal))
 
-		sub, ok := app.DemoSubjectResolver(r)
+		sub, ok := demo.DemoSubjectResolver(r)
 		if !ok {
 			t.Fatal("no subject for a request with a tenant and a verified principal")
 		}
@@ -125,7 +125,7 @@ func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) 
 			UserID: "real-seeded-user", TenantID: "tenant-globex", SessionID: "session-1",
 		}))
 
-		sub, ok := app.DemoSubjectResolver(r)
+		sub, ok := demo.DemoSubjectResolver(r)
 		if !ok {
 			t.Fatal("no subject for a request with a tenant and a verified principal")
 		}
@@ -139,7 +139,7 @@ func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) 
 // and, more importantly, its strict direction: a method this app never
 // considered demands the WRITE permission, not the read one.
 func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
-	permissionFor := app.DemoPermissionFor(app.NotesResource)
+	permissionFor := demo.DemoPermissionFor(demo.NotesResource)
 	tests := []struct {
 		method string
 		want   string
@@ -164,7 +164,7 @@ func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
 // rulesByPath indexes the app's route table for the tests below.
 func rulesByPath(t *testing.T) map[string]rbac.RouteRule {
 	t.Helper()
-	rules := app.DemoRouteRules(nil, app.OrgRouteGuardDeps{}, false)
+	rules := demo.DemoRouteRules(nil, demo.OrgRouteGuardDeps{}, false)
 	byPath := make(map[string]rbac.RouteRule, len(rules))
 	for _, rule := range rules {
 		byPath[rule.Path] = rule
@@ -181,7 +181,7 @@ func TestDemoRouteRules_MountedPathWithoutADecision_RefusesToServe(t *testing.T)
 
 	guarded, err := rbac.GuardRoutes(nil,
 		[]pkgcore.MountedRoute{{Path: unlisted, Handler: http.NotFoundHandler()}},
-		app.DemoRouteRules(nil, app.OrgRouteGuardDeps{}, false))
+		demo.DemoRouteRules(nil, demo.OrgRouteGuardDeps{}, false))
 	if err == nil {
 		t.Fatal("an unlisted mounted path was accepted; it must fail the server build")
 	}
@@ -269,10 +269,10 @@ func TestDemoRouteRules_OrgEntry_ExemptsOnlyTheAcceptOperation(t *testing.T) {
 // breaks here rather than silently gating on a permission the module no
 // longer declares.
 func TestNotesResource_MatchesTheModulesOwnPermissions(t *testing.T) {
-	if got := rbac.Permission(app.NotesResource, app.DemoActionRead); got != notes.PermissionRead {
+	if got := rbac.Permission(demo.NotesResource, demo.DemoActionRead); got != notes.PermissionRead {
 		t.Fatalf("read permission = %q, want %q", got, notes.PermissionRead)
 	}
-	if got := rbac.Permission(app.NotesResource, app.DemoActionWrite); got != notes.PermissionWrite {
+	if got := rbac.Permission(demo.NotesResource, demo.DemoActionWrite); got != notes.PermissionWrite {
 		t.Fatalf("write permission = %q, want %q", got, notes.PermissionWrite)
 	}
 }
@@ -295,7 +295,7 @@ func TestMustResourceOf_DisagreeingPermissions_Panics(t *testing.T) {
 					t.Fatalf("MustResourceOf(%v) returned instead of panicking", tc.permissions)
 				}
 			}()
-			_ = app.MustResourceOf(tc.permissions...)
+			_ = demo.MustResourceOf(tc.permissions...)
 		})
 	}
 }

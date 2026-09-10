@@ -1,7 +1,7 @@
 //go:build integration
 
 // This file is the Docker-backed regression for the smilesim completion
-// subscription's cross-instance wire shape: internal/app/demo_notification.go's
+// subscription's cross-instance wire shape: internal/app/demo/demo_notification.go's
 // smilesim.EventSimulationCompleted subscription reads its payload through
 // a probe (simulationCompletedFieldsFromPayload) rather than a naked type
 // assertion, because pkgcore/eventbus/redis's EventBus always JSON
@@ -58,7 +58,7 @@
 // deliverRemote path, JSON-decoded to map[string]any) rather than the
 // local synchronous delivery flowtests/smilesim_flow_test.go's own in-process test
 // exercises. The one real reference-app subprocess this test boots runs
-// the actual, unmodified wireDemoNotification subscription -- the exact
+// the actual, unmodified WireDemoNotification subscription -- the exact
 // code under test -- and its own console SMS sender's stdout is the
 // externally observable proof of whether the subscription actually
 // dispatched.
@@ -80,12 +80,12 @@ import (
 )
 
 // The reference app's own constants, hardcoded here with a note that they
-// must match internal/app/demo_notification.go's real declarations --
+// must match internal/app/demo/demo_notification.go's real declarations --
 // mirroring this directory's own established convention
 // (redis_eventbus_composition_test.go's acmeTenantID/demoOwnerEmail doc
 // comment).
 //
-// smilesimDemoRecipientUserID is internal/app/demo_notification.go's
+// smilesimDemoRecipientUserID is internal/app/demo/demo_notification.go's
 // DemoSmileSimRecipientUserID, and smilesimDemoRecipientPhone is that same
 // id's entry in DemoUserAddresses -- a static table the resolver reads
 // with no user account or membership needed, which is why this test never
@@ -100,7 +100,7 @@ const (
 	// its own process stdout -- the signal this test polls for.
 	smilesimSMSLinePrefix = "SMS to " + smilesimDemoRecipientPhone + ":"
 	// smilesimUnreadablePayloadLogSubstring is the constant warning message
-	// wireDemoNotification's smilesim subscription logs for a payload
+	// WireDemoNotification's smilesim subscription logs for a payload
 	// simulationCompletedFieldsFromPayload cannot read -- a
 	// version-independent "the child's
 	// consumer group for this event type is live and consuming" signal this

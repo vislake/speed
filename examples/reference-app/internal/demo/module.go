@@ -6,7 +6,7 @@
 // completion glue dispatches to the user who started the simulation -- both
 // wired end
 // to end as the notification module's consumers (see
-// internal/app/demo_notification.go and the module's own notification_flow_test/
+// internal/app/demo/demo_notification.go and the module's own notification_flow_test/
 // smilesim_flow_test suites).
 //
 // The package exists because both types' template copy must live inside
@@ -62,7 +62,7 @@ const (
 	// TypeKeySimulationReady is the Key of the second notification type
 	// this module declares: a transactional SMS telling a tenant member
 	// their smile-simulation image has finished generating.
-	// internal/app's smilesim completion glue (internal/app/demo_notification.go's
+	// internal/app's smilesim completion glue (internal/app/demo/demo_notification.go's
 	// EventSimulationCompleted subscription) dispatches it and reads this
 	// constant rather than retyping the string.
 	//
@@ -146,7 +146,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 
 // OpenAPISpec implements pkgcore.Module. demo mounts no HTTP surface of its
 // own -- the demo patient-message route is a hand-written internal/app route
-// outside the OpenAPI machinery (see internal/app/demo_notification.go) -- so
+// outside the OpenAPI machinery (see internal/app/demo/demo_notification.go) -- so
 // there is no fragment to return.
 func (m *Module) OpenAPISpec() []byte { return nil }
 

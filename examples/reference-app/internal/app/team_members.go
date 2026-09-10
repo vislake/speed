@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -65,7 +66,7 @@ import (
 //
 // The gate mirrors the org module route the web's roster reads:
 // GET /api/v1/org/members answers org:read (the org entry of DemoRouteRules,
-// demo_subject.go), so this answer requires the same permission through
+// demo/demo_subject.go), so this answer requires the same permission through
 // the same rbac gate and the same demo subject resolver, and adds the
 // same tenant-wide narrowing that route applies to a node-less roster
 // listing (enforceOrgNodeScope's requireTenantWide): a caller whose
@@ -149,7 +150,7 @@ func WriteTeamMembersJSON(w http.ResponseWriter, members []TeamMemberRow) {
 }
 
 // teamMembersDeps bundles the org-module and authn state serveTeamMembers
-// composes, mirroring OrgRouteGuardDeps' own bundling shape (demo_subject.go):
+// composes, mirroring OrgRouteGuardDeps' own bundling shape (demo/demo_subject.go):
 // one struct so wireTeamMembers' signature grows by one field rather than
 // by one parameter per service this composition reaches into.
 type teamMembersDeps struct {
@@ -167,7 +168,7 @@ type teamMembersDeps struct {
 	users *authn.UserRepository
 	// headerDisabled carries cfg.DisableDemoUserHeader into the subject
 	// resolver, exactly as the route table threads it (DemoRouteRules,
-	// demo_subject.go): the demo header, when enabled, names who acts for
+	// demo/demo_subject.go): the demo header, when enabled, names who acts for
 	// the gate.
 	headerDisabled bool
 }
@@ -175,7 +176,7 @@ type teamMembersDeps struct {
 // teamMembersPermissionFor selects the permission a TeamMembersPath
 // request must hold: org's own read permission, the same permission the
 // org module route the web's roster reads gates its node-less
-// member listing on (orgPermissionFor, demo_subject.go). Only reads
+// member listing on (orgPermissionFor, demo/demo_subject.go). Only reads
 // exist on this answer, so any other method answers "" -- and an empty
 // selector is refused by RequirePermissionFunc before the handler runs,
 // the same 403 rbac.permission_denied the org route answers, a refusal
@@ -209,7 +210,7 @@ func teamMembersPermissionFor(r *http.Request) string {
 // or body.
 func wireTeamMembers(mux *http.ServeMux, deps teamMembersDeps) {
 	gated := rbac.RequirePermissionFunc(deps.az, teamMembersPermissionFor,
-		rbac.WithSubjectResolver(DemoSubjectResolverFor(deps.headerDisabled)),
+		rbac.WithSubjectResolver(demo.DemoSubjectResolverFor(deps.headerDisabled)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", http.MethodGet)
@@ -251,7 +252,7 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 
 	// The tenant-wide narrowing, mirroring the org module route's own
 	// requireTenantWide refusal for a node-less roster listing
-	// (enforceOrgNodeScope, demo_subject.go): this answer is the WHOLE
+	// (enforceOrgNodeScope, demo/demo_subject.go): this answer is the WHOLE
 	// clinic's roster, with names -- a grant that covers one subtree of
 	// the clinic cannot read it, exactly as it cannot read the org route's
 	// node-less member list. rbac.RequirePermissionFunc has already

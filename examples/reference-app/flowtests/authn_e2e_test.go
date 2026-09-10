@@ -150,11 +150,11 @@ func buildAuthnE2EServer(t *testing.T, mutate ...func(*app.ServerConfig)) (*http
 	// This test signs its demo account into tenant-e2e, a tenant of its
 	// own that testConfig's shared DemoHostTenants map (acme/globex) does
 	// not name. Replace the map -- never mutate the shared one -- so
-	// seedDemoGrants (internal/app/demo_subject.go) seeds tenant-e2e with the built-in
+	// SeedDemoGrants (internal/app/demo/demo_subject.go) seeds tenant-e2e with the built-in
 	// roles and the demo grants at boot, exactly as it does for the two
 	// demo tenants in every other test: the merged notes gate resolves WHO
 	// is acting from DemoUserHeader (DemoSubjectResolver in
-	// internal/app/demo_subject.go), and demo-owner -- the acting user createNoteAs
+	// internal/app/demo/demo_subject.go), and demo-owner -- the acting user createNoteAs
 	// sends -- holds the owner role in every seeded tenant, so a notes
 	// call after a real sign-in is not denied for want of a grant.
 	cfg.HostTenants = map[string]pkgcore.TenantID{"e2e.demo.localhost": "tenant-e2e"}

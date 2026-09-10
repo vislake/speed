@@ -83,10 +83,11 @@ import (
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/attestation"
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
-	"github.com/vislake/speed/examples/reference-app/internal/demo"
+	demomodule "github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
@@ -214,218 +215,6 @@ var DevNotificationIndexKey = []byte{
 	0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
 	0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
 }
-
-// DemoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
-// lookup. It exists only so this reference app has *some* way to render a
-// tenant-specific brand on the config module's pre-auth display endpoints
-// (configModule's tenancy.NewDomainResolver wiring in BuildServer below)
-// without a real custom-domain table.
-//
-// This is a placeholder, not a pattern to copy into a real deployment: a
-// real Resolver must derive the tenant from a source the server itself
-// controls -- never an unauthenticated, static Host map like this one,
-// which anyone can trigger just by setting the Host header on an HTTP
-// request. See go/tenancy/resolver.go's own Resolver doc comment for the
-// same rule stated as a hard requirement on every implementation.
-//
-// Host does NOT select the tenant for anything else in this app. The notes
-// API, and every other route this app protects, resolve their tenant from
-// the caller's ACCESS TOKEN instead (authn.NewPrincipalResolver, wired
-// below) -- an unauthenticated caller cannot choose a tenant just by
-// setting Host, which a Host-keyed lookup like this one would otherwise
-// allow. See BuildServer's middleware-chain doc comment for the full
-// reasoning.
-var DemoHostTenants = map[string]pkgcore.TenantID{
-	"acme.demo.localhost":   "tenant-acme",
-	"globex.demo.localhost": "tenant-globex",
-}
-
-// signInMemberships -- the authn.MembershipReader this app wires, whose
-// customer-tenant answers read org's own memberships table live -- lives
-// in sign_in_memberships.go with its full rationale. The short version of
-// why host glue must exist here at all is structural: authn never imports
-// org -- the two sit at the same dependency tier, peers, neither importing
-// the other -- so whatever answers authn's two membership questions must
-// be supplied by the assembling application, exactly like
-// DemoNotesSubjectResolver and OrgSubtreeResolverFor below are. The app's
-// membership store starts empty, and who fills it depends on the boot:
-//
-//   - Every boot seeds the fixed demo header actors' rbac grants
-//     (seedDemoGrants) but NO memberships: those actors have no database
-//     row, so nothing can sign in as them.
-//   - A boot with APP_DEMO_USERS_PASSWORD set additionally registers the
-//     three demo accounts of demo_users.go through the real register route
-//     and places each into org's memberships table under every tenant its
-//     actor model names -- which is what makes those real sign-ins succeed,
-//     in this process and in any later one against the same database
-//     (authn's resolveTenant refuses an account with no membership:
-//     go/authn/service.go's nil-or-unseeded MembershipReader answer refuses
-//     rather than allows, and the org rows are that answer now).
-//   - Tests grant membership explicitly after registering an account
-//     through the real HTTP surface (registerAndAuthenticate in
-//     flowtests/server_test.go, flowtests/authn_e2e_test.go), keeping a reference to the same
-//     store BuildServer itself wires.
-
-// DemoOrgUserHeader is the header the demo identity closure
-// DemoOrgSubjectResolverFor builds reads to identify the HTTP caller: the
-// stand-in for the verified access-token claims a real deployment's
-// resolver would read, in exactly the spirit of DemoHostTenants' own
-// disclaimer above. A caller sets it to whatever user id it wants to act
-// as, with no verification whatsoever -- which is fine for this reference
-// app's own demonstration purposes and would be a critical vulnerability
-// in any real deployment.
-const DemoOrgUserHeader = "X-Demo-User-Id"
-
-// DemoOrgSubjectResolverFor returns the demo identity closure every module
-// that declares the structurally identical SubjectResolver seam resolves
-// its callers through: org's two caller-scoped endpoints (creating and
-// accepting an invitation), every notification endpoint (which resolves
-// its caller's inbox, contacts and preferences through it) and
-// integration's creator reads. Each module's own func adapter wraps it at
-// the wiring site (org.SubjectResolverFunc and the two siblings -- see the
-// compile-time checks below), so no host-side named type is needed to
-// satisfy the seam. It exists only so this reference app has *some* way to
-// demonstrate those endpoints end to end through a caller-chosen identity.
-//
-// It fails closed: no header, and no verified Principal in the wiring that
-// reads one, reports ("", false), and the module's own per-operation
-// refusal (notification.subject_unresolved,
-// integration.subject_unresolved, org's sibling) is what a caller then
-// sees. Resolution order in the header-enabled wiring: the X-Demo-User-Id
-// header when present (the pre-auth flows' affordance); else, when
-// principalFallback is set (org's wiring only), the verified Principal;
-// else fail closed. In the headerDisabled wiring, the verified Principal
-// alone.
-//
-// principalFallback is the deliberate exception for ORG's wiring alone, the
-// same shape DemoNotesSubjectResolver's header-then-Principal fallback
-// gives notes' and cases' creator seams: org's caller-scoped endpoints also
-// serve browser-shaped callers -- a signed-in clinic owner whose requests
-// carry a bearer token and no demo header -- so the org module is wired
-// with principalFallback true, and a header-less request with a verified
-// Principal resolves as that Principal's user. false (notification's,
-// integration's and every test's wiring) keeps the header-only resolver,
-// preserving the pinned refusal where it belongs.
-//
-// headerDisabled is the other deliberate exception to the "never falls back
-// to the Principal" rule: an operator who sets APP_DISABLE_DEMO_USER_HEADER
-// has declared this deployment reads no demo header at all, so the only
-// identity left to resolve a caller from is the verified Principal.
-// BuildServer passes cfg.DisableDemoUserHeader here, which is what extends
-// the kill switch -- alone it would only reach DemoUserHeader in the rbac
-// gate -- to the org, notification and integration surfaces this closure
-// serves. See the DisableDemoUserHeader field's own doc comment
-// (bootstrap.go) for the full contract.
-//
-// This is a placeholder, not a pattern to copy into a real deployment: a
-// real SubjectResolver must derive the caller from a source the server
-// itself verified (a validated access token's subject claim), never an
-// unauthenticated, client-supplied header like this one -- see
-// org.SubjectResolver's own doc comment for the same rule stated as a hard
-// requirement.
-func DemoOrgSubjectResolverFor(headerDisabled, principalFallback bool) func(*http.Request) (string, bool) {
-	return func(req *http.Request) (string, bool) {
-		if !headerDisabled {
-			if userID := req.Header.Get(DemoOrgUserHeader); userID != "" {
-				return userID, true
-			}
-			if principalFallback {
-				if principal, ok := authn.PrincipalFromContext(req.Context()); ok && principal.UserID != "" {
-					return principal.UserID, true
-				}
-			}
-			return "", false
-		}
-		principal, ok := authn.PrincipalFromContext(req.Context())
-		if !ok || principal.UserID == "" {
-			return "", false
-		}
-		return principal.UserID, true
-	}
-}
-
-// compile-time checks that the closure DemoOrgSubjectResolverFor returns
-// satisfies the identical SubjectResolver seam the three modules it serves
-// declare -- wrapped by each module's own func adapter, exactly as the
-// wiring sites below pass it.
-var (
-	_ org.SubjectResolver          = org.SubjectResolverFunc(DemoOrgSubjectResolverFor(false, false))
-	_ notification.SubjectResolver = notification.SubjectResolverFunc(DemoOrgSubjectResolverFor(false, false))
-	_ integration.SubjectResolver  = integration.SubjectResolverFunc(DemoOrgSubjectResolverFor(false, false))
-)
-
-// DemoNotesSubjectResolver is what notes' create handler resolves the
-// creating user from -- the notes.NewModule option BuildServer wires
-// below. It is DemoOrgSubjectResolverFor's behavior plus one source: like
-// its sibling it reads the X-Demo-User-Id header first, the attribution
-// affordance every flow helper in this package sends and the namespace
-// demo_notification.go's address table keys on; and only when no header
-// is present does it fall back to the verified Principal authn.Middleware
-// left in the request context. The fallback is what lets a browser-shaped
-// caller with no demo header create notes: the accounts demo_users.go
-// seeds (real users acting through their access tokens) are attributed
-// through it, exactly as they pass the rbac gate through DemoSubjectResolver's
-// own fallback, and the note-created events their creates publish name
-// their real user ids -- which resolve to no notification addresses, an
-// ordinary skip (see demo_notification.go's DemoUserAddresses).
-//
-// Notes' creator seam is not alone in having this second source:
-// org's caller-scoped endpoints share it -- the org module is wired with
-// DemoOrgSubjectResolverFor's principalFallback true, giving org the
-// identical header-then-Principal shape (see DemoOrgSubjectResolverFor's own
-// doc comment). The notification module's caller-scoped endpoints keep the
-// header-only read, because its subject-less refusal is a pinned behaviour
-// of this app's rig -- and a request that reaches those surfaces without
-// the header stays refused rather than acting as the principal's user id.
-//
-// This is a placeholder, not a pattern to copy into a real deployment:
-// the header is exactly as unverifiable here as in DemoOrgSubjectResolverFor,
-// and a real deployment's resolver reads the creating user from the
-// verified token the notes create handler already stands behind.
-//
-// headerDisabled carries the value of cfg.DisableDemoUserHeader
-// (APP_DISABLE_DEMO_USER_HEADER) BuildServer wired this resolver with --
-// the sibling of DemoOrgSubjectResolverFor's own headerDisabled argument, and
-// what extends the kill switch to this resolver: without it, a caller
-// could still name any creator through X-Demo-User-Id on notes' and
-// cases' surfaces while the rbac header alone was disabled. The
-// zero value keeps the header-then-Principal resolver;
-// with headerDisabled set, Subject skips the header read entirely
-// and resolves the caller from the verified authn Principal alone, failing
-// closed exactly like the default shape when no Principal exists.
-type DemoNotesSubjectResolver struct {
-	// HeaderDisabled carries cfg.DisableDemoUserHeader
-	// (APP_DISABLE_DEMO_USER_HEADER): when true, Subject skips the
-	// header read and resolves the verified authn Principal alone,
-	// failing closed without one -- see the type's own doc comment for
-	// the full contract. The zero value keeps the header-first resolver.
-	HeaderDisabled bool
-}
-
-// Subject implements notes.SubjectResolver (and the cases package's
-// identical copy of the seam -- see the compile-time check at the bottom
-// of cases.go). It fails closed: no header (and, in the
-// headerDisabled wiring, no verified Principal) reports ("", false), and
-// the module's own per-operation refusal (notes.subject_unresolved,
-// cases.subject_unresolved) is what a caller then sees.
-func (r DemoNotesSubjectResolver) Subject(req *http.Request) (string, bool) {
-	userID := ""
-	if !r.HeaderDisabled {
-		userID = req.Header.Get(DemoOrgUserHeader)
-	}
-	if userID == "" {
-		principal, ok := authn.PrincipalFromContext(req.Context())
-		if !ok || principal.UserID == "" {
-			return "", false
-		}
-		userID = principal.UserID
-	}
-	return userID, true
-}
-
-// compile-time check that DemoNotesSubjectResolver satisfies notes' own
-// copy of the seam.
-var _ notes.SubjectResolver = DemoNotesSubjectResolver{}
 
 // The host's feature gate is one config-module read adapted to org's and
 // authn's identically shaped FeatureGate seams. Both modules must be part
@@ -861,7 +650,7 @@ type ServerConfig struct {
 	Memberships *signInMemberships
 
 	// DemoUsersPassword, when non-empty, makes BuildServer seed the three
-	// demo accounts of demo_users.go at the end of its composition --
+	// demo accounts of demo/demo_users.go at the end of its composition --
 	// register each through the composed handler, then grant the
 	// membership and role its actor model declares -- so a browser visitor
 	// can sign in as demo-owner@example.com and friends with a real
@@ -872,7 +661,7 @@ type ServerConfig struct {
 	DemoUsersPassword string
 
 	// DemoPlatformStaffPassword, when non-empty, makes BuildServer seed
-	// the demo platform-staff account of demo_admin.go (seedDemoPlatformStaff)
+	// the demo platform-staff account of demo/demo_admin.go (SeedDemoPlatformStaff)
 	// at the end of its composition, INDEPENDENTLY of DemoUsersPassword: a
 	// boot seeds each demo account set from its own variable, never one
 	// from the other's. The platform administrator (BuiltinRoleOwner under
@@ -958,7 +747,7 @@ type ServerConfig struct {
 	WebhookHTTPClient   *http.Client
 
 	// OnRBACReady, when non-nil, receives the live *rbac.Service BuildServer
-	// attaches, immediately after seedDemoGrants seeds every configured
+	// attaches, immediately after SeedDemoGrants seeds every configured
 	// tenant's built-in roles and demo grants. It exists purely for a test
 	// that needs to grant a role scoped to an organization node CREATED
 	// AFTER the server starts serving HTTP -- the subtree-scoped grant
@@ -989,7 +778,7 @@ type ServerConfig struct {
 // BuildServer wires the reference app's Kernel -- the authn, notes, org,
 // config, rbac, storage, demo, notification, ai-gateway and audit Modules --
 // their migrations, the job queue the storage and notification modules
-// share, the demo notification glue (demo_notification.go), the
+// share, the demo notification glue (demo/demo_notification.go), the
 // consult glue (consult.go, go/ai-gateway's mandatory first
 // consumer), and the authn+tenancy middleware chain into a single
 // http.Handler. It is the one place that wiring logic lives -- main() and
@@ -1062,14 +851,14 @@ type serverBuild struct {
 	storageModule       *storage.Module
 	sharingModule       *sharing.Module
 	integrationModule   *integration.Module
-	demoModule          *demo.Module
+	demoModule          *demomodule.Module
 	notificationModule  *notification.Module
 	aiGatewayModule     *aigateway.Module
 	billingModule       *billing.Module
 	complianceModule    *compliance.Module
 	adminModule         *admin.Module
 	attestationService  *attestation.Service
-	authnUserLocales    AuthnUserLocales
+	authnUserLocales    demo.AuthnUserLocales
 	gatewayEntitlements aigateway.EntitlementsFunc
 	memberships         *signInMemberships
 
@@ -1424,7 +1213,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 		// The notification and integration modules keep the flag false (see
 		// DemoOrgSubjectResolverFor's own doc comment for why their
 		// header-only refusal stays pinned).
-		org.WithSubjectResolver(org.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, true))),
+		org.WithSubjectResolver(org.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, true))),
 		org.WithMailFrom("invitations@reference-app.example"),
 		// Replies to an invitation land in the support inbox rather than on
 		// the no-reply-ish sender above. Module-level configuration by
@@ -1627,10 +1416,10 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// (see internal/notes handler.go's ErrSubjectUnresolved). The resolver
 	// reads the X-Demo-User-Id header first and falls back to the verified
 	// Principal only when no header is present -- the fallback that lets the
-	// seeded accounts of demo_users.go create notes through their access
-	// tokens alone (see its own doc comment, and demo_subject.go's
+	// seeded accounts of demo/demo_users.go create notes through their access
+	// tokens alone (see its own doc comment, and demo/demo_subject.go's
 	// DemoNotesCreatorUserID).
-	b.notesModule = notes.NewModule(b.db, notes.WithSubjectResolver(DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}))
+	b.notesModule = notes.NewModule(b.db, notes.WithSubjectResolver(demo.DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}))
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
 	// own database connection -- no new infra dependency is needed for
@@ -1651,7 +1440,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// this app's organization tree is real (flowtests/org_flow_test.go's multi-level
 	// DSO tree, and the subtree-scoped grant test),
 	// so a node-scoped rbac binding must actually resolve against it rather
-	// than deny for want of a resolver. Every demo grant seedDemoGrants
+	// than deny for want of a resolver. Every demo grant SeedDemoGrants
 	// makes is still tenant-wide (rbac.Scope{}) -- the wiring below is what
 	// makes a NARROWER grant (a role assigned with a real node id) mean
 	// something, for a host that wants one, not what makes one mandatory.
@@ -1749,7 +1538,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(b.standaloneQueue),
-		integration.WithSubjectResolver(integration.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
+		integration.WithSubjectResolver(integration.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	}
 	if cfg.WebhookURLValidator != nil {
 		integrationOpts = append(integrationOpts, integration.WithWebhookURLValidator(cfg.WebhookURLValidator))
@@ -1761,7 +1550,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 
 	// notificationModule is the reference app's first consumer of
 	// go/notification, wired end to end as the module's mandatory
-	// first-consumer proof (see demo_notification.go for the
+	// first-consumer proof (see demo/demo_notification.go for the
 	// host-side glue that
 	// drives it -- the note-created subscription and the demo
 	// patient-message route -- and flowtests/notification_flow_test.go for the
@@ -1778,7 +1567,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// same worker pool (its Register call declares the delivery job handler
 	// on the registry, and the drain loop below moves every handler onto
 	// the queue); and the user-address resolver is notification/staticaddr
-	// over the demo directory demo_notification.go owns -- the demo users
+	// over the demo directory demo/demo_notification.go owns -- the demo users
 	// exist only as header values, so the operator-declared table is this
 	// app's whole address store. WithSubjectResolver hands the HTTP surface
 	// the same demo identity layer type org's handler uses -- its own
@@ -1792,7 +1581,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// demo deliveries' recipient-language resolution -- see that type's own
 	// doc comment). It is built here, before either module registers, and
 	// reads the authn service lazily so the wiring order is not a hazard.
-	b.authnUserLocales = AuthnUserLocales{authn: b.authnModule}
+	b.authnUserLocales = demo.AuthnUserLocales{Authn: b.authnModule}
 
 	b.notificationModule = notification.NewModule(b.db,
 		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)),
@@ -1804,9 +1593,9 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 		notification.WithContactEmailIndexer(b.contactEmailIndexer),
 		notification.WithContactPhoneIndexer(b.contactPhoneIndexer),
 		notification.WithDeliveryQueue(b.standaloneQueue),
-		notification.WithUserAddressResolver(staticaddr.New(DemoUserAddresses)),
+		notification.WithUserAddressResolver(staticaddr.New(demo.DemoUserAddresses)),
 		notification.WithUserLocaleResolver(b.authnUserLocales),
-		notification.WithSubjectResolver(notification.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
+		notification.WithSubjectResolver(notification.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	)
 
 	// demoModule is the carrier of the app's demo notification type
@@ -1817,7 +1606,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// renders every dispatch from that frozen catalog -- a type whose copy
 	// lives outside the set can never render (internal/demo module.go's
 	// package comment says so at length).
-	b.demoModule = demo.NewModule()
+	b.demoModule = demomodule.NewModule()
 
 	// billingModule is the reference app's mandatory first consumer of
 	// go/billing -- a module API this app genuinely uses, both judgment
@@ -1842,7 +1631,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// The one deliberately absent wiring is a UsageReader (nil): quota-kind
 	// grants need go/billing's real-time usage counter through that reader,
 	// and this app still wires no usage reader into billing -- which is why
-	// demo_entitlements.go's seed grants are Boolean, never Quota (see that
+	// demo/demo_entitlements.go's seed grants are Boolean, never Quota (see that
 	// file's own doc comment). No WithQueue either: no payment-channel
 	// gateway is wired, so PollingService's active-polling fallback has
 	// nothing to poll -- an actual payment-gateway integration (a real
@@ -1908,7 +1697,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// the closure shape below is that file's own documented example,
 	// verbatim. An unwired seam (nil) would let every request through; a
 	// wired one judged against an empty database would deny everything --
-	// seedDemoEntitlements (boot, below) is what keeps the seeded demo
+	// SeedDemoEntitlements (boot, below) is what keeps the seeded demo
 	// tenants on the allowed side from the very first request.
 	// gatewayEntitlements is the ONE adapter instance this app's gateway
 	// gate and smilesim's own pre-flight both run through. Binding it as a
@@ -2012,8 +1801,8 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// ai-gateway UsageRecorder bridge, also above, feeds for real on
 	// every consult/smilesim AI call), and WithBilling hands it the same
 	// billingModule every other consumer in this file already uses (its
-	// credit balances seeded by seedDemoCredits and subscriptions by
-	// seedDemoEntitlements below). Both options are optional by
+	// credit balances seeded by SeedDemoCredits and subscriptions by
+	// SeedDemoEntitlements below). Both options are optional by
 	// go/admin's own contract (a host wiring neither gets
 	// ErrUsageModulesNotWired from UsageService.Summary, a host wiring
 	// one gets that dimension present and the other absent); this app
@@ -2377,32 +2166,32 @@ func (b *serverBuild) attachAndSeed(ctx context.Context, cfg ServerConfig) error
 	if err != nil {
 		return fmt.Errorf("reference-app: attach the rbac module: %w", err)
 	}
-	if seedErr := seedDemoGrants(ctx, b.rbacService, cfg.HostTenants); seedErr != nil {
+	if seedErr := demo.SeedDemoGrants(ctx, b.rbacService, cfg.HostTenants); seedErr != nil {
 		return seedErr
 	}
 	if cfg.OnRBACReady != nil {
 		cfg.OnRBACReady(b.rbacService)
 	}
-	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for a real
+	// SeedDemoCredits is the demo, NOT-a-real-payment stand-in for a real
 	// buy-a-credit-pack flow -- see that function's own doc comment for
 	// exactly why a real Stripe/Alipay/WeChat sandbox charge stays out of
 	// scope here. It runs
-	// unconditionally, like seedDemoGrants just above,
+	// unconditionally, like SeedDemoGrants just above,
 	// regardless of cfg.DemoUsersPassword: internal/smilesim's own tests
 	// (flowtests/smilesim_flow_test.go) need a real, non-zero starting balance on
 	// tenant-acme to exercise the successful-generation leg, exactly the
-	// way seedDemoGrants' own roles are needed by every test that gates a
+	// way SeedDemoGrants' own roles are needed by every test that gates a
 	// route on a permission, demo password or not.
-	if seedErr := seedDemoCredits(ctx, b.billingModule.Credits(), cfg.HostTenants); seedErr != nil {
+	if seedErr := demo.SeedDemoCredits(ctx, b.billingModule.Credits(), cfg.HostTenants); seedErr != nil {
 		return seedErr
 	}
 
-	// seedDemoEntitlements is the demo, NOT-a-real-purchase stand-in for
+	// SeedDemoEntitlements is the demo, NOT-a-real-purchase stand-in for
 	// the "tenant buys a subscription, the payment channel confirms it"
 	// leg of a real billing flow -- see
 	// that function's own doc comment for exactly why a real
 	// Stripe/Alipay/WeChat sandbox charge stays out of scope here. It runs
-	// unconditionally, like seedDemoCredits just above: since the gateway
+	// unconditionally, like SeedDemoCredits just above: since the gateway
 	// below is wired with WithEntitlements, every consult/smilesim request
 	// is gated on the calling tenant holding an Active subscription to a
 	// Plan granting that route's model key -- without this seed the demo
@@ -2410,7 +2199,7 @@ func (b *serverBuild) attachAndSeed(ctx context.Context, cfg ServerConfig) error
 	// aigateway.entitlement_denied. Running it here, before any route can
 	// serve, also means the seam is live (never nil and never judging an
 	// empty database) from the very first request.
-	if seedErr := seedDemoEntitlements(ctx, b.billingModule.Plans(), b.billingModule.Subscriptions(), cfg.HostTenants); seedErr != nil {
+	if seedErr := demo.SeedDemoEntitlements(ctx, b.billingModule.Plans(), b.billingModule.Subscriptions(), cfg.HostTenants); seedErr != nil {
 		return seedErr
 	}
 
@@ -2570,7 +2359,7 @@ func (b *serverBuild) attachAndSeed(ctx context.Context, cfg ServerConfig) error
 func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) error {
 	mux := http.NewServeMux()
 	obs.MountLiveness(mux)
-	orgGuardDeps := OrgRouteGuardDeps{scope: b.orgModule.Scope(), members: b.orgModule.Members()}
+	orgGuardDeps := demo.OrgRouteGuardDeps{Scope: b.orgModule.Scope(), Members: b.orgModule.Members()}
 	adminHandler, authnRoutes, mountErr := mountModuleRoutes(mux, b.reg, b.rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
 		return mountErr
@@ -2590,7 +2379,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// repeated calls this package's tests make are idempotent in effect.
 	hostcore.RegisterMountedRoutes(b.reg)
 
-	// wireDemoNotification adds the reference app's demo glue on top of the
+	// WireDemoNotification adds the reference app's demo glue on top of the
 	// mounted module routes: the subscription that turns notes' note-created
 	// event into a notification dispatch for the note's creator, and the
 	// hand-written demo patient-message route that dispatches the demo
@@ -2599,10 +2388,10 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// the note-created subscription hears exactly what notesModule's handler
 	// publishes on that bus -- and the notificationModule services are the
 	// module's own accessors, the same instances its Register validated and
-	// its HTTP handler drives (see demo_notification.go for the seam
+	// its HTTP handler drives (see demo/demo_notification.go for the seam
 	// contracts, and flowtests/notification_flow_test.go for the end-to-end legs).
 	// The call cannot fail: nothing it does returns an error.
-	wireDemoNotification(mux, b.reg.EventBus(), b.notificationModule, b.reg, b.authnUserLocales)
+	demo.WireDemoNotification(mux, b.reg.EventBus(), b.notificationModule, b.reg, b.authnUserLocales)
 
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
 	// (consult.go): consultService shares notesModule's own
@@ -2624,7 +2413,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// storageModule's own HTTP surface, and the job-status route polls the
 	// same standaloneQueue every other async task in this app shares.
 	// billingModule.Credits() is the same *billing.CreditService instance
-	// seedDemoCredits granted the demo tenants' starting balance against
+	// SeedDemoCredits granted the demo tenants' starting balance against
 	// above: smilesim.Service reserves smilesim.CreditsPerSimulation credits from it
 	// before ever calling Gateway.GenerateImage, and settles that
 	// reservation (Confirm/Refund) once the async job reaches a terminal
@@ -2771,7 +2560,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// module's HTTP surface serves -- so the app's case surface and the
 	// module agree on what an object is and which tenant's rows each read
 	// (go/storage resolves the tenant from the request context itself).
-	wireCasesRoutes(mux, cases.NewService(caseRepository), DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}, b.storageModule.ObjectService())
+	wireCasesRoutes(mux, cases.NewService(caseRepository), demo.DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}, b.storageModule.ObjectService())
 
 	// wireIntegrationAuthenticated mounts go/integration's
 	// mandatory-first-consumer route (integration_authenticate.go):
@@ -2827,7 +2616,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// internal DomainResolver, see configModule's wiring above -- entirely
 	// independent of this outer middleware), and the three routes that
 	// resolve their own tenant server-side once this middleware lets them
-	// through, sharing.PathAccess, IntegrationWhoamiPath and orgAcceptPath,
+	// through, sharing.PathAccess, IntegrationWhoamiPath and OrgAcceptPath,
 	// each with its own entry comment right below.
 	//
 	// Both GET and HEAD are allowlisted for healthz/metrics, not GET
@@ -2852,7 +2641,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// admin's OWN mounted route is deliberately excluded from that branch
 	// entirely -- topMux below dispatches it straight from
 	// authn.Middleware's own output, through the admin entry's
-	// adminSubjectResolver (demo_admin.go) and nothing else -- what
+	// adminSubjectResolver (demo/demo_admin.go) and nothing else -- what
 	// mountModuleRoutes' own doc comment explains: admin's five
 	// permissions are evaluated in rbac.SystemDomain against the CALLER'S
 	// OWN real, unsubstituted Principal, regardless of whichever tenant
@@ -2878,7 +2667,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// all (see hostcore.AuthnAPIPath's own doc comment). topMux therefore
 	// dispatches hostcore.AuthnAPIPath straight from authn.Middleware's own
 	// output, the same
-	// shape adminRoutePath gets above -- with the deliberate difference
+	// shape AdminRoutePath gets above -- with the deliberate difference
 	// that authn's branch is UNGATED: it sits behind authn.Middleware's
 	// optional verification and nothing else, because authn's Handler
 	// itself is the per-operation authority on who may call what
@@ -2925,7 +2714,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 			// AuthMiddleware ever got the chance to resolve one from the
 			// presented key.
 			tenancy.WithAllowlist(http.MethodGet, IntegrationWhoamiPath),
-			// orgAcceptPath (org_acceptInvitation) is the one org route this
+			// OrgAcceptPath (org_acceptInvitation) is the one org route this
 			// app lets through tenant resolution, for the identical reason
 			// sharing.PathAccess gets its entry: the caller an invitation
 			// exists for -- a freshly invited person -- holds no membership
@@ -2943,7 +2732,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 			// surface: org's own per-operation SubjectResolver check still
 			// refuses an unidentifiable acceptor with org.subject_unresolved,
 			// and authn.Middleware still 401s a genuinely invalid bearer.
-			tenancy.WithAllowlist(http.MethodPost, orgAcceptPath),
+			tenancy.WithAllowlist(http.MethodPost, demo.OrgAcceptPath),
 		)...)(mux),
 	)
 
@@ -2953,7 +2742,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// the only correct shape. authnRoutes is what authn.ExemptSubtree split
 	// out of the module route set (mountModuleRoutes above): the module's
 	// own subtree, carried here with its mount path attached.
-	topMuxBranches := append([]pkgcore.MountedRoute{{Path: adminRoutePath, Handler: adminHandler}}, authnRoutes...)
+	topMuxBranches := append([]pkgcore.MountedRoute{{Path: demo.AdminRoutePath, Handler: adminHandler}}, authnRoutes...)
 	pkgcore.MountRoutes(topMux, topMuxBranches...)
 	topMux.Handle("/", restOfAppChain)
 
@@ -2966,26 +2755,26 @@ func (b *serverBuild) seedAndServe(ctx context.Context, cfg ServerConfig) error 
 	// register the demo accounts through the same register route a browser
 	// would use, which needs the whole chain above it. Each seed is opt-in
 	// under its OWN variable (APP_DEMO_USERS_PASSWORD for the three
-	// customer-tenant demo accounts of demo_users.go,
+	// customer-tenant demo accounts of demo/demo_users.go,
 	// APP_DEMO_PLATFORM_STAFF_PASSWORD for the rbac.SystemDomain platform
-	// administrator of demo_admin.go) and runs independently of the other:
+	// administrator of demo/demo_admin.go) and runs independently of the other:
 	// the platform administrator must never be seeded from the ordinary
 	// demo users' password variable -- see
 	// the DemoPlatformStaffPassword field's own doc comment (bootstrap.go) for
 	// why. An empty
 	// variable skips the seed.
 	if cfg.DemoUsersPassword != "" {
-		if seedErr := seedDemoUsers(ctx, b.handler, b.authnModule.Service(), b.rbacService, b.orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
+		if seedErr := demo.SeedDemoUsers(ctx, b.handler, b.authnModule.Service(), b.rbacService, b.orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
 			return seedErr
 		}
 	}
-	// seedDemoPlatformStaff is admin's own first-consumer demo account
-	// (demo_admin.go): a real registered user whose ONLY membership is
+	// SeedDemoPlatformStaff is admin's own first-consumer demo account
+	// (demo/demo_admin.go): a real registered user whose ONLY membership is
 	// rbac.SystemDomain, holding BuiltinRoleOwner there -- every
 	// admin:* permission included, since owner carries every
 	// permission any module declared.
 	if cfg.DemoPlatformStaffPassword != "" {
-		if _, seedErr := seedDemoPlatformStaff(ctx, b.handler, b.memberships, b.rbacService, b.authnModule.Service(), cfg.DemoPlatformStaffPassword); seedErr != nil {
+		if _, seedErr := demo.SeedDemoPlatformStaff(ctx, b.handler, b.memberships, b.rbacService, b.authnModule.Service(), cfg.DemoPlatformStaffPassword); seedErr != nil {
 			return seedErr
 		}
 	}
@@ -3103,7 +2892,7 @@ func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindInd
 // BuildServer's own composition comment -- and each returned here instead
 // of mounted into mux:
 //
-//   - admin's own mounted route (adminRoutePath): admin's HTTP surface
+//   - admin's own mounted route (AdminRoutePath): admin's HTTP surface
 //     must not sit behind ordinary tenancy.Middleware tenant resolution,
 //     and must not sit behind admin.ImpersonationMiddleware's identity
 //     substitution either -- go/admin/AGENTS.md's wiring-contract section
@@ -3137,29 +2926,29 @@ func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindInd
 // what every plain route below mounts through.
 //
 // Every route is admitted through the route table on the way out: the
-// table is DemoRouteRules (demo_subject.go), applied by rbac.GuardRoutes,
+// table is DemoRouteRules (demo/demo_subject.go), applied by rbac.GuardRoutes,
 // which wraps each gated route in rbac's permission gate and refuses the
 // whole set -- failing the build here rather than serving the route -- when
 // a mounted path has no declared decision. The two excepted paths are
 // decided by the same table (admin gated, authn public) and keep being
 // covered by its exhaustiveness check; only the DESTINATION of the
 // resulting handler differs. hostcore.AuthnAPIPath stays in use as the
-// route table's own name for authn's mount point (demo_subject.go's rules).
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnRoutes []pkgcore.MountedRoute, err error) {
-	guarded, err := rbac.GuardRoutes(az, reg.Routes.Routes(), DemoRouteRules(az, orgDeps, demoHeaderDisabled))
+// route table's own name for authn's mount point (demo/demo_subject.go's rules).
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps demo.OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnRoutes []pkgcore.MountedRoute, err error) {
+	guarded, err := rbac.GuardRoutes(az, reg.Routes.Routes(), demo.DemoRouteRules(az, orgDeps, demoHeaderDisabled))
 	if err != nil {
 		return nil, nil, err
 	}
 	authnRoutes, rest := authn.ExemptSubtree(guarded)
 	for _, route := range rest {
-		if route.Path == adminRoutePath {
+		if route.Path == demo.AdminRoutePath {
 			adminHandler = route.Handler
 			continue
 		}
 		pkgcore.MountRoutes(mux, route)
 	}
 	if adminHandler == nil {
-		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
+		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", demo.AdminRoutePath)
 	}
 	if len(authnRoutes) == 0 {
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", hostcore.AuthnAPIPath)

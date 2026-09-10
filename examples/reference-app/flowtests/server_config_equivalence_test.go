@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -192,7 +193,7 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		TrustedProxies:            legacySplitTrustedProxies(os.Getenv("APP_TRUSTED_PROXIES")),
 		ReadFlyClientIP:           readFlyClientIP,
 		WebDistDir:                os.Getenv("APP_WEB_DIST"),
-		HostTenants:               app.DemoHostTenants,
+		HostTenants:               demo.DemoHostTenants,
 		PublicOrigin:              publicOrigin,
 		DemoUsersPassword:         os.Getenv("APP_DEMO_USERS_PASSWORD"),
 		DemoPlatformStaffPassword: os.Getenv("APP_DEMO_PLATFORM_STAFF_PASSWORD"),

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 
 	"github.com/vislake/speed/go/authn"
@@ -21,7 +22,7 @@ import (
 	"github.com/vislake/speed/go/rbac"
 )
 
-// demo_users_test.go is the consumer proof of seedDemoUsers: when an
+// demo_users_test.go is the consumer proof of SeedDemoUsers: when an
 // operator sets APP_DEMO_USERS_PASSWORD, the boot registers the three demo
 // accounts through authn's real register route, grants each its membership
 // and rbac role under the user id authn assigned, and those grants are then
@@ -46,22 +47,22 @@ import (
 const demoSeedPassword = "demo users seed passphrase"
 
 // demoPlatformStaffSeedPassword is the test passphrase the suites that seed
-// the demo platform-staff account (internal/app/demo_admin.go's seedDemoPlatformStaff)
+// the demo platform-staff account (internal/app/demo/demo_admin.go's SeedDemoPlatformStaff)
 // set its OWN config field to -- deliberately a DIFFERENT value from
 // demoSeedPassword, mirroring the runtime split between
 // APP_DEMO_USERS_PASSWORD and APP_DEMO_PLATFORM_STAFF_PASSWORD
-// (internal/app/demo_admin.go). It must satisfy go/authn's password policy for the same
+// (internal/app/demo/demo_admin.go). It must satisfy go/authn's password policy for the same
 // registration-through-the-real-route reason demoSeedPassword documents.
 const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
 
 // demoSeedDomain is the email domain the demo accounts are declared on
-// (internal/app/demo_users.go's own demoSeedDomain, unexported), restated
+// (internal/app/demo/demo_users.go's own demoSeedDomain, unexported), restated
 // here for the seeder this file drives directly.
 const demoSeedDomain = "example.com"
 
 // buildSeededUsersTestServer composes BuildServer's real output the way
 // buildTestServer does, with the demo-user seed switched on: the boot runs
-// seedDemoUsers, which the plain testConfig's empty password never does.
+// SeedDemoUsers, which the plain testConfig's empty password never does.
 // (flowtests/config_public_endpoint_gates_test.go's own buildSeededTestServer seeds config values
 // instead; the two names keep the two different seeds apart.)
 func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server, app.ServerConfig) {
@@ -195,7 +196,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	srv, _ := buildSeededUsersTestServer(t, demoSeedPassword)
 
 	// The seeded owner may write and read.
-	status, code, ownerToken := demoLogin(t, srv, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -217,7 +218,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	}()
 
 	// The seeded reader may list notes...
-	status, code, readerToken := demoLogin(t, srv, app.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+	status, code, readerToken := demoLogin(t, srv, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -241,7 +242,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// proves the credentials the globex control refuses below are right
 	// and yields the bearer the login-history read after the control needs
 	// (history is the one place a refusal's real reason survives).
-	status, code, acmeOnlyToken := demoLogin(t, srv, app.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-acme")
+	status, code, acmeOnlyToken := demoLogin(t, srv, demo.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded acme-only account in its own tenant: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -255,7 +256,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// not disclose that to an anonymous caller (the answer was deliberately
 	// unified: the specific reason is recorded in the login history, never
 	// the response).
-	status, code, _ = demoLogin(t, srv, app.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
+	status, code, _ = demoLogin(t, srv, demo.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 401 %q",
 			status, code, "authn.invalid_credentials")
@@ -274,11 +275,11 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 // seed. Boot one registers every account, signs in fine, and shuts down.
 // Boot two, with the seed switched on again, finds the registrations
 // already in authn's users table, re-asserts each account's grants under
-// the user id authn assigned on boot one (seedDemoUsers' own doc comment),
+// the user id authn assigned on boot one (SeedDemoUsers' own doc comment),
 // and every sign-in that worked under boot one still works: the demo
 // accounts' memberships are org rows that predate boot two and are read
 // straight from the database, and the platform-staff account's
-// rbac.SystemDomain membership is re-granted by seedDemoPlatformStaff on
+// rbac.SystemDomain membership is re-granted by SeedDemoPlatformStaff on
 // the same already-exists path.
 //
 // Boot two (the honest image of a restart) must answer every account as a
@@ -302,7 +303,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 	// Both demo seed variables are set, each to its OWN passphrase, exactly
 	// as an operator enabling the full demo would (the platform-staff
 	// account is seeded from APP_DEMO_PLATFORM_STAFF_PASSWORD alone, never
-	// from the demo users' variable -- internal/app/demo_admin.go).
+	// from the demo users' variable -- internal/app/demo/demo_admin.go).
 	boot := func() (*httptest.Server, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
@@ -317,7 +318,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 
 	// Boot one seeds every demo account and proves the seed works.
 	srv1, cleanup1 := boot()
-	status, code, ownerToken := demoLogin(t, srv1, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := demoLogin(t, srv1, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-one login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -350,7 +351,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		}
 	}()
 
-	status, code, ownerToken2 := demoLogin(t, srv2, app.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken2 := demoLogin(t, srv2, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the seeded owner: status = %d, code = %q, want %d "+
 			"(a demo account's org membership row must survive a restart)",
@@ -365,12 +366,12 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		}
 	}()
 
-	status, code, _ = demoLogin(t, srv2, app.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+	status, code, _ = demoLogin(t, srv2, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
 
-	status, code, _ = demoLogin(t, srv2, app.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, _ = demoLogin(t, srv2, demo.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the platform-staff account: status = %d, code = %q, want %d "+
 			"(the staff account's SystemDomain membership must survive a restart)",
@@ -406,7 +407,7 @@ func TestDemoUsers_Seeder_RateLimitAnswerNamedDistinctly(t *testing.T) {
 	ctx := context.Background()
 
 	// The seeder is the one the seed itself builds
-	// (internal/app/demo_users.go's seedDemoUsers), over the app's declared
+	// (internal/app/demo/demo_users.go's SeedDemoUsers), over the app's declared
 	// demo domain. Its lookup answers "no such account" because both
 	// addresses below are genuinely absent from this fresh boot's users
 	// table, so every seeder.Register call reaches the register POST whose

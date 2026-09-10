@@ -45,7 +45,7 @@
 //
 // The recipient/notified bookkeeping is a plain in-memory map, matching
 // this app's other demo-only, single-process conveniences
-// (internal/app/demo_notification.go's own DemoUserAddresses table): it
+// (internal/app/demo/demo_notification.go's own DemoUserAddresses table): it
 // does not survive a process restart, which is an acceptable limitation
 // for a reference app's own demo feature, never for a real deployment's
 // own notification pipeline. It is also bounded, not a log of every job
@@ -78,7 +78,7 @@
 // written to the ledger for it (see Simulate's own doc comment). Every
 // credit-pack-purchase leg (a real Stripe/Alipay/WeChat sandbox charge)
 // is deliberately out of scope here -- internal/app/server.go's
-// seedDemoCredits is the Grant-based demo stand-in, since no live
+// SeedDemoCredits is the Grant-based demo stand-in, since no live
 // payment credentials exist in this environment.
 //
 // # Settlement reachability
@@ -280,7 +280,7 @@ const creditReasonSimulate = "smilesim:simulate"
 // status and a recipient was named for it -- the "notes.note.create"
 // pattern's completion-side counterpart: a business fact published as a
 // pkgcore.Event, for the reference app's own demo notification glue
-// (internal/app/demo_notification.go) to consume and dispatch through
+// (internal/app/demo/demo_notification.go) to consume and dispatch through
 // go/notification, exactly as it already does for notes.EventNoteCreated.
 // Its Payload is a SimulationCompletedPayload.
 const EventSimulationCompleted = "smilesim.simulation_completed"
@@ -336,7 +336,7 @@ type Service struct {
 	// real -- a real *billing.CreditService here and the
 	// WithEntitlements closure over billingModule.Entitlements() there
 	// (internal/app/server.go's own construction call at NewService,
-	// judged against the demo subscriptions internal/app/demo_entitlements.go
+	// judged against the demo subscriptions internal/app/demo/demo_entitlements.go
 	// seeds at boot) -- so the nil states these field comments describe
 	// belong to other hosts and to this package's standalone unit tests,
 	// never to this app's booted wiring.

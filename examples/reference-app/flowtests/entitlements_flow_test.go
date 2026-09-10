@@ -19,8 +19,8 @@ package flowtests
 //     ("model:chat:default" for every consult Suggest call,
 //     "model:image:smile-simulation" for every smile-simulation
 //     generation), which is exactly the grant set internal/app's
-//     seedDemoEntitlements stamps on the demo Plan every boot resolves
-//     (internal/app/demo_entitlements.go) -- so a demo tenant's requests pass, and a
+//     SeedDemoEntitlements stamps on the demo Plan every boot resolves
+//     (internal/app/demo/demo_entitlements.go) -- so a demo tenant's requests pass, and a
 //     tenant whose Active subscription was canceled is refused.
 //   - The refusal arrives as go/ai-gateway's own coded error
 //     (ErrEntitlementDenied, Forbidden, "aigateway.entitlement_denied",
@@ -41,7 +41,7 @@ package flowtests
 // stand-in for "this tenant's subscription lapsed between requests",
 // exactly the state change a real payment-channel failure would drive.
 //
-// Why tenant-acme and never a fresh tenant: seedDemoEntitlements runs
+// Why tenant-acme and never a fresh tenant: SeedDemoEntitlements runs
 // unconditionally at boot for every tenant in cfg.HostTenants, so every
 // test's fresh temp-file database starts with tenant-acme and
 // tenant-globex subscribed. A tenant outside that map would be refused
@@ -53,7 +53,7 @@ package flowtests
 //
 // The subscription state this suite depends on is a demo seed, and the
 // purchase leg that would create a subscription for real stays out of
-// scope -- see internal/app/demo_entitlements.go's package doc comment.
+// scope -- see internal/app/demo/demo_entitlements.go's package doc comment.
 import (
 	"context"
 	"encoding/json"
@@ -118,7 +118,7 @@ func cancelActiveDemoSubscription(t *testing.T, cfg app.ServerConfig, tenantID p
 		t.Fatalf("read the active subscription of %q: %v", tenantID, err)
 	}
 	if active == nil {
-		t.Fatalf("tenant %q holds no Active demo subscription to cancel -- did seedDemoEntitlements fail to run at boot?", tenantID)
+		t.Fatalf("tenant %q holds no Active demo subscription to cancel -- did SeedDemoEntitlements fail to run at boot?", tenantID)
 	}
 	if _, err := openBillingModule(t, cfg).Subscriptions().Cancel(ctx, active.ID); err != nil {
 		t.Fatalf("cancel the demo subscription of %q: %v", tenantID, err)
@@ -167,7 +167,7 @@ func assertEntitlementDeniedEnvelope(t *testing.T, resp *http.Response, logicalM
 
 // TestConsultSuggest_SeededSubscriptionPasses_ReachesChatProvider is the
 // chat half's happy path: tenant-acme holds the Active demo subscription
-// seedDemoEntitlements gave it at boot, so its consult Suggest request
+// SeedDemoEntitlements gave it at boot, so its consult Suggest request
 // clears go/ai-gateway's entitlement gate and genuinely reaches the fake
 // OpenAI-compatible chat endpoint -- asserted on the fake server's own
 // recorded request (the routed vendor model, never the logical key),

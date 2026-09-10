@@ -9,14 +9,14 @@ package flowtests
 // surface requires:
 //
 //   - a tenant with a sufficient granted balance (the demo seed
-//     internal/app/demo_credits.go's seedDemoCredits grants tenant-acme at
+//     internal/app/demo/demo_credits.go's SeedDemoCredits grants tenant-acme at
 //     boot, unconditionally, before any test runs) generates an image
 //     successfully and is genuinely debited afterward -- read back through
 //     a real CreditService.Balance call over a SECOND database connection
 //     (creditBalanceFor below), never merely trusted from the job's own
 //     reported "succeeded" status;
 //   - a tenant with NO granted balance (one outside cfg.HostTenants, so
-//     seedDemoCredits never touches it, and CreditService.Balance
+//     SeedDemoCredits never touches it, and CreditService.Balance
 //     materializes a fresh all-zero row on first read) is refused BEFORE
 //     the fake AI-gateway endpoint is ever reached -- asserted on the fake
 //     server's own request counter, staying at zero;
@@ -29,7 +29,7 @@ package flowtests
 // actual credit-pack purchase through a real Stripe/Alipay/WeChat sandbox.
 // No live credentials for any of the three providers exist in this
 // environment, so that leg stays explicitly out of scope --
-// internal/app/demo_credits.go's seedDemoCredits is the deliberate,
+// internal/app/demo/demo_credits.go's SeedDemoCredits is the deliberate,
 // documented stand-in (a Grant, never a payment) that gives this suite
 // something real to reserve against.
 
@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/dbkit"
@@ -232,7 +233,7 @@ func TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents(t *testing
 	// credit_transaction id, which is also this test's own txID.
 	events := auditEventsForTenant(t, cfg, tenantID)
 
-	// The demo seed at boot (internal/app/demo_credits.go's seedDemoCredits)
+	// The demo seed at boot (internal/app/demo/demo_credits.go's SeedDemoCredits)
 	// is itself a real CreditService.Grant call, so a Grant-actioned row
 	// for tenant-acme is expected to exist too -- this test only asserts
 	// on the reserve/confirm pair a genuine transaction id ties together,
@@ -337,10 +338,10 @@ func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T)
 }
 
 // TestDemoSeedCreditGrant_AttributedToTheSeedActor pins the audit
-// attribution of the demo seed's credit grant: seedDemoCredits' boot-time
-// Grant (internal/app/demo_credits.go) is a real CreditService.Grant and
+// attribution of the demo seed's credit grant: SeedDemoCredits' boot-time
+// Grant (internal/app/demo/demo_credits.go) is a real CreditService.Grant and
 // records a real billing.credit.grant row, and that row must name the
-// demo seed's system Actor (internal/app/demo_seed_actor.go) -- the
+// demo seed's system Actor (internal/app/demo/demo_seed_actor.go) -- the
 // attribution every audited boot-time demo write carries, which is what
 // lets the trail answer who granted a tenant's starting balance.
 func TestDemoSeedCreditGrant_AttributedToTheSeedActor(t *testing.T) {
@@ -352,9 +353,9 @@ func TestDemoSeedCreditGrant_AttributedToTheSeedActor(t *testing.T) {
 	if !ok {
 		t.Fatalf("no %s audit event for tenant %q; events = %+v", billing.AuditActionCreditGrant, tenantID, events)
 	}
-	if actor := grantEvt.Actor(); actor.Type != pkgcore.ActorTypeSystem || actor.ID != app.DemoSeedActorID {
+	if actor := grantEvt.Actor(); actor.Type != pkgcore.ActorTypeSystem || actor.ID != demo.DemoSeedActorID {
 		t.Errorf("the boot seed grant's AuditEvent.Actor() = %+v, want {Type: %q, ID: %q}: a seed grant recorded under an actor-less context would land with a blank attribution",
-			actor, pkgcore.ActorTypeSystem, app.DemoSeedActorID)
+			actor, pkgcore.ActorTypeSystem, demo.DemoSeedActorID)
 	}
 }
 
@@ -409,7 +410,7 @@ func TestSmileSimulation_SufficientCredits_DebitsBalance(t *testing.T) {
 
 	before := creditBalanceFor(t, cfg, tenantID)
 	if before.Available < smilesim.CreditsPerSimulation {
-		t.Fatalf("tenant-acme's balance before simulating = %+v, want Available >= %d (seedDemoCredits should have granted it at boot)", before, smilesim.CreditsPerSimulation)
+		t.Fatalf("tenant-acme's balance before simulating = %+v, want Available >= %d (SeedDemoCredits should have granted it at boot)", before, smilesim.CreditsPerSimulation)
 	}
 
 	photo := jpegWithExif(t)

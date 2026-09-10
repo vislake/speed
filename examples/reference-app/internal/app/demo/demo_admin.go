@@ -1,4 +1,4 @@
-package app
+package demo
 
 import (
 	"context"
@@ -28,13 +28,13 @@ import (
 // way to reach them at all.
 const DemoPlatformStaffEmail = "demo-platform-staff@example.com"
 
-// adminRoutePath mirrors notesRoutePath's own situation: admin keeps its
+// AdminRoutePath mirrors notesRoutePath's own situation: admin keeps its
 // mount-point constant unexported, so this app names it again here to
 // keep DemoRouteRules in step with it.
-const adminRoutePath = "/api/v1/admin"
+const AdminRoutePath = "/api/v1/admin"
 
 // The admin sub-paths adminPermissionFor tells apart. admin mounts
-// its whole surface as one Handler under adminRoutePath (mountModuleRoutes
+// its whole surface as one Handler under AdminRoutePath (mountModuleRoutes
 // wraps the WHOLE subtree in one guard), so distinguishing which
 // permission a specific request needs is this app's own job, done by
 // inspecting the request's own path and method -- never a header, a query
@@ -49,14 +49,14 @@ const adminRoutePath = "/api/v1/admin"
 // PermissionAuditExport doc comment: exporting a tenant's complete audit
 // trail is a materially stronger action than merely reading it).
 const (
-	adminTenantsPath                  = adminRoutePath + "/tenants"
-	adminUsersPath                    = adminRoutePath + "/users"
-	adminImpersonationPath            = adminRoutePath + "/impersonation"
-	adminAuditEventsExportPath        = adminRoutePath + "/audit-events/export"
-	adminAuditEventsPath              = adminRoutePath + "/audit-events"
-	adminRolesPath                    = adminRoutePath + "/roles"
-	AdminUsageSummaryPath             = adminRoutePath + "/usage-summary"
-	adminNotificationsSendRecordsPath = adminRoutePath + "/notifications/send-records"
+	adminTenantsPath                  = AdminRoutePath + "/tenants"
+	adminUsersPath                    = AdminRoutePath + "/users"
+	adminImpersonationPath            = AdminRoutePath + "/impersonation"
+	adminAuditEventsExportPath        = AdminRoutePath + "/audit-events/export"
+	adminAuditEventsPath              = AdminRoutePath + "/audit-events"
+	adminRolesPath                    = AdminRoutePath + "/roles"
+	AdminUsageSummaryPath             = AdminRoutePath + "/usage-summary"
+	adminNotificationsSendRecordsPath = AdminRoutePath + "/notifications/send-records"
 )
 
 // adminPermissionFor chooses the admin:* permission a request against
@@ -146,9 +146,9 @@ func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 	return sub, true
 }
 
-// seedDemoPlatformStaff registers DemoPlatformStaffEmail through the
+// SeedDemoPlatformStaff registers DemoPlatformStaffEmail through the
 // composed handler's real register route, over the same authn/demoseed
-// helper seedDemoUsers uses, grants it membership in rbac.SystemDomain ALONE
+// helper SeedDemoUsers uses, grants it membership in rbac.SystemDomain ALONE
 // -- never in any customer tenant, so its access token's tenant claim
 // resolves unambiguously to "system" with no tenant_id request needed at
 // sign-in -- ensures rbac's built-in roles exist in that tenant, and
@@ -160,20 +160,20 @@ func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 // special-cased identity model of its own.
 //
 // The SystemDomain membership is granted into the app's sign-in
-// membership store (sign_in_memberships.go) -- the one membership that
+// membership store (internal/app/sign_in_memberships.go) -- the one membership that
 // store holds by design, because "system" is a pseudo-tenant with no org
 // tree for a row to live in -- and, unlike a customer-tenant membership,
 // that grant has no database home, so this seed re-asserts it on every
 // boot: an account it finds already registered is looked up by its email
 // through authn.Service.SearchUsers (the same exact-email recovery
-// seedDemoUsers uses, documented there) and granted afresh. Without that
+// SeedDemoUsers uses, documented there) and granted afresh. Without that
 // re-assertion a process restart would leave the platform-staff account
 // permanently unable to sign in -- an empty in-memory roster resolves no
 // membership, and password sign-in answers the uniform 401
 // authn.invalid_credentials every failed sign-in answers -- locking the
 // operator out of admin's own console until the database is wiped. The
 // registration itself goes through demoseed,
-// exactly like seedDemoUsers' accounts: an already-registered staff
+// exactly like SeedDemoUsers' accounts: an already-registered staff
 // account is discovered by the SearchUsers lookup and never POSTs the
 // public register route -- the route whose per-IP budget
 // repeated restart boots could exhaust under the distributed
@@ -182,7 +182,7 @@ func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 //
 // It returns the registered user id, or an error naming exactly what
 // failed -- registration, membership or role assignment -- mirroring
-// seedDemoUsers' own fail-the-boot-rather-than-half-seed discipline. The
+// SeedDemoUsers' own fail-the-boot-rather-than-half-seed discipline. The
 // role half is idempotent (EnsureBuiltinRoles and AssignRole both are),
 // so re-asserting on an already-seeded account changes nothing an
 // operator may have revoked; the membership half cannot be revoked from
@@ -193,10 +193,19 @@ func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 // field) -- NEVER
 // with cfg.DemoUsersPassword, the three demo accounts' own variable: the
 // platform administrator must have its own credential source, per that
-// field's own doc comment. It runs independently of seedDemoUsers: a
+// field's own doc comment. It runs independently of SeedDemoUsers: a
 // boot seeding only the platform-staff account seeds exactly that account,
 // and one seeding only the demo users seeds exactly those three.
-func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *signInMemberships, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
+// membershipGranter is the slice of the host's sign-in membership store this
+// seed writes: the platform administrator's rbac.SystemDomain seat, the one
+// membership that has no org row by design. The seed accepts the
+// consumer-side interface so the store keeps its own package (and its type)
+// to itself.
+type membershipGranter interface {
+	Grant(userID string, tenant pkgcore.TenantID)
+}
+
+func SeedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships membershipGranter, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
 	logger := obs.FromContext(ctx)
 
 	seeder, err := demoseed.NewSeeder(handler, authnService.SearchUsers, demoSeedDomain)

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
 // mail_reply_to_flow_test.go drives the Reply-To wiring end to end through
@@ -67,8 +67,8 @@ func TestMailReplyTo_OrgInvitation_CarriesTheAssemblyReplyTo(t *testing.T) {
 // captured message carries the assembly-configured Reply-To.
 func TestMailReplyTo_NotificationContactCode_CarriesTheAssemblyReplyTo(t *testing.T) {
 	srv, cfg, mailer, _ := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, app.DemoSingleTenantID, "reply-to-notif")
-	subject := app.DemoNotesCreatorUserID
+	token := registerAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "reply-to-notif")
+	subject := demo.DemoNotesCreatorUserID
 
 	const contactEmail = "reply-to-contact@example.com"
 	var contact notifContact
