@@ -507,11 +507,11 @@ tasks:
       prints how to trigger it.
     # The demo-data seeding this task's planned form once promised is real today, but it is
     # deliberately NOT a separate offline loader: the reference app seeds its demo accounts
-    # (demo_users.go's three real accounts registered through the composed authn register
-    # route, demo_admin.go's platform-staff account, plus the boot-time grant/credit/
-    # entitlement seeds of server.go) at BOOT, gated on the APP_DEMO_USERS_PASSWORD /
+    # (internal/app/demo/demo_users.go's three real accounts registered through the composed authn register
+    # route, internal/app/demo/demo_admin.go's platform-staff account, plus the boot-time grant/credit/
+    # entitlement seeds of internal/app/demo) at BOOT, gated on the APP_DEMO_USERS_PASSWORD /
     # APP_DEMO_PLATFORM_STAFF_PASSWORD environment variables and idempotent per database.
-    # The doc comments on seedDemoUsers argue why registration goes through the real HTTP
+    # The doc comments on SeedDemoUsers argue why registration goes through the real HTTP
     # register route in-process rather than through a second, parallel account-creation
     # path that could drift from the handler, the password policy and the rate limiter --
     # which is exactly what a standalone `task seed` loader would be. A one-command
@@ -521,7 +521,7 @@ tasks:
     cmds:
       - |
         echo "seed: no standalone demo-data loader exists -- seeding is a boot-time"
-        echo "mechanism, and this is deliberate (cmd/server/demo_users.go's seedDemoUsers"
+        echo "mechanism, and this is deliberate (cmd/server/demo_users.go's SeedDemoUsers"
         echo "doc comment: registration goes through the real composed register route"
         echo "in-process, never through a parallel loader that could drift from it)."
         echo

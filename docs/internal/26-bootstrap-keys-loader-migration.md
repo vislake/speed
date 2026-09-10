@@ -41,7 +41,7 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
 - 密钥三段优先(`resolveKey`,internal/app/server.go):单独设的派生键 env(individual env,`parseHexKeyEnv` 解析)> `APP_ROOT_KEY` 设了之后按 HKDF-SHA256 按 purpose 派生(`dbkit.DeriveKey`)> 硬编码 dev default。任何一枚派生键都可单独覆盖、单独轮转。
 - 存在式开关:若干键的语义是"非空即真"而非布尔解析——`APP_DISABLE_DEMO_USER_HEADER`、`APP_DISABLE_QUEUE_WORKER`(读 `os.Getenv(...) != ""`),curated kind 为 string 并注明 "any non-empty value disables them";`APP_READ_FLY_CLIENT_IP`、`APP_S3_USE_SSL` 是 bool kind;`APP_FAIL_SELF_SERVICE_PROVISION` 与 `APP_SMTP_PORT` 是 int kind。
 - 深注释栖于 env 常量本身(server.go 的每个 `*Env` 常量一条),curated 表注释自述"每个声明点(常量注释)是表的深层来源"。`ServerConfig`(server.go)字段注释同样是权威叙述(如六密钥字段的注释块、`PublicOrigin` 的完整人口切分说明)。装配产物还含非 env 字段(`HostTenants`、`TrustedProxies` 拆分等)。
-- 读点:`cmd/server/main.go` 两处 `PORT`(healthcheck 分支的 `runHealthcheck(ctx, os.Getenv("PORT"))`、`run` 内的 `ConfigFromEnv()`);`internal/app/server.go` 的 `ConfigFromEnv` 主体与 `resolveKey`;demo 密码常量定义在 `internal/app/demo_users.go`、`demo_admin.go`、`frontend.go`(webDist)、`ai-gateway` 两键亦在 server.go。`cmd/server/self_service_test.go` 的 `selfServiceJourneyConfigFromEnv` 也调用 `ConfigFromEnv()`。
+- 读点:`cmd/server/main.go` 两处 `PORT`(healthcheck 分支的 `runHealthcheck(ctx, os.Getenv("PORT"))`、`run` 内的 `ConfigFromEnv()`);`internal/app/server.go` 的 `ConfigFromEnv` 主体与 `resolveKey`;demo 密码常量定义在 `internal/app/demo/demo_users.go`、`internal/app/demo/demo_admin.go`、`frontend.go`(webDist)、`ai-gateway` 两键亦在 server.go。`cmd/server/self_service_test.go` 的 `selfServiceJourneyConfigFromEnv` 也调用 `ConfigFromEnv()`。
 
 ### 1.3 运行时动态配置层现状(对比面)
 

@@ -242,7 +242,7 @@ user-stranger can see 0 node(s)
 **在参考应用中看到它。** 参考应用用真实组合出来的 HTTP 栈跑同样的
 形态:[`flowtests/org_flow_test.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/org_flow_test.go)
 是多层树、邀请被接受、按子树读回名册的完整旅程;
-[`internal/app/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_subject.go)
+[`internal/app/demo/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_subject.go)
 展示 org 的 HTTP 面如何再被 `rbac` 在边界处门控。在
 `examples/reference-app` 里 `go run ./cmd/server`,与播种好的 demo 租户
 对比即可。

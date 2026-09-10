@@ -64,7 +64,7 @@ services:
       # and `docker compose down` (without `-v`) rather than living in the
       # container's throwaway writable layer.
       APP_DB_PATH: /data/reference-app.db
-      # Gates the boot-time demo-user seed (internal/app/demo_users.go)
+      # Gates the boot-time demo-user seed (internal/app/demo/demo_users.go)
       # exactly as
       # .env.example documents; this is a local-demo passphrase, not a
       # security secret -- README.md's own "Try it" section already
@@ -73,7 +73,7 @@ services:
       # X-Demo-User header path instead.
       APP_DEMO_USERS_PASSWORD: local-demo-password
       # Gates the boot-time demo platform-staff seed
-      # (internal/app/demo_admin.go) under its OWN variable, exactly as
+      # (internal/app/demo/demo_admin.go) under its OWN variable, exactly as
       # .env.example documents: the
       # rbac.SystemDomain platform administrator (which holds every
       # admin:* permission) must never share the demo users' passphrase

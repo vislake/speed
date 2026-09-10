@@ -29,7 +29,7 @@
  * (DEMO_READER_IDENTIFIER, the web mirror of the demo-reader@example.com
  * seed): its sign-in answers a principal of its own user and session,
  * the notes list serves it like any member's (the Go suite pins the
- * seeded reader's list as served in demo_users_test.go's
+ * seeded reader's list as served in internal/app/demo/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal),
  * and a note create from that principal answers the 403 the write
  * gate gives a caller without notes:write (rbac.permission_denied,
@@ -39,7 +39,7 @@
  * account itself signed into the system pseudo-tenant -- the fixture's
  * tenantId option set to SYSTEM_PSEUDO_TENANT_ID ('system', the value
  * the Go seed grants demo-platform-staff@example.com its sole
- * membership in, internal/app/demo_admin.go) -- the web mirror of an
+ * membership in, internal/app/demo/demo_admin.go) -- the web mirror of an
  * account whose
  * admin:* grants live under rbac.SystemDomain.
  *
@@ -67,7 +67,7 @@
  * unified 401 authn.invalid_credentials answer a wrong password also
  * gets, its no-membership reason surviving in the login history, never
  * the response (the acme-only account asking for tenant-globex, in
- * demo_users_test.go's
+ * internal/app/demo/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal) -- a
  * refusal no journey drives, since the switch and sign-in surfaces a
  * browser reaches never ask for a tenant it was not granted.
@@ -209,7 +209,7 @@
  * stays on notes, the exact surface where the seed's grant asymmetry
  * lives: the list served like any member's, a create refused with
  * the rbac write gate's 403 -- the answers the Go suite pins for the
- * read-only member (its list served in demo_users_test.go's
+ * read-only member (its list served in internal/app/demo/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal; its
  * create refused in flowtests/server_test.go's
  * TestBuildServer_PermissionGate_EnforcesTheNotesPermissions). The read-denied
@@ -481,7 +481,7 @@ export interface DemoServerOptions {
    * credits/balance and GET /api/v1/billing/credits/transactions).
    * Defaults to the demo mirror of a freshly booted server's state: a
    * tenant seeded with the boot-time grant (1000 credits, reason
-   * 'demo:seed' -- internal/app/demo_credits.go's DemoSimulationCreditGrant
+   * 'demo:seed' -- internal/app/demo/demo_credits.go's DemoSimulationCreditGrant
    * and DemoCreditGrantReason), an empty reserved bucket and the seed
    * grant as the ledger's one row. Stateful from there, the way the
    * real handler's tenant-scoped ledger is: each accepted simulation
@@ -567,7 +567,7 @@ export interface DemoServerOptions {
    * tenant) is served the ledger; any other principal's read answers
    * the rbac gate's 403, the answer the real app's admin route guard
    * gives a caller whose user id holds no admin grant under the system
-   * domain (internal/app/demo_admin.go's adminSubjectResolver). Default
+   * domain (internal/app/demo/demo_admin.go's adminSubjectResolver). Default
    * [] -- the mirror of a ledger a freshly booted server auto-fills as
    * org roots are created. */
   readonly initialAdminTenants?: readonly DemoAdminTenant[]
@@ -578,7 +578,7 @@ export interface DemoServerOptions {
    * -- the demo-server's platform-staff shape) is served the dashboard;
    * any other principal's read answers the rbac gate's 403, the answer
    * the real app's admin route guard gives a caller whose user id holds
-   * no admin grant under the system domain (internal/app/demo_admin.go's
+   * no admin grant under the system domain (internal/app/demo/demo_admin.go's
    * adminSubjectResolver), exactly like the ledger read above. Default
    * [] -- the mirror of a freshly booted ledger with no tenants in it
    * yet. */
@@ -858,12 +858,12 @@ const DEMO_PHOTO_CONTENT_BASE64 = 'cGhvdG8tYnl0ZXM='
 const DEMO_SIMULATION_CONTENT_BASE64 = 'c2ltdWxhdGlvbi1yZXN1bHQtYnl0ZXM='
 
 /** The boot-time credit grant every demo tenant receives, mirroring
- * internal/app/demo_credits.go's DemoSimulationCreditGrant -- the web
+ * internal/app/demo/demo_credits.go's DemoSimulationCreditGrant -- the web
  * fixture's answer for a freshly booted server's balance and the seed
  * row its ledger serves. */
 export const DEMO_CREDIT_SEED_GRANT = 1000
 /** The reason the demo seed's grant row carries, mirroring
- * internal/app/demo_credits.go's DemoCreditGrantReason. */
+ * internal/app/demo/demo_credits.go's DemoCreditGrantReason. */
 export const DEMO_CREDIT_SEED_REASON = 'demo:seed'
 /** The flat credit cost of one smile simulation, mirroring
  * internal/smilesim/service.go's CreditsPerSimulation: the amount the
@@ -1652,7 +1652,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       case 'GET /api/v1/admin/tenants': {
         // The platform's tenant ledger (admin-api.ts), mirroring
         // go/admin's own operator-facing route behind this app's admin
-        // route guard (internal/app/demo_admin.go's guardAdminRoute).
+        // route guard (internal/app/demo/demo_admin.go's guardAdminRoute).
         // The bearer is resolved BEFORE the gate answers, like every
         // other gate here. The ledger is served only to a principal
         // scoped to the system pseudo-tenant -- the demo's

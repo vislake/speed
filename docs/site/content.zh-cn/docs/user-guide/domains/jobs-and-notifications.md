@@ -268,7 +268,7 @@ enqueued <job id> (the HTTP response returns this JobID immediately)
   ——`Bootstrap` 之后,应用以一次 `jobs.Wire` 调用把 `reg.Jobs` 上声
   明的每个 handler 交给它的独立队列并启动;每个模块的 handler(storage
   派生、notification 投递,以及本模式的各种变体)都骑在同一个队列上。
-- [examples/reference-app/internal/app/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_notification.go)
+- [examples/reference-app/internal/app/demo/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_notification.go)
   ——notes.note.created 事件被转成真实的 `Deliveries().Dispatch` 调
   用;[examples/reference-app/flowtests/notification_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/notification_flow_test.go)
   在组合好的 HTTP 栈上驱动整条投递。

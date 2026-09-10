@@ -302,7 +302,7 @@ See it in the reference app:
   every handler the modules declared on `reg.Jobs`, and then it starts
   the queue; every module's handlers (storage derivation, notification
   delivery, this pattern's shape) ride the same queue.
-- [examples/reference-app/internal/app/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_notification.go)
+- [examples/reference-app/internal/app/demo/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_notification.go)
   — the note-created event turned into a real `Deliveries().Dispatch`
   call, and [examples/reference-app/flowtests/notification_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/notification_flow_test.go)
   drives the whole delivery through the composed HTTP stack.

@@ -16,7 +16,7 @@
  * shape is this host's own -- see share-api.ts's header for the same
  * relationship on go/sharing). The path literals are hand-kept in step
  * with the module's own mounted route (/api/v1/org --
- * internal/app/demo_subject.go's orgRoutePath), and the wire shapes
+ * internal/app/demo/demo_subject.go's orgRoutePath), and the wire shapes
  * mirror
  * go/org/api/openapi.yaml's schemas field-for-field, never the
  * generator's Go types.

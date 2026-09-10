@@ -274,7 +274,7 @@ through its real composed HTTP stack in
 [`flowtests/org_flow_test.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/org_flow_test.go) —
 a multi-level tree, an invitation accepted, and a roster read back scoped
 to a subtree — and
-[`internal/app/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_subject.go)
+[`internal/app/demo/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_subject.go)
 shows how org's HTTP surface is additionally gated by `rbac` at the edge.
 Run `go run ./cmd/server` in `examples/reference-app` and compare against
 its seeded demo tenants.

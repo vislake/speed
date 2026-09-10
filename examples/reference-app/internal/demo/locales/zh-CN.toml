@@ -10,7 +10,7 @@
 # 各加一条 "<type_key>.description" 供类型目录展示；面向收件人的参数以
 # {{.snake_case}} 占位符拼写。病人提醒类型的模板不带参数——demo 病人提醒路由
 # 只触发发送，文案本身是固定文本——而 simulation-ready 类型的短信模板接收完成
-# 的模拟任务 id 作为 {{.simulation_job_id}}：派发（internal/app/demo_notification.go
+# 的模拟任务 id 作为 {{.simulation_job_id}}：派发（internal/app/demo/demo_notification.go
 # 的 smilesim 完成态胶水代码）携带它既作文案，也作区分每次发生的事件标记——两次
 # 为同一收件人完成的模拟是两次独立的发生，各自投递，不会因为派发参数相同而在
 # 派生投递键上坍缩成一次（派生投递键对派发的参数做哈希）。

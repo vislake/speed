@@ -8,10 +8,10 @@
  * the mounted route through the app's own api-client RequestFn -- the
  * same transport every generated call rides, the app never calls HTTP
  * directly -- answered by the module's own handler behind this app's
- * admin route guard (internal/app/demo_admin.go's guardAdminRoute, which
+ * admin route guard (internal/app/demo/demo_admin.go's guardAdminRoute, which
  * evaluates every admin:* permission in rbac.SystemDomain). The path
- * is a module constant admin keeps unexported (adminRoutePath is this
- * app's own mirror in internal/app/demo_admin.go), and the shapes are
+ * is a module constant admin keeps unexported (AdminRoutePath is this
+ * app's own mirror in internal/app/demo/demo_admin.go), and the shapes are
  * the fragment's own (AdminTenant, AdminListTenantsResponse,
  * AdminUsageSummaryRow, AdminUsageSummaryResponse in
  * go/admin/api/openapi.yaml) -- the same hand-kept-shape relationship
@@ -30,8 +30,8 @@
 
 import type { RequestFn } from '@speed/api-client'
 
-/** The path of go/admin's tenant ledger (adminRoutePath + '/tenants'
- * in internal/app/demo_admin.go). */
+/** The path of go/admin's tenant ledger (AdminRoutePath + '/tenants'
+ * in internal/app/demo/demo_admin.go). */
 export const ADMIN_TENANTS_PATH = '/api/v1/admin/tenants'
 
 /** A ledger row's status vocabulary (AdminTenantStatus in
@@ -79,8 +79,8 @@ export async function listAdminTenants(
 // --- The usage/billing dashboard --------------------------------------------
 
 /**
- * The path of go/admin's usage/billing dashboard (adminRoutePath +
- * '/usage-summary' in internal/app/demo_admin.go), served behind the
+ * The path of go/admin's usage/billing dashboard (AdminRoutePath +
+ * '/usage-summary' in internal/app/demo/demo_admin.go), served behind the
  * same admin route guard as the ledger above.
  */
 export const ADMIN_USAGE_SUMMARY_PATH = '/api/v1/admin/usage-summary'

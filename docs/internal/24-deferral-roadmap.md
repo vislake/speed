@@ -221,7 +221,7 @@
 | 200 | ROADMAP | `docs/internal/17-risks.md` | saasctl upgrade npm 侧改写与自检未落地 | 锚:create-saas-app;upgrade 的 web/package.json 改写随 web 模板 |
 | 205 | ROADMAP | `docs/internal/02-repo-and-release.md` | create-saas-app 与前端模板未实现 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 | 213 | ROADMAP | `.github/workflows/scaffold-verify.yml` | create-saas-app 与 web 侧模板未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
-| 215 | ROADMAP | `internal/app/demo_subject.go` | X-Demo-User/X-Demo-User-Id demo 身份头的移除未做 | 锚:org-web 轮;X-Demo-User 演示身份头移除(kill switch 已交付) |
+| 215 | ROADMAP | `internal/app/demo/demo_subject.go` | X-Demo-User/X-Demo-User-Id demo 身份头的移除未做 | 锚:org-web 轮;X-Demo-User 演示身份头移除(kill switch 已交付) |
 | 218 | ROADMAP | `.github/workflows/scaffold-verify.yml` | 注释 "a web-side scaffold-verify leg waits for create-saas-app"(:31)与 "the other four selections ... do NOT get a per-PR (or per-schedule) dual-mode BOOT proof of their own" 缺口说明(:23-31) | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 
 ### 8.2 锚:M2(媒体与变现行:storage、notification-ui、billing 前端包、ui-kit 组件族)

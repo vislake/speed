@@ -48,7 +48,7 @@ replace github.com/vislake/speed/go/storage => ../../go/storage
 
 // go/notification is imported directly by this app: BuildServer wires
 // the module's mandatory-first-consumer proof through it (see
-// internal/app/server.go and internal/app/demo_notification.go). Like every other
+// internal/app/server.go and internal/app/demo/demo_notification.go). Like every other
 // workspace-local module it carries no published version, so this app's
 // own go.mod needs its own replace for it too -- root CLAUDE.md's
 // per-module standalone-build rule (`GOWORK=off go build`) means
@@ -76,7 +76,7 @@ replace github.com/vislake/speed/go/sharing => ../../go/sharing
 
 // go/compliance and go/admin are imported directly by this app:
 // BuildServer wires them as go/admin's mandatory-first-consumer proof
-// (see internal/app/server.go, internal/app/demo_admin.go and
+// (see internal/app/server.go, internal/app/demo/demo_admin.go and
 // flowtests/admin_flow_test.go). Like every other
 // workspace-local module they carry no published version, so this app's
 // own go.mod needs its own replace for them too -- root CLAUDE.md's

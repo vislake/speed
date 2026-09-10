@@ -191,7 +191,7 @@ func main() {
 		return rbac.Permission("notes", "write")
 	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 
-	// subjectBridge 是宿主自己的胶水——参考应用的 demo_subject.go 做
+	// subjectBridge 是宿主自己的胶水——参考应用的 internal/app/demo/demo_subject.go 做
 	// 的正是这件事:把 authn.Middleware 验证出的 Principal 变成 rbac
 	// 门要裁决的 Subject。rbac 从不 import authn,两者只在这种结构化
 	// 形态上相遇。
@@ -254,10 +254,10 @@ func main() {
 缝不跨重启存活的 `WARN`——先打到 stderr,再输出上面的 stdout 行。
 
 **在参考应用中看到它。** 参考应用正是这样门控自家 notes 路由的:
-[`internal/app/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_subject.go)
+[`internal/app/demo/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_subject.go)
 放着路由授权表(`DemoRouteRules`,经 `rbac.GuardRoutes` 施加)、Principal 到 Subject 的
 桥(`DemoSubjectResolver`)与 `note-reader` 式角色播种
-(`seedDemoGrants`);
+(`SeedDemoGrants`);
 [`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)
 声明了本节示例授予的 `notes:read` / `notes:write` 常量本身。在
 `examples/reference-app` 里 `go run ./cmd/server` 后,拿播种好的

@@ -21,8 +21,8 @@
 | 2 | 座位 | membership 行 | `MemberService.Add`,容忍 `ErrMembershipExists` | 已有座位原样保留,永不改绑 |
 | 3 | 内置角色 | rbac 角色行 | `rbac.Service.EnsureBuiltinRoles`(go/rbac/builtin.go:110) | 对账而非重建 |
 | 4 | owner 授权 | 角色绑定行 | `rbac.Service.AssignRole(BuiltinRoleOwner)`(go/rbac/assign.go:159),经 `pkgcore.WithActor` 归因 | 绑定已存在即 no-op |
-| 5 | 订阅 | demo Plan 上的 Active 订阅 | `demoEntitlementPlan`(demo_entitlements.go:80,resolve-else-create)+ `ensureDemoSubscription`(同文件:145) | 已有 Active 即原样返回,绝不替换 |
-| 6 | 信用点 | 起始余额 | `grantDemoCredits`(demo_credits.go,余额全零守卫 + `CreditService.Grant`) | 余额(Available 与 Reserved)非全零即跳过(见 §3.4 的边界) |
+| 5 | 订阅 | demo Plan 上的 Active 订阅 | `DemoEntitlementPlan`(internal/app/demo/demo_entitlements.go:80,resolve-else-create)+ `EnsureDemoSubscription`(同文件:145) | 已有 Active 即原样返回,绝不替换 |
+| 6 | 信用点 | 起始余额 | `GrantDemoCredits`(internal/app/demo/demo_credits.go,余额全零守卫 + `CreditService.Grant`) | 余额(Available 与 Reserved)非全零即跳过(见 §3.4 的边界) |
 | 7 | 失败恢复 | 重试作业行 | `scheduleProvisionRetry`(:471)→ `jobs.StandaloneQueue.Enqueue`(:517) | 作业类型 `self_service.provision_clinic`(:333),`WithMaxRetries(10)`(:347) |
 
 每一跳都在**诊所租户自己的上下文**里执行(`pkgcore.WithTenant`),读写全部是模块的公开服务调用,没有跨租户读写,也没有对另一模块结构体的导入。
@@ -43,7 +43,7 @@ org 的订阅者 `handleUserCreated`(go/org/events.go:305)只处理**带租户**
 
 ### 1.5 并行轮刚收掉的两跳手工形状
 
-`TreeService.EnsureRoot`(go/org/tree.go:214)与 `MemberService.EnsureRootSeat`(go/org/membership.go:482)已落地:前者是"找根否则建根、吸收创建竞态"的一跳一次调用,后者把"根 + 座位"合成一次幂等调用(已有根/已有座位原样返回,不重命名、不改绑)。demo 种子已改走它(`addDemoOrgMembership`,demo_users.go:209)。本链的 1、2 两跳仍停在手工形状(`ensureClinicRoot` + `Add` 容忍 `ErrMembershipExists`),是本设计 §6 的迁移对象。
+`TreeService.EnsureRoot`(go/org/tree.go:214)与 `MemberService.EnsureRootSeat`(go/org/membership.go:482)已落地:前者是"找根否则建根、吸收创建竞态"的一跳一次调用,后者把"根 + 座位"合成一次幂等调用(已有根/已有座位原样返回,不重命名、不改绑)。demo 种子已改走它(`addDemoOrgMembership`,internal/app/demo/demo_users.go:209)。本链的 1、2 两跳仍停在手工形状(`ensureClinicRoot` + `Add` 容忍 `ErrMembershipExists`),是本设计 §6 的迁移对象。
 
 顺带记录一处文档漂移:go/org/events.go:288 的注释把宿主的显式调用写成 `CreateTenantRoot`,树中无此符号;实现轮应把注释改为实际 API 名(`TreeService.EnsureRoot` / `MemberService.EnsureRootSeat`),与内容规范"注释只述当前状态"对齐。
 
@@ -114,7 +114,7 @@ org 的订阅者 `handleUserCreated`(go/org/events.go:305)只处理**带租户**
 
 ### 3.4 已识别的残留弱点(如实记录,不在本设计内解决)
 
-- **信用点跳的"全零余额"守卫是启发式**:`grantDemoCredits` 以"Available 与 Reserved 全零"判断"未播种过"。重试若在诊所恰好把种子余额花到**正好全零**之后到达,会二次播种。demo_credits.go 与 demo_entitlements.go 已把这一条如实记录为有界幂等的接受项(与"canceled 按启动周期保持"同级)。根治需要一个"播种已发生"的持久标记,属产品/账本设计,不在本项内。
+- **信用点跳的"全零余额"守卫是启发式**:`GrantDemoCredits` 以"Available 与 Reserved 全零"判断"未播种过"。重试若在诊所恰好把种子余额花到**正好全零**之后到达,会二次播种。internal/app/demo/demo_credits.go 与 internal/app/demo/demo_entitlements.go 已把这一条如实记录为有界幂等的接受项(与"canceled 按启动周期保持"同级)。根治需要一个"播种已发生"的持久标记,属产品/账本设计,不在本项内。
 - **订阅跳的双 active 竞态**:本设计 §5 一并处理。
 - **demo 判别子的多副本窗口**:`wireSelfService` 的注释已记录——另一个副本的重叠启动窗口里,它的 demo 种子事件可能到达本副本的订阅;收敛幂等、不改变 demo 账号的既有答案,是"排序判别子"在多副本下的残留成本,保持现状。
 - **载荷探针的重复**:`selfServiceUserIDKeys`(:734)与 org 的 `userCreatedUserIDKeys`(go/org/events.go:419)是同一组拼写的两份声明,注释互相点名。这是刻意的协调点(跨模块事件载荷以字符串键为结构契约,探针走 `pkgcore.EventPayloadString`,各消费方自己声明可接受的拼写),不是缺陷,保持现状。
@@ -131,7 +131,7 @@ org 的订阅者 `handleUserCreated`(go/org/events.go:305)只处理**带租户**
 
 **手写重写有三处**:
 
-1. reference-app 的 `demoUserAddressResolver`(demo_notification.go:117)+ `DemoUserAddresses` 静态表(:100),经 `notification.WithUserAddressResolver(demoUserAddressResolver{})` 装配(server.go:1857);
+1. reference-app 的 `demoUserAddressResolver`(internal/app/demo/demo_notification.go:117)+ `DemoUserAddresses` 静态表(:100),经 `notification.WithUserAddressResolver(demoUserAddressResolver{})` 装配(server.go:1857);
 2. 模块自己的 godoc `Example`:`exampleUserResolver`(go/notification/example_test.go:17)是一张 switch 表——同一形状的第三份;
 3. 模块测试里的 stub(`stubUserResolver`,module_test.go)。测试替身不算产品重写,但它同样指向同一结论:这个形状被反复手写。
 
@@ -164,7 +164,7 @@ func New(addresses map[string]notification.UserAddresses) notification.UserAddre
 ### 4.4 迁移(reference-app 与模块自身)
 
 - server.go:1857 的 `notification.WithUserAddressResolver(demoUserAddressResolver{})` 改为 `notification.WithUserAddressResolver(staticaddr.New(DemoUserAddresses))`;
-- 删除 `demoUserAddressResolver`(类型、`Resolve`、编译期断言,共 demo_notification.go:105-125 一段)与其说明;`DemoUserAddresses`(:100)保留,它是 app 的数据(flowtests/smilesim_flow_test.go:968、integration_test 用它做断言),不再是 resolver 的实现;
+- 删除 `demoUserAddressResolver`(类型、`Resolve`、编译期断言,共 internal/app/demo/demo_notification.go:105-125 一段)与其说明;`DemoUserAddresses`(:100)保留,它是 app 的数据(flowtests/smilesim_flow_test.go:968、integration_test 用它做断言),不再是 resolver 的实现;
 - `example_test.go` 的 `exampleUserResolver`(:17-36)改用它自己所在模块的子包 `staticaddr`(example 是外部测试包 `notification_test`,可以 import;示例顺带演示最小装配);
 - 模块文档:`go/notification/AGENTS.md` 补子包条目(shipped surface 与文件表),子包自带 `example_test.go`(可编译示例)与单元测试(解析、缺行、拷贝语义、`-race` 并发读)。
 
@@ -172,7 +172,7 @@ func New(addresses map[string]notification.UserAddresses) notification.UserAddre
 
 ### 5.1 现状
 
-宿主手工 ensure:`ensureDemoSubscription`(demo_entitlements.go:145)做"读 `SubscriptionService.Active` → 无则 `Create(CreateInput{PlanID})`(go/billing/subscription.go:195)→ `Activate`(:257)"三步,两个调用方:boot 种子 `seedDemoEntitlements`(:181)与供给链第 5 跳。`SubscriptionService.Active`(:242)只读 `status == "active"` 的行,并在文档里**假设每租户至多一条 active**;`go/billing/AGENTS.md` 的 Known limitations 明说这个假设**没有任何数据库层约束**(第 155 行:多订阅并存需要自己的 uniqueness 决定,现在两处都没有)。
+宿主手工 ensure:`EnsureDemoSubscription`(internal/app/demo/demo_entitlements.go:145)做"读 `SubscriptionService.Active` → 无则 `Create(CreateInput{PlanID})`(go/billing/subscription.go:195)→ `Activate`(:257)"三步,两个调用方:boot 种子 `SeedDemoEntitlements`(:181)与供给链第 5 跳。`SubscriptionService.Active`(:242)只读 `status == "active"` 的行,并在文档里**假设每租户至多一条 active**;`go/billing/AGENTS.md` 的 Known limitations 明说这个假设**没有任何数据库层约束**(第 155 行:多订阅并存需要自己的 uniqueness 决定,现在两处都没有)。
 
 ### 5.2 形状:`SubscriptionService.EnsureActive`
 
@@ -215,7 +215,7 @@ CREATE UNIQUE INDEX uq_billing_subscriptions_one_active
 
 ### 5.5 迁移
 
-- `ensureDemoSubscription` 的体收缩为一次 `EnsureActive`(保留 app 级包装:它承载"demo Plan + 租户上下文 + 错误包装"的宿主策略文本),或按两个调用方点内联;两处调用点(种子、供给链)行为不变;
+- `EnsureDemoSubscription` 的体收缩为一次 `EnsureActive`(保留 app 级包装:它承载"demo Plan + 租户上下文 + 错误包装"的宿主策略文本),或按两个调用方点内联;两处调用点(种子、供给链)行为不变;
 - 其文档里的 "bounded idempotence" 段落按新形状改写:幂等语义移到 `EnsureActive` 的 godoc,app 侧只留"本 app 何时调用它"的策略句(内容规范:注释述当前状态);
 - `go/billing/AGENTS.md`:shipped surface 增补 `EnsureActive`;Known limitations 的"至多一条 active 无约束"条目按 Q1 的裁定改写;
 - 测试:模块侧新增 `EnsureActive` 单测(无 active → 建并激活;已有 active → 原样返回、不换 Plan;canceled 后 → 建新行;Q1 落地时加并发双 ensure 的收敛用例与索引存在性 pin);
@@ -228,8 +228,8 @@ CREATE UNIQUE INDEX uq_billing_subscriptions_one_active
 | 文件 | 改动 | 行为影响 |
 |---|---|---|
 | `examples/reference-app/internal/app/self_service.go` | 1、2 跳改 `orgModule.Members().EnsureRootSeat(tenantCtx, userID, name, "workspace")`;删 `ensureClinicRoot`;5 跳改 `EnsureActive` 路径(经 app 包装);终局文案去掉"can not sign in"的过度承诺;注释按现状改写 | 逐字保持(座位/根/订阅/信用点的产物相同;`created` 的 Debug 行改述为无条件 Debug 或删除,仅日志) |
-| `internal/app/demo_entitlements.go` | `ensureDemoSubscription` 体改 `EnsureActive` 调用 | 逐字保持 |
-| `internal/app/demo_notification.go` | 删 `demoUserAddressResolver` 与其断言;保留 `DemoUserAddresses` | 逐字保持(同一张表、同一解析结果) |
+| `internal/app/demo/demo_entitlements.go` | `EnsureDemoSubscription` 体改 `EnsureActive` 调用 | 逐字保持 |
+| `internal/app/demo/demo_notification.go` | 删 `demoUserAddressResolver` 与其断言;保留 `DemoUserAddresses` | 逐字保持(同一张表、同一解析结果) |
 | `internal/app/server.go` | `WithUserAddressResolver(staticaddr.New(DemoUserAddresses))` | 逐字保持 |
 | `go/org/events.go` | 注释把不存在符号 `CreateTenantRoot` 改为 `EnsureRoot`/`EnsureRootSeat` | 无(runtime 零改动) |
 | `go/billing/subscription.go` + 测试 + AGENTS | 新 `EnsureActive`(§5) | 纯新增 + 文档 |
@@ -240,7 +240,7 @@ CREATE UNIQUE INDEX uq_billing_subscriptions_one_active
 
 **行为保持的验收 pin**:`flowtests/self_service_clinic_name_test.go`、`self_service_no_ledger_test.go`、`self_service_entitlements_test.go`、`entitlements_flow_test.go`、`notification_flow_test.go`、`smilesim_flow_test.go` 全部**不改一行**通过;`APP_FAIL_SELF_SERVICE_PROVISION` 注入路径(`FailSelfServiceProvision`,bootstrap.go:420)的恢复旅程与 `web/e2e/self-service-signup.spec.ts` 保持通过;模块侧新增单测按 §4.4/§5.5。
 
-**不迁移清单(有意保留在宿主)**:`ClinicTenantOf` 派生、`clinicRootNameFor`/命名的兜底、`demoEntitlementPlan` 的 resolve-else-create、`grantDemoCredits` 的金额与守卫、事件订阅的安装时机(demo 判别子)、重试作业类型/预算/`OnFailure`、`FailProvision` 注入点。
+**不迁移清单(有意保留在宿主)**:`ClinicTenantOf` 派生、`clinicRootNameFor`/命名的兜底、`DemoEntitlementPlan` 的 resolve-else-create、`GrantDemoCredits` 的金额与守卫、事件订阅的安装时机(demo 判别子)、重试作业类型/预算/`OnFailure`、`FailProvision` 注入点。
 
 ## 7 开放问题(需要裁定)
 

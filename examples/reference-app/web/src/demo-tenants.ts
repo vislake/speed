@@ -9,7 +9,7 @@
  *
  * The demo has no roster endpoint: the server seeds exactly two
  * tenants and the accounts the web journeys use hold membership in
- * both (internal/app/demo_users.go), so the roster is the app's own
+ * both (internal/app/demo/demo_users.go), so the roster is the app's own
  * static data with app-namespace display names -- the same
  * hand-maintained mirror the chrome always used, moved here so the
  * two consumers can never drift apart. The static copy covers the
@@ -52,7 +52,7 @@ export function demoTenantNameKey(tenantId: string | null): string | null {
 /**
  * The id of the system pseudo-tenant: rbac.SystemDomain's value
  * ("system", pinned by go/rbac's own suite in subject_test.go). The
- * demo's platform-staff seed (internal/app/demo_admin.go) grants
+ * demo's platform-staff seed (internal/app/demo/demo_admin.go) grants
  * demo-platform-staff@example.com membership in this pseudo-tenant
  * ALONE -- never in any customer tenant -- so its access token's tenant
  * claim always resolves here, and the signed-in frame scoped to this
@@ -62,7 +62,7 @@ export function demoTenantNameKey(tenantId: string | null): string | null {
  * the switcher roster lists tenants only. The frame's administration
  * entry gates on this claim (app.tsx) the way the server's admin
  * subject resolver evaluates every admin route in this domain
- * (internal/app/demo_admin.go's adminSubjectResolver) -- the web side
+ * (internal/app/demo/demo_admin.go's adminSubjectResolver) -- the web side
  * cannot import the Go constant, so the mirror lives here, and the
  * demo server's own staff-shaped answers key off the same value
  * (test-utils/demo-server.ts).

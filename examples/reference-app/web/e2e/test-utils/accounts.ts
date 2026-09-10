@@ -1,6 +1,6 @@
 /**
  * The demo accounts the reference-app server seeds at boot when
- * APP_DEMO_USERS_PASSWORD is set (internal/app/demo_users.go's
+ * APP_DEMO_USERS_PASSWORD is set (internal/app/demo/demo_users.go's
  * demoSeedAccounts table), expressed for the specs that sign in as them.
  *
  * These mirror the server's own table rather than re-deriving it: each

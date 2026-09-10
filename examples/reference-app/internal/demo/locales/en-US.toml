@@ -14,7 +14,7 @@
 # take no parameters -- the demo patient-message route only triggers the
 # send and the copy is fixed text -- while the simulation-ready type's SMS
 # takes the completing simulation's job id as {{.simulation_job_id}}: the
-# dispatch (internal/app/demo_notification.go's smilesim completion glue)
+# dispatch (internal/app/demo/demo_notification.go's smilesim completion glue)
 # carries it both as copy and as the per-occurrence marker that keeps two
 # completed simulations for the same recipient from collapsing into one
 # delivery (the derived delivery key hashes the dispatch's params).

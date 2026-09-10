@@ -457,7 +457,7 @@ regression from its own impatience.
 
 **A fresh database per run is mandatory, not hygiene.** Demo-account
 seeding deliberately skips an account a previous boot already created
-(`internal/app/demo_users.go`), so a reused database hands the suite
+(`internal/app/demo/demo_users.go`), so a reused database hands the suite
 accounts with no memberships. `playwright.config.ts` puts the SQLite file
 in the OS temp directory under a run-unique name.
 

@@ -211,7 +211,7 @@ func main() {
 	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 
 	// subjectBridge is the host's own glue -- the reference app's
-	// demo_subject.go does the same: the Principal authn.Middleware
+	// internal/app/demo/demo_subject.go does the same: the Principal authn.Middleware
 	// verified becomes the rbac.Subject the gate decides against. rbac
 	// never imports authn; the two meet only in this structural shape.
 	subjectBridge := func(next http.Handler) http.Handler {
@@ -280,10 +280,10 @@ seam-composition log and the `WARN` lines that the in-memory seams do not
 survive a restart — go to stderr before the stdout lines above.
 
 **See it in the reference app.** The reference app gates its own notes
-route exactly this way: [`internal/app/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_subject.go)
+route exactly this way: [`internal/app/demo/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_subject.go)
 holds the route table (`DemoRouteRules`, applied by `rbac.GuardRoutes`), the
 Principal-to-Subject bridge (`DemoSubjectResolver`), and the
-`note-reader`-style role seeding (`seedDemoGrants`), and
+`note-reader`-style role seeding (`SeedDemoGrants`), and
 [`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)
 declares the very `notes:read` / `notes:write` constants this example
 grants. Run `go run ./cmd/server` in `examples/reference-app` and compare
