@@ -20,10 +20,12 @@
 // middleware options, config's pre-auth paths, observability's handler
 // and middleware) and stdlib HTTP, and none of it names a tenant, a
 // module set, a demo layer or an application. What stays host-specific
-// by design: the assembly itself (each host's buildServer/BuildServer),
-// the middleware chain's host-owned additions (an application's tenant
-// status resolver, impersonation decorator, rbac/org route guards, the
-// demo identity layer), the bootstrap configuration surface, and every
+// by design: the boot sequence around ServeUntilShutdown -- signal
+// wiring, configuration load, observability init and teardown -- the
+// assembly itself (each host's buildServer/BuildServer), the middleware
+// chain's host-owned additions (an application's tenant status
+// resolver, impersonation decorator, rbac/org route guards, the demo
+// identity layer), the bootstrap configuration surface, and every
 // business route.
 package hostcore
 
