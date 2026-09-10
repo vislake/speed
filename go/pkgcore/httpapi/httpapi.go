@@ -7,8 +7,13 @@
 // plus structured parameters, serialized as {"code": ..., "params": ...},
 // and the client resolves the code through its own i18n catalog (see
 // go/pkgcore/apperr for the error value itself). WriteError is the one
-// place that shape is built, so every module's surface -- and every
-// generated fragment -- answers refusals identically.
+// place that shape is built for a refusal the module classifies as an
+// application error, so every module's surface -- and every generated
+// fragment -- answers such refusals identically. A protocol-level refusal
+// with no apperr-classified operation behind it -- a module's answer to a
+// method its endpoints do not allow -- is the one deliberate exception:
+// it writes the same shape from its fragment's generated type instead
+// (go/config/http.go's handleMethodNotAllowed).
 //
 // DecodeJSON is the request-side half: it bounds the body before decoding
 // and maps every decode failure, an oversized body included, onto the

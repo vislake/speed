@@ -636,7 +636,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrInvalidRequestBody",
       "kind": "declared",
-      "line": 415,
+      "line": 417,
       "module": "authn",
       "status": 400
     },

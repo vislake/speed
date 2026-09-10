@@ -1193,7 +1193,8 @@ func toLoginAttemptResponse(attempt *LoginAttempt) api.AuthnLoginAttempt {
 // RequireAuthenticated, and from every operation below -- has exactly one
 // shape and exactly one place that decides what a Retry-After header is
 // worth. Its {code, params} wire shape matches api.AuthnError's JSON tags
-// exactly, even though it is written from the package-private errorBody
+// exactly, even though pkgcore/httpapi.WriteError -- which writeAppError
+// delegates the body to -- builds it from that package's own envelope
 // type rather than the generated one.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", jsonContentType)

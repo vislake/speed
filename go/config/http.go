@@ -124,6 +124,12 @@ const methodNotAllowedCode = "config.method_not_allowed"
 // plain-text 405 with no envelope and no caching header, and this handler
 // is what keeps the endpoint's own structured refusal in front of that
 // built-in. Like every other refusal it carries Cache-Control: no-store.
+//
+// The body is the one envelope write in the platform outside
+// pkgcore/httpapi.WriteError, the deliberate exception recorded in that
+// package's doc: the 405 is the fragment's HTTP method-contract answer,
+// not an apperr-classified operation, so it is built directly from the
+// fragment's generated api.ConfigError type.
 func handleMethodNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Allow", "GET, HEAD")
