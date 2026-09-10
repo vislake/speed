@@ -124,7 +124,7 @@ import (
 
 // periodicFlowTickInterval is the cadence the scheduler flow tests inject
 // through cfg.PeriodicTaskInterval: a real tick every second, far faster
-// than the production default (defaultPeriodicTaskSchedulerInterval) so a
+// than the production default (jobs.DefaultScheduleInterval) so a
 // mechanism's scheduled work lands within test time, and far slower than a
 // spin so a pass never depends on tick-counting races.
 //

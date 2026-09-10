@@ -843,14 +843,14 @@ type ServerConfig struct {
 	// config) leaves the composed handler serving no static files at all.
 	WebDistDir string
 
-	// PeriodicTaskInterval is the cadence of this host's periodic-task
-	// scheduler (periodic_scheduler.go), the ticker that enqueues the
-	// jobs-driven mechanisms this app wired -- storage's per-tenant expiry
-	// sweep and pki's signing-key expiry scan. ConfigFromEnv never sets
-	// it, so zero (the default) means the scheduler's own default,
-	// defaultPeriodicTaskSchedulerInterval, and the flow tests inject a
-	// sub-second interval to drive real ticks within test time -- the same
-	// test-override shape Mailer and Memberships below use.
+	// PeriodicTaskInterval is the tick cadence of this host's
+	// periodic-task scheduler (the jobs.Scheduler BuildServer installs
+	// over the registry's declared schedules; see periodic_scheduler.go).
+	// ConfigFromEnv never sets it, so zero (the default) means the
+	// scheduler's own default, jobs.DefaultScheduleInterval, and the flow
+	// tests inject a sub-second interval to drive real ticks within test
+	// time -- the same test-override shape Mailer and Memberships below
+	// use.
 	PeriodicTaskInterval time.Duration
 
 	// PKIPropagationWindow, PKIRenewalLeadTime and PKIExpiryScanWindow
@@ -1203,7 +1203,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// audit-capture bus was constructed, when cfg.RedisAddr selects the
 	// injected Redis-backed composition (nil otherwise).
 	// cleanup closes the services and the job queue first -- stopping the
-	// two ticker loops, config's anti-loss poller, rbac's cache janitor
+	// reconciler and the periodic-task scheduler, config's anti-loss
+	// poller, rbac's cache janitor
 	// and the queue's workers so none of them drains a job, enqueues a
 	// task or runs a poll against a connection that is being torn down --
 	// then the injected bus, stopping its readers so no remote event can
@@ -1421,11 +1422,11 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// two job handlers onto the registry -- the signing-key expiry-scan
 	// task (pki.expiry_scan), which this host's periodic-task scheduler
 	// enqueues on its tick, and the CRL-regenerate task, declared and
-	// drained like every other registered handler but never scheduled:
-	// the app's X.509 consumer (internal/attestation) verifies against
-	// row state and chains and generates CRLs on demand, so a scheduled
-	// refresh still has no reader (periodic_scheduler.go's doc comment
-	// and go/pki/AGENTS.md record that honestly). The three
+	// scheduled like the scan: the app's X.509 consumer
+	// (internal/attestation) verifies against row state and chains and
+	// generates CRLs on demand, so the periodic regeneration's output has
+	// no reader in this app (periodic_scheduler.go's doc comment and
+	// go/pki/AGENTS.md record that honestly). The three
 	// knobs below are applied only when a test injects them: a zero
 	// PKIPropagationWindow, PKIRenewalLeadTime or PKIExpiryScanWindow
 	// (what ConfigFromEnv always leaves them at) keeps pki's own
@@ -2499,28 +2500,35 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		}
 		// Start the host's periodic-task scheduler on the same gate: a
 		// task this replica can never execute is pointless to enqueue, so
-		// the ticker that enqueues the wired mechanisms' tasks -- storage's
-		// per-tenant expiry sweep and compliance's per-tenant retention
-		// sweep over the scheduler's tenant universe, plus pki's
-		// signing-key expiry scan -- only starts once the queue worker
-		// did. The universe is the configured host tenants joined with
-		// go/admin's tenant ledger (periodic_scheduler.go's
+		// the scheduler that drives the modules' declared periodic tasks
+		// -- storage's per-tenant expiry sweep, compliance's per-tenant
+		// retention sweep, pki's expiry scan and CRL regeneration,
+		// sharing's and integration's per-tenant expiry sweeps (billing
+		// declares none here: it is wired without a queue) -- only starts
+		// once the queue worker did. The tenant universe every per-tenant
+		// declaration expands through is the configured host tenants
+		// joined with go/admin's tenant ledger (periodic_scheduler.go's
 		// periodicTenantUniverse), so a self-registered clinic -- a tenant
 		// this app's own registration flow provisions at runtime, never a
 		// cfg.HostTenants value -- is swept from the tick after its org
 		// root's ledger row lands. See periodic_scheduler.go.
-		// context.Background(), never ctx, per
-		// startPeriodicTaskScheduler's own doc comment: the enqueues must
-		// keep running until cleanup's own periodicTaskSchedulerStop call,
-		// not be cut short by whatever cancels BuildServer's own ctx.
-		periodicTaskSchedulerStop = startPeriodicTaskScheduler(
-			context.Background(),
-			cfg.PeriodicTaskInterval,
-			newPeriodicTenantUniverse(cfg.HostTenants, adminModule.Tenants()),
-			storageModule.LifecycleService(),
-			complianceModule.Retention(),
-			pkiModule.Service(),
-		)
+		// context.Background(), never ctx, per jobs.Scheduler.Start's own
+		// doc comment: the enqueues must keep running until cleanup's own
+		// periodicTaskSchedulerStop call, not be cut short by whatever
+		// cancels BuildServer's own ctx.
+		schedulerOpts := []jobs.SchedulerOption{
+			jobs.WithSchedules(reg.Schedules),
+			jobs.WithTenantLister(newPeriodicTenantUniverse(cfg.HostTenants, adminModule.Tenants())),
+		}
+		if cfg.PeriodicTaskInterval > 0 {
+			schedulerOpts = append(schedulerOpts, jobs.WithInterval(cfg.PeriodicTaskInterval))
+		}
+		scheduler := jobs.NewScheduler(standaloneQueue, schedulerOpts...)
+		if err := scheduler.Start(context.Background()); err != nil {
+			_ = cleanup()
+			return nil, nil, nil, fmt.Errorf("reference-app: start the periodic-task scheduler: %w", err)
+		}
+		periodicTaskSchedulerStop = scheduler.Stop
 	}
 	// Start meteringModule's background pipelines now that Bootstrap has
 	// returned (Register attached the registry's bus onto its Aggregator,
