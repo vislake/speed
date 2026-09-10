@@ -25,6 +25,7 @@ package s3_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -211,10 +212,10 @@ func startRustfsPersistentStore(t *testing.T, ctx context.Context) (testcontaine
 }
 
 // waitForRustfsReady polls the container's /health endpoint until the
-// restarted server answers, or fails the test once the deadline passes. The
-// restart closure of the survives-restart proof must not return before the
-// server accepts connections, or the post-restart read would fail on a dead
-// connection rather than on genuinely lost data.
+// restarted server answers, or fails the test once the deadline passes.
+// Accepting connections is only the first half of readiness though: see
+// waitForRustfsReadsReady, which the restart closure must also pass before
+// the survives-restart proof's own read runs.
 func waitForRustfsReady(t *testing.T, ctx context.Context, endpoint string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -232,4 +233,37 @@ func waitForRustfsReady(t *testing.T, ctx context.Context, endpoint string) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatal("restarted rustfs server did not answer /health within 30s")
+}
+
+// waitForRustfsReadsReady polls the restarted S3 service until it answers a
+// read authoritatively, or fails the test once the deadline passes. The
+// /health endpoint above turns green before RustFS finishes its
+// asynchronous startup_finalization, so a read issued as soon as /health
+// answers can still fail with "Service not ready: waiting for
+// startup_finalization" -- a liveness answer from the process, not a verdict
+// about the stored bytes, and the restart closure of the survives-restart
+// proof must wait past it: a post-restart read that fails on the service's
+// own startup window would report lost data where none was lost. The probe
+// is a GetObject of a key the fixture never wrote: an operational service
+// answers it with pkgcore.ErrObjectNotFound (S3's NoSuchKey -- the storage
+// layer answering for itself), while a service still in
+// startup_finalization keeps failing it with the not-ready error.
+func waitForRustfsReadsReady(t *testing.T, ctx context.Context, store pkgcore.ObjectStore) {
+	t.Helper()
+	const probeKey = "readiness-probe"
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		reader, err := store.GetObject(ctx, probeKey)
+		switch {
+		case err == nil:
+			_ = reader.Close()
+			return
+		case errors.Is(err, pkgcore.ErrObjectNotFound):
+			return
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("restarted rustfs S3 service never answered a read within 30s; last error = %v", lastErr)
 }

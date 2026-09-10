@@ -32,10 +32,14 @@ import (
 // restart pkgcore.Capability's doc comment names — and read the payload
 // back through a fresh store over a fresh client, then store and read a
 // second payload through the restarted service to prove it fully
-// operational. The proof's teeth: a store whose bytes lived only in the
-// client process (the default objectstore.local's throwaway temp directory
-// is the unit-scale model) would fail the post-restart read here, exactly
-// as objectstoretest's own unit suite pins.
+// operational. The restart closure returns only once the restarted service
+// answers reads authoritatively as well (rustfs_container_test.go's
+// waitForRustfsReadsReady), so the post-restart assertions below judge the
+// stored bytes, never the service's own startup window. The proof's teeth:
+// a store whose bytes lived only in the client process (the default
+// objectstore.local's throwaway temp directory is the unit-scale model)
+// would fail the post-restart read here, exactly as objectstoretest's own
+// unit suite pins.
 func TestObjectStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testing.T) {
 	ctx := context.Background()
 	container, endpoint, makeStore := startRustfsPersistentStore(t, ctx)
@@ -52,5 +56,6 @@ func TestObjectStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *te
 				t.Fatalf("restart rustfs container: %v", err)
 			}
 			waitForRustfsReady(t, ctx, endpoint)
+			waitForRustfsReadsReady(t, ctx, makeStore())
 		})
 }
