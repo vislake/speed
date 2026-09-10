@@ -1,42 +1,23 @@
 /**
  * layout-kit test configuration: jsdom DOM environment with the shared
- * jest-dom matcher setup, plus the workspace-sibling source aliases that
- * mirror tsconfig.json's paths.
+ * jest-dom matcher setup, plus the workspace source aliases.
  *
- * The aliases point @speed/i18n and @speed/ui-kit specifiers at the
- * siblings' src entry files so tests run against live sources (a
- * sibling's dist/ is never committed and not guaranteed to exist when
- * tests run); @speed/tokens is aliased too since ui-kit's own theme
- * module imports it -- this package never imports @speed/tokens itself
- * (see tsconfig.json's paths comment). List order matters: the
- * "@speed/i18n/mui-locale" subpath entry must be tried before its
- * "@speed/i18n" prefix.
+ * The aliases come from the workspace's single package map
+ * (web/scripts/speed-aliases.mjs) instead of a list hand-copied here:
+ * every @speed/* specifier -- subpaths included -- resolves onto its
+ * sibling's live src entry, because a sibling's dist/ is never
+ * committed and not guaranteed to exist when tests run, and the map is
+ * the one place a specifier is added or moved, so this list cannot
+ * drift from what src/ and test-utils/ import. The map keeps subpath
+ * entries before their prefixes, which both alias matching (first
+ * match wins) and tsconfig paths resolution need.
  */
-import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
-
-const sibling = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
+import { speedAliases } from '../../scripts/speed-aliases.mjs'
 
 export default defineConfig({
   resolve: {
-    alias: [
-      {
-        find: '@speed/i18n/mui-locale',
-        replacement: sibling('../i18n/src/mui-locale.ts'),
-      },
-      {
-        find: '@speed/i18n',
-        replacement: sibling('../i18n/src/index.ts'),
-      },
-      {
-        find: '@speed/ui-kit',
-        replacement: sibling('../ui-kit/src/index.ts'),
-      },
-      {
-        find: '@speed/tokens',
-        replacement: sibling('../tokens/src/index.ts'),
-      },
-    ],
+    alias: speedAliases(),
   },
   test: {
     environment: 'jsdom',
