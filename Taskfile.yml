@@ -521,7 +521,7 @@ tasks:
     cmds:
       - |
         echo "seed: no standalone demo-data loader exists -- seeding is a boot-time"
-        echo "mechanism, and this is deliberate (cmd/server/demo_users.go's SeedDemoUsers"
+        echo "mechanism, and this is deliberate (internal/app/demo/demo_users.go's SeedDemoUsers"
         echo "doc comment: registration goes through the real composed register route"
         echo "in-process, never through a parallel loader that could drift from it)."
         echo
