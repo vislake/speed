@@ -24,6 +24,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	auditmigrations "github.com/vislake/speed/go/dbkit/audit/migrations"
@@ -245,3 +246,95 @@ func (exampleNoopQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) { re
 func (exampleNoopQueue) Cancel(context.Context, jobs.JobID) error           { return nil }
 
 var _ jobs.Queue = exampleNoopQueue{}
+
+// ExampleNewConfigReader wires the config module's lazy Handle into
+// compliance's export-delivery-expiry seam: the reader is constructed while
+// assembling -- before Attach has produced the *config.Service, which the
+// config module's own Attach contract only allows after Bootstrap returns --
+// and its first read, in that window, fails closed with the config module's
+// coded not-attached error. Once Attach has run and an operator has written
+// the tenant's own compliance.export_delivery_expiry row, the same reader
+// resolves that row.
+func ExampleNewConfigReader() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:compliance_example_config_reader?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	registry := dbkit.NewMigrationRegistry()
+	if registryErr := registry.Register(exampleAuditModule{}); registryErr != nil {
+		fmt.Println("register audit migrations:", registryErr)
+		return
+	}
+	configModule := config.NewModule(db, config.WithPollInterval(0))
+	if registryErr := registry.Register(configModule); registryErr != nil {
+		fmt.Println("register config migrations:", registryErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	// The reader is wired here, at assembly time, over the config module's
+	// handle: compliance's own Register declares the
+	// compliance.export_delivery_expiry item that the handle will serve
+	// once the schema is frozen.
+	reader := compliance.NewConfigReader(configModule.Handle())
+	m := compliance.NewModule(audit.NewRepository(db), compliance.WithQueue(exampleNoopQueue{}),
+		compliance.WithExportConfigReader(reader))
+
+	tenant := pkgcore.TenantID("tenant-acme")
+
+	// Before Attach there is no schema to resolve against, and the read
+	// says so: a coded refusal, never a fabricated "unconfigured" answer.
+	if _, _, readErr := reader.ExportDeliveryExpiry(ctx, tenant); readErr != nil {
+		fmt.Println("before Attach:", readErr)
+	}
+
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, m, configModule)
+	if err != nil {
+		fmt.Println("bootstrap:", err)
+		return
+	}
+	svc, err := configModule.Attach(reg)
+	if err != nil {
+		fmt.Println("attach config:", err)
+		return
+	}
+	defer func() { _ = svc.Close() }()
+
+	// No row yet: ok is false, the "tenant configured none" answer Export
+	// falls back to defaultExportDeliveryExpiry on.
+	_, configured, err := reader.ExportDeliveryExpiry(ctx, tenant)
+	if err != nil {
+		fmt.Println("read:", err)
+		return
+	}
+	fmt.Println("unconfigured:", configured)
+
+	// The operator's tenant-tier write is what the same reader now serves.
+	writer := pkgcore.WithTenant(ctx, tenant)
+	if err = svc.Set(writer, config.ScopeTenant, compliance.ConfigExportDeliveryExpiry,
+		config.Value{Data: 2 * time.Hour}, "ops-1"); err != nil {
+		fmt.Println("set:", err)
+		return
+	}
+	expiry, configured, err := reader.ExportDeliveryExpiry(ctx, tenant)
+	if err != nil {
+		fmt.Println("read:", err)
+		return
+	}
+	fmt.Println("configured:", configured, expiry)
+
+	// Output:
+	// before Attach: config.service_not_attached
+	// unconfigured: false
+	// configured: true 2h0m0s
+}

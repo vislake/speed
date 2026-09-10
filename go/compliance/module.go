@@ -135,7 +135,8 @@ func WithSharing(s SharingCreator) Option {
 }
 
 // WithExportConfigReader wires the live reader ExportService.Export
-// resolves a tenant's configured export-delivery-link expiry through.
+// resolves a tenant's configured export-delivery-link expiry through --
+// NewConfigReader over the config module's Handle is the sanctioned one.
 // Without it (the default), Export always falls back to
 // defaultExportDeliveryExpiry -- still correct, per this item's own
 // declared Default, just never per-tenant-tunable until a host wires
@@ -144,8 +145,7 @@ func WithSharing(s SharingCreator) Option {
 // rather than a *config.Service field the way WithConfigService gives
 // RetentionService: config.Module.Attach's *config.Service is only
 // produced strictly after Kernel.Bootstrap returns, by which point
-// NewModule has already run, so a host wires a lazy adapter over a
-// **config.Service filled in later.
+// NewModule has already run.
 func WithExportConfigReader(r ExportDeliveryExpiryReader) Option {
 	return func(m *Module) { m.export.cfg = r }
 }

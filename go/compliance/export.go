@@ -129,8 +129,9 @@ const exportDeliveryMaxViews = 1
 // *config.Service, which per its own doc comment is only produced strictly
 // after Kernel.Bootstrap returns -- by which point every module's own
 // NewModule call, this one included, has already run. This interface
-// exists so a host can wire a lazy adapter over a later-filled
-// **config.Service, not to avoid an import edge compliance does not have.
+// exists so a host can wire a lazy adapter -- NewConfigReader, over
+// config's lazy Handle, is the sanctioned one -- not to avoid an import
+// edge compliance does not have.
 //
 // ok is false when the tenant has configured none (the value resolved at
 // go/config's own schema default) -- Export then falls back to
