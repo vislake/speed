@@ -3,8 +3,9 @@
 # Dockerfile's own header comment explains why: this app's go.mod replace
 # directives point at sibling go/* modules by relative path, and it builds
 # under go.work workspace mode, so the build stage needs go.work,
-# go.work.sum, every go/* module and examples/reference-app all visible in
-# one context.
+# go.work.sum and every one of go.work's `use` entries -- the go/* modules,
+# tools/configrefgen and examples/reference-app -- all visible in one
+# context.
 #
 # This file follows .gitignore's own patterns rather than duplicating its
 # reasoning (see that file for the comments this one deliberately omits);
