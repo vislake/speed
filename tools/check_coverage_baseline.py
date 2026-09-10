@@ -80,27 +80,40 @@ module
     and fail or pass on cache state alone.
   * The unit suite only: the Docker-backed integration tiers
     (-tags=integration) are not part of a coverage gate on every run.
-  * The comparison carries a small tolerance, EPSILON_PP, applied
-    identically to both bounds: a measured total more than EPSILON_PP
-    below the 80.0% floor fails, and one more than EPSILON_PP below
-    the recorded baseline fails. The statement census is fixed for a
-    fixed tree, but which blocks a suite executes is not perfectly
-    stable between runs: timing-sensitive tests reach different block
-    sets when scheduling shifts. The six foundation suites that
-    predated the 2026-09 extension showed swings up to ~0.03 points,
-    which sized the original 0.05 tolerance; the extension to every
-    module measured a wider edge, ~0.12 points, in go/authn's own MFA
+  * The comparison carries a tolerance applied identically to both
+    bounds (effective_tolerance): a measured total more than the
+    effective tolerance below the 80.0% floor fails, and one more than
+    it below the recorded baseline fails. The statement census is
+    fixed for a fixed tree, but which blocks a suite executes is not
+    perfectly stable between runs: timing-sensitive tests reach
+    different block sets when scheduling shifts. The measured upper
+    edge of that jitter is ~0.12 points, in go/authn's MFA
     confirm-race suite -- eight goroutines confirming one pending TOTP
     factor over SQLite, where a losing confirm either hits the
     database's write-lock error or lands a clean zero-row update
     depending on scheduler luck, so the loser-branch statements are
-    covered or not by scheduling alone. EPSILON_PP is now 0.15 points,
-    one notch above that measured edge. The cost of the wider band is
-    bounded: 0.15 points is a handful of statements in these modules'
-    suite sizes (about five in authn's 3232-statement census), while a
-    single untested function of thirty statements costs authn a whole
-    point -- far below any decline that adding code without tests
-    produces. One tolerance, two comparisons, one rule. The
+    covered or not by scheduling alone. The main tolerance,
+    TOLERANCE_POINTS, is 0.15 points, one notch above that edge.
+  * The tolerance is calibrated by the module's statement count,
+    because a fixed points-tolerance is not size-invariant: in a small
+    module it can sit below one statement's worth of points --
+    observability's 424-statement census makes one statement worth
+    about 0.24 points, more than the whole 0.15-point band, so a run
+    that merely skips a statement of scheduling-sensitive coverage
+    would red the gate -- while in a large module the same points
+    cover several statements, looser than the intended noise budget.
+    effective_tolerance is the wider of TOLERANCE_POINTS and the
+    points TOLERANCE_STATEMENTS statements are worth in the module
+    under measurement (TOLERANCE_STATEMENTS * 100 / total_statements):
+    the 2-statement floor makes the noise budget size-invariant, and
+    the main tolerance still governs modules large enough that two
+    statements are worth less than it (about 1334 statements and up;
+    authn's 2971-statement census keeps 0.15). The cost stays bounded
+    either way: the band is about four and a half statements in
+    authn's census, while a single untested function of thirty
+    statements costs authn about a point -- far below any decline that
+    adding code without tests produces. One tolerance, two
+    comparisons, one rule. The
     recorded TOOLCHAIN (the short `go version` form) is part of the
     baseline: a check run under a different Go than the baselines were
     recorded with fails with an update instruction -- a Go upgrade
@@ -110,8 +123,9 @@ module
 What a breach means and how to respond
 
   * A PR that adds code without tests drops the total and fails one or
-    both comparisons, naming the module, the measured total and the
-    breached bound -- the intended signal ("write the tests"). The
+    both comparisons, naming the module, the measured total, the
+    effective tolerance it was compared under and the breached bound
+    -- the intended signal ("write the tests"). The
     same failure prints the module's largest uncovered blocks and its
     total uncovered statements, so a breach names where the gap sits,
     not only how large it is.
@@ -204,17 +218,25 @@ DEFAULT_BASELINE = pathlib.Path(__file__).resolve().parent / BASELINE_FILE_NAME
 
 # The floor every module's measured total must clear, in percentage
 # points: the 2026-09 product decision (docs/internal/20). A measured
-# total more than EPSILON_PP below it fails the floor comparison, and
-# --update refuses to record one (see the module docstring).
+# total more than the effective tolerance (below) beneath it fails the
+# floor comparison, and --update refuses to record one (see the module
+# docstring).
 LOWER_BOUND_PP = 80.0
 
-# The tolerance band for both comparisons, in percentage points. A
-# measured total more than this far below the floor -- or below the
-# recorded baseline -- fails; a smaller dip is measurement jitter
-# (timing-sensitive tests reach different block sets between runs; the
-# observed upper edge is ~0.12 points, from go/authn's MFA confirm-race
-# suite -- see the module docstring). See the module docstring.
-EPSILON_PP = 0.15
+# The tolerance band both comparisons carry, calibrated by module size
+# (effective_tolerance below). TOLERANCE_POINTS is the main tolerance,
+# in percentage points: a measured total more than the effective
+# tolerance below the floor -- or below the recorded baseline -- fails,
+# a smaller dip being measurement jitter (timing-sensitive tests reach
+# different block sets between runs; the observed upper edge is ~0.12
+# points, from go/authn's MFA confirm-race suite). TOLERANCE_STATEMENTS
+# is the size floor of that band, in statements: the tolerance is never
+# tighter than the points this many statements are worth in the module
+# under measurement (TOLERANCE_STATEMENTS * 100 / total_statements),
+# because a band below one statement's worth cannot absorb a single
+# statement of jitter. See the module docstring.
+TOLERANCE_POINTS = 0.15
+TOLERANCE_STATEMENTS = 2
 
 # The cap on the uncovered-block lines a failed comparison prints: the
 # uncovered set of a large module runs to thousands of blocks, which
@@ -285,19 +307,24 @@ def statement_census(
     return census
 
 
-def coverage_from_profile(profile_text: str) -> float:
-    """Total statement coverage percent from a go test -coverprofile
-    file, computed exactly: covered statements (count > 0) over all
-    statements across every block the profile carries. Unrounded, so a
-    comparison against a stored baseline is not quantized by the
-    0.1-point rounding `go tool cover -func` applies to its output.
+def census_statements(
+    census: dict[tuple[str, str], tuple[int, bool]],
+) -> int:
+    """The census's statement total -- the module's size, read off the
+    same census as the coverage total, and the input the tolerance is
+    calibrated against (effective_tolerance)."""
+    return sum(statements for statements, _ in census.values())
 
-    The blocks come from statement_census, the same census the failure
-    diagnostics read, so the number a comparison fails on and the
-    uncovered list printed beside it cannot disagree about what
-    "uncovered" means."""
-    census = statement_census(profile_text)
-    total = sum(statements for statements, _ in census.values())
+
+def coverage_from_census(
+    census: dict[tuple[str, str], tuple[int, bool]],
+) -> float:
+    """Total statement coverage percent from a statement census,
+    computed exactly: covered statements (count > 0) over all
+    statements across every block the census carries. Unrounded, so a
+    comparison against a stored baseline is not quantized by the
+    0.1-point rounding `go tool cover -func` applies to its output."""
+    total = census_statements(census)
     covered = sum(
         statements
         for statements, was_covered in census.values()
@@ -306,6 +333,16 @@ def coverage_from_profile(profile_text: str) -> float:
     if total == 0:
         return 100.0
     return 100.0 * covered / total
+
+
+def coverage_from_profile(profile_text: str) -> float:
+    """coverage_from_census over the profile's own census.
+
+    The blocks come from statement_census, the same census the failure
+    diagnostics read, so the number a comparison fails on and the
+    uncovered list printed beside it cannot disagree about what
+    "uncovered" means."""
+    return coverage_from_census(statement_census(profile_text))
 
 
 def line_span(position: str) -> str:
@@ -363,42 +400,88 @@ def uncovered_diagnostics(module_dir: str, profile_text: str) -> list[str]:
     return lines
 
 
+def effective_tolerance(total_statements: int) -> float:
+    """The tolerance band for a module of this statement count, in
+    percentage points: the wider of TOLERANCE_POINTS and the points
+    TOLERANCE_STATEMENTS statements are worth over the module's census
+    (TOLERANCE_STATEMENTS * 100 / total_statements).
+
+    A fixed points-tolerance is not size-invariant (see the module
+    docstring): in a small module it can sit below one statement's
+    worth of points, so a run that merely skips a statement of
+    scheduling-sensitive coverage would red the gate, while in a large
+    module it covers several statements, looser than the intended
+    noise budget. The statement floor makes the budget size-invariant,
+    and the main tolerance governs the modules large enough that two
+    statements are worth less than it."""
+    if total_statements <= 0:
+        return TOLERANCE_POINTS
+    return max(
+        TOLERANCE_POINTS,
+        TOLERANCE_STATEMENTS * 100.0 / total_statements,
+    )
+
+
 def comparison_failures(
     measured: float,
     baseline: float | None,
+    total_statements: int,
     floor: float = LOWER_BOUND_PP,
-    epsilon: float = EPSILON_PP,
 ) -> list[str]:
     """The breached bounds for one measured total, in a fixed order
     (floor first, then the recorded baseline); empty means pass. Both
     comparisons share the same tolerance semantics: a measured total
-    more than EPSILON_PP below the bound fails it."""
+    more than effective_tolerance(total_statements) below the bound
+    fails it, and the failure text names the effective tolerance and
+    the census it was calibrated against."""
+    tolerance = effective_tolerance(total_statements)
     failures = []
-    if measured + epsilon < floor:
+    if measured + tolerance < floor:
         failures.append(
-            "measured %.4f%% sits more than the %.2f-point tolerance "
-            "below the %.1f%% floor (the product decision; the response "
-            "is adding tests -- --update cannot waive it)"
-            % (measured, epsilon, floor)
+            "measured %.4f%% sits more than the effective %.4f-point "
+            "tolerance of the module's %d-statement census (the wider "
+            "of %.2f points and %d statements' worth) below the %.1f%% "
+            "floor (the product decision; the response is adding tests "
+            "-- --update cannot waive it)"
+            % (
+                measured,
+                tolerance,
+                total_statements,
+                TOLERANCE_POINTS,
+                TOLERANCE_STATEMENTS,
+                floor,
+            )
         )
-    if baseline is not None and measured + epsilon < baseline:
+    if baseline is not None and measured + tolerance < baseline:
         failures.append(
-            "measured %.4f%% sits more than the %.2f-point tolerance "
-            "below the recorded baseline %.4f%% -- add tests, or record "
-            "a deliberate decline with --update (with the reason in the "
+            "measured %.4f%% sits more than the effective %.4f-point "
+            "tolerance of the module's %d-statement census (the wider "
+            "of %.2f points and %d statements' worth) below the "
+            "recorded baseline %.4f%% -- add tests, or record a "
+            "deliberate decline with --update (with the reason in the "
             "commit message)"
-            % (measured, epsilon, baseline)
+            % (
+                measured,
+                tolerance,
+                total_statements,
+                TOLERANCE_POINTS,
+                TOLERANCE_STATEMENTS,
+                baseline,
+            )
         )
     return failures
 
 
 @dataclasses.dataclass(frozen=True)
 class ModuleMeasurement:
-    """One module's measurement: the exact total the gate compares,
-    plus the profile text it was computed from, so a failed comparison
-    can list the uncovered blocks behind the total."""
+    """One module's measurement: the exact total the gate compares, the
+    module's statement census size -- the input its tolerance is
+    calibrated against -- plus the profile text the two were computed
+    from, so a failed comparison can list the uncovered blocks behind
+    the total."""
 
     total: float
+    total_statements: int
     profile_text: str
 
 
@@ -407,9 +490,11 @@ def measure_module_coverage(
 ) -> ModuleMeasurement:
     """Run the module's unit suite under -coverprofile and return its
     measurement: the exact total statement coverage percent -- the
-    module suite measured against the whole module -- plus the profile
-    text behind it, so a failed comparison can print the uncovered
-    blocks (the profile temp file is gone by then). -coverpkg=./...
+    module suite measured against the whole module -- the module's
+    statement census size, which calibrates the comparison's tolerance,
+    plus the profile text behind both, so a failed comparison can print
+    the uncovered blocks (the profile temp file is gone by then).
+    -coverpkg=./...
     instruments every module package in every test binary, so
     execution that crosses a package boundary counts toward the
     package whose code it runs: a suite that lives in a directory of
@@ -463,8 +548,11 @@ def measure_module_coverage(
         profile_text = pathlib.Path(profile).read_text(encoding="utf-8")
     finally:
         pathlib.Path(profile).unlink(missing_ok=True)
+    census = statement_census(profile_text)
     return ModuleMeasurement(
-        coverage_from_profile(profile_text), profile_text
+        coverage_from_census(census),
+        census_statements(census),
+        profile_text,
     )
 
 
@@ -612,13 +700,17 @@ def main(argv: list[str]) -> int:
                 return 1
             measurement = measure_module_coverage(root, module_dir)
             measured_by_module[module_dir] = measurement.total
-            if comparison_failures(measurement.total, baseline=None):
+            if comparison_failures(
+                measurement.total,
+                baseline=None,
+                total_statements=measurement.total_statements,
+            ):
                 refusals.append(
                     "update refuses to record %s at %.4f%%: the measured "
                     "total breaches the %.1f%% floor, and the floor is "
                     "the product decision -- not a baseline -- so the "
                     "response is adding tests, not re-recording"
-                    % (module_dir, total, LOWER_BOUND_PP)
+                    % (module_dir, measurement.total, LOWER_BOUND_PP)
                 )
         if refusals:
             for refusal in refusals:
@@ -665,7 +757,9 @@ def main(argv: list[str]) -> int:
             continue
         measurement = measure_module_coverage(root, module_dir)
         baseline = rows[module_dir]
-        reasons = comparison_failures(measurement.total, baseline)
+        reasons = comparison_failures(
+            measurement.total, baseline, measurement.total_statements
+        )
         if reasons:
             for reason in reasons:
                 print(

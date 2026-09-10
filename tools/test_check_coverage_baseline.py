@@ -24,9 +24,16 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
     exclusion as the coverage math, largest blocks first, and the cap
     that keeps the printed list short while the summary line still
     carries the true uncovered totals.
-  * comparison_failures -- the two-bounds decision rule (the 80.0%
-    floor and the recorded baseline, both under the same tolerance),
-    including which bound a measurement breaches when both do.
+  * comparison_failures / effective_tolerance -- the two-bounds
+    decision rule (the 80.0% floor and the recorded baseline, both
+    under the same size-calibrated tolerance): both regimes of the
+    calibration -- the main tolerance governing a large module, the
+    2-statement floor governing a small one -- pinned in both
+    directions, along with which bound a measurement breaches when
+    both do and the failure text naming the effective tolerance and
+    the census it was calibrated against.
+  * main's --update refusal path -- a measured total breaching the
+    floor is refused with its total named, and nothing is recorded.
   * short_toolchain -- the go version line's short form.
   * The gating rule's fail direction -- the mechanism must not go soft
     on the decline it exists to catch -- is proven against the real
@@ -37,9 +44,13 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
 
 from __future__ import annotations
 
+import contextlib
+import io
 import pathlib
 import sys
+import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -248,23 +259,58 @@ class Diagnostics(unittest.TestCase):
 
 class Comparisons(unittest.TestCase):
     """The two-bounds decision rule: the 80.0% floor and the recorded
-    baseline, both breached only more than EPSILON_PP below the bound
+    baseline, both breached only more than the module's effective
+    tolerance below the bound -- the wider of the 0.15-point main
+    tolerance and the points 2 statements are worth in that module
     (the measurement-jitter band; see the tool's module docstring)."""
 
+    # Census sizes that put each regime of the calibration under test.
+    # In a 4000-statement module two statements are worth 0.05 points
+    # (below 0.15), so the main tolerance governs; in a 400-statement
+    # module they are worth 0.5 points, so the statement floor governs.
+    LARGE_CENSUS = 4000
+    SMALL_CENSUS = 400
+
+    def test_effective_tolerance_is_the_wider_of_the_two(self):
+        # The main tolerance governs while two statements are worth
+        # less than it (more than 1333.33 statements); the two-statement
+        # worth governs below that. An empty census has no statement
+        # basis, so the main tolerance governs.
+        self.assertEqual(m.effective_tolerance(self.LARGE_CENSUS), 0.15)
+        self.assertEqual(
+            m.effective_tolerance(self.SMALL_CENSUS),
+            2 * 100.0 / self.SMALL_CENSUS,
+        )
+        self.assertEqual(m.effective_tolerance(1333), 200.0 / 1333)
+        self.assertEqual(m.effective_tolerance(1334), 0.15)
+        self.assertEqual(m.effective_tolerance(0), 0.15)
+
     def test_pass_above_floor_and_baseline(self):
-        self.assertEqual(m.comparison_failures(84.0, baseline=83.0), [])
+        self.assertEqual(
+            m.comparison_failures(
+                84.0, baseline=83.0, total_statements=self.LARGE_CENSUS
+            ),
+            [],
+        )
 
     def test_pass_within_tolerance_of_the_floor(self):
         # 79.86 + 0.15 clears 80.0: a sub-floor dip inside the jitter
         # band passes, exactly as a dip inside the band passes the
         # baseline comparison.
-        self.assertEqual(m.comparison_failures(79.86, baseline=None), [])
+        self.assertEqual(
+            m.comparison_failures(
+                79.86, baseline=None, total_statements=self.LARGE_CENSUS
+            ),
+            [],
+        )
 
     def test_floor_breach_fails_even_above_a_low_baseline(self):
         # A measured total below the floor fails no matter what the
         # baseline file says -- the floor is the product decision, not
         # a re-baselineable row.
-        reasons = m.comparison_failures(79.5, baseline=79.5)
+        reasons = m.comparison_failures(
+            79.5, baseline=79.5, total_statements=self.LARGE_CENSUS
+        )
         self.assertEqual(len(reasons), 1)
         self.assertIn("floor", reasons[0])
 
@@ -272,12 +318,16 @@ class Comparisons(unittest.TestCase):
         # A decline against the baseline still fails while the floor
         # holds: the decline gate exists so coverage that merely slides
         # within a high-but-falling band cannot pass.
-        reasons = m.comparison_failures(83.0, baseline=84.0)
+        reasons = m.comparison_failures(
+            83.0, baseline=84.0, total_statements=self.LARGE_CENSUS
+        )
         self.assertEqual(len(reasons), 1)
         self.assertIn("baseline", reasons[0])
 
     def test_both_breaches_report_both_bounds(self):
-        reasons = m.comparison_failures(79.0, baseline=84.0)
+        reasons = m.comparison_failures(
+            79.0, baseline=84.0, total_statements=self.LARGE_CENSUS
+        )
         self.assertEqual(len(reasons), 2)
         self.assertIn("floor", reasons[0])
         self.assertIn("baseline", reasons[1])
@@ -286,8 +336,153 @@ class Comparisons(unittest.TestCase):
         # 79.85 + 0.15 == 80.0 exactly: the band edge passes. The
         # comparisons run on unrounded totals, so a floor crossing
         # cannot hide behind display rounding.
-        self.assertEqual(m.comparison_failures(79.85, baseline=None), [])
-        self.assertEqual(len(m.comparison_failures(79.84, baseline=None)), 1)
+        self.assertEqual(
+            m.comparison_failures(
+                79.85, baseline=None, total_statements=self.LARGE_CENSUS
+            ),
+            [],
+        )
+        self.assertEqual(
+            len(
+                m.comparison_failures(
+                    79.84, baseline=None, total_statements=self.LARGE_CENSUS
+                )
+            ),
+            1,
+        )
+
+    def test_large_module_main_tolerance_governs(self):
+        # 4000 statements: two statements are worth 0.05 points, below
+        # the 0.15-point main tolerance, so the main tolerance governs.
+        # A 0.15-point drop sits on the band edge and passes; any wider
+        # drop fails.
+        self.assertEqual(
+            m.comparison_failures(
+                89.85, baseline=90.0, total_statements=self.LARGE_CENSUS
+            ),
+            [],
+        )
+        self.assertEqual(
+            len(
+                m.comparison_failures(
+                    89.84, baseline=90.0, total_statements=self.LARGE_CENSUS
+                )
+            ),
+            1,
+        )
+
+    def test_small_module_two_statement_drop_passes(self):
+        # 400 statements: the effective tolerance is the two-statement
+        # worth, 0.5 points. A drop of exactly two statements sits on
+        # the band edge and passes -- under a fixed 0.15-point band it
+        # would already have failed, because one statement is 0.25
+        # points here.
+        self.assertEqual(
+            m.comparison_failures(
+                89.5, baseline=90.0, total_statements=self.SMALL_CENSUS
+            ),
+            [],
+        )
+
+    def test_small_module_three_statement_drop_fails(self):
+        # Three statements are 0.75 points, beyond the 0.5-point band:
+        # the floor is a floor, not a licence.
+        self.assertEqual(
+            len(
+                m.comparison_failures(
+                    89.25, baseline=90.0, total_statements=self.SMALL_CENSUS
+                )
+            ),
+            1,
+        )
+
+    def test_one_statement_of_jitter_passes_a_small_module(self):
+        # observability's 424-statement census: one statement is 0.236
+        # points, wider than the whole 0.15-point main tolerance, so a
+        # single statement of scheduling jitter would red a fixed-band
+        # gate. The statement floor (0.47 points here) absorbs it.
+        self.assertEqual(
+            m.comparison_failures(
+                90.0 - 100.0 / 424, baseline=90.0, total_statements=424
+            ),
+            [],
+        )
+
+    def test_small_module_calibrated_band_governs_the_floor_too(self):
+        # The calibrated band applies to both comparisons: in a
+        # 400-statement module a dip of 0.5 points below the floor
+        # still passes (the band is 0.5), while a dip beyond it fails.
+        self.assertEqual(
+            m.comparison_failures(
+                79.5, baseline=None, total_statements=self.SMALL_CENSUS
+            ),
+            [],
+        )
+        self.assertEqual(
+            len(
+                m.comparison_failures(
+                    79.49, baseline=None, total_statements=self.SMALL_CENSUS
+                )
+            ),
+            1,
+        )
+
+    def test_failure_text_names_the_effective_tolerance_and_census(self):
+        # A breach names the tolerance it was judged under and the
+        # census that calibrated it, so the number in the message can
+        # be recomputed from the module alone.
+        baseline_reason = m.comparison_failures(
+            89.25, baseline=90.0, total_statements=self.SMALL_CENSUS
+        )[0]
+        self.assertIn("effective 0.5000-point tolerance", baseline_reason)
+        self.assertIn("400-statement census", baseline_reason)
+        floor_reason = m.comparison_failures(
+            79.4, baseline=None, total_statements=self.SMALL_CENSUS
+        )[0]
+        self.assertIn("effective 0.5000-point tolerance", floor_reason)
+        self.assertIn("400-statement census", floor_reason)
+
+
+class UpdateRefusal(unittest.TestCase):
+    """main's --update refusal path: a measured total breaching the
+    floor is refused (exit 1) with its total named, and nothing is
+    recorded -- the floor is not a re-baselineable row."""
+
+    def test_sub_floor_measurement_is_refused_with_its_total(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            measurement = m.ModuleMeasurement(
+                total=50.0,
+                total_statements=100,
+                profile_text="mode: set\n",
+            )
+            stderr = io.StringIO()
+            with (
+                contextlib.redirect_stderr(stderr),
+                unittest.mock.patch.object(
+                    m, "current_toolchain", return_value="go1.26.8"
+                ),
+                unittest.mock.patch.object(
+                    m, "measure_module_coverage", return_value=measurement
+                ),
+            ):
+                code = m.main(
+                    [
+                        "--update",
+                        "--module",
+                        "go/pkgcore",
+                        "--root",
+                        str(root),
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn(
+                "update refuses to record go/pkgcore at 50.0000%",
+                stderr.getvalue(),
+            )
+            self.assertFalse(
+                (root / "tools" / m.BASELINE_FILE_NAME).exists()
+            )
 
 
 class Toolchain(unittest.TestCase):
