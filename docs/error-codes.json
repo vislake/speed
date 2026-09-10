@@ -1221,7 +1221,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesErrInternal",
       "kind": "declared",
-      "line": 59,
+      "line": 60,
       "module": "cases",
       "status": 500
     },
@@ -1230,7 +1230,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesInvalidRequestBody",
       "kind": "declared",
-      "line": 66,
+      "line": 67,
       "module": "cases",
       "status": 400
     },
@@ -1500,7 +1500,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrAlreadyAttached",
       "kind": "declared",
-      "line": 117,
+      "line": 118,
       "module": "config",
       "status": 500
     },
@@ -1563,7 +1563,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrRateLimited",
       "kind": "declared",
-      "line": 136,
+      "line": 137,
       "module": "config",
       "status": 429
     },
@@ -1581,7 +1581,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrServiceNotAttached",
       "kind": "declared",
-      "line": 111,
+      "line": 112,
       "module": "config",
       "status": 500
     },
@@ -1590,7 +1590,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrStorage",
       "kind": "declared",
-      "line": 124,
+      "line": 125,
       "module": "config",
       "status": 500
     },
@@ -3147,7 +3147,7 @@
       "file": "examples/reference-app/internal/app/team_members.go",
       "ident": "teamMemberErrInternal",
       "kind": "declared",
-      "line": 119,
+      "line": 120,
       "module": "reference_app",
       "status": 500
     },
