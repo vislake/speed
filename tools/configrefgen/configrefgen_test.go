@@ -42,8 +42,10 @@ func repoRootFromTest(t *testing.T) string {
 // TestConfigExampleYAMLLoadsThroughTheLoader is the load-verification of
 // the repository-root config.example.yaml: the file must genuinely parse
 // through go/pkgcore/config's loader against the loader-shaped target
-// struct this package carries, with the documented precedence chain (flags
-// > env > file > struct defaults) pinned on the real file's own keys.
+// struct this package carries -- the six platform keys parsing to their
+// placeholder, the host-own demonstration keys to their values -- with the
+// documented precedence chain (flags > env > file > struct defaults) pinned
+// on the real file's own keys.
 func TestConfigExampleYAMLLoadsThroughTheLoader(t *testing.T) {
 	root := repoRootFromTest(t)
 	path := filepath.Join(root, "config.example.yaml")
@@ -65,6 +67,25 @@ func TestConfigExampleYAMLLoadsThroughTheLoader(t *testing.T) {
 	}
 	if cfg.DBPath != "app.db" {
 		t.Errorf("DBPath = %q, want the file's app.db", cfg.DBPath)
+	}
+
+	// The platform block: all six declared keys the file supplies parse
+	// into their nested fields, carrying the file's placeholder value
+	// verbatim.
+	for _, tc := range []struct {
+		key string
+		got string
+	}{
+		{"authn.blind_index_key", cfg.Authn.Blind_Index_Key},
+		{"authn.pii_cipher_key", cfg.Authn.PII_Cipher_Key},
+		{"config.master_key", cfg.Config.Master_Key},
+		{"notification.contact_index_key", cfg.Notification.Contact_Index_Key},
+		{"org.invitation_email_index_key", cfg.Org.Invitation_Email_Index_Key},
+		{"pki.local_key_cipher_key", cfg.Pki.Local_Key_Cipher_Key},
+	} {
+		if tc.got != configExampleKeyPlaceholder {
+			t.Errorf("%s = %q, want the file's placeholder %s", tc.key, tc.got, configExampleKeyPlaceholder)
+		}
 	}
 
 	// Environment beats the file: SPEED_DEPLOYMENTMODE and SPEED_SMTP__PORT

@@ -1,10 +1,13 @@
-# config.example.yaml -- the optional config-file source of go/pkgcore/config's
-# bootstrap loader, in its official file format (YAML or JSON; the loader's
-# package doc and ExampleWithConfigFile show both). config.example.json beside
-# this file is the same example in the other format: it is DERIVED from this
-# file by tools/configrefgen, never hand-written, so the
-# pair cannot disagree about a key or a value, and its unit test loads both
-# through the real loader.
+# config.example.yaml -- a template for the optional config-file source of
+# go/pkgcore/config's bootstrap loader. Copy it, replace the placeholder
+# values with real ones, adjust the host-own block to your own keys, and
+# point config.WithConfigFile at the copy.
+#
+# The loader accepts YAML or JSON; config.example.json beside this file is
+# the same example in the other format. It is DERIVED from this file by
+# tools/configrefgen, never hand-written, so the pair cannot disagree about
+# a key or a value, and the generator's unit test loads both through the
+# real loader.
 #
 # The loader resolves every bootstrap key from four sources, highest priority
 # first:
@@ -26,18 +29,84 @@
 # to database.dsn. Field names map to keys lowercased and dotted, so the
 # target struct field Database.DSN is the key "database.dsn".
 #
-# IMPORTANT: this file is the FILE FORMAT'S example, not a file any process in
-# this repository reads: nothing here points WithConfigFile at it (an absent
+# The first block below is the platform key surface: the process-start key
+# material the platform modules declare on the registry's bootstrap seat and
+# a host must feed. A real deployment injects each key from a secret store,
+# or derives it from one 32-byte root key with
+# config.DeriveBootstrapKeyMaterial(rootKey, keyPath);
+# docs/config-reference.md's bootstrap section states each key's contract,
+# purpose string and unset fallback.
+#
+# The second block demonstrates a host's own keys going through this same
+# file: a host's fields, value types and nesting, not part of the platform
+# surface.
+#
+# IMPORTANT: this file is a template to copy, not a file any process in this
+# repository reads: nothing here points WithConfigFile at it (an absent
 # file is skipped silently, which is how every boot in this repository runs).
-# The mechanism it demonstrates is real and exercised all the same: a host
-# that wants the file source declares its own target struct and points
-# WithConfigFile at a file shaped like this one;
+# The mechanism it demonstrates is real and exercised all the same:
 # tools/configrefgen's config_example.go carries the struct this exact file
 # loads against, and its unit test loads this file through the real loader, so
 # the format demonstrated here is load-verified, never aspirational.
-#
-# The keys below are a demonstration set, spelled the way a loader target
-# struct would declare them in the loader's own SPEED_ family.
+
+# --- Platform keys ---------------------------------------------------------
+# The exact key set the platform modules declare, grouped by declaring
+# module. REPLACE_WITH_64_HEX_CHARS stands in for a hex-encoded 32-byte key
+# (`openssl rand -hex 32`); never commit real material -- a real deployment
+# injects each key from a secret store or derives it from the root key above.
+
+authn:
+  # HMAC key authn indexes its users.email_index and phone_index
+  # blind-index columns with; it must stay identical across restarts, or
+  # every already-stored index becomes unfindable.
+  #   env:  SPEED_AUTHN__BLIND_INDEX_KEY=...
+  #   flag: --authn.blind_index_key=...
+  blind_index_key: REPLACE_WITH_64_HEX_CHARS
+
+  # AES key sealing authn's encrypted PII columns (email, phone, TOTP
+  # secrets), deliberately separate from every other module's key material
+  # and from the blind-index key above.
+  #   env:  SPEED_AUTHN__PII_CIPHER_KEY=...
+  #   flag: --authn.pii_cipher_key=...
+  pii_cipher_key: REPLACE_WITH_64_HEX_CHARS
+
+config:
+  # Master key the config module seals every Sensitive dynamic-configuration
+  # value with; the key that encrypts the configs table cannot live in the
+  # table, so it comes from the host's process-start input.
+  #   env:  SPEED_CONFIG__MASTER_KEY=...
+  #   flag: --config.master_key=...
+  master_key: REPLACE_WITH_64_HEX_CHARS
+
+notification:
+  # HMAC key the notification module's blind indexers index its encrypted
+  # contact addresses with; one key serves the email and phone indexers,
+  # whose canonical forms are disjoint.
+  #   env:  SPEED_NOTIFICATION__CONTACT_INDEX_KEY=...
+  #   flag: --notification.contact_index_key=...
+  contact_index_key: REPLACE_WITH_64_HEX_CHARS
+
+org:
+  # HMAC key org's blind indexer indexes invitation email addresses with;
+  # separate from every cipher key, because an AES key never doubles as an
+  # HMAC key.
+  #   env:  SPEED_ORG__INVITATION_EMAIL_INDEX_KEY=...
+  #   flag: --org.invitation_email_index_key=...
+  invitation_email_index_key: REPLACE_WITH_64_HEX_CHARS
+
+pki:
+  # AES key sealing go/pki's LocalSigner private-key column, the key authn's
+  # access tokens are ultimately signed with.
+  #   env:  SPEED_PKI__LOCAL_KEY_CIPHER_KEY=...
+  #   flag: --pki.local_key_cipher_key=...
+  local_key_cipher_key: REPLACE_WITH_64_HEX_CHARS
+
+# --- A host's own keys, demonstration only ---------------------------------
+# These are NOT platform keys. They show how a host's own target-struct
+# fields, value types and nesting map onto this same file and the four
+# sources above, spelled in the loader's SPEED_ family; a host whose
+# variables already carry another prefix pins its fields' exact variable
+# names with config:"env=NAME" instead.
 
 # Deployment topology the process runs as. Required: no source may leave it
 # unset. Equivalent writings:

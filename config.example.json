@@ -1,6 +1,22 @@
 {
+  "authn": {
+    "blind_index_key": "REPLACE_WITH_64_HEX_CHARS",
+    "pii_cipher_key": "REPLACE_WITH_64_HEX_CHARS"
+  },
+  "config": {
+    "master_key": "REPLACE_WITH_64_HEX_CHARS"
+  },
   "dbpath": "app.db",
   "deploymentmode": "standalone",
+  "notification": {
+    "contact_index_key": "REPLACE_WITH_64_HEX_CHARS"
+  },
+  "org": {
+    "invitation_email_index_key": "REPLACE_WITH_64_HEX_CHARS"
+  },
+  "pki": {
+    "local_key_cipher_key": "REPLACE_WITH_64_HEX_CHARS"
+  },
   "port": "8080",
   "redis": {
     "addr": ""
