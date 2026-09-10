@@ -13,7 +13,7 @@
 | `e2e` | 合入 main / 每日 | reference-app 端到端（Playwright） | < 20 分钟 |
 | `security` | PR + 每日 | 依赖漏洞、密钥扫描、SAST、镜像扫描、许可证检查 | < 10 分钟 |
 | `docs-check` | 涉及文档或公开 API 的 PR | 文档示例编译运行、链接检查、i18n key 一致性、配置清单漂移 | < 5 分钟 |
-| `api-contract` | 涉及 `api/openapi.yaml` 或 handler 的 PR | spec lint、合并冲突检查、**生成物一致性 diff**、oasdiff 破坏性变更检测（**未接线，见下方实施状态注记**——待首个发布基线，计划 M4，与 security 行的 govulncheck/trivy 同属"暂缓"而非遗漏） | < 5 分钟 |
+| `api-contract` | 涉及 `api/openapi.yaml` 或 handler 的 PR | spec lint、合并冲突检查、**生成物一致性 diff**、oasdiff 破坏性变更检测（**未接线，见下方实施状态注记**——基线取 v0.0.1 发布提交 `fbaaaf98` 之树，Go module proxy 只解析 21 个模块中的 17 个；接线计划 M4，与 security 行的 govulncheck/trivy 同属"暂缓"而非遗漏） | < 5 分钟 |
 | `scaffold-verify` | 每日 + 发布后 | CLI 生成全新项目 → 构建 → 两种部署模式各启动一次 → 冒烟 | < 15 分钟 |
 | `release` | 手动触发（指定版本号） | lockstep 全量发布：Go module 逐个打 tag + npm 包逐个发布 + 镜像 + CLI 二进制 | < 30 分钟 |
 | `nightly` | 每日 | 全量矩阵 + 性能基准回归 + flaky test 检测 | 不限 |

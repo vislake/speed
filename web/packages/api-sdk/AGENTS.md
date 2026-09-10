@@ -95,8 +95,11 @@ fails that package's typecheck.
 Deferred with reasons:
 
 - The oasdiff breaking-change gate -- not implemented: a
-  breaking-change gate needs a release baseline to diff against, and
-  no release baseline exists yet.
+  breaking-change gate needs a release baseline to diff against. The
+  first baseline is derivable -- v0.0.1's publish commit (fbaaaf98) is
+  in this repository's history and its tree carries the complete merged
+  document and every fragment; the module proxy's cache covers only 17
+  of the 21 modules -- but nothing is wired yet.
 - Raw-byte transport -- not shipped: the spec's byte-carrying
   operations (sharing's access-content route, storage's
   object-content read) generate typed operations with orval's

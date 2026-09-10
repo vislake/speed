@@ -103,7 +103,7 @@
 - ESLint 规则确实拦截手写的 `fetch`/`axios` 后端调用
 - 合并后的 spec 通过 redocly lint，无 operationId / schema 命名冲突
 
-> `oasdiff` 破坏性变更闸门本身仍未交付——它需要首个发布基线作为比对对象，基线出现之前不存在可比对的上一版本；该决策记录在 `api-contract.yml` 自己的 DELIBERATELY NOT WIRED 一节。
+> `oasdiff` 破坏性变更闸门本身仍未交付——它需要发布基线作比对对象，基线从仓库自身历史取：v0.0.1 虽作废，其发布提交 `fbaaaf98`（main 的祖先）的树带着完整的合并文档与全部片段；Go module proxy 只解析 21 个模块中的 17 个，单靠代理拼不出完整基线。闸门未接线的决策与基线来源记录在 `api-contract.yml` 自己的 DELIBERATELY NOT WIRED 一节。
 
 **15. 数据分域与系统上下文**
 - 身份数据与平台数据跑 `AssertNotTenantScoped`：断言它们**不会**被误加租户过滤

@@ -139,9 +139,13 @@ name: api-contract
 #
 # DELIBERATELY NOT WIRED -- API-contract items without the tooling to
 # check them honestly:
-#   * breaking-change detection (oasdiff, a diff of the spec against the
-#     last release): no release has happened, so no baseline exists to
-#     diff against -- a recorded mechanism decision, not a fake gate.
+#   * breaking-change detection (oasdiff, a diff of the spec against a
+#     release baseline): not wired. The first baseline is derivable --
+#     v0.0.1's publish commit (fbaaaf98) is in this repository's
+#     history and its tree carries the complete merged document and
+#     every fragment, while the module proxy's cache covers only 17 of
+#     the 21 modules -- but the wiring is deferred: a recorded
+#     mechanism decision, not a fake gate.
 #   * a redocly rule enforcing the "/api/v1/<module>" path-prefix
 #     convention: redocly has no subject type that exposes a PathItem's
 #     own map key to an assertion (verified empirically against a real

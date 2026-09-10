@@ -107,8 +107,9 @@ name: release
 # (versioned multi-arch image publishing under the lockstep lifecycle --
 # the GHCR builds today carry CI tags only -- goreleaser binaries, the
 # merged speed.yaml as a Release asset and docs-site version directory);
-# oasdiff breaking-change baselining (the v0.0.1 tag set provides the
-# first baseline anchor; the wiring is not done); post-release
+# oasdiff breaking-change baselining (the v0.0.1 publish commit in this
+# repository's history provides the first baseline anchor; the wiring
+# is not done); post-release
 # scaffold-verify triggers (a real release event exists from v0.0.1 on;
 # the trigger wiring is not done); trivy image scanning (the image build
 # stays workflow_dispatch-only); and license-scan transitive-dependency
