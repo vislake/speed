@@ -203,11 +203,12 @@ func RegisterMountedRoutes(reg *pkgcore.Registry) {
 // ServeUntilShutdown wraps handler in obs.Middleware and serves it on
 // addr ("host:port" or ":port") until ctx is done (the caller's signal
 // context) or the listener fails, then drains in-flight requests within
-// ShutdownTimeout. appName prefixes every log message and error it
-// produces ("<appName> server listening", "<appName>: serve: ..."), so
-// each host's log lines stay attributable to the process that emitted
-// them; deploymentMode is attached as the listing line's
-// deployment_mode attribute.
+// ShutdownTimeout. appName is carried as the app_name attribute on every
+// log line and prefixes the errors this function returns
+// ("<appName>: serve: ..."), so each host stays attributable without
+// bending the logging discipline (the message is a constant string; the
+// host name is an attribute); deploymentMode is attached as the listing
+// line's deployment_mode attribute.
 //
 // ctx must be the signal-derived context (which SHOULD observe
 // cancellation), baseCtx the caller's logger-carrying base context
@@ -243,7 +244,7 @@ func ServeUntilShutdown(ctx, baseCtx context.Context, handler http.Handler, addr
 
 	serveErr := make(chan error, 1)
 	go func() {
-		obs.FromContext(ctx).Info(appName+" server listening", "addr", srv.Addr, "deployment_mode", deploymentMode)
+		obs.FromContext(ctx).Info("server listening", "app_name", appName, "addr", srv.Addr, "deployment_mode", deploymentMode)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return
@@ -253,7 +254,7 @@ func ServeUntilShutdown(ctx, baseCtx context.Context, handler http.Handler, addr
 
 	select {
 	case <-ctx.Done():
-		obs.FromContext(ctx).Info(appName + ": shutdown signal received")
+		obs.FromContext(ctx).Info("shutdown signal received", "app_name", appName)
 	case err := <-serveErr:
 		if err != nil {
 			return fmt.Errorf("%s: serve: %w", appName, err)
@@ -265,6 +266,6 @@ func ServeUntilShutdown(ctx, baseCtx context.Context, handler http.Handler, addr
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("%s: graceful shutdown: %w", appName, err)
 	}
-	obs.FromContext(ctx).Info(appName + ": server stopped cleanly")
+	obs.FromContext(ctx).Info("server stopped cleanly", "app_name", appName)
 	return nil
 }
