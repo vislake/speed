@@ -117,15 +117,15 @@ func ledgerCounts(t *testing.T, gdb *gorm.DB) map[string]int {
 // pki too carries the five-module fullUniverseWithPKILedger below).
 //
 // The counts are drift guards against the modules' own migration sets:
-// authn ships eleven sqlite migration files (0001_create_users through
-// 0011_add_pending_mfa_factor_unique_index), config one
+// authn ships twelve sqlite migration files (0001_create_users through
+// 0012_add_user_timezone), config one
 // (0001_create_configs), org nine (0001_create_org_nodes,
 // 0002_create_memberships, 0003_create_org_invitations,
 // 0004_add_soft_delete, 0005_unique_pending_invitation,
 // 0006_create_org_invitation_token_index, 0007_single_root,
 // 0008_single_root_live, 0009_memberships_user_lookup) and rbac three
 // (0001_create_rbac, 0002_add_soft_delete,
-// 0003_add_revoke_origin) -- 24 in total, tables configs,
+// 0003_add_revoke_origin) -- 25 in total, tables configs,
 // users, org_nodes and rbac_roles among them. A module adding or removing
 // a migration file fails the tests that pin these numbers, so the
 // expectation here is updated deliberately when the module's migration
@@ -135,7 +135,7 @@ func ledgerCounts(t *testing.T, gdb *gorm.DB) map[string]int {
 // moved without this map moving after it fails by naming the module and
 // both counts.
 var fullUniverseLedger = map[string]int{
-	"authn":  11,
+	"authn":  12,
 	"config": 1,
 	"org":    9,
 	"rbac":   3,
@@ -146,11 +146,11 @@ var fullUniverseLedger = map[string]int{
 // saasctl-generated authn-containing selection's go.mod requires (pki
 // follows authn silently, never a --with choice of its own). pki ships nine
 // sqlite migration files (0001_create_pki_signing_keys through
-// 0009_widen_key_ref_columns) -- 33 in total. The same drift-guard rule as
+// 0009_widen_key_ref_columns) -- 34 in total. The same drift-guard rule as
 // fullUniverseLedger's owns its counts, and the same tree-pinning test
 // keeps both maps equal to the modules' own migration sets.
 var fullUniverseWithPKILedger = map[string]int{
-	"authn":  11,
+	"authn":  12,
 	"config": 1,
 	"org":    9,
 	"pki":    9,
@@ -172,7 +172,7 @@ func TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 25 migration files (authn 12, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -205,7 +205,7 @@ func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 33 migration files (authn 11, config 1, org 9, pki 9, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 34 migration files (authn 12, config 1, org 9, pki 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -274,7 +274,7 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 	if wantPath != filepath.Join(projectDir, "app.db") {
 		t.Fatalf("EffectiveDBPath = %q, want %q (the shared resolution itself moved)", wantPath, filepath.Join(projectDir, "app.db"))
 	}
-	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", wantPath)
+	want := fmt.Sprintf("Migrated %s: applied 25 migration files (authn 12, config 1, org 9, rbac 3)\n", wantPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -336,7 +336,7 @@ func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
 	if wantPath != filepath.Join(projectDir, "rel.db") {
 		t.Fatalf("EffectiveDBPath = %q, want %q (the shared resolution itself moved)", wantPath, filepath.Join(projectDir, "rel.db"))
 	}
-	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", wantPath)
+	want := fmt.Sprintf("Migrated %s: applied 25 migration files (authn 12, config 1, org 9, rbac 3)\n", wantPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -514,7 +514,7 @@ func TestMigrateRerunOverTheSameDatabaseReportsUpToDate(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("%s is up to date: schema_migrations already records 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("%s is up to date: schema_migrations already records 25 migration files (authn 12, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -544,7 +544,7 @@ func TestMigrateAppliesOnlyWhatAGrowingGoModNewlyRequires(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("full-universe run exit code = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	want = fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, org 9, rbac 3)\n", dbPath)
+	want = fmt.Sprintf("Migrated %s: applied 24 migration files (authn 12, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -610,7 +610,7 @@ func TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 25 migration files (authn 12, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -640,7 +640,7 @@ func TestMigrateDistributedModeRerunReportsUpToDate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("second run: exit code = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	want := fmt.Sprintf("%s is up to date: schema_migrations already records 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("%s is up to date: schema_migrations already records 25 migration files (authn 12, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
