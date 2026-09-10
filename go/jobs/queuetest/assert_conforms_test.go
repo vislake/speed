@@ -6,6 +6,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/jobs/internal/testutil"
 )
 
 // This file runs the package's own conformance driver (assert_conforms.go)
@@ -32,6 +33,14 @@ import (
 func TestAssertConforms_StandaloneQueue(t *testing.T) {
 	AssertConforms(t, func() Runnable {
 		db := dbtest.NewSQLite(t)
+		// The pool is pinned to one connection so the suite measures the
+		// Queue contract, never SQLite's multi-connection lock behaviour:
+		// the concurrent-enqueue subtest drives ten racing Enqueues while
+		// the queue's own dispatcher, heartbeat and workers write the same
+		// file, and on a multi-connection pool a losing statement's bounded
+		// busy budget can expire under that contention -- a lock error no
+		// assertion here is about. See testutil.PinSingleConnection.
+		testutil.PinSingleConnection(t, db)
 		return jobs.NewStandaloneQueue(db,
 			jobs.WithPollInterval(15*time.Millisecond),
 			jobs.WithBackoff(20*time.Millisecond, 200*time.Millisecond),
