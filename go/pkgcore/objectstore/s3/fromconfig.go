@@ -10,9 +10,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -34,13 +31,14 @@ import (
 // convention for a host that built a typed Config by hand and then wired it
 // itself, while this constructor returns the same judgment to a caller
 // assembling a Kernel, whose options are built before Bootstrap and can
-// still be abandoned. Two configurations come back as errors, and never as
-// panics: one missing any of the four fields with no safe default (Endpoint,
-// Bucket, AccessKey, SecretKey, in one message that names all four), and one
-// minio-go itself rejects at construction, such as an endpoint carrying a
-// scheme ("https://...") -- this package's endpoint convention is a
-// scheme-less host or host:port, UseSSL deciding the transport. Everything
-// else that can fail does so on first use, not here: nothing is dialed at
+// still be abandoned. Three configurations come back as errors, and never
+// as panics: one missing any of the four fields with no safe default
+// (Endpoint, Bucket, AccessKey, SecretKey, in one message that names all
+// four), one naming a BucketLookup outside the enum, and one minio-go itself
+// rejects at construction, such as an endpoint carrying a scheme
+// ("https://...") -- this package's endpoint convention is a scheme-less
+// host or host:port, UseSSL deciding the transport. Everything else that
+// can fail does so on first use, not here: nothing is dialed at
 // construction, matching NewObjectStore's own contract.
 //
 // The returned store owns no closable resource -- the minio-go client
@@ -52,16 +50,14 @@ func FromConfig(cfg Config) (pkgcore.ObjectStore, pkgcore.Capability, error) {
 	if cfg.Endpoint == "" || cfg.Bucket == "" || cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return nil, 0, errors.New("pkgcore/objectstore/s3: FromConfig requires a non-empty Config.Endpoint, Config.Bucket, Config.AccessKey and Config.SecretKey")
 	}
-	// The client construction below mirrors NewObjectStore's own options
-	// rather than delegating to it, because NewObjectStore's contract is to
-	// panic on the configurations this constructor must report as errors.
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
-	})
+	// The store construction below shares newObjectStore with NewObjectStore
+	// rather than mirroring its options: the options are the same shape for
+	// both, and what distinguishes the two constructors is the judgment they
+	// pass down on a configuration that cannot work -- this one's returned
+	// error, NewObjectStore's panic.
+	store, err := newObjectStore(cfg, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("pkgcore/objectstore/s3: FromConfig: %w", err)
 	}
-	return &objectStore{client: client, bucket: cfg.Bucket}, Capabilities, nil
+	return store, Capabilities, nil
 }

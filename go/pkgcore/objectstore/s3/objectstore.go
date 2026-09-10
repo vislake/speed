@@ -23,11 +23,43 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/vislake/speed/go/pkgcore"
+)
+
+// BucketLookupType selects how the store addresses its bucket on the
+// endpoint. The zero value, BucketLookupAuto, is the default and derives
+// the style from the endpoint and the bucket name.
+type BucketLookupType int
+
+const (
+	// BucketLookupAuto derives the addressing style from the endpoint and
+	// the bucket name, the convention every S3 client follows: an HTTPS
+	// endpoint with a bucket name containing a dot addresses the bucket as
+	// a path segment (host/bucket/key), because such a name as a host label
+	// could not match a wildcard TLS certificate; an endpoint recognized as
+	// Amazon S3, Google Cloud Storage or Alibaba OSS addresses it as the
+	// host's first label (bucket.host/key); every other service -- a
+	// self-hosted MinIO, RustFS or Ceph at any address -- is addressed
+	// path-style, the one style all of them accept.
+	BucketLookupAuto BucketLookupType = iota
+
+	// BucketLookupPath addresses the bucket as a path segment:
+	// host/bucket/key. It is the style to pin when the endpoint's wildcard
+	// bucket hosts do not resolve -- a bare IP address, a host reachable
+	// only under its own name -- or when the certificate covers the
+	// endpoint alone.
+	BucketLookupPath
+
+	// BucketLookupVirtualHost addresses the bucket as the endpoint's first
+	// host label: bucket.host/key. It is the style Amazon S3 and Aliyun OSS
+	// expect, and pinning it requires the deployment's DNS and TLS
+	// certificate to cover the per-bucket host names.
+	BucketLookupVirtualHost
 )
 
 // Config names one bucket on an S3-compatible object service and the
@@ -39,13 +71,16 @@ import (
 // provisions its own bucket. Region is the signing region; MinIO ignores it,
 // while AWS S3 and Aliyun OSS require the region their bucket lives in for
 // the request signature to validate, so a host pointed at either sets it.
+// BucketLookup pins how the bucket is addressed on the endpoint; the zero
+// value applies the BucketLookupAuto convention.
 type Config struct {
-	Endpoint  string
-	Bucket    string
-	AccessKey string
-	SecretKey string
-	Region    string
-	UseSSL    bool
+	Endpoint     string
+	Bucket       string
+	AccessKey    string
+	SecretKey    string
+	Region       string
+	UseSSL       bool
+	BucketLookup BucketLookupType
 }
 
 // objectStore is the distributed deployment mode's ObjectStore: an
@@ -76,11 +111,11 @@ type objectStore struct {
 // is contacted on the first operation, so constructing a store never blocks
 // and never fails on a service that is down, and a store wired at startup
 // works whether or not the service is reachable yet. An unusable
-// configuration (an empty endpoint, bucket or credential) panics instead,
-// because it is an unrecoverable wiring error at startup, the same failure
-// mode pkgcore's SMTP mailer uses for an unusable configuration. The caller
-// never imports minio-go: the store builds its own client and the minio
-// types never cross this seam.
+// configuration (an empty endpoint, bucket or credential, an unknown
+// BucketLookup) panics instead, because it is an unrecoverable wiring error
+// at startup, the same failure mode pkgcore's SMTP mailer uses for an
+// unusable configuration. The caller never imports minio-go: the store
+// builds its own client and the minio types never cross this seam.
 func NewObjectStore(cfg Config) pkgcore.ObjectStore {
 	if cfg.Endpoint == "" {
 		panic("pkgcore/objectstore/s3: NewObjectStore requires a non-empty Config.Endpoint")
@@ -94,15 +129,56 @@ func NewObjectStore(cfg Config) pkgcore.ObjectStore {
 	if cfg.SecretKey == "" {
 		panic("pkgcore/objectstore/s3: NewObjectStore requires a non-empty Config.SecretKey")
 	}
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
-	})
+	store, err := newObjectStore(cfg, nil)
 	if err != nil {
 		panic(fmt.Sprintf("pkgcore/objectstore/s3: NewObjectStore: %v", err))
 	}
-	return &objectStore{client: client, bucket: cfg.Bucket}
+	return store
+}
+
+// newObjectStore assembles the store for an already field-checked cfg: it
+// maps cfg.BucketLookup onto minio-go's own enum, builds the client that
+// addresses the bucket in that style, and returns the store over it.
+// transport, when non-nil, is the RoundTripper the client dials through --
+// minio-go's default transport otherwise; production passes nil and the
+// line-shape tests inject a stand-in that observes the URL a lookup mode
+// produces without a service. An unknown BucketLookup or an endpoint
+// minio-go itself rejects comes back as an error, which the two callers
+// report in their own conventions: NewObjectStore's panic, FromConfig's
+// returned error.
+func newObjectStore(cfg Config, transport http.RoundTripper) (pkgcore.ObjectStore, error) {
+	lookup, ok := minioBucketLookup(cfg.BucketLookup)
+	if !ok {
+		return nil, fmt.Errorf("unknown Config.BucketLookup %d: want BucketLookupAuto, BucketLookupPath or BucketLookupVirtualHost", cfg.BucketLookup)
+	}
+	client, err := minio.New(cfg.Endpoint, &minio.Options{
+		Creds:        credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure:       cfg.UseSSL,
+		Region:       cfg.Region,
+		BucketLookup: lookup,
+		Transport:    transport,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &objectStore{client: client, bucket: cfg.Bucket}, nil
+}
+
+// minioBucketLookup maps a BucketLookupType onto minio-go's own
+// BucketLookupType, the client's addressing-style selector. ok is false for
+// a value outside this package's enum, which newObjectStore reports as an
+// error.
+func minioBucketLookup(lookup BucketLookupType) (minio.BucketLookupType, bool) {
+	switch lookup {
+	case BucketLookupAuto:
+		return minio.BucketLookupAuto, true
+	case BucketLookupPath:
+		return minio.BucketLookupPath, true
+	case BucketLookupVirtualHost:
+		return minio.BucketLookupDNS, true
+	default:
+		return minio.BucketLookupAuto, false
+	}
 }
 
 // PutObject implements pkgcore.ObjectStore.PutObject by streaming r to the
