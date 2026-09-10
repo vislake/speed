@@ -55,7 +55,12 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
 - 输出三件、字节幂等(main.go:45-48):仓库根 `docs/config-reference.md`、`docs/config-reference.json`、根 `.env.example`(根 `.env.example` 头注明为 configrefgen 所生成、键缺漏会触发 drift 门)。`--check` 接 docs-check.yml(docs-check.yml:295 运行 `go run ./cmd/configrefgen --check`,configrefgen 目录触发路径 234 行;configrefgen 自身测试由 full-check 的 reference-app 腿跑)。
 - `docs/config-reference.md` 导言目前自述 "The generalized loader mechanism behind this surface is `go/pkgcore/config`: …… This app's own bootstrap does not drive the loader (its values carry app-specific resolution rules, key derivation among them)……"。这句话在迁移后必须翻转。
 - `config.example.yaml`(仓库根,手写)配 `config_example.go`(configrefgen 内的 loader 形状结构体,子集:deploymentmode/port/dbpath/redis.addr/smtp.*)与一个单测——用真实 loader 加载真实文件,验证格式与四源优先序。该示例维持 `SPEED_` 拼写族。
-- 站点与文档链:docs/site 下 content.en 与 content.zh-cn 各四页命中 env 变量或 config-reference 引用(`operating.md`、`walkthrough-reference-app.md`、`frontend-building.md`、`modules/tools/saasctl.md`);`examples/reference-app/README.md`、`DEPLOY.md` 是操作文案载体;`docker-compose.yml`、`docker-compose.distributed.yml`、根 `fly.toml` 与 CI(full-check 双副本用 `APP_DEPLOYMENT_MODE=distributed`、`APP_DISABLE_QUEUE_WORKER=true`;scaffold-verify 以 distributed 模式起生成骨架)按名消费 env。
+- 站点与文档链:docs/site 下 content.en 与 content.zh-cn 对称,2026-09-10 按 `APP_|config-reference` 对两语区实跑 grep 各命中 8 页——`config-reference` 字面在站点零命中,8 页全部因 `APP_` env 字面命中(`SPEED_|os.Getenv|ConfigFromEnv` 复查面仅另见 i18n 页的 `SPEED_LOCALE_STORAGE_KEY` 与 observability-and-ops 页的 `OTLP_ENDPOINT` 直读示例,均与引导链无关,不入清单)。命中页按步骤二是否需人工核对分两类:
+
+  - **需核对(五页,均 user-guide 域,入 §5.3 清单与 §7 评审第 4 路):**`operating.md`、`walkthrough-reference-app.md`、`domains/frontend-building.md`、`modules/tools/saasctl.md`(原清单四页,部署/启动/引导的 env 叙述),以及本轮补入的 `modules/core/pkgcore.md`——其约 73 行的宿主引导示例直读 `os.Getenv("APP_DEPLOYMENT_MODE")`,步骤二迁移后将成为站点里把 APP_ 键教成直读的唯一示例,必须改口;
+  - **可存活(三页,不进清单):**`quickstart.md`、`modules/web/_index.md` 仅引 env 名(名不改即真);developer-docs 域 `modules/tools/saasctl.md` 是生成骨架 twin 的模块文档,骨架按 §1.5/Q1 维持直读。
+
+  站点外的按名消费载体:`examples/reference-app/README.md`、`DEPLOY.md` 是操作文案载体;`docker-compose.yml`、`docker-compose.distributed.yml`、根 `fly.toml` 与 CI(full-check 双副本用 `APP_DEPLOYMENT_MODE=distributed`、`APP_DISABLE_QUEUE_WORKER=true`;scaffold-verify 以 distributed 模式起生成骨架)按名消费 env。
 - 双重遗留:`examples/reference-app/.env.example`(191 行,手写,最后实质内容提交 9e3efa28)与根生成 `.env.example`(100 行)并存、主题相同,是迁移文档链时要清理的重复载体(§5.2)。
 
 ### 1.5 saasctl 一侧
@@ -251,7 +256,8 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go:413-415)�
 | `README.md` / `DEPLOY.md`(reference-app) | 操作文案与叙述更新 |
 | `docker-compose.yml` / `.distributed.yml` / 根 `fly.toml` | env 名不变 → 只需值语义核对(空串/存在式用法) |
 | CI(full-check、scaffold-verify、docs-check) | env 名不变 → 值语义核对 |
-| docs/site en/zh 四页(operating、walkthrough-reference-app、frontend-building、saasctl) | 叙述核对:凡写"应用直读 os.Getenv/loader 无人驱动"处翻转;键表若有引用与生成件对齐 |
+| docs/site en/zh 四页(operating、walkthrough-reference-app、frontend-building、user-guide 的 modules/tools/saasctl) | 叙述核对:凡写"应用直读 os.Getenv/loader 无人驱动"处翻转;键表若有引用与生成件对齐 |
+| docs/site en/zh pkgcore 页(user-guide/modules/core/pkgcore.md,本轮补入) | 宿主引导示例改写:约 73 行的 `os.Getenv("APP_DEPLOYMENT_MODE")` 直读在步骤二后陈旧——平台文档不再把 APP_ 键教成直读,示例改 loader 驱动叙述或换非 APP_ 键的通用写法 |
 | `go/pkgcore/config` 包注释 | §2 边界句、钉与前缀说明、示例 |
 | 六模块声明模块自身文档/AGENTS 行 | 按文档纪律随步骤一(§3.6) |
 
@@ -289,9 +295,9 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go:413-415)�
 1. 模块声明(六模块 `reg.Bootstrap` 项)
 2. 生成文档(`docs/config-reference.md` bootstrap 节 + `.json` + 根 `.env.example`)
 3. 示例文件(`config.example.yaml`、`config_example.go`)
-4. 站点页(docs/site en/zh 相关四页)
+4. 站点页(docs/site en/zh §5.3 清单五页:operating、walkthrough-reference-app、frontend-building、user-guide 的 modules/tools/saasctl,及本轮补入的 modules/core/pkgcore)
 
-机器门:`configrefgen --check` 在步骤一覆盖 1↔2,在步骤二经换源后覆盖 1+宿主键↔2↔3(键集/分组/示例三向);站点页是静态叙述,无自动对账,归手工核对——评审清单固定四行:键名全集一致、分组一致、敏感标记一致、叙述(loader/直读)与当前阶段一致。步骤一结束时站点页允许停留在"过渡态前"叙述(应用还没迁移,旧叙述仍为真);步骤二结束时四路必须同时为真。
+机器门:`configrefgen --check` 在步骤一覆盖 1↔2,在步骤二经换源后覆盖 1+宿主键↔2↔3(键集/分组/示例三向);站点页是静态叙述,无自动对账,归手工核对——评审清单固定四行:键名全集一致、分组一致、敏感标记一致、叙述与宿主示例均与当前阶段一致(宿主示例陈旧是独立核点:页内嵌的宿主引导示例,如 pkgcore 页约 73 行的 `os.Getenv("APP_DEPLOYMENT_MODE")` 直读,在步骤二结束后不得残留)。步骤一结束时站点页允许停留在"过渡态前"叙述(应用还没迁移,旧叙述仍为真);步骤二结束时四路必须同时为真。
 
 ## 8 风险与工作量
 
