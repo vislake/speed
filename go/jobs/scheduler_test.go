@@ -390,6 +390,10 @@ func TestScheduler_Start_RefusesPerTenantDeclarationWithoutLister(t *testing.T) 
 
 	q := &recordingQueue{}
 	s := NewScheduler(q, WithSchedules(schedules), WithInterval(5*time.Millisecond))
+	// t.Cleanup alongside every explicit Stop below: a failing assertion
+	// before the explicit call must still stop a started scheduler's ticker
+	// goroutine, and Stop is idempotent.
+	t.Cleanup(s.Stop)
 	err := s.Start(context.Background())
 	if !errors.Is(err, ErrTenantListerRequired) {
 		t.Fatalf("Start without a lister = %v, want an error wrapping ErrTenantListerRequired", err)
@@ -410,6 +414,7 @@ func TestScheduler_Start_RefusesPerTenantDeclarationWithoutLister(t *testing.T) 
 	// With a lister wired, the same declarations start and tick.
 	lister := &recordingLister{tenants: []pkgcore.TenantID{"acme"}}
 	ok := NewScheduler(q, WithSchedules(schedules), WithTenantLister(lister), WithInterval(5*time.Millisecond))
+	t.Cleanup(ok.Stop)
 	if err := ok.Start(context.Background()); err != nil {
 		t.Fatalf("Start with a lister wired = %v, want nil", err)
 	}
@@ -427,6 +432,7 @@ func TestScheduler_Lifecycle(t *testing.T) {
 	schedules := newTestSchedules(t)
 	q := &recordingQueue{}
 	s := NewScheduler(q, WithSchedules(schedules), WithInterval(5*time.Millisecond))
+	t.Cleanup(s.Stop)
 
 	// Stop before Start is a no-op.
 	s.Stop()
@@ -459,6 +465,7 @@ func TestScheduler_Stop_HaltsTicking(t *testing.T) {
 	})
 	q := &recordingQueue{}
 	s := NewScheduler(q, WithSchedules(schedules), WithInterval(5*time.Millisecond))
+	t.Cleanup(s.Stop)
 
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("Start = %v, want nil", err)
