@@ -575,3 +575,23 @@ func TestHTTP_PreAuthEndpoints_DeclareTheCachingContract(t *testing.T) {
 		t.Fatalf("POST %s Cache-Control = %q, want %q for a method refusal", PathPublic, cc, "no-store")
 	}
 }
+
+// TestClientIP_KeepsAnAddressItCannotSplit pins the fallback of the
+// rate-limit key's extraction: a RemoteAddr a real server always writes as
+// "IP:port", but one it cannot split is still key material -- the check
+// must count such requests under the address as given rather than collapse
+// every one of them into a single empty key, which is also what the
+// documented empty-address case (ratelimit.go) describes at the Service
+// seam.
+func TestClientIP_KeepsAnAddressItCannotSplit(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, PathPublic, nil)
+	req.RemoteAddr = "203.0.113.7"
+	if got := clientIP(req); got != "203.0.113.7" {
+		t.Fatalf("clientIP(%q) = %q, want the address unchanged", req.RemoteAddr, got)
+	}
+
+	req.RemoteAddr = "[2001:db8::1]:443"
+	if got := clientIP(req); got != "2001:db8::1" {
+		t.Fatalf("clientIP(%q) = %q, want the host half with the port stripped", req.RemoteAddr, got)
+	}
+}
