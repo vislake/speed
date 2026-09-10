@@ -8,7 +8,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	"github.com/vislake/speed/go/billing/api"
 )
@@ -325,23 +325,13 @@ func toInvoiceResponse(inv *Invoice) api.BillingInvoice {
 	}
 }
 
-// writeError writes err to w as a JSON {code, params} body, the
-// structured-error envelope shape every other module handler in this
-// codebase produces (backend coding standard §6.2): a stable code plus
-// structured parameters, never localized text -- the client resolves the
-// code through its own i18n catalog. An error that is not itself an
-// *apperr.Error -- a database failure wrapped in a plain fmt.Errorf, say
-// -- folds into ErrInternal, so a caller never sees raw Go error text.
+// writeError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else -- a database failure wrapped in a plain fmt.Errorf, say
+// -- is folded into ErrInternal so a caller never sees raw Go error text
+// either way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrInternal
-	}
-	envelope := api.BillingError{Code: appErr.Code}
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	writeJSON(w, appErr.Status, envelope)
+	httpapi.WriteError(w, err, ErrInternal)
 }
 
 // writeJSON writes body to w as JSON with the surface's content type.
