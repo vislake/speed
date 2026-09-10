@@ -95,7 +95,7 @@ name: api-contract
 #     component schema-name and tag formats, the conventions that keep
 #     fragments from colliding under the merge), then the porcelain gate
 #     fails the job if the committed contracts/speed.yaml is not
-#     what the ten fragments merge -- plus the stamp -- to.
+#     what the eleven fragments merge -- plus the stamp -- to.
 #     These steps
 #     sit before the frontend regeneration because the merged document
 #     is that leg's input.

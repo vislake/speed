@@ -248,7 +248,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // OpenAPISpec implements pkgcore.Module. metering has no HTTP surface --
 // it is a Go-level Recorder/Enqueue API business modules call in-process,
 // not a service other code reaches over HTTP -- so this returns nil, the
-// same answer go/config's and go/pki's Module give.
+// same answer go/compliance's and go/rbac's Module give.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract it

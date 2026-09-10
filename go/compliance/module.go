@@ -217,8 +217,8 @@ func (m *Module) Migrations() embed.FS { return embed.FS{} }
 func (m *Module) Locales() embed.FS { return locales.FS }
 
 // OpenAPISpec implements pkgcore.Module. compliance has no HTTP surface,
-// so this returns nil -- the same "no fragment yet" answer go/config's,
-// go/pki's and go/metering's Module give.
+// so this returns nil -- the same answer go/metering's and go/rbac's
+// Module give.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
