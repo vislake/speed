@@ -138,18 +138,30 @@ func TestServerConfigFrom_RefusesAMalformedIndividualKey(t *testing.T) {
 		envName string
 		set     func(hc *hostConfig, value string)
 	}{
-		{"config.master_key", "APP_CONFIG_KEY",
-			func(hc *hostConfig, value string) { hc.Config.Master_Key = value }},
-		{"org.invitation_email_index_key", "APP_ORG_INDEX_KEY",
-			func(hc *hostConfig, value string) { hc.Org.Invitation_Email_Index_Key = value }},
-		{"notification.contact_index_key", "APP_NOTIFICATION_INDEX_KEY",
-			func(hc *hostConfig, value string) { hc.Notification.Contact_Index_Key = value }},
-		{"pki.local_key_cipher_key", "APP_PKI_LOCAL_KEY_CIPHER_KEY",
-			func(hc *hostConfig, value string) { hc.Pki.Local_Key_Cipher_Key = value }},
-		{"authn.blind_index_key", "APP_AUTHN_BLIND_INDEX_KEY",
-			func(hc *hostConfig, value string) { hc.Authn.Blind_Index_Key = value }},
-		{"authn.pii_cipher_key", "APP_AUTHN_PII_CIPHER_KEY",
-			func(hc *hostConfig, value string) { hc.Authn.PII_Cipher_Key = value }},
+		{
+			"config.master_key", "APP_CONFIG_KEY",
+			func(hc *hostConfig, value string) { hc.Config.Master_Key = value },
+		},
+		{
+			"org.invitation_email_index_key", "APP_ORG_INDEX_KEY",
+			func(hc *hostConfig, value string) { hc.Org.Invitation_Email_Index_Key = value },
+		},
+		{
+			"notification.contact_index_key", "APP_NOTIFICATION_INDEX_KEY",
+			func(hc *hostConfig, value string) { hc.Notification.Contact_Index_Key = value },
+		},
+		{
+			"pki.local_key_cipher_key", "APP_PKI_LOCAL_KEY_CIPHER_KEY",
+			func(hc *hostConfig, value string) { hc.Pki.Local_Key_Cipher_Key = value },
+		},
+		{
+			"authn.blind_index_key", "APP_AUTHN_BLIND_INDEX_KEY",
+			func(hc *hostConfig, value string) { hc.Authn.Blind_Index_Key = value },
+		},
+		{
+			"authn.pii_cipher_key", "APP_AUTHN_PII_CIPHER_KEY",
+			func(hc *hostConfig, value string) { hc.Authn.PII_Cipher_Key = value },
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hc := hostConfigDefaults()
