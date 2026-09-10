@@ -327,3 +327,86 @@ func ExampleCreditService_Expire() {
 	// retry returned the first run's row: true
 	// available: 60 reserved: 0
 }
+
+// ExampleSubscriptionService_EnsureActive walks the read-or-establish
+// contract a boot seed and a provisioning chain converge on: the first
+// call creates and activates a subscription against the given Plan, a
+// repeated call returns that same subscription untouched, and a canceled
+// subscription is never revived -- the next ensure subscribes the tenant
+// anew, on a fresh row. (A separate in-memory database keeps this example
+// independent of the others'.)
+func ExampleSubscriptionService_EnsureActive() {
+	ctx := context.Background()
+
+	// A real host opens PostgreSQL in the distributed deployment mode
+	// (dbkit.DialectPostgres). SQLite keeps this example self-contained
+	// under `go test`, with no external service required -- which is
+	// exactly what the standalone deployment mode does in production too.
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:billing_example_ensure_active?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	m := billing.NewModule(db, nil)
+
+	// Migrations are versioned SQL, applied through dbkit's registry.
+	// There is no AutoMigrate anywhere in this codebase.
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(m); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	plan := &billing.Plan{Key: "pro", Name: "Pro"}
+	if createErr := m.Plans().Create(ctx, plan); createErr != nil {
+		fmt.Println("create plan:", createErr)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-acme")
+	subs := m.Subscriptions()
+
+	// No Active subscription yet: EnsureActive creates one against the
+	// Plan and activates it.
+	first, err := subs.EnsureActive(tenantCtx, billing.CreateInput{PlanID: plan.ID})
+	if err != nil {
+		fmt.Println("ensure:", err)
+		return
+	}
+	fmt.Println("first ensure:", first.Status)
+
+	// A repeated ensure -- the next boot's seed, a redelivered
+	// provisioning attempt -- returns the same subscription untouched.
+	again, err := subs.EnsureActive(tenantCtx, billing.CreateInput{PlanID: plan.ID})
+	if err != nil {
+		fmt.Println("ensure again:", err)
+		return
+	}
+	fmt.Println("second ensure returned the same subscription:", again.ID == first.ID)
+
+	// A canceled subscription stays terminal: the next ensure does not
+	// revive it, it subscribes the tenant anew.
+	if _, cancelErr := subs.Cancel(tenantCtx, first.ID); cancelErr != nil {
+		fmt.Println("cancel:", cancelErr)
+		return
+	}
+	afterCancel, err := subs.EnsureActive(tenantCtx, billing.CreateInput{PlanID: plan.ID})
+	if err != nil {
+		fmt.Println("ensure after cancel:", err)
+		return
+	}
+	fmt.Println("after cancel:", afterCancel.Status, "on a new subscription:", afterCancel.ID != first.ID)
+
+	// Output:
+	// first ensure: active
+	// second ensure returned the same subscription: true
+	// after cancel: active on a new subscription: true
+}

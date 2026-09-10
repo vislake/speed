@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -236,8 +237,11 @@ func (s *SubscriptionService) Get(ctx context.Context, id string) (*Subscription
 }
 
 // Active returns the tenant's SubscriptionStatusActive subscription, or
-// (nil, nil) when it has none. The service assumes at most one active
-// subscription per tenant; a genuine multi-subscription model is not
+// (nil, nil) when it has none. At most one Active subscription per tenant
+// can exist: uq_billing_subscriptions_one_active (migrations/{sqlite,
+// postgres}/0007_single_active.sql) is the database-level backstop, so the
+// list scan below finds at most one. EnsureActive is the read-or-establish
+// shape built on this read. A genuine multi-subscription model is not
 // implemented.
 func (s *SubscriptionService) Active(ctx context.Context) (*Subscription, error) {
 	subs, err := s.repo.List(ctx)
@@ -252,8 +256,79 @@ func (s *SubscriptionService) Active(ctx context.Context) (*Subscription, error)
 	return nil, nil
 }
 
+// EnsureActive returns the tenant's SubscriptionStatusActive subscription,
+// creating and activating one against in.PlanID when the tenant has none.
+//
+// It is the idempotent shape a boot-time seed and a provisioning chain
+// want, safe to call on every boot and on every redelivery:
+//
+//   - an existing Active subscription -- on any Plan -- is returned
+//     untouched: in.PlanID is a creation-time parameter, read only when a
+//     subscription must be created, so an ensure never replaces a
+//     subscription an operator or another flow established;
+//   - a tenant with no Active subscription gets one created and activated,
+//     through the same public calls Create and Activate make; a non-active
+//     row (created/past_due/canceled) is never revived or adopted --
+//     canceled stays terminal, and the next subscription is a new row;
+//   - the race between two concurrent ensures is absorbed, not surfaced:
+//     uq_billing_subscriptions_one_active (migrations/{sqlite,postgres}/
+//     0007_single_active.sql) admits the first activation and refuses the
+//     loser's with a duplicate-key error, which EnsureActive catches by
+//     re-reading the winning row and returning it -- the same convergence
+//     TreeService.EnsureRoot applies to go/org's single-root index. The
+//     loser's own created-status row remains as an inert orphan: no read
+//     path selects it, and a later ensure finds the winner Active and
+//     returns that row.
+//
+// If the re-read after a refused activation finds no Active row -- only
+// reachable when the winner was itself transitioned out of Active between
+// the refusal and the re-read -- EnsureActive surfaces the refusal's
+// duplicate-key error rather than fabricate an answer; the caller can
+// simply call again. No new event publishes: an activation publishes
+// EventSubscriptionStatusChanged through Activate's own transition path,
+// exactly as it would for any other activation.
+func (s *SubscriptionService) EnsureActive(ctx context.Context, in CreateInput) (*Subscription, error) {
+	active, err := s.Active(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if active != nil {
+		return active, nil
+	}
+
+	sub, err := s.Create(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	activated, err := s.Activate(ctx, sub.ID)
+	if err == nil {
+		return activated, nil
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		winner, readErr := s.Active(ctx)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if winner != nil {
+			return winner, nil
+		}
+	}
+	return nil, err
+}
+
 // Activate transitions id to SubscriptionStatusActive. Legal from Created
 // or PastDue.
+//
+// At most one subscription per tenant may be Active:
+// uq_billing_subscriptions_one_active (migrations/{sqlite,postgres}/
+// 0007_single_active.sql) admits the first activation of a tenant and
+// refuses any later one -- the refusal surfaces as an error wrapping
+// gorm.ErrDuplicatedKey (match it with errors.Is), deliberately not as
+// ErrInvalidSubscriptionTransition, because the move itself is legal and
+// it is the single-active invariant that refuses it. A direct caller
+// attempting a second activation for a tenant therefore sees the
+// duplicate-key refusal rather than a second Active row; EnsureActive is
+// the convergence a racing or repeated caller wants.
 func (s *SubscriptionService) Activate(ctx context.Context, id string) (*Subscription, error) {
 	return s.transition(ctx, id, SubscriptionStatusActive)
 }

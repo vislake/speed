@@ -1,0 +1,34 @@
+-- Makes the "at most one active subscription per tenant" invariant
+-- database-arbitrated: SubscriptionService.Active documents the
+-- single-Active read every entitlement judgment rests on, and without the
+-- constraint two concurrent activations -- two EnsureActive callers racing
+-- the tenant's first subscription, or any two creators -- could each
+-- commit an Active row, leaving the tenant with two subscriptions where
+-- every read path sees only one.
+--
+-- A partial unique index on ACTIVE-NESS, scoped WHERE status = 'active':
+-- created, past_due and canceled rows are unconstrained (a tenant may hold
+-- any number of them -- canceled stays terminal and is never revived), so
+-- exactly the rows the invariant is about participate in the index,
+-- mirroring the partial-index shape go/org's single-root index
+-- (0007_single_root.sql) uses for its own one-per-tenant rule.
+--
+-- The index arbitrates EVERY write path, not only Activate: a host writing
+-- an Active row directly through the exported Repository surface is
+-- refused just the same. The race a losing creator meets is absorbed by
+-- SubscriptionService.EnsureActive: its Activate reports the duplicate-key
+-- error, EnsureActive re-reads and returns the winning row, and the
+-- loser's own created-status row remains as an inert orphan no read path
+-- adopts.
+--
+-- A database that already carries two Active rows for one tenant fails
+-- this CREATE INDEX loudly rather than being silently repaired; such a
+-- tenant needs a human to reconcile which subscription stays active before
+-- the migration can land.
+--
+-- This is the sqlite/ copy; the postgres/ sibling carries the full
+-- rationale. The two are byte-identical -- partial unique indexes are
+-- standard SQL both dialects support with the same syntax.
+CREATE UNIQUE INDEX uq_billing_subscriptions_one_active
+    ON billing_subscriptions (tenant_id)
+    WHERE status = 'active';
