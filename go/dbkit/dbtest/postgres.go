@@ -29,8 +29,12 @@ import (
 // own Docker-availability check. The container and connection are
 // automatically torn down via t.Cleanup.
 //
-// NewPostgres applies no migration; see this package's doc comment for
-// why, and for the pattern a caller uses to apply its own.
+// NewPostgres applies no migration: a caller migrates the returned
+// database itself, typically with the same Migrate call its NewSQLite
+// counterpart uses (each set's postgres/ subdirectory, under
+// DialectPostgres), so one test can run against both dialects by swapping
+// this constructor for NewSQLite and nothing else. See this package's doc
+// comment for why no schema is ever baked in here.
 func NewPostgres(t *testing.T) *gorm.DB {
 	t.Helper()
 

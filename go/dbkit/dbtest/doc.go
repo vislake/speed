@@ -13,16 +13,19 @@
 // Both constructors return a *gorm.DB obtained through dbkit.Open, so a
 // caller gets dbkit's full mandatory wiring (fixed connection-pool limits
 // and the tenant-scoping GORM plugin) on top of the underlying connection,
-// not a bare one it would have to wire up itself. Neither constructor
-// applies any migration: this package is imported by tests belonging to
-// modules dbkit has never heard of, each with its own model(s) and its own
-// migration source, so baking in any particular schema here — even
-// dbkit's own internal/testutil.Widget fixture — would be wrong for every
-// caller outside dbkit itself. A caller migrates the returned connection
-// itself before using it, typically by constructing its own
-// dbkit.MigrationRegistry, registering its pkgcore.Module, and calling
-// Apply(ctx, db, dialect) against it — the same shape dbkit/AGENTS.md's
-// "Typical integration" section and dbkit's own example_test.go show for a
-// business module — or with a plain db.Exec of a fixture's migration SQL
-// for a lightweight, non-production test.
+// not a bare one it would have to wire up itself. Neither applies any
+// migration: this package is imported by tests belonging to modules dbkit
+// has never heard of, each with its own model(s) and its own migration
+// source, so baking in any particular schema here — even dbkit's own
+// internal/testutil.Widget fixture — would be wrong for every caller
+// outside dbkit itself. A caller migrates the returned connection itself
+// before using it, either with Migrate — which applies the migration sets
+// it names (Migration{Module, FS} values composed from the caller's own
+// migrations package) through the real dbkit.MigrationRegistry, the same
+// mechanism production boot runs, and is also the shape a staged-upgrade
+// test uses (the frozen older set first, the full set second) — or, for a
+// lightweight, non-production test, with a plain db.Exec of a fixture's
+// migration SQL. Each module's own internal/testutil keeps that
+// migrate-after-open composition as a module-local wrapper (see e.g.
+// go/pki/internal/testutil), so its tests spell the two steps nowhere.
 package dbtest

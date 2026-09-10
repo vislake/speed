@@ -137,6 +137,26 @@ func TestNewSQLite_CalledTwice_ReturnsIndependentDatabases(t *testing.T) {
 	}
 }
 
+// TestNewSQLite_AppliesNoMigration pins the constructor half of the
+// open-then-migrate contract: a bare NewSQLite(t) returns an empty database
+// -- not even the registry's own schema_migrations bookkeeping table
+// exists, because no Apply ran. Callers that open a bare database for their
+// own fixture DDL depend on exactly this, and migrate_test.go pins the
+// Migrate call that carries the other half.
+func TestNewSQLite_AppliesNoMigration(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+
+	var n int64
+	if err := db.Raw(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (?, 'schema_migrations')`, fixtureTable,
+	).Scan(&n).Error; err != nil {
+		t.Fatalf("probe sqlite_master: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("fresh dbtest.NewSQLite() carries %d of the migration tables, want none", n)
+	}
+}
+
 // TestNewPostgres_RepositoryRoundTrip is NewPostgres's happy path, run
 // against a real, disposable PostgreSQL container. It reports itself
 // skipped rather than failed on a machine with no Docker (see

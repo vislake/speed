@@ -33,8 +33,16 @@ import (
 // ordinary connection-pool defaults (open.go's defaultMaxOpenConns and
 // friends) unmodified, exactly like production code would.
 //
-// NewSQLite applies no migration; see this package's doc comment for why,
-// and for the pattern a caller uses to apply its own.
+// NewSQLite applies no migration; a caller migrates the returned database
+// itself, typically with Migrate --
+//
+//	db := dbtest.NewSQLite(t)
+//	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "widgets", FS: widgetmigrations.FS})
+//
+// which is the composition every module's own testutil wrapper spells (see
+// e.g. go/pki/internal/testutil) -- or with a plain db.Exec of a fixture's
+// migration SQL for a lightweight test. See this package's doc comment for
+// why no schema is ever baked in here.
 func NewSQLite(t *testing.T) *gorm.DB {
 	t.Helper()
 
