@@ -12,28 +12,8 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/notification"
+	"github.com/vislake/speed/go/notification/staticaddr"
 )
-
-// exampleUserResolver is a UserAddressResolver answering from a fixed
-// per-user address table -- the shape of a host layer over its own identity
-// store, which the notification module deliberately never imports. The demo
-// recipient keeps a verified email address and phone number, the two
-// channels preference resolution can end in; a user with no row resolves to
-// no addresses, which is not an error (the delivery job treats it as the
-// skip-everything case).
-type exampleUserResolver struct{}
-
-func (exampleUserResolver) Resolve(_ context.Context, userID string) (notification.UserAddresses, error) {
-	switch userID {
-	case "user-7":
-		return notification.UserAddresses{
-			Email: "demo@example.com",
-			Phone: "+8613800138000",
-		}, nil
-	default:
-		return notification.UserAddresses{}, nil
-	}
-}
 
 // ExampleInboxMessage walks a delivery into one tenant's in-app inbox end
 // to end: open and migrate the database, create a message under the
@@ -208,9 +188,10 @@ func ExampleSendRecordRepository_ListByFilter() {
 // the two address blind indexers, a queue to carry outbound deliveries (here
 // the standalone shape, a jobs.StandaloneQueue over the same database,
 // never started because the walk below enqueues nothing) and a
-// user-address resolver (exampleUserResolver above, never consulted because
-// the walk below resolves no address) -- exactly as a standalone-deployment
-// host assembles them.
+// user-address resolver (staticaddr.New over a fixed table, the minimal
+// wiring for a host whose addresses are statically held; never consulted
+// because the walk below resolves no address) -- exactly as a
+// standalone-deployment host assembles them.
 func ExamplePreferenceService() {
 	ctx := context.Background()
 
@@ -226,7 +207,9 @@ func ExamplePreferenceService() {
 	// The required seams, in the standalone shape: a console sender for SMS,
 	// one blind indexer per address channel over dev keys (a real host
 	// derives its keys from its own secret store), the standalone queue over
-	// the same database, and a resolver over the host's own identity store.
+	// the same database, and a resolver over a fixed table of
+	// operator-declared addresses, standing in for the host's own address
+	// store.
 	// The indexers' column argument is the module's exported
 	// notification.AddressIndexColumn -- the blind-index column's exact SQL
 	// name, carried as a referenced constant rather than a hand-typed
@@ -251,7 +234,9 @@ func ExamplePreferenceService() {
 		notification.WithContactEmailIndexer(emailIndexer),
 		notification.WithContactPhoneIndexer(phoneIndexer),
 		notification.WithDeliveryQueue(jobs.NewStandaloneQueue(db)),
-		notification.WithUserAddressResolver(exampleUserResolver{}),
+		notification.WithUserAddressResolver(staticaddr.New(map[string]notification.UserAddresses{
+			"user-7": {Email: "demo@example.com", Phone: "+8613800138000"},
+		})),
 	)
 	if err = registry.Register(module); err != nil {
 		fmt.Println("register migrations:", err)

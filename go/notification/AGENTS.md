@@ -125,6 +125,17 @@ module must import.
   test double (see "The SMS seam is pkgcore's").
 - `render.go` -- the template-render seam: per-channel part shapes and the
   `<type_key>.<channel>.<part>` id convention.
+- `staticaddr/` -- the subpackage implementing `UserAddressResolver` over
+  a fixed per-user table (`staticaddr.New(map[string]notification.UserAddresses)`,
+  copied at construction, read-only and concurrency-safe thereafter). It
+  serves the deployment shapes whose addresses are statically held -- demos,
+  a single-tenant install whose operator holds the accounts, tests -- and
+  its package doc carries the seam's obligation: the table is the
+  operator's declaration of VERIFIED addresses, and a host whose addresses
+  change (users rebinding, a verification flow) must implement its own
+  resolver over its own address store. An implementation never shares a
+  package with the interface it implements, so it lives beside the module
+  root, not in it.
 - `hub.go`, `handler.go` -- the per-replica realtime fan-out and the HTTP
   surface (fragment operations plus the hand-mounted stream route).
 - `errors.go` -- the module's error catalog (see below); `events.go` -- the
@@ -277,7 +288,9 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
   the registered handler consumes.
 - `WithUserAddressResolver` -- the host's read of a user recipient's
   outbound addresses at send time (see "Every consent and address decision is
-  re-checked at send time").
+  re-checked at send time"). A host whose addresses are statically held can
+  wire the module's own `staticaddr` subpackage (`staticaddr.New`); a host
+  whose addresses change implements the interface over its own store.
 
 The host also supplies structural, no-import seams the module consumes as
 interfaces it declares -- never as imported packages: `SubjectResolver` (the
@@ -783,7 +796,10 @@ HTTP surface, driven through a real httptest server), `hub_test.go`,
 the per-file suites. Godoc `ExampleInboxMessage` and
 `ExamplePreferenceService` compile and run in the unit suite, pinning the
 documented host wiring (six seams, a hand-built `pkgcore.NewRegistry` host)
-against the real API.
+against the real API. The `staticaddr` subpackage carries its own suite
+(`staticaddr_test.go`: table resolution, missing rows, the
+construction-time copy, concurrent reads under `-race`) and its own
+runnable `example_test.go`.
 
 The Docker-backed integration tier lives in `integration_test/` (run as
 `go test -tags=integration ./integration_test/...` from the module dir): a
