@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -251,5 +252,41 @@ func TestDataScope_ZeroValueFieldsAreTheDocumentedShape(t *testing.T) {
 	}
 	if !reflect.DeepEqual(scope.SubtreePrefixes, []string(nil)) {
 		t.Fatalf("a tenant-wide DataScope carries prefixes %v, want none", scope.SubtreePrefixes)
+	}
+}
+
+func TestSubtreeResolverFunc_ImplementsSubtreeResolver(t *testing.T) {
+	var r SubtreeResolver = SubtreeResolverFunc(
+		func(_ context.Context, nodeID string) (string, bool, error) {
+			if nodeID == "missing" {
+				return "", false, nil
+			}
+			return "/g1/" + nodeID, true, nil
+		},
+	)
+	path, ok, err := r.NodePath(context.Background(), "store7")
+	if err != nil {
+		t.Fatalf("NodePath: %v", err)
+	}
+	if !ok || path != "/g1/store7" {
+		t.Fatalf("NodePath(store7) = (%q, %v), want (/g1/store7, true)", path, ok)
+	}
+
+	path, ok, err = r.NodePath(context.Background(), "missing")
+	if err != nil {
+		t.Fatalf("NodePath: %v", err)
+	}
+	if ok || path != "" {
+		t.Fatalf("NodePath(missing) = (%q, %v), want (\"\", false)", path, ok)
+	}
+}
+
+func TestSubtreeResolverFunc_PropagatesError(t *testing.T) {
+	wantErr := errors.New("boom")
+	r := SubtreeResolverFunc(func(_ context.Context, _ string) (string, bool, error) {
+		return "", false, wantErr
+	})
+	if _, _, err := r.NodePath(context.Background(), "node-1"); !errors.Is(err, wantErr) {
+		t.Errorf("NodePath error = %v, want %v", err, wantErr)
 	}
 }

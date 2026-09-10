@@ -1000,6 +1000,17 @@ type SubjectResolver interface {
 	Subject(r *http.Request) (userID string, ok bool)
 }
 
+// SubjectResolverFunc adapts a plain function to SubjectResolver, the same
+// func-to-interface adapter shape http.HandlerFunc popularized, so a host
+// need not declare a named type just to satisfy this seam with a closure
+// over its authenticating layer.
+type SubjectResolverFunc func(r *http.Request) (userID string, ok bool)
+
+// Subject implements SubjectResolver.
+func (f SubjectResolverFunc) Subject(r *http.Request) (string, bool) {
+	return f(r)
+}
+
 // compile-time check that *Handler satisfies the generated ServerInterface
 // for this module's fragment -- the guarantee that a spec whose generated
 // interface outgrew this handler cannot compile.

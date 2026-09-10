@@ -33,3 +33,23 @@ func TestSubjectResolver_StructuralSatisfaction(t *testing.T) {
 		t.Fatalf("Subject = (%q, %v), want (%q, true)", userID, ok, "u-42")
 	}
 }
+
+func TestSubjectResolverFunc_ImplementsSubjectResolver(t *testing.T) {
+	var resolver SubjectResolver = SubjectResolverFunc(
+		func(r *http.Request) (string, bool) {
+			userID := r.Header.Get("X-Test-User")
+			return userID, userID != ""
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if _, ok := resolver.Subject(req); ok {
+		t.Fatal("Subject reported ok=true with no header set")
+	}
+
+	req.Header.Set("X-Test-User", "u-42")
+	userID, ok := resolver.Subject(req)
+	if !ok || userID != "u-42" {
+		t.Fatalf("Subject = (%q, %v), want (%q, true)", userID, ok, "u-42")
+	}
+}

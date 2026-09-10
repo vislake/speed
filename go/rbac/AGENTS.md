@@ -29,7 +29,7 @@ The **semantics** the design asks for are preserved exactly: domain = tenant, `r
 | The built-in roles (`BuiltinRoleOwner` / `Admin` / `Member`) and `EnsureBuiltinRoles` | `builtin.go` |
 | The per-subject decision cache, its TTL expiry and its janitor | `cache.go` |
 | `Subject`, `Scope`, `WithSubject` / `SubjectFromContext`, `SystemDomain` | `subject.go` |
-| `SubtreeResolver`, the organization-tree seam; `DataScope` and `PathWithinSubtree` | `scope.go` |
+| `SubtreeResolver`, the organization-tree seam, and `SubtreeResolverFunc`, its func-to-interface adapter (`http.HandlerFunc`'s shape) so a host wires the seam with a closure; `DataScope` and `PathWithinSubtree` | `scope.go` |
 | The three models and their table names | `model.go` |
 | The three repositories and their filtered reads | `repository.go` |
 | The frozen permission catalog (unexported) | `catalog.go` |

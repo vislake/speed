@@ -13,6 +13,8 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -122,4 +124,24 @@ func Example() {
 	// issued a key, prefix length: 11, key length: 46, key has literal prefix: true
 	// request allowed: true
 	// key revoked
+}
+
+// ExampleSubjectResolverFunc wires integration's caller-identity seam with
+// a closure: the adapter gives a plain (r *http.Request) (string, bool)
+// function the Subject method WithSubjectResolver takes. The seam is the
+// identical one org and notification declare, so the same closure value can
+// serve all three modules, each wrapped by its own func adapter. A real
+// resolver must derive the caller from a source the server itself verified;
+// this example reads a header only to keep the shape visible.
+func ExampleSubjectResolverFunc() {
+	resolver := integration.SubjectResolverFunc(func(r *http.Request) (string, bool) {
+		userID := r.Header.Get("X-Verified-User")
+		return userID, userID != ""
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Verified-User", "u-42")
+	userID, ok := resolver.Subject(req)
+	fmt.Println(userID, ok)
+	// Output: u-42 true
 }

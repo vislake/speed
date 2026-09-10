@@ -1731,3 +1731,27 @@ func TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood(t *testing.T) {
 		}
 	})
 }
+
+// TestSubjectResolverFunc_ImplementsSubjectResolver pins the func adapter
+// beside the seam it adapts: a host can wire a closure as this module's
+// subject seam with no named type, and the adapter forwards the request
+// unchanged.
+func TestSubjectResolverFunc_ImplementsSubjectResolver(t *testing.T) {
+	var r SubjectResolver = SubjectResolverFunc(
+		func(req *http.Request) (string, bool) {
+			userID := req.Header.Get("X-Test-User")
+			return userID, userID != ""
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if _, ok := r.Subject(req); ok {
+		t.Fatal("Subject reported ok=true with no header set")
+	}
+
+	req.Header.Set("X-Test-User", handlerUser)
+	userID, ok := r.Subject(req)
+	if !ok || userID != handlerUser {
+		t.Fatalf("Subject = (%q, %v), want (%q, true)", userID, ok, handlerUser)
+	}
+}

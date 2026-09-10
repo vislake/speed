@@ -354,3 +354,29 @@ func (notesLikeModule) OpenAPISpec() []byte  { return nil }
 func (notesLikeModule) Register(reg *pkgcore.Registry) error {
 	return reg.Permissions.Add("notes:read", "notes:write")
 }
+
+// ExampleSubtreeResolverFunc wires rbac's organization-tree seam with a
+// closure instead of a named type: the adapter gives a plain function the
+// NodePath method WithSubtreeResolver takes, so a host whose resolver is
+// one closure over its own tree needs no type declaration at all.
+func ExampleSubtreeResolverFunc() {
+	resolver := rbac.SubtreeResolverFunc(func(_ context.Context, nodeID string) (string, bool, error) {
+		// A real host resolves the node against its own tree here -- the
+		// reference app's implementation reads org.Scope.Path -- and folds
+		// its "no such node" answer into ok=false: rbac denies a
+		// node-scoped binding it cannot resolve rather than widening it.
+		if nodeID == "store7" {
+			return "/g1/r2/store7", true, nil
+		}
+		return "", false, nil
+	})
+
+	var seam rbac.SubtreeResolver = resolver
+	path, ok, err := seam.NodePath(context.Background(), "store7")
+	fmt.Println(path, ok, err)
+	_, ok, err = seam.NodePath(context.Background(), "gone")
+	fmt.Println(ok, err)
+	// Output:
+	// /g1/r2/store7 true <nil>
+	// false <nil>
+}

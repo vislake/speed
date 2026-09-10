@@ -35,6 +35,18 @@ type SubtreeResolver interface {
 	NodePath(ctx context.Context, nodeID string) (path string, ok bool, err error)
 }
 
+// SubtreeResolverFunc adapts a plain function to SubtreeResolver, the same
+// func-to-interface adapter shape http.HandlerFunc popularized, so a host
+// need not declare a named type just to wire this seam with a closure over
+// its organization tree (for example one reading org.Scope.Path and folding
+// org.ErrNodeNotFound into ok=false).
+type SubtreeResolverFunc func(ctx context.Context, nodeID string) (path string, ok bool, err error)
+
+// NodePath implements SubtreeResolver.
+func (f SubtreeResolverFunc) NodePath(ctx context.Context, nodeID string) (string, bool, error) {
+	return f(ctx, nodeID)
+}
+
 // DataScope answers "over which slice of the organization tree does this
 // subject hold this permission", which is a different question from Can's
 // "does this subject hold it at all". A row-level filter needs this one:

@@ -129,7 +129,7 @@ func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, use
 // This is the identical structurally-typed, no-import seam org.SubjectResolver
 // and notification.SubjectResolver already declare -- same signature, same
 // contract, so a host implementing either of those (see
-// examples/reference-app/internal/app/server.go's DemoOrgSubjectResolver) can
+// examples/reference-app/internal/app/server.go's DemoOrgSubjectResolverFor) can
 // hand the identical value to WithSubjectResolver here with no adapter code
 // at all. go/integration still does not import go/authn to get this: the
 // seam is the mandatory injection point (the module-boundary rule),
@@ -147,4 +147,15 @@ type SubjectResolver interface {
 	// no caller could be identified, in which case userID is meaningless and
 	// must not be used.
 	Subject(r *http.Request) (userID string, ok bool)
+}
+
+// SubjectResolverFunc adapts a plain function to SubjectResolver, the same
+// func-to-interface adapter shape http.HandlerFunc popularized, so a host
+// need not declare a named type just to satisfy this seam with a closure
+// over its authenticating layer.
+type SubjectResolverFunc func(r *http.Request) (userID string, ok bool)
+
+// Subject implements SubjectResolver.
+func (f SubjectResolverFunc) Subject(r *http.Request) (string, bool) {
+	return f(r)
 }

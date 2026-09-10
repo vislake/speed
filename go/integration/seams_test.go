@@ -3,6 +3,8 @@ package integration
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -61,5 +63,25 @@ func TestMembershipCheckerFunc_PropagatesError(t *testing.T) {
 	})
 	if _, err := c.IsActiveMember(context.Background(), "t", "u"); !errors.Is(err, wantErr) {
 		t.Errorf("IsActiveMember error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSubjectResolverFunc_ImplementsSubjectResolver(t *testing.T) {
+	var r SubjectResolver = SubjectResolverFunc(
+		func(req *http.Request) (string, bool) {
+			userID := req.Header.Get("X-Test-User")
+			return userID, userID != ""
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if _, ok := r.Subject(req); ok {
+		t.Fatal("Subject reported ok=true with no header set")
+	}
+
+	req.Header.Set("X-Test-User", "u-42")
+	userID, ok := r.Subject(req)
+	if !ok || userID != "u-42" {
+		t.Fatalf("Subject = (%q, %v), want (%q, true)", userID, ok, "u-42")
 	}
 }
