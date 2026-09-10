@@ -198,8 +198,6 @@ github.com/vislake/speed/go/jobs v0.0.1 h1:U6SU06y69m0i1KgRirURq5AinFJFa1BVwZ+4n
 github.com/vislake/speed/go/jobs v0.0.1/go.mod h1:XvNN1obnnop04am+cGCq/NCaQXOn9ibNJ7QOlZqQ86A=
 github.com/vislake/speed/go/observability v0.0.1 h1:Bkt6TEUDVTGuwlUwtHRDx+Ey6UaAWgjtl/tetwdhrG4=
 github.com/vislake/speed/go/observability v0.0.1/go.mod h1:1xrda4IsEVgWJ5XwJlQ0ggG1ta//I4Ui6lMFXEnLRyQ=
-github.com/vislake/speed/go/pkgcore v0.0.1 h1:2SQU+uzhTENHh6+gQY60USBCPxG+rMnZpxjenbzdUBc=
-github.com/vislake/speed/go/pkgcore v0.0.1/go.mod h1:vC1fF+15XCz7MuEoks1wZNj9NyDzprlkS2x5Mtuyf3k=
 github.com/vislake/speed/go/ratelimit v0.0.1 h1:ZPozStmxdbizwScnOhmCIx+pi38cva0IoyCXXkUqqd4=
 github.com/vislake/speed/go/ratelimit v0.0.1/go.mod h1:MPWm0Il7uBkuu5lJqaCBIieF/pnXqyYSVbZKGL67fD0=
 github.com/vislake/speed/go/tenancy v0.0.1 h1:IRfYlAJfi2HalSI2E9DqIsckpoHS1xf4gVUjg51FO2s=
