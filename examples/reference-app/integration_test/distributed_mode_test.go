@@ -749,6 +749,11 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 		"APP_S3_BUCKET="+s3Bucket,
 		"APP_S3_ACCESS_KEY="+s3AccessKey,
 		"APP_S3_SECRET_KEY="+s3SecretKey,
+		// The RustFS fixture is reached at a bare host:port, where the
+		// bucket is addressable only path-style; naming the style pins the
+		// variable's end-to-end path through the binary's own config
+		// resolution into the store.
+		"APP_S3_BUCKET_LOOKUP=path",
 		"APP_SMTP_HOST="+smtpHost,
 		"APP_SMTP_PORT="+smtpPort,
 		// Never dialed: this test never drives the phone-login flow, and

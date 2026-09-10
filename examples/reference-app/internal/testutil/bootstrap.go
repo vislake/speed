@@ -41,6 +41,7 @@ var bootstrapEnvNames = []string{
 	"APP_S3_SECRET_KEY",
 	"APP_S3_REGION",
 	"APP_S3_USE_SSL",
+	"APP_S3_BUCKET_LOOKUP",
 	"APP_OBJECT_STORE_ROOT",
 	"APP_SMTP_HOST",
 	"APP_SMTP_PORT",

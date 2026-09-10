@@ -700,22 +700,24 @@ type ServerConfig struct {
 	// such a link build produces names this variable.
 	PublicOrigin string
 
-	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
-	// name the registered "objectstore.s3" implementation for the
-	// "objectstore" seam through the Preset's config channel when S3Endpoint
-	// is non-empty: BuildServer overrides that one entry of the standalone
-	// Preset with these values, and the registration builds the
-	// S3-compatible ObjectStore from them -- the host pre-builds nothing.
-	// The S3 fields' own doc comment (bootstrap.go) has the completeness
-	// rule.
+	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL
+	// and S3BucketLookup name the registered "objectstore.s3"
+	// implementation for the "objectstore" seam through the Preset's
+	// config channel when S3Endpoint is non-empty: BuildServer overrides
+	// that one entry of the standalone Preset with these values, and the
+	// registration builds the S3-compatible ObjectStore from them -- the
+	// host pre-builds nothing. The S3 fields' own doc comment
+	// (bootstrap.go) has the completeness rule; an empty S3BucketLookup
+	// reads as the store's endpoint-derived auto default.
 	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
 	// local-directory default.
-	S3Endpoint  string
-	S3Bucket    string
-	S3AccessKey string
-	S3SecretKey string
-	S3Region    string
-	S3UseSSL    bool
+	S3Endpoint     string
+	S3Bucket       string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3Region       string
+	S3UseSSL       bool
+	S3BucketLookup string
 
 	// ObjectStoreRoot, when non-empty, replaces the "objectstore" seam's
 	// Preset default with pkgcore.NewLocalObjectStore over this fixed
@@ -2238,12 +2240,13 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		preset = preset.With("objectstore", pkgcore.SeamPreset{
 			Implementation: "objectstore.s3",
 			Config: pkgcore.Config{
-				"endpoint":   cfg.S3Endpoint,
-				"bucket":     cfg.S3Bucket,
-				"access_key": cfg.S3AccessKey,
-				"secret_key": cfg.S3SecretKey,
-				"region":     cfg.S3Region,
-				"use_ssl":    strconv.FormatBool(cfg.S3UseSSL),
+				"endpoint":      cfg.S3Endpoint,
+				"bucket":        cfg.S3Bucket,
+				"access_key":    cfg.S3AccessKey,
+				"secret_key":    cfg.S3SecretKey,
+				"region":        cfg.S3Region,
+				"use_ssl":       strconv.FormatBool(cfg.S3UseSSL),
+				"bucket_lookup": cfg.S3BucketLookup,
 			},
 		})
 	}

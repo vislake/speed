@@ -188,8 +188,8 @@ type hostConfig struct {
 	// required together -- the transform fails loudly when only some of them
 	// are set, rather than silently falling back to the local-directory Preset
 	// default, since a partially named S3 target is far more likely a typo than
-	// a deliberate choice. S3Region and S3UseSSL below refine the same
-	// composition.
+	// a deliberate choice. S3Region, S3UseSSL and S3BucketLookup below
+	// refine the same composition.
 	S3Endpoint  string `config:"env=APP_S3_ENDPOINT"`
 	S3Bucket    string `config:"env=APP_S3_BUCKET"`
 	S3AccessKey string `config:"env=APP_S3_ACCESS_KEY"`
@@ -210,6 +210,17 @@ type hostConfig struct {
 	// common case for a local RustFS -- and an emptied variable refuses the
 	// load rather than reading as false.
 	S3UseSSL bool `config:"env=APP_S3_USE_SSL"`
+
+	// S3BucketLookup names APP_S3_BUCKET_LOOKUP: the addressing style the
+	// store uses to reach its bucket, one of "auto" (unset, the default --
+	// derived from the endpoint: path-style for a self-hosted service,
+	// virtual-hosted for Amazon S3, Google or Aliyun OSS), "path"
+	// (host/bucket/key) or "virtual_host" (bucket.host/key). Optional and
+	// meaningful only alongside a complete APP_S3_* group. The value is
+	// validated where the composition is resolved -- the "objectstore.s3"
+	// registration refuses anything outside the three at Bootstrap, naming
+	// the key -- so it passes through the transform as a plain string.
+	S3BucketLookup string `config:"env=APP_S3_BUCKET_LOOKUP"`
 
 	// ObjectStoreRoot names APP_OBJECT_STORE_ROOT: a fixed local directory for
 	// the "objectstore" seam instead of the Preset's throwaway temp directory
@@ -706,6 +717,10 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 		}
 	}
 	s3UseSSL := hc.S3UseSSL
+	// s3BucketLookup stays empty when unset, which the registration's own
+	// parse maps onto the endpoint-derived default; any other unrecognized
+	// value fails Bootstrap there, naming the key and the allowed set.
+	s3BucketLookup := hc.S3BucketLookup
 
 	// readFlyClientIP is APP_READ_FLY_CLIENT_IP's strict bool: 'true' is this
 	// deployment's declaration that its proxy is Fly's, the per-header opt-in
@@ -780,6 +795,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 		S3SecretKey:           s3SecretKey,
 		S3Region:              hc.S3Region,
 		S3UseSSL:              s3UseSSL,
+		S3BucketLookup:        s3BucketLookup,
 		ObjectStoreRoot:       objectStoreRoot,
 		SMTPHost:              smtpHost,
 		SMTPPort:              smtpPort,
@@ -865,6 +881,7 @@ var hostBootstrapKeys = []string{
 	"s3secretkey",
 	"s3region",
 	"s3usessl",
+	"s3bucketlookup",
 	"objectstoreroot",
 	"smtphost",
 	"smtpport",

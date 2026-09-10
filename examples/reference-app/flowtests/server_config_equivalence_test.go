@@ -180,6 +180,7 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		S3SecretKey:               s3SecretKey,
 		S3Region:                  os.Getenv("APP_S3_REGION"),
 		S3UseSSL:                  s3UseSSL,
+		S3BucketLookup:            os.Getenv("APP_S3_BUCKET_LOOKUP"),
 		ObjectStoreRoot:           objectStoreRoot,
 		SMTPHost:                  smtpHost,
 		SMTPPort:                  smtpPort,
@@ -295,12 +296,13 @@ type equivalenceEnvCase struct {
 // configured composition.
 func equivalenceEnvCases() []equivalenceEnvCase {
 	completeS3 := map[string]string{
-		"APP_S3_ENDPOINT":   "https://objects.example.test",
-		"APP_S3_BUCKET":     "bucket",
-		"APP_S3_ACCESS_KEY": "access-key",
-		"APP_S3_SECRET_KEY": "secret-key",
-		"APP_S3_REGION":     "eu-central-1",
-		"APP_S3_USE_SSL":    "true",
+		"APP_S3_ENDPOINT":      "https://objects.example.test",
+		"APP_S3_BUCKET":        "bucket",
+		"APP_S3_ACCESS_KEY":    "access-key",
+		"APP_S3_SECRET_KEY":    "secret-key",
+		"APP_S3_REGION":        "eu-central-1",
+		"APP_S3_USE_SSL":       "true",
+		"APP_S3_BUCKET_LOOKUP": "path",
 	}
 	completeSMTP := map[string]string{
 		"APP_SMTP_HOST":     "smtp.example.test",
@@ -319,7 +321,8 @@ func equivalenceEnvCases() []equivalenceEnvCase {
 				"APP_WEB_DIST": "", "APP_TRUSTED_PROXIES": "",
 				"APP_OBJECT_STORE_ROOT": "", "APP_SMTP_HOST": "", "APP_SMTP_USERNAME": "",
 				"APP_SMTP_PASSWORD": "", "APP_SMS_GATEWAY_URL": "",
-				"APP_ROOT_KEY": "", "APP_CONFIG_KEY": "", "APP_ORG_INDEX_KEY": "",
+				"APP_S3_BUCKET_LOOKUP": "",
+				"APP_ROOT_KEY":         "", "APP_CONFIG_KEY": "", "APP_ORG_INDEX_KEY": "",
 				"APP_NOTIFICATION_INDEX_KEY": "", "APP_PKI_LOCAL_KEY_CIPHER_KEY": "",
 				"APP_AUTHN_BLIND_INDEX_KEY": "", "APP_AUTHN_PII_CIPHER_KEY": "",
 				"APP_DEMO_USERS_PASSWORD": "", "APP_DEMO_PLATFORM_STAFF_PASSWORD": "",
@@ -524,6 +527,7 @@ type serverConfigValues struct {
 	s3SecretKey               string
 	s3Region                  string
 	s3UseSSL                  bool
+	s3BucketLookup            string
 	objectStoreRoot           string
 	smtpHost                  string
 	smtpPort                  int
@@ -566,6 +570,7 @@ func comparableValues(c app.ServerConfig) serverConfigValues {
 		s3SecretKey:               c.S3SecretKey,
 		s3Region:                  c.S3Region,
 		s3UseSSL:                  c.S3UseSSL,
+		s3BucketLookup:            c.S3BucketLookup,
 		objectStoreRoot:           c.ObjectStoreRoot,
 		smtpHost:                  c.SMTPHost,
 		smtpPort:                  c.SMTPPort,
