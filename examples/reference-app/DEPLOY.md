@@ -115,7 +115,7 @@ curl -s "https://<your-app-name>.fly.dev/api/v1/config/public"
 
 ### Secrets to set first
 
-**Set `APP_ROOT_KEY` — that is the whole recommended path.** `internal/app/server.go`'s `ConfigFromEnv` derives all six of the bootstrap key materials below from this one 32-byte hex secret via `dbkit.DeriveKey` (HKDF-SHA256, one distinct, versioned purpose string per key — `go/dbkit/AGENTS.md`'s "Key derivation" section has the full mechanism and its honest trade-off: a leaked root key compromises all six at once, and rotating it rotates all six together). Generate one value and set it, never valued by this repository — generate it yourself (`openssl rand -hex 32`) and set it only through `fly secrets set`, never in `fly.toml`'s `[env]` (which is plaintext and committed) or anywhere else in this repository:
+**Set `APP_ROOT_KEY` — that is the whole recommended path.** `internal/app/bootstrap.go`'s `ConfigFromEnv` derives all six of the bootstrap key materials below from this one 32-byte hex secret through `go/config`'s `DeriveBootstrapKeyMaterial` (HKDF-SHA256 over each declared key path's frozen purpose string — `go/config/derivation.go` carries the full mechanism and its honest trade-off: a leaked root key compromises all six at once, and rotating it rotates all six together). Generate one value and set it, never valued by this repository — generate it yourself (`openssl rand -hex 32`) and set it only through `fly secrets set`, never in `fly.toml`'s `[env]` (which is plaintext and committed) or anywhere else in this repository:
 
 ```bash
 fly secrets set APP_ROOT_KEY="$(openssl rand -hex 32)"

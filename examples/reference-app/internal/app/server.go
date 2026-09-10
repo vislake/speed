@@ -115,27 +115,6 @@ const (
 	// reason HealthzPath is: a scraper (or a human's browser) has no demo
 	// Host to send and must not depend on one.
 	MetricsPath = "/metrics"
-
-	// RootKeyPurposeConfigCipher, RootKeyPurposeOrgIndex,
-	// RootKeyPurposeNotificationIndex, RootKeyPurposePKILocalKeyCipher,
-	// RootKeyPurposeAuthnBlindIndex and RootKeyPurposeAuthnPIICipher are the
-	// six dbkit.DeriveKey purpose strings APP_ROOT_KEY's derivation uses,
-	// one per key material the RootKey field's doc comment lists
-	// (bootstrap.go), in the
-	// same order. Each is distinct (so no two ever derive the same bytes)
-	// and versioned (a trailing ".v1", per DeriveKey's own doc comment on
-	// why: any re-derivation bumps the suffix rather than
-	// editing a string already used in production, which would silently
-	// re-derive a different key for whatever it named). Never rename or
-	// reuse one of these strings once APP_ROOT_KEY ships to a real
-	// deployment -- doing so is operationally identical to rotating that
-	// one key without telling anyone.
-	RootKeyPurposeConfigCipher      = "speed.reference-app.config.cipher.v1"
-	RootKeyPurposeOrgIndex          = "speed.reference-app.org.blind_index.v1"
-	RootKeyPurposeNotificationIndex = "speed.reference-app.notification.blind_index.v1"
-	RootKeyPurposePKILocalKeyCipher = "speed.reference-app.pki.local_key_cipher.v1"
-	RootKeyPurposeAuthnBlindIndex   = "speed.reference-app.authn.blind_index.v1"
-	RootKeyPurposeAuthnPIICipher    = "speed.reference-app.authn.pii_cipher.v1"
 )
 
 // DevConfigKey is the master key used when APP_CONFIG_KEY is unset. It is

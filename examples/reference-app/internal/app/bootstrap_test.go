@@ -29,7 +29,10 @@ import (
 
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
-	"github.com/vislake/speed/go/dbkit"
+	// configmodule is go/config, the runtime configuration module; config
+	// alone below is the loader, go/pkgcore/config, the package this file's
+	// subject (hostConfig) is a target of.
+	configmodule "github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
 )
@@ -237,11 +240,11 @@ func TestParseHexKeyEnv(t *testing.T) {
 // that cannot derive refusing too.
 func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
 	const envName = "APP_CONFIG_KEY"
+	keyPath := "config.master_key"
 	devDefault := []byte("dev-default-key-material")
 	rootKey := bytes.Repeat([]byte{0x5a}, 32)
-	purpose := RootKeyPurposeConfigCipher
 
-	key, err := resolveKey(nil, purpose, envName, "", devDefault)
+	key, err := resolveKey(nil, keyPath, envName, "", devDefault)
 	if err != nil {
 		t.Fatalf("resolveKey with nothing set: %v", err)
 	}
@@ -249,23 +252,23 @@ func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
 		t.Fatalf("resolveKey with nothing set = %x, want the development default %x", key, devDefault)
 	}
 
-	key, err = resolveKey(rootKey, purpose, envName, "", devDefault)
+	key, err = resolveKey(rootKey, keyPath, envName, "", devDefault)
 	if err != nil {
 		t.Fatalf("resolveKey with a root key: %v", err)
 	}
-	derived, err := dbkit.DeriveKey(rootKey, purpose)
+	derived, err := configmodule.DeriveBootstrapKeyMaterial(rootKey, keyPath)
 	if err != nil {
-		t.Fatalf("dbkit.DeriveKey: %v", err)
+		t.Fatalf("configmodule.DeriveBootstrapKeyMaterial: %v", err)
 	}
 	if !bytes.Equal(key, derived) {
-		t.Fatalf("resolveKey with a root key = %x, want dbkit.DeriveKey's %x", key, derived)
+		t.Fatalf("resolveKey with a root key = %x, want configmodule.DeriveBootstrapKeyMaterial's %x", key, derived)
 	}
 	if bytes.Equal(key, devDefault) {
 		t.Fatal("the root key tier did not move the key off the development default")
 	}
 
 	override := hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32))
-	key, err = resolveKey(rootKey, purpose, envName, override, devDefault)
+	key, err = resolveKey(rootKey, keyPath, envName, override, devDefault)
 	if err != nil {
 		t.Fatalf("resolveKey with an individual override: %v", err)
 	}
@@ -273,16 +276,16 @@ func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
 		t.Fatalf("resolveKey with an individual override = %s, want the override %s", got, override)
 	}
 
-	if _, err := resolveKey(nil, purpose, envName, "not-a-key", devDefault); err == nil {
+	if _, err := resolveKey(nil, keyPath, envName, "not-a-key", devDefault); err == nil {
 		t.Fatal("resolveKey accepted a malformed individual value")
 	} else if !strings.Contains(err.Error(), envName) {
 		t.Errorf("malformed-override refusal does not name %s: %v", envName, err)
 	}
 
-	if _, err := resolveKey([]byte("short"), purpose, envName, "", devDefault); err == nil {
+	if _, err := resolveKey([]byte("short"), keyPath, envName, "", devDefault); err == nil {
 		t.Fatal("resolveKey derived from a root key that cannot derive")
-	} else if !strings.Contains(err.Error(), envName) || !strings.Contains(err.Error(), "APP_ROOT_KEY") {
-		t.Errorf("derivation refusal does not name both the variable and APP_ROOT_KEY: %v", err)
+	} else if !strings.Contains(err.Error(), keyPath) || !strings.Contains(err.Error(), "APP_ROOT_KEY") {
+		t.Errorf("derivation refusal does not name both the key path and APP_ROOT_KEY: %v", err)
 	}
 }
 

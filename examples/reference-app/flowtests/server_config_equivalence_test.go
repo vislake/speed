@@ -29,7 +29,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
-	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -82,27 +82,27 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		rootKey = decoded
 	}
 
-	configKey, err := legacyResolveKey(rootKey, app.RootKeyPurposeConfigCipher, "APP_CONFIG_KEY", app.DevConfigKey)
+	configKey, err := legacyResolveKey(rootKey, "config.master_key", "APP_CONFIG_KEY", app.DevConfigKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	orgIndexKey, err := legacyResolveKey(rootKey, app.RootKeyPurposeOrgIndex, "APP_ORG_INDEX_KEY", app.DevOrgIndexKey)
+	orgIndexKey, err := legacyResolveKey(rootKey, "org.invitation_email_index_key", "APP_ORG_INDEX_KEY", app.DevOrgIndexKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	notificationIndexKey, err := legacyResolveKey(rootKey, app.RootKeyPurposeNotificationIndex, "APP_NOTIFICATION_INDEX_KEY", app.DevNotificationIndexKey)
+	notificationIndexKey, err := legacyResolveKey(rootKey, "notification.contact_index_key", "APP_NOTIFICATION_INDEX_KEY", app.DevNotificationIndexKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	pkiLocalKeyCipherKey, err := legacyResolveKey(rootKey, app.RootKeyPurposePKILocalKeyCipher, "APP_PKI_LOCAL_KEY_CIPHER_KEY", app.DevPKILocalKeyCipherKey)
+	pkiLocalKeyCipherKey, err := legacyResolveKey(rootKey, "pki.local_key_cipher_key", "APP_PKI_LOCAL_KEY_CIPHER_KEY", app.DevPKILocalKeyCipherKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	authnBlindIndexKey, err := legacyResolveKey(rootKey, app.RootKeyPurposeAuthnBlindIndex, "APP_AUTHN_BLIND_INDEX_KEY", app.DevBlindIndexKey)
+	authnBlindIndexKey, err := legacyResolveKey(rootKey, "authn.blind_index_key", "APP_AUTHN_BLIND_INDEX_KEY", app.DevBlindIndexKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	authnPIICipherKey, err := legacyResolveKey(rootKey, app.RootKeyPurposeAuthnPIICipher, "APP_AUTHN_PII_CIPHER_KEY", app.DevPIICipherKey)
+	authnPIICipherKey, err := legacyResolveKey(rootKey, "authn.pii_cipher_key", "APP_AUTHN_PII_CIPHER_KEY", app.DevPIICipherKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
@@ -213,7 +213,11 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 
 // legacyParseHexKeyEnv and legacyResolveKey mirror the deleted direct-read
 // helpers' validation and precedence exactly, so the oracle's refusals land
-// where production's do.
+// where production's do. The oracle derives through the platform rule
+// (config.DeriveBootstrapKeyMaterial over the declared key path), spelled
+// independently of production's own call sites, so a path literal the two
+// sides disagree on shows up as an equivalence failure rather than passing
+// on both sides of a shared spelling.
 func legacyParseHexKeyEnv(envName, encoded string) ([]byte, error) {
 	if len(encoded) != 64 {
 		return nil, fmt.Errorf("reference-app: %s must hold 64 hex characters (a 32-byte key), got %d", envName, len(encoded))
@@ -225,12 +229,12 @@ func legacyParseHexKeyEnv(envName, encoded string) ([]byte, error) {
 	return decoded, nil
 }
 
-func legacyResolveKey(rootKey []byte, purpose, envName string, devDefault []byte) ([]byte, error) {
+func legacyResolveKey(rootKey []byte, keyPath, envName string, devDefault []byte) ([]byte, error) {
 	key := devDefault
 	if rootKey != nil {
-		derived, err := dbkit.DeriveKey(rootKey, purpose)
+		derived, err := config.DeriveBootstrapKeyMaterial(rootKey, keyPath)
 		if err != nil {
-			return nil, fmt.Errorf("reference-app: derive %s from APP_ROOT_KEY: %w", envName, err)
+			return nil, fmt.Errorf("reference-app: derive %s from APP_ROOT_KEY: %w", keyPath, err)
 		}
 		key = derived
 	}

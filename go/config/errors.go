@@ -3,6 +3,7 @@ package config
 import (
 	"net/http"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -93,6 +94,22 @@ var (
 	// encrypted at rest, so a schema that declares them cannot be served
 	// without the host's master key.
 	ErrCipherRequired = apperr.Internal("config.cipher_required")
+
+	// ErrInvalidBootstrapKeyPath reports a bootstrap key path that is empty
+	// or carries an empty segment (a leading, trailing or doubled dot),
+	// passed to BootstrapKeyPurpose or DeriveBootstrapKeyMaterial. The
+	// decorated error carries the offending path under "key"; the path is
+	// never secret material.
+	ErrInvalidBootstrapKeyPath = apperr.Invalid("config.invalid_bootstrap_key_path")
+
+	// ErrInvalidRootKey reports a root key DeriveBootstrapKeyMaterial
+	// refused: it must be exactly 32 bytes (256 bits), the length
+	// dbkit.NewCipher, dbkit.NewBlindIndexer and dbkit.DeriveKey all
+	// require. The cause is dbkit.ErrInvalidKeySize, so callers that
+	// already classify that sentinel keep working; the key material itself
+	// is never echoed.
+	ErrInvalidRootKey = apperr.Invalid("config.invalid_root_key").
+		WithCause(dbkit.ErrInvalidKeySize)
 
 	// ErrAuditPublishFailed reports that a Set wrote its row but could not
 	// publish the resulting config.item.changed event. The write itself has

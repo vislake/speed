@@ -15,6 +15,7 @@ It sits directly above `pkgcore`, `dbkit` and `tenancy` — among the always-on 
 | The read-through row cache and the Watch registry, both keyed per scope tier | `cache.go` |
 | Scope vocabulary and its validation (`system`, `tenant`; `user` rejected) | `scope.go` |
 | Error vocabulary: every sentinel's code, status and params | `errors.go` |
+| Declared-path bootstrap key derivation: `BootstrapKeyPurpose` and `DeriveBootstrapKeyMaterial` (purpose = the declared key path embedded in `"speed." + keyPath + ".v1"`), plus `ErrInvalidBootstrapKeyPath` / `ErrInvalidRootKey` | `derivation.go` |
 | The change event declaration (`config.item.changed`) and the redaction marker | `events.go` |
 | The two pre-auth endpoints (`/api/v1/config/public`, `/api/v1/config/features`), the OpenAPI fragment declaring them (`config_getPublicConfig`, `config_getSystemFeatures`) with its generated `api.ServerInterface`, and the per-address rate limiting in front of them | `http.go`, `ratelimit.go`, `api/` |
 | Versioned SQL migrations, one subdirectory per dialect | `migrations/` |
@@ -34,6 +35,12 @@ The two routes mounted by Register resolve `m.service` lazily per request; betwe
 Register also declares one process-start key on the `Registry.Bootstrap` seat: `config.master_key`, the `hexkey`/Sensitive master key whose `dbkit.Cipher` seals every Sensitive item (see "Sensitive values at rest"). It is declared on the bootstrap layer rather than as a `ConfigItem` because the key that encrypts the configs table cannot live in the configs table, and `Kernel.Bootstrap` refuses a key declared on both layers — so this declaration and the schema this module folds can never claim the same identifier. The host resolves the value and passes the cipher through `WithCipher`; config never reads the environment.
 
 The module itself never calls `Kernel.Bootstrap`: it is a `pkgcore.Module` (implementing `Module`, `Migrations()`, `Register` plus its own `Attach`), and hosts boot it beside their own modules, as `examples/reference-app` does.
+
+## Bootstrap key derivation
+
+`derivation.go` carries the platform's derivation contract for the key materials modules declare on the bootstrap seat. `BootstrapKeyPurpose(keyPath)` returns the versioned purpose string of one declared key path — the literal concatenation `"speed." + keyPath + ".v1"`, never a string-surgery transform of the path — and `DeriveBootstrapKeyMaterial(rootKey, keyPath)` derives that key's 32-byte material from a 32-byte root key through `dbkit.DeriveKey`. The pair is path-keyed pure functions rather than a signer that takes the booted registry because the six materials are consumed before `Kernel.Bootstrap` can run (dbkit serializer registration precedes `dbkit.Open`, which precedes Bootstrap), so the registry is not yet in hand where the derivation happens; whether a path is a declared key at all is the host's binding check (`config.Verify` over the registry's declarations). Both inputs are validated: a path that is empty or carries an empty segment fails `ErrInvalidBootstrapKeyPath` with the path under the `key` param, a root key that is not 32 bytes fails `ErrInvalidRootKey` chaining to `dbkit.ErrInvalidKeySize`.
+
+The stability contract is part of the API: the purpose embeds the declared key path verbatim and `dbkit.DeriveKey` is deterministic, so renaming a declared key path re-derives different material for that key — a rotation, not an edit. `derivation_test.go` pins the six declared key paths this repository's modules register and their frozen purposes: `speed.authn.blind_index_key.v1`, `speed.authn.pii_cipher_key.v1`, `speed.config.master_key.v1`, `speed.notification.contact_index_key.v1`, `speed.org.invitation_email_index_key.v1` and `speed.pki.local_key_cipher_key.v1`. Precedence between a derived material and an explicitly configured one is host policy, never this module's: the module only produces the derived candidate.
 
 ## Scope, fallback and entitlements
 
@@ -83,6 +90,7 @@ Because they are pre-auth, these two routes are also the module's whole abuse su
 - **Do not hand `Set` a caller-supplied tenant.** The service derives the row's tenant from the context; the API layer never accepts a tenant parameter, per the multi-tenancy discipline.
 - **Do not bypass the audited system context** to write the system tier. `WithSystemContext` with a declared purpose is the only entitlement, and it is the same escape hatch every cross-tenant write in this repository must use.
 - **Do not log or return a Sensitive value** in this module's own code paths; the redaction points live in `events.go` and the service, and new code that touches value-shaped data should route it through the same two points.
+- **Never rename a declared bootstrap key path as a plain edit.** `DeriveBootstrapKeyMaterial` embeds the path in the derivation purpose, so a rename re-derives different material for that key: it is a rotation and must ship as one (keep the old material readable, or re-derive and re-seal deliberately). The six frozen purposes are pinned by `derivation_test.go`; editing one there is the same act.
 - **Do not add a third scope tier** (user) by editing `scope.go`'s validation alone; the tier's storage, resolution order and entitlement need their own design pass and their own tests.
 - **Do not add PostgreSQL-only features** to migrations or queries, and **never use `AutoMigrate`** — versioned SQL per dialect, registered through `dbkit`'s `MigrationRegistry` (`migrations/`), is the only path.
 

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -16,8 +17,11 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/dbtest"
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/org"
+	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -369,11 +373,10 @@ func clearRootKeyOverrides(t *testing.T) {
 // TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
 // -- no individual key env var set -- derives every one of the six key
 // materials the RootKey bootstrap field's own doc comment lists, and that
-// ConfigFromEnv's
-// derivation matches dbkit.DeriveKey called directly with this file's own
-// rootKeyPurpose* constants: not merely "some non-default bytes landed in
-// cfg", but the exact key a caller who knew the root and the purpose
-// string could reproduce independently.
+// ConfigFromEnv's derivation matches config.DeriveBootstrapKeyMaterial over
+// the declared key path: not merely "some non-default bytes landed in
+// cfg", but the exact key a caller who knew the root and the declared path
+// could reproduce independently through the platform API.
 func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
@@ -391,22 +394,22 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		got     []byte
-		purpose string
+		keyPath string
 	}{
-		{"ConfigKey", cfg.ConfigKey, app.RootKeyPurposeConfigCipher},
-		{"OrgIndexKey", cfg.OrgIndexKey, app.RootKeyPurposeOrgIndex},
-		{"NotificationIndexKey", cfg.NotificationIndexKey, app.RootKeyPurposeNotificationIndex},
-		{"PKILocalKeyCipherKey", cfg.PKILocalKeyCipherKey, app.RootKeyPurposePKILocalKeyCipher},
-		{"AuthnBlindIndexKey", cfg.AuthnBlindIndexKey, app.RootKeyPurposeAuthnBlindIndex},
-		{"AuthnPIICipherKey", cfg.AuthnPIICipherKey, app.RootKeyPurposeAuthnPIICipher},
+		{"ConfigKey", cfg.ConfigKey, "config.master_key"},
+		{"OrgIndexKey", cfg.OrgIndexKey, "org.invitation_email_index_key"},
+		{"NotificationIndexKey", cfg.NotificationIndexKey, "notification.contact_index_key"},
+		{"PKILocalKeyCipherKey", cfg.PKILocalKeyCipherKey, "pki.local_key_cipher_key"},
+		{"AuthnBlindIndexKey", cfg.AuthnBlindIndexKey, "authn.blind_index_key"},
+		{"AuthnPIICipherKey", cfg.AuthnPIICipherKey, "authn.pii_cipher_key"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			want, deriveErr := dbkit.DeriveKey(rootKey[:], tt.purpose)
+			want, deriveErr := config.DeriveBootstrapKeyMaterial(rootKey[:], tt.keyPath)
 			if deriveErr != nil {
-				t.Fatalf("dbkit.DeriveKey(rootKey, %q): %v", tt.purpose, deriveErr)
+				t.Fatalf("config.DeriveBootstrapKeyMaterial(rootKey, %q): %v", tt.keyPath, deriveErr)
 			}
 			if !bytes.Equal(tt.got, want) {
-				t.Fatalf("cfg.%s = %x, want dbkit.DeriveKey(rootKey, %q) = %x", tt.name, tt.got, tt.purpose, want)
+				t.Fatalf("cfg.%s = %x, want config.DeriveBootstrapKeyMaterial(rootKey, %q) = %x", tt.name, tt.got, tt.keyPath, want)
 			}
 		})
 	}
@@ -459,9 +462,9 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 			cfg.ConfigKey, "APP_CONFIG_KEY", explicitConfigKey[:])
 	}
 
-	wantOrgIndexKey, err := dbkit.DeriveKey(rootKey[:], app.RootKeyPurposeOrgIndex)
+	wantOrgIndexKey, err := config.DeriveBootstrapKeyMaterial(rootKey[:], "org.invitation_email_index_key")
 	if err != nil {
-		t.Fatalf("dbkit.DeriveKey: %v", err)
+		t.Fatalf("config.DeriveBootstrapKeyMaterial: %v", err)
 	}
 	if !bytes.Equal(cfg.OrgIndexKey, wantOrgIndexKey) {
 		t.Fatalf("cfg.OrgIndexKey = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since %s was never set",
@@ -469,11 +472,147 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 	}
 }
 
+// TestDeclaredBootstrapKeys_ReconcileWithResolvedKeyMaterial reconciles the
+// transform's derivation call sites against the declarations: it boots a
+// kernel over the modules that declare the six hexkey bootstrap keys, then
+// requires every declared key's material -- derived from APP_ROOT_KEY
+// through the platform API under the module's own declared path -- to be
+// exactly the bytes the resolved ServerConfig field carries. The
+// declaration is the oracle, so a call site whose path literal diverges
+// from what its module declares (a misspelling, a stale name) derives
+// under a path no module declared and fails here naming the key.
+func TestDeclaredBootstrapKeys_ReconcileWithResolvedKeyMaterial(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("APP_DB_PATH", "")
+	clearRootKeyOverrides(t)
+
+	rootKey := sha256.Sum256([]byte("TestDeclaredBootstrapKeys_ReconcileWithResolvedKeyMaterial root secret"))
+	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
+
+	cfg, err := app.ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv: %v", err)
+	}
+
+	// The resolved material per declared key path, keyed by the path
+	// spelling the declaration uses.
+	resolved := map[string][]byte{
+		"config.master_key":              cfg.ConfigKey,
+		"org.invitation_email_index_key": cfg.OrgIndexKey,
+		"notification.contact_index_key": cfg.NotificationIndexKey,
+		"pki.local_key_cipher_key":       cfg.PKILocalKeyCipherKey,
+		"authn.blind_index_key":          cfg.AuthnBlindIndexKey,
+		"authn.pii_cipher_key":           cfg.AuthnPIICipherKey,
+	}
+
+	reg := newDeclaringModuleRegistry(t)
+	declared := 0
+	for _, key := range reg.Bootstrap.Keys() {
+		if key.Format != "hexkey" {
+			continue
+		}
+		declared++
+		got, mapped := resolved[key.Key]
+		if !mapped {
+			t.Fatalf("a module declares the hexkey bootstrap key %q and this app resolves no key material for it", key.Key)
+		}
+		want, deriveErr := config.DeriveBootstrapKeyMaterial(rootKey[:], key.Key)
+		if deriveErr != nil {
+			t.Fatalf("config.DeriveBootstrapKeyMaterial(rootKey, %q): %v", key.Key, deriveErr)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("resolved material for the declared key %q = %x, want config.DeriveBootstrapKeyMaterial(rootKey, %q) = %x: the derivation call site must use the key path the module declared",
+				key.Key, got, key.Key, want)
+		}
+	}
+	if declared != len(resolved) {
+		t.Fatalf("the booted registry declared %d hexkey bootstrap keys, want the %d this app derives", declared, len(resolved))
+	}
+}
+
+// newDeclaringModuleRegistry boots a kernel over the module types that
+// declare the six hexkey bootstrap keys -- the same five types BuildServer
+// composes -- so their declarations are reachable the way the running app's
+// own registry carries them. Each module's required seams are wired with
+// recognizable test placeholders, the way BuildServer wires the real ones;
+// the reconciliation exercises none of them, it only reads the declarations
+// Register contributes.
+func newDeclaringModuleRegistry(t *testing.T) *pkgcore.Registry {
+	t.Helper()
+	ctx := context.Background()
+	db := dbtest.NewSQLite(t)
+
+	pkiModule := pki.NewModule(db)
+	t.Cleanup(func() {
+		if closeErr := pkiModule.Close(); closeErr != nil {
+			t.Errorf("close pki module: %v", closeErr)
+		}
+	})
+
+	authnModule, err := authn.NewModule(db,
+		authn.WithKeySource(pkiModule.Service()),
+		authn.WithBlindIndexKey(bytes.Repeat([]byte{0x11}, 32)),
+	)
+	if err != nil {
+		t.Fatalf("authn.NewModule: %v", err)
+	}
+
+	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, bytes.Repeat([]byte{0x22}, 32), dbkit.NormalizeEmail)
+	if err != nil {
+		t.Fatalf("dbkit.NewBlindIndexer(org.EmailIndexColumn): %v", err)
+	}
+	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, bytes.Repeat([]byte{0x33}, 32), dbkit.NormalizeEmail)
+	if err != nil {
+		t.Fatalf("dbkit.NewBlindIndexer(notification.AddressIndexColumn): %v", err)
+	}
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, bytes.Repeat([]byte{0x33}, 32), dbkit.NormalizePhoneE164)
+	if err != nil {
+		t.Fatalf("dbkit.NewBlindIndexer(notification.AddressIndexColumn, phone): %v", err)
+	}
+
+	deliveryQueue := jobs.NewStandaloneQueue(db)
+	t.Cleanup(func() {
+		if closeErr := deliveryQueue.Close(ctx); closeErr != nil {
+			t.Errorf("close delivery queue: %v", closeErr)
+		}
+	})
+
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx,
+		config.NewModule(db),
+		authnModule,
+		org.NewModule(db, org.WithEmailIndexer(orgIndexer), org.WithInvitationEmailDisabled()),
+		notification.NewModule(db,
+			notification.WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
+			notification.WithMailFrom("notifications@example.test"),
+			notification.WithContactEmailIndexer(contactEmailIndexer),
+			notification.WithContactPhoneIndexer(contactPhoneIndexer),
+			notification.WithDeliveryQueue(deliveryQueue),
+			notification.WithUserAddressResolver(noAddressesResolver{}),
+		),
+		pkiModule,
+	)
+	if err != nil {
+		t.Fatalf("bootstrap the modules declaring the six hexkey keys: %v", err)
+	}
+	return reg
+}
+
+// noAddressesResolver satisfies the user-address seam notification's
+// Register requires; the reconciliation never dispatches a notification, so
+// every user simply has no address on file.
+type noAddressesResolver struct{}
+
+// Resolve implements notification.UserAddressResolver.
+func (noAddressesResolver) Resolve(context.Context, string) (notification.UserAddresses, error) {
+	return notification.UserAddresses{}, nil
+}
+
 // TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose is
 // the end-to-end proof: APP_ROOT_KEY set alone (every
 // individual key env var cleared), ConfigFromEnv resolves all six key
-// materials through dbkit.DeriveKey, BuildServer boots a real composed
-// server from the result, and every one of the six derived keys is
+// materials through config.DeriveBootstrapKeyMaterial, BuildServer boots a
+// real composed server from the result, and every one of the six derived keys is
 // exercised through the real mechanism it protects -- never merely "no
 // error from NewCipher/NewBlindIndexer".
 //

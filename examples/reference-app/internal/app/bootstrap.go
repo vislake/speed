@@ -27,7 +27,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vislake/speed/go/dbkit"
+	// configmodule is go/config, the runtime configuration module; the bare
+	// name config in this file is the loader, go/pkgcore/config, matching
+	// this file's own vocabulary.
+	configmodule "github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
 )
@@ -257,12 +260,14 @@ type hostConfig struct {
 	// root secret that, when set, derives ALL SIX of the key materials this app
 	// otherwise requires individually (Config.Master_Key, Org, Notification,
 	// Pki, Authn.Blind_Index_Key and Authn.PII_Cipher_Key below) via
-	// dbkit.DeriveKey, one distinct, versioned purpose string per key (see the
-	// rootKeyPurpose* constants) -- so a deployer can set ONE secret instead of
-	// six and still end up with six independent derived keys, none of them
-	// reused across two differently-designed constructions (the trade-off: a
-	// leaked root key compromises every derived key at once, and rotating the
-	// root rotates all six simultaneously).
+	// config.DeriveBootstrapKeyMaterial, once per declared bootstrap key path
+	// -- so a deployer can set ONE secret instead of six and still end up with
+	// six independent derived keys, none of them reused across two
+	// differently-designed constructions (the trade-off: a leaked root key
+	// compromises every derived key at once, and rotating the root rotates all
+	// six simultaneously). The path-to-purpose mapping and its stability
+	// contract (renaming a declared key path is a rotation) belong to the
+	// platform function, not to this app.
 	//
 	// Precedence, applied independently per key: an explicitly-set individual
 	// variable (e.g. APP_ORG_INDEX_KEY) always wins over what APP_ROOT_KEY
@@ -646,27 +651,27 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	// an opaque cipher error; hex.DecodeString rejects anything that is not
 	// valid lowercase-or-uppercase hex, and the length check parseHexKeyEnv runs
 	// first rejects anything that does not decode to exactly 32 bytes.
-	configKey, err := resolveKey(rootKey, RootKeyPurposeConfigCipher, "APP_CONFIG_KEY", hc.Config.Master_Key, DevConfigKey)
+	configKey, err := resolveKey(rootKey, "config.master_key", "APP_CONFIG_KEY", hc.Config.Master_Key, DevConfigKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	orgIndexKey, err := resolveKey(rootKey, RootKeyPurposeOrgIndex, "APP_ORG_INDEX_KEY", hc.Org.Invitation_Email_Index_Key, DevOrgIndexKey)
+	orgIndexKey, err := resolveKey(rootKey, "org.invitation_email_index_key", "APP_ORG_INDEX_KEY", hc.Org.Invitation_Email_Index_Key, DevOrgIndexKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	notificationIndexKey, err := resolveKey(rootKey, RootKeyPurposeNotificationIndex, "APP_NOTIFICATION_INDEX_KEY", hc.Notification.Contact_Index_Key, DevNotificationIndexKey)
+	notificationIndexKey, err := resolveKey(rootKey, "notification.contact_index_key", "APP_NOTIFICATION_INDEX_KEY", hc.Notification.Contact_Index_Key, DevNotificationIndexKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	pkiLocalKeyCipherKey, err := resolveKey(rootKey, RootKeyPurposePKILocalKeyCipher, "APP_PKI_LOCAL_KEY_CIPHER_KEY", hc.Pki.Local_Key_Cipher_Key, DevPKILocalKeyCipherKey)
+	pkiLocalKeyCipherKey, err := resolveKey(rootKey, "pki.local_key_cipher_key", "APP_PKI_LOCAL_KEY_CIPHER_KEY", hc.Pki.Local_Key_Cipher_Key, DevPKILocalKeyCipherKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	authnBlindIndexKey, err := resolveKey(rootKey, RootKeyPurposeAuthnBlindIndex, "APP_AUTHN_BLIND_INDEX_KEY", hc.Authn.Blind_Index_Key, DevBlindIndexKey)
+	authnBlindIndexKey, err := resolveKey(rootKey, "authn.blind_index_key", "APP_AUTHN_BLIND_INDEX_KEY", hc.Authn.Blind_Index_Key, DevBlindIndexKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	authnPIICipherKey, err := resolveKey(rootKey, RootKeyPurposeAuthnPIICipher, "APP_AUTHN_PII_CIPHER_KEY", hc.Authn.PII_Cipher_Key, DevPIICipherKey)
+	authnPIICipherKey, err := resolveKey(rootKey, "authn.pii_cipher_key", "APP_AUTHN_PII_CIPHER_KEY", hc.Authn.PII_Cipher_Key, DevPIICipherKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}
@@ -827,7 +832,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 // 32-byte key, returning a precise error naming envName when encoded is not
 // exactly configKeyHexLength hex characters or is not valid hex, rather than
 // letting a subtly wrong value surface later as an opaque dbkit.NewCipher /
-// dbkit.NewBlindIndexer / dbkit.DeriveKey error. Every one of this app's six
+// dbkit.NewBlindIndexer error. Every one of this app's six
 // key-material variables, plus APP_ROOT_KEY itself, shares this exact
 // validation.
 func parseHexKeyEnv(envName, encoded string) ([]byte, error) {
@@ -846,20 +851,22 @@ func parseHexKeyEnv(envName, encoded string) ([]byte, error) {
 // resolveKey applies the three-tier precedence the transform uses for every
 // one of the six key materials: an explicitly-set individual variable (encoded,
 // non-empty) always wins, over a rootKey-derived value
-// (dbkit.DeriveKey(rootKey, purpose), computed only when rootKey is non-nil --
-// i.e. APP_ROOT_KEY was set), which in turn always wins over devDefault, the
-// hardcoded development fallback applied when neither rootKey nor the
-// individual variable is set. This precedence lets a deployment set one root
-// secret and still override any single derived key independently, for a
-// fine-grained rotation cadence that key alone needs. envName appears only in
-// the derivation error's text; it is the variable the encoded override arrived
-// through.
-func resolveKey(rootKey []byte, purpose, envName, encoded string, devDefault []byte) ([]byte, error) {
+// (config.DeriveBootstrapKeyMaterial(rootKey, keyPath), computed only when
+// rootKey is non-nil -- i.e. APP_ROOT_KEY was set), which in turn always wins
+// over devDefault, the hardcoded development fallback applied when neither
+// rootKey nor the individual variable is set. This precedence lets a
+// deployment set one root secret and still override any single derived key
+// independently, for a fine-grained rotation cadence that key alone needs.
+// keyPath is one of the bootstrap key paths a module declared on the
+// registry's bootstrap seat, spelled exactly as the module declares it;
+// envName appears only in the override error's text, naming the variable the
+// encoded override arrived through.
+func resolveKey(rootKey []byte, keyPath, envName, encoded string, devDefault []byte) ([]byte, error) {
 	key := devDefault
 	if rootKey != nil {
-		derived, err := dbkit.DeriveKey(rootKey, purpose)
+		derived, err := configmodule.DeriveBootstrapKeyMaterial(rootKey, keyPath)
 		if err != nil {
-			return nil, fmt.Errorf("reference-app: derive %s from APP_ROOT_KEY: %w", envName, err)
+			return nil, fmt.Errorf("reference-app: derive %s from APP_ROOT_KEY: %w", keyPath, err)
 		}
 		key = derived
 	}

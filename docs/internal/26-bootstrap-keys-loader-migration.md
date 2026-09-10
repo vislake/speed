@@ -144,7 +144,7 @@ func Verify(target any, declared []string) error   // 每个 declared 键必须�
 | pki | `pki.local_key_cipher_key` | `APP_PKI_LOCAL_KEY_CIPHER_KEY` |
 | config | `config.*`(configs 表敏感值密封主键) | `APP_CONFIG_KEY` |
 
-`APP_ROOT_KEY` 是**宿主键**:派生链(目的串、dev default、HKDF 调用)是参考应用的装配逻辑,不入任何平台模块。六派生键声明后,"每枚密钥为何单独存在、为何 AES 不当 HMAC 用"这类理由由模块声明承载(参考应用现有常量深注释是文案来源),参考应用侧常量注释在步骤二退役。
+`APP_ROOT_KEY` 是**宿主键**:宿主根变量的命名与"显式单键胜过派生"的优先级应用归宿主;派生链的归属已被 §9.4 取代——原判"目的串、dev default、HKDF 调用属参考应用装配逻辑,不入任何平台模块"作废,目的串方案与 HKDF 派生调用上收为 `go/config` 的平台能力,dev default 与根变量名仍归宿主。六派生键声明后,"每枚密钥为何单独存在、为何 AES 不当 HMAC 用"这类理由由模块声明承载(参考应用现有常量深注释是文案来源),参考应用侧常量注释在步骤二退役。
 
 其余 29 枚(core/seams/network/observability/serving/demo + root)是宿主键:接线地址、demo rig、故障注入、端口、部署形态——装配面的东西,归宿主。它们不会因为没有模块声明而失去文档:步骤二起由 loader 形状结构体的字段注释承载(§5.1)。
 
@@ -352,3 +352,15 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 
 - 四枚 int/bool 键的空串收紧(§9.2)是设计裁定的有意行为;此外无行为差异。
 - 未做(与本设计无关或按既定排期):saasctl 生成骨架与 `appconfig` twin 维持直读(Q1);五个声明模块的过渡 `replace` 随下一个版本号的发布清理(Q4);`examples/reference-app/.env.example` 目前只覆盖部分宿主键(其余键的装配文本以 `bootstrap.go` 字段注释 + README/DEPLOY 叙述为准),扩到 35 键留作文档体验增强。
+
+### 9.4 根密钥派生上收为平台能力(go/config)
+
+用户要求"config 模块须支持从一枚根密钥派生其他密钥"并裁定"纳入本次:设计+实现"后落地;§3.5 的"派生链不入任何平台模块"裁定由本节取代(宿主根变量名与优先级应用仍归宿主)。
+
+- **API**(`go/config/derivation.go`,无新依赖):`BootstrapKeyPurpose(keyPath)` 返回声明键路径的目的串——字面拼接 `"speed." + keyPath + ".v1"`,不做任何字符串变形;`DeriveBootstrapKeyMaterial(rootKey, keyPath)` 经 `dbkit.DeriveKey` 从 32 字节根密钥派生该键的 32 字节材料。目的串六枚冻结:`speed.authn.blind_index_key.v1`、`speed.authn.pii_cipher_key.v1`、`speed.config.master_key.v1`、`speed.notification.contact_index_key.v1`、`speed.org.invitation_email_index_key.v1`、`speed.pki.local_key_cipher_key.v1`。哨兵两枚(`go/config/errors.go`):`config.invalid_bootstrap_key_path`(空路径/空段,路径随 `key` 参数)与 `config.invalid_root_key`(cause 为 `dbkit.ErrInvalidKeySize`);错误码索引随之重生成。
+- **形态理由**:六枚材料全部在 `Kernel.Bootstrap` 之前被消费(serializer 注册先于 `dbkit.Open`,后者先于 Bootstrap),收 `reg.Bootstrap.Keys()` 的批量签名服务不到真实宿主可用,故取按声明键路径取键的纯函数;"路径属于已声明键"由宿主绑定对账(`config.Verify` + 既有 `verifyBootstrapBinding`)承担。
+- **稳定性契约**:目的串内嵌键路径且 HKDF 确定性,故**重命名声明键路径 = 轮换**——写进 godoc 与 `go/config/AGENTS.md` 的 Rules,并由 `derivation_test.go` 钉死六枚目的串字面量。
+- **参考应用迁移**(语义逐字不变):`internal/app/server.go` 的六枚 `speed.reference-app.*.v1` purpose 常量块删除;`internal/app/bootstrap.go` 的 `resolveKey` 形参 `purpose`→`keyPath`,派生改调 `config.DeriveBootstrapKeyMaterial`(该文件以 `configmodule` 别名导入 `go/config`;裸名 `config` 仍是 loader),错误文案点名键路径;六个调用点传声明键路径字面量。`hostConfig.RootKey`、宿主键清单(`hostBootstrapKeys`)与六枚可辨认字节段开发默认值**保留**(归宿主)。
+- **派生值变化**:六枚材料由 `speed.reference-app.*.v1` 派生改为 `speed.*` 派生,字节全部改变——版本未发布(v0.0.0),无既有状态需要迁移;`.env.example`、`DEPLOY.md` 与 zh 站页的机制表述同步改为平台归属。
+- **测试**:`flowtests/server_config_test.go` 的六键期望改平台 API(互异断言保留);新增声明对账测试(boot 后遍历 `reg.Bootstrap.Keys()` 的 hexkey 键,断言每枚派生值==cfg 对应字段,错拼路径字面量必红——已以临时错拼实证);`server_config_equivalence_test.go` 的 oracle 改按平台规则派生(与生产调用点各自拼写,分歧即等价性失败);`internal/app/bootstrap_test.go` 的 `resolveKey` 用例同步。
+- **文档面**:zh 站页 `configuration.md` 改写为平台口径(不含宿主变量名);生成产物机制句进 `bootstrapSecretsNote`(md 与站点 EN 页共享,JSON 无叙述字段不受影响):派生规则、六个 purpose 形状、"显式胜过派生"、"重命名=轮换";`go/dbkit/key_derivation.go` 与 `go/dbkit/AGENTS.md` 的 `APP_ROOT_KEY` 指认改指向 config 能力(纯注释);`go/config/AGENTS.md`(文件表/小节/Rules)、`doc.go`、`example_test.go`(`ExampleDeriveBootstrapKeyMaterial`,确定性 `// Output:`)配齐。

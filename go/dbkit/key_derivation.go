@@ -95,11 +95,13 @@ const derivedKeySize = 32
 // variable, its own secret-manager entry) instead of deriving it, and
 // mixes the two freely: derive everything from one root secret by
 // default, override any single purpose's key independently when that
-// purpose's own rotation cadence demands it. See
-// examples/reference-app/internal/app/server.go's APP_ROOT_KEY wiring for
-// exactly this precedence in practice: an explicitly-set individual key's
-// own environment variable always wins over a value DeriveKey would have
-// produced for it.
+// purpose's own rotation cadence demands it. For the keys modules declare
+// on the registry's bootstrap seat, go/config's DeriveBootstrapKeyMaterial
+// is the platform's derivation entry: it derives each declared key from a
+// root key under a purpose string embedding the declared key path, states
+// the stability contract that makes renaming a declared path a rotation,
+// and leaves the precedence between a derived material and an explicitly
+// configured one to the host.
 func DeriveKey(rootKey []byte, purpose string) ([]byte, error) {
 	if len(rootKey) != rootKeySize {
 		return nil, fmt.Errorf("dbkit: derive key: root key: %w: got %d bytes", ErrInvalidKeySize, len(rootKey))
