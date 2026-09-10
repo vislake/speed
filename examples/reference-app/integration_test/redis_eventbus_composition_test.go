@@ -271,7 +271,8 @@ type testListNotesResponse struct {
 // acmeTenantID/demoUserHdr/demoOwner: demoUserHdr/demoOwner name WHO is
 // acting for rbac's demo gate (see the doc comment above), and
 // demoUsersPassword gates the child's own boot-time demo-account seed
-// (internal/app/demo_users.go's demoUsersPasswordEnv) -- set in the
+// (internal/app/bootstrap.go's DemoUsersPassword field, which pins
+// APP_DEMO_USERS_PASSWORD) -- set in the
 // child's env below, it makes the child itself register demoOwnerEmail as
 // a real account with real tenant-acme membership before this test signs
 // in as it.

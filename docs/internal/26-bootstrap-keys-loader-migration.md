@@ -343,7 +343,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - **healthcheck**:`cmd/server` 的 healthcheck 分支与主进程共用同一份 loader 结果(`app.ConfigFromEnv` 的 `cfg.Port`),`cmd/server` 直读清零。
 - **等价性 pin**:`flowtests/server_config_equivalence_test.go` 以"迁移前的直读实现"为 oracle,对同一份 env 注入集逐一断言新旧两条路径产出同一 `ServerConfig`(dev default、root 派生、individual 覆盖、空串、各类拒绝);有意的行为差异(见 §9.3)单独 pin,不进等价表。
 - **值语义核对**:`APP_S3_USE_SSL`、`APP_READ_FLY_CLIENT_IP`、`APP_SMTP_PORT`、`APP_FAIL_SELF_SERVICE_PROVISION` 四枚 int/bool 键的空串注入点(测试/CI/compose)改为"显式值或不设";测试面用 `internal/testutil.ClearBootstrapEnv` 统一清理。附带一条同族语义:SMTP 端口现在以 0 为"未设"(`0` 本就不是可用 SMTP 端口)。
-- **生成器换源**:`bootstrap.go` 只保留两层互斥规则(`overlappingKeys`);`document.go` 的 bootstrap 节渲染"机制陈述 + per-module 声明表 + 零声明条款";`--check` 产物四件;新增渲染键集 ↔ 声明集双向测试。`docs-check.yml` 的覆盖说明与 PATH SET 随之收窄(移除 `examples/reference-app/internal/app/**` 触发条目——参考面已不读它),`docs/site/static/llms.txt` 的配置参考描述同步。
+- **生成器换源**:`bootstrap.go` 只保留两层互斥规则(`overlappingKeys`);`document.go` 的 bootstrap 节渲染"机制陈述 + per-module 声明表 + 零声明条款";`--check` 产物四件;新增渲染键集 ↔ 声明集双向测试。`docs-check.yml` 的覆盖说明随参考面改写(配置参考只看平台面),而引用应用源码的触发条目保留并加宽为 `examples/reference-app/internal/**`(错误码索引扫描面需要,同时补上 `internal/cases`、`internal/notes`、`internal/smilesim` 的既有缺口),`docs/site/static/llms.txt` 的配置参考描述同步。
 - **设计文档维护**:§1、§4、§5 内凡"文件:行号"式引用一律改为符号名优先(行号随步骤一/二落地已失效)。
 
 ### 9.3 有意行为差异与本轮未做
