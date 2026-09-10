@@ -79,8 +79,8 @@ name: docs-check
 #     port and fetches the site root). Needs the pinned Hugo binary
 #     (setup-hugo-env step below) and the theme submodule checked out,
 #     unlike the dependency-free i18n checker above.
-#   * config-reference drift: `go run ./cmd/configrefgen --check` from
-#     examples/reference-app/ (the step below runs it after the pinned
+#   * config-reference drift: `go run . --check` from
+#     tools/configrefgen/ (the step below runs it after the pinned
 #     Go install, sharing that toolchain with the markdown-example
 #     check). The reference -- docs/config-reference.md, its
 #     machine-readable twin docs/config-reference.json, the derived
@@ -99,8 +99,9 @@ name: docs-check
 #     committed reference (a module that added, removed or changed an
 #     item, a flag or a bootstrap key; a hand-edit of a generated
 #     file) fails this step.
-#     The generator's own unit suite (cmd/configrefgen/*_test.go, run
-#     by full-check's reference-app job) pins the load-verification of
+#     The generator's own unit suite (tools/configrefgen/*_test.go, run
+#     by the tools/configrefgen matrix row in fast-check and
+#     full-check) pins the load-verification of
 #     config.example.yaml and its JSON twin, the rendered-keys-vs-
 #     census correspondence in both directions, and
 #     byte-determinism;
@@ -187,10 +188,11 @@ name: docs-check
 #                                of the generator's drift gate)
 #   tools/test_check_error_code_index_coverage.py  and its own unit
 #                                test suite (self-test on change)
-#   examples/reference-app/cmd/configrefgen/**  the config-reference
-#                                generator command (self-test on change;
-#                                its unit suite runs under full-check's
-#                                reference-app job too)
+#   tools/configrefgen/**        the config-reference generator tool
+#                                module (self-test on change; its unit
+#                                suite also runs under the
+#                                tools/configrefgen matrix row in
+#                                fast-check and full-check)
 #   examples/reference-app/internal/**  the app sources the error-code
 #                                index scans (internal/app, internal/cases,
 #                                internal/notes, internal/smilesim): the
@@ -245,7 +247,7 @@ on:
       - tools/test_gen_error_code_index.py
       - tools/check_error_code_index_coverage.py
       - tools/test_check_error_code_index_coverage.py
-      - examples/reference-app/cmd/configrefgen/**
+      - tools/configrefgen/**
       - examples/reference-app/internal/**
       - go/config/**
       - go/authn/module.go
@@ -300,12 +302,11 @@ jobs:
         run: python3 tools/check_markdown_examples.py
       - name: Config reference drift check
         # The reference is generated from the live configuration schema by
-        # composing a schema-only host (examples/reference-app/cmd/configrefgen/
-        # has the full mechanism); this step regenerates it in memory and
-        # fails when any committed artifact is stale. Runs from the
-        # reference-app module directory because the repository root is a
-        # go.work workspace, not a module. Module downloads come from the
-        # setup-go-env cache or the network, exactly like the markdown-example
-        # check above.
-        working-directory: examples/reference-app
-        run: go run ./cmd/configrefgen --check
+        # composing a schema-only host (tools/configrefgen has the full
+        # mechanism); this step regenerates it in memory and fails when any
+        # committed artifact is stale. Runs from the tool module's own
+        # directory because the repository root is a go.work workspace, not
+        # a module. Module downloads come from the setup-go-env cache or
+        # the network, exactly like the markdown-example check above.
+        working-directory: tools/configrefgen
+        run: go run . --check

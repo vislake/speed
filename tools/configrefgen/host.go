@@ -23,16 +23,14 @@ package main
 // renders, on either layer, and no module's declaration can reach the
 // reference without being composed here.
 //
-// The composition deliberately stops at the platform modules. The reference
-// app's own notes module registers its own app-owned items (brand.site_name
-// and support.reply_email plus its two feature flags); a config reference
-// committed at the repository's docs/ root documents the PLATFORM
-// configuration surface a speed-based application receives from the modules
-// it imports, not one example app's demo items, so notes stays out of the
-// composition and its items out of the reference. A host that wants its own
-// complete reference (own items included) runs the same two calls against
-// its own composition -- go/config's RenderMarkdown doc comment shows the
-// shape.
+// The composition deliberately stops at the platform modules. A
+// config reference committed at the repository's docs/ root documents the
+// PLATFORM configuration surface a speed-based application receives from the
+// modules it imports, not any one application's own items, so an
+// application's declarations stay out of the composition and out of the
+// reference. A host that wants its own complete reference (own items
+// included) runs the same two calls against its own composition -- go/config's
+// RenderMarkdown doc comment shows the shape.
 //
 // The database is a throwaway in-memory SQLite: every module's Register
 // performs no I/O by contract, config's Attach only wires its Service (the
@@ -180,8 +178,8 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	// org.invitation_email flag at its declared default of on -- a sender
 	// address and a link builder (ErrInvitationMailRequired without both).
 	// The indexer key is the same fixed snapshotKey the cipher and authn's
-	// indexer reuse: a real host derives a separate APP_ORG_INDEX_KEY
-	// material, but nothing here encrypts or indexes real rows and Describe
+	// indexer reuse: a real host resolves a separate declared key for this
+	// indexer, but nothing here encrypts or indexes real rows and Describe
 	// never renders a key, so the reuse leaks nothing (the package comment
 	// above states the fixed-literal reasoning).
 	orgEmailIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, snapshotKey, dbkit.NormalizeEmail)

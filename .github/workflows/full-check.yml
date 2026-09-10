@@ -29,7 +29,11 @@ name: full-check
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per the
 #     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs.
+#     module and copies no legs. The matrix also carries
+#     tools/configrefgen, the repository's tool module (a go.work entry
+#     outside go/, consumer-module form): its suite is fast and
+#     container-free, so unlike the reference app's it also rides the
+#     fast per-PR matrix.
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier,
 #     run from inside the module: go test -race -tags=integration ./...
@@ -222,6 +226,7 @@ jobs:
           - go/ai-gateway
           - go/compliance
           - go/admin
+          - tools/configrefgen
     uses: ./.github/workflows/reusable-go-module-ci.yml
     with:
       module: ${{ matrix.module }}

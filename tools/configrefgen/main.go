@@ -19,13 +19,13 @@
 //     sharing, pki and org) plus the config module, bootstrapped on a
 //     throwaway in-memory database, schema frozen by Attach. The module
 //     composition is the cost of this mechanism: it must import the
-//     declaring modules, which only a top-of-graph host module can do
+//     declaring modules, which only a top-of-graph composition can do
 //     without inflating a low-tier module's dependency floor, so this
-//     command lives in the reference-app module (the one module whose go.mod
-//     already requires every platform module) and composes the PLATFORM
-//     modules directly rather than through the app's own assembly, keeping
-//     the reference app's own demo items (notes' brand/support keys and its
-//     two flags) out of the platform reference.
+//     command lives in its own tool module (tools/configrefgen, a go.work
+//     use entry outside go/, consumer-module form that the lockstep release
+//     coordinator never publishes) and composes the PLATFORM modules
+//     directly, keeping any application's own items out of the platform
+//     reference.
 //
 //   - The BOOTSTRAP layer: the process-start input resolved once, before the
 //     dynamic layer exists. Its keys come from the modules themselves: every
@@ -38,12 +38,11 @@
 //     declares no keys; the reference says so, rather than filling the gap
 //     with a placeholder. The host side stays out of this reference on
 //     purpose: the variables an assembling application reads are that host's
-//     own surface, documented where the host lives (examples/reference-app's
-//     README.md, DEPLOY.md and .env.example carry the reference app's own
-//     operator text), while this repository-wide reference is the platform
-//     surface -- the declared keys and the mechanism a host drives to
-//     resolve them (go/pkgcore/config: the four-source chain, the prefix
-//     option, pinned variable names, and Verify's binding check).
+//     own surface, documented where that host lives, while this
+//     repository-wide reference is the platform surface -- the declared keys
+//     and the mechanism a host drives to resolve them (go/pkgcore/config:
+//     the four-source chain, the prefix option, pinned variable names, and
+//     Verify's binding check).
 //
 // The outputs are docs/config-reference.md and docs/config-reference.json at
 // the repository root, config.example.json (the JSON counterpart of the
@@ -52,10 +51,11 @@
 // (docs/site/content.en/docs/user-guide/configuration.md). Every output is
 // deterministic and byte-identical across runs.
 //
-// Usage (from the examples/reference-app module directory; the repository
-// root is located automatically as the nearest ancestor carrying go.work):
+// Usage (from this module's own directory, tools/configrefgen; the
+// repository root is located automatically as the nearest ancestor carrying
+// go.work):
 //
-//	go run ./cmd/configrefgen [--check]
+//	go run . [--check]
 //
 // --check exits nonzero (printing a diff) instead of writing, for the CI
 // wiring in docs-check.yml.

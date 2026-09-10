@@ -51,8 +51,8 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
 
 ### 1.4 configrefgen 与文档链现状
 
-- configrefgen(examples/reference-app/cmd/configrefgen)是唯一同时接触两层的工具:动态层由它自组的 schema host(host.go)经 Describe 枚举;bootstrap 层用两个机制(文件头注自述):(1) AST 扫描 `internal/app` 与 `cmd/server`,提取全部 `"APP_…"`/`"PORT"` 字面量成总账——总账派生自代码,绝不手列;(2) curated 事实表(键的 kind/回退/secret/summary/group/example)配**双向覆盖门**:总账键必须恰好各出现一次,表行必须都是真实读键,否则生成器失败。
-- 输出与字节幂等(main.go 的 `renderOutputs`):仓库根 `docs/config-reference.md`、`docs/config-reference.json`、根 `.env.example`、`config.example.json` 与站点页 `docs/site/content.en/docs/user-guide/configuration.md`(根 `.env.example` 头注明为 configrefgen 所生成、键缺漏会触发 drift 门;步骤二落地后该产物随宿主面一起移除,产物集为四件,§9)。`--check` 接 docs-check.yml 的 Config reference drift check 步(`go run ./cmd/configrefgen --check`;configrefgen 自身测试由 full-check 的 reference-app 腿跑)。
+- configrefgen(tools/configrefgen;原位于 examples/reference-app/cmd/configrefgen,后归位为独立 Go 工具模块——go.work use 条目在 go/ 之外,锁步发布不产 tag,见 §5.2 迁移注记)是唯一同时接触两层的工具:动态层由它自组的 schema host(host.go)经 Describe 枚举;bootstrap 层用两个机制(文件头注自述):(1) AST 扫描 `internal/app` 与 `cmd/server`,提取全部 `"APP_…"`/`"PORT"` 字面量成总账——总账派生自代码,绝不手列;(2) curated 事实表(键的 kind/回退/secret/summary/group/example)配**双向覆盖门**:总账键必须恰好各出现一次,表行必须都是真实读键,否则生成器失败。
+- 输出与字节幂等(main.go 的 `renderOutputs`):仓库根 `docs/config-reference.md`、`docs/config-reference.json`、根 `.env.example`、`config.example.json` 与站点页 `docs/site/content.en/docs/user-guide/configuration.md`(根 `.env.example` 头注明为 configrefgen 所生成、键缺漏会触发 drift 门;步骤二落地后该产物随宿主面一起移除,产物集为四件,§9)。`--check` 接 docs-check.yml 的 Config reference drift check 步(归位后为工作目录 `tools/configrefgen` 下 `go run . --check`;configrefgen 自身测试由 fast-check 与 full-check 的 `tools/configrefgen` 矩阵行跑)。
 - `docs/config-reference.md` 导言目前自述 "The generalized loader mechanism behind this surface is `go/pkgcore/config`: …… This app's own bootstrap does not drive the loader (its values carry app-specific resolution rules, key derivation among them)……"。这句话在迁移后必须翻转。
 - `config.example.yaml`(仓库根,手写)配 `config_example.go`(configrefgen 内的 loader 形状结构体,子集:deploymentmode/port/dbpath/redis.addr/smtp.*)与一个单测——用真实 loader 加载真实文件,验证格式与四源优先序。该示例维持 `SPEED_` 拼写族。
 - 站点与文档链:docs/site 下 content.en 与 content.zh-cn 对称,2026-09-10 按 `APP_|config-reference` 对两语区实跑 grep 各命中 8 页——`config-reference` 字面在站点零命中,8 页全部因 `APP_` env 字面命中(`SPEED_|os.Getenv|ConfigFromEnv` 复查面仅另见 i18n 页的 `SPEED_LOCALE_STORAGE_KEY` 与 observability-and-ops 页的 `OTLP_ENDPOINT` 直读示例,均与引导链无关,不入清单)。命中页按步骤二是否需人工核对分两类:
@@ -242,6 +242,8 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 
 > **实施注记(2026-09-10,用户裁定 A):** 本节原案的"宿主 29 键进平台产物、根 `.env.example` 重生成、旧 `examples/reference-app/.env.example` 删除"三点已由裁定 A 取代——平台参考面不含宿主变量节,curated 表与宿主渲染整体删除而非推迟,根 `.env.example` 产物移除,`examples/reference-app/.env.example` 保留为宿主键的文档载体之一。落地形态与替代门见 §9。
 
+> **迁移注记(归位):** 生成器已从 `examples/reference-app/cmd/configrefgen` 归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外,consumer-module 形态,锁步发布不产 tag、不进 changesets)。产物路径集不变(仍为 md/json/`config.example.json`/站点页四件);生成器内与产物内的宿主指涉同轮清除——产物与生成器内不再出现任何宿主变量名或 reference-app 指涉,`config.example.yaml` 的演示值中性化为 `app.db`。命令契约:在 `tools/configrefgen` 下 `go run .` / `go run . --check`;漂移门(docs-check.yml)与单测矩阵(fast-check/full-check 的 `tools/configrefgen` 行)按新路径接线。本节与 §7 描述的"表退役与换源"工作即在该新路径发生。
+
 - curated 表退役:35 行事实的宿主侧 29 枚迁入 loader 形状结构体字段注释,六枚平台键迁入模块声明;`bootstrap.go` 的 AST 扫描器与 `bootstrapTable` 删除。
 - 覆盖门重定义:结构体字段集 ≡ 模块声明集 ∪ 宿主键清单(双向,零差零漏),维持生成器"键缺漏即红"的既有承诺;另加"残留直读即失败"扫描:`internal/app` 与 `cmd/server` 出现 `os.Getenv` 即红(白名单空,healthcheck 迁移后无豁免)。
 - 导言翻转:`docs/config-reference.md` 的 "This app's own bootstrap does not drive the loader" 删除,改写为 loader 驱动叙述(前缀 `APP_`、四源链、派生键三段语义一句话带过);"no process in this repository currently reads it" 的 `config.example.yaml` 注记同步翻转(§5.3)。
@@ -276,7 +278,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - `go/pkgcore/config`:`WithEnvPrefix`、`env=` 钉、`Verify`、文本弱类型补强、readEnv 语义改写、包注释(边界句 + 新机制说明),配 §4.6 测试面与 godoc 示例;
 - `go/pkgcore`:Registry.Bootstrap 席位、`BootstrapKey`、`BootstrapRegistrar`、memory 实现、Add 校验、`ErrDuplicateBootstrapKey`、`NewRegistry` 接线,配席位级测试;Kernel.Bootstrap 双席键冲突检查(§2);
 - 平台模块声明:authn(2)、org(1)、notification(1)、pki(1)、config(1)六键声明(文案源 = 参考应用现有常量深注释);metering、compliance、sharing 记录零声明(§6 条款适用);声明模块的 AGENTS.md 行按文档纪律补齐;
-- configrefgen:渲染改造(模块声明 → per-module 键清单;宿主 29 键过渡期仍走 curated 表,两源对账门:键/名/分组不重不漏,表头注明过渡态;同时实现 §2 防线 2——运行时项键与 bootstrap 键交叠即红)、`.env.example`/JSON 对齐、站点页与 `config.example.json` 同入产物集(步骤一即已渲染)、docs-check 配置不动(--check 即门);
+- configrefgen(现于 `tools/configrefgen`,见 §5.2 迁移注记):渲染改造(模块声明 → per-module 键清单;宿主 29 键过渡期仍走 curated 表,两源对账门:键/名/分组不重不漏,表头注明过渡态;同时实现 §2 防线 2——运行时项键与 bootstrap 键交叠即红)、`.env.example`/JSON 对齐、站点页与 `config.example.json` 同入产物集(步骤一即已渲染)、docs-check 配置不动(--check 即门);
 - 明确不做:reference-app 任何运行面改动、env 名、站点页文案(§2 的机器防线 1 在 kernel 落、防线 2 在 configrefgen 落,都不依赖参考应用迁移)。
 
 排序理由:声明面先行,六平台键在过渡态有"模块声明 + curated 行"双源对账,任何漂移在步骤一就被门抓住;渲染底座先行,步骤二只换源不换管线。步骤一不触碰参考应用运行语义,因此独立可绿。
@@ -286,7 +288,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 ### 步骤二:reference-app 迁移 + 全链同步
 
 - loader 形状结构体 + transform(§5.1)、env 常量与 `os.Getenv` 退役、healthcheck 复用 cfg、等价性 pin 测试、值语义核对清单(flowtests/CI/compose 注入点);
-- configrefgen 表退役与换源、输出重生成(§5.2;含站点页与 `.json` 两份产物——裁定 A 后产物集为 md/json/`config.example.json`/站点页四件);
+- configrefgen(现于 `tools/configrefgen`)表退役与换源、输出重生成(§5.2;含站点页与 `.json` 两份产物——裁定 A 后产物集为 md/json/`config.example.json`/站点页四件);
 - 文档链同步清单整表执行(§5.3),按裁定 A 执行(旧 `examples/reference-app/.env.example` 保留,根生成件删除);
 - 两向 Verify 接入(宿主键清单并册,严格全等)。
 

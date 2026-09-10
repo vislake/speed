@@ -2,7 +2,7 @@
 # bootstrap loader, in its official file format (YAML or JSON; the loader's
 # package doc and ExampleWithConfigFile show both). config.example.json beside
 # this file is the same example in the other format: it is DERIVED from this
-# file by examples/reference-app/cmd/configrefgen, never hand-written, so the
+# file by tools/configrefgen, never hand-written, so the
 # pair cannot disagree about a key or a value, and its unit test loads both
 # through the real loader.
 #
@@ -29,15 +29,12 @@
 # IMPORTANT: this file is the FILE FORMAT'S example, not a file any process in
 # this repository reads: nothing here points WithConfigFile at it (an absent
 # file is skipped silently, which is how every boot in this repository runs).
-# The mechanism it demonstrates is real and exercised all the same: the
-# reference app drives this same loader for its whole bootstrap surface (its
-# target struct pins its own APP_-prefixed variables), and a host that wants
-# the file source declares its own target struct and points WithConfigFile at
-# a file shaped like this one;
-# examples/reference-app/cmd/configrefgen's config_example.go carries the
-# struct this exact file loads against, and its unit test loads this file
-# through the real loader, so the format demonstrated here is load-verified,
-# never aspirational.
+# The mechanism it demonstrates is real and exercised all the same: a host
+# that wants the file source declares its own target struct and points
+# WithConfigFile at a file shaped like this one;
+# tools/configrefgen's config_example.go carries the struct this exact file
+# loads against, and its unit test loads this file through the real loader, so
+# the format demonstrated here is load-verified, never aspirational.
 #
 # The keys below are a demonstration set, spelled the way a loader target
 # struct would declare them in the loader's own SPEED_ family.
@@ -55,9 +52,9 @@ deploymentmode: standalone
 port: "8080"
 
 # SQLite database file the standalone deployment mode opens.
-#   env:  SPEED_DBPATH=reference-app.db
-#   flag: --dbpath=reference-app.db
-dbpath: reference-app.db
+#   env:  SPEED_DBPATH=app.db
+#   flag: --dbpath=app.db
+dbpath: app.db
 
 # The infrastructure seams a process composes through real implementations.
 # A nested struct contributes its field names as further key segments, so
@@ -65,14 +62,14 @@ dbpath: reference-app.db
 # smtp.username and smtp.password, with env spellings SPEED_REDIS__ADDR,
 # SPEED_SMTP__HOST, SPEED_SMTP__PORT and so on (--redis.addr=...,
 # --smtp.host=... as flags). Unset, each seam stays on its in-process
-# default, exactly like the app's own unset fallbacks.
+# default, exactly like a host's own unset fallbacks.
 redis:
   addr: ""
 
 smtp:
   host: ""
   # A numeric value is decoded into the target field's type: this example
-  # file is genuinely loaded by the loader in cmd/configrefgen's unit test,
+  # file is genuinely loaded by the loader in tools/configrefgen's unit test,
   # which pins the flag > env > file > defaults precedence on it.
   port: 0
   username: ""

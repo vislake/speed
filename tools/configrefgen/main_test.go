@@ -112,7 +112,7 @@ func TestFindRepoRoot_DiscoversTheAncestorCarryingGoWork(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("// repository-root marker for findRepoRoot\n"), 0o644); err != nil {
 		t.Fatalf("write go.work: %v", err)
 	}
-	nested := filepath.Join(root, "examples", "reference-app")
+	nested := filepath.Join(root, "tools", "configrefgen")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", nested, err)
 	}

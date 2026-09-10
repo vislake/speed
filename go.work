@@ -23,4 +23,5 @@ use (
 	./go/sharing
 	./go/storage
 	./go/tenancy
+	./tools/configrefgen
 )

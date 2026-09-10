@@ -81,12 +81,12 @@ func checkOutputs(root string, doc *document) int {
 		// below the repository root, never caller input.
 		current, err := os.ReadFile(abs)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s is missing or unreadable; run go run ./cmd/configrefgen from examples/reference-app/ (%v)\n", out.path, err)
+			fmt.Fprintf(os.Stderr, "%s is missing or unreadable; run go run . from tools/configrefgen/ (%v)\n", out.path, err)
 			stale = true
 			continue
 		}
 		if string(current) != out.content {
-			fmt.Fprintf(os.Stderr, "%s is out of date; run go run ./cmd/configrefgen from examples/reference-app/\n", out.path)
+			fmt.Fprintf(os.Stderr, "%s is out of date; run go run . from tools/configrefgen/\n", out.path)
 			stale = true
 		}
 	}

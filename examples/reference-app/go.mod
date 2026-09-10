@@ -126,9 +126,6 @@ require (
 )
 
 require (
-	github.com/knadh/koanf/parsers/yaml v1.1.1
-	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/v2 v2.3.6
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/vislake/speed/go/metering v0.0.1
 	github.com/vislake/speed/go/ratelimit v0.0.1
@@ -180,6 +177,9 @@ require (
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
+	github.com/knadh/koanf/parsers/yaml v1.1.1 // indirect
+	github.com/knadh/koanf/providers/file v1.2.1 // indirect
+	github.com/knadh/koanf/v2 v2.3.6 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

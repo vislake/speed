@@ -1,6 +1,6 @@
 {
   "baselines": {
-    "examples/reference-app": 80.854043,
+    "examples/reference-app": 80.725712,
     "go/admin": 88.634098,
     "go/ai-gateway": 87.544484,
     "go/authn": 86.972789,

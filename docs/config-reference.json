@@ -74,7 +74,7 @@
       ]
     }
   ],
-  "generated_by": "examples/reference-app/cmd/configrefgen (go run ./cmd/configrefgen)",
+  "generated_by": "tools/configrefgen (go run .)",
   "items": [
     {
       "key": "authn.access_token_ttl",

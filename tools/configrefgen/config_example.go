@@ -3,9 +3,10 @@ package main
 // config_example.go carries the target struct the repository-root
 // config.example.yaml loads against, and the load-verification unit test in
 // configrefgen_test.go drives the real pkgcore/config loader over the real
-// committed file. The struct mirrors the reference app's own bootstrap item
-// set in loader shape (see config.example.yaml's header comment for why the
-// file is the format's example rather than a file a shipped host reads).
+// committed file. The struct is a demonstration loader target in the
+// loader's own SPEED_ spelling family (see config.example.yaml's header
+// comment for why the file is the format's example rather than a file a
+// shipped host reads).
 //
 // The struct's fields are deliberately loader-shaped: exported fields map
 // to dotted keys lowercased, a nested struct contributes its type name's
@@ -66,10 +67,10 @@ type exampleBootstrapConfig struct {
 	// Port is the HTTP listen port, defaulting to 8080.
 	Port string
 
-	// DBPath is the SQLite database file, defaulting to reference-app.db.
+	// DBPath is the SQLite database file, defaulting to app.db.
 	DBPath string
 
-	// Redis and SMTP mirror the app's seam variables in nested form: the
+	// Redis and SMTP mirror a host's seam variables in nested form: the
 	// block in config.example.yaml maps onto redis.addr and the smtp.*
 	// keys, whose env spellings are SPEED_REDIS__ADDR and SPEED_SMTP__*.
 	Redis exampleRedisConfig
@@ -92,7 +93,7 @@ type exampleSMTPConfig struct {
 func exampleBootstrapDefaults() exampleBootstrapConfig {
 	return exampleBootstrapConfig{
 		Port:   "8080",
-		DBPath: "reference-app.db",
+		DBPath: "app.db",
 	}
 }
 

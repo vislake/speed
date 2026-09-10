@@ -15,8 +15,7 @@ import (
 )
 
 // repoRootFromTest locates the repository root above the package directory
-// (cmd/configrefgen sits five levels deep: configrefgen -> cmd ->
-// reference-app -> examples -> root).
+// (configrefgen sits two levels deep: configrefgen -> tools -> root).
 func repoRootFromTest(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -59,8 +58,8 @@ func TestConfigExampleYAMLLoadsThroughTheLoader(t *testing.T) {
 	if cfg.Port != "8080" {
 		t.Errorf("Port = %q, want the struct default 8080 (file spelling must decode)", cfg.Port)
 	}
-	if cfg.DBPath != "reference-app.db" {
-		t.Errorf("DBPath = %q, want the file's reference-app.db", cfg.DBPath)
+	if cfg.DBPath != "app.db" {
+		t.Errorf("DBPath = %q, want the file's app.db", cfg.DBPath)
 	}
 
 	// Environment beats the file: SPEED_DEPLOYMENTMODE and SPEED_SMTP__PORT
@@ -130,7 +129,7 @@ func TestConfigExampleJSONLoadsThroughTheLoader(t *testing.T) {
 		t.Fatalf("read %s: %v", configExampleJSONPath, err)
 	}
 	if string(committed) != derived {
-		t.Errorf("%s is not the derivation of %s; run go run ./cmd/configrefgen from examples/reference-app/", configExampleJSONPath, configExampleYAMLPath)
+		t.Errorf("%s is not the derivation of %s; run go run . from tools/configrefgen/", configExampleJSONPath, configExampleYAMLPath)
 	}
 }
 
