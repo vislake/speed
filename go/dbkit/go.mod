@@ -2,6 +2,12 @@ module github.com/vislake/speed/go/dbkit
 
 go 1.26.0
 
+// The bootstrap-key declaration seat (pkgcore.BootstrapKeyPurpose) is not in a
+// released pkgcore version yet, so this module resolves pkgcore from the
+// sibling checkout. A replace directive in a dependency is ignored by
+// consumers, so this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
