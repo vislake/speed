@@ -77,6 +77,11 @@ name: fast-check
 #         runs on every module job. The reference app's own coverage
 #         check is not gated here: its unit suite is full-check-only,
 #         so the measurement rides full-check's reference-app job.
+#         The checker's own unit suite
+#         (tools/test_check_coverage_baseline.py) runs as its own
+#         stdlib-only step just before it, pinning the coverage math,
+#         the diagnostics census, both regimes of the size-calibrated
+#         tolerance and the --update refusal path.
 #       - tools/check_spec_request_tenant_id.py -- the API-spec lint for
 #         the 18-cicd discipline row "the API layer must not accept an
 #         externally supplied tenant_id": every backend fragment's
@@ -295,6 +300,14 @@ jobs:
       # step like the CJK scan above it.
       - name: Tenant-isolation coverage check (Repository isolation suites)
         run: python3 tools/check_repo_isolation.py
+      # The coverage baseline checker's own unit suite: stdlib-only
+      # unittest over the statement-coverage math, the failure-
+      # diagnostics census, both regimes of the size-calibrated
+      # tolerance (the 0.15-point main tolerance and the 2-statement
+      # floor) and the --update refusal path. Pure python, so it needs
+      # no Go toolchain, and it runs before the self-check step below.
+      - name: Coverage-baseline checker's unit suite (tools/test_check_coverage_baseline.py)
+        run: python3 tools/test_check_coverage_baseline.py
       # Coverage-baseline file health: every row must name a gated
       # module (docs/internal/20's released set: the 21 go/ modules with
       # a go.mod plus examples/reference-app) with a real go.mod, and
