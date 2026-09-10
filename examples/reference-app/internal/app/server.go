@@ -159,9 +159,11 @@ var DevOrgIndexKey = []byte{
 // way this demo commits these. Each has a real override path
 // (APP_PKI_LOCAL_KEY_CIPHER_KEY, APP_AUTHN_BLIND_INDEX_KEY and
 // APP_AUTHN_PII_CIPHER_KEY, the Authn and Pki fields of the bootstrap target;
-// or APP_ROOT_KEY deriving all three at once -- see the RootKey field's own
-// doc comment (bootstrap.go)); ConfigFromEnv's transform consults those three
-// variables as resolveKey's devDefault fallback, never directly from
+// or APP_ROOT_KEY deriving all three at once -- see loadHostConfig's own doc
+// comment (bootstrap.go) for the root-key wiring and the three-tier
+// precedence it applies); the loader consults those three variables while
+// resolving the fields, with the Dev* struct defaults (hostConfigDefaults)
+// standing as its lowest tier -- never a direct environment read from
 // BuildServer.
 //
 // Each protects something different and each MUST stay stable across

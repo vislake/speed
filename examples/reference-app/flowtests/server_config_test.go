@@ -349,11 +349,11 @@ func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
 }
 
 // rootKeyEnvVars lists every environment variable an explicit individual
-// key can be set through, in the same order the RootKey bootstrap field's own
-// doc comment
-// lists the six key materials. The root-key tests below clear all six
-// before setting APP_ROOT_KEY, so every key is proven to resolve through
-// the derivation path with nothing left over from the ambient environment.
+// key can be set through, in the same order loadHostConfig's own doc comment
+// documents the six key materials' three-tier resolution. The root-key tests
+// below clear all six before setting APP_ROOT_KEY, so every key is proven to
+// resolve through the derivation path with nothing left over from the
+// ambient environment.
 var rootKeyEnvVars = []string{
 	"APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
 	"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
@@ -372,7 +372,7 @@ func clearRootKeyOverrides(t *testing.T) {
 
 // TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
 // -- no individual key env var set -- derives every one of the six key
-// materials the RootKey bootstrap field's own doc comment lists, and that
+// materials loadHostConfig's own doc comment documents, and that
 // ConfigFromEnv's derivation matches the platform composition
 // (pkgcore.BootstrapKeyPurpose over the declared key path, then
 // dbkit.DeriveKey over the root): not merely "some non-default bytes landed
@@ -413,7 +413,7 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 	}
 
 	// The six derived keys must also be pairwise distinct -- a purpose
-	// string collision (or a resolveKey wiring mistake reusing one
+	// string collision (or a loadHostConfig wiring mistake reusing one
 	// derived value for two fields) would silently reintroduce the exact
 	// key-material reuse dbkit's key-separation rule forbids.
 	keys := map[string][]byte{
@@ -432,8 +432,7 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 }
 
 // TestConfigFromEnv_RootKey_IndividualOverrideWins proves the precedence
-// order the RootKey bootstrap field's own doc comment states: with both
-// APP_ROOT_KEY and
+// order loadHostConfig's own doc comment states: with both APP_ROOT_KEY and
 // one individual key env var (APP_CONFIG_KEY) set, the explicit
 // individual value wins for that one key, while every other key still
 // resolves through the root-key derivation -- the "power users can still

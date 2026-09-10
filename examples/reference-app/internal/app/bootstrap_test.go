@@ -12,10 +12,10 @@ package app
 // compose the declaring module.
 //
 // The file also drives the resolution the target feeds, with hand-built
-// hostConfig values instead of a process environment: serverConfigFrom and
-// the helpers under it (parseHexKeyEnv, resolveKey, splitTrustedProxies) are
-// exercised directly, so every refusal path and precedence tier is pinned
-// here as well as end to end through ConfigFromEnv in flowtests.
+// hostConfig values instead of a process environment: serverConfigFrom,
+// splitTrustedProxies, hostConfigDefaults and loadHostConfig are exercised
+// directly, so every refusal path and precedence tier is pinned here as well
+// as end to end through ConfigFromEnv in flowtests.
 
 import (
 	"bytes"
