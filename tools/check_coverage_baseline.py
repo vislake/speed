@@ -111,7 +111,10 @@ What a breach means and how to respond
 
   * A PR that adds code without tests drops the total and fails one or
     both comparisons, naming the module, the measured total and the
-    breached bound -- the intended signal ("write the tests").
+    breached bound -- the intended signal ("write the tests"). The
+    same failure prints the module's largest uncovered blocks and its
+    total uncovered statements, so a breach names where the gap sits,
+    not only how large it is.
   * A change that deliberately lowers coverage (removing a test whose
     scenario is obsolete, restructuring) fails the decline comparison
     and must say so: re-run with --update to record the new baseline in
@@ -155,6 +158,7 @@ Standard library only, Python >= 3.11. Needs a Go toolchain on PATH.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import pathlib
@@ -212,6 +216,14 @@ LOWER_BOUND_PP = 80.0
 # suite -- see the module docstring). See the module docstring.
 EPSILON_PP = 0.15
 
+# The cap on the uncovered-block lines a failed comparison prints: the
+# uncovered set of a large module runs to thousands of blocks, which
+# would bury the CI log, so the list keeps only the largest
+# contributors. The summary line after the list always carries the
+# true totals (statements and blocks), so the cap hides size, never
+# the aggregate.
+DIAGNOSTIC_LIMIT = 30
+
 # The profile format line for one function block:
 #   go/pkgcore/kernel.go:12.17,18.2 3 2
 # path:startline.startcol,endline.endcol <numstmt> <count>
@@ -236,12 +248,11 @@ def short_toolchain(go_version_output: str) -> str:
     return "go" + match.group(1)
 
 
-def coverage_from_profile(profile_text: str) -> float:
-    """Total statement coverage percent from a go test -coverprofile
-    file, computed exactly: covered statements (count > 0) over all
-    statements across every block the profile carries. Unrounded, so a
-    comparison against a stored baseline is not quantized by the
-    0.1-point rounding `go tool cover -func` applies to its output.
+def statement_census(
+    profile_text: str,
+) -> dict[tuple[str, str], tuple[int, bool]]:
+    """The profile's function blocks, each distinct block counted once,
+    as a (path, position) -> (statements, covered) census.
 
     A go test run over many packages writes one profile fragment per
     test binary, and under -coverpkg=./... every fragment carries the
@@ -271,6 +282,21 @@ def coverage_from_profile(profile_text: str) -> float:
             census[key] = (statements, covered or count > 0)
         else:
             census[key] = (statements, count > 0)
+    return census
+
+
+def coverage_from_profile(profile_text: str) -> float:
+    """Total statement coverage percent from a go test -coverprofile
+    file, computed exactly: covered statements (count > 0) over all
+    statements across every block the profile carries. Unrounded, so a
+    comparison against a stored baseline is not quantized by the
+    0.1-point rounding `go tool cover -func` applies to its output.
+
+    The blocks come from statement_census, the same census the failure
+    diagnostics read, so the number a comparison fails on and the
+    uncovered list printed beside it cannot disagree about what
+    "uncovered" means."""
+    census = statement_census(profile_text)
     total = sum(statements for statements, _ in census.values())
     covered = sum(
         statements
@@ -280,6 +306,61 @@ def coverage_from_profile(profile_text: str) -> float:
     if total == 0:
         return 100.0
     return 100.0 * covered / total
+
+
+def line_span(position: str) -> str:
+    """A profile position's line span, for the failure diagnostics:
+    '12.17,18.2' -> '12-18'."""
+    start, end = position.split(",")
+    return "%s-%s" % (start.split(".")[0], end.split(".")[0])
+
+
+def uncovered_blocks_from_profile(
+    profile_text: str,
+) -> list[tuple[str, str, int]]:
+    """The profile's uncovered blocks -- blocks no fragment ever
+    executed, deduplicated and .gen.go-filtered exactly as the census
+    does -- as (path, position, statements) triples sorted by
+    statement count descending, ties by path then position, so a
+    failed comparison names its largest gaps first and equal-size
+    gaps keep a stable order."""
+    census = statement_census(profile_text)
+    blocks = [
+        (path, position, statements)
+        for (path, position), (statements, covered) in census.items()
+        if not covered
+    ]
+    blocks.sort(key=lambda block: (-block[2], block[0], block[1]))
+    return blocks
+
+
+def uncovered_diagnostics(module_dir: str, profile_text: str) -> list[str]:
+    """The diagnostic lines a failed comparison prints: the module's
+    largest uncovered blocks, up to DIAGNOSTIC_LIMIT of them, one per
+    line in the 'file:startLine-endLine (N stmts)' form, followed by a
+    summary line carrying the true uncovered totals. Naming the blocks
+    is what lets a breach be located -- an environment-specific gap
+    between two runs shows up as a different uncovered set, which a
+    bare percentage cannot show."""
+    blocks = uncovered_blocks_from_profile(profile_text)
+    lines = [
+        "check_coverage_baseline: %s: uncovered blocks (showing %d of "
+        "%d, largest first):"
+        % (module_dir, min(len(blocks), DIAGNOSTIC_LIMIT), len(blocks))
+    ]
+    for path, position, statements in blocks[:DIAGNOSTIC_LIMIT]:
+        lines.append(
+            "%s:%s (%d stmts)" % (path, line_span(position), statements)
+        )
+    lines.append(
+        "check_coverage_baseline: %s: %d uncovered statements in %d blocks"
+        % (
+            module_dir,
+            sum(statements for _, _, statements in blocks),
+            len(blocks),
+        )
+    )
+    return lines
 
 
 def comparison_failures(
@@ -311,18 +392,33 @@ def comparison_failures(
     return failures
 
 
-def measure_module_coverage(root: pathlib.Path, module_dir: str) -> float:
+@dataclasses.dataclass(frozen=True)
+class ModuleMeasurement:
+    """One module's measurement: the exact total the gate compares,
+    plus the profile text it was computed from, so a failed comparison
+    can list the uncovered blocks behind the total."""
+
+    total: float
+    profile_text: str
+
+
+def measure_module_coverage(
+    root: pathlib.Path, module_dir: str
+) -> ModuleMeasurement:
     """Run the module's unit suite under -coverprofile and return its
-    exact total statement coverage percent -- the module suite measured
-    against the whole module. -coverpkg=./... instruments every module
-    package in every test binary, so execution that crosses a package
-    boundary counts toward the package whose code it runs: a suite that
-    lives in a directory of its own (go/<module>/unittest/ for no-target
-    unit suites, an application's flowtests/ for assembly flows) and
-    drives another package from outside would contribute no coverage to
-    that package at all under per-package instrumentation -- go test's
-    default -- which instruments only the package under test. The
-    merged profile is written to a temp file inside the module
+    measurement: the exact total statement coverage percent -- the
+    module suite measured against the whole module -- plus the profile
+    text behind it, so a failed comparison can print the uncovered
+    blocks (the profile temp file is gone by then). -coverpkg=./...
+    instruments every module package in every test binary, so
+    execution that crosses a package boundary counts toward the
+    package whose code it runs: a suite that lives in a directory of
+    its own (go/<module>/unittest/ for no-target unit suites, an
+    application's flowtests/ for assembly flows) and drives another
+    package from outside would contribute no coverage to that package
+    at all under per-package instrumentation -- go test's default --
+    which instruments only the package under test. The merged profile
+    is written to a temp file inside the module
     directory (go test names profile paths relative to its working
     directory, but the parse only needs the statement census, so an
     absolute temp path works too) and removed afterwards. A failing
@@ -367,7 +463,9 @@ def measure_module_coverage(root: pathlib.Path, module_dir: str) -> float:
         profile_text = pathlib.Path(profile).read_text(encoding="utf-8")
     finally:
         pathlib.Path(profile).unlink(missing_ok=True)
-    return coverage_from_profile(profile_text)
+    return ModuleMeasurement(
+        coverage_from_profile(profile_text), profile_text
+    )
 
 
 def load_baselines(path: pathlib.Path) -> dict:
@@ -512,9 +610,9 @@ def main(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
                 return 1
-            total = measure_module_coverage(root, module_dir)
-            measured_by_module[module_dir] = total
-            if comparison_failures(total, baseline=None):
+            measurement = measure_module_coverage(root, module_dir)
+            measured_by_module[module_dir] = measurement.total
+            if comparison_failures(measurement.total, baseline=None):
                 refusals.append(
                     "update refuses to record %s at %.4f%%: the measured "
                     "total breaches the %.1f%% floor, and the floor is "
@@ -565,9 +663,9 @@ def main(argv: list[str]) -> int:
             )
             failures += 1
             continue
-        measured = measure_module_coverage(root, module_dir)
+        measurement = measure_module_coverage(root, module_dir)
         baseline = rows[module_dir]
-        reasons = comparison_failures(measured, baseline)
+        reasons = comparison_failures(measurement.total, baseline)
         if reasons:
             for reason in reasons:
                 print(
@@ -575,11 +673,15 @@ def main(argv: list[str]) -> int:
                     % (module_dir, reason),
                     file=sys.stderr,
                 )
+            for line in uncovered_diagnostics(
+                module_dir, measurement.profile_text
+            ):
+                print(line, file=sys.stderr)
             failures += 1
         else:
             print(
                 "%s: %.4f%% (floor %.1f%%, baseline %.4f%%)"
-                % (module_dir, measured, LOWER_BOUND_PP, baseline)
+                % (module_dir, measurement.total, LOWER_BOUND_PP, baseline)
             )
     return 1 if failures else 0
 

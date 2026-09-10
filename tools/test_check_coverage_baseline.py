@@ -19,6 +19,11 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
     multi-binary fragments (a -coverpkg run lists each block once per
     test binary) are deduplicated: each block counts once, covered
     when any fragment executed it.
+  * uncovered_blocks_from_profile / uncovered_diagnostics -- the
+    failure diagnostics' block census: the same dedup and .gen.go
+    exclusion as the coverage math, largest blocks first, and the cap
+    that keeps the printed list short while the summary line still
+    carries the true uncovered totals.
   * comparison_failures -- the two-bounds decision rule (the 80.0%
     floor and the recorded baseline, both under the same tolerance),
     including which bound a measurement breaches when both do.
@@ -143,6 +148,102 @@ class CoverageMath(unittest.TestCase):
             ]
         )
         self.assertAlmostEqual(m.coverage_from_profile(profile), 8 / 12 * 100)
+
+
+class Diagnostics(unittest.TestCase):
+    """The uncovered-block census and the lines a failed comparison
+    prints: same dedup and .gen.go exclusion as the coverage math,
+    largest blocks first, capped at DIAGNOSTIC_LIMIT with the true
+    totals on the summary line."""
+
+    def test_lists_uncovered_blocks_largest_first(self):
+        # worker.go's block is executed by one of the two binaries that
+        # carried it, so it counts as covered and stays off the list;
+        # queue.go's 6-statement block outranks store.go's 4-statement
+        # one.
+        profile = "\n".join(
+            [
+                "mode: set",
+                "go/jobs/worker.go:10.2,20.14 8 0",
+                "go/jobs/worker.go:10.2,20.14 8 1",
+                "go/jobs/store.go:21.2,30.14 4 0",
+                "go/jobs/queue.go:31.2,40.14 6 0",
+            ]
+        )
+        self.assertEqual(
+            m.uncovered_blocks_from_profile(profile),
+            [
+                ("go/jobs/queue.go", "31.2,40.14", 6),
+                ("go/jobs/store.go", "21.2,30.14", 4),
+            ],
+        )
+
+    def test_uncovered_blocks_exclude_gen_go(self):
+        # A big uncovered generated block is still not a test target:
+        # it must not appear in the diagnostics either.
+        profile = "\n".join(
+            [
+                "mode: set",
+                "go/authn/api/authn-server.gen.go:10.2,90.14 80 0",
+                "go/authn/service.go:10.2,20.14 8 0",
+            ]
+        )
+        self.assertEqual(
+            m.uncovered_blocks_from_profile(profile),
+            [("go/authn/service.go", "10.2,20.14", 8)],
+        )
+
+    def test_line_span_renders_start_and_end_line(self):
+        self.assertEqual(m.line_span("12.17,18.2"), "12-18")
+
+    def test_diagnostics_format_and_totals(self):
+        profile = "\n".join(
+            [
+                "mode: set",
+                "go/jobs/queue.go:31.2,40.14 6 0",
+                "go/jobs/store.go:21.2,30.14 4 0",
+            ]
+        )
+        self.assertEqual(
+            m.uncovered_diagnostics("go/jobs", profile),
+            [
+                "check_coverage_baseline: go/jobs: uncovered blocks "
+                "(showing 2 of 2, largest first):",
+                "go/jobs/queue.go:31-40 (6 stmts)",
+                "go/jobs/store.go:21-30 (4 stmts)",
+                "check_coverage_baseline: go/jobs: 10 uncovered "
+                "statements in 2 blocks",
+            ],
+        )
+
+    def test_diagnostics_cap_keeps_true_totals(self):
+        # The list stops at DIAGNOSTIC_LIMIT block lines, but the
+        # summary line still carries the module's true uncovered
+        # totals, so the cap never understates the gap.
+        profile = "\n".join(
+            ["mode: set"]
+            + [
+                "go/jobs/f%02d.go:1.1,2.2 1 0" % i
+                for i in range(m.DIAGNOSTIC_LIMIT + 5)
+            ]
+        )
+        lines = m.uncovered_diagnostics("go/jobs", profile)
+        self.assertEqual(len(lines), m.DIAGNOSTIC_LIMIT + 2)
+        self.assertEqual(
+            lines[0],
+            "check_coverage_baseline: go/jobs: uncovered blocks "
+            "(showing %d of %d, largest first):"
+            % (m.DIAGNOSTIC_LIMIT, m.DIAGNOSTIC_LIMIT + 5),
+        )
+        self.assertEqual(lines[1], "go/jobs/f00.go:1-2 (1 stmts)")
+        self.assertEqual(
+            lines[m.DIAGNOSTIC_LIMIT], "go/jobs/f29.go:1-2 (1 stmts)"
+        )
+        self.assertEqual(
+            lines[-1],
+            "check_coverage_baseline: go/jobs: %d uncovered statements in "
+            "%d blocks" % (m.DIAGNOSTIC_LIMIT + 5, m.DIAGNOSTIC_LIMIT + 5),
+        )
 
 
 class Comparisons(unittest.TestCase):
