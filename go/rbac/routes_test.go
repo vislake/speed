@@ -107,13 +107,19 @@ func TestGuardRoutes_ContradictoryDecisions_FailStartup(t *testing.T) {
 		},
 		{
 			name: "public with a subject resolver",
-			rule: RouteRule{Path: "/api/v1/notes", Access: pkgcore.RouteAccess{Public: true},
-				SubjectResolver: func(*http.Request) (Subject, bool) { return Subject{}, false }},
+			rule: RouteRule{
+				Path:            "/api/v1/notes",
+				Access:          pkgcore.RouteAccess{Public: true},
+				SubjectResolver: func(*http.Request) (Subject, bool) { return Subject{}, false },
+			},
 		},
 		{
 			name: "public with an exemption",
-			rule: RouteRule{Path: "/api/v1/notes", Access: pkgcore.RouteAccess{Public: true},
-				Exempt: func(*http.Request) bool { return true }},
+			rule: RouteRule{
+				Path:   "/api/v1/notes",
+				Access: pkgcore.RouteAccess{Public: true},
+				Exempt: func(*http.Request) bool { return true },
+			},
 		},
 	}
 	for _, tc := range tests {
@@ -246,14 +252,17 @@ func TestGuardRoutes_ThreeSegmentPermission_SplitsAtTheLastSeparator(t *testing.
 	az := &stubAuthorizer{allow: true}
 	guarded, err := GuardRoutes(az,
 		[]pkgcore.MountedRoute{route},
-		[]RouteRule{{Path: "/api/v1/integration", Access: pkgcore.RouteAccess{
-			Permission: func(r *http.Request) string {
-				if r.Method == http.MethodGet {
-					return "integration:apikey:read"
-				}
-				return "integration:apikey:manage"
+		[]RouteRule{{
+			Path: "/api/v1/integration",
+			Access: pkgcore.RouteAccess{
+				Permission: func(r *http.Request) string {
+					if r.Method == http.MethodGet {
+						return "integration:apikey:read"
+					}
+					return "integration:apikey:manage"
+				},
 			},
-		}}})
+		}})
 	if err != nil {
 		t.Fatalf("GuardRoutes: %v", err)
 	}
@@ -275,8 +284,12 @@ func TestGuardRoutes_AuthorizerError_KeepsTheGatesServerErrorShape(t *testing.T)
 	az := &stubAuthorizer{allow: true, err: errors.New("storage unreachable")}
 	guarded, err := GuardRoutes(az,
 		[]pkgcore.MountedRoute{route},
-		[]RouteRule{{Path: "/api/v1/notes", Access: pkgcore.RouteAccess{
-			Permission: func(*http.Request) string { return "notes:read" }}}})
+		[]RouteRule{{
+			Path: "/api/v1/notes",
+			Access: pkgcore.RouteAccess{
+				Permission: func(*http.Request) string { return "notes:read" },
+			},
+		}})
 	if err != nil {
 		t.Fatalf("GuardRoutes: %v", err)
 	}
@@ -440,8 +453,12 @@ func TestGuardRoutes_SubjectResolverOverride_IsHonored(t *testing.T) {
 	route2, next2 := newRoute("/api/v1/admin")
 	noResolver, err := GuardRoutes(az,
 		[]pkgcore.MountedRoute{route2},
-		[]RouteRule{{Path: "/api/v1/admin", Access: pkgcore.RouteAccess{
-			Permission: func(*http.Request) string { return "admin:impersonate" }}}})
+		[]RouteRule{{
+			Path: "/api/v1/admin",
+			Access: pkgcore.RouteAccess{
+				Permission: func(*http.Request) string { return "admin:impersonate" },
+			},
+		}})
 	if err != nil {
 		t.Fatalf("GuardRoutes: %v", err)
 	}
@@ -477,8 +494,12 @@ func TestGuardRoutes_InexactTable_ReturnsNothingAndMutatesNothing(t *testing.T) 
 	})
 
 	guarded, err := GuardRoutes(&stubAuthorizer{allow: true}, mounted, []RouteRule{
-		{Path: "/api/v1/notes", Access: pkgcore.RouteAccess{
-			Permission: func(*http.Request) string { return "notes:read" }}},
+		{
+			Path: "/api/v1/notes",
+			Access: pkgcore.RouteAccess{
+				Permission: func(*http.Request) string { return "notes:read" },
+			},
+		},
 		{Path: "/api/v1/config/public", Access: pkgcore.RouteAccess{Public: true}},
 	})
 	if err != nil {
