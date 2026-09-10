@@ -18,6 +18,7 @@ import (
 	// file in this directory into a single binary.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // brandModule is a business module in the shape every speed module takes:
@@ -287,4 +288,58 @@ func ExampleService_TenantDuration() {
 	// system row: 2h0m0s
 	// acme's own row: 30m0s
 	// globex still sees: 2h0m0s
+}
+
+// ExampleModule_Handle shows the lazy read handle: a host captures it while
+// assembling, long before the Service exists, and reads through it after
+// Attach. A read in the window before Attach fails closed with the module's
+// coded not-attached error rather than a zero-value answer; the same handle
+// then serves the real reads.
+func ExampleModule_Handle() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:config_example_handle?mode=memory&cache=shared",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	configModule := config.NewModule(db, config.WithPollInterval(0))
+	migrations := dbkit.NewMigrationRegistry()
+	if err = migrations.Register(configModule); err != nil {
+		panic(err)
+	}
+	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+
+	// A seam that reads configuration is wired with the handle here --
+	// before Bootstrap, when no Service exists yet.
+	handle := configModule.Handle()
+	if _, err = handle.IsEnabled(ctx, "brand.custom_theme"); err != nil {
+		appErr, _ := apperr.As(err)
+		fmt.Println("before Attach:", appErr.Code)
+	}
+
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, &brandModule{}, configModule)
+	if err != nil {
+		panic(err)
+	}
+	svc, err := configModule.Attach(reg)
+	if err != nil {
+		panic(err)
+	}
+	defer svc.Close()
+
+	enabled, err := handle.IsEnabled(ctx, "brand.custom_theme")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("after Attach:", enabled)
+
+	// Output:
+	// before Attach: config.service_not_attached
+	// after Attach: false
 }

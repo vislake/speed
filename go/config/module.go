@@ -85,9 +85,15 @@ type Module struct {
 	pollInterval time.Duration
 
 	// service is the Service Attach produced, nil until then. Routes
-	// mounted during Register resolve it lazily per request, so the
-	// window between Register and Attach reports ErrServiceNotAttached.
+	// mounted during Register and the module's Handle (handle.go) resolve
+	// it lazily per call, so the window between Register and Attach
+	// reports ErrServiceNotAttached.
 	service *Service
+
+	// handle is the module's lazy read handle, created by NewModule and
+	// returned unchanged by Handle for the module's whole life; its reads
+	// resolve m.service per call (handle.go's Handle doc comment).
+	handle *Handle
 
 	// attachMu serializes Attach calls. Attach is a once-per-Module
 	// startup step, so the lock is uncontended in practice; it exists to
@@ -161,8 +167,13 @@ func withAfterRefreshLockForTest(hook func()) Option {
 // sequence). db must not be nil by the time Attach runs; Register itself
 // never touches it (per pkgcore.Module's "declares, never performs I/O"
 // contract).
+//
+// It also creates the module's lazy read handle (Handle), so a host can
+// capture it here and wire it into the seams that read configuration
+// before Attach has run.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{db: db, pollInterval: DefaultPollInterval}
+	m.handle = &Handle{m: m}
 	for _, opt := range opts {
 		opt(m)
 	}

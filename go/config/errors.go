@@ -105,9 +105,10 @@ var (
 
 	// ErrServiceNotAttached reports a call through a Service whose Module has
 	// not been Attached to a Registry yet (or whose Attach failed). Routes
-	// are mounted during Register and resolve the service lazily, so this
-	// error can only surface in the window between Register and Attach, a
-	// host wiring bug.
+	// are mounted during Register and resolve the service lazily, and the
+	// module's lazy read Handle (handle.go) resolves it the same way, so
+	// this error can surface from either in the window before Attach -- a
+	// host wiring bug, never a steady state.
 	ErrServiceNotAttached = apperr.Internal("config.service_not_attached")
 
 	// ErrAlreadyAttached reports a second Attach call on one Module. The
