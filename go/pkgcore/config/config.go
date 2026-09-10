@@ -308,7 +308,7 @@ func (l *Loader) Load(target any) error {
 	if err != nil {
 		return err
 	}
-	if err := l.resolveEnvNames(schema); err != nil {
+	if err = l.resolveEnvNames(schema); err != nil {
 		return err
 	}
 
