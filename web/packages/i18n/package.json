@@ -14,6 +14,10 @@
       "types": "./dist/mui-locale.d.ts",
       "import": "./dist/mui-locale.js"
     },
+    "./platform-errors": {
+      "types": "./dist/platform-errors.d.ts",
+      "import": "./dist/platform-errors.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -37,6 +41,7 @@
   },
   "devDependencies": {
     "@mui/material": "^9.4.0",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.0.0",
     "react": "^19.2.8"
   }

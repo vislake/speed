@@ -72,6 +72,10 @@ export const SPEED_PACKAGE_MAP = Object.freeze([
     specifier: '@speed/i18n/mui-locale',
     entry: 'packages/i18n/src/mui-locale.ts',
   },
+  {
+    specifier: '@speed/i18n/platform-errors',
+    entry: 'packages/i18n/src/platform-errors.ts',
+  },
   { specifier: '@speed/i18n', entry: 'packages/i18n/src/index.ts' },
   { specifier: '@speed/tokens', entry: 'packages/tokens/src/index.ts' },
   { specifier: '@speed/ui-kit', entry: 'packages/ui-kit/src/index.ts' },

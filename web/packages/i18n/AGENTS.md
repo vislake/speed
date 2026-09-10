@@ -7,8 +7,10 @@ negotiated start language (`createI18n`), the manual language switch
 (`switchLanguage`), per-namespace resource registration
 (`registerNamespace`), the instance's own supported-language read
 (`readSupportedLanguages`, exported for surfaces that render a language
-picker from the instance's real set rather than the package default), and
-the MUI localization bridge (`./mui-locale`).
+picker from the instance's real set rather than the package default), the
+MUI localization bridge (`./mui-locale`), and the generated platform
+error-copy bundle with its registration (`./platform-errors`:
+`PLATFORM_ERRORS_NAMESPACE`, `registerPlatformErrors`).
 It wraps react-i18next/i18next and adds the platform's discipline on top:
 pinned supported-language sets, per-language coverage, key-set parity, and
 missing keys that warn and render as the key -- never another language's

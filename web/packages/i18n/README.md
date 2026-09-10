@@ -233,6 +233,47 @@ const theme = createTheme(baseTheme, muiLocaleFor(i18n.language))
 `muiLocaleFor` throws on unknown tags rather than silently pairing a
 Chinese UI with English locale text. It is identity-stable per language.
 
+## Platform error copy (`./platform-errors`)
+
+The backend modules already publish their error text: each
+`go/*/locales/*.toml` key is an apperr code and its value is the message
+the backend renders for it. `tools/gen_platform_error_bundle.py` turns
+those catalogs into this package's one generated client bundle
+(`src/platform-errors/locales/{zh-CN,en-US}.json`), a host registers it
+once at bootstrap, and the fallback namespace above makes it reachable
+from every package lookup:
+
+```ts
+import { createI18n } from '@speed/i18n'
+import {
+  PLATFORM_ERRORS_NAMESPACE,
+  registerPlatformErrors,
+} from '@speed/i18n/platform-errors'
+
+const i18n = createI18n({ fallbackNamespaces: [PLATFORM_ERRORS_NAMESPACE] })
+registerPlatformErrors(i18n)
+// t('welcome:errors.authn.invalid_credentials') resolves through the
+// platform bundle where the welcome bundle has no such leaf
+```
+
+Two properties of the generated bundle are deliberate and worth knowing
+before reading a miss as a bug:
+
+- **It is not status-filtered.** Every catalog entry ships, including
+  refusal classes a user is unlikely to see and wording that reads like
+  a developer's note (a boot-time wiring refusal, for one). The bundle is
+  a lookup table, not a curated user-facing catalog; what a client shows
+  is the resolver's decision, not the generator's.
+- **It covers the codes the catalogs cover, not every code.** Codes the
+  backend declares no copy for (request-time refusals answered as a
+  structured code only, boot-time refusals) have no entry here and keep
+  resolving through each package's own fallback text.
+
+Regenerate after any backend catalog or apperr code change:
+`python3 tools/gen_platform_error_bundle.py`; `--check` fails when the
+committed bundle is stale, and the docs-check pipeline runs both the
+generator's suite and that gate.
+
 ## Dependencies
 
 | Package | Kind | Why |
