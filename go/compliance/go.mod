@@ -2,6 +2,12 @@ module github.com/vislake/speed/go/compliance
 
 go 1.26.0
 
+// The lazy read handle (config.Handle, read through its TenantDuration read)
+// is not in a released config version yet, so this module resolves config from
+// the sibling checkout. A replace directive in a dependency is ignored by
+// consumers, so this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/config => ../config
+
 // The periodic-task declaration seat (pkgcore.PeriodicTask and
 // pkgcore.Registry.Schedules) is not in a released pkgcore version yet, so this
 // module resolves pkgcore from the sibling checkout. A replace directive in a
