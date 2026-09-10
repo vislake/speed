@@ -132,7 +132,7 @@
       "file": "go/admin/handler.go",
       "ident": "errInternal",
       "kind": "declared",
-      "line": 25,
+      "line": 26,
       "module": "admin",
       "status": 500
     },
