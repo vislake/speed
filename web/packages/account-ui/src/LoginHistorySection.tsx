@@ -44,9 +44,11 @@ import Button from '@mui/material/Button'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
 import {
+  useAuthnGetPreferences,
   useAuthnListLoginHistory,
 } from '@speed/api-sdk'
 import { EmptyState } from '@speed/ui-kit'
+import { resolveTimeZone } from './internal/time-format.js'
 import { useAccountUiTranslation } from './internal/translation.js'
 
 /**
@@ -137,13 +139,19 @@ export function LoginHistorySection() {
     limit: PAGE_SIZE,
   })
 
+  // The display-timezone chain (stored profile preference -> device ->
+  // UTC), the same one the sessions surface observes: attempt times render
+  // in the account's chosen zone, never the engine's implicit
+  // process-local default.
+  const { data: preferences } = useAuthnGetPreferences()
   const formatTime = useMemo(
     () =>
       new Intl.DateTimeFormat(i18n.language, {
         dateStyle: 'medium',
         timeStyle: 'short',
+        timeZone: resolveTimeZone(preferences?.timezone),
       }),
-    [i18n.language],
+    [i18n.language, preferences?.timezone],
   )
 
   const attempts = data?.attempts

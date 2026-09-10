@@ -27,6 +27,7 @@ import {
   makePair,
   makeRealClientRig,
   signInWithPassword,
+  type RealResponder,
 } from '../test-utils/real-client.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import { expectNoAxeViolations } from '../test-utils/axe.js'
@@ -34,6 +35,24 @@ import { LoginHistorySection } from './LoginHistorySection.js'
 
 const LOGIN_PATH = '/api/v1/authn/login/password'
 const HISTORY_PATH = '/api/v1/authn/login-history'
+
+/** The display-timezone read the section issues beside its history list
+ * (GET /api/v1/authn/me/preferences). */
+const PREFERENCES_PATH = '/api/v1/authn/me/preferences'
+
+/** Wraps a journey responder so the section's display-timezone read
+ * answers the "not chosen" state (an empty preference set), whose
+ * resolution chain lands on the device timezone -- exactly the zone this
+ * suite's expected time strings are formatted in. */
+function withPreferences(respond: RealResponder): RealResponder {
+  return (call) => {
+    if (call.method === 'GET' && call.path === PREFERENCES_PATH) {
+      return jsonResponse(200, {})
+    }
+    return respond(call)
+  }
+}
+
 
 const T1 = '2026-07-30T08:30:00.000Z'
 const T2 = '2026-08-01T02:05:00.000Z'
@@ -110,7 +129,7 @@ describe('LoginHistorySection', () => {
         created_at: '2026-07-27T16:40:00.000Z',
       }),
     ]
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -118,7 +137,7 @@ describe('LoginHistorySection', () => {
         return jsonResponse(200, { attempts })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<LoginHistorySection />)
 
@@ -167,7 +186,7 @@ describe('LoginHistorySection', () => {
     const gate = new Promise<Response>((resolve) => {
       release = resolve
     })
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -175,7 +194,7 @@ describe('LoginHistorySection', () => {
         return gate
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     const { container } = renderWithProviders(<LoginHistorySection />)
 
@@ -189,7 +208,7 @@ describe('LoginHistorySection', () => {
   })
 
   it('render the empty state without the header when there is no history', async () => {
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -197,7 +216,7 @@ describe('LoginHistorySection', () => {
         return jsonResponse(200, { attempts: [] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<LoginHistorySection />)
 
@@ -211,7 +230,7 @@ describe('LoginHistorySection', () => {
   it('render the error state with a retry that refetches the history', async () => {
     const user = userEvent.setup()
     let historyCalls = 0
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -225,7 +244,7 @@ describe('LoginHistorySection', () => {
         })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<LoginHistorySection />)
 
@@ -245,7 +264,7 @@ describe('LoginHistorySection', () => {
     const list = [attempt()]
     let wentOnline = false
     let historyCalls = 0
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -259,7 +278,7 @@ describe('LoginHistorySection', () => {
         return jsonResponse(200, { attempts: list })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     // react-query's default networkMode 'online' parks a fetch that
     // starts while the device is offline at fetchStatus 'paused':
@@ -305,7 +324,7 @@ describe('LoginHistorySection', () => {
     const user = userEvent.setup()
     let historyCalls = 0
     let wentOnline = true
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -322,7 +341,7 @@ describe('LoginHistorySection', () => {
         return jsonResponse(200, { attempts: [attempt()] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     const { queryClient } = renderWithProviders(<LoginHistorySection />)
 
@@ -369,7 +388,7 @@ describe('LoginHistorySection', () => {
   it('end the loading state when a settled answer omits the optional attempts key: the error state renders with aria-busy ended, and its retry converges once the answer carries the list', async () => {
     const user = userEvent.setup()
     let historyCalls = 0
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -387,7 +406,7 @@ describe('LoginHistorySection', () => {
         return jsonResponse(200, { attempts: [attempt()] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<LoginHistorySection />)
 

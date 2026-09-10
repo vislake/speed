@@ -43,6 +43,7 @@ import {
 } from '../test-utils/real-client.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import { expectNoAxeViolations } from '../test-utils/axe.js'
+import { PreferencesSection } from './PreferencesSection.js'
 import { SessionsSection } from './SessionsSection.js'
 import { LoginHistorySection } from './LoginHistorySection.js'
 import { SocialBindingsSection } from './SocialBindingsSection.js'
@@ -65,6 +66,7 @@ const REVOKE_OTHERS_PATH = '/api/v1/authn/sessions/revoke-others'
 const ENROLL_PATH = '/api/v1/authn/mfa/totp/enroll'
 const STEP_UP_PATH = '/api/v1/authn/mfa/step-up'
 const CONFIRM_PATH = '/api/v1/authn/mfa/totp/confirm'
+const PREFERENCES_PATH = '/api/v1/authn/me/preferences'
 
 // The demo account of the quick start: a passwordless account whose one
 // sign-in method is GitHub (the ground truth the refused unbind below
@@ -197,6 +199,7 @@ function AccountPage({
 
   return (
     <div>
+      <PreferencesSection />
       <SessionsSection />
       <LoginHistorySection />
       <SocialBindingsSection
@@ -238,6 +241,12 @@ describe('the README quick start, exercised over a real api-client', () => {
     })
     const rig = makeRealClientRig(async (call) => {
       switch (call.path) {
+        case PREFERENCES_PATH:
+          // The display-timezone read the sessions and history sections
+          // issue beside their lists: "not chosen", whose resolution
+          // chain lands on the device timezone -- the zone this
+          // journey's expected time strings are formatted in.
+          return jsonResponse(200, {})
         case '/api/v1/authn/social/github/callback':
           // The sign-in exchange of the passwordless demo account.
           return jsonResponse(200, {
@@ -635,6 +644,10 @@ describe('the README quick start, exercised over a real api-client', () => {
       rig.calls.map((call) => `${call.method} ${call.path}`),
     ).toEqual([
       'POST /api/v1/authn/social/github/callback',
+      // The display-timezone read the preferences, sessions and history
+      // sections share (one in-flight fetch, deduped across the mounts;
+      // the preferences section leads the page, so it issues it).
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/authn/sessions',
       'GET /api/v1/authn/login-history',
       'GET /api/v1/authn/identities',
@@ -649,6 +662,7 @@ describe('the README quick start, exercised over a real api-client', () => {
       'POST /api/v1/authn/mfa/totp/confirm',
       'GET /api/v1/authn/social/wechat/authorize',
       'POST /api/v1/authn/social/wechat/callback',
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/authn/sessions',
       'GET /api/v1/authn/login-history',
       'GET /api/v1/authn/identities',
@@ -656,23 +670,23 @@ describe('the README quick start, exercised over a real api-client', () => {
     const calls = rig.calls
     expect(calls[0]?.authorization).toBeNull()
     expect(calls[1]?.authorization).toBe('Bearer access-1')
-    expect(calls[2]?.query).toBe('?limit=20')
-    expect(calls[4]?.authorization).toBe('Bearer access-1')
-    expect(calls[6]?.authorization).toBe('Bearer access-1')
-    expect(calls[9]?.authorization).toBe('Bearer access-1')
+    expect(calls[3]?.query).toBe('?limit=20')
+    expect(calls[5]?.authorization).toBe('Bearer access-1')
+    expect(calls[7]?.authorization).toBe('Bearer access-1')
+    expect(calls[10]?.authorization).toBe('Bearer access-1')
     // The step-up's own request still rides the stale token; everything
     // after it rides the rotated one.
-    expect(calls[10]?.authorization).toBe('Bearer access-1')
-    expect(calls[11]?.authorization).toBe('Bearer access-2')
+    expect(calls[11]?.authorization).toBe('Bearer access-1')
     expect(calls[12]?.authorization).toBe('Bearer access-2')
+    expect(calls[13]?.authorization).toBe('Bearer access-2')
     // The authorize request carries the redirect URI the host configured
     // for the channel as its query parameter; the binding callback --
     // signed-in all the way -- rides the rotated token.
-    expect(calls[13]?.query).toBe(
+    expect(calls[14]?.query).toBe(
       `?redirect_uri=${encodeURIComponent(WECHAT_REDIRECT_URI)}`,
     )
-    expect(calls[14]?.authorization).toBe('Bearer access-2')
     expect(calls[15]?.authorization).toBe('Bearer access-2')
+    expect(calls[16]?.authorization).toBe('Bearer access-2')
 
     await expectNoAxeViolations()
   }, 20000)

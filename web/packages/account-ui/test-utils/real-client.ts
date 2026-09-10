@@ -43,6 +43,11 @@ export interface RealCall {
   /** The authorization header value, or null for a credential-less
    * request (the refresh leg travels credential-less by declaration). */
   readonly authorization: string | null
+  /** The JSON-decoded request body when the request carried one (a
+   * string body that parses as JSON), else null -- for the suites that
+   * pin a write's exact payload (the preferences PATCH's partial
+   * update, say). */
+  readonly body: unknown
 }
 
 /** One scripted endpoint: answer with a genuine Response, immediately
@@ -79,11 +84,20 @@ export function makeRealClientRig(respond: RealResponder): RealClientRig {
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
     const authorization = new Headers(init?.headers).get('authorization')
+    let body: unknown = null
+    if (typeof init?.body === 'string' && init.body !== '') {
+      try {
+        body = JSON.parse(init.body)
+      } catch {
+        body = null
+      }
+    }
     const call: RealCall = {
       method,
       path: url.pathname,
       query: url.search,
       authorization,
+      body,
     }
     calls.push(call)
     return respond(call)

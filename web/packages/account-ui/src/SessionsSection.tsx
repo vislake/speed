@@ -61,12 +61,14 @@ import type { SxProps, Theme } from '@mui/material'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   getAuthnListSessionsQueryKey,
+  useAuthnGetPreferences,
   useAuthnListSessions,
   useAuthnRevokeOtherSessions,
   useAuthnRevokeSession,
 } from '@speed/api-sdk'
 import { ConfirmDialog, EmptyState } from '@speed/ui-kit'
 import { errorCodeOf, InlineError } from './internal/inline-error.js'
+import { resolveTimeZone } from './internal/time-format.js'
 import { useAccountUiTranslation } from './internal/translation.js'
 import { summarizeUserAgent } from './internal/ua-summary.js'
 
@@ -185,13 +187,20 @@ export function SessionsSection() {
   const [notice, setNotice] = useState<Notice>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
 
+  // The display-timezone chain (stored profile preference -> device ->
+  // UTC): the rows render in the account's chosen zone, not whatever
+  // machine happens to run the client. The formatter always receives an
+  // explicit timeZone -- resolveTimeZone has validated it, so the
+  // constructor cannot throw on a stale stored value.
+  const { data: preferences } = useAuthnGetPreferences()
   const formatTime = useMemo(
     () =>
       new Intl.DateTimeFormat(i18n.language, {
         dateStyle: 'medium',
         timeStyle: 'short',
+        timeZone: resolveTimeZone(preferences?.timezone),
       }),
-    [i18n.language],
+    [i18n.language, preferences?.timezone],
   )
 
   const sessions = data?.sessions

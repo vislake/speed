@@ -79,6 +79,12 @@ export const ERROR_TEXT_CODES = [
   'authn.mfa_already_enrolled',
   'authn.mfa_invalid_code',
   'authn.mfa_code_used',
+  // authn: the preferences PATCH's strict validation. A locale or
+  // timezone the deployment cannot store answers with its own code; the
+  // preferences surface renders the code text beside its save-failed
+  // line rather than inventing wording per refusal.
+  'authn.invalid_locale',
+  'authn.invalid_timezone',
   // Transport-level failures of the api-client contract.
   'client.network',
   'client.timeout',

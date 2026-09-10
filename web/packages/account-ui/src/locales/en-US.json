@@ -20,7 +20,9 @@
       "mfa_not_enrolled": "Two-step verification is not enabled.",
       "mfa_already_enrolled": "Two-step verification is already enabled.",
       "mfa_invalid_code": "The code is incorrect or has expired. Try again.",
-      "mfa_code_used": "That code has already been used. Enter the latest code from your authenticator app, or an unused recovery code."
+      "mfa_code_used": "That code has already been used. Enter the latest code from your authenticator app, or an unused recovery code.",
+      "invalid_locale": "That language is not available; choose one of the offered languages.",
+      "invalid_timezone": "That timezone is not available; choose one of the offered timezones."
     },
     "client": {
       "network": "No network connection. Check your connection and try again.",
@@ -157,5 +159,25 @@
       "confirmLabel": "Verify",
       "cancelLabel": "Cancel"
     }
+  },
+  "preferences": {
+    "title": "Preferences",
+    "loading": "Loading preferences",
+    "saveFailed": "Your change could not be saved to your account.",
+    "language": {
+      "label": "Language",
+      "notChosen": "Not chosen (use your device's language)",
+      "helper": "The language for emails and other messages we send you."
+    },
+    "timezone": {
+      "label": "Time zone",
+      "notChosen": "Not chosen (use your device's time zone)",
+      "helper": "Times shown in your account use this time zone."
+    },
+    "error": {
+      "title": "Could not load preferences",
+      "description": "Something went wrong while loading your preferences. Please try again."
+    },
+    "retry": "Retry"
   }
 }

@@ -1,10 +1,12 @@
 # AGENTS.md for `@speed/account-ui`
 
 The account-management component family of a speed frontend, the
-signed-in half of the account story: four surfaces compose a host
-account page — `SessionsSection` (the sessions-and-devices list with
-per-session and bulk revocation), `LoginHistorySection` (the
-sign-in-history list), `SocialBindingsSection` plus
+signed-in half of the account story: five surfaces compose a host
+account page — `PreferencesSection` (the language-and-timezone selects
+over the account's stored preferences), `SessionsSection` (the
+sessions-and-devices list with per-session and bulk revocation),
+`LoginHistorySection` (the sign-in-history list),
+`SocialBindingsSection` plus
 `BindingCallbackHandler` (the social bindings surface and the callback
 route that completes a binding), and `MfaSection` (the
 step-up-gated TOTP authenticator + recovery-codes setup). The package
@@ -16,7 +18,7 @@ generated mutations over the same `bindRequestFn` seam. Two surfaces
 take the `@speed/auth-core`
 session as a required prop for exactly one session operation each (the
 add area's authorize-URL request; the step-up challenge dialog's
-verification); two take no props at all.
+verification); three take no props at all.
 
 ## What this package is
 
@@ -38,6 +40,17 @@ verification); two take no props at all.
   therefore the host's QueryClientProvider) exists. Invalidations use
   the exported query-key builders (`getAuthnListIdentitiesQueryKey`),
   never hand-written query keys.
+- **Display times carry the account's timezone chain, explicitly.**
+  Every timestamp a surface renders is formatted with an explicit
+  `timeZone` resolved through `resolveTimeZone` (internal/time-format:
+  the stored preference, else the device zone, else UTC) -- never
+  Intl's implicit process-local default, which would render one account
+  differently depending on which machine ran the code. The profile tier
+  reads GET `/api/v1/authn/me/preferences`; the query is shared and
+  deduped across the sections by react-query, so adding another
+  time-rendering surface costs no extra request. Every Intl
+  construction in that helper is guarded: a stored value the engine
+  rejects falls through the chain instead of throwing into a render.
 - **Every built-in string is bilingual and bundled.** All text renders
   from the `account-ui` namespace (`ACCOUNT_UI_NAMESPACE`, one
   `zh-CN.json` and one `en-US.json` under `src/locales/`, identical
@@ -163,8 +176,9 @@ verification); two take no props at all.
 
 ## Public surface
 
-Everything in `src/index.ts` is public: the four surfaces
-(`SessionsSection`; `LoginHistorySection`; `SocialBindingsSection`
+Everything in `src/index.ts` is public: the five surfaces
+(`PreferencesSection`; `SessionsSection`; `LoginHistorySection`;
+`SocialBindingsSection`
 with `SocialBindingsSectionProps`, `SocialProvider` and
 `SocialProviderConfig`; `MfaSection` with `MfaSectionProps`),
 `BindingCallbackHandler` with `BindingCallbackHandlerProps`, and the

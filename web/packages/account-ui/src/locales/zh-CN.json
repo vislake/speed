@@ -20,7 +20,9 @@
       "mfa_not_enrolled": "你尚未开启两步验证。",
       "mfa_already_enrolled": "两步验证已开启，无需重复设置。",
       "mfa_invalid_code": "验证码不正确或已过期，请重试。",
-      "mfa_code_used": "该验证码已使用，请输入验证器应用中的最新验证码，或使用一条未使用的恢复码。"
+      "mfa_code_used": "该验证码已使用，请输入验证器应用中的最新验证码，或使用一条未使用的恢复码。",
+      "invalid_locale": "不支持所选语言，请从可用语言中选择。",
+      "invalid_timezone": "不支持所选时区，请从可用时区中选择。"
     },
     "client": {
       "network": "网络连接不可用，请检查网络后重试。",
@@ -157,5 +159,25 @@
       "confirmLabel": "验证",
       "cancelLabel": "取消"
     }
+  },
+  "preferences": {
+    "title": "偏好设置",
+    "loading": "正在加载偏好设置",
+    "saveFailed": "你的修改未能保存到账户。",
+    "language": {
+      "label": "语言",
+      "notChosen": "未选择（跟随设备语言）",
+      "helper": "我们发给你的邮件及其他消息使用的语言。"
+    },
+    "timezone": {
+      "label": "时区",
+      "notChosen": "未选择（跟随设备时区）",
+      "helper": "账户中显示的时间使用该时区。"
+    },
+    "error": {
+      "title": "无法加载偏好设置",
+      "description": "加载偏好设置时出现问题，请重试。"
+    },
+    "retry": "重试"
   }
 }

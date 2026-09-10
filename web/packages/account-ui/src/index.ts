@@ -25,6 +25,7 @@
  */
 
 export { ACCOUNT_UI_NAMESPACE, accountUiResources } from './resources.js'
+export { PreferencesSection } from './PreferencesSection.js'
 export { SessionsSection } from './SessionsSection.js'
 export { LoginHistorySection } from './LoginHistorySection.js'
 export {

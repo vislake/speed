@@ -31,6 +31,7 @@ empty/error states render through `ui-kit`'s `ConfirmDialog`/
 
 | Module | Exports |
 |---|---|
+| `PreferencesSection.tsx` | `PreferencesSection` |
 | `SessionsSection.tsx` | `SessionsSection` |
 | `LoginHistorySection.tsx` | `LoginHistorySection` |
 | `SocialBindingsSection.tsx` | `SocialBindingsSection`, `SocialBindingsSectionProps`, `SocialProvider`, `SocialProviderConfig` |
@@ -71,6 +72,7 @@ import {
   BindingCallbackHandler,
   LoginHistorySection,
   MfaSection,
+  PreferencesSection,
   SessionsSection,
   SocialBindingsSection,
   type SocialProviderConfig,
@@ -146,6 +148,7 @@ function AccountPage({ session }: { session: AuthSession }): ReactElement {
 
   return (
     <div>
+      <PreferencesSection />
       <SessionsSection />
       <LoginHistorySection />
       <SocialBindingsSection
@@ -197,6 +200,36 @@ authorization header asserted (turn zero credential-less, `access-1`
 until the step-up rotates it to `access-2`). The documented usage
 cannot drift from the API.
 
+## PreferencesSection
+
+The language-and-timezone surface: two selects editing the account's
+own stored preferences through GET/PATCH
+`/api/v1/authn/me/preferences`. The language options are the i18n
+instance's own supported set (`readSupportedLanguages`), labelled with
+the language names in the current UI language (`Intl.DisplayNames`,
+falling back to the raw tag); choosing one PATCHes the account first
+and, only on a confirmed write, runs the persisting `switchLanguage` --
+the settings switch is the one place the decision is meant to land on
+the device (the manual-choice slot) and the account together. The
+timezone options are the engine's IANA list
+(`Intl.supportedValuesOf('timeZone')`, guarded) plus an explicit "not
+chosen" choice whose value is the empty string (the API's clearing
+value), and the stored value is always among the options: a value the
+engine's list omits is added as its own option, because a select whose
+value matches no option would silently display another zone.
+
+Both writes are immediate and PATCH-first, so a refusal leaves the
+controls reading the stored values -- the natural revert, no undo
+bookkeeping -- and renders a two-line failure alert: the save line and
+the server's own code text (`authn.invalid_locale` /
+`authn.invalid_timezone`, the transport codes). Both selects disable
+while a write is in flight. The section takes no props and follows the
+family's settled-state paradigm: an unresolved load keeps a loading
+placeholder, a settled load with no data renders the `EmptyState` error
+variant with a retry, and the settled-with-data state always renders
+both controls (both fields absent means "not chosen", which each
+control displays as such).
+
 ## SessionsSection
 
 The sessions-and-devices surface: every session the authn module holds
@@ -210,7 +243,9 @@ otherwise read as two identical walls of text), else the unknown-device
 label; the summary repeats as a muted detail line only under a row
 line 1 already names. Beneath the label sit the IP, created and
 last-seen times rendered through `Intl` in the surface's current
-language, AMR values as chips (AMR tokens are opaque
+language and the account's display timezone (the stored preference,
+else the device zone, else UTC -- the renderer always passes an
+explicit `timeZone`), AMR values as chips (AMR tokens are opaque
 authentication-method references -- server vocabulary, not text to
 translate -- so they render as-is) and a status badge telling an active
 session from a revoked one. A revoked session stays listed, greyed

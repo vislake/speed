@@ -39,6 +39,7 @@ import {
   makePair,
   makeRealClientRig,
   signInWithPassword,
+  type RealResponder,
 } from '../test-utils/real-client.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import { expectNoAxeViolations } from '../test-utils/axe.js'
@@ -47,6 +48,28 @@ import { SessionsSection } from './SessionsSection.js'
 const LOGIN_PATH = '/api/v1/authn/login/password'
 const SESSIONS_PATH = '/api/v1/authn/sessions'
 const REVOKE_OTHERS_PATH = '/api/v1/authn/sessions/revoke-others'
+
+/** The display-timezone read the section issues beside its sessions list
+ * (GET /api/v1/authn/me/preferences). */
+const PREFERENCES_PATH = '/api/v1/authn/me/preferences'
+
+/** Wraps a journey responder so the section's display-timezone read
+ * answers an empty preference set by default -- the "not chosen" state,
+ * whose resolution chain lands on the device timezone, exactly the zone
+ * this suite's expected time strings are formatted in. `preferences`
+ * overrides the answer for the tests that pin a stored zone. */
+function withPreferences(
+  respond: RealResponder,
+  preferences: Record<string, string> = {},
+): RealResponder {
+  return (call) => {
+    if (call.method === 'GET' && call.path === PREFERENCES_PATH) {
+      return jsonResponse(200, preferences)
+    }
+    return respond(call)
+  }
+}
+
 
 /** The ui-kit dialog strings the armed-confirm flow depends on, typed
  * straight from the package's own exported resources. */
@@ -153,7 +176,7 @@ describe('SessionsSection', () => {
         created_at: T2,
       }),
     ]
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, {
           ...makePair(),
@@ -168,7 +191,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { sessions })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -230,7 +253,7 @@ describe('SessionsSection', () => {
     const gate = new Promise<Response>((resolve) => {
       release = resolve
     })
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -238,7 +261,7 @@ describe('SessionsSection', () => {
         return gate
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     const { container } = renderWithProviders(<SessionsSection />)
 
@@ -252,7 +275,7 @@ describe('SessionsSection', () => {
   })
 
   it('render the empty state -- no header, no actions -- when the account has no sessions', async () => {
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -260,7 +283,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { sessions: [] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -275,7 +298,7 @@ describe('SessionsSection', () => {
   it('render the error state with a retry that refetches the list', async () => {
     const user = userEvent.setup()
     let listCalls = 0
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -287,7 +310,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { sessions: [session()] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -307,7 +330,7 @@ describe('SessionsSection', () => {
     const list = [session()]
     let wentOnline = false
     let listCalls = 0
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -321,7 +344,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { sessions: list })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     // react-query's default networkMode 'online' parks a fetch that
     // starts while the device is offline at fetchStatus 'paused':
@@ -367,7 +390,7 @@ describe('SessionsSection', () => {
     const user = userEvent.setup()
     let listCalls = 0
     let wentOnline = true
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -384,7 +407,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { sessions: [session()] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     const { queryClient } = renderWithProviders(<SessionsSection />)
 
@@ -431,7 +454,7 @@ describe('SessionsSection', () => {
   it('revoke a single session with the bearer token and refetch until the row reads revoked', async () => {
     const user = userEvent.setup()
     let otherRevoked = false
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -451,7 +474,7 @@ describe('SessionsSection', () => {
         return new Response(null, { status: 204 })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -478,9 +501,13 @@ describe('SessionsSection', () => {
     )
     expect(revokeCall?.authorization).toBe('Bearer access-1')
     // The refetch after the revoke really happened: GET, DELETE, GET.
+    // The preferences read rides beside the first sessions fetch (the
+    // display-timezone tier) and is not re-issued by the revoke's
+    // invalidation, which targets only the sessions key.
     expect(rig.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       `POST ${LOGIN_PATH}`,
       `GET ${SESSIONS_PATH}`,
+      `GET ${PREFERENCES_PATH}`,
       `DELETE ${SESSIONS_PATH}/other-1`,
       `GET ${SESSIONS_PATH}`,
     ])
@@ -490,7 +517,7 @@ describe('SessionsSection', () => {
 
   it('render the session_not_found alert when a single revoke answers 404 and keep the row actionable', async () => {
     const user = userEvent.setup()
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -503,7 +530,7 @@ describe('SessionsSection', () => {
         return errorResponse(404, 'authn.session_not_found')
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -526,7 +553,7 @@ describe('SessionsSection', () => {
   it('revoke every other session only behind the danger double-confirm dialog and surface the revoked count', async () => {
     const user = userEvent.setup()
     let othersRevoked = false
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -544,7 +571,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { revoked_count: 2 })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -611,7 +638,7 @@ describe('SessionsSection', () => {
     // text change an announcement rather than another mount.
     const user = userEvent.setup()
     let othersRevoked = false
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -639,7 +666,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { revoked_count: 2 })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -696,7 +723,7 @@ describe('SessionsSection', () => {
 
   it('close the revoke-others dialog on cancel without revoking anything', async () => {
     const user = userEvent.setup()
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -709,7 +736,7 @@ describe('SessionsSection', () => {
         })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -734,7 +761,7 @@ describe('SessionsSection', () => {
     // time, never written back), so a session whose stored expires_at
     // has passed must render as dead -- never as a live device that
     // stays individually revocable and reads as a logged-in session.
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, {
           ...makePair(),
@@ -770,7 +797,7 @@ describe('SessionsSection', () => {
         })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -802,7 +829,7 @@ describe('SessionsSection', () => {
   })
 
   it('not arm "sign out other devices" for an expired session: only live other sessions count', async () => {
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, {
           ...makePair(),
@@ -822,7 +849,7 @@ describe('SessionsSection', () => {
         })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -840,7 +867,7 @@ describe('SessionsSection', () => {
   it('end the loading state when a settled answer omits the optional sessions key: the error state renders with aria-busy ended, and its retry converges once the answer carries the list', async () => {
     const user = userEvent.setup()
     let listCalls = 0
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
@@ -858,7 +885,7 @@ describe('SessionsSection', () => {
         return jsonResponse(200, { sessions: [session()] })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -895,7 +922,7 @@ describe('SessionsSection', () => {
     // sessions-are-distinguishable.spec.ts) exactly: the machine
     // substrings that only ever appear in a raw UA must not appear in
     // any rendered row.
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, {
           ...makePair(),
@@ -918,7 +945,7 @@ describe('SessionsSection', () => {
         })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -946,7 +973,7 @@ describe('SessionsSection', () => {
     // must still carry its own story -- the summary label, its own
     // signed-in and last-active times, and the current mark on exactly
     // the row whose token is asking.
-    const rig = makeRealClientRig(async (call) => {
+    const rig = makeRealClientRig(withPreferences(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, {
           ...makePair(),
@@ -966,7 +993,7 @@ describe('SessionsSection', () => {
         })
       }
       throw new Error(`unexpected ${call.method} ${call.path}`)
-    })
+    }))
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
@@ -987,5 +1014,50 @@ describe('SessionsSection', () => {
     expect(rows[0]!.textContent).not.toBe(rows[1]!.textContent)
 
     await expectNoAxeViolations()
+  })
+
+  it("renders times in the account's stored timezone, not the engine's implicit default", async () => {
+    const rig = makeRealClientRig(
+      withPreferences(
+        async (call) => {
+          if (call.method === 'POST' && call.path === LOGIN_PATH) {
+            return jsonResponse(200, makePair())
+          }
+          if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+            return jsonResponse(200, {
+              sessions: [session({ id: 'current-1', is_current: true })],
+            })
+          }
+          throw new Error(`unexpected ${call.method} ${call.path}`)
+        },
+        { timezone: 'Asia/Tokyo' },
+      ),
+    )
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    const formatted = (timeZone?: string) =>
+      new Intl.DateTimeFormat('zh-CN', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        ...(timeZone === undefined ? {} : { timeZone }),
+      }).format(new Date(T1))
+
+    // The row reads the stored zone's rendering...
+    const storedText = zhCN.sessions.signedIn.replace(
+      '{{time}}',
+      formatted('Asia/Tokyo'),
+    )
+    expect(await screen.findByText(storedText)).toBeTruthy()
+
+    // ...and -- where the two renderings actually differ (the device
+    // zone is not Asia/Tokyo) -- NOT the implicit device-zone rendering.
+    const deviceText = zhCN.sessions.signedIn.replace(
+      '{{time}}',
+      formatted(),
+    )
+    if (deviceText !== storedText) {
+      expect(screen.queryByText(deviceText)).toBeNull()
+    }
   })
 })
