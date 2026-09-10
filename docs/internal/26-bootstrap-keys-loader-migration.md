@@ -353,7 +353,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 ### 9.3 有意行为差异与本轮未做
 
 - 四枚 int/bool 键的空串收紧(§9.2)是设计裁定的有意行为;此外无行为差异。
-- 未做(与本设计无关或按既定排期):saasctl 生成骨架与 `appconfig` twin 维持直读(Q1);五个声明模块的过渡 `replace` 随下一个版本号的发布清理(Q4);`examples/reference-app/.env.example` 目前只覆盖部分宿主键(其余键的装配文本以 `bootstrap.go` 字段注释 + README/DEPLOY 叙述为准),扩到 35 键留作文档体验增强。
+- 未做(与本设计无关或按既定排期):saasctl 生成骨架与 `appconfig` twin 维持直读(Q1);五个声明模块的过渡 `replace` 随下一个版本号的发布清理(Q4)。`examples/reference-app/.env.example` 已覆盖全部 35 键,并由 env-example 一致性检查器(`tools/check_env_example_consistency.py`,planted-drift 套件 + 门接在 fast-check 的 repo-checks 作业)与 loader 形状结构体的 `config:"env=NAME"` 钉及 `APP_ROOT_KEY` 读点持续对齐。
 
 ### 9.4 根密钥派生上收为平台能力(pkgcore 席位 + dbkit 原语)
 
