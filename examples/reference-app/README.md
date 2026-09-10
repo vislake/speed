@@ -118,7 +118,7 @@ Every one of this app's own routes (the notes API included) resolves its tenant 
 
 ### Demo accounts and the demo identity layer
 
-Reaching a tenant from a browser means signing in as a real account that holds membership there. This app wires authn's host-injected `MembershipReader` to `sign_in_memberships` (see its own doc comment in `internal/app/sign_in_memberships.go`), whose customer-tenant answers are read live from org's own memberships table — the same rows org's invitation accept writes and this app's seed writes, which is what makes a membership survive a server restart instead of dying with the process that granted it. Registering an arbitrary account through the open register route grants it **no** membership anywhere, so its sign-in is refused with `authn.tenant_membership_required` until something grants it one. Two things grant one on a running server: the boot-time demo-account seed below, and — the real, general path a genuine SaaS deployment relies on — actually accepting an org invitation through org's own HTTP flow (`POST /api/v1/org/invitations/accept`). An invited user who accepts for real can sign in immediately afterward — in the accepting process and in every later process booted against the same database — no header and no server restart required. Three demo accounts come pre-granted when the server boots with `APP_DEMO_USERS_PASSWORD` set — registered through the real register route at boot, then granted membership and roles under each tenant's own context, so the browser flow never needs a special header:
+Reaching a tenant from a browser means signing in as a real account that holds membership there. This app wires authn's host-injected `MembershipReader` to `sign_in_memberships` (see its own doc comment in `internal/app/sign_in_memberships.go`), whose customer-tenant answers are read live from org's own memberships table — the same rows org's invitation accept writes and this app's seed writes, which is what makes a membership survive a server restart instead of dying with the process that granted it. Registering an arbitrary account through the open register route grants it **no** membership anywhere, so its sign-in is refused with the uniform 401 `authn.invalid_credentials` a wrong password also gets — the no-membership reason recorded in the login history, never the response — until something grants it one. Two things grant one on a running server: the boot-time demo-account seed below, and — the real, general path a genuine SaaS deployment relies on — actually accepting an org invitation through org's own HTTP flow (`POST /api/v1/org/invitations/accept`). An invited user who accepts for real can sign in immediately afterward — in the accepting process and in every later process booted against the same database — no header and no server restart required. Three demo accounts come pre-granted when the server boots with `APP_DEMO_USERS_PASSWORD` set — registered through the real register route at boot, then granted membership and roles under each tenant's own context, so the browser flow never needs a special header:
 
 | Account | Roles | Tenants |
 |---|---|---|
@@ -173,10 +173,11 @@ curl -s -X POST localhost:8080/api/v1/notes \
 
 # demo-acme-only holds membership in tenant-acme alone, so signing it in
 # with tenant_id=tenant-globex is refused before it reaches any route:
-# 403 authn.tenant_membership_required -- a grant is a (tenant, user)
-# fact, never a user fact (cmd/server/demo_users_test.go pins this
-# shape). The read refusal that fails the frontend gate closed lives in
-# web/README.md's gate section.
+# the uniform 401 authn.invalid_credentials a wrong password also gets,
+# the no-membership reason recorded in the login history alone -- a
+# grant is a (tenant, user) fact, never a user fact
+# (cmd/server/demo_users_test.go pins this shape). The read refusal that
+# fails the frontend gate closed lives in web/README.md's gate section.
 
 curl -s -i localhost:8080/api/v1/notes
 # HTTP/1.1 403 Forbidden -- {"code":"tenancy.tenant_unresolved"} -- no

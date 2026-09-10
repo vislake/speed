@@ -7,8 +7,9 @@
  * would break: seeding skips an account a previous boot already
  * created, and a host that stops an idle machine (the ordinary,
  * recommended shape for a small deployment, and what the reference
- * app's own fly.toml configures) would leave every sign-in answering
- * authn.tenant_membership_required within minutes of idleness.
+ * app's own fly.toml configures) would leave every sign-in refused
+ * with the uniform 401 authn.invalid_credentials within minutes of
+ * idleness.
  *
  * THE RESTART IS SEQUENTIAL, WHICH IS THE WHOLE POINT
  *
@@ -100,7 +101,8 @@ test('a member signs in again after the server restarts against the same databas
     await visitSignIn(page)
     await submitPasswordSignIn(page, DEMO_OWNER.email, DEMO_OWNER.password)
 
-    // The whole point: the frame, not authn.tenant_membership_required.
+    // The whole point: the frame, not the uniform 401
+    // authn.invalid_credentials a missing membership draws.
     await expectSignedIn(page)
   } finally {
     await restarted.stop()

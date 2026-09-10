@@ -21,10 +21,10 @@ import (
 // rows, read live through the org-backed internal/app/sign_in_memberships.go store; an
 // in-process roster alone would lose an accepted invitation's membership
 // when the accepting process exited, leaving the invited user unable to
-// sign in to the invited tenant: 403 authn.tenant_membership_required
-// forever, exactly the failure a real invited user hits on a deployed
-// instance that stopped and came back between their acceptance and their
-// first sign-in.
+// sign in to the invited tenant -- refused forever with the uniform 401
+// authn.invalid_credentials every failed sign-in answers -- exactly the
+// failure a real invited user hits on a deployed instance that stopped
+// and came back between their acceptance and their first sign-in.
 //
 // The shape: the invitee is
 // registered through authn's real register route and NEVER granted a
@@ -237,8 +237,8 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// THE property this regression exists to protect: the invited user's
 	// sign-in survives the process that accepted the invitation. The org
 	// row is real and persistent; an in-process roster would be empty on
-	// boot two, and this login would answer
-	// 403 authn.tenant_membership_required forever.
+	// boot two, and this login would be refused forever with the uniform
+	// 401 authn.invalid_credentials every failed sign-in answers.
 	status, code, _ = demoLogin(t, srv2, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("post-restart login as the invited user: status = %d, code = %q, want %d "+

@@ -21,12 +21,12 @@ import (
 // (MemberService.TenantsOf) for the tenant to land the clinic owner in
 // and never consults a row of the host's self_service_clinics
 // bookkeeping; a resolution that needed the ledger would answer the
-// clinic owner's no-tenant sign-in with 403
-// authn.tenant_membership_required no matter how real the org
-// membership row was. The wipe below is that dependency's probe: it
-// reproduces a ledger-less state, so a sign-in that resolves the clinic
-// from the org row alone succeeds while one that needs the ledger
-// answers 403 and fails the test.
+// clinic owner's no-tenant sign-in with the uniform 401
+// authn.invalid_credentials every failed sign-in answers, no matter how
+// real the org membership row was. The wipe below is that dependency's
+// probe: it reproduces a ledger-less state, so a sign-in that resolves
+// the clinic from the org row alone succeeds while one that needs the
+// ledger answers 401 and fails the test.
 //
 // The sqlite3 driver import below is this test's own, mirroring the
 // raw-DB probe pattern org's own upgrade tests use: the wipe must reach

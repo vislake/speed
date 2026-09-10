@@ -179,10 +179,11 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // through authn.Service.SearchUsers (the same exact-email recovery
 // seedDemoUsers uses, documented there) and granted afresh. Without that
 // re-assertion a process restart would leave the platform-staff account
-// permanently unable to sign in -- 403 authn.tenant_membership_required
-// from an empty in-memory roster -- locking the operator out of admin's
-// own console until the database is wiped. The registration itself goes
-// through demoseed,
+// permanently unable to sign in -- an empty in-memory roster resolves no
+// membership, and password sign-in answers the uniform 401
+// authn.invalid_credentials every failed sign-in answers -- locking the
+// operator out of admin's own console until the database is wiped. The
+// registration itself goes through demoseed,
 // exactly like seedDemoUsers' accounts: an already-registered staff
 // account is discovered by the SearchUsers lookup and never POSTs the
 // public register route -- the route whose per-IP budget
