@@ -12,14 +12,16 @@
 # `replace` directive for every sibling go/* module it imports, pointing at
 # ../../go/<module> by RELATIVE PATH (see that file's own header), and it
 # builds under go.work workspace mode -- go.work lists this app alongside
-# every go/* module, and Go's workspace-mode auto-detection walks up parent
-# directories from the build's working directory looking for a go.work file,
-# which is exactly why the build RUN below can `cd` into
-# examples/reference-app and still resolve the whole workspace graph. So
-# the build stage needs go.work, go.work.sum, every go/* module AND
-# examples/reference-app all visible in one context, which only the
-# repository root provides -- root CLAUDE.md's own Taskfile.yml note on
-# package patterns says the identical thing for `go test`/`go vet`.
+# every go/* module and tools/configrefgen, and Go's workspace-mode
+# auto-detection walks up parent directories from the build's working
+# directory looking for a go.work file, which is exactly why the build's
+# WORKDIR below (examples/reference-app) still resolves the whole
+# workspace graph. So the build stage needs go.work, go.work.sum and
+# every one of go.work's `use` entries -- the go/* modules,
+# tools/configrefgen and examples/reference-app -- all visible in one
+# context, which only the repository root provides -- root CLAUDE.md's
+# own Taskfile.yml note on package patterns says the identical thing for
+# `go test`/`go vet`.
 #
 # CGO_ENABLED=0: go/dbkit's SQLite dialect driver
 # (github.com/glebarez/sqlite, wrapping modernc.org/sqlite) is pure Go --
@@ -63,6 +65,13 @@ COPY go.work go.work.sum ./
 # package one -- so this stays the whole go/ tree, not just the modules
 # this app happens to import today.
 COPY go/ ./go/
+
+# go.work's other non-go/ `use` entry besides the app: tools/configrefgen,
+# the config-reference generator. The same workspace-resolution rule
+# applies -- its go.mod must be present or the workspace does not load,
+# even though this app imports nothing from it -- so the whole directory
+# travels, consistent with the go/ tree above.
+COPY tools/configrefgen/ ./tools/configrefgen/
 
 # The app itself, including its own go.mod/go.sum and the replace
 # directives that point back at the go/ modules just copied above.
