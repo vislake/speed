@@ -78,8 +78,10 @@ err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject, validity */ })
 ```
 
 Lifecycle plumbing: after `Bootstrap`, call `EnsurePurpose` for each
-purpose your product signs for, and schedule `EnqueueExpiryScan` from
-your periodic-task loop; the scan stages and promotes successors. Host
+purpose your product signs for; the expiry scan is declared on the
+registry's `Schedules` seat, so a host that runs a `jobs.Scheduler`
+drives it (or call `EnqueueExpiryScan` from your own periodic-task
+loop). The scan stages and promotes successors. Host
 options: `WithSigner(name, signer)`, `WithPropagationWindow`,
 `WithRenewalLeadTime`, `WithCacheTTL`, `WithExpiryScanWindow`.
 Resolve a signer by registered name with a capability requirement

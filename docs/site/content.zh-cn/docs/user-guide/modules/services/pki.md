@@ -63,8 +63,9 @@ err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject、有效期 */ })
 ```
 
 生命周期管道:在 `Bootstrap` 之后为你产品签名的每个 purpose 调
-`EnsurePurpose`,并在周期任务循环里调度 `EnqueueExpiryScan`;扫描负
-责分阶段准备并提升继任者。宿主选项:`WithSigner(name, signer)`、
+`EnsurePurpose`;过期扫描已声明在注册表的 `Schedules` 座席上,宿主
+起一个 `jobs.Scheduler` 即驱动它(也可自己在周期任务循环里调
+`EnqueueExpiryScan`)。扫描负责分阶段准备并提升继任者。宿主选项:`WithSigner(name, signer)`、
 `WithPropagationWindow`、`WithRenewalLeadTime`、`WithCacheTTL`、
 `WithExpiryScanWindow`。按注册名带能力要求(比如直签)解析签名器,
 走 `SignerRegistry` 的 `BuildSignerRequiring`(先空 import provider

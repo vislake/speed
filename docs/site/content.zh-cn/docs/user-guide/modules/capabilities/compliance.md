@@ -107,9 +107,10 @@ _, err := c.Erasure().Erase(ctx, pkgcore.SubjectRef{
 
 ## 已知限制与链接
 
-- 保留清扫在模块内没有排程点:每个接 compliance 的宿主自己加周期
-  入队(参考应用的调度器是交付形态),否则软删行就一直留着,直到
-  有人清扫。
+- 保留清扫的排程点就是模块自己的声明:`Module.Register` 在注册表的
+  `Schedules` 座席上声明按租户的周期任务,宿主起一个
+  `jobs.Scheduler` 即按租户清扫,不必自己加排程点(也可手动入队某
+  租户的清扫)。
 - `SweepAllTenants` 需要宿主提供 `TenantLister`——compliance 坐在
   `org` 之上,不会 import 它;没有内建租户目录。
 - 一次 `Erase` 只删运行时刻已注册参与者的行——绝不是某主体租户数

@@ -172,7 +172,6 @@
 |---|---|---|---|---|
 | 1 | ROADMAP | `go/ai-gateway/route.go` | runtime-configurable (config-driven) model routing 层未实现 | 需先推翻已记录决策(防请求中途静默变道)方可做动态路由 |
 | 3 | ROADMAP | `go/compliance/config_audit.go` | config 事件缺 ActorType/DisplayName 字段,系统调用方归因不完整 | 触发=未来真正 system-actor 的 config.Set 调用方;需 go/config 事件 schema 先行 |
-| 4 | ROADMAP | `go/compliance/AGENTS.md` | retention sweep 无模块内置调度点 | 模块内调度点需 jobs 级调度器设计;宿主 cadence 契约已记录 |
 | 6 | ROADMAP | `go/notification/contact.go` | per-contact locale negotiation 未实现 | 无消费需求;per-contact locale 协商路径与文案对账为 later-round 变更(已刻意延后) |
 | 8 | BLOCKED | `go/pki/AGENTS.md` | authority/certificate 无 expiry 驱动生命周期 | 无真实消费者前提已闭(66c81ee9/e0f4e691);到期驱动续期/轮转仍未建,宿主自管到期为现状,机制待真实到期需求 |
 | 11 | ROADMAP | `go/authn/AGENTS.md` | 动态配置项运行时不读回(读回绑定未实现) | 读回绑定等有活值消费端才接(反投机;flag 可见性已由宿主 FeatureGate 生效) |
@@ -356,7 +355,7 @@
 
 ## 9. 闭于 main 的普查行(记录时点 2026-09-09)
 
-以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地;2026-09-10 另闭 2 行(127、212,真实发布类)随 v0.0.1 发布机制落地。
+以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地;2026-09-10 另闭 2 行(127、212,真实发布类)随 v0.0.1 发布机制落地,另闭 1 行(4,周期调度席位)随 R2 落地。
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
@@ -377,6 +376,7 @@
 | 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 个模块 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本随后作废(21 个模块 tag 已从远端与本地删除、版本号不复用),org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛 |
 | 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | 闭:5cb0ce68 pre-auth 端点先 secured/versioned——移入 `/api/v1/config/...` 版本化前缀、两路径共享每地址限流预算、成功答案一分钟公开缓存 + `Vary: Host`(行内记录的前置条件达成);片段随 ba3ddb76 落地——`go/config/api/openapi.yaml` 声明 config_getPublicConfig/config_getSystemFeatures 两个操作,`*Module` 以编译期断言实现生成 `api.ServerInterface` 并经生成 wrapper 挂载 |
 | 154 | ROADMAP | `web/packages/api-client/src/config-fetcher.ts` | OpenAPI fragment for go/config pre-auth endpoints | 闭:ba3ddb76 go/config 片段落地并进合并文档与 `@speed/api-sdk`;前端手写面与之同步——config-fetcher 保持 per-key 映射层、路径常量与片段一致,片段生成的 hook(useConfigGetPublicConfig/useConfigGetSystemFeatures)为前端的主调用面;前置 secured/versioned 由 5cb0ce68 达成 |
+| 4 | ROADMAP | `go/compliance/AGENTS.md` | retention sweep 无模块内置调度点 | 闭:周期调度席位 R2 落地——`pkgcore.Registry.Schedules` 座席(声明即排产)随 `2566a03d`,`jobs.Scheduler` + `TenantLister` seam + 统一窗口键派生随 `73fae4f0`;七处声明随 `0b511ccb`/`5631f94e`/`b4acb18e`/`a40dd80e`/`46fd58c9`/`3a111862`(storage/compliance/pki 两处/billing/sharing/integration;站点前缀与调度器派生的逐字节同键由各模块窗口测试钉住),参考应用宿主 ticker 删除与 `periodicTenantUniverse` 转 `TenantLister` 实现随 `21c4a23c`。compliance AGENTS 该 bullet 已改写为现文(声明制:模块拥有自己的默认排产,宿主的总开关是启不启动调度器) |
 
 **部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
 

@@ -130,10 +130,11 @@ owners that register no participant yet.
 
 ## Limitations and links
 
-- The retention sweep has no schedule point in the module: every host
-  that wires compliance adds its own periodic enqueue (the reference
-  app's scheduler is the shipped shape) or soft-deleted rows are
-  retained until someone does.
+- The retention sweep's schedule point is the module's own declaration:
+  `Module.Register` announces a per-tenant schedule on the registry's
+  `Schedules` seat, so a host that runs a `jobs.Scheduler` sweeps every
+  tenant without adding one of its own (a host can also enqueue a
+  tenant's sweep by hand).
 - `SweepAllTenants` needs a host-supplied `TenantLister` — compliance
   sits above `org` and will not import it; there is no built-in tenant
   directory.
