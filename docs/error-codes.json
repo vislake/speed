@@ -132,7 +132,7 @@
       "file": "go/admin/handler.go",
       "ident": "errInternal",
       "kind": "declared",
-      "line": 24,
+      "line": 25,
       "module": "admin",
       "status": 500
     },
@@ -258,7 +258,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrBaseURLBlocked",
       "kind": "declared",
-      "line": 115,
+      "line": 106,
       "module": "aigateway",
       "status": 400
     },
@@ -267,7 +267,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrBaseURLInvalid",
       "kind": "declared",
-      "line": 81,
+      "line": 72,
       "module": "aigateway",
       "status": 400
     },
@@ -276,7 +276,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrBaseURLUnresolvable",
       "kind": "declared",
-      "line": 86,
+      "line": 77,
       "module": "aigateway",
       "status": 400
     },
@@ -285,7 +285,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrCredentialNotFound",
       "kind": "declared",
-      "line": 54,
+      "line": 45,
       "module": "aigateway",
       "status": 404
     },
@@ -294,7 +294,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrCredentialRequired",
       "kind": "declared",
-      "line": 59,
+      "line": 50,
       "module": "aigateway",
       "status": 400
     },
@@ -303,7 +303,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrEmptyMessages",
       "kind": "declared",
-      "line": 31,
+      "line": 22,
       "module": "aigateway",
       "status": 400
     },
@@ -312,7 +312,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrEmptyModel",
       "kind": "declared",
-      "line": 27,
+      "line": 18,
       "module": "aigateway",
       "status": 400
     },
@@ -321,7 +321,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrEmptyPrompt",
       "kind": "declared",
-      "line": 170,
+      "line": 161,
       "module": "aigateway",
       "status": 400
     },
@@ -330,7 +330,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrEntitlementDenied",
       "kind": "declared",
-      "line": 41,
+      "line": 32,
       "module": "aigateway",
       "status": 403
     },
@@ -339,7 +339,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageGenerationUnavailable",
       "kind": "declared",
-      "line": 196,
+      "line": 187,
       "module": "aigateway",
       "status": 500
     },
@@ -348,7 +348,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageInputNotAllowed",
       "kind": "declared",
-      "line": 190,
+      "line": 181,
       "module": "aigateway",
       "status": 400
     },
@@ -357,7 +357,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageInputRequired",
       "kind": "declared",
-      "line": 178,
+      "line": 169,
       "module": "aigateway",
       "status": 400
     },
@@ -366,7 +366,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageJobClaimInFlight",
       "kind": "declared",
-      "line": 232,
+      "line": 223,
       "module": "aigateway",
       "status": 409
     },
@@ -375,7 +375,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageMaskRequired",
       "kind": "declared",
-      "line": 182,
+      "line": 173,
       "module": "aigateway",
       "status": 400
     },
@@ -384,7 +384,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageObjectUnavailable",
       "kind": "declared",
-      "line": 211,
+      "line": 202,
       "module": "aigateway",
       "status": 500
     },
@@ -393,7 +393,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageOutputWriteFailed",
       "kind": "declared",
-      "line": 216,
+      "line": 207,
       "module": "aigateway",
       "status": 500
     },
@@ -402,7 +402,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrImageRequiresTenant",
       "kind": "declared",
-      "line": 204,
+      "line": 195,
       "module": "aigateway",
       "status": 400
     },
@@ -411,7 +411,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrInternal",
       "kind": "declared",
-      "line": 257,
+      "line": 248,
       "module": "aigateway",
       "status": 500
     },
@@ -420,7 +420,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrInvalidImageOperation",
       "kind": "declared",
-      "line": 174,
+      "line": 165,
       "module": "aigateway",
       "status": 400
     },
@@ -429,7 +429,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrMultipleImageResults",
       "kind": "declared",
-      "line": 247,
+      "line": 238,
       "module": "aigateway",
       "status": 400
     },
@@ -438,7 +438,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrProviderConfigInvalid",
       "kind": "declared",
-      "line": 143,
+      "line": 134,
       "module": "aigateway",
       "status": 400
     },
@@ -447,7 +447,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrProviderNotSSRFGuardable",
       "kind": "declared",
-      "line": 166,
+      "line": 157,
       "module": "aigateway",
       "status": 400
     },
@@ -456,7 +456,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrProviderRequestFailed",
       "kind": "declared",
-      "line": 121,
+      "line": 112,
       "module": "aigateway",
       "status": 500
     },
@@ -465,7 +465,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrProviderResponseInvalid",
       "kind": "declared",
-      "line": 126,
+      "line": 117,
       "module": "aigateway",
       "status": 500
     },
@@ -474,7 +474,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrRateLimitCheckFailed",
       "kind": "declared",
-      "line": 50,
+      "line": 41,
       "module": "aigateway",
       "status": 500
     },
@@ -492,7 +492,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrSystemScopeRequiresSystemContext",
       "kind": "declared",
-      "line": 74,
+      "line": 65,
       "module": "aigateway",
       "status": 403
     },
@@ -501,7 +501,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrTenantScopeRequiresTenant",
       "kind": "declared",
-      "line": 66,
+      "line": 57,
       "module": "aigateway",
       "status": 400
     },
@@ -510,7 +510,7 @@
       "file": "go/ai-gateway/errors.go",
       "ident": "ErrUnroutedModel",
       "kind": "declared",
-      "line": 36,
+      "line": 27,
       "module": "aigateway",
       "status": 404
     },
@@ -1203,7 +1203,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesErrInternal",
       "kind": "declared",
-      "line": 58,
+      "line": 59,
       "module": "cases",
       "status": 500
     },
@@ -1212,7 +1212,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesInvalidRequestBody",
       "kind": "declared",
-      "line": 65,
+      "line": 66,
       "module": "cases",
       "status": 400
     },
@@ -1266,7 +1266,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentInvalid",
       "kind": "declared",
-      "line": 79,
+      "line": 80,
       "module": "cases",
       "status": 400
     },
@@ -1275,7 +1275,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentRequired",
       "kind": "declared",
-      "line": 74,
+      "line": 75,
       "module": "cases",
       "status": 400
     },
@@ -1284,7 +1284,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentTooLarge",
       "kind": "declared",
-      "line": 86,
+      "line": 87,
       "module": "cases",
       "status": 400
     },
@@ -1293,7 +1293,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoNotFound",
       "kind": "declared",
-      "line": 101,
+      "line": 102,
       "module": "cases",
       "status": 404
     },
@@ -1320,7 +1320,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoRejected",
       "kind": "declared",
-      "line": 94,
+      "line": 95,
       "module": "cases",
       "status": 400
     },
@@ -1635,7 +1635,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "consultErrInternal",
       "kind": "declared",
-      "line": 35,
+      "line": 41,
       "module": "consult",
       "status": 500
     },
@@ -1644,7 +1644,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 57,
+      "line": 70,
       "module": "consult",
       "status": 400
     },
@@ -1653,7 +1653,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 61,
+      "line": 74,
       "module": "consult",
       "status": 400
     },
@@ -1707,7 +1707,7 @@
       "file": "go/dbkit/repository.go",
       "ident": "ErrMissingID",
       "kind": "declared",
-      "line": 93,
+      "line": 107,
       "module": "dbkit",
       "status": 400
     },
@@ -1833,7 +1833,7 @@
       "file": "examples/reference-app/internal/app/demo_subject.go",
       "ident": "integrationErrInternal",
       "kind": "declared",
-      "line": 691,
+      "line": 692,
       "module": "integration",
       "status": 500
     },
@@ -2265,7 +2265,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "errInternal",
       "kind": "declared",
-      "line": 84,
+      "line": 85,
       "module": "notes",
       "status": 500
     },
@@ -2274,7 +2274,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "",
       "kind": "inline",
-      "line": 237,
+      "line": 230,
       "module": "notes",
       "status": 400
     },
@@ -2283,7 +2283,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrNoteNotFound",
       "kind": "declared",
-      "line": 114,
+      "line": 115,
       "module": "notes",
       "status": 404
     },
@@ -2292,7 +2292,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrSubjectUnresolved",
       "kind": "declared",
-      "line": 99,
+      "line": 100,
       "module": "notes",
       "status": 401
     },
@@ -2301,7 +2301,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrTextRequired",
       "kind": "declared",
-      "line": 31,
+      "line": 32,
       "module": "notes",
       "status": 400
     },
@@ -2310,7 +2310,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrTextTooLong",
       "kind": "declared",
-      "line": 80,
+      "line": 81,
       "module": "notes",
       "status": 400
     },
@@ -3084,7 +3084,7 @@
       "file": "examples/reference-app/internal/app/team_members.go",
       "ident": "teamMemberErrInternal",
       "kind": "declared",
-      "line": 118,
+      "line": 119,
       "module": "reference_app",
       "status": 500
     },
@@ -3093,7 +3093,7 @@
       "file": "examples/reference-app/internal/app/clinic_name.go",
       "ident": "",
       "kind": "inline",
-      "line": 81,
+      "line": 79,
       "module": "reference_app",
       "status": 400
     },
@@ -3201,7 +3201,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrInternal",
       "kind": "declared",
-      "line": 55,
+      "line": 56,
       "module": "smilesim",
       "status": 500
     },
@@ -3210,7 +3210,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrInvalidRequestBody",
       "kind": "declared",
-      "line": 66,
+      "line": 67,
       "module": "smilesim",
       "status": 400
     },
@@ -3219,7 +3219,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrOutputNotFound",
       "kind": "declared",
-      "line": 91,
+      "line": 92,
       "module": "smilesim",
       "status": 404
     },
@@ -3228,7 +3228,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrOutputNotReady",
       "kind": "declared",
-      "line": 86,
+      "line": 87,
       "module": "smilesim",
       "status": 404
     },
@@ -3237,7 +3237,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrPhotoObjectIDRequired",
       "kind": "declared",
-      "line": 70,
+      "line": 71,
       "module": "smilesim",
       "status": 400
     },
@@ -3255,7 +3255,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrSimulationNotFound",
       "kind": "declared",
-      "line": 82,
+      "line": 83,
       "module": "smilesim",
       "status": 404
     },
@@ -3291,7 +3291,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrAllowedTypeUnsupported",
       "kind": "declared",
-      "line": 153,
+      "line": 145,
       "module": "storage",
       "status": 500
     },
@@ -3300,7 +3300,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrChecksumMismatch",
       "kind": "declared",
-      "line": 80,
+      "line": 72,
       "module": "storage",
       "status": 409
     },
@@ -3309,7 +3309,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrContentLengthMismatch",
       "kind": "declared",
-      "line": 90,
+      "line": 82,
       "module": "storage",
       "status": 400
     },
@@ -3318,7 +3318,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrContentMissing",
       "kind": "declared",
-      "line": 94,
+      "line": 86,
       "module": "storage",
       "status": 409
     },
@@ -3327,7 +3327,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrImageUnreadable",
       "kind": "declared",
-      "line": 116,
+      "line": 108,
       "module": "storage",
       "status": 400
     },
@@ -3336,7 +3336,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInternal",
       "kind": "declared",
-      "line": 175,
+      "line": 167,
       "module": "storage",
       "status": 500
     },
@@ -3345,7 +3345,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidChecksum",
       "kind": "declared",
-      "line": 75,
+      "line": 67,
       "module": "storage",
       "status": 400
     },
@@ -3354,7 +3354,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidExpiry",
       "kind": "declared",
-      "line": 121,
+      "line": 113,
       "module": "storage",
       "status": 400
     },
@@ -3363,7 +3363,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidLimit",
       "kind": "declared",
-      "line": 207,
+      "line": 199,
       "module": "storage",
       "status": 400
     },
@@ -3372,7 +3372,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidRequestBody",
       "kind": "declared",
-      "line": 201,
+      "line": 193,
       "module": "storage",
       "status": 400
     },
@@ -3381,7 +3381,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidSize",
       "kind": "declared",
-      "line": 169,
+      "line": 161,
       "module": "storage",
       "status": 400
     },
@@ -3390,7 +3390,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrNoExpiryNotAllowed",
       "kind": "declared",
-      "line": 130,
+      "line": 122,
       "module": "storage",
       "status": 400
     },
@@ -3399,7 +3399,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectNotFound",
       "kind": "declared",
-      "line": 46,
+      "line": 38,
       "module": "storage",
       "status": 404
     },
@@ -3408,7 +3408,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectNotUploading",
       "kind": "declared",
-      "line": 51,
+      "line": 43,
       "module": "storage",
       "status": 409
     },
@@ -3417,7 +3417,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectTooLarge",
       "kind": "declared",
-      "line": 69,
+      "line": 61,
       "module": "storage",
       "status": 400
     },
@@ -3426,7 +3426,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectUploading",
       "kind": "declared",
-      "line": 62,
+      "line": 54,
       "module": "storage",
       "status": 409
     },
@@ -3435,7 +3435,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrPixelLimitExceeded",
       "kind": "declared",
-      "line": 111,
+      "line": 103,
       "module": "storage",
       "status": 400
     },
@@ -3444,7 +3444,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrQueueRequired",
       "kind": "declared",
-      "line": 185,
+      "line": 177,
       "module": "storage",
       "status": 500
     },
@@ -3453,7 +3453,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrSizeMismatch",
       "kind": "declared",
-      "line": 84,
+      "line": 76,
       "module": "storage",
       "status": 409
     },
@@ -3462,7 +3462,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrStoreError",
       "kind": "declared",
-      "line": 165,
+      "line": 157,
       "module": "storage",
       "status": 500
     },
@@ -3471,7 +3471,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrStoreUnavailable",
       "kind": "declared",
-      "line": 160,
+      "line": 152,
       "module": "storage",
       "status": 500
     },
@@ -3480,7 +3480,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrSweepPartialFailure",
       "kind": "declared",
-      "line": 139,
+      "line": 131,
       "module": "storage",
       "status": 500
     },
@@ -3489,7 +3489,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrTypeMismatch",
       "kind": "declared",
-      "line": 105,
+      "line": 97,
       "module": "storage",
       "status": 400
     },
@@ -3498,7 +3498,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrTypeNotAllowed",
       "kind": "declared",
-      "line": 100,
+      "line": 92,
       "module": "storage",
       "status": 400
     },
@@ -3516,7 +3516,7 @@
       "file": "go/tenancy/middleware.go",
       "ident": "ErrTenantStatusUnavailable",
       "kind": "declared",
-      "line": 45,
+      "line": 41,
       "module": "tenancy",
       "status": 500
     },
@@ -3525,7 +3525,7 @@
       "file": "go/tenancy/middleware.go",
       "ident": "ErrTenantSuspended",
       "kind": "declared",
-      "line": 38,
+      "line": 34,
       "module": "tenancy",
       "status": 403
     },
@@ -3534,7 +3534,7 @@
       "file": "go/tenancy/middleware.go",
       "ident": "ErrTenantUnresolved",
       "kind": "declared",
-      "line": 25,
+      "line": 21,
       "module": "tenancy",
       "status": 403
     }
