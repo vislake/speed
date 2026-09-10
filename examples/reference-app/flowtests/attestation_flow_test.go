@@ -249,12 +249,15 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 
 	// Leg 7: the external-verifier leg. The platform regenerates the
 	// issuing authority's CRL (CAService.GenerateCRL over the same
-	// database -- the app does not schedule CRL regeneration, per the
-	// records), and the test fetches the document over pki's real HTTP
-	// operation pki_getAuthorityCrl as an external verifier would. The
-	// revoked certificate's serial is listed; the replacement's is not;
-	// the document's signature checks out against the issuing authority's
-	// certificate with the standard library.
+	// database -- the module declares CRL regeneration on the
+	// pkgcore.Registry.Schedules seat, so the app's host, which runs a
+	// jobs.Scheduler over the finished registry's declarations,
+	// schedules it by declaration; this leg's explicit call pins the
+	// document it reads), and the test fetches the document over pki's
+	// real HTTP operation pki_getAuthorityCrl as an external verifier
+	// would. The revoked certificate's serial is listed; the
+	// replacement's is not; the document's signature checks out against
+	// the issuing authority's certificate with the standard library.
 	crlCA := pki.NewCAService(
 		pki.NewLocalSigner(observerDB), "local",
 		pki.NewAuthorityRepository(observerDB),
