@@ -2,6 +2,7 @@ package tencent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -18,25 +19,21 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// fixedSender returns a sender whose clock is pinned to fixedTimestamp, so a
-// whole signed request is deterministic and the unit tier can assert it
-// against the independently precomputed signature (see sign_test.go's vector
-// tests). The HTTP client is scripted through the caller's RoundTripper.
-func fixedSender(rt roundTripFunc, cfg Config) *sender {
-	if cfg.Region == "" {
-		cfg.Region = defaultRegion // NewSender's own default; this helper bypasses it
+// fixedSender builds a real sender through NewSender (so the constructor's
+// own Templates and Region handling runs) whose clock is then pinned to
+// fixedTimestamp, so a whole signed request is deterministic and the unit
+// tier can assert it against the independently precomputed signature (see
+// sign_test.go's vector tests). The HTTP client is scripted through the
+// caller's RoundTripper.
+func fixedSender(t *testing.T, rt roundTripFunc, cfg Config) *sender {
+	t.Helper()
+	s, err := NewSender(cfg, WithClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("NewSender(%+v) error = %v", cfg, err)
 	}
-	s := &sender{
-		secretID:   cfg.SecretID,
-		secretKey:  cfg.SecretKey,
-		sdkAppID:   cfg.SdkAppID,
-		signName:   cfg.SignName,
-		templateID: cfg.TemplateID,
-		region:     cfg.Region,
-		client:     &http.Client{Transport: rt},
-		now:        func() time.Time { return fixedTimestamp },
-	}
-	return s
+	fixed := s.(*sender)
+	fixed.now = func() time.Time { return fixedTimestamp }
+	return fixed
 }
 
 const (
@@ -45,16 +42,45 @@ const (
 	testSdkAppID  = "1400006666"
 	testSignName  = "speed-test"
 	testTemplID   = "1234567"
+	testMessageID = "authn.sms.verification_code"
+	testLocale    = "zh-CN"
 )
 
 func testConfig() Config {
 	return Config{
-		SecretID:   testSecretID,
-		SecretKey:  testSecretKey,
-		SdkAppID:   testSdkAppID,
-		SignName:   testSignName,
-		TemplateID: testTemplID,
+		SecretID:  testSecretID,
+		SecretKey: testSecretKey,
+		SdkAppID:  testSdkAppID,
+		SignName:  testSignName,
+		Templates: map[string]Template{
+			testLocale + "/" + testMessageID: {
+				ID:     testTemplID,
+				Params: []string{"code", "minutes"},
+			},
+		},
 	}
+}
+
+// testSMS is the message testConfig's single mapping serves: the phone-login
+// verification-code message go/authn sends, with both variables of its
+// mapped template assigned.
+func testSMS() pkgcore.SMS {
+	return pkgcore.SMS{
+		To:        "+8613800000000",
+		Text:      "your code is 654321, valid for 5 minutes",
+		MessageID: testMessageID,
+		Locale:    testLocale,
+		Params:    map[string]string{"code": "654321", "minutes": "5"},
+	}
+}
+
+// okResponse is the gateway's success envelope for one sent message.
+func okResponse(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"Response":{"SendStatusSet":[{"SerialNo":"111","Code":"Ok","Message":"send success","IsoCode":"CN"}],"RequestId":"REQ-1"}}`)),
+		Header:     make(http.Header),
+	}, nil
 }
 
 // TestNewSender_MissingField_RefusesNamesField proves construction fails
@@ -73,7 +99,7 @@ func TestNewSender_MissingField_RefusesNamesField(t *testing.T) {
 		{name: "secret key", mutate: func(c *Config) { c.SecretKey = "" }, wantErr: "SecretKey"},
 		{name: "sdk app id", mutate: func(c *Config) { c.SdkAppID = "" }, wantErr: "SdkAppID"},
 		{name: "sign name", mutate: func(c *Config) { c.SignName = "" }, wantErr: "SignName"},
-		{name: "template id", mutate: func(c *Config) { c.TemplateID = "" }, wantErr: "TemplateID"},
+		{name: "templates", mutate: func(c *Config) { c.Templates = nil }, wantErr: "Templates"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -89,6 +115,65 @@ func TestNewSender_MissingField_RefusesNamesField(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), testSecretKey) {
 				t.Errorf("NewSender error = %v, must never echo the secret", err)
+			}
+		})
+	}
+}
+
+// TestNewSender_BrokenTemplatesEntry_RefusesNamingKey proves each malformed
+// Templates entry -- a key that does not split into two non-empty halves, an
+// empty template id, an empty variable name -- is refused at construction,
+// with the error naming the offending key or field so an operator can fix
+// the map without guessing which entry is broken.
+func TestNewSender_BrokenTemplatesEntry_RefusesNamingKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:    "key without a slash",
+			mutate:  func(c *Config) { c.Templates = map[string]Template{testLocale: {ID: testTemplID}} },
+			wantErr: `Templates key "zh-CN"`,
+		},
+		{
+			name:    "empty locale half",
+			mutate:  func(c *Config) { c.Templates = map[string]Template{"/" + testMessageID: {ID: testTemplID}} },
+			wantErr: `Templates key "/authn.sms.verification_code"`,
+		},
+		{
+			name:    "empty message-id half",
+			mutate:  func(c *Config) { c.Templates = map[string]Template{testLocale + "/": {ID: testTemplID}} },
+			wantErr: `Templates key "zh-CN/"`,
+		},
+		{
+			name: "empty template id",
+			mutate: func(c *Config) {
+				c.Templates = map[string]Template{testLocale + "/" + testMessageID: {Params: []string{"code"}}}
+			},
+			wantErr: `Templates["zh-CN/authn.sms.verification_code"].ID`,
+		},
+		{
+			name: "empty variable name",
+			mutate: func(c *Config) {
+				c.Templates = map[string]Template{testLocale + "/" + testMessageID: {ID: testTemplID, Params: []string{""}}}
+			},
+			wantErr: `Templates["zh-CN/authn.sms.verification_code"].Params`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := testConfig()
+			tc.mutate(&cfg)
+			_, err := NewSender(cfg)
+			if err == nil {
+				t.Fatalf("NewSender(%+v) error = nil, want a refusal naming the broken entry", cfg)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("NewSender error = %v, want it to name %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -110,17 +195,18 @@ func TestNewSender_EmptyRegion_DefaultsToApGuangzhou(t *testing.T) {
 
 // TestSend_PostsSignedSendSmsRequest is the offline request-shape proof: the
 // transport records exactly one POST to Tencent's fixed gateway whose body is
-// the byte-exact SendSms JSON and whose headers -- the X-TC-* quartet, the
-// exact content type, and an Authorization header independently precomputed
-// over those exact bytes (python oracle; the vector's fixed clock is this
-// test's injected now) -- match what a genuine request must carry. A renamed
-// field, a wrong version, a drifted body or a signature that does not cover
-// the sent bytes all fail here.
+// the byte-exact SendSms JSON -- the mapped template's id, and its declared
+// variables positional -- and whose headers -- the X-TC-* quartet, the exact
+// content type, and an Authorization header independently precomputed over
+// those exact bytes (python oracle; the vector's fixed clock is this test's
+// injected now) -- match what a genuine request must carry. A renamed field,
+// a wrong version, a drifted body or a signature that does not cover the
+// sent bytes all fail here.
 func TestSend_PostsSignedSendSmsRequest(t *testing.T) {
 	t.Parallel()
 
-	const wantBody = `{"PhoneNumberSet":["+8613800000000"],"SmsSdkAppId":"1400006666","SignName":"speed-test","TemplateId":"1234567","TemplateParamSet":["your code is 654321"]}`
-	const wantAuthz = "TC3-HMAC-SHA256 Credential=TC3-test-id/2026-05-28/sms/tc3_request, SignedHeaders=content-type;host, Signature=fb2b497248a5517203af23cceef807fd13136eeea441a631dbbbc8979ee93dd4"
+	const wantBody = `{"PhoneNumberSet":["+8613800000000"],"SmsSdkAppId":"1400006666","SignName":"speed-test","TemplateId":"1234567","TemplateParamSet":["654321","5"]}`
+	const wantAuthz = "TC3-HMAC-SHA256 Credential=TC3-test-id/2026-05-28/sms/tc3_request, SignedHeaders=content-type;host, Signature=5c34bcb91b20068fae8b8be64675af89abfa3ccc0dd96d03edcdf5bb0851c453"
 
 	var gotBody, gotURL, gotMethod string
 	gotHeaders := make(http.Header)
@@ -133,15 +219,11 @@ func TestSend_PostsSignedSendSmsRequest(t *testing.T) {
 			t.Errorf("read request body: %v", err)
 		}
 		gotBody = string(raw)
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"Response":{"SendStatusSet":[{"SerialNo":"111","Code":"Ok","Message":"send success","IsoCode":"CN"}],"RequestId":"REQ-1"}}`)),
-			Header:     make(http.Header),
-		}, nil
+		return okResponse(r)
 	})
 
-	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "your code is 654321"}); err != nil {
+	s := fixedSender(t, rt, testConfig())
+	if err := s.Send(context.Background(), testSMS()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -174,6 +256,157 @@ func TestSend_PostsSignedSendSmsRequest(t *testing.T) {
 	}
 }
 
+// TestSend_TemplateParamSetFollowsDeclaredOrder proves TemplateParamSet is
+// built in the mapped template's declared order, not in map-iteration order:
+// the template here declares minutes BEFORE code, and the wire set must be
+// ["5","654321"] -- the positional variables {1} and {2} would otherwise
+// receive each other's values.
+func TestSend_TemplateParamSetFollowsDeclaredOrder(t *testing.T) {
+	t.Parallel()
+
+	var gotBody string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		return okResponse(r)
+	})
+
+	cfg := testConfig()
+	cfg.Templates[testLocale+"/"+testMessageID] = Template{ID: testTemplID, Params: []string{"minutes", "code"}}
+	s := fixedSender(t, rt, cfg)
+	if err := s.Send(context.Background(), testSMS()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	var got sendSmsRequest
+	if err := json.Unmarshal([]byte(gotBody), &got); err != nil {
+		t.Fatalf("decode request body %q: %v", gotBody, err)
+	}
+	want := []string{"5", "654321"}
+	if len(got.TemplateParamSet) != len(want) {
+		t.Fatalf("TemplateParamSet = %v, want %v (declared order)", got.TemplateParamSet, want)
+	}
+	for i := range want {
+		if got.TemplateParamSet[i] != want[i] {
+			t.Errorf("TemplateParamSet[%d] = %q, want %q (declared order, never map iteration order)", i, got.TemplateParamSet[i], want[i])
+		}
+	}
+}
+
+// TestSend_TemplateDeclaringNoVariables_OmitsParamSet proves a template that
+// declares no variables sends no TemplateParamSet field at all (the
+// omitempty contract), rather than an empty array.
+func TestSend_TemplateDeclaringNoVariables_OmitsParamSet(t *testing.T) {
+	t.Parallel()
+
+	var gotBody string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		return okResponse(r)
+	})
+
+	cfg := testConfig()
+	cfg.Templates[testLocale+"/"+testMessageID] = Template{ID: testTemplID}
+	s := fixedSender(t, rt, cfg)
+	if err := s.Send(context.Background(), testSMS()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	if strings.Contains(gotBody, "TemplateParamSet") {
+		t.Errorf("body = %s, want the TemplateParamSet field absent entirely for a template declaring no variables", gotBody)
+	}
+}
+
+// TestSend_MappedTemplate_IgnoresUndeclaredParams proves a message parameter
+// the mapped template does not name never reaches the wire.
+func TestSend_MappedTemplate_IgnoresUndeclaredParams(t *testing.T) {
+	t.Parallel()
+
+	var gotBody string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		return okResponse(r)
+	})
+
+	s := fixedSender(t, rt, testConfig())
+	msg := testSMS()
+	msg.Params["unused_by_template"] = "must not be sent"
+	if err := s.Send(context.Background(), msg); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if strings.Contains(gotBody, "unused_by_template") || strings.Contains(gotBody, "must not be sent") {
+		t.Errorf("body = %s, want no trace of a parameter the template does not declare", gotBody)
+	}
+}
+
+// TestSend_NoMappedTemplate_RefusedBeforeRequest proves a message whose
+// (Locale, MessageID) has no Templates entry -- including one whose
+// MessageID or Locale is empty, which can match no entry -- is refused
+// before any request leaves the process, with no fallback template and no
+// free-text path. The transport would fail the test if it were reached.
+func TestSend_NoMappedTemplate_RefusedBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		mutate func(*pkgcore.SMS)
+	}{
+		{name: "unmapped message id", mutate: func(m *pkgcore.SMS) { m.MessageID = "notification.contact.verify_code.sms" }},
+		{name: "unmapped locale", mutate: func(m *pkgcore.SMS) { m.Locale = "en-US" }},
+		{name: "empty message id", mutate: func(m *pkgcore.SMS) { m.MessageID = "" }},
+		{name: "empty locale", mutate: func(m *pkgcore.SMS) { m.Locale = "" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rt := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				t.Error("transport reached; an unmapped message must be refused before any request")
+				return nil, nil
+			})
+			s := fixedSender(t, rt, testConfig())
+			msg := testSMS()
+			tc.mutate(&msg)
+			err := s.Send(context.Background(), msg)
+			if err == nil {
+				t.Fatalf("Send(%+v) error = nil, want a no-mapped-template refusal", msg)
+			}
+			if !strings.Contains(err.Error(), "no template for locale") {
+				t.Errorf("Send() error = %v, want it to say no template was mapped", err)
+			}
+		})
+	}
+}
+
+// TestSend_MissingDeclaredVariable_RefusedBeforeRequest proves a declared
+// template variable with no value in SMS.Params is refused before any
+// request, and that the refusal names the missing variable but never a
+// value: the values here can be credentials, so an error carrying one would
+// be a leak.
+func TestSend_MissingDeclaredVariable_RefusedBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	rt := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		t.Error("transport reached; a missing declared variable must be refused before any request")
+		return nil, nil
+	})
+	s := fixedSender(t, rt, testConfig())
+
+	msg := testSMS()
+	delete(msg.Params, "minutes")
+	err := s.Send(context.Background(), msg)
+	if err == nil {
+		t.Fatalf("Send(%+v) error = nil, want a refusal naming the missing variable", msg)
+	}
+	if !strings.Contains(err.Error(), `"minutes"`) {
+		t.Errorf("Send() error = %v, want it to name the missing variable minutes", err)
+	}
+	if strings.Contains(err.Error(), "654321") {
+		t.Errorf("Send() error = %v, must never echo a parameter value", err)
+	}
+}
+
 // TestSend_ConfiguredRegion_ReachesTheRegionHeader proves an explicit
 // Config.Region travels in X-TC-Region instead of the default.
 func TestSend_ConfiguredRegion_ReachesTheRegionHeader(t *testing.T) {
@@ -182,17 +415,15 @@ func TestSend_ConfiguredRegion_ReachesTheRegionHeader(t *testing.T) {
 	var gotRegion string
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		gotRegion = r.Header.Get("X-TC-Region")
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"Response":{"SendStatusSet":[{"Code":"Ok","Message":"send success"}],"RequestId":"REQ-1"}}`)),
-			Header:     make(http.Header),
-		}, nil
+		return okResponse(r)
 	})
 
 	cfg := testConfig()
 	cfg.Region = "ap-hongkong"
-	s := fixedSender(rt, cfg)
-	if err := s.Send(context.Background(), pkgcore.SMS{To: "+85290000000", Text: "x"}); err != nil {
+	s := fixedSender(t, rt, cfg)
+	msg := testSMS()
+	msg.To = "+85290000000"
+	if err := s.Send(context.Background(), msg); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if gotRegion != "ap-hongkong" {
@@ -215,8 +446,8 @@ func TestSend_EnvelopeError_ReturnsRefusal(t *testing.T) {
 		}, nil
 	})
 
-	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
+	s := fixedSender(t, rt, testConfig())
+	err := s.Send(context.Background(), testSMS())
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the envelope's refusal")
 	}
@@ -240,8 +471,8 @@ func TestSend_StatusRowRefusal_ReturnsError(t *testing.T) {
 		}, nil
 	})
 
-	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
+	s := fixedSender(t, rt, testConfig())
+	err := s.Send(context.Background(), testSMS())
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the status row's refusal")
 	}
@@ -264,8 +495,8 @@ func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 		}, nil
 	})
 
-	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	s := fixedSender(t, rt, testConfig())
+	if err := s.Send(context.Background(), testSMS()); err == nil {
 		t.Fatalf("Send() error = nil, want an error for a 503 gateway response")
 	}
 }
@@ -286,8 +517,8 @@ func TestSend_EnvelopeErrorOnNon200_StillReturnsTheEnvelopeRefusal(t *testing.T)
 		}, nil
 	})
 
-	s := fixedSender(rt, testConfig())
-	err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"})
+	s := fixedSender(t, rt, testConfig())
+	err := s.Send(context.Background(), testSMS())
 	if err == nil {
 		t.Fatalf("Send() error = nil, want the envelope's refusal")
 	}
@@ -309,8 +540,8 @@ func TestSend_EmptyStatusSet_ReturnsError(t *testing.T) {
 		}, nil
 	})
 
-	s := fixedSender(rt, testConfig())
-	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	s := fixedSender(t, rt, testConfig())
+	if err := s.Send(context.Background(), testSMS()); err == nil {
 		t.Fatalf("Send() error = nil, want an error for an envelope without a send status")
 	}
 }
@@ -320,10 +551,10 @@ func TestSend_EmptyStatusSet_ReturnsError(t *testing.T) {
 func TestSend_TransportFailure_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	s := fixedSender(func(_ *http.Request) (*http.Response, error) {
+	s := fixedSender(t, func(_ *http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	}, testConfig())
-	if err := s.Send(context.Background(), pkgcore.SMS{To: "+8613800000000", Text: "x"}); err == nil {
+	if err := s.Send(context.Background(), testSMS()); err == nil {
 		t.Fatalf("Send() error = nil, want the transport failure")
 	}
 }

@@ -13,7 +13,8 @@ import (
 var fixedTimestamp = time.Date(2026, 5, 28, 20, 26, 40, 0, time.UTC)
 
 // vectorPayload is the exact SendSms body the vectors sign -- the JSON
-// marshaling of the sendSmsRequest the request tests drive, byte for byte.
+// marshaling of the sendSmsRequest the request tests drive, byte for byte:
+// the mapped template's id and its declared variables positional.
 func vectorPayload(t *testing.T) []byte {
 	t.Helper()
 	payload, err := json.Marshal(sendSmsRequest{
@@ -21,7 +22,7 @@ func vectorPayload(t *testing.T) []byte {
 		SmsSdkAppID:      "1400006666",
 		SignName:         "speed-test",
 		TemplateID:       "1234567",
-		TemplateParamSet: []string{"your code is 654321"},
+		TemplateParamSet: []string{"654321", "5"},
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -38,7 +39,7 @@ func vectorPayload(t *testing.T) []byte {
 func TestSign_CanonicalRequest_MatchesIndependentVector(t *testing.T) {
 	payload := vectorPayload(t)
 
-	const want = "POST\n/\n\ncontent-type:application/json\nhost:sms.tencentcloudapi.com\n\ncontent-type;host\n7e70749845302f973aae91a8203824ec9f60e487c404bdf4a206e8f781acb41e"
+	const want = "POST\n/\n\ncontent-type:application/json\nhost:sms.tencentcloudapi.com\n\ncontent-type;host\n2d2dbf80b69aecd89623867727fcf69ae01cf3b132024ca8892f78dad0dad1ca"
 	if got := canonicalRequestTC3(gatewayHost, "application/json", payload); got != want {
 		t.Errorf("canonicalRequestTC3() =\n%q\nwant\n%q", got, want)
 	}
@@ -49,7 +50,7 @@ func TestSign_CanonicalRequest_MatchesIndependentVector(t *testing.T) {
 func TestSign_StringToSign_MatchesIndependentVector(t *testing.T) {
 	canonical := canonicalRequestTC3(gatewayHost, "application/json", vectorPayload(t))
 
-	const want = "TC3-HMAC-SHA256\n1780000000\n2026-05-28/sms/tc3_request\ndce24e3a85656a4d935e632cf123647f378ec9de279cad9ce9ccd6a9d11dd950"
+	const want = "TC3-HMAC-SHA256\n1780000000\n2026-05-28/sms/tc3_request\nd64fd63291410ab5b4b7e1906d623f1e539d7b58b930d3ba586705329ae46fdc"
 	if got := stringToSignTC3(fixedTimestamp, canonical); got != want {
 		t.Errorf("stringToSignTC3() =\n%q\nwant\n%q", got, want)
 	}
@@ -63,7 +64,7 @@ func TestSign_StringToSign_MatchesIndependentVector(t *testing.T) {
 func TestSign_AuthorizationHeader_MatchesIndependentVector(t *testing.T) {
 	payload := vectorPayload(t)
 
-	const want = "TC3-HMAC-SHA256 Credential=TC3-test-id/2026-05-28/sms/tc3_request, SignedHeaders=content-type;host, Signature=fb2b497248a5517203af23cceef807fd13136eeea441a631dbbbc8979ee93dd4"
+	const want = "TC3-HMAC-SHA256 Credential=TC3-test-id/2026-05-28/sms/tc3_request, SignedHeaders=content-type;host, Signature=5c34bcb91b20068fae8b8be64675af89abfa3ccc0dd96d03edcdf5bb0851c453"
 	got := signTC3("TC3-test-id", "TC3-test-secret", fixedTimestamp, gatewayHost, "application/json", payload)
 	if got != want {
 		t.Errorf("signTC3() =\n%q\nwant\n%q", got, want)

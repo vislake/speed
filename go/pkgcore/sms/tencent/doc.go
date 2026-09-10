@@ -20,11 +20,22 @@
 //
 // Tencent SMS has no free-text send: every message instantiates one approved
 // template (TemplateID) whose variables are substituted POSITIONALLY by
-// TemplateParamSet. This adapter maps the seam's already-rendered message
-// text onto the template's first (and only) positional parameter, always
-// sending a single-element TemplateParamSet. A template with zero variables
-// would drop the message and one with several cannot be driven by a single
-// text, so the registered template must declare exactly one variable.
+// TemplateParamSet, and Tencent has one approved template per kind of
+// message -- so Config.Templates declares, per message identity, which
+// approved template serves it: the map is keyed "<locale>/<message-id>" (the
+// locale the message was rendered in and the identity it was rendered from,
+// both carried by pkgcore.SMS) and each entry names the template id plus the
+// seam parameter names its positional variables take, in order (the first
+// name fills {1}, the second {2}, and so on -- TemplateParamSet is
+// positional and the template carries no variable names this codebase could
+// read). Send selects the entry by (Locale, MessageID), resolves exactly the
+// declared names from SMS.Params, and refuses -- before any request -- a
+// message with no mapped template or a declared name the message carries no
+// value for. There is no fallback template and no free-text path: which
+// templates exist is data of the operator's Tencent account that this
+// codebase cannot know, and guessing would be a send the operator never
+// approved. A template declaring no variables sends no TemplateParamSet at
+// all; a message parameter the mapped template does not name is never sent.
 //
 // # Phone numbers
 //
@@ -54,17 +65,21 @@
 //
 // SecretKey never leaves the Config/NewSender boundary except inside the TC3
 // key derivation, and no error or log path in this package echoes a
-// credential. The payload rides in the POST body over TLS; only the
-// Authorization header (which embeds the non-secret SecretID) is visible in
-// the request line's headers.
+// credential. The payload carries the mapped template's parameter values,
+// which may be a credential (a login verification code); an error this
+// package returns names a missing variable, never its value. The payload
+// rides in the POST body over TLS; only the Authorization header (which
+// embeds the non-secret SecretID) is visible in the request line's headers.
 //
 // # Offline proof and the live boundary
 //
 // The TC3 signature is deterministic given the timestamp, so the unit tier
 // pins the canonical request and the final Authorization header against
-// values precomputed by an independent implementation. What no offline test
-// can prove -- that a real Tencent Cloud account accepts this package's
-// signature at the real gateway -- is the env-gated leg in integration_test/,
-// which self-skips with a recorded note until TENCENT_SMS_* credentials are
-// present (the alipay sandbox-leg precedent).
+// values precomputed by an independent implementation, and pins that an
+// unmapped message and a missing declared variable are refused before any
+// request. What no offline test can prove -- that a real Tencent Cloud
+// account accepts this package's signature at the real gateway -- is the
+// env-gated leg in integration_test/, which self-skips with a recorded note
+// until TENCENT_SMS_* credentials are present (the alipay sandbox-leg
+// precedent).
 package tencent

@@ -23,9 +23,24 @@
 //	TENCENT_SMS_SECRET_KEY            the matching SecretKey
 //	TENCENT_SMS_SDK_APP_ID            the SMS SDK AppID (1400...)
 //	TENCENT_SMS_SIGN_NAME             an approved SMS signature content
-//	TENCENT_SMS_TEMPLATE_ID           an approved template declaring exactly
-//	                                  one positional variable
+//	TENCENT_SMS_TEMPLATE_ID           an approved template's id
 //	TENCENT_SMS_TO                    the recipient phone, E.164 "+86..." form
+//
+// Optional variables (the defaults serve the phone-login verification-code
+// message this repository's own flows produce):
+//
+//	TENCENT_SMS_MESSAGE_ID           the message id the template is mapped
+//	                                 for (default
+//	                                 "authn.sms.verification_code")
+//	TENCENT_SMS_LOCALE               the locale it is mapped for (default
+//	                                 "zh-CN")
+//	TENCENT_SMS_TEMPLATE_VARS        the comma-separated seam parameter
+//	                                 names the template's positional
+//	                                 variables take, in order (default
+//	                                 "code,minutes"); each is sent with a
+//	                                 plausible value -- "code" gets 123456,
+//	                                 "minutes" gets 5, anything else gets
+//	                                 the variable's own name
 //
 // TENCENT_SMS_REGION is optional (defaults to ap-guangzhou).
 //
@@ -52,13 +67,25 @@ import (
 
 // tencentSMSEnv names the environment variables this leg reads.
 const (
-	envSecretID   = "TENCENT_SMS_SECRET_ID"
-	envSecretKey  = "TENCENT_SMS_SECRET_KEY"
-	envSdkAppID   = "TENCENT_SMS_SDK_APP_ID"
-	envSignName   = "TENCENT_SMS_SIGN_NAME"
-	envTemplateID = "TENCENT_SMS_TEMPLATE_ID"
-	envRegion     = "TENCENT_SMS_REGION"
-	envTo         = "TENCENT_SMS_TO"
+	envSecretID     = "TENCENT_SMS_SECRET_ID"
+	envSecretKey    = "TENCENT_SMS_SECRET_KEY"
+	envSdkAppID     = "TENCENT_SMS_SDK_APP_ID"
+	envSignName     = "TENCENT_SMS_SIGN_NAME"
+	envTemplateID   = "TENCENT_SMS_TEMPLATE_ID"
+	envMessageID    = "TENCENT_SMS_MESSAGE_ID"
+	envLocale       = "TENCENT_SMS_LOCALE"
+	envTemplateVars = "TENCENT_SMS_TEMPLATE_VARS"
+	envRegion       = "TENCENT_SMS_REGION"
+	envTo           = "TENCENT_SMS_TO"
+)
+
+// defaultMessageID, defaultLocale and defaultTemplateVars are the leg's
+// defaults: the phone-login verification-code message this repository's own
+// flows deliver, whose template takes code and minutes as {1} and {2}.
+const (
+	defaultMessageID    = "authn.sms.verification_code"
+	defaultLocale       = "zh-CN"
+	defaultTemplateVars = "code,minutes"
 )
 
 // configFromEnv assembles the tencent.Config this leg drives, skipping the
@@ -68,13 +95,31 @@ const (
 func configFromEnv(t *testing.T) tencent.Config {
 	t.Helper()
 
+	messageID := os.Getenv(envMessageID)
+	if messageID == "" {
+		messageID = defaultMessageID
+	}
+	locale := os.Getenv(envLocale)
+	if locale == "" {
+		locale = defaultLocale
+	}
+	vars := os.Getenv(envTemplateVars)
+	if vars == "" {
+		vars = defaultTemplateVars
+	}
+
 	cfg := tencent.Config{
-		SecretID:   os.Getenv(envSecretID),
-		SecretKey:  os.Getenv(envSecretKey),
-		SdkAppID:   os.Getenv(envSdkAppID),
-		SignName:   os.Getenv(envSignName),
-		TemplateID: os.Getenv(envTemplateID),
-		Region:     os.Getenv(envRegion),
+		SecretID:  os.Getenv(envSecretID),
+		SecretKey: os.Getenv(envSecretKey),
+		SdkAppID:  os.Getenv(envSdkAppID),
+		SignName:  os.Getenv(envSignName),
+		Templates: map[string]tencent.Template{
+			locale + "/" + messageID: {
+				ID:     os.Getenv(envTemplateID),
+				Params: strings.Split(vars, ","),
+			},
+		},
+		Region: os.Getenv(envRegion),
 	}
 
 	var missing []string
@@ -90,7 +135,7 @@ func configFromEnv(t *testing.T) tencent.Config {
 	if cfg.SignName == "" {
 		missing = append(missing, envSignName)
 	}
-	if cfg.TemplateID == "" {
+	if os.Getenv(envTemplateID) == "" {
 		missing = append(missing, envTemplateID)
 	}
 	if os.Getenv(envTo) == "" {
@@ -98,11 +143,41 @@ func configFromEnv(t *testing.T) tencent.Config {
 	}
 	if len(missing) > 0 {
 		t.Skipf(
-			"self-skip: the Tencent Cloud SMS live leg needs the operator's own live credentials and a recipient phone, which %s is/are not set (Tencent Cloud SMS has no sandbox: each run sends one real text message and charges the account, so the leg runs only when an operator deliberately provides an API SecretId with SendSms permission, the SMS console's SDK AppID, an approved signature and a single-variable template, plus an E.164 phone in %s). Set them and re-run: go test -tags=integration ./sms/tencent/integration_test/",
+			"self-skip: the Tencent Cloud SMS live leg needs the operator's own live credentials and a recipient phone, which %s is/are not set (Tencent Cloud SMS has no sandbox: each run sends one real text message and charges the account, so the leg runs only when an operator deliberately provides an API SecretId with SendSms permission, the SMS console's SDK AppID, an approved signature and an approved template, plus an E.164 phone in %s). Set them and re-run: go test -tags=integration ./sms/tencent/integration_test/",
 			strings.Join(missing, ", "), envTo,
 		)
 	}
 	return cfg
+}
+
+// liveMessage returns the SMS this leg sends: the configured mapping's own
+// (locale, message-id) key, with a plausible value for each parameter the
+// configured template declares -- 123456 for "code", 5 for "minutes", the
+// variable's own name for anything else -- so the leg runs against an
+// arbitrary approved template.
+func liveMessage(cfg tencent.Config, to string) pkgcore.SMS {
+	for key, tpl := range cfg.Templates {
+		locale, messageID, _ := strings.Cut(key, "/")
+		params := make(map[string]string, len(tpl.Params))
+		for _, name := range tpl.Params {
+			switch name {
+			case "code":
+				params[name] = "123456"
+			case "minutes":
+				params[name] = "5"
+			default:
+				params[name] = name
+			}
+		}
+		return pkgcore.SMS{
+			To:        to,
+			Text:      "[speed authn] tencent live-leg message; your code is 123456",
+			MessageID: messageID,
+			Locale:    locale,
+			Params:    params,
+		}
+	}
+	return pkgcore.SMS{}
 }
 
 // TestSender_LiveTencentGateway_SendsOneMessage drives one Send through the
@@ -121,11 +196,8 @@ func TestSender_LiveTencentGateway_SendsOneMessage(t *testing.T) {
 		t.Fatalf("NewSender: %v (a config error here means the %s/%s/%s values do not satisfy the documented Config shape)", err, envSecretID, envSdkAppID, envTemplateID)
 	}
 
-	err = sender.Send(context.Background(), pkgcore.SMS{
-		To:   os.Getenv(envTo),
-		Text: "[speed authn] tencent live-leg message; your code is 123456",
-	})
+	err = sender.Send(context.Background(), liveMessage(cfg, os.Getenv(envTo)))
 	if err != nil {
-		t.Fatalf("Send against the real Tencent Cloud SMS gateway: %v (if this is an AuthFailure.*/FailedOperation.* error, the SecretId in %s must be allowed to call SendSms in the region of %s, %s must be an approved signature, and %s an approved template with exactly one positional variable)", err, envSecretID, envRegion, envSignName, envTemplateID)
+		t.Fatalf("Send against the real Tencent Cloud SMS gateway: %v (if this is an AuthFailure.*/FailedOperation.* error, the SecretId in %s must be allowed to call SendSms in the region of %s, %s must be an approved signature, %s an approved template id for the %s/%s message, and %s must list exactly the seam parameters its positional variables take)", err, envSecretID, envRegion, envSignName, envTemplateID, envLocale, envMessageID, envTemplateVars)
 	}
 }

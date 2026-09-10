@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -48,9 +49,28 @@ const defaultRegion = "ap-guangzhou"
 // applies).
 const maxResponseBytes = 64 * 1024
 
-// Config is everything NewSender needs to sign and send one message through
-// Tencent Cloud SMS. Every field except Region is required; a missing one is
-// refused by NewSender with an error naming the field.
+// Template is one approved Tencent Cloud message template and the seam
+// parameter names its positional variables take.
+type Template struct {
+	// ID is the approved template's id (Template ID).
+	ID string
+	// Params lists the seam parameter names the template's positional
+	// variables take, in the order the template declares them -- the first
+	// name fills {1}, the second {2}, and so on -- because TemplateParamSet
+	// is positional and the template itself carries no variable names this
+	// codebase could read. Send forwards exactly these names from
+	// pkgcore.SMS.Params, in this order; a declared name the message
+	// carries no value for is refused before any request. An empty list
+	// means the template declares no variables, and the send omits
+	// TemplateParamSet entirely. A message parameter the list does not name
+	// is never sent.
+	Params []string
+}
+
+// Config is everything NewSender needs to sign and send messages through
+// Tencent Cloud SMS. Every field except Region is required; a missing or
+// malformed one is refused by NewSender with an error naming the field (or
+// the offending Templates key), never a field's value.
 type Config struct {
 	// SecretID is the Tencent Cloud API secret id (SecretId, AKID...).
 	SecretID string
@@ -63,8 +83,15 @@ type Config struct {
 	// SignName is the approved SMS signature content the send is
 	// attributed to, e.g. "speed-test".
 	SignName string
-	// TemplateID is the approved message template's id (Template ID).
-	TemplateID string
+	// Templates maps a message identity to the approved template it is sent
+	// through, keyed "<locale>/<message-id>" -- the locale the message was
+	// rendered in and the message id it was rendered from, both carried by
+	// pkgcore.SMS ("zh-CN/authn.sms.verification_code"). Tencent has one
+	// template per kind of message, so this map is where the operator
+	// declares which approved template serves which message in which
+	// language; a send whose (locale, message-id) has no entry fails before
+	// any request, with no fallback template and no free-text path.
+	Templates map[string]Template
 	// Region is the Tencent Cloud region the send is addressed to (SMS is
 	// region-scoped). Empty defaults to ap-guangzhou.
 	Region string
@@ -86,16 +113,24 @@ func WithClient(client *http.Client) Option {
 	}
 }
 
+// templateKey is a parsed Templates key: the message identity a send maps
+// through, split into its two halves once at construction so a Send looks up
+// a struct rather than re-splitting a string.
+type templateKey struct {
+	locale    string
+	messageID string
+}
+
 // sender is the tencent SMSSender implementation: one TC3-signed JSON POST
 // to the fixed gateway (sign.go).
 type sender struct {
-	secretID   string
-	secretKey  string
-	sdkAppID   string
-	signName   string
-	templateID string
-	region     string
-	client     *http.Client
+	secretID  string
+	secretKey string
+	sdkAppID  string
+	signName  string
+	templates map[templateKey]Template
+	region    string
+	client    *http.Client
 
 	// now is injectable so the unit tier can pin a whole request
 	// deterministically (the TC3 signature derives from the Unix
@@ -108,7 +143,10 @@ type sender struct {
 // (never its value -- SecretKey is a credential). Constructing fails closed:
 // Tencent refuses a send with an error envelope rather than an HTTP error,
 // so an adapter built with a typo'd configuration must fail before the first
-// send, not after a phone number already paid for the attempt.
+// send, not after a phone number already paid for the attempt. Every
+// Templates entry is validated here -- the key parses into two non-empty
+// halves, the template id is present, no declared variable name is empty --
+// so a send never has to discover a broken map entry.
 func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.SecretID == "" {
 		return nil, errors.New("tencent: config: SecretID is required")
@@ -122,8 +160,24 @@ func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.SignName == "" {
 		return nil, errors.New("tencent: config: SignName is required")
 	}
-	if cfg.TemplateID == "" {
-		return nil, errors.New("tencent: config: TemplateID is required")
+	if len(cfg.Templates) == 0 {
+		return nil, errors.New("tencent: config: Templates is required")
+	}
+	templates := make(map[templateKey]Template, len(cfg.Templates))
+	for key, tpl := range cfg.Templates {
+		locale, messageID, ok := strings.Cut(key, "/")
+		if !ok || locale == "" || messageID == "" {
+			return nil, fmt.Errorf("tencent: config: Templates key %q is not of the form \"<locale>/<message-id>\"", key)
+		}
+		if tpl.ID == "" {
+			return nil, fmt.Errorf("tencent: config: Templates[%q].ID is required", key)
+		}
+		for _, name := range tpl.Params {
+			if name == "" {
+				return nil, fmt.Errorf("tencent: config: Templates[%q].Params carries an empty variable name", key)
+			}
+		}
+		templates[templateKey{locale: locale, messageID: messageID}] = tpl
 	}
 	region := cfg.Region
 	if region == "" {
@@ -131,14 +185,14 @@ func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	}
 
 	s := &sender{
-		secretID:   cfg.SecretID,
-		secretKey:  cfg.SecretKey,
-		sdkAppID:   cfg.SdkAppID,
-		signName:   cfg.SignName,
-		templateID: cfg.TemplateID,
-		region:     region,
-		client:     safehttp.NewGuard().Client(),
-		now:        time.Now,
+		secretID:  cfg.SecretID,
+		secretKey: cfg.SecretKey,
+		sdkAppID:  cfg.SdkAppID,
+		signName:  cfg.SignName,
+		templates: templates,
+		region:    region,
+		client:    safehttp.NewGuard().Client(),
+		now:       time.Now,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -180,17 +234,29 @@ type tencentResponse struct {
 }
 
 // Send implements pkgcore.SMSSender: a TC3-signed SendSms POST to the fixed
-// gateway. The message text travels as the template's FIRST (and only)
-// positional parameter -- Tencent's templates declare positional variables
-// substituted by TemplateParamSet -- so the registered template must declare
-// exactly one variable, which receives the whole rendered message.
+// gateway. The message is first mapped to its approved template by
+// (msg.Locale, msg.MessageID) and the template's positional parameters --
+// Tencent's templates declare positional variables substituted by
+// TemplateParamSet, so the mapped template's Params list fixes which seam
+// parameter fills {1}, {2} and so on -- are resolved from msg.Params; both
+// steps fail before any request, and a template declaring no variables sends
+// no TemplateParamSet at all.
 func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
+	tpl, ok := s.templates[templateKey{locale: msg.Locale, messageID: msg.MessageID}]
+	if !ok {
+		return fmt.Errorf("tencent: send: no template for locale %q and message %q", msg.Locale, msg.MessageID)
+	}
+	paramSet, err := templateParamSet(tpl, msg.Params)
+	if err != nil {
+		return err
+	}
+
 	payload, err := json.Marshal(sendSmsRequest{
 		PhoneNumberSet:   []string{msg.To},
 		SmsSdkAppID:      s.sdkAppID,
 		SignName:         s.signName,
-		TemplateID:       s.templateID,
-		TemplateParamSet: []string{msg.Text},
+		TemplateID:       tpl.ID,
+		TemplateParamSet: paramSet,
 	})
 	if err != nil {
 		return fmt.Errorf("tencent: encode send request: %w", err)
@@ -250,6 +316,30 @@ func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 		return fmt.Errorf("tencent sms: send refused: %s: %s (request %s)", code, msg, envelope.Response.RequestID)
 	}
 	return nil
+}
+
+// templateParamSet resolves tpl's positional parameters from params, in the
+// template's declared order: the returned slice is the TemplateParamSet
+// Tencent substitutes into {1}, {2} and so on. A declared name the message
+// carries no value for is an error naming the variable (never a value -- a
+// Params value can be a verification code). A template declaring no
+// variables returns a nil set, so the request marshals with the
+// TemplateParamSet field omitted entirely (its omitempty tag), which is what
+// Tencent expects from a template without variables. A param the template
+// does not name is deliberately ignored.
+func templateParamSet(tpl Template, params map[string]string) ([]string, error) {
+	if len(tpl.Params) == 0 {
+		return nil, nil
+	}
+	values := make([]string, 0, len(tpl.Params))
+	for _, name := range tpl.Params {
+		value, ok := params[name]
+		if !ok {
+			return nil, fmt.Errorf("tencent: send: template %s declares variable %q, which the message carries no value for", tpl.ID, name)
+		}
+		values = append(values, value)
+	}
+	return values, nil
 }
 
 // compile-time check that sender satisfies the seam.
