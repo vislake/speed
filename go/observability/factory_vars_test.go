@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -103,4 +105,126 @@ func TestFactoryVars_ConcurrentRegisterAndInit_NoDataRace(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	close(stop)
 	wg.Wait()
+}
+
+// TestFactoryVars_OTLPFactoryError_InitPropagatesIt drives Init's
+// OTLP-factory error branch directly: with a non-empty WithOTLPEndpoint
+// and a registered otlpFactory that itself fails, Init must return that
+// factory's own error, never ErrOTLPExporterNotRegistered -- the factory
+// WAS registered, so the blank-import instruction that error carries
+// would be a false diagnosis (the genuinely unregistered case is
+// exporter/prometheus/otlp_not_registered_test.go's subject). The probe
+// factory is registered and invoked on this test's own call path, so the
+// branch runs deterministically on every execution.
+func TestFactoryVars_OTLPFactoryError_InitPropagatesIt(t *testing.T) {
+	previousOTLP := otlpFactory
+	defer func() { otlpFactory = previousOTLP }()
+
+	probeErr := errors.New("factory_vars_test: OTLP exporter probe failure")
+	RegisterOTLPExporters(func(context.Context, Config, *resource.Resource) (func(context.Context) error, error) {
+		return nil, probeErr
+	})
+
+	shutdown, err := Init(context.Background(), WithOTLPEndpoint("127.0.0.1:1"))
+	if err == nil {
+		_ = shutdown(context.Background())
+		t.Fatal("Init with an OTLP endpoint and a failing registered factory succeeded, want the factory's error")
+	}
+	if !errors.Is(err, probeErr) {
+		t.Errorf("Init error = %v, want the registered OTLP factory's own error", err)
+	}
+	if errors.Is(err, ErrOTLPExporterNotRegistered) {
+		t.Errorf("Init error = %v, want the registered factory's error, not ErrOTLPExporterNotRegistered: a factory was registered, so that blank-import instruction would be a false diagnosis", err)
+	}
+}
+
+// TestFactoryVars_MetricsReaderFactoryError_InitPropagatesIt drives the
+// no-endpoint half of the same seam directly: with no WithOTLPEndpoint
+// and a registered metricsReaderFactory that fails, Init must fail with
+// an error wrapping that factory's own error (initLocalExporters names
+// the reader in the wrap) rather than leave a half-built local exporter
+// set behind -- nothing past the reader factory is installed on this
+// path, and the partially built TracerProvider is shut down before the
+// error returns.
+func TestFactoryVars_MetricsReaderFactoryError_InitPropagatesIt(t *testing.T) {
+	previousReader := metricsReaderFactory
+	defer func() { metricsReaderFactory = previousReader }()
+
+	probeErr := errors.New("factory_vars_test: metrics reader probe failure")
+	RegisterLocalMetricsReader(func() (sdkmetric.Reader, http.Handler, error) {
+		return nil, nil, probeErr
+	})
+
+	shutdown, err := Init(context.Background())
+	if err == nil {
+		_ = shutdown(context.Background())
+		t.Fatal("Init with a failing registered metrics reader factory succeeded, want the factory's error")
+	}
+	if !errors.Is(err, probeErr) {
+		t.Errorf("Init error = %v, want it to wrap the registered metrics reader factory's own error", err)
+	}
+}
+
+// TestFactoryVars_PreviousShutdownFailure_SurfacedViaOtelHandle drives the
+// repeated-Init swap's failure branch directly: the first Init installs a
+// shutdown func that fails, the second Init succeeds and invokes that
+// superseded shutdown while tearing the previous pair down, and the
+// failure is reported through otel.Handle -- see Init's own doc comment
+// on the swap. The second Init itself still succeeds: the replacement
+// pair is fully installed by the time the superseded func runs, and a
+// teardown failure of providers already being replaced must not fail the
+// caller's fresh Init.
+func TestFactoryVars_PreviousShutdownFailure_SurfacedViaOtelHandle(t *testing.T) {
+	previousOTLP := otlpFactory
+	defer func() { otlpFactory = previousOTLP }()
+
+	probeErr := errors.New("factory_vars_test: previous providers shutdown probe failure")
+	RegisterOTLPExporters(func(context.Context, Config, *resource.Resource) (func(context.Context) error, error) {
+		return func(context.Context) error { return probeErr }, nil
+	})
+
+	firstShutdown, err := Init(context.Background(), WithOTLPEndpoint("127.0.0.1:1"))
+	if err != nil {
+		t.Fatalf("Init installing a failing shutdown: %v", err)
+	}
+	// The second Init consumes this shutdown func below; this defer covers
+	// the path where the test exits before that happens, so its once-guard
+	// fires inside this test either way. A later invocation is a no-op
+	// returning the first run's result (see onceShutdown).
+	defer func() { _ = firstShutdown(context.Background()) }()
+
+	previousHandler := otel.GetErrorHandler()
+	var mu sync.Mutex
+	var handled []error
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		handled = append(handled, err)
+	}))
+	t.Cleanup(func() { otel.SetErrorHandler(previousHandler) })
+
+	RegisterOTLPExporters(func(context.Context, Config, *resource.Resource) (func(context.Context) error, error) {
+		return func(context.Context) error { return nil }, nil
+	})
+	secondShutdown, err := Init(context.Background(), WithOTLPEndpoint("127.0.0.1:1"))
+	if err != nil {
+		t.Fatalf("second Init: %v", err)
+	}
+	defer func() { _ = secondShutdown(context.Background()) }()
+
+	mu.Lock()
+	defer mu.Unlock()
+	var reported error
+	for _, err := range handled {
+		if errors.Is(err, probeErr) {
+			reported = err
+			break
+		}
+	}
+	if reported == nil {
+		t.Fatalf("the superseded shutdown's failure was not reported through otel.Handle; captured errors: %v", handled)
+	}
+	if msg := reported.Error(); !strings.Contains(msg, "previous Init") {
+		t.Errorf("reported error = %q, want it to name the superseded providers' teardown", msg)
+	}
 }
