@@ -26,7 +26,7 @@
 两项用户裁决标记(2026-09-08 裁决,记录于协调侧):
 
 - **★加排**:**GeoIP 类(GeoIP 许可证审查)与其余凭据类**一律记录待排期,不设里程碑;解除依赖外部前提达成(许可证过 license scanner、真实账户/凭据到位或政策变化)。
-- **◆M4-forward**:**真实发布类**原随 v1.0(M4)版本冻结与真实发布落地——发布前这些机制没有可作用的对象(零 tag 无基线、无发布事件可挂、无制品可扫)。首个真实发布 v0.0.1(2026-09-10)已提前落地该类的发布执行腿(21 个 Go tag + 十二个 npm 包 → GitHub Packages,见第 5 章),类内其余机制仍随 v1.0(M4)。
+- **◆M4-forward**:**真实发布类**原随 v1.0(M4)版本冻结与真实发布落地——发布前这些机制没有可作用的对象(零 tag 无基线、无发布事件可挂、无制品可扫)。首个真实发布 v0.0.1(2026-09-10)已提前落地该类的发布执行腿——Go 21 tag 推送发布成功;npm 十二包发布尝试失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,十二包零上 registry),待 org 侧关联后重发(见第 5 章)。类内其余机制仍随 v1.0(M4)。
 
 ## 3. 用户裁决与闭合记录
 
@@ -93,7 +93,7 @@
 
 ## 5. 真实发布类(◆M4-forward)
 
-此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布 v0.0.1 的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/v0.0.1` tag 由 Go module proxy 服务;npm 十二包 0.0.1 发布至 GitHub Packages registry 的 @speed 作用域;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212),类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
+此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布 v0.0.1 的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/v0.0.1` tag 由 Go module proxy 服务;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212)。v0.0.1 首轮真实运行半成功:Go 21 tag 推送发布成功;npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry。半成功态无自动恢复路径,待 org 侧关联 @speed scope(或等效配置)后重发,重发前需补"跳过已存在 tag"支持。类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
 
 补记(2026-09-10):上述跟踪清单之外另有两条同族行文残留,不在普查行内,已随文改述并在此补记——scaffold-verify.yml 触发注释(该文件 :36-39)原称 "release.yml carries no publish credential"、仓内无发布,与 5.4 行 51/52/80 已重述的 "release.yml dispatch 即发布" 前提相悖;web/.changeset/README.md 的版本现状句(该文件 :15-18)原称十二包全在 0.0.0、与 Go 半同处过渡态,与 5.3 行 85/130 记的直接 bump 落地相悖。
 
@@ -103,7 +103,7 @@
 |---|---|---|---|---|
 | 165 | BLOCKED | `docs/internal/02-repo-and-release.md` | lockstep 真实发布未实现 | 部分落地:00e24732 v0.0.1 发布机制(Go tag 推送 + npm 发布至 GitHub Packages);docs/02 自身的"只读/未实现"行文未随动,文本残余 |
 | 33 | BLOCKED | `docs/internal/18-cicd.md` | release 流水线第 2/4/6/7 步接线未完成 | 部分落地:00e24732 接第 3 步(Go tag 推送)与第 4 步 npm 半程(直接 bump + npm publish 至 GitHub Packages);changesets 流程、2/5/6/7 步仍随 v1.0(M4);docs/18 注记文本未随动 |
-| 162 | BLOCKED | `docs/internal/18-cicd.md` | 真实 registry 发布与 goreleaser 未落地 | 部分落地:v0.0.1 起 Go 21 tag 经代理服务、npm 十二包发布至 GitHub Packages;npmjs.org registry 与 goreleaser 仍随 v1.0(M4) |
+| 162 | BLOCKED | `docs/internal/18-cicd.md` | 真实 registry 发布与 goreleaser 未落地 | 部分落地:v0.0.1 起 Go 21 tag 经代理服务;npm 十二包发布尝试失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,十二包零上 registry),待 org 侧关联后重发;npmjs.org registry 与 goreleaser 仍随 v1.0(M4) |
 | 160 | ROADMAP | `go/saasctl/AGENTS.md` | upgrade 无版本发现 | upgrade 版本发现未随 v0.0.1 首次发布落地,仍待后续发布配套 |
 | 201 | ROADMAP | `docs/internal/20-quality-and-security.md` | SBOM 与 npm provenance 未接线 | v0.0.1 发布不含 SBOM 与 provenance(npm 发布无 provenance 属性),仍随 v1.0(M4) |
 | 97 | ROADMAP | `tools/license_scan.py` | 传递(非直接)依赖与 reference-app 自身依赖的许可扫描未覆盖 | v0.0.1 发布未扩展传递依赖扫描,仍随发布准备(v1.0) |
@@ -372,8 +372,8 @@
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
 | 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:02831bf3 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
 | 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:02831bf3 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;残余:站点版式与按版本发布随 M4 文档站完整化 |
-| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job,Go 21 tag 推送 + npm 十二包发布至 GitHub Packages;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
-| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;首轮真实运行随 v0.0.1 dispatch(web 十二包 0.0.1 随 bd0399b8 先落) |
+| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job;首轮真实运行半成功:Go 21 tag 已推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态无自动恢复路径,待 org 侧关联 @speed scope(或等效配置)后重发,重发前需补"跳过已存在 tag"支持;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
+| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态无自动恢复路径,待 org 侧关联 @speed scope(或等效配置)后重发,重发前需补"跳过已存在 tag"支持 |
 
 **部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
 
