@@ -60,10 +60,11 @@ func TestEmbeddedGoFilesStartWithBuildIgnoreLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk embedded project tree: %v", err)
 	}
-	// The shared trio plus one server.go per selection: a drift in either
-	// direction (a new template file, a removed one) is a real convention
-	// change and this count is the tripwire.
-	wantGoFiles := 3 + len(validSelectionKeys)
+	// The shared pair (main.go, config.go) plus one server.go per
+	// selection: a drift in either direction (a new template file, a
+	// removed one) is a real convention change and this count is the
+	// tripwire.
+	wantGoFiles := 2 + len(validSelectionKeys)
 	if goFiles != wantGoFiles {
 		t.Errorf("embedded tree holds %d .go files, want %d", goFiles, wantGoFiles)
 	}
@@ -235,24 +236,24 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 		{
 			key:      "authn+org+rbac",
 			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
 		},
 		{
 			key:      "authn+rbac",
 			modules:  []string{"pkiModule", "authnModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
 			absent:   []string{"org.NewModule("},
 		},
 		{
 			key:      "authn+org",
 			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
 			absent:   []string{"rbac.NewModule("},
 		},
 		{
 			key:      "authn",
 			modules:  []string{"pkiModule", "authnModule", "configModule"},
-			contains: []string{"authn.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
 			absent:   []string{"org.NewModule(", "rbac.NewModule("},
 		},
 		{
@@ -263,6 +264,7 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 				"authn.NewModule(", "org.NewModule(", "rbac.NewModule(",
 				"authn.Middleware(", "tenancy.Middleware(", "authn.NewPrincipalResolver()",
 				"authnAPIPath", "authnPreAuthAllowlist", "RegisterPIISerializer", "devSigningKeySeed",
+				"speedchain.Chain(",
 			},
 		},
 	}
@@ -303,18 +305,18 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 // request (provider "oidc:<tenant>", a per-tenant name no allowlist can
 // enumerate) must reach authn's own handler instead of being refused 403
 // tenancy.tenant_unresolved by tenancy.Middleware. The exemption must be
-// STRUCTURAL -- every route under authn's API path mounted ahead of
+// STRUCTURAL -- every route under authn's API path dispatched ahead of
 // tenancy.Middleware -- never an enumerated allowlist, which is exactly
 // the fixed-channel enumeration that failed: each authn selection's
-// server.go must mount the authn subtree on topMux directly behind
-// authn.Middleware (topMux.Handle(hostcore.AuthnAPIPath, ...) with the
-// tenancy
-// chain as the "/" fallback), route-split in mountModuleRoutes by path
-// prefix, and must NOT carry a pre-auth allowlist for authn paths at all
-// -- no authnPreAuthAllowlist function, no per-provider social entries,
-// no register/login literals next to tenancy.WithAllowlist. A template
-// edit that reintroduces the enumeration (or drops the structural
-// dispatch) fails here before any generated project inherits the bug.
+// server.go must hand the authn subtree to speedchain.Chain as its
+// AuthnRoutes branch (dispatched from authn.Middleware's output, exempt
+// from the tenancy chain by construction), route-split out of the module
+// route set in mountModuleRoutes by path prefix, and must NOT carry a
+// pre-auth allowlist for authn paths at all -- no authnPreAuthAllowlist
+// function, no per-provider social entries, no register/login literals
+// next to tenancy.WithAllowlist. A template edit that reintroduces the
+// enumeration (or drops the structural dispatch) fails here before any
+// generated project inherits the bug.
 func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 	for key, mountCall := range map[string]string{
 		"authn+org+rbac": "mountModuleRoutes(authnMux, moduleMux, reg, rbacService)",
@@ -330,10 +332,10 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})",
+			"AuthnRoutes: []pkgcore.MountedRoute{{Path: speedapp.AuthnAPIPath, Handler: authnMux}}",
 			mountCall,
-			"strings.HasPrefix(route.Path, hostcore.AuthnAPIPath)",
-			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
+			"strings.HasPrefix(route.Path, speedapp.AuthnAPIPath)",
+			"Verifier:    authnModule.Service().Verifier(),",
 		} {
 			if !strings.Contains(server, want) {
 				t.Errorf("%s: missing the structural exemption marker %q", path, want)
@@ -373,7 +375,7 @@ func TestRBACSelectionsAdoptTheRouteTable(t *testing.T) {
 		for _, want := range []string{
 			"rbac.GuardRoutes(az, reg.Routes.Routes(), routeRules())",
 			"func routeRules() []rbac.RouteRule {",
-			"{Path: hostcore.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}",
+			"{Path: speedapp.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}",
 			"{Path: config.PathPublic, Access: pkgcore.RouteAccess{Public: true}}",
 			"{Path: config.PathSystemFeatures, Access: pkgcore.RouteAccess{Public: true}}",
 			"{Path: pkiAPIPath, Access: pkgcore.RouteAccess{Permission: pkiPermissionFor}}",
@@ -766,8 +768,8 @@ func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 		}
 		server := string(content)
 		for _, marker := range []string{
-			"pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})",
-			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
+			"AuthnRoutes: []pkgcore.MountedRoute{{Path: speedapp.AuthnAPIPath, Handler: authnMux}}",
+			"Verifier:    authnModule.Service().Verifier(),",
 		} {
 			if !strings.Contains(server, marker) {
 				t.Errorf("%s: the composed-shape twin marker %q is missing from the template", key, marker)

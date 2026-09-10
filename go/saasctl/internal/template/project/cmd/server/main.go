@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	speedapp "github.com/vislake/speed/go/app"
 	obs "github.com/vislake/speed/go/observability"
 	// Blank-imported for its init side effect: registers the OTLP exporter
 	// factory obs.WithOTLPEndpoint composes when APP_OTLP_ENDPOINT is set.
@@ -28,7 +29,7 @@ import (
 	// want.
 	_ "github.com/vislake/speed/go/observability/exporter/otlp"
 	// Blank-imported for its init side effect: registers the local metrics
-	// reader the shared host kernel's /metrics route serves through
+	// reader this project's /metrics route serves through
 	// obs.MetricsHandler. Without this import /metrics answers 404, which
 	// is go/observability's documented default for a host that never opted
 	// into the Prometheus exporter; with it the route serves this
@@ -37,8 +38,6 @@ import (
 	// again -- by design, since no local registry is being kept to
 	// scrape; the OTLP collector is where metrics go then.)
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
-
-	"__APP_NAME__/internal/hostcore"
 )
 
 // main is deliberately thin process-lifecycle glue (signal handling,
@@ -145,11 +144,11 @@ func run(baseCtx context.Context) error {
 	// The serve-and-drain lifecycle -- the obs.Middleware wrap, the
 	// server's ReadHeaderTimeout/ShutdownTimeout values, the BaseContext
 	// that hands baseCtx (never the signal-derived ctx) to every request,
-	// and the graceful drain -- is the shared host kernel's
-	// (internal/hostcore), byte-identical to the reference app's copy:
-	// ServeUntilShutdown's own doc comment carries the full reasoning for
-	// each of those choices. What stays this process's own: the logger
-	// baseCtx carries, the signal context ctx, and BuildServer's
-	// composition and cleanup.
-	return hostcore.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "__APP_NAME__", string(cfg.DeploymentMode))
+	// and the graceful drain -- is the platform composition toolkit's
+	// (github.com/vislake/speed/go/app, shared with every other host,
+	// the reference app included): app.ServeUntilShutdown's own doc
+	// comment carries the full reasoning for each of those choices. What
+	// stays this process's own: the logger baseCtx carries, the signal
+	// context ctx, and buildServer's composition and cleanup.
+	return speedapp.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "__APP_NAME__", string(cfg.DeploymentMode))
 }

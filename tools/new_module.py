@@ -1209,8 +1209,9 @@ def app_registration_checklist(module_name: str, target_dir: str) -> list[str]:
         "dbkit.MigrationRegistry beside every other module BEFORE the "
         "startup Apply, and pass it to Kernel.Bootstrap's module list so "
         "its Register runs (routes, permissions, event, audit action). "
-        "The host-neutral parts of that assembly are shared -- see "
-        "internal/hostcore.",
+        "The host-neutral parts of that assembly are shared through the "
+        "platform's composition toolkit, github.com/vislake/speed/go/app; "
+        "compose them the way the generated server.go does.",
         "  3. Grant the module's permissions: '" + module_name + ":read' "
         "and '" + module_name + ":write' are in the permission catalog "
         "after Bootstrap; grant them to the roles that should hold them "

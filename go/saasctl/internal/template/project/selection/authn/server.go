@@ -11,6 +11,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	speedapp "github.com/vislake/speed/go/app"
+	speedchain "github.com/vislake/speed/go/app/chain"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -27,17 +29,16 @@ import (
 	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/tenancy"
-
-	"__APP_NAME__/internal/hostcore"
 )
 
 // The liveness routes' paths and handlers are observability's
 // (obs.MountLiveness), the module-route mounting rule is pkgcore's
-// (pkgcore.MountRoutes), and the pre-auth allowlist set is the shared host
-// kernel's (internal/hostcore, byte-identical to the reference app's copy):
-// this file names them through those packages rather than restating any of
-// them, so a generated project and the reference app keep composing the
-// same host surface.
+// (pkgcore.MountRoutes), and the middleware chain plus the pre-auth
+// allowlist set are the platform composition toolkit's
+// (github.com/vislake/speed/go/app -- the same module the reference app
+// composes through): this file names them through those packages rather
+// than restating any of them, so a generated project and the reference app
+// keep composing the same host surface.
 
 // buildServer wires this project's Kernel, the modules the generator
 // selected for it, their migrations, and the middleware chain into a
@@ -56,23 +57,22 @@ import (
 // authn's signing keys now live behind. Migrations register in the same order Bootstrap runs, so every
 // Register-time declaration (authn's config items, permissions and events
 // first, then config's own Register) lands before the step that freezes
-// it. The middleware chain is authn.Middleware(verifier) then
-// tenancy.Middleware(authn.NewPrincipalResolver()): authn first, so each
-// token is verified exactly once and the tenant comes from the verified
-// Principal's claims, never a Host header. authn.Middleware is optional
-// auth (a bad token is a 401, an
-// absent one stays anonymous), so tenancy.Middleware's fail-closed default
-// is what protects every route this file does NOT allowlist: such a route
-// answers 403 without a valid Principal and needs no per-route wrapping.
-// The allowlist covers only the non-authn routes that must work before a
-// Principal exists: healthz, metrics and config's two pre-auth display
-// endpoints. authn's own pre-auth operations need NO allowlist entries at
-// all -- every route under authn's API path is mounted ahead of
-// tenancy.Middleware (see mountModuleRoutes), which is also what lets
-// enterprise SSO's dynamic per-tenant provider names ("oidc:<tenant>",
-// authn.ProviderOIDCPrefix + a tenant id) work: no allowlist could
-// enumerate them, and authn's handler decides per operation which of its
-// routes require a Principal (go/authn/handler.go).
+// it. The middleware chain is speedchain.Chain's composition: authn first,
+// so each token is verified exactly once and the tenant comes from the
+// verified Principal's claims, never a Host header, then tenancy under
+// the chain's pre-auth allowlist -- authn.Middleware is optional auth (a
+// bad token is a 401, an absent one stays anonymous), so tenancy's
+// fail-closed default is what makes every route NOT on the allowlist
+// require a valid Principal with no per-route wrapping. The allowlist
+// covers only the non-authn routes that must work before a Principal
+// exists: healthz, metrics and config's two pre-auth display endpoints.
+// authn's own pre-auth operations need NO allowlist entries at all --
+// speedchain.Chain dispatches the whole subtree under
+// speedapp.AuthnAPIPath ahead of tenancy (see mountModuleRoutes), which is
+// also what lets enterprise SSO's dynamic per-tenant provider names
+// ("oidc:<tenant>", authn.ProviderOIDCPrefix + a tenant id) work: no
+// allowlist could enumerate them, and authn's handler decides per
+// operation which of its routes require a Principal (go/authn/handler.go).
 //
 // Host seams deliberately left unwired, each failing closed per the owning
 // module's contract and each the owner's first task: authn's
@@ -301,7 +301,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// Route mounting: every route reg's modules mounted goes to one of
 	// two muxes, decided in mountModuleRoutes by the route's path --
-	// authn's own subtree (hostcore.AuthnAPIPath) to authnMux, everything else to
+	// authn's own subtree (speedapp.AuthnAPIPath) to authnMux, everything else to
 	// moduleMux -- never by a per-route enumeration.
 	moduleMux := http.NewServeMux()
 	obs.MountLiveness(moduleMux)
@@ -313,15 +313,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Obs route-label seeding: the shared kernel registers this host's
 	// real route table (its two liveness paths plus every module route
 	// just mounted) before obs.Middleware is constructed; see
-	// hostcore.RegisterMountedRoutes' doc comment.
-	hostcore.RegisterMountedRoutes(reg)
+	// speedapp.RegisterMountedRoutes' doc comment.
+	speedapp.RegisterMountedRoutes(reg)
 
-	// The middleware chain: authn first, then tenancy (see buildServer's
-	// doc comment above for the order reasoning). What tenancy.Middleware
-	// wraps is moduleMux only: topMux dispatches authn's own subtree
-	// (hostcore.AuthnAPIPath) straight from authn.Middleware's output, exempt from
-	// tenant resolution BY STRUCTURE rather than by allowlist entry.
-	// Everything under hostcore.AuthnAPIPath must work before a Principal exists --
+	// The middleware chain: speedchain.Chain owns the fixed order -- authn
+	// first, then tenancy, with the pre-auth allowlist -- and dispatches
+	// authn's own subtree (speedapp.AuthnAPIPath) straight from
+	// authn.Middleware's output, exempt from tenant resolution BY
+	// STRUCTURE rather than by allowlist entry. Everything under
+	// speedapp.AuthnAPIPath must work before a Principal exists --
 	// registration, every sign-in entry point, token refresh and the
 	// social authorize/callback pair -- and authn's own handler decides,
 	// operation by operation, which of its routes require a Principal (see
@@ -331,18 +331,23 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// no fixed allowlist could enumerate -- so any allowlist-shaped wiring
 	// would refuse an SSO-configured tenant's login-start request with 403
 	// tenancy.tenant_unresolved before authn's own OIDC logic ever saw it.
-	// The tenancy allowlist below therefore names only the NON-authn
-	// routes that must work with no Principal: healthz, metrics and
-	// config's two pre-auth display endpoints.
-	topMux := http.NewServeMux()
-	pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})
-	topMux.Handle("/", tenancy.Middleware(authn.NewPrincipalResolver(), hostcore.PreAuthAllowlist()...)(moduleMux))
-	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
+	// The chain's allowlist therefore names only the NON-authn routes that
+	// must work with no Principal: healthz, metrics and config's two
+	// pre-auth display endpoints.
+	handler, err := speedchain.Chain(speedchain.Config{
+		Verifier:    authnModule.Service().Verifier(),
+		Protected:   moduleMux,
+		AuthnRoutes: []pkgcore.MountedRoute{{Path: speedapp.AuthnAPIPath, Handler: authnMux}},
+	})
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("__APP_NAME__: compose the middleware chain: %w", err)
+	}
 	return handler, cleanup, nil
 }
 
 // mountModuleRoutes copies every route reg's modules mounted onto one of
-// the two muxes, decided by path prefix: a route under hostcore.AuthnAPIPath --
+// the two muxes, decided by path prefix: a route under speedapp.AuthnAPIPath --
 // authn's own subtree, which authn mounts as a single handler at its API
 // path -- goes to authnMux, mounted by buildServer on topMux ahead of
 // tenancy.Middleware; every other route goes to protectedMux, the
@@ -359,7 +364,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Registry) error {
 	for _, route := range reg.Routes.Routes() {
 		target := protectedMux
-		if strings.HasPrefix(route.Path, hostcore.AuthnAPIPath) {
+		if strings.HasPrefix(route.Path, speedapp.AuthnAPIPath) {
 			target = authnMux
 		}
 		pkgcore.MountRoutes(target, route)

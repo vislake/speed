@@ -16,15 +16,16 @@ go 1.26.0
 // A later `saasctl upgrade` round rewrites the version lines in
 // lockstep.
 require (
-	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/app v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/authn v0.0.1
+	github.com/vislake/speed/go/config v0.0.1
 	github.com/vislake/speed/go/dbkit v0.0.1
 	github.com/vislake/speed/go/observability v0.0.1
-	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/org v0.0.1
 	github.com/vislake/speed/go/pkgcore v0.0.1
 	github.com/vislake/speed/go/pki v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ratelimit v0.0.1 // indirect
-	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/rbac v0.0.1
 	github.com/vislake/speed/go/tenancy v0.0.1
 )
 
@@ -115,6 +116,8 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 )
+
+replace github.com/vislake/speed/go/app => __SPEED_ROOT__/go/app
 
 replace github.com/vislake/speed/go/pkgcore => __SPEED_ROOT__/go/pkgcore
 

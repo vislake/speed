@@ -151,14 +151,15 @@ data). The host seams (authn's `MembershipReader`, org's
 `SubjectResolver`, the config resolver) stay unwired and fail closed,
 each named by a doc comment as the owner's first task. Selections
 differ in two files only — the go.mod require set and `server.go`'s
-wiring; `config.go` and the shared host kernel
-(`internal/hostcore/hostcore.go`: the liveness endpoints, the pre-auth
-allowlist set, the route-mount rule and the serve/shutdown lifecycle)
-are shared verbatim — and two tokens,
+wiring; `config.go` is shared verbatim — and two tokens,
 `__APP_NAME__` (the module path) and `__SPEED_ROOT__` (the checkout
-path), are substituted at materialisation. The host kernel is one file
-carried byte-identically by the reference app and every generated
-project, and a repository parity gate keeps the two copies equal.
+path), are substituted at materialisation. The host-neutral
+composition itself (the liveness endpoints, the pre-auth allowlist
+set, the route-mount rule, the serve/shutdown lifecycle and the fixed
+middleware chain) lives once, in the platform module
+`github.com/vislake/speed/go/app`, imported by every generated project
+and the reference app alike; a repository gate keeps either host from
+re-declaring it.
 
 The boot defaults: standalone mode, SQLite `app.db`, port 8080.
 `/healthz` and `/api/v1/config/public` answer 200 and registering answers

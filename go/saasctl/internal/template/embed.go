@@ -18,11 +18,14 @@
 // shared across every selection except for the two files a selection
 // drives -- the go.mod require set and the server.go
 // import/module/middleware set: project/.gitignore, project/README.md,
-// project/cmd/server/main.go, project/cmd/server/config.go and the shared
-// host kernel project/internal/hostcore/hostcore.go are shared verbatim,
-// while project/selection/<key>/go.mod.txt and
+// project/cmd/server/main.go and project/cmd/server/config.go are shared
+// verbatim, while project/selection/<key>/go.mod.txt and
 // project/selection/<key>/server.go are chosen by <key>, SelectionKey's
-// canonical rendering of the --with module set. The go.mod document is stored under the inert name go.mod.txt for a
+// canonical rendering of the --with module set. The host-neutral
+// composition itself (the middleware chain, the pre-auth allowlist, the
+// serve lifecycle) is not part of the embedded tree at all: it lives in
+// the platform module github.com/vislake/speed/go/app, which every
+// materialized project imports. The go.mod document is stored under the inert name go.mod.txt for a
 // mechanical reason: go:embed's directory scan refuses to descend into a
 // subdirectory that contains a file named go.mod -- such a directory reads
 // as a nested module root -- so a go.mod named as such would silently
@@ -84,18 +87,17 @@ const ProjectRoot = "project"
 // SharedFiles lists the embedded files that every selection materializes
 // verbatim, keyed by their path inside ProjectRoot. The .go files carry the
 // BuildIgnoreLine like any template .go file; README.md and .gitignore are
-// copied byte for byte. internal/hostcore/hostcore.go is the shared host
-// kernel, byte-identical (modulo the marker) to
-// examples/reference-app/internal/hostcore/hostcore.go --
-// tools/check_host_core_parity.py is the gate that keeps the two copies
-// equal, so the shared host surface cannot drift back into two
-// hand-maintained variants.
+// copied byte for byte. The host-neutral composition itself is not a
+// materialized file: it lives in the platform module
+// github.com/vislake/speed/go/app, so a generated project and the
+// reference app import one shared kernel instead of carrying two copies
+// (tools/check_host_composition.py is the gate keeping either host tree
+// from re-declaring the kernel's symbols).
 var SharedFiles = []string{
 	".gitignore",
 	"README.md",
 	"cmd/server/main.go",
 	"cmd/server/config.go",
-	"internal/hostcore/hostcore.go",
 }
 
 // SelectionKey renders a validated --with module set as the embedded

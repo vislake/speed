@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
@@ -23,17 +24,16 @@ import (
 	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
 	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/tenancy"
-
-	"__APP_NAME__/internal/hostcore"
 )
 
 // The liveness routes' paths and handlers are observability's
 // (obs.MountLiveness), the module-route mounting rule is pkgcore's
-// (pkgcore.MountRoutes), and the pre-auth allowlist set is the shared host
-// kernel's (internal/hostcore, byte-identical to the reference app's copy):
-// this file names them through those packages rather than restating any of
-// them, so a generated project and the reference app keep composing the
-// same host surface.
+// (pkgcore.MountRoutes), and the pre-auth allowlist set is the platform
+// composition toolkit's (github.com/vislake/speed/go/app -- the same
+// module the reference app composes through): this file names them
+// through those packages rather than restating any of them, so a
+// generated project and the reference app keep composing the same host
+// surface.
 
 // buildServer wires this project's Kernel, the modules the generator
 // selected for it, their migrations, and the handler into a single
@@ -233,8 +233,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Obs route-label seeding: the shared kernel registers this host's
 	// real route table (its two liveness paths plus every module route
 	// just mounted) before obs.Middleware is constructed; see
-	// hostcore.RegisterMountedRoutes' doc comment.
-	hostcore.RegisterMountedRoutes(reg)
+	// speedapp.RegisterMountedRoutes' doc comment.
+	speedapp.RegisterMountedRoutes(reg)
 
 	// The bare mux IS the handler: no authn module means no verifier and no
 	// Principal, so there is no middleware chain to wrap it in -- see
