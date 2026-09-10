@@ -10,7 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/config/api"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
 const (
@@ -91,13 +91,13 @@ func setPublicCacheHeaders(w http.ResponseWriter) {
 // cannot import the reference app.
 const jsonContentType = "application/json; charset=utf-8"
 
-// writeError writes err to w as a JSON api.ConfigError -- the structured
-// {code, params} envelope the fragment declares for every refusal on both
-// operations. An err that is not an *apperr.Error -- something below this
-// handler failed to classify -- is folded into ErrStorage, the module's
-// internal error, so a caller never sees raw Go error text (nor, on a
-// storage failure, the underlying cause chain, which can name a driver, a
-// host or a ciphertext detail).
+// writeError writes err to w as the coded error envelope the fragment
+// declares for every refusal on both operations (see pkgcore/httpapi). An
+// err that is not an *apperr.Error -- something below this handler failed
+// to classify -- is folded into ErrStorage, the module's internal error, so
+// a caller never sees raw Go error text (nor, on a storage failure, the
+// underlying cause chain, which can name a driver, a host or a ciphertext
+// detail).
 //
 // The response is marked Cache-Control: no-store before anything else is
 // written: a refusal is never a cacheable answer. A cached 429 would keep
@@ -105,18 +105,8 @@ const jsonContentType = "application/json; charset=utf-8"
 // a cached 500 would hide the recovery of whatever failed -- neither is a
 // display decision the endpoint's publicCacheMaxAge applies to.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrStorage
-	}
-	envelope := api.ConfigError{Code: appErr.Code}
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, ErrStorage)
 }
 
 // methodNotAllowedCode is the stable code handleMethodNotAllowed answers
