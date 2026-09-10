@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -147,6 +149,135 @@ class NpmPlanTests(unittest.TestCase):
         plan = self._plan()
         self.assertIn(f"See {DESIGN} for the design.", plan["README.md"])
         self.assertIn(f"See {DESIGN} for the design.", plan["AGENTS.md"])
+
+
+class AppPlanTests(unittest.TestCase):
+    def _plan(self, name="widgets", description="provides the widget resource"):
+        pair = m.read_app_locale_templates()
+        self.assertIsNotNone(pair, "the locale pair templates must ship beside the script")
+        return dict(m.build_app_plan(name, description, "example.com/probe-app", pair))
+
+    def test_app_plan_ships_the_module_shape(self):
+        plan = self._plan()
+        self.assertEqual(
+            sorted(plan),
+            sorted(
+                [
+                    "doc.go",
+                    "module.go",
+                    "model.go",
+                    "repository.go",
+                    "handler.go",
+                    "handler_test.go",
+                    "migrations/fs.go",
+                    "migrations/sqlite/0001_create_widgets.sql",
+                    "migrations/postgres/0001_create_widgets.sql",
+                    "locales/fs.go",
+                    "locales/zh-CN.toml",
+                    "locales/en-US.toml",
+                    "api/openapi.yaml",
+                    "api/oapi-codegen.yaml",
+                ]
+            ),
+        )
+
+    def test_app_plan_derives_names_from_the_module_name(self):
+        plan = self._plan()
+        module = plan["module.go"]
+        self.assertIn('moduleName = "widgets"', module)
+        self.assertIn('apiPath = "/api/v1/widgets"', module)
+        self.assertIn("type Widget struct", plan["model.go"])
+        self.assertIn('func (Widget) TableName() string { return "widgets" }', plan["model.go"])
+        self.assertIn("func (h *Handler) WidgetsCreateWidget(", plan["handler.go"])
+        # The import paths carry the application's own module path, read
+        # from the app's go.mod, so the module compiles where it lands.
+        self.assertIn('"example.com/probe-app/internal/widgets/migrations"', module)
+        self.assertIn('"example.com/probe-app/internal/widgets/api"', plan["handler.go"])
+
+    def test_app_plan_hyphen_and_irregular_names(self):
+        derived = m.app_names("patient-records")
+        self.assertEqual(derived["entity"], "PatientRecord")
+        self.assertEqual(derived["table"], "patient_records")
+        self.assertEqual(derived["ci"], "PatientRecords")
+        self.assertEqual(derived["pkg"], "patientrecords")
+        self.assertEqual(m.app_names("inventory")["entity"], "Inventory")
+
+    def test_app_plan_migration_pair_is_identical(self):
+        plan = self._plan()
+        self.assertEqual(
+            plan["migrations/sqlite/0001_create_widgets.sql"],
+            plan["migrations/postgres/0001_create_widgets.sql"],
+        )
+        self.assertIn("CREATE TABLE widgets (", plan["migrations/sqlite/0001_create_widgets.sql"])
+
+    def test_app_plan_operation_ids_match_the_handler_methods(self):
+        # The spec's operationId and the handler's method name must agree
+        # (the generated ServerInterface is built from the former and
+        # implemented by the latter); the scaffold derives both from the
+        # module name, so this pins the two derivations together.
+        plan = self._plan()
+        self.assertIn("operationId: widgets_createWidget", plan["api/openapi.yaml"])
+        self.assertIn("operationId: widgets_list", plan["api/openapi.yaml"])
+        self.assertIn("func (h *Handler) WidgetsCreateWidget(", plan["handler.go"])
+        self.assertIn("func (h *Handler) WidgetsList(", plan["handler.go"])
+        self.assertIn("var _ api.ServerInterface = (*Handler)(nil)", plan["handler.go"])
+
+    def test_app_plan_locale_pair_mirrors_the_templates(self):
+        plan = self._plan()
+        pair = dict(m.read_app_locale_templates())
+        self.assertEqual(plan["locales/zh-CN.toml"], pair["locales/zh-CN.toml"].replace("__NAME__", "widgets"))
+        self.assertEqual(plan["locales/en-US.toml"], pair["locales/en-US.toml"].replace("__NAME__", "widgets"))
+        # Same message-id set in both languages (the i18n parity rule),
+        # read straight off the rendered pair.
+
+        def ids(text):
+            return set(re.findall(r'^"([^"]+)" =', text, flags=re.MULTILINE))
+
+        self.assertEqual(ids(plan["locales/zh-CN.toml"]), ids(plan["locales/en-US.toml"]))
+        self.assertTrue(ids(plan["locales/en-US.toml"]))
+
+    def test_app_plan_leaves_no_placeholders(self):
+        plan = self._plan()
+        for rel, content in plan.items():
+            for token in ("__NAME__", "__ENTITY__", "__ENTITY_KEY__", "__CI__",
+                          "__PKG__", "__TABLE__", "__APP_MODULE__", "__DESCRIPTION__"):
+                self.assertNotIn(token, content, rel)
+
+    def test_app_category_requires_a_go_module_target(self):
+        with tempfile.TemporaryDirectory() as empty:
+            code = m.main([
+                "widgets", "--category", "app",
+                "--description", "provides the widget resource",
+                "--target-dir", empty, "--dry-run",
+            ])
+            self.assertEqual(code, 2, "a target with no go.mod must be refused")
+        with tempfile.TemporaryDirectory() as app:
+            pathlib.Path(app, "go.mod").write_text(
+                "module example.com/probe-app\n\ngo 1.26.0\n", encoding="utf-8"
+            )
+            code = m.main([
+                "widgets", "--category", "app",
+                "--description", "provides the widget resource",
+                "--target-dir", app, "--dry-run",
+            ])
+            self.assertEqual(code, 0)
+
+    def test_app_category_takes_no_design_doc(self):
+        with tempfile.TemporaryDirectory() as app:
+            pathlib.Path(app, "go.mod").write_text(
+                "module example.com/probe-app\n\ngo 1.26.0\n", encoding="utf-8"
+            )
+            code = m.main([
+                "widgets", "--category", "app",
+                "--description", "provides the widget resource",
+                "--design-doc", "docs/internal/07-platform-services.md",
+                "--target-dir", app, "--dry-run",
+            ])
+            self.assertEqual(code, 0, "--design-doc stays optional for app")
+
+    def test_go_and_npm_categories_still_require_the_design_doc(self):
+        code = m.main(["sharing", "--description", "public share links."])
+        self.assertEqual(code, 2)
 
 
 class NameValidationTests(unittest.TestCase):

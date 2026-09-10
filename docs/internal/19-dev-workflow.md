@@ -65,7 +65,9 @@ python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/
 task new:module NAME=<name> DESCRIPTION='...' DESIGN_DOC=docs/internal/NN-<name>.md
 ```
 
-直接运行上面的 `python3` 命令效果相同。同理的 `task new:npm-package` 尚未实现——web/ 工作区已存在（`@speed/tokens`、`@speed/i18n` 已落地），但还没有 npm 包模板脚手架，脚本的 `--category npm` 目前仍直接拒绝。这是脚手架项目对自己的「脚手架化」——如果我们自己都嫌新增模块麻烦，说明模板设计有问题。
+直接运行上面的 `python3` 命令效果相同。同理的 `task new:npm-package` 尚未实现——web/ 工作区已存在（`@speed/tokens`、`@speed/i18n` 已落地），但还没有 npm 包模板脚手架。这是脚手架项目对自己的「脚手架化」——如果我们自己都嫌新增模块麻烦，说明模板设计有问题。
+
+`--category app` 面向的是另一半场景：往一个**已存在的应用**里加应用侧业务模块，产物是参考应用 notes 模块的同一形态（doc.go / model.go / repository.go / handler.go 与编译期 `api.ServerInterface` 断言 / handler_test.go / 双方言迁移对 / 双语 locale 对 / OpenAPI 片段与其 oapi-codegen 配置），落地在 `<应用根>/internal/<name>/`；应用根由 `--target-dir` 指定（必须含应用的 go.mod），脚本读取它推导模块的 import 路径，保证物化出来即可编译。生成器**不**写 `api/<name>-server.gen.go`——那是 pinned 生成器的产物，清单第一步给出与仓库 api 生成腿同一版本的 oapi-codegen 命令；物化 + 生成 + `go build` + `go test` 走通一次，就是这一类别形状的验证。脚手架的双语 locale 模板以真实文件形式放在 `tools/new_module_locales/`（tools/ 是英文区，中文文案不能内联在脚本源码里），顺带被 `tools/check_i18n_keys.py` 的键集奇偶校验覆盖。
 
 ## 分支与合并策略
 

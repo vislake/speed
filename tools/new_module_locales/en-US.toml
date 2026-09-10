@@ -1,0 +1,16 @@
+# English (en-US) user-facing text for the __NAME__ module.
+#
+# These ids correspond one to one with the apperr.Error.Code values the
+# module's HTTP handlers return (see handler.go): APIs themselves never
+# return this text -- they return the structured code plus parameters,
+# and a client resolves the code through its own i18n catalog, of which
+# this file is this module's own contribution.
+#
+# File contract (see go/pkgcore/i18n): every entry is one flat top-level
+# message -- no [errors]-style grouping sections -- and zh-CN.toml must
+# carry exactly the same id set.
+
+"__NAME__.name_required" = "The name must not be empty."
+"__NAME__.name_too_long" = "The name must not exceed 200 characters."
+"__NAME__.invalid_request_body" = "The request body is not valid JSON."
+"__NAME__.internal_error" = "An internal error occurred. Please try again later."
