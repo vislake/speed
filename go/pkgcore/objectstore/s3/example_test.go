@@ -41,6 +41,33 @@ func ExampleNewObjectStore() {
 	// store wired; the first operation contacts the service
 }
 
+// ExampleFromConfig shows the bare-injection path's one-step constructor:
+// the same store ExampleNewObjectStore builds, plus the capability
+// declaration pkgcore.WithObjectStore takes, in one call -- and a
+// configuration with a field missing or an endpoint minio-go rejects comes
+// back as an error here, where NewObjectStore panics, so a host assembling
+// Kernel options can still abandon them. Nothing is dialed, and there is
+// nothing to release afterwards: the minio-go client exposes no close.
+func ExampleFromConfig() {
+	store, caps, err := s3.FromConfig(s3.Config{
+		Endpoint:  "s3.internal:9000",
+		Bucket:    "objects",
+		AccessKey: "access-key",
+		SecretKey: "secret-key",
+		Region:    "us-east-1",
+		UseSSL:    true,
+	})
+	if err != nil {
+		fmt.Println("from config:", err)
+		return
+	}
+
+	// The pair a host passes to pkgcore.WithObjectStore.
+	fmt.Println(store != nil, caps)
+	// Output:
+	// true MultiReplicaSafe|SurvivesRestart
+}
+
 // Example demonstrates the package's self-registration: importing it for
 // side effect -- as a distributed-mode host does with a blank import when it
 // wants pkgcore.WithPreset(pkgcore.PresetDistributed) to resolve the

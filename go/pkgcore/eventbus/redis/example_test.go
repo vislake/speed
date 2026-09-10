@@ -44,6 +44,29 @@ func ExampleNewEventBus() {
 	// bus wired and reading; no event was published
 }
 
+// ExampleFromAddr shows the bare-injection path's one-step constructor: a
+// host holding nothing but the deployment's Redis address gets the bus --
+// over a client FromAddr builds and owns -- and the capability declaration
+// pkgcore.WithEventBus takes, in one call, instead of hand-assembling the
+// go-redis client and then the bus over it. The address points at a closed
+// port so this example stays hermetic: nothing dials until something
+// subscribes. The returned value's Close stops the bus's readers and
+// releases that client, so the host calls it at shutdown -- the kernel
+// never closes an injected seam.
+func ExampleFromAddr() {
+	bus, caps, err := eventbusredis.FromAddr("127.0.0.1:1")
+	if err != nil {
+		fmt.Println("from addr:", err)
+		return
+	}
+	defer func() { _ = bus.Close() }()
+
+	// The pair a host passes to pkgcore.WithEventBus.
+	fmt.Println(caps)
+	// Output:
+	// MultiReplicaSafe|SurvivesRestart
+}
+
 // Example demonstrates the package's self-registration: importing it for
 // side effect -- as a distributed-mode host does with a blank import when it
 // wants pkgcore.WithPreset(pkgcore.PresetDistributed) to resolve the

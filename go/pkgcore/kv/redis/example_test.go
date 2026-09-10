@@ -38,6 +38,27 @@ func ExampleNewKVStore() {
 	// store wired; its first operation dials the server
 }
 
+// ExampleFromAddr shows the bare-injection path's one-step constructor: a
+// host holding nothing but the deployment's Redis address gets the store --
+// over a client FromAddr builds and owns -- and the capability declaration
+// pkgcore.WithKVStore takes, in one call, instead of hand-assembling the
+// go-redis client and then the store over it. Nothing dials until an
+// operation runs. The returned value's Close releases that client, so the
+// host calls it at shutdown -- the kernel never closes an injected seam.
+func ExampleFromAddr() {
+	store, caps, err := kvredis.FromAddr("127.0.0.1:1")
+	if err != nil {
+		fmt.Println("from addr:", err)
+		return
+	}
+	defer func() { _ = store.Close() }()
+
+	// The pair a host passes to pkgcore.WithKVStore.
+	fmt.Println(store != nil, caps)
+	// Output:
+	// true MultiReplicaSafe|SurvivesRestart
+}
+
 // Example demonstrates the package's self-registration: importing it for
 // side effect -- as a distributed-mode host does with a blank import when it
 // wants pkgcore.WithPreset(pkgcore.PresetDistributed) to resolve the "kv"
