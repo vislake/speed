@@ -330,6 +330,86 @@ func TestGuardRoutes_Exempt_ShortCircuitsToTheHandler(t *testing.T) {
 	}
 }
 
+// TestGuardRoutes_Layer_RunsBetweenGateAndHandler pins the rule Layer's
+// position: the permission check decides first, the layer runs only for an
+// admitted request, and an exempt request reaches the handler with neither
+// the check nor the layer run -- the narrowing layer reads the Subject the
+// gate installed, so it must never see a request the gate did not admit.
+func TestGuardRoutes_Layer_RunsBetweenGateAndHandler(t *testing.T) {
+	ruleFor := func(layerRan *[]string) RouteRule {
+		return RouteRule{
+			Path: "/api/v1/org",
+			Access: pkgcore.RouteAccess{
+				Permission: func(*http.Request) string { return "org:read" },
+			},
+			Exempt: func(r *http.Request) bool { return r.URL.Path == "/api/v1/org/invitations/accept" },
+			Layer: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					*layerRan = append(*layerRan, "layer")
+					next.ServeHTTP(w, r)
+				})
+			},
+		}
+	}
+
+	t.Run("admitted request runs the layer", func(t *testing.T) {
+		route, next := newRoute("/api/v1/org")
+		var layerRan []string
+		az := &stubAuthorizer{allow: true}
+		guarded, err := GuardRoutes(az, []pkgcore.MountedRoute{route}, []RouteRule{ruleFor(&layerRan)})
+		if err != nil {
+			t.Fatalf("GuardRoutes: %v", err)
+		}
+		rec := serveGuarded(t, guarded, "/api/v1/org", requestFor(http.MethodGet, "/api/v1/org/nodes", demoSubject))
+		if !next.served || rec.Code != http.StatusOK {
+			t.Fatalf("status = %d served=%v, want the handler reached", rec.Code, next.served)
+		}
+		if len(layerRan) != 1 {
+			t.Fatalf("layer runs = %v, want exactly one run for an admitted request", layerRan)
+		}
+	})
+
+	t.Run("denied request never runs the layer", func(t *testing.T) {
+		route, next := newRoute("/api/v1/org")
+		var layerRan []string
+		az := &stubAuthorizer{allow: false}
+		guarded, err := GuardRoutes(az, []pkgcore.MountedRoute{route}, []RouteRule{ruleFor(&layerRan)})
+		if err != nil {
+			t.Fatalf("GuardRoutes: %v", err)
+		}
+		rec := serveGuarded(t, guarded, "/api/v1/org", requestFor(http.MethodGet, "/api/v1/org/nodes", demoSubject))
+		if next.served {
+			t.Fatal("the handler ran despite the denial")
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+		}
+		if len(layerRan) != 0 {
+			t.Fatalf("the layer ran behind a denied request: %v", layerRan)
+		}
+	})
+
+	t.Run("exempt request runs neither the check nor the layer", func(t *testing.T) {
+		route, next := newRoute("/api/v1/org")
+		var layerRan []string
+		az := &stubAuthorizer{allow: false}
+		guarded, err := GuardRoutes(az, []pkgcore.MountedRoute{route}, []RouteRule{ruleFor(&layerRan)})
+		if err != nil {
+			t.Fatalf("GuardRoutes: %v", err)
+		}
+		rec := serveGuarded(t, guarded, "/api/v1/org", requestFor(http.MethodPost, "/api/v1/org/invitations/accept", demoSubject))
+		if !next.served || rec.Code != http.StatusOK {
+			t.Fatalf("status = %d served=%v, want the exempt request to reach the handler", rec.Code, next.served)
+		}
+		if len(az.calls) != 0 {
+			t.Fatalf("the Authorizer was consulted for an exempt request: %v", az.calls)
+		}
+		if len(layerRan) != 0 {
+			t.Fatalf("the layer ran for an exempt request: %v", layerRan)
+		}
+	})
+}
+
 // TestGuardRoutes_SubjectResolverOverride_IsHonored pins the per-route
 // resolver: a request carrying no Subject in its context still reaches the
 // handler when the rule's resolver supplies one (a request whose decisions

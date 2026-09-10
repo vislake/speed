@@ -60,8 +60,22 @@ type RouteRule struct {
 	// The handler is the only gate for an exempt request, so the predicate
 	// must select exactly the operations the handler itself refuses without
 	// a standing grant; nil gates every request, which is the ordinary
-	// shape. Meaningless (and refused) on a public route.
+	// shape. An exempt request also never reaches the rule's Layer: the
+	// bypass skips everything the gate would have run. Meaningless (and
+	// refused) on a public route.
 	Exempt func(*http.Request) bool
+
+	// Layer, when set, wraps the route's handler INSIDE the permission
+	// gate: the gate decides first, then this layer runs for an admitted
+	// request, then the handler itself. It exists for a check that narrows
+	// what the gate allowed -- rbac's DataScope machinery's consumer is the
+	// standing example, refusing a request whose target lies outside the
+	// caller's scoped grant -- and it must sit between gate and handler
+	// because that is where the Subject the gate decided against is on the
+	// request context: WithSubject's own contract, which the gate fulfils
+	// before calling next. Nil when the route needs no such layer, which
+	// is the ordinary shape.
+	Layer func(http.Handler) http.Handler
 }
 
 // GuardRoutes applies a host's route table to the routes its modules
@@ -83,9 +97,10 @@ type RouteRule struct {
 // selects a permission is wrapped in the same fail-closed gate
 // RequirePermission and RequirePermissionFunc document -- one refusal shape
 // for every gated route (403 rbac.permission_denied, 500 rbac.storage_error)
-// -- with the rule's SubjectResolver when it has one, and the rule's Exempt
-// predicate short-circuiting the gate to the handler for exactly the
-// requests it names.
+// -- with the rule's SubjectResolver when it has one, the rule's Layer (when
+// declared) between the gate and the handler, and the rule's Exempt
+// predicate short-circuiting the whole pipeline to the handler for exactly
+// the requests it names.
 //
 // The returned routes are what the host mounts (pkgcore.MountRoutes); the
 // input slice is not modified. az is the Authorizer every gated route's
@@ -140,23 +155,28 @@ func validateRouteRule(rule RouteRule) error {
 	case !rule.Access.Public && rule.Access.Permission == nil:
 		return fmt.Errorf("%w: route %q declares neither public nor a permission it requires",
 			ErrRouteUndecided, rule.Path)
-	case rule.Access.Public && (rule.SubjectResolver != nil || rule.Exempt != nil):
-		return fmt.Errorf("%w: route %q is public yet carries a subject resolver or an exemption, which only a permission check would use",
+	case rule.Access.Public && (rule.SubjectResolver != nil || rule.Exempt != nil || rule.Layer != nil):
+		return fmt.Errorf("%w: route %q is public yet carries a subject resolver, an exemption or a layer, which only a permission check would use",
 			ErrRouteUndecided, rule.Path)
 	}
 	return nil
 }
 
-// gateRoute wraps next in the rule's admission check: RequirePermissionFunc
-// with the rule's permission selector and, when declared, its subject
-// resolver; the rule's Exempt predicate, when present, short-circuits to
-// next for the requests it names.
+// gateRoute wraps next in the rule's admission pipeline:
+// RequirePermissionFunc with the rule's permission selector and, when
+// declared, its subject resolver, around the rule's Layer (when declared)
+// around next; the rule's Exempt predicate, when present, short-circuits
+// the whole pipeline to next for the requests it names.
 func gateRoute(az Authorizer, rule RouteRule, next http.Handler) http.Handler {
+	inner := next
+	if rule.Layer != nil {
+		inner = rule.Layer(next)
+	}
 	var opts []MiddlewareOption
 	if rule.SubjectResolver != nil {
 		opts = append(opts, WithSubjectResolver(rule.SubjectResolver))
 	}
-	gated := RequirePermissionFunc(az, rule.Access.Permission, opts...)(next)
+	gated := RequirePermissionFunc(az, rule.Access.Permission, opts...)(inner)
 	if rule.Exempt == nil {
 		return gated
 	}
