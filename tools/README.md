@@ -629,7 +629,7 @@ rule deliberately does not close (code review owns those evasions).
 
 | Rule file | Discipline row (18-cicd table / root CLAUDE.md) | What fires | Allowlist (paths.exclude) | Residual gap |
 |---|---|---|---|---|
-| `deployment-mode-branch.yml` | no `if mode == "standalone"` branching in business logic | mode-value comparisons (`==`/`!=`, both operand orders), `case` labels naming the mode values, `os.Getenv("APP_DEPLOYMENT_MODE")`; same-package literal-valued consts resolve before matching, so an alias const still fires | test files; `go/pkgcore/deployment_mode.go` (the mode constants, parser and `RequiredCapabilities()` dispatch -- the one library-internal mode consultation left by the deployment-composition retrofit); the reference-app assembly (`internal/app/bootstrap.go`, where `ConfigFromEnv`'s loader-driven bootstrap resolves and parses `APP_DEPLOYMENT_MODE`, and `internal/app/server.go`, where `BuildServer` passes the resolved mode to Bootstrap); `go/authn/module.go` (the newOptions refusal of a distributed composition that wired no explicit `WithSMSSender` -- the module-owned SMSSender seam's assembly-time check, counterpart of the pkgcore Kernel's own seam resolution, wiring-time only per `WithDeploymentMode`'s doc); the saasctl generated-project command entries (the embedded `cmd/server/config.go` and each authn-containing selection's `server.go`, consumer projects materialized outside this tree). The former registry.go / observability init.go / main.go / saasctl `db migrate.go` entries were inert since the retrofit removed their mode switches (migrate's standalone-only gate went in a later round once its premise was shown false); they now fire on sight instead of being exempted | an indirection neither text matching nor value propagation reaches -- a helper inside an allowlisted file, a cross-package alias constant, a runtime-computed decision; branching on a `Capability` (`caps.Has(MultiReplicaSafe)`-shaped) is deliberately not covered -- the capability vocabulary arrived with the retrofit and no discipline row governs it yet |
+| `deployment-mode-branch.yml` | no `if mode == "standalone"` branching in business logic | mode-value comparisons (`==`/`!=`, both operand orders), `case` labels naming the mode values, `APP_DEPLOYMENT_MODE` reads -- the direct `os.Getenv`/`os.LookupEnv` form and the pkgcore/config loader pin naming the variable in a struct tag (`config:"env=APP_DEPLOYMENT_MODE"`, in either Go string spelling); same-package literal-valued consts resolve before matching, so an alias const still fires | test files; `go/pkgcore/deployment_mode.go` (the mode constants, parser and `RequiredCapabilities()` dispatch -- the one library-internal mode consultation left by the deployment-composition retrofit); the reference-app assembly (`internal/app/bootstrap.go`, where `ConfigFromEnv`'s loader-driven bootstrap resolves and parses `APP_DEPLOYMENT_MODE`, and `internal/app/server.go`, where `BuildServer` passes the resolved mode to Bootstrap); `go/authn/module.go` (the newOptions refusal of a distributed composition that wired no explicit `WithSMSSender` -- the module-owned SMSSender seam's assembly-time check, counterpart of the pkgcore Kernel's own seam resolution, wiring-time only per `WithDeploymentMode`'s doc); the saasctl generated-project command entries (the embedded `cmd/server/config.go` and each authn-containing selection's `server.go`, consumer projects materialized outside this tree). The former registry.go / observability init.go / main.go / saasctl `db migrate.go` entries were inert since the retrofit removed their mode switches (migrate's standalone-only gate went in a later round once its premise was shown false); they now fire on sight instead of being exempted | an indirection neither text matching nor value propagation reaches -- a helper inside an allowlisted file, a cross-package alias constant, a runtime-computed decision; branching on a `Capability` (`caps.Has(MultiReplicaSafe)`-shaped) is deliberately not covered -- the capability vocabulary arrived with the retrofit and no discipline row governs it yet; a loader pin whose tag value carries another loader option beside the variable (`config:"env=APP_DEPLOYMENT_MODE,required"` is a different string literal) escapes the tag patterns the same way, and review owns that spelling |
 | `gorm-automigrate-ban.yml` | no `AutoMigrate` (migrations are versioned SQL) | any `.AutoMigrate(...)` call in shipped code. STATUS: future guard -- zero real call sites exist today | test files | none stated (the ban is total) |
 | `handwritten-tenant-id-filter.yml` | no hand-written `WHERE tenant_id = ?` | a `Where` / `Or` / `Not` / `Having` chain call whose FIRST argument is a string literal containing a `tenant_id = ?`-style clause | test files; `go/dbkit/**` (the scoping plugin builds the filter everyone else relies on); `go/jobs/store.go` (platform-data idempotency guard); `go/config/store.go` (the configs-table accessor's exact `(scope, tenant_id, key)` lookups on platform data -- the model implements no `TenantScoped`, so no injected filter exists for this table, and ScopeSystem rows carry an empty tenant_id) | a clause assembled dynamically (fmt.Sprintf into the clause, a filter passed through a helper); only the first-argument literal form is matched |
 | `non-constant-log-message.yml` | log messages are constant strings (structured logging) | a call to the observability logger's `Info`/`Warn`/`Error`/`Debug` whose first argument is not a string literal (fmt.Sprintf output, concatenation, a variable) | test files | a raw-string (backtick) literal message is flagged although constant (none exists today); anything logged outside the shared structured logger is a separate discipline |
@@ -654,7 +654,10 @@ own `positive.go` and stay clean on its own `negative.go` (the mirror of
 how the no-literal-text rule's own unit tests keep that rule honest).
 The self-check exists because the real-tree scan alone cannot detect a
 semgrep upgrade that silently stopped matching a rule -- the tree would
-stay clean and nothing would go red.
+stay clean and nothing would go red. The reader behind the liveness
+expectation has its own stdlib-only unit suite
+(`tools/test_semgrep_fixture_check.py`), run as its own step in the same
+job, just before the semgrep step -- no semgrep binary needed.
 
 The first two expectations compare the rule to its own fixture, so a
 rename that aged the rule and the fixture TOGETHER keeps them green
@@ -665,11 +668,13 @@ deployment-mode env rename from `SPEED_DEPLOYMENT_MODE` to
 this way). A third, reverse expectation closes the blind spot without
 any semgrep run: every environment-variable name literal a rule's
 positive fixture exercises (a direct `os.Getenv`/`os.LookupEnv` string
-argument, or a same-file literal const passed to one) must still be read
-by a non-test `.go` file under `go/` `examples/` `tools/` (the rules'
-own `testdata/` subtree excluded, the same exclusion shape the real-tree
-scan applies) -- a fixture naming an env variable real code no longer
-reads has aged away from the tree and proves nothing.
+argument, a same-file literal const passed to one, or the env pin of a
+pkgcore/config loader struct tag -- `config:"env=NAME"` in either Go
+string spelling) must still be read by a non-test `.go` file under
+`go/` `examples/` `tools/` (the rules' own `testdata/` subtree
+excluded, the same exclusion shape the real-tree scan applies) -- a
+fixture naming an env variable real code no longer reads has aged away
+from the tree and proves nothing.
 
 Running locally (the docker image is the pinned local version; CI instead
 pip-installs into a throwaway venv -- see below):

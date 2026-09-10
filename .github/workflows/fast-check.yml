@@ -113,7 +113,7 @@ name: fast-check
 #         tenant_id metric labels, hand-written tenant filters,
 #         non-snake_case log attribute keys), each with
 #         planted-violation fixtures under tools/semgrep_rules/testdata/.
-#         The step below pip-installs semgrep into a throwaway venv and
+#         The semgrep step below pip-installs into a throwaway venv and
 #         scans go/ examples/ tools/ with the fixture subtree excluded at
 #         the CLI level; any finding fails the PR. The same step then runs
 #         tools/semgrep_fixture_check.py: every rule must fire on its own
@@ -121,6 +121,10 @@ name: fast-check
 #         semgrep upgrade that silently stops matching a rule cannot pass
 #         the green tree scan unnoticed (the mirror of how the
 #         no-literal-text rule's own unit tests keep that rule honest).
+#         The fixture checker's own unit suite
+#         (tools/test_semgrep_fixture_check.py) runs as its own
+#         stdlib-only step just before the semgrep step, pinning the
+#         env-literal reader's recognized shapes -- no semgrep needed.
 #         Pinned at 1.176.0 -- the version the rules' local proofs ran
 #         against -- so the merge-gating semgrep cannot float (see
 #         tools/README.md).
@@ -340,10 +344,19 @@ jobs:
         run: python3 tools/test_check_host_core_parity.py
       - name: Shared host-kernel parity check (internal/hostcore copies)
         run: python3 tools/check_host_core_parity.py
+      # The fixture checker's own unit suite: stdlib-only unittest over
+      # the env-literal reader the fixture-liveness expectation reads
+      # the tree with -- direct os.Getenv/os.LookupEnv arguments,
+      # same-file consts (single and block declarations) and
+      # config:"env=NAME" loader tag pins in either Go string spelling.
+      # Pure python, so it needs no semgrep binary and runs before the
+      # venv step below.
+      - name: Fixture-checker unit suite (tools/test_semgrep_fixture_check.py)
+        run: python3 tools/test_semgrep_fixture_check.py
       # Semgrep into a throwaway venv: the runner has no pinned semgrep
       # and this job's toolchain setup is the Go/Node actions only. The
-      # pip install is the deliberately-unpinned piece -- see the COVERAGE
-      # note and tools/README.md; it is pinned here once CI is green.
+      # pip install pins the version the rules' local proofs ran against
+      # -- see the COVERAGE note and tools/README.md.
       - name: Semgrep architecture-discipline rules (tools/semgrep_rules)
         run: |
           python3 -m venv /tmp/semgrep-venv
