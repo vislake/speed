@@ -198,8 +198,6 @@ github.com/vislake/speed/go/compliance v0.0.1 h1:fguTOhIlqTZbsquDOuJb+I6sU32BHGX
 github.com/vislake/speed/go/compliance v0.0.1/go.mod h1:w4iYFQmILcm9hFPqnGR8dQ1UY83vkSeixLtB/IJwVm4=
 github.com/vislake/speed/go/config v0.0.1 h1:xi75ARu8HP7AXUD/HbsSLQQCZxtjYmDKt45GhlgH/ww=
 github.com/vislake/speed/go/config v0.0.1/go.mod h1:lZicRj2xmtIEQ+CNS03pZMJMLVHwFELlNsMWEcwWbTE=
-github.com/vislake/speed/go/dbkit v0.0.1 h1:b5kVcH04D5BHLfSFAwWD4JIIRkAyDHsV3TM5oZgbcdY=
-github.com/vislake/speed/go/dbkit v0.0.1/go.mod h1:m9CmOHjg4G4RQ6nJn97h4+wJ+GpK3ik6plu0lIpXbjM=
 github.com/vislake/speed/go/jobs v0.0.1 h1:U6SU06y69m0i1KgRirURq5AinFJFa1BVwZ+4nGF1kRM=
 github.com/vislake/speed/go/jobs v0.0.1/go.mod h1:XvNN1obnnop04am+cGCq/NCaQXOn9ibNJ7QOlZqQ86A=
 github.com/vislake/speed/go/metering v0.0.1 h1:zOHV4XReyPGIH8qV+G/y98Xi2XIipX5u8dcjJ62+oQg=

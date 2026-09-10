@@ -1,7 +1,6 @@
 package migrations
 
 import (
-	"context"
 	"embed"
 	"errors"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
-	"github.com/vislake/speed/go/pkgcore"
 )
 
 // upTo0006 embeds exactly the metering migration files 0001..0006 -- the
@@ -28,48 +26,24 @@ import (
 //go:embed sqlite/000[1-6]_*.sql postgres/000[1-6]_*.sql
 var upTo0006 embed.FS
 
-// migrationSetModule is the minimal pkgcore.Module a test needs to feed a
-// chosen embed.FS to dbkit.MigrationRegistry, mirroring metering's own
-// internal/testutil migrationModule for the staged-upgrade tests here
-// (the subset FS above is only constructible from inside this package, so
-// the stub has to live beside it).
-type migrationSetModule struct {
-	name string
-	fs   embed.FS
-}
-
-func (m migrationSetModule) Name() string                   { return m.name }
-func (migrationSetModule) DependsOn() []string              { return nil }
-func (m migrationSetModule) Migrations() embed.FS           { return m.fs }
-func (migrationSetModule) Locales() embed.FS                { return embed.FS{} }
-func (migrationSetModule) OpenAPISpec() []byte              { return nil }
-func (migrationSetModule) Register(*pkgcore.Registry) error { return nil }
-
 // stageRetryAfterUpgrade drives the 0007 upgrade-path proof on one real
-// database: apply the 0006-era subset, seed rows on the nullable
-// schema -- including a NULL-retry_after row, a write only the pre-0007
-// schema accepts -- then upgrade by applying the FULL set through a
-// second registry, whose ledger skip is the real upgrade mechanism, and
-// pin that 0007 backfilled the NULL row to its created_at, made the
-// column NOT NULL (a fresh NULL write is refused), preserved the
+// database: apply the 0006-era subset (the same module name, so the full
+// set's re-run is a genuine ledger-skip upgrade of it), seed rows on the
+// nullable schema -- including a NULL-retry_after row, a write only the
+// pre-0007 schema accepts -- then upgrade by re-applying the module's full
+// set, and pin that 0007 backfilled the NULL row to its created_at, made
+// the column NOT NULL (a fresh NULL write is refused), preserved the
 // concrete row untouched, and kept the unique index working (a duplicate
 // idempotency key is still refused -- the sqlite/ copy's table rebuild
 // recreates the indexes, and this is where a dropped index would show).
 func stageRetryAfterUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 	t.Helper()
-	ctx := context.Background()
 	now := time.Now()
 	createdAt := now.Add(-time.Minute)
 	scheduledAt := now.Add(-2 * time.Hour)
 
 	// Stage 1: a genuine 0006-era database.
-	era := dbkit.NewMigrationRegistry()
-	if err := era.Register(migrationSetModule{name: "metering", fs: upTo0006}); err != nil {
-		t.Fatalf("Register(0006-era set): %v", err)
-	}
-	if err := era.Apply(ctx, db, dialect); err != nil {
-		t.Fatalf("apply the 0006-era migration set: %v", err)
-	}
+	dbtest.Migrate(t, db, dialect, dbtest.Migration{Module: "metering", FS: upTo0006})
 
 	insertRow := `INSERT INTO metering_outbox_records
 		(id, tenant_id, feature, quantity, idempotency_key, occurred_at, metadata, status, attempts, last_error, retry_after, created_at, delivered_at)
@@ -89,17 +63,11 @@ func stageRetryAfterUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 		t.Fatalf("insert the scheduled row on the 0006-era schema: %v", err)
 	}
 
-	// Stage 2: the upgrade. A second registry applies the FULL set; its
-	// ledger already records 0001..0006 (same module name, same
-	// filenames), so it executes exactly the new file --
+	// Stage 2: the upgrade. Applying the FULL set re-runs the registry
+	// against a database whose ledger already records 0001..0006 (same
+	// module name, same filenames), so it executes exactly the new file --
 	// 0007_enforce_outbox_retry_after_not_null.sql.
-	full := dbkit.NewMigrationRegistry()
-	if err := full.Register(migrationSetModule{name: "metering", fs: FS}); err != nil {
-		t.Fatalf("Register(full set): %v", err)
-	}
-	if err := full.Apply(ctx, db, dialect); err != nil {
-		t.Fatalf("upgrade the 0006-era database with the full set: %v", err)
-	}
+	dbtest.Migrate(t, db, dialect, dbtest.Migration{Module: "metering", FS: FS})
 
 	var ledgerRows int64
 	if err := db.Raw("SELECT count(*) FROM schema_migrations WHERE module = 'metering'").Scan(&ledgerRows).Error; err != nil {

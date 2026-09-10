@@ -2,6 +2,12 @@ module github.com/vislake/speed/go/authn
 
 go 1.26.0
 
+// dbtest.Migration (and the migration-accepting NewSQLite/NewPostgres) is
+// not in a released dbkit version yet, so this module resolves dbkit from
+// the sibling checkout. A replace directive in a dependency is ignored by
+// consumers, so this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/dbkit => ../dbkit
+
 // The bootstrap-key declaration seat (pkgcore.BootstrapKey and
 // pkgcore.Registry.Bootstrap) is not in a released pkgcore version yet, so this
 // module resolves pkgcore from the sibling checkout. A replace directive in a

@@ -4,45 +4,26 @@
 package testutil
 
 import (
-	"embed"
 	"testing"
 
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
-	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/admin/migrations"
 )
 
-// migrationModule is the minimal pkgcore.Module NewDB feeds to
-// dbkit.MigrationRegistry, carrying admin's real migration files. It
-// exists because the registry works in terms of modules, and building the
-// real admin.Module here would create an import cycle (this package is
-// imported BY admin's own tests).
-type migrationModule struct{}
-
-func (migrationModule) Name() string                     { return "admin" }
-func (migrationModule) DependsOn() []string              { return nil }
-func (migrationModule) Migrations() embed.FS             { return migrations.FS }
-func (migrationModule) Locales() embed.FS                { return embed.FS{} }
-func (migrationModule) OpenAPISpec() []byte              { return nil }
-func (migrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// NewDB returns a fresh in-memory SQLite database with every admin
+// NewDB returns a fresh, migrated SQLite database with every admin
 // migration applied from zero.
+//
+// The migration set is named by hand rather than read from a module value:
+// building the real admin.Module here would create an import cycle (this
+// package is imported BY admin's own tests), which is exactly the case
+// dbtest.Migration exists for.
 func NewDB(t *testing.T) *gorm.DB {
 	t.Helper()
-
 	db := dbtest.NewSQLite(t)
-
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(migrationModule{}); err != nil {
-		t.Fatalf("register admin's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply admin's migrations from zero: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "admin", FS: migrations.FS})
 	return db
 }

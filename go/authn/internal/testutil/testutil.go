@@ -10,7 +10,6 @@ package testutil
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"sync"
 	"testing"
@@ -164,25 +163,15 @@ func (m *Memberships) TenantsOf(_ context.Context, userID string) ([]pkgcore.Ten
 	return out, nil
 }
 
-// migrationModule is the minimal pkgcore.Module NewDB feeds to
-// dbkit.MigrationRegistry, carrying authn's real migration files. It exists
-// because the registry works in terms of modules, and building the real
-// authn.Module here would import authn.
-type migrationModule struct{}
-
-func (migrationModule) Name() string                     { return "authn" }
-func (migrationModule) DependsOn() []string              { return nil }
-func (migrationModule) Migrations() embed.FS             { return migrations.FS }
-func (migrationModule) Locales() embed.FS                { return migrations.FS }
-func (migrationModule) OpenAPISpec() []byte              { return nil }
-func (migrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// NewDB returns a fresh in-memory SQLite database with authn's PII serializer
+// NewDB returns a fresh SQLite database with authn's PII serializer
 // registered and every authn migration applied from zero.
 //
 // The serializer is registered BEFORE the handle is opened, which is the
 // ordering the real host must follow too: GORM's serializer registry is
 // process-global and is consulted while a model's schema is parsed.
+//
+// The migration set is named by hand rather than read from a module value:
+// building the real authn.Module here would import authn.
 func NewDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
@@ -193,14 +182,7 @@ func NewDB(t *testing.T) *gorm.DB {
 	dbkit.RegisterEncryptedSerializer(serializerName, cipher)
 
 	db := dbtest.NewSQLite(t)
-
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(migrationModule{}); err != nil {
-		t.Fatalf("register authn's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply authn's migrations from zero: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "authn", FS: migrations.FS})
 	return db
 }
 
@@ -226,14 +208,7 @@ func NewPostgresDB(t *testing.T) *gorm.DB {
 	dbkit.RegisterEncryptedSerializer(serializerName, cipher)
 
 	db := dbtest.NewPostgres(t)
-
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(migrationModule{}); err != nil {
-		t.Fatalf("register authn's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectPostgres); err != nil {
-		t.Fatalf("apply authn's migrations from zero on postgres: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectPostgres, dbtest.Migration{Module: "authn", FS: migrations.FS})
 	return db
 }
 

@@ -1,7 +1,6 @@
 package migrations
 
 import (
-	"context"
 	"embed"
 	"errors"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
-	"github.com/vislake/speed/go/pkgcore"
 )
 
 // upTo0007 embeds exactly the org migration files 0001..0007 -- the schema
@@ -27,42 +25,18 @@ import (
 //go:embed sqlite/000[1-7]_*.sql postgres/000[1-7]_*.sql
 var upTo0007 embed.FS
 
-// migrationSetModule is the minimal pkgcore.Module a test needs to feed a
-// chosen embed.FS to dbkit.MigrationRegistry, mirroring org's own
-// internal/testutil migrationModule for the staged-upgrade tests here (the
-// subset FS above is only constructible from inside this package, so the
-// stub has to live beside it).
-type migrationSetModule struct {
-	name string
-	fs   embed.FS
-}
-
-func (m migrationSetModule) Name() string                   { return m.name }
-func (migrationSetModule) DependsOn() []string              { return nil }
-func (m migrationSetModule) Migrations() embed.FS           { return m.fs }
-func (migrationSetModule) Locales() embed.FS                { return embed.FS{} }
-func (migrationSetModule) OpenAPISpec() []byte              { return nil }
-func (migrationSetModule) Register(*pkgcore.Registry) error { return nil }
-
 // stageSingleRootUpgrade drives the single-root upgrade-path proof on one
-// real database: apply the 0007-era subset, pin that its single-root index
-// still counts a soft-deleted root (the pre-0008 behavior), then
-// upgrade by applying the FULL set through a second registry -- whose ledger
-// skip is the real upgrade mechanism -- and pin that the narrowed index now
-// lets a live root coexist with the soft-deleted one while still refusing
-// two live roots.
+// real database: apply the 0007-era subset (the same module name, so the
+// full set's re-run is a genuine ledger-skip upgrade of it), pin that its
+// single-root index still counts a soft-deleted root (the pre-0008
+// behavior), then upgrade by applying the FULL set -- and pin that the
+// narrowed index now lets a live root coexist with the soft-deleted one
+// while still refusing two live roots.
 func stageSingleRootUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 	t.Helper()
-	ctx := context.Background()
 
 	// Stage 1: a genuine 0007-era database.
-	era := dbkit.NewMigrationRegistry()
-	if err := era.Register(migrationSetModule{name: "org", fs: upTo0007}); err != nil {
-		t.Fatalf("Register(0007-era set): %v", err)
-	}
-	if err := era.Apply(ctx, db, dialect); err != nil {
-		t.Fatalf("apply the 0007-era migration set: %v", err)
-	}
+	dbtest.Migrate(t, db, dialect, dbtest.Migration{Module: "org", FS: upTo0007})
 
 	insertRoot := `INSERT INTO org_nodes
 		(id, tenant_id, parent_id, path, depth, name, kind, created_at, updated_at, deleted_at, deleted_by)
@@ -79,17 +53,12 @@ func stageSingleRootUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 	eraLiveRootErr := db.Exec(insertRoot, "new-root", "tenant-a", "/new-root/", 0, "New Root", "group", now, now, nil).Error
 	assertUniqueViolation(t, eraLiveRootErr, "inserting a live root beside a soft-deleted one on the 0007-era schema")
 
-	// Stage 2: the upgrade. A second registry applies the FULL set; its
-	// ledger already records 0001..0007 (same module name, same filenames),
-	// so it executes exactly the files after 0007 -- 0008_single_root_live.sql
-	// and everything later in the module's migration set.
-	full := dbkit.NewMigrationRegistry()
-	if err := full.Register(migrationSetModule{name: "org", fs: FS}); err != nil {
-		t.Fatalf("Register(full set): %v", err)
-	}
-	if err := full.Apply(ctx, db, dialect); err != nil {
-		t.Fatalf("upgrade the 0007-era database with the full set: %v", err)
-	}
+	// Stage 2: the upgrade. Applying the FULL set re-runs the registry
+	// against a database whose ledger already records 0001..0007 (same
+	// module name, same filenames), so it executes exactly the files after
+	// 0007 -- 0008_single_root_live.sql and everything later in the
+	// module's migration set.
+	dbtest.Migrate(t, db, dialect, dbtest.Migration{Module: "org", FS: FS})
 
 	var ledgerRows int64
 	if err := db.Raw("SELECT count(*) FROM schema_migrations WHERE module = 'org'").Scan(&ledgerRows).Error; err != nil {
