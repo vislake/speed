@@ -7,6 +7,7 @@ import (
 
 	"github.com/vislake/speed/go/admin"
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/authn/demoseed"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -157,8 +158,8 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 }
 
 // seedDemoPlatformStaff registers DemoPlatformStaffEmail through the
-// composed handler's real register route (mirroring RegisterDemoUser in
-// demo_users.go exactly), grants it membership in rbac.SystemDomain ALONE
+// composed handler's real register route, over the same authn/demoseed
+// helper seedDemoUsers uses, grants it membership in rbac.SystemDomain ALONE
 // -- never in any customer tenant, so its access token's tenant claim
 // resolves unambiguously to "system" with no tenant_id request needed at
 // sign-in -- ensures rbac's built-in roles exist in that tenant, and
@@ -181,12 +182,12 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // permanently unable to sign in -- 403 authn.tenant_membership_required
 // from an empty in-memory roster -- locking the operator out of admin's
 // own console until the database is wiped. The registration itself goes
-// through registerDemoUserIfAbsent,
+// through demoseed,
 // exactly like seedDemoUsers' accounts: an already-registered staff
 // account is discovered by the SearchUsers lookup and never POSTs the
 // public register route -- the route whose per-IP budget
 // repeated restart boots could exhaust under the distributed
-// deployment mode's shared KVStore (seedDemoUsers' own doc comment has
+// deployment mode's shared KVStore (demoseed's own doc comment has
 // the reasoning) -- so a restart consumes no register budget at all.
 //
 // It returns the registered user id, or an error naming exactly what
@@ -208,7 +209,11 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *signInMemberships, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
 	logger := obs.FromContext(ctx)
 
-	userID, alreadyExists, err := registerDemoUserIfAbsent(ctx, handler, authnService, DemoPlatformStaffEmail, password)
+	seeder, err := demoseed.NewSeeder(handler, authnService.SearchUsers, demoSeedDomain)
+	if err != nil {
+		return "", err
+	}
+	userID, alreadyExists, err := seeder.Register(ctx, DemoPlatformStaffEmail, password)
 	if err != nil {
 		return "", err
 	}

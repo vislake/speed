@@ -1,22 +1,17 @@
 package app
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/authn/demoseed"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 
 	obs "github.com/vislake/speed/go/observability"
-
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 )
 
 // The three demo accounts seedDemoUsers registers when
@@ -41,6 +36,14 @@ const (
 	// grant model: notes:read in DemoSingleTenantID and nowhere else.
 	DemoAcmeOnlyEmail = "demo-acme-only@example.com"
 )
+
+// demoSeedDomain is the email domain every demo account this app seeds
+// lives on: the three addresses above and demo_admin.go's platform-staff
+// account. It is declared to demoseed at construction, where it arms the
+// subpackage's demo-only guard -- an account outside the declared domain is
+// refused before anything is sent -- and it is the caller-side half of that
+// guard: this app writes down that its boot-time seeding is demo seeding.
+const demoSeedDomain = "example.com"
 
 // demoSeedAccount pairs one demo account (registered as a real authn user)
 // with the grant model of its demo_subject.go actor twin. Registration
@@ -75,11 +78,15 @@ var demoSeedAccounts = []demoSeedAccount{
 	{actor: DemoSingleTenantUserID, email: DemoAcmeOnlyEmail, inEveryTenant: false, roleKey: demoReaderRoleKey},
 }
 
-// seedDemoUsers registers demoSeedAccounts through the composed handler's
-// real register route and grants each registered account the membership
-// and role its model declares, per configured tenant and under its own
-// tenant context (roles and bindings are tenant data -- nothing here reads
-// or writes across a tenant boundary).
+// seedDemoUsers registers demoSeedAccounts through authn's demoseed helper --
+// which POSTs the composed handler's real register route, so registration
+// runs the real handler, the real password policy, the real rate limiter and
+// the real users table rather than a second, parallel account-creation path
+// that could drift from them; a password the policy refuses therefore fails
+// startup, naming authn's answer code -- and grants each registered account
+// the membership and role its model declares, per configured tenant and
+// under its own tenant context (roles and bindings are tenant data --
+// nothing here reads or writes across a tenant boundary).
 //
 // BuildServer calls it AFTER seedDemoGrants, which is what guarantees the
 // roles this function AssignRole-s are already defined in every tenant. It
@@ -87,49 +94,28 @@ var demoSeedAccounts = []demoSeedAccount{
 // password skips the seed, leaving the demo headers as the only demo
 // identity.
 //
-// Registration goes through the HTTP surface on purpose: seedDemoUsers is
-// a consumer of authn like any other, and taking the same register path a
-// browser takes exercises the real handler, the real password policy, the
-// real rate limiter and the real users table rather than a second,
-// parallel account-creation path that could drift from them. A password
-// the policy refuses therefore fails startup, naming authn's answer code.
-//
-// The seed is idempotent, and now the idempotence reaches all the way to
-// the grants, not just the registrations: the account's memberships live
-// in org's own memberships table and its roles in rbac's bindings table,
-// both durable, both written under the user id authn assigned -- so a
-// second boot against the same database finds the registration already
-// there, recovers the user id authn assigned the first time through the
-// exact email match of authn.Service.SearchUsers (the platform-operator
-// lookup go/admin's own user search goes through), and re-runs the grant
-// leg, which is safe to repeat by construction: the org membership is
-// ensured idempotently (addDemoOrgMembership) and AssignRole is
-// idempotent. A boot that finds a demo account pre-existing therefore
-// restores whatever the boot that created it left half-done -- a crash
-// between registration and grants can no longer strand a memberless demo
-// account -- and a restart against the same database loses none of the
-// accounts' sign-in power.
-//
-// One deliberately ordered detail: the existence question is asked of
-// authn.Service.SearchUsers BEFORE the register route, never answered by
-// POSTing and reading the already-registered conflict back. Both answers
-// disclose the same fact to the same caller -- the boot-time demo seed is
-// operator configuration, the same trust level as the registration it
-// performs, which is what makes the platform-operator lookup appropriate
-// here without an admin:search_users gate around it (that gate protects
-// HTTP callers; this call is the operator's own boot) -- but asking first
-// means a restart never POSTs the public register route at all, and
-// therefore never debits authn's per-IP register budget
-// (limitRegisterByIP, go/authn/ratelimit.go) for accounts that are
-// already there. Under the distributed mode the budget lives in the
-// shared Redis KVStore and accumulates across restarts, so a seed that
-// POSTed on every boot could exhaust the budget within the quota window
-// and fail the boot; posting only for genuinely absent accounts leaves
-// restarts at zero register traffic whatever the deployment mode.
+// The seed is idempotent through and through: demoseed answers an
+// already-registered account from authn's own exact-email lookup without
+// posting the register route at all, so a restart debits no register budget
+// (demoseed's own doc comment carries the budget reasoning), and the grant
+// leg re-runs safely -- the org membership is ensured idempotently
+// (addDemoOrgMembership) and AssignRole is idempotent. A boot that finds a
+// demo account pre-existing therefore restores whatever the boot that
+// created it left half-done -- a crash between registration and grants can
+// no longer strand a memberless demo account -- and a restart against the
+// same database loses none of the accounts' sign-in power.
 func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *authn.Service, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
 	logger := obs.FromContext(ctx)
+	// The lookup is authn's platform-operator search, appropriate here for
+	// the reason demoseed's doc comment gives: this is the operator's own
+	// boot-time configuration, the same trust level as the registration it
+	// performs -- whereas the same search behind an HTTP route is gated.
+	seeder, err := demoseed.NewSeeder(handler, authnService.SearchUsers, demoSeedDomain)
+	if err != nil {
+		return fmt.Errorf("reference-app: seed demo users: %w", err)
+	}
 	for _, account := range demoSeedAccounts {
-		userID, alreadyExists, err := registerDemoUserIfAbsent(ctx, handler, authnService, account.email, password)
+		userID, alreadyExists, err := seeder.Register(ctx, account.email, password)
 		if err != nil {
 			return fmt.Errorf("reference-app: seed demo users: %w", err)
 		}
@@ -151,157 +137,6 @@ func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *auth
 		}
 	}
 	return nil
-}
-
-// registerDemoUserIfAbsent registers one demo account through the register
-// route ONLY when it is not already in the users table: the existence
-// question is answered first by the exact-email SearchUsers lookup
-// (lookupRegisteredDemoUserID), and only an absent account POSTs
-// /api/v1/authn/register. This is what keeps a restart from debiting the
-// public register budget for accounts a previous boot already created
-// (seedDemoUsers' own doc comment gives the budget reasoning in full);
-// RegisterDemoUser itself still treats an unexpected already-registered
-// conflict answer -- a concurrent first boot that registered the account
-// between this boot's lookup and its POST -- as alreadyExists and recovers
-// the assigned id, so a first-boot race between
-// two replicas cannot double-register or strand an account.
-//
-// alreadyExists=true reports an account that needs no registration; its
-// caller then re-asserts the grant leg under the returned id, the same
-// shape both seedDemoUsers and seedDemoPlatformStaff reach after a
-// conflict answer.
-func registerDemoUserIfAbsent(ctx context.Context, handler http.Handler, authnService *authn.Service, email, password string) (userID string, alreadyExists bool, err error) {
-	existingID, exists, err := lookupRegisteredDemoUserID(ctx, authnService, email)
-	if err != nil {
-		return "", false, fmt.Errorf("reference-app: check whether demo user %q already exists: %w", email, err)
-	}
-	if exists {
-		return existingID, true, nil
-	}
-
-	userID, alreadyExists, err = RegisterDemoUser(ctx, handler, email, password)
-	if err != nil {
-		return "", false, err
-	}
-	if alreadyExists {
-		// A concurrent first boot registered the account between the
-		// lookup above and this POST; recover its id.
-		userID, err = registeredDemoUserID(ctx, authnService, email)
-		if err != nil {
-			return "", false, err
-		}
-	}
-	return userID, alreadyExists, nil
-}
-
-// lookupRegisteredDemoUserID asks authn.Service.SearchUsers whether the
-// exact-email account exists -- the platform-operator lookup whose
-// appropriateness for this boot-time, operator-configured seed is argued
-// on seedDemoUsers' own doc comment -- answering (id, true) for the
-// exactly-one-account case, (_, false) for none, and an error for a
-// lookup failure or an impossible many-account collision.
-func lookupRegisteredDemoUserID(ctx context.Context, authnService *authn.Service, email string) (string, bool, error) {
-	users, err := authnService.SearchUsers(ctx, authn.UserSearchQuery{Email: email})
-	if err != nil {
-		return "", false, err
-	}
-	switch len(users) {
-	case 0:
-		return "", false, nil
-	case 1:
-		return users[0].ID, true, nil
-	default:
-		return "", false, fmt.Errorf("SearchUsers answered %d accounts for %q, want 0 or exactly 1", len(users), email)
-	}
-}
-
-// registeredDemoUserID resolves the user id authn assigned to an email that
-// is already registered -- the one thing the register conflict answer never
-// discloses. The exact-email SearchUsers match is the platform-operator
-// lookup of go/authn/search.go; the seed's boot-time use is documented on
-// seedDemoUsers' own doc comment above.
-func registeredDemoUserID(ctx context.Context, authnService *authn.Service, email string) (string, error) {
-	users, err := authnService.SearchUsers(ctx, authn.UserSearchQuery{Email: email})
-	if err != nil {
-		return "", fmt.Errorf("look up pre-existing demo registration for %q: %w", email, err)
-	}
-	if len(users) != 1 {
-		return "", fmt.Errorf("look up pre-existing demo registration for %q: SearchUsers answered %d accounts, want exactly 1",
-			email, len(users))
-	}
-	return users[0].ID, nil
-}
-
-// RegisterDemoUser registers one demo account by POSTing the register
-// payload to the composed handler -- in-process, through the same
-// authn.Middleware + tenancy allowlist + mux + handler stack a browser
-// request traverses -- and returns the user id authn assigned, or
-// alreadyExists=true when the account is already in the users table. The
-// callers (registerDemoUserIfAbsent and, through it, both seed functions)
-// already asked SearchUsers whether the account exists, so reaching this
-// POST at all means the account was genuinely absent a moment ago; the
-// already-registered conflict answer here is the concurrent-first-boot
-// race.
-//
-// Classification goes through the CODE, exactly as the register API
-// reports it: any non-201 answer other than authn's
-// email-already-registered conflict is an error naming the answer code, so
-// a policy refusal, a rate limit or anything else fails the boot instead
-// of silently producing a half-seeded demo. A rate-limit answer is
-// distinguished from the other refusals on purpose rather than folded
-// into the generic message: authn's register budget is 10 registrations
-// per hour per client IP (limitRegisterByIP, go/authn/ratelimit.go), and
-// with this seed POSTing only genuinely absent accounts, an
-// authn.rate_limited answer on a first boot means the PUBLIC register
-// budget is genuinely exhausted -- by other register traffic, or by
-// several first-boots of fresh databases within the hour -- a transient,
-// operator-actionable state, not a misconfiguration the generic message
-// would send an operator hunting for. It therefore names the limit and
-// the remedy.
-func RegisterDemoUser(ctx context.Context, handler http.Handler, email, password string) (userID string, alreadyExists bool, err error) {
-	payload, err := json.Marshal(map[string]string{"email": email, "password": password})
-	if err != nil {
-		return "", false, fmt.Errorf("reference-app: marshal demo register body: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hostcore.AuthnAPIPath+"/register", bytes.NewReader(payload))
-	if err != nil {
-		return "", false, fmt.Errorf("reference-app: build demo register request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	resp := rec.Result()
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusCreated {
-		var envelope struct {
-			Code string `json:"code"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&envelope)
-		if resp.StatusCode == http.StatusConflict && envelope.Code == authn.ErrEmailAlreadyRegistered.Code {
-			return "", true, nil
-		}
-		if resp.StatusCode == http.StatusTooManyRequests && envelope.Code == authn.ErrRateLimited.Code {
-			return "", false, fmt.Errorf(
-				"reference-app: registering demo user %q was refused by authn's public register rate limit (HTTP 429 %s, 10 registrations per hour per client IP): the seed only registers genuinely new accounts, so the limit is exhausted by other register traffic -- retry after the sliding window closes, or investigate the register traffic",
-				email, authn.ErrRateLimited.Code)
-		}
-		return "", false, fmt.Errorf(
-			"reference-app: registering demo user %q answered HTTP %d with code %q, want 201 or the already-registered conflict",
-			email, resp.StatusCode, envelope.Code)
-	}
-
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
-		return "", false, fmt.Errorf("reference-app: decode demo register response: %w", err)
-	}
-	if created.ID == "" {
-		return "", false, fmt.Errorf("reference-app: demo register response carried no id")
-	}
-	return created.ID, false, nil
 }
 
 // grantDemoSeedAccount records the membership and role of one demo
@@ -363,31 +198,17 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 // is a separate surface (rbac's own authorization decision); org knows
 // nothing about it, and the sign-in store knows nothing beyond the row.
 //
-// It idempotently ensures the tenant's org root node exists (CreateRoot
-// on the first account seeded into a given tenant, Root thereafter, both
-// under the tenant context ctx already carries) and binds userID to it --
-// the reference app seeds no deeper organization tree, so the root is the
-// only node there is to place a demo account into. A seat that already
-// exists somewhere in the tenant (org.MemberService.Add's own
-// ErrMembershipExists answer -- one seat per person per tenant) is left
-// exactly where it is, never moved and never duplicated: this helper is
-// safe to call on every boot, which is what makes the demo seed's
-// idempotence extend to membership rows and not only to user rows.
+// It delegates to org's own idempotent EnsureRootSeat: the tenant's root
+// node is created on the first account seeded into it, and a seat that
+// already exists somewhere in the tenant -- one seat per person per tenant,
+// including one a flow later re-placed into a deeper node -- is left
+// exactly where it is, never moved and never duplicated. That is what makes
+// this helper safe to call on every boot, and it is why the reference app
+// seeds no deeper organization tree than a bare root: the root is the only
+// node there is to place a demo account into.
 func addDemoOrgMembership(ctx context.Context, orgModule *org.Module, userID string) error {
-	root, err := orgModule.Tree().Root(ctx)
-	if err != nil {
-		if !apperr.HasCode(err, org.ErrNodeNotFound.Code) {
-			return fmt.Errorf("look up tenant's org root: %w", err)
-		}
-		root, err = orgModule.Tree().CreateRoot(ctx, "Demo Tenant", "group")
-		if err != nil {
-			return fmt.Errorf("create tenant's org root: %w", err)
-		}
-	}
-	if _, err := orgModule.Members().Add(ctx, userID, root.ID); err != nil {
-		if !apperr.HasCode(err, org.ErrMembershipExists.Code) {
-			return fmt.Errorf("add member to org roster: %w", err)
-		}
+	if _, err := orgModule.Members().EnsureRootSeat(ctx, userID, "Demo Tenant", "group"); err != nil {
+		return fmt.Errorf("add member to org roster: %w", err)
 	}
 	return nil
 }

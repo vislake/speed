@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/authn/demoseed"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -52,6 +53,11 @@ const demoSeedPassword = "demo users seed passphrase"
 // (internal/app/demo_admin.go). It must satisfy go/authn's password policy for the same
 // registration-through-the-real-route reason demoSeedPassword documents.
 const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
+
+// demoSeedDomain is the email domain the demo accounts are declared on
+// (internal/app/demo_users.go's own demoSeedDomain, unexported), restated
+// here for the seeder this file drives directly.
+const demoSeedDomain = "example.com"
 
 // buildSeededUsersTestServer composes BuildServer's real output the way
 // buildTestServer does, with the demo-user seed switched on: the boot runs
@@ -372,20 +378,20 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 	}
 }
 
-// TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly pins that
-// RegisterDemoUser distinguishes authn's register
-// rate-limit answer from the other fatal answers honestly -- naming the
-// public per-IP register budget (limitRegisterByIP,
+// TestDemoUsers_Seeder_RateLimitAnswerNamedDistinctly pins that the seeding
+// helper the boot-time seed drives (authn/demoseed's Register) distinguishes
+// authn's register rate-limit answer from the other fatal answers honestly --
+// naming the public per-IP register budget (limitRegisterByIP,
 // go/authn/ratelimit.go) and its remedy -- rather than folding it into the
 // generic "answered HTTP %d with code %q" message that reads like a
 // misconfiguration. The budget here is one boot's own in-memory KVStore:
 // the test exhausts the register route's no-client-address bucket with 10
 // in-process register POSTs (the identical in-process, recorder-based
-// shape RegisterDemoUser itself uses, so every POST lands on the same
-// bucket the seed's own POSTs land on), then drives RegisterDemoUser
+// shape the seeder itself uses, so every POST lands on the same
+// bucket the seed's own POSTs land on), then drives the seeder
 // itself and asserts the refusal is named as the rate limit -- and that an
 // ordinary policy refusal (the control) never carries that name.
-func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T) {
+func TestDemoUsers_Seeder_RateLimitAnswerNamedDistinctly(t *testing.T) {
 	cfg := testConfig(t)
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
@@ -399,8 +405,21 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 
 	ctx := context.Background()
 
+	// The seeder is the one the seed itself builds
+	// (internal/app/demo_users.go's seedDemoUsers), over the app's declared
+	// demo domain. Its lookup answers "no such account" because both
+	// addresses below are genuinely absent from this fresh boot's users
+	// table, so every seeder.Register call reaches the register POST whose
+	// classification this test pins.
+	seeder, err := demoseed.NewSeeder(handler, func(context.Context, authn.UserSearchQuery) ([]authn.User, error) {
+		return nil, nil
+	}, demoSeedDomain)
+	if err != nil {
+		t.Fatalf("demoseed.NewSeeder: %v", err)
+	}
+
 	// postRegister posts one register payload in-process, exactly the
-	// shape RegisterDemoUser uses (no client address, so the POST debits
+	// shape the seeder uses (no client address, so the POST debits
 	// the same no-address bucket the seed's own POSTs debit), and returns
 	// the status.
 	postRegister := func(email, password string) int {
@@ -421,9 +440,9 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 	// Control first, while the budget still has room: a policy refusal (a
 	// password too short for authn's policy) must keep flowing through the
 	// generic classification -- never mistaken for the rate limit.
-	_, _, policyErr := app.RegisterDemoUser(ctx, handler, "policy-refused@example.com", "x")
+	_, _, policyErr := seeder.Register(ctx, "policy-refused@example.com", "x")
 	if policyErr == nil {
-		t.Fatal("RegisterDemoUser with a policy-refused password: want error, got nil")
+		t.Fatal("Register with a policy-refused password: want error, got nil")
 	}
 	if strings.Contains(policyErr.Error(), "rate limit") {
 		t.Fatalf("policy-refusal error names the rate limit: %v", policyErr)
@@ -438,11 +457,11 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 	}
 
 	// The 11th register POST (10 already debited) must answer 429, and
-	// RegisterDemoUser must name the answer as the public register rate
+	// the seeder must name the answer as the public register rate
 	// limit with its remedy, not as the generic fatal refusal.
-	_, _, rateErr := app.RegisterDemoUser(ctx, handler, "rate-limited@example.com", demoSeedPassword)
+	_, _, rateErr := seeder.Register(ctx, "rate-limited@example.com", demoSeedPassword)
 	if rateErr == nil {
-		t.Fatal("RegisterDemoUser with an exhausted register budget: want error, got nil")
+		t.Fatal("Register with an exhausted register budget: want error, got nil")
 	}
 	for _, want := range []string{"public register rate limit", authn.ErrRateLimited.Code, "retry after the sliding window"} {
 		if !strings.Contains(rateErr.Error(), want) {

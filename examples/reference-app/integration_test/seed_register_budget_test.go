@@ -28,7 +28,7 @@
 // seeded owner can still sign in on each boot. The seed asks
 // authn.Service.SearchUsers whether each account exists BEFORE POSTing
 // the register route
-// (registerDemoUserIfAbsent), so boots two and three register nothing at
+// (authn/demoseed's Register), so boots two and three register nothing at
 // all and never touch the public register budget, whatever deployment
 // mode and whatever KVStore state the budget lives in.
 //
@@ -104,7 +104,7 @@ func TestServer_DistributedMode_RepeatedSeededRestarts_DoNotTripTheRegisterBudge
 		// The seeded owner can sign in on every boot: boot one through the
 		// registrations it just made, boots two and three through the
 		// grants the seed re-asserted under the ids a previous boot
-		// assigned (registerDemoUserIfAbsent's already-exists path).
+		// assigned (demoseed's already-exists path).
 		token := demoAccessToken(t, httpClient, replica.baseURL, pkgcore.TenantID(acmeTenantID))
 		if token == "" {
 			t.Fatalf("boot %d: demo owner sign-in returned no access token", boot)
