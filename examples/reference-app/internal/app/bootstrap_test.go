@@ -29,10 +29,7 @@ import (
 
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
-	// configmodule is go/config, the runtime configuration module; config
-	// alone below is the loader, go/pkgcore/config, the package this file's
-	// subject (hostConfig) is a target of.
-	configmodule "github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
 )
@@ -256,12 +253,9 @@ func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveKey with a root key: %v", err)
 	}
-	derived, err := configmodule.DeriveBootstrapKeyMaterial(rootKey, keyPath)
-	if err != nil {
-		t.Fatalf("configmodule.DeriveBootstrapKeyMaterial: %v", err)
-	}
+	derived := mustDeriveKey(t, rootKey, keyPath)
 	if !bytes.Equal(key, derived) {
-		t.Fatalf("resolveKey with a root key = %x, want configmodule.DeriveBootstrapKeyMaterial's %x", key, derived)
+		t.Fatalf("resolveKey with a root key = %x, want the composed derivation's %x", key, derived)
 	}
 	if bytes.Equal(key, devDefault) {
 		t.Fatal("the root key tier did not move the key off the development default")
@@ -287,6 +281,26 @@ func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
 	} else if !strings.Contains(err.Error(), keyPath) || !strings.Contains(err.Error(), "APP_ROOT_KEY") {
 		t.Errorf("derivation refusal does not name both the key path and APP_ROOT_KEY: %v", err)
 	}
+}
+
+// mustDeriveKey builds the expectation TestResolveKey compares against by
+// composing the platform's two derivation contracts directly -- the key
+// path's purpose string (pkgcore.BootstrapKeyPurpose) and the material under
+// it (dbkit.DeriveKey) -- rather than reusing production's resolveKey, so a
+// purpose or path-spelling mistake inside resolveKey shows up as a value
+// mismatch here instead of the test echoing whatever production computed.
+func mustDeriveKey(t *testing.T, rootKey []byte, keyPath string) []byte {
+	t.Helper()
+
+	purpose, err := pkgcore.BootstrapKeyPurpose(keyPath)
+	if err != nil {
+		t.Fatalf("pkgcore.BootstrapKeyPurpose(%q): %v", keyPath, err)
+	}
+	derived, err := dbkit.DeriveKey(rootKey, purpose)
+	if err != nil {
+		t.Fatalf("dbkit.DeriveKey(rootKey, %q): %v", purpose, err)
+	}
+	return derived
 }
 
 // TestSplitTrustedProxies pins the list shape ServerConfig.TrustedProxies

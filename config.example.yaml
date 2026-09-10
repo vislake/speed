@@ -32,10 +32,11 @@
 # The first block below is the platform key surface: the process-start key
 # material the platform modules declare on the registry's bootstrap seat and
 # a host must feed. A real deployment injects each key from a secret store,
-# or derives it from one 32-byte root key with
-# config.DeriveBootstrapKeyMaterial(rootKey, keyPath);
-# docs/config-reference.md's bootstrap section states each key's contract,
-# purpose string and unset fallback.
+# or derives it from one 32-byte root key through the platform composition:
+# pkgcore.BootstrapKeyPurpose fixes one purpose string per declared key
+# path, and dbkit.DeriveKey turns the root key plus that purpose into the
+# key's material. docs/config-reference.md's bootstrap section states each
+# key's contract, purpose string and unset fallback.
 #
 # The second block demonstrates a host's own keys going through this same
 # file: a host's fields, value types and nesting, not part of the platform

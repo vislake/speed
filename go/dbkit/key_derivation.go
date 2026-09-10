@@ -96,12 +96,13 @@ const derivedKeySize = 32
 // mixes the two freely: derive everything from one root secret by
 // default, override any single purpose's key independently when that
 // purpose's own rotation cadence demands it. For the keys modules declare
-// on the registry's bootstrap seat, go/config's DeriveBootstrapKeyMaterial
-// is the platform's derivation entry: it derives each declared key from a
-// root key under a purpose string embedding the declared key path, states
-// the stability contract that makes renaming a declared path a rotation,
-// and leaves the precedence between a derived material and an explicitly
-// configured one to the host.
+// on the registry's bootstrap seat, the purpose convention lives at the
+// seat itself (pkgcore.BootstrapKeyPurpose maps a declared key path to its
+// stable, versioned purpose string, and states the stability contract that
+// makes renaming a declared path a rotation), and the material is derived
+// by this primitive: DeriveKey(rootKey, purpose). The precedence between a
+// derived material and an explicitly configured one is the host's policy,
+// never this primitive's.
 func DeriveKey(rootKey []byte, purpose string) ([]byte, error) {
 	if len(rootKey) != rootKeySize {
 		return nil, fmt.Errorf("dbkit: derive key: root key: %w: got %d bytes", ErrInvalidKeySize, len(rootKey))

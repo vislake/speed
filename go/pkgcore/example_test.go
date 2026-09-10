@@ -327,6 +327,28 @@ func ExampleBootstrapRegistrar() {
 	// duplicate: true
 }
 
+// ExampleBootstrapKeyPurpose shows the derivation convention of the bootstrap
+// seat: a declared key path maps to one stable, versioned purpose string,
+// which a host composes with dbkit.DeriveKey -- the material at keyPath is
+// dbkit.DeriveKey(rootKey, purpose) -- so one root secret can serve every
+// declared key. Because the purpose embeds the declared path verbatim and
+// the derivation is deterministic, renaming a declared key path is a
+// rotation of that key's material, never a plain edit.
+func ExampleBootstrapKeyPurpose() {
+	purpose, err := pkgcore.BootstrapKeyPurpose("config.master_key")
+	fmt.Println(purpose, err)
+
+	// A path that is empty or carries an empty segment (a doubled dot here)
+	// is refused at the call site, before anything is derived under a
+	// purpose nobody meant to freeze.
+	_, err = pkgcore.BootstrapKeyPurpose("config..master_key")
+	fmt.Println(errors.Is(err, pkgcore.ErrInvalidBootstrapKeyPath))
+
+	// Output:
+	// speed.config.master_key.v1 <nil>
+	// true
+}
+
 // ExampleKernel_Bootstrap shows the host side of module wiring: hand the
 // kernel every module, get one Registry back with everything they contributed.
 func ExampleKernel_Bootstrap() {

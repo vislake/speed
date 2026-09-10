@@ -29,7 +29,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
-	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -213,11 +213,11 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 
 // legacyParseHexKeyEnv and legacyResolveKey mirror the deleted direct-read
 // helpers' validation and precedence exactly, so the oracle's refusals land
-// where production's do. The oracle derives through the platform rule
-// (config.DeriveBootstrapKeyMaterial over the declared key path), spelled
-// independently of production's own call sites, so a path literal the two
-// sides disagree on shows up as an equivalence failure rather than passing
-// on both sides of a shared spelling.
+// where production's do. The oracle derives through the platform composition
+// (pkgcore.BootstrapKeyPurpose over the declared key path, then
+// dbkit.DeriveKey), spelled independently of production's own call sites, so
+// a path literal the two sides disagree on shows up as an equivalence failure
+// rather than passing on both sides of a shared spelling.
 func legacyParseHexKeyEnv(envName, encoded string) ([]byte, error) {
 	if len(encoded) != 64 {
 		return nil, fmt.Errorf("reference-app: %s must hold 64 hex characters (a 32-byte key), got %d", envName, len(encoded))
@@ -232,7 +232,11 @@ func legacyParseHexKeyEnv(envName, encoded string) ([]byte, error) {
 func legacyResolveKey(rootKey []byte, keyPath, envName string, devDefault []byte) ([]byte, error) {
 	key := devDefault
 	if rootKey != nil {
-		derived, err := config.DeriveBootstrapKeyMaterial(rootKey, keyPath)
+		purpose, err := pkgcore.BootstrapKeyPurpose(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("reference-app: derive %s from APP_ROOT_KEY: %w", keyPath, err)
+		}
+		derived, err := dbkit.DeriveKey(rootKey, purpose)
 		if err != nil {
 			return nil, fmt.Errorf("reference-app: derive %s from APP_ROOT_KEY: %w", keyPath, err)
 		}

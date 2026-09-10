@@ -30,14 +30,6 @@
 //     never emitted on a public endpoint, in a log line or in a change
 //     event: event payloads carry the "[redacted]" marker instead.
 //
-//   - The derivation entry for declared bootstrap key material lives here
-//     too (derivation.go): BootstrapKeyPurpose gives one declared key
-//     path its versioned purpose string and DeriveBootstrapKeyMaterial
-//     derives that key's 32-byte material from a 32-byte root key, so a
-//     host can manage one root secret instead of one secret per key.
-//     Renaming a declared key path is a rotation of that key's material,
-//     never a plain edit -- the purpose embeds the path verbatim.
-//
 //   - Every successful Set publishes a config.item.changed event on the
 //     shared bus (declared through pkgcore's event registrar). Config
 //     itself never writes audit rows: a host that composes the optional

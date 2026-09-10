@@ -1,10 +1,8 @@
 package config_test
 
 import (
-	"bytes"
 	"context"
 	"embed"
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -175,24 +173,4 @@ func ExampleService_Describe() {
 	// brand.custom_theme: type=bool public=false has_default=true
 	// brand.site_name: type=string public=true has_default=true
 	// true
-}
-
-// ExampleDeriveBootstrapKeyMaterial derives the material of a declared
-// bootstrap key path from one root key. The root key here is a recognizable
-// constant so the output is stable; a real deployment feeds a high-entropy
-// secret. Deriving through this function -- rather than calling
-// dbkit.DeriveKey with a hand-spelled purpose string -- is what keeps the
-// call site under BootstrapKeyPurpose's stability contract: renaming the
-// key path is a rotation of this material, never a plain edit.
-func ExampleDeriveBootstrapKeyMaterial() {
-	rootKey := bytes.Repeat([]byte{0x42}, 32)
-
-	material, err := config.DeriveBootstrapKeyMaterial(rootKey, "config.master_key")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(hex.EncodeToString(material))
-
-	// Output:
-	// 8cac2cecb13cf0ab892b1c3e491fc01b739d7cea056f7a886c981c6f5636fbd3
 }

@@ -373,10 +373,11 @@ func clearRootKeyOverrides(t *testing.T) {
 // TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
 // -- no individual key env var set -- derives every one of the six key
 // materials the RootKey bootstrap field's own doc comment lists, and that
-// ConfigFromEnv's derivation matches config.DeriveBootstrapKeyMaterial over
-// the declared key path: not merely "some non-default bytes landed in
-// cfg", but the exact key a caller who knew the root and the declared path
-// could reproduce independently through the platform API.
+// ConfigFromEnv's derivation matches the platform composition
+// (pkgcore.BootstrapKeyPurpose over the declared key path, then
+// dbkit.DeriveKey over the root): not merely "some non-default bytes landed
+// in cfg", but the exact key a caller who knew the root and the declared
+// path could reproduce independently through the platform API.
 func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
@@ -404,12 +405,9 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 		{"AuthnPIICipherKey", cfg.AuthnPIICipherKey, "authn.pii_cipher_key"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			want, deriveErr := config.DeriveBootstrapKeyMaterial(rootKey[:], tt.keyPath)
-			if deriveErr != nil {
-				t.Fatalf("config.DeriveBootstrapKeyMaterial(rootKey, %q): %v", tt.keyPath, deriveErr)
-			}
+			want := deriveDeclaredKeyMaterial(t, rootKey[:], tt.keyPath)
 			if !bytes.Equal(tt.got, want) {
-				t.Fatalf("cfg.%s = %x, want config.DeriveBootstrapKeyMaterial(rootKey, %q) = %x", tt.name, tt.got, tt.keyPath, want)
+				t.Fatalf("cfg.%s = %x, want the composed derivation over %q = %x", tt.name, tt.got, tt.keyPath, want)
 			}
 		})
 	}
@@ -462,14 +460,32 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 			cfg.ConfigKey, "APP_CONFIG_KEY", explicitConfigKey[:])
 	}
 
-	wantOrgIndexKey, err := config.DeriveBootstrapKeyMaterial(rootKey[:], "org.invitation_email_index_key")
-	if err != nil {
-		t.Fatalf("config.DeriveBootstrapKeyMaterial: %v", err)
-	}
+	wantOrgIndexKey := deriveDeclaredKeyMaterial(t, rootKey[:], "org.invitation_email_index_key")
 	if !bytes.Equal(cfg.OrgIndexKey, wantOrgIndexKey) {
 		t.Fatalf("cfg.OrgIndexKey = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since %s was never set",
 			cfg.OrgIndexKey, wantOrgIndexKey, "APP_ORG_INDEX_KEY")
 	}
+}
+
+// deriveDeclaredKeyMaterial builds an expectation by composing the two
+// platform contracts a host derives through -- the declared key path's
+// purpose string (pkgcore.BootstrapKeyPurpose), then the 32-byte material
+// under it (dbkit.DeriveKey) -- so the assertions above and below compare
+// against the exact bytes a caller who knew the root and the declared path
+// could reproduce independently, never against bytes copied from the app's
+// own resolution.
+func deriveDeclaredKeyMaterial(t *testing.T, rootKey []byte, keyPath string) []byte {
+	t.Helper()
+
+	purpose, err := pkgcore.BootstrapKeyPurpose(keyPath)
+	if err != nil {
+		t.Fatalf("pkgcore.BootstrapKeyPurpose(%q): %v", keyPath, err)
+	}
+	derived, err := dbkit.DeriveKey(rootKey, purpose)
+	if err != nil {
+		t.Fatalf("dbkit.DeriveKey(rootKey, %q): %v", purpose, err)
+	}
+	return derived
 }
 
 // TestDeclaredBootstrapKeys_ReconcileWithResolvedKeyMaterial reconciles the
@@ -517,12 +533,9 @@ func TestDeclaredBootstrapKeys_ReconcileWithResolvedKeyMaterial(t *testing.T) {
 		if !mapped {
 			t.Fatalf("a module declares the hexkey bootstrap key %q and this app resolves no key material for it", key.Key)
 		}
-		want, deriveErr := config.DeriveBootstrapKeyMaterial(rootKey[:], key.Key)
-		if deriveErr != nil {
-			t.Fatalf("config.DeriveBootstrapKeyMaterial(rootKey, %q): %v", key.Key, deriveErr)
-		}
+		want := deriveDeclaredKeyMaterial(t, rootKey[:], key.Key)
 		if !bytes.Equal(got, want) {
-			t.Fatalf("resolved material for the declared key %q = %x, want config.DeriveBootstrapKeyMaterial(rootKey, %q) = %x: the derivation call site must use the key path the module declared",
+			t.Fatalf("resolved material for the declared key %q = %x, want the composed derivation over %q = %x: the derivation call site must use the key path the module declared",
 				key.Key, got, key.Key, want)
 		}
 	}
@@ -611,7 +624,8 @@ func (noAddressesResolver) Resolve(context.Context, string) (notification.UserAd
 // TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose is
 // the end-to-end proof: APP_ROOT_KEY set alone (every
 // individual key env var cleared), ConfigFromEnv resolves all six key
-// materials through config.DeriveBootstrapKeyMaterial, BuildServer boots a
+// materials through the composed platform derivation
+// (pkgcore.BootstrapKeyPurpose + dbkit.DeriveKey), BuildServer boots a
 // real composed server from the result, and every one of the six derived keys is
 // exercised through the real mechanism it protects -- never merely "no
 // error from NewCipher/NewBlindIndexer".
