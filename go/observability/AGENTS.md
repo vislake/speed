@@ -26,6 +26,7 @@ build their instrumentation for them.
 | Concern | Where |
 |---|---|
 | `Init` (TracerProvider/MeterProvider wiring, global install, shutdown; exporters chosen by whether `WithOTLPEndpoint` was supplied — no deployment mode involved) + `MetricsHandler` (the local exporters' `/metrics` handler) + `RegisterOTLPExporters` / `RegisterLocalMetricsReader` (the two opt-in registration seams the exporter subpackages below call) | `init.go` |
+| `HealthzPath` / `MetricsPath`, `HealthzHandler` (always 200 `"ok"`, no state consulted), `MountLiveness(mux)` (registers the two paths as GET patterns, HEAD served by ServeMux, every other method 405; the metrics route re-reads `MetricsHandler()` per request so a mount never depends on `Init` having run yet) | `liveness.go` |
 | `FromContext` / `WithLogger` (the context-aware `*slog.Logger`) | `logger.go` |
 | Attribute redaction (key-based + value-shaped secret masking on the log channel; the span channel is kept free of secret-shaped and id-bearing material by construction — see the redaction and Middleware sections below) | `redact.go` |
 | `Middleware` (per-request span + request-count/duration metrics) + `AnnotateTenant` + `RegisterMountedRoutes` (the host route-table registration that seeds `Middleware`'s route limiter with its mount prefixes) | `middleware.go` |

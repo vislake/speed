@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"time"
@@ -945,4 +946,34 @@ func ExampleEventPayloadString() {
 	// u-42 true
 	// u-42 true
 	// false
+}
+
+// ExampleMountRoutes mounts two module routes the one correct way: each
+// Handler answers at its exact Path and at everything nested below it,
+// which is the contract MountedRoute's own doc comment states. The
+// alternative -- registering only the subtree pattern -- leaves the exact
+// path to ServeMux's redirect-on-missing-slash behavior, which does not
+// preserve a POST's method or body.
+func ExampleMountRoutes() {
+	mux := http.NewServeMux()
+	mount := func(mark string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, mark)
+		})
+	}
+	pkgcore.MountRoutes(mux,
+		pkgcore.MountedRoute{Path: "/api/v1/notes", Handler: mount("notes")},
+		pkgcore.MountedRoute{Path: "/api/v1/authn", Handler: mount("authn")},
+	)
+
+	for _, path := range []string{"/api/v1/notes", "/api/v1/notes/42", "/api/v1/authn/login"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		fmt.Println(path, rec.Code, rec.Body.String())
+	}
+
+	// Output:
+	// /api/v1/notes 200 notes
+	// /api/v1/notes/42 200 notes
+	// /api/v1/authn/login 200 authn
 }

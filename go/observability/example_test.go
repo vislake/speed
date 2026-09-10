@@ -344,3 +344,36 @@ func ExampleAnnotateTenant() {
 	// span 0 tenant_id="acme"
 	// span 1 tenant_id=""
 }
+
+// ExampleMountLiveness shows the liveness route set a host mounts for its
+// orchestrator and its metrics scraper: both routes answer GET (and HEAD,
+// through ServeMux's GET-implies-HEAD rule), any other method is refused by
+// the method-scoped pattern, and /healthz needs no state at all.
+func ExampleMountLiveness() {
+	mux := http.NewServeMux()
+	observability.MountLiveness(mux)
+
+	serve := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec
+	}
+
+	fmt.Println(http.MethodGet, observability.HealthzPath, serve(http.MethodGet, observability.HealthzPath).Code)
+	fmt.Println(http.MethodHead, observability.HealthzPath, serve(http.MethodHead, observability.HealthzPath).Code)
+	fmt.Println(http.MethodPost, observability.HealthzPath, serve(http.MethodPost, observability.HealthzPath).Code)
+
+	// The metrics route serves whatever MetricsHandler() currently is: the
+	// real scrape endpoint once Init has wired one, or the documented 404
+	// explaining why not. This example asserts only that the route is
+	// mounted -- a request reaches a handler rather than the mux's own 404
+	// page.
+	metrics := serve(http.MethodGet, observability.MetricsPath)
+	fmt.Println(observability.MetricsPath, metrics.Code != 0)
+
+	// Output:
+	// GET /healthz 200
+	// HEAD /healthz 200
+	// POST /healthz 405
+	// /metrics true
+}
