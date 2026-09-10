@@ -212,6 +212,29 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 	}
 }
 
+// TestModule_Register_DeclaresTheExpirySweepSchedule pins the module's
+// periodic declaration: Register puts exactly the expiry-sweep schedule on
+// the registry's Schedules seat, alongside the handler it registered
+// unconditionally -- declaring means scheduled, so a host running a
+// jobs.Scheduler over the finished registry sweeps every tenant at the
+// module's own window cadence.
+func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
+	m := NewModule(newTestDB(t), WithQueue(&recordingQueue{}))
+	reg := pkgcore.NewRegistry(
+		pkgcore.NewMemoryEventBus(),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewConsoleMailer(),
+	)
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	decls := reg.Schedules.Declarations()
+	if len(decls) != 1 || decls[0] != expirySweepSchedule {
+		t.Errorf("Register declared %+v, want exactly the expiry-sweep schedule %+v", decls, expirySweepSchedule)
+	}
+}
+
 // TestModule_WithTenantConfigReader proves the Option wires through to the
 // Service the module builds.
 func TestModule_WithTenantConfigReader(t *testing.T) {

@@ -355,3 +355,40 @@ func TestModule_EnqueueExpirySweep_LaterWindowSweepRefundsAnOverageReservation(t
 		t.Errorf("share's RevokedAt = %v after the sweeps, want nil -- a stale reservation alone must not revoke a live share; its legal recipient keeps the share", got.RevokedAt)
 	}
 }
+
+// TestExpirySweepKeyMatchesTheSchedulerDerivation pins the schedule
+// migration's key identity: the same (task type, tenant, window) must
+// resolve one idempotency key through the module's own schedule point and
+// through the jobs.Scheduler's derivation over the module's declaration,
+// or a scheduler tick and a manual enqueue landing in one window would
+// run the sweep twice. The key literal below is the pinned string.
+func TestExpirySweepKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
+	windowStart := now.Truncate(expirySweepWindowSize)
+
+	// Path one: the module's own schedule point, through the recording
+	// queue.
+	fq := &recordingQueue{}
+	m := NewModule(newTestDB(t), WithQueue(fq))
+	m.svc.now = func() time.Time { return now }
+	if err := m.EnqueueExpirySweep(testCtx()); err != nil {
+		t.Fatalf("EnqueueExpirySweep: %v", err)
+	}
+	manual := fq.lastTask.IdempotencyKey
+	if want := "sharing.sweep:tenant-a:2026-09-07T10:00:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	// Path two: the scheduler's own derivation over the declaration, for
+	// the same (tenant, window).
+	decl := expirySweepSchedule
+	if decl.Type != taskTypeExpirySweep || decl.Every != expirySweepWindowSize {
+		t.Errorf("declaration = %+v, want the site's own type %q and window %s", decl, taskTypeExpirySweep, expirySweepWindowSize)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePerTenant {
+		t.Errorf("declaration scope = %q, want %q", decl.Scope, pkgcore.PeriodicScopePerTenant)
+	}
+	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, testTenant, windowStart); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
+	}
+}
