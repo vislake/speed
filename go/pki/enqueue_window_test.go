@@ -50,7 +50,8 @@ var (
 // TestEnqueueWindowDefaults_SatisfyTheWindowToIntervalRatio pins the
 // sizing contract both window constants document: the window must be
 // significantly larger than the reference host's scheduler interval (one
-// minute, examples/reference-app's defaultPeriodicTaskSchedulerInterval),
+// minute, jobs.DefaultScheduleInterval, the jobs.Scheduler default the
+// reference app runs its schedules at),
 // or every tick would land in a fresh window and the dedup would be void.
 // The 60:1 ratio is asserted as a relationship between the two constants
 // so a change to either surfaces here, at the contract, rather than
