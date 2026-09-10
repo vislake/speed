@@ -312,3 +312,110 @@ func ExampleWire() {
 // ever runs jobs.StandaloneQueue (the standalone deployment mode) never
 // pulls in asynq or go-redis at all; see that subpackage's own
 // ExampleNewQueue for the equivalent shape.
+
+// exampleSweepRuns is a jobs.Handler that reports the tenant each sweep
+// runs for, so ExampleScheduler can observe a real end-to-end tick.
+type exampleSweepRuns struct{ ran chan string }
+
+func (*exampleSweepRuns) Type() string { return "storage.expiry_sweep" }
+
+func (h *exampleSweepRuns) Handle(ctx context.Context, _ *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
+	tenant, _ := pkgcore.TenantFromContext(ctx)
+	select {
+	case h.ran <- string(tenant):
+	default:
+	}
+	return jobs.Result{}, nil
+}
+
+// exampleTenantUniverse is the structural TenantLister seam: any value with
+// a ListTenants method of this shape satisfies it, so a host implementation
+// already built for another module needs no adapter.
+type exampleTenantUniverse struct{ tenants []pkgcore.TenantID }
+
+func (u exampleTenantUniverse) ListTenants(context.Context) ([]pkgcore.TenantID, error) {
+	return u.tenants, nil
+}
+
+// ExampleScheduler shows the portable scheduler: it reads the periodic
+// tasks a module declared on a pkgcore Registry's Schedules seat, expands
+// the per-tenant ones through the host's tenant lister, and enqueues each
+// under a window-scoped idempotency key -- so same-window ticks (however
+// many replicas produce them) collapse onto one job, and the first tick of
+// the next window runs the task again.
+func ExampleScheduler() {
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:jobs_example_scheduler?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	// The module side: declare the schedule where the task's handler is
+	// registered. Declaring means scheduled -- a host that starts a
+	// scheduler over the seat runs exactly this declaration.
+	sweeps := &exampleSweepRuns{ran: make(chan string, 1)}
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := reg.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
+		fmt.Println("declare handler:", err)
+		return
+	}
+	err = reg.Schedules.Add(pkgcore.PeriodicTask{
+		Type:      sweeps.Type(),
+		Every:     time.Hour,
+		Scope:     pkgcore.PeriodicScopePerTenant,
+		KeyPrefix: "storage.sweep:",
+	})
+	if err != nil {
+		fmt.Println("declare schedule:", err)
+		return
+	}
+
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	if err := jobs.Wire(ctx, queue, reg.Jobs); err != nil {
+		fmt.Println("wire:", err)
+		return
+	}
+	if err := queue.Start(ctx); err != nil {
+		fmt.Println("start:", err)
+		return
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = queue.Close(shutdownCtx)
+	}()
+
+	// The host side: one scheduler over the declarations, the tenant
+	// universe it expands per-tenant tasks through, and the tick cadence.
+	scheduler := jobs.NewScheduler(queue,
+		jobs.WithSchedules(reg.Schedules),
+		jobs.WithTenantLister(exampleTenantUniverse{tenants: []pkgcore.TenantID{"acme"}}),
+		jobs.WithInterval(5*time.Millisecond),
+	)
+	if err := scheduler.Start(ctx); err != nil {
+		fmt.Println("start scheduler:", err)
+		return
+	}
+	defer scheduler.Stop()
+
+	select {
+	case tenant := <-sweeps.ran:
+		fmt.Println("swept:", tenant)
+	case <-time.After(2 * time.Second):
+		fmt.Println("swept: nothing within the deadline")
+	}
+
+	// The key one window's enqueue landed under is deterministic: the
+	// declaration's prefix, the tenant segment and the window start
+	// (truncated on the absolute clock).
+	fmt.Println(jobs.ScheduleIdempotencyKey("storage.sweep:", "acme",
+		jobs.ScheduleWindowStart(time.Date(2026, 3, 4, 5, 37, 0, 0, time.UTC), time.Hour)))
+
+	// Output:
+	// swept: acme
+	// storage.sweep:acme:2026-03-04T05:00:00Z
+}

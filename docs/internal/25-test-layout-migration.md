@@ -308,6 +308,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 | go/jobs/retryable_start_test.go | jobs | 白 | 可重试启动(建表/丢表, jobsTable) | WB |
 | go/jobs/single_writer_test.go | jobs | 白 | 单写者注册(ensureJobsSchema) | WB |
 | go/jobs/writer_gate_liveness_test.go | jobs | 白 | 写者门活性(queueWritersTable、findByID) | WB |
+| go/jobs/scheduler_test.go | jobs | 白 | 周期调度器(声明遍历、租户展开、窗口截断、键派生、生命周期与选项校验) | WB |
 | go/jobs/standalone_queue_cancel_test.go | jobs | 黑(包内) | standalone_queue_test 取消竞态族(2a 行数拆分片) | S |
 | go/jobs/standalone_queue_bench_test.go | jobs | 白 | StandaloneQueue 基准 | BENCH |
 | go/jobs/queue/asynq/job_outcome_metrics_recording_test.go | asynq | 白 | handleErrorAttempt/wrapFailedAttempt 双源结果度量 | WB |
