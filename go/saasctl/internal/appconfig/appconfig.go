@@ -3,7 +3,7 @@
 // APP_ORG_INDEX_KEY, the three authn/pki key variables (APP_AUTHN_BLIND_INDEX_KEY,
 // APP_AUTHN_PII_CIPHER_KEY, APP_PKI_LOCAL_KEY_CIPHER_KEY), APP_REDIS_ADDR,
 // APP_OTLP_ENDPOINT, the APP_S3_* group, the APP_SMTP_* group and
-// APP_SMS_GATEWAY_URL -- the full twenty-one-variable surface -- resolved
+// APP_SMS_GATEWAY_URL -- the full twenty-two-variable surface -- resolved
 // exactly as the generated project's own cmd/server/config.go resolves
 // them.
 //
@@ -14,7 +14,7 @@
 // would refuse to boot, on the identical incomplete infrastructure group.
 // This package is therefore a deliberate, test-pinned twin of the embedded
 // template file internal/template/project/cmd/server/config.go -- the same
-// twenty-one variable names, the same defaults, the same completeness rules
+// twenty-two variable names, the same defaults, the same completeness rules
 // (an S3 group or an SMTP pair that is only partially set is refused, never
 // silently dropped to the Preset default), the same development key bytes
 // and the same malformed-value error texts, with the template's
@@ -61,7 +61,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The twenty-one environment variable names of a generated project's
+// The twenty-two environment variable names of a generated project's
 // bootstrap surface, exported because the command groups that render
 // provenance and the tests that pin template parity all name the same
 // variables.
@@ -119,8 +119,9 @@ const (
 	// S3EndpointEnv, S3BucketEnv, S3AccessKeyEnv and S3SecretKeyEnv
 	// together compose a real S3-compatible ObjectStore for the
 	// "objectstore" seam. All four are required together; a partially set
-	// group is refused, exactly as the template refuses it. S3RegionEnv
-	// and S3UseSSLEnv refine the same composition and are optional.
+	// group is refused, exactly as the template refuses it. S3RegionEnv,
+	// S3UseSSLEnv and S3BucketLookupEnv refine the same composition and
+	// are optional.
 	S3EndpointEnv = "APP_S3_ENDPOINT"
 	S3BucketEnv   = "APP_S3_BUCKET"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
@@ -133,6 +134,13 @@ const (
 	S3SecretKeyEnv = "APP_S3_SECRET_KEY"
 	S3RegionEnv    = "APP_S3_REGION"
 	S3UseSSLEnv    = "APP_S3_USE_SSL"
+
+	// S3BucketLookupEnv names the addressing style the S3 composition
+	// reaches its bucket with, one of "auto" (the default: derived from
+	// the endpoint), "path" (host/bucket/key) or "virtual_host"
+	// (bucket.host/key); any other value is refused, naming the allowed
+	// set. S3BucketLookup holds the parsed spelling.
+	S3BucketLookupEnv = "APP_S3_BUCKET_LOOKUP"
 
 	// SMTPHostEnv and SMTPPortEnv together compose a real SMTP Mailer for
 	// the "mailer" seam; both are required together, for the same
@@ -265,17 +273,20 @@ type Config struct {
 	// see OTLPEndpointEnv's own doc comment above.
 	OTLPEndpoint string
 
-	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
-	// compose a real S3-compatible ObjectStore for the "objectstore" seam
-	// when S3Endpoint is non-empty -- see S3EndpointEnv's own doc comment
-	// above for the completeness rule. Empty S3Endpoint (the default) leaves
-	// "objectstore" on the Preset's local-directory default.
-	S3Endpoint  string
-	S3Bucket    string
-	S3AccessKey string
-	S3SecretKey string
-	S3Region    string
-	S3UseSSL    bool
+	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL
+	// and S3BucketLookup compose a real S3-compatible ObjectStore for the
+	// "objectstore" seam when S3Endpoint is non-empty -- see
+	// S3EndpointEnv's own doc comment above for the completeness rule.
+	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
+	// local-directory default. S3BucketLookup carries the parsed spelling
+	// ("auto" when unset), never the raw text.
+	S3Endpoint     string
+	S3Bucket       string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3Region       string
+	S3UseSSL       bool
+	S3BucketLookup string
 
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
 	// Mailer for the "mailer" seam when SMTPHost is non-empty -- see
@@ -316,6 +327,7 @@ type Config struct {
 	S3SecretKeyFromEnv          bool
 	S3RegionFromEnv             bool
 	S3UseSSLFromEnv             bool
+	S3BucketLookupFromEnv       bool
 	SMTPHostFromEnv             bool
 	SMTPPortFromEnv             bool
 	SMTPUsernameFromEnv         bool
@@ -329,7 +341,7 @@ type Config struct {
 // the SQLite default, which is the fixed defaultSQLitePath literal -- the
 // one default the generated app freezes rather than derives, so deriving
 // it from the module path here would fork on a module rename (see
-// defaultSQLitePath's own doc comment) -- reading the twenty-one
+// defaultSQLitePath's own doc comment) -- reading the twenty-two
 // environment variables through lookup. The parse order, defaults,
 // completeness rules and failure texts mirror the generated configFromEnv
 // exactly, including its error contract: a mode that does not parse is
@@ -465,6 +477,22 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	}
 	cfg.S3UseSSL = s3UseSSL
 	cfg.S3UseSSLFromEnv = s3UseSSLRaw != ""
+
+	s3BucketLookupRaw, _ := lookup(S3BucketLookupEnv)
+	s3BucketLookup := "auto"
+	switch strings.ToLower(strings.TrimSpace(s3BucketLookupRaw)) {
+	case "path":
+		s3BucketLookup = "path"
+	case "virtual_host":
+		s3BucketLookup = "virtual_host"
+	case "", "auto":
+		// The default: the store derives the addressing style from the
+		// endpoint.
+	default:
+		return Config{}, fmt.Errorf(`%s: %s must be one of "auto", "path", "virtual_host", got %q`, appName, S3BucketLookupEnv, s3BucketLookupRaw)
+	}
+	cfg.S3BucketLookup = s3BucketLookup
+	cfg.S3BucketLookupFromEnv = s3BucketLookupRaw != ""
 
 	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
 	// the "mailer" seam on its Preset default, and a partial APP_SMTP_* set

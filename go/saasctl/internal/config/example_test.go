@@ -92,6 +92,7 @@ go 1.25.0
 	// s3 secret key    [redacted]   unset or empty (objectstore stays on the local-directory default)
 	// s3 region                     unset or empty (optional S3 refinement; used only when the group above is set)
 	// s3 use ssl       false        unset or empty (default false)
+	// s3 bucket lookup auto         unset or empty (default auto)
 	// smtp host                     unset or empty (mailer stays on the console default)
 	// smtp port                     unset or empty (mailer stays on the console default)
 	// smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)

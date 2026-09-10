@@ -274,19 +274,20 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 // the infrastructure counterpart of TestLoadReadsSetVariables above.
 func TestLoadReadsInfrastructureVariables(t *testing.T) {
 	cfg, err := Load("cli-app", envFromMap(map[string]string{
-		RedisAddrEnv:     "redis.internal:6379",
-		OTLPEndpointEnv:  "collector.internal:4317",
-		S3EndpointEnv:    "s3.internal:9000",
-		S3BucketEnv:      "smiles",
-		S3AccessKeyEnv:   "AKIAEXAMPLE",
-		S3SecretKeyEnv:   "s3cr3t",
-		S3RegionEnv:      "us-east-1",
-		S3UseSSLEnv:      "true",
-		SMTPHostEnv:      "smtp.internal",
-		SMTPPortEnv:      "587",
-		SMTPUsernameEnv:  "mailer",
-		SMTPPasswordEnv:  "hunter2",
-		SMSGatewayURLEnv: "http://sms.internal/send",
+		RedisAddrEnv:      "redis.internal:6379",
+		OTLPEndpointEnv:   "collector.internal:4317",
+		S3EndpointEnv:     "s3.internal:9000",
+		S3BucketEnv:       "smiles",
+		S3AccessKeyEnv:    "AKIAEXAMPLE",
+		S3SecretKeyEnv:    "s3cr3t",
+		S3RegionEnv:       "us-east-1",
+		S3UseSSLEnv:       "true",
+		S3BucketLookupEnv: "virtual_host",
+		SMTPHostEnv:       "smtp.internal",
+		SMTPPortEnv:       "587",
+		SMTPUsernameEnv:   "mailer",
+		SMTPPasswordEnv:   "hunter2",
+		SMSGatewayURLEnv:  "http://sms.internal/send",
 	}))
 	if err != nil {
 		t.Fatalf("Load with a complete infrastructure environment failed: %v", err)
@@ -298,11 +299,12 @@ func TestLoadReadsInfrastructureVariables(t *testing.T) {
 		t.Errorf("OTLPEndpoint = %q (fromEnv %v), want the set value recorded as from-env", cfg.OTLPEndpoint, cfg.OTLPEndpointFromEnv)
 	}
 	if cfg.S3Endpoint != "s3.internal:9000" || cfg.S3Bucket != "smiles" ||
-		cfg.S3AccessKey != "AKIAEXAMPLE" || cfg.S3SecretKey != "s3cr3t" || cfg.S3Region != "us-east-1" || !cfg.S3UseSSL {
+		cfg.S3AccessKey != "AKIAEXAMPLE" || cfg.S3SecretKey != "s3cr3t" || cfg.S3Region != "us-east-1" || !cfg.S3UseSSL ||
+		cfg.S3BucketLookup != "virtual_host" {
 		t.Errorf("S3 fields did not resolve to the set values: %+v", cfg)
 	}
 	if !cfg.S3EndpointFromEnv || !cfg.S3BucketFromEnv || !cfg.S3AccessKeyFromEnv ||
-		!cfg.S3SecretKeyFromEnv || !cfg.S3RegionFromEnv || !cfg.S3UseSSLFromEnv {
+		!cfg.S3SecretKeyFromEnv || !cfg.S3RegionFromEnv || !cfg.S3UseSSLFromEnv || !cfg.S3BucketLookupFromEnv {
 		t.Error("a complete S3 group must record every field as from-env")
 	}
 	if cfg.SMTPHost != "smtp.internal" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer" || cfg.SMTPPassword != "hunter2" {
@@ -317,10 +319,11 @@ func TestLoadReadsInfrastructureVariables(t *testing.T) {
 }
 
 // TestLoadInfrastructureVariablesDefaultToUnwired: with an empty
-// environment, every infrastructure field resolves to its zero value --
-// empty strings, S3UseSSL false, SMTPPort 0 -- leaving every seam on its
-// Preset default, and no field is recorded as from-env: the same "empty
-// counts as unset" contract the original five variables already carry.
+// environment, every infrastructure field resolves to its documented
+// default -- empty strings, S3UseSSL false, S3BucketLookup "auto",
+// SMTPPort 0 -- leaving every seam on its Preset default, and no field is
+// recorded as from-env: the same "empty counts as unset" contract the
+// original five variables already carry.
 // TestLoadReadsInfrastructureVariables above is what proves the wired
 // reading of the same fields.
 func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
@@ -329,12 +332,12 @@ func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
 		t.Fatalf("Load with an empty environment failed: %v", err)
 	}
 	if cfg.RedisAddr != "" || cfg.OTLPEndpoint != "" || cfg.S3Endpoint != "" || cfg.S3Bucket != "" || cfg.S3AccessKey != "" ||
-		cfg.S3SecretKey != "" || cfg.S3Region != "" || cfg.S3UseSSL || cfg.SMTPHost != "" ||
+		cfg.S3SecretKey != "" || cfg.S3Region != "" || cfg.S3UseSSL || cfg.S3BucketLookup != "auto" || cfg.SMTPHost != "" ||
 		cfg.SMTPPort != 0 || cfg.SMTPUsername != "" || cfg.SMTPPassword != "" || cfg.SMSGatewayURL != "" {
-		t.Errorf("an empty environment must leave every infrastructure field at its zero value, got %+v", cfg)
+		t.Errorf("an empty environment must leave every infrastructure field at its default, got %+v", cfg)
 	}
 	if cfg.RedisAddrFromEnv || cfg.OTLPEndpointFromEnv || cfg.S3EndpointFromEnv || cfg.S3BucketFromEnv || cfg.S3AccessKeyFromEnv ||
-		cfg.S3SecretKeyFromEnv || cfg.S3RegionFromEnv || cfg.S3UseSSLFromEnv || cfg.SMTPHostFromEnv ||
+		cfg.S3SecretKeyFromEnv || cfg.S3RegionFromEnv || cfg.S3UseSSLFromEnv || cfg.S3BucketLookupFromEnv || cfg.SMTPHostFromEnv ||
 		cfg.SMTPPortFromEnv || cfg.SMTPUsernameFromEnv || cfg.SMTPPasswordFromEnv || cfg.SMSGatewayURLFromEnv {
 		t.Error("an empty environment must record every infrastructure field as not-from-env")
 	}
@@ -391,6 +394,50 @@ func TestLoadS3UseSSLMustBeAValidBool(t *testing.T) {
 	}
 }
 
+// TestLoadS3BucketLookupParsesEveryLegalSpelling: each documented spelling
+// resolves to the canonical value the printed row renders -- "path" and
+// "virtual_host" as themselves, unset and "auto" onto the default --
+// whitespace and case included, and the from-env flag tracking the raw
+// text rather than the resolved value.
+func TestLoadS3BucketLookupParsesEveryLegalSpelling(t *testing.T) {
+	for raw, want := range map[string]string{
+		"":             "auto",
+		"auto":         "auto",
+		"path":         "path",
+		" PATH ":       "path",
+		"virtual_host": "virtual_host",
+		"VIRTUAL_HOST": "virtual_host",
+	} {
+		cfg, err := Load("cli-app", envFromMap(map[string]string{S3BucketLookupEnv: raw}))
+		if err != nil {
+			t.Errorf("Load with APP_S3_BUCKET_LOOKUP=%q failed: %v", raw, err)
+			continue
+		}
+		if cfg.S3BucketLookup != want {
+			t.Errorf("Load with APP_S3_BUCKET_LOOKUP=%q: S3BucketLookup = %q, want %q", raw, cfg.S3BucketLookup, want)
+		}
+		if wantFromEnv := raw != ""; cfg.S3BucketLookupFromEnv != wantFromEnv {
+			t.Errorf("Load with APP_S3_BUCKET_LOOKUP=%q: S3BucketLookupFromEnv = %t, want %t", raw, cfg.S3BucketLookupFromEnv, wantFromEnv)
+		}
+	}
+}
+
+// TestLoadS3BucketLookupMustBeAnAllowedValue: an APP_S3_BUCKET_LOOKUP
+// outside the documented set fails with the template's own parse error,
+// naming the allowed values -- the refusal that keeps a typo from booting
+// on the endpoint-derived default instead of the addressing style the
+// operator named.
+func TestLoadS3BucketLookupMustBeAnAllowedValue(t *testing.T) {
+	_, err := Load("cli-app", envFromMap(map[string]string{S3BucketLookupEnv: "path_style"}))
+	if err == nil {
+		t.Fatal("Load accepted an unknown APP_S3_BUCKET_LOOKUP")
+	}
+	want := `cli-app: APP_S3_BUCKET_LOOKUP must be one of "auto", "path", "virtual_host", got "path_style"`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+}
+
 // TestLoadSMTPPortMustBeAValidNumber: a non-numeric APP_SMTP_PORT fails
 // with the template's own parse error, once its pair partner (the host)
 // is also set so the completeness check does not short-circuit first.
@@ -408,7 +455,7 @@ func TestLoadSMTPPortMustBeAValidNumber(t *testing.T) {
 }
 
 // envTagPattern matches one `config:"env=<NAME>"` struct-tag option, the
-// exact shape every one of the twenty-one bootstrap variable names takes
+// exact shape every one of the twenty-two bootstrap variable names takes
 // in the template's config.go: the name lives in its loader target
 // field's env tag, not in a constant (this package's own const block above
 // is the twin side of the same names). The tag is a raw string literal, so
@@ -452,7 +499,7 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 		AuthnBlindIndexKeyEnv: true, AuthnPIICipherKeyEnv: true, PKILocalKeyCipherKeyEnv: true,
 		RedisAddrEnv: true, OTLPEndpointEnv: true,
 		S3EndpointEnv: true, S3BucketEnv: true, S3AccessKeyEnv: true, S3SecretKeyEnv: true,
-		S3RegionEnv: true, S3UseSSLEnv: true,
+		S3RegionEnv: true, S3UseSSLEnv: true, S3BucketLookupEnv: true,
 		SMTPHostEnv: true, SMTPPortEnv: true, SMTPUsernameEnv: true, SMTPPasswordEnv: true,
 		SMSGatewayURLEnv: true,
 	}
@@ -484,7 +531,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}
 	src := string(content)
 
-	// The twenty-one variable pins: each hostConfig field carries one
+	// The twenty-two variable pins: each hostConfig field carries one
 	// variable's exact name in its env tag -- the tag, not a constant, is
 	// where the template's variable names live, one pin per twin constant.
 	// The regex anchors on the field declaration's own line (a leading
@@ -510,6 +557,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		{"S3SecretKey", S3SecretKeyEnv},
 		{"S3Region", S3RegionEnv},
 		{"S3UseSSL", S3UseSSLEnv},
+		{"S3BucketLookup", S3BucketLookupEnv},
 		{"SMTPHost", SMTPHostEnv},
 		{"SMTPPort", SMTPPortEnv},
 		{"SMTPUsername", SMTPUsernameEnv},
@@ -604,6 +652,9 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	if !strings.Contains(src, `"__APP_NAME__: APP_S3_USE_SSL must be a valid bool, got %q: %w"`) {
 		t.Error("template's S3-use-SSL bool-parse error format string drifted from the twin's")
 	}
+	if !strings.Contains(src, "`__APP_NAME__: APP_S3_BUCKET_LOOKUP must be one of \"auto\", \"path\", \"virtual_host\", got %q`") {
+		t.Error("template's S3-bucket-lookup parse error format string drifted from the twin's")
+	}
 	if !strings.Contains(src, `"__APP_NAME__: APP_SMTP_PORT must be a valid port number, got %q: %w"`) {
 		t.Error("template's SMTP-port parse error format string drifted from the twin's")
 	}
@@ -642,7 +693,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		"hc.DeploymentMode", "hc.Port", "hc.DBPath",
 		"hc.ConfigKey", "hc.OrgIndexKey", "hc.AuthnBlindIndexKey", "hc.AuthnPIICipherKey", "hc.PKILocalKeyCipherKey",
 		"hc.RedisAddr", "hc.OTLPEndpoint",
-		"hc.S3Endpoint", "hc.S3Bucket", "hc.S3AccessKey", "hc.S3SecretKey", "hc.S3UseSSL",
+		"hc.S3Endpoint", "hc.S3Bucket", "hc.S3AccessKey", "hc.S3SecretKey", "hc.S3UseSSL", "hc.S3BucketLookup",
 		"hc.SMTPHost", "hc.SMTPPort",
 		"hc.S3Region", "hc.SMTPUsername", "hc.SMTPPassword", "hc.SMSGatewayURL",
 	}

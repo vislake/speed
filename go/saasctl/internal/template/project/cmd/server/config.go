@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
+	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 )
 
 const (
@@ -285,8 +286,8 @@ type hostConfig struct {
 	// the Preset's local-directory default, since a partial S3 target is far
 	// more likely a typo than a deliberate choice -- the identical
 	// completeness rule examples/reference-app/internal/app/server.go's own
-	// S3 group doc comment states. S3Region and S3UseSSL below refine
-	// the same composition.
+	// S3 group doc comment states. S3Region, S3UseSSL and S3BucketLookup
+	// below refine the same composition.
 	S3Endpoint  string `config:"env=APP_S3_ENDPOINT"`
 	S3Bucket    string `config:"env=APP_S3_BUCKET"`
 	S3AccessKey string `config:"env=APP_S3_ACCESS_KEY"`
@@ -309,6 +310,15 @@ type hostConfig struct {
 	// serverConfigFrom parses the text itself and refuses a value
 	// strconv.ParseBool rejects, naming the variable.
 	S3UseSSL string `config:"env=APP_S3_USE_SSL"`
+
+	// S3BucketLookup names APP_S3_BUCKET_LOOKUP: the addressing style the
+	// S3 composition above uses to reach its bucket. Optional and only
+	// meaningful alongside a complete group; serverConfigFrom parses the
+	// text into the store's own enum -- "auto" (or unset) leaves the
+	// style to the endpoint-derived default, "path" addresses the bucket
+	// as a path segment, "virtual_host" as the endpoint's first host
+	// label -- and refuses any other value, naming the allowed set.
+	S3BucketLookup string `config:"env=APP_S3_BUCKET_LOOKUP"`
 
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword name
 	// APP_SMTP_HOST/APP_SMTP_PORT/APP_SMTP_USERNAME/APP_SMTP_PASSWORD:
@@ -417,18 +427,19 @@ type serverConfig struct {
 	// needs.
 	OTLPEndpoint string
 
-	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
-	// compose a real S3-compatible ObjectStore for the "objectstore" seam
-	// when S3Endpoint is non-empty -- see the APP_S3_* fields' own doc
-	// comment above for the completeness rule. Empty S3Endpoint (the
-	// default) leaves "objectstore" on the Preset's local-directory
-	// default.
-	S3Endpoint  string
-	S3Bucket    string
-	S3AccessKey string
-	S3SecretKey string
-	S3Region    string
-	S3UseSSL    bool
+	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL
+	// and S3BucketLookup compose a real S3-compatible ObjectStore for the
+	// "objectstore" seam when S3Endpoint is non-empty -- see the APP_S3_*
+	// fields' own doc comment above for the completeness rule. Empty
+	// S3Endpoint (the default) leaves "objectstore" on the Preset's
+	// local-directory default.
+	S3Endpoint     string
+	S3Bucket       string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3Region       string
+	S3UseSSL       bool
+	S3BucketLookup objectstores3.BucketLookupType
 
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
 	// Mailer for the "mailer" seam when SMTPHost is non-empty -- see the
@@ -625,6 +636,23 @@ func serverConfigFrom(hc hostConfig) (serverConfig, error) {
 		s3UseSSL = parsed
 	}
 
+	// s3BucketLookup is APP_S3_BUCKET_LOOKUP's parsed enum: unset and
+	// "auto" keep the store's endpoint-derived default, the other two
+	// legal values pin one addressing style each, and anything else is
+	// refused here -- naming the variable -- rather than reaching the
+	// store's own validation.
+	s3BucketLookup := objectstores3.BucketLookupAuto
+	switch strings.ToLower(strings.TrimSpace(hc.S3BucketLookup)) {
+	case "path":
+		s3BucketLookup = objectstores3.BucketLookupPath
+	case "virtual_host":
+		s3BucketLookup = objectstores3.BucketLookupVirtualHost
+	case "", "auto":
+		// The default: the endpoint-derived style stays selected.
+	default:
+		return serverConfig{}, fmt.Errorf(`__APP_NAME__: APP_S3_BUCKET_LOOKUP must be one of "auto", "path", "virtual_host", got %q`, hc.S3BucketLookup)
+	}
+
 	// smtpHost/smtpPortRaw mirror the S3 group above: both unset leaves
 	// the "mailer" seam on its Preset default, and a partial APP_SMTP_*
 	// set is refused rather than silently ignored.
@@ -662,6 +690,7 @@ func serverConfigFrom(hc hostConfig) (serverConfig, error) {
 		S3SecretKey:          s3SecretKey,
 		S3Region:             hc.S3Region,
 		S3UseSSL:             s3UseSSL,
+		S3BucketLookup:       s3BucketLookup,
 		SMTPHost:             smtpHost,
 		SMTPPort:             smtpPort,
 		SMTPUsername:         hc.SMTPUsername,

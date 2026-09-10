@@ -278,12 +278,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.S3Endpoint != "" {
 		kernelOptions = append(kernelOptions,
 			pkgcore.WithObjectStore(objectstores3.NewObjectStore(objectstores3.Config{
-				Endpoint:  cfg.S3Endpoint,
-				Bucket:    cfg.S3Bucket,
-				AccessKey: cfg.S3AccessKey,
-				SecretKey: cfg.S3SecretKey,
-				Region:    cfg.S3Region,
-				UseSSL:    cfg.S3UseSSL,
+				Endpoint:     cfg.S3Endpoint,
+				Bucket:       cfg.S3Bucket,
+				AccessKey:    cfg.S3AccessKey,
+				SecretKey:    cfg.S3SecretKey,
+				Region:       cfg.S3Region,
+				UseSSL:       cfg.S3UseSSL,
+				BucketLookup: cfg.S3BucketLookup,
 			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 	}
 	if cfg.SMTPHost != "" {

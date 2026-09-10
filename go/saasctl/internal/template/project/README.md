@@ -88,6 +88,7 @@ environment instead.
 | `APP_S3_SECRET_KEY` | S3 secret key |
 | `APP_S3_REGION` | S3 region (optional; matters to AWS S3, ignored by MinIO/RustFS-compatible servers) |
 | `APP_S3_USE_SSL` | whether the S3 endpoint speaks TLS (optional bool, default `false`) |
+| `APP_S3_BUCKET_LOOKUP` | how the bucket is addressed on the endpoint: `auto` (unset, default: derived from the endpoint), `path` (host/bucket/key) or `virtual_host` (bucket.host/key); any other value is refused, naming the allowed set (optional) |
 | `APP_SMTP_HOST` | SMTP host; together with `APP_SMTP_PORT`, composes a real SMTP Mailer for the "mailer" seam -- both are required together, a partial pair is refused rather than silently ignored |
 | `APP_SMTP_PORT` | SMTP port |
 | `APP_SMTP_USERNAME` | SMTP AUTH username (optional; AUTH activates only when set) |

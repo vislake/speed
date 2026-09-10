@@ -14,7 +14,7 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the full twenty-one variables appconfig resolves,
+// bootstrap reads -- the full twenty-two variables appconfig resolves,
 // exported for the tests and examples that must clear or restore them all.
 // The list mirrors the one internal/db's migrate tests carry, each
 // package's copy sitting next to the code that uses it.
@@ -35,6 +35,7 @@ var bootstrapEnvKeys = []string{
 	appconfig.S3SecretKeyEnv,
 	appconfig.S3RegionEnv,
 	appconfig.S3UseSSLEnv,
+	appconfig.S3BucketLookupEnv,
 	appconfig.SMTPHostEnv,
 	appconfig.SMTPPortEnv,
 	appconfig.SMTPUsernameEnv,
@@ -121,6 +122,7 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 		"s3 secret key    [redacted]   unset or empty (objectstore stays on the local-directory default)\n" +
 		"s3 region                     unset or empty (optional S3 refinement; used only when the group above is set)\n" +
 		"s3 use ssl       false        unset or empty (default false)\n" +
+		"s3 bucket lookup auto         unset or empty (default auto)\n" +
 		"smtp host                     unset or empty (mailer stays on the console default)\n" +
 		"smtp port                     unset or empty (mailer stays on the console default)\n" +
 		"smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
@@ -163,6 +165,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		appconfig.S3SecretKeyEnv:          "s3cr3t",
 		appconfig.S3RegionEnv:             "us-east-1",
 		appconfig.S3UseSSLEnv:             "true",
+		appconfig.S3BucketLookupEnv:       "virtual_host",
 		appconfig.SMTPHostEnv:             "smtp.internal",
 		appconfig.SMTPPortEnv:             "587",
 		appconfig.SMTPUsernameEnv:         "mailer",
@@ -191,6 +194,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		"s3 secret key    [redacted]   from APP_S3_SECRET_KEY\n" +
 		"s3 region        us-east-1    from APP_S3_REGION\n" +
 		"s3 use ssl       true         from APP_S3_USE_SSL\n" +
+		"s3 bucket lookup virtual_host from APP_S3_BUCKET_LOOKUP\n" +
 		"smtp host        smtp.internal from APP_SMTP_HOST\n" +
 		"smtp port        587          from APP_SMTP_PORT\n" +
 		"smtp username    mailer       from APP_SMTP_USERNAME\n" +

@@ -20,7 +20,7 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the full twenty-one variables appconfig resolves,
+// bootstrap reads -- the full twenty-two variables appconfig resolves,
 // exported for the tests and examples that must clear or restore them all.
 var bootstrapEnvKeys = []string{
 	appconfig.DeploymentModeEnv,
@@ -39,6 +39,7 @@ var bootstrapEnvKeys = []string{
 	appconfig.S3SecretKeyEnv,
 	appconfig.S3RegionEnv,
 	appconfig.S3UseSSLEnv,
+	appconfig.S3BucketLookupEnv,
 	appconfig.SMTPHostEnv,
 	appconfig.SMTPPortEnv,
 	appconfig.SMTPUsernameEnv,

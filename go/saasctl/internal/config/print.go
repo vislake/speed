@@ -313,6 +313,10 @@ func print(modPath string) (string, error) {
 			provenance(appconfig.S3UseSSLEnv, cfg.S3UseSSLFromEnv, "unset or empty (default false)"),
 		},
 		{
+			"s3 bucket lookup", appconfig.S3BucketLookupEnv, cfg.S3BucketLookup,
+			provenance(appconfig.S3BucketLookupEnv, cfg.S3BucketLookupFromEnv, "unset or empty (default auto)"),
+		},
+		{
 			"smtp host", appconfig.SMTPHostEnv, cfg.SMTPHost,
 			provenance(appconfig.SMTPHostEnv, cfg.SMTPHostFromEnv, unsetSMTPGroup),
 		},

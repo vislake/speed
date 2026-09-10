@@ -11,7 +11,7 @@ import (
 	"github.com/vislake/speed/go/saasctl/internal/appconfig"
 )
 
-// bootstrapEnvKeys lists the full twenty-one bootstrap variables a
+// bootstrapEnvKeys lists the full twenty-two bootstrap variables a
 // generated project's configuration reads; the dispatch tests clear them
 // all so a run starts from the same defaults a fresh shell would be in.
 // The list mirrors the ones internal/db and internal/config carry.
@@ -32,6 +32,7 @@ var bootstrapEnvKeys = []string{
 	appconfig.S3SecretKeyEnv,
 	appconfig.S3RegionEnv,
 	appconfig.S3UseSSLEnv,
+	appconfig.S3BucketLookupEnv,
 	appconfig.SMTPHostEnv,
 	appconfig.SMTPPortEnv,
 	appconfig.SMTPUsernameEnv,
@@ -136,7 +137,7 @@ func TestRunDBDispatchesThroughCLI(t *testing.T) {
 // TestRunConfigDispatchesThroughCLI drives `saasctl config print` through
 // the root dispatch -- the one place main.go and the config command group
 // meet -- against a go.mod in a temp directory: exit 0 and the full
-// twenty-one-row provenance render on stdout, resolved from the module path
+// twenty-two-row provenance render on stdout, resolved from the module path
 // and the cleared environment. The print command's own behavior matrix
 // lives in internal/config's suite; this test only proves the dispatch
 // reaches it.
@@ -177,6 +178,7 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 		"s3 secret key    [redacted]   unset or empty (objectstore stays on the local-directory default)\n" +
 		"s3 region                     unset or empty (optional S3 refinement; used only when the group above is set)\n" +
 		"s3 use ssl       false        unset or empty (default false)\n" +
+		"s3 bucket lookup auto         unset or empty (default auto)\n" +
 		"smtp host                     unset or empty (mailer stays on the console default)\n" +
 		"smtp port                     unset or empty (mailer stays on the console default)\n" +
 		"smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
