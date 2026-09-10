@@ -399,7 +399,7 @@ func TestHandleUserCreated_DefaultWorkspaceName_ComesFromTheCatalog(t *testing.T
 	if err != nil {
 		t.Fatalf("Root: %v", err)
 	}
-	want, err := host.catalog.Lookup(i18n.LocaleZHCN, msgDefaultWorkspaceName, nil)
+	want, err := host.catalog.Lookup(i18n.LocaleENUS, msgDefaultWorkspaceName, nil)
 	if err != nil {
 		t.Fatalf("Lookup(%s): %v", msgDefaultWorkspaceName, err)
 	}

@@ -131,25 +131,32 @@ func TestRenderInvitationMail_EscapesTheNodeNameInHTML(t *testing.T) {
 	}
 }
 
-func TestNegotiateLocale(t *testing.T) {
-	catalog := newTestHost(t).catalog
+// TestInvitationLocale_Chain drives the invitation chain's tier order on
+// the service rule itself: the declared locale wins when the catalog serves
+// it, an unusable or absent declared value falls to the requester's
+// Accept-Language (the frontend chain's transported value), and the
+// platform default en-US is the terminal tier -- for a request whose
+// header matches nothing too, never a silent substitution.
+func TestInvitationLocale_Chain(t *testing.T) {
+	f := newInviteFixture(t)
 
 	tests := []struct {
-		name      string
-		catalog   *i18n.Catalog
-		requested string
-		want      string
+		name           string
+		declared       string
+		acceptLanguage string
+		want           string
 	}{
-		{"a served locale is honored", catalog, i18n.LocaleENUS, i18n.LocaleENUS},
-		{"the default is honored", catalog, i18n.LocaleZHCN, i18n.LocaleZHCN},
-		{"an unserved locale falls back", catalog, "fr-FR", i18n.LocaleZHCN},
-		{"an empty preference falls back", catalog, "", i18n.LocaleZHCN},
-		{"no catalog falls back", nil, i18n.LocaleENUS, i18n.LocaleZHCN},
+		{"a served declared locale wins", i18n.LocaleZHCN, i18n.LocaleENUS, i18n.LocaleZHCN},
+		{"an unserved declared value falls to the requester language", "fr-FR", i18n.LocaleZHCN, i18n.LocaleZHCN},
+		{"an absent declared value falls to the requester language", "", i18n.LocaleENUS, i18n.LocaleENUS},
+		{"a header prefix matches", "", "zh", i18n.LocaleZHCN},
+		{"no declared value and no usable header lands on the default", "", "fr-FR", i18n.LocaleENUS},
+		{"nothing at all lands on the default", "", "", i18n.LocaleENUS},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := negotiateLocale(tc.catalog, tc.requested); got != tc.want {
-				t.Errorf("negotiateLocale(%q) = %q, want %q", tc.requested, got, tc.want)
+			if got := f.m.Invitations().invitationLocale(tc.declared, tc.acceptLanguage); got != tc.want {
+				t.Errorf("invitationLocale(%q, %q) = %q, want %q", tc.declared, tc.acceptLanguage, got, tc.want)
 			}
 		})
 	}
@@ -169,19 +176,17 @@ func TestSendMail_WithoutATransport(t *testing.T) {
 }
 
 // TestMail_RendersRecipientLocale_NotOperatorLocale pins the SERVICE-layer
-// half of the rule -- backend-generated content renders in the RECIPIENT's
-// locale -- by driving InviteService.Invite directly: two
-// invitations, each with a different InviteRequest.Locale, must render two
-// different subjects, and Invite must never look anywhere else (an
-// operator-scoped field, say) for the language to use.
+// half of the chain: two invitations, each declaring a different
+// InviteRequest.Locale, must render two different subjects -- the declared
+// value is the chain's highest tier and the send renders what creation
+// captured, whoever later triggers the send.
 //
-// It deliberately does NOT exercise where InviteRequest.Locale itself comes
-// from at the HTTP boundary -- that is
-// TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage
-// (handler_test.go), which is the test that actually proves the operator's
-// own Accept-Language header is never consulted. The two tests are
-// deliberately split at the same seam the code is: this one to the request
-// struct, that one to the header the request struct must never come from.
+// It deliberately does NOT exercise where InviteRequest.Locale and
+// InviteRequest.AcceptLanguage themselves come from at the HTTP boundary --
+// that is TestHandler_OrgCreateInvitation_LocaleChain (handler_test.go). The
+// two tests are split at the same seam the code is: this one to the request
+// struct and its rendering, that one to the request fields the HTTP layer
+// fills.
 func TestMail_RendersRecipientLocale_NotOperatorLocale(t *testing.T) {
 	f := newInviteFixture(t)
 
@@ -228,22 +233,38 @@ func TestMail_RendersRecipientLocale_NotOperatorLocale(t *testing.T) {
 }
 
 // TestMail_UnsupportedRequestedLocale_FallsBackWithoutFailing pins that an
-// Accept-Language org does not serve is a preference, not a command: the
-// invitation is still sent, in the platform default.
+// A locale org does not serve is a preference, not a command: the declared
+// value is skipped, the chain continues to the requester's language, and
+// the invitation is still sent -- and with neither a usable declared value
+// nor a usable header, it lands on the platform default.
 func TestMail_UnsupportedRequestedLocale_FallsBackWithoutFailing(t *testing.T) {
 	f := newInviteFixture(t)
 
-	result, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
-		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter", Locale: "fr-FR",
+	// The declared value is unusable; the requester's language is not, so
+	// the chain's second relevant tier answers.
+	viaHeader, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
+		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
+		Locale: "fr-FR", AcceptLanguage: i18n.LocaleZHCN,
 	})
 	if err != nil {
-		t.Fatalf("Invite(fr-FR): %v", err)
+		t.Fatalf("Invite(fr-FR, zh header): %v", err)
 	}
-	if result.Invitation.Locale != i18n.LocaleZHCN {
-		t.Errorf("captured locale = %q, want the platform default %q", result.Invitation.Locale, i18n.LocaleZHCN)
+	if viaHeader.Invitation.Locale != i18n.LocaleZHCN {
+		t.Errorf("captured locale = %q, want the requester language %q", viaHeader.Invitation.Locale, i18n.LocaleZHCN)
 	}
 	if len(f.host.mailer.messages()) != 1 {
 		t.Error("the invitation was not sent")
+	}
+
+	// Nothing usable anywhere: the platform default.
+	viaDefault, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
+		Email: "grace@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter", Locale: "fr-FR",
+	})
+	if err != nil {
+		t.Fatalf("Invite(fr-FR, no header): %v", err)
+	}
+	if viaDefault.Invitation.Locale != i18n.LocaleENUS {
+		t.Errorf("captured locale = %q, want the platform default %q", viaDefault.Invitation.Locale, i18n.LocaleENUS)
 	}
 }
 

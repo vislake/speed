@@ -330,10 +330,11 @@ func (h *Handler) OrgCreateInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.invites.Invite(ctx, InviteRequest{
-		Email:         req.Email,
-		NodeID:        req.NodeID,
-		InviterUserID: inviterUserID,
-		Locale:        recipientLocale(req.Locale),
+		Email:          req.Email,
+		NodeID:         req.NodeID,
+		InviterUserID:  inviterUserID,
+		Locale:         declaredInviteeLocale(req.Locale),
+		AcceptLanguage: r.Header.Get("Accept-Language"),
 	})
 	if err != nil {
 		writeError(w, err)
@@ -404,25 +405,20 @@ func (h *Handler) OrgAcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toMembershipResponse(membership))
 }
 
-// recipientLocale reads the RECIPIENT's locale off an
-// OrgCreateInvitationRequest, or "" when the caller supplied none.
+// declaredInviteeLocale reads the explicitly declared invitee locale off an
+// OrgCreateInvitationRequest, or "" when the caller supplied none -- the
+// invitation chain's highest tier, carried verbatim (an unusable value is
+// skipped by the chain, never refused here).
 //
-// This is deliberately NOT read from the request's own Accept-Language
-// header: that header belongs to the authenticated inviter/operator making
-// THIS HTTP call, and the invitee -- who has made no request of their own
-// yet, and may not even be a user -- has no channel to reach the server
-// through at invite-creation time. Reading it here would render every
-// invitation email in the ADMIN's own browser language, directly
-// contradicting the "renders in the recipient's locale" contract this
-// endpoint documents (org/api/openapi.yaml's org_createInvitation
-// description). See
-// TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage.
-//
-// An empty return is not an error: InviteService.Invite negotiates it
-// through negotiateLocale (mail.go), which falls back to the platform
-// default for an empty or unrecognized locale exactly as it does for any
-// other unrecognized tag.
-func recipientLocale(locale *string) string {
+// It is deliberately only the DECLARED tier: the request's own
+// Accept-Language is a separate tier of the same chain (the requester's
+// language, ordered below the declared value and below the
+// recipient-profile tier), and OrgCreateInvitation passes it to
+// InviteService.Invite as its own field rather than folding the two here.
+// The chain itself -- including the ordering, the vendor of the terminal
+// default, and the not-implemented recipient-profile tier -- lives in
+// invite.go's invitationLocale.
+func declaredInviteeLocale(locale *string) string {
 	if locale == nil {
 		return ""
 	}

@@ -635,21 +635,18 @@ func doRequestWithHeaders(h *Handler, ctx context.Context, method, path string, 
 	return rec
 }
 
-// TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage
-// pins where OrgCreateInvitation takes the invitation's locale from: never
-// off the CALLER's own Accept-Language header -- the authenticated
-// inviter/operator making this request, not the invitee, who has made no
-// request of their own for the server to read a header from.
-// Backend-generated content renders in the recipient's locale, not the
-// operator's UI language.
-func TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage(t *testing.T) {
+// TestHandler_OrgCreateInvitation_LocaleChain pins the HTTP layer's part
+// of the invitation chain: the body's optional locale is the declared
+// (highest) tier, the caller's own Accept-Language is the requester tier
+// behind it, and the platform default closes a request that names neither.
+// The stored row carries the resolved value -- captured once at creation --
+// so a later send renders the same language whichever operator triggers it.
+func TestHandler_OrgCreateInvitation_LocaleChain(t *testing.T) {
 	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
 	ctx := tenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
-	// The request body names the recipient's locale explicitly; the
-	// operator's own Accept-Language claims a different one. The stored
-	// invitation must render in the body's locale, never the header's.
+	// The body's declared locale outranks the requester's header.
 	locale := i18n.LocaleENUS
 	rec := doRequestWithHeaders(h, ctx, http.MethodPost, "/api/v1/org/invitations",
 		api.OrgCreateInvitationRequest{Email: "a@example.test", NodeID: root.ID, Locale: &locale},
@@ -665,28 +662,45 @@ func TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage
 		t.Fatalf("FindByID: %v", err)
 	}
 	if stored.Locale != i18n.LocaleENUS {
-		t.Errorf("stored Locale = %q, want the body's %q -- Accept-Language leaked through", stored.Locale, i18n.LocaleENUS)
+		t.Errorf("stored Locale = %q, want the declared %q", stored.Locale, i18n.LocaleENUS)
 	}
 
-	// No locale in the body at all, but the header still claims one this
-	// endpoint must never consult: the stored locale must fall all the way
-	// through to the platform default, not the header's language.
-	recNoLocale := doRequestWithHeaders(h, ctx, http.MethodPost, "/api/v1/org/invitations",
+	// No declared locale: the requester's own language answers -- the
+	// header is a real tier of the chain now, and this asserts the
+	// handler actually fills it.
+	recFromHeader := doRequestWithHeaders(h, ctx, http.MethodPost, "/api/v1/org/invitations",
 		api.OrgCreateInvitationRequest{Email: "b@example.test", NodeID: root.ID},
-		map[string]string{"Accept-Language": i18n.LocaleENUS},
+		map[string]string{"Accept-Language": i18n.LocaleZHCN},
 	)
-	if recNoLocale.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body %q", recNoLocale.Code, recNoLocale.Body.String())
+	if recFromHeader.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %q", recFromHeader.Code, recFromHeader.Body.String())
 	}
-	var invNoLocale api.OrgInvitation
-	decodeBody(t, recNoLocale, &invNoLocale)
-	storedNoLocale, err := m.Invitations().Repository().FindByID(ctx, *invNoLocale.ID)
+	var invFromHeader api.OrgInvitation
+	decodeBody(t, recFromHeader, &invFromHeader)
+	storedFromHeader, err := m.Invitations().Repository().FindByID(ctx, *invFromHeader.ID)
 	if err != nil {
 		t.Fatalf("FindByID: %v", err)
 	}
-	if storedNoLocale.Locale != i18n.LocaleZHCN {
-		t.Errorf("stored Locale = %q, want the platform default %q -- the Accept-Language header (%q) was read instead of falling back",
-			storedNoLocale.Locale, i18n.LocaleZHCN, i18n.LocaleENUS)
+	if storedFromHeader.Locale != i18n.LocaleZHCN {
+		t.Errorf("stored Locale = %q, want the requester language %q", storedFromHeader.Locale, i18n.LocaleZHCN)
+	}
+
+	// Neither a declared locale nor a usable header: the platform default.
+	recDefault := doRequestWithHeaders(h, ctx, http.MethodPost, "/api/v1/org/invitations",
+		api.OrgCreateInvitationRequest{Email: "c@example.test", NodeID: root.ID},
+		map[string]string{"Accept-Language": "fr-FR"},
+	)
+	if recDefault.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %q", recDefault.Code, recDefault.Body.String())
+	}
+	var invDefault api.OrgInvitation
+	decodeBody(t, recDefault, &invDefault)
+	storedDefault, err := m.Invitations().Repository().FindByID(ctx, *invDefault.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if storedDefault.Locale != i18n.LocaleENUS {
+		t.Errorf("stored Locale = %q, want the platform default %q", storedDefault.Locale, i18n.LocaleENUS)
 	}
 }
 

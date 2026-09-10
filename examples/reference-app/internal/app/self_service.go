@@ -648,13 +648,13 @@ func (p *SelfServiceProvisioner) clinicRootNameFor(userID string, tenantCtx cont
 // clinicRootName renders the fallback name of a clinic's org root from
 // the merged catalog, mirroring org's own defaultWorkspaceName
 // (go/org/events.go): the message id is org's own auto-created-root name
-// (its zh-CN value is the Chinese word for "workspace",
-// go/org/locales/{zh-CN,en-US}.toml) and is referenced by its literal
+// (its en-US value is the word "workspace", go/org/locales/{zh-CN,en-US}.toml)
+// and is referenced by its literal
 // string the same way this app's role seeding references rbac's
 // "rbac.role.member" description id (demo_subject.go's
 // seedDemoReaderRole) -- a coordination point between this host's glue
 // and the module that owns the message, never a new piece of copy living
-// in Go. The locale is the platform default (zh-CN), exactly org's own
+// in Go. The locale is the platform default (en-US), exactly org's own
 // choice for its auto-created roots: this node is created before anybody
 // has expressed a preference, and the tenant renames it the moment it
 // means something else to them. A missing catalog or message falls back
@@ -671,7 +671,7 @@ func (p *SelfServiceProvisioner) clinicRootName(ctx context.Context) string {
 	if p.catalog == nil {
 		return fallback()
 	}
-	name, err := p.catalog.Lookup(i18n.LocaleZHCN, "org.default_workspace_name", nil)
+	name, err := p.catalog.Lookup(i18n.LocaleENUS, "org.default_workspace_name", nil)
 	if err != nil {
 		obs.FromContext(ctx).Warn("reference-app could not render the clinic root name",
 			"message_id", "org.default_workspace_name", "error", err)

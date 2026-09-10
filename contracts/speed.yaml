@@ -2663,14 +2663,18 @@ paths:
         The invitee's address is normalized, indexed and rate-limited (per
         tenant and, separately, per recipient) before anything is stored; an
         earlier pending invitation for the same address is revoked so only the
-        newest link works. The invitation email renders in the RECIPIENT's
-        locale, taken from the optional locale field below -- never from the
-        inviting operator's own Accept-Language or UI language, since the
-        invitee has made no request of their own yet for the server to read a
-        header from. Omitting locale, or naming one the platform does not carry
-        a message catalog for, falls back to the platform default. The response
-        never carries the invitation token: it is a bearer credential handed to
-        the invitee alone, through the message this endpoint sends.
+        newest link works. The invitation email's language is resolved by the
+        invitation chain and stored on the invitation at creation time, so a
+        later send renders the same language: the optional locale field below
+        (the invitee's explicitly named language) first, then the recipient's
+        stored profile when one can be confirmed, then the requesting caller's
+        own Accept-Language (the frontend's language chain, transported here),
+        then the platform default en-US. Omitting locale therefore no longer
+        means "the platform default" outright -- it means the chain continues to
+        the requester's language, and only a request naming no usable language
+        lands on the default. The response never carries the invitation token:
+        it is a bearer credential handed to the invitee alone, through the
+        message this endpoint sends.
       requestBody:
         required: true
         content:

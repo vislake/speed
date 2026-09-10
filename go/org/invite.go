@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,10 +67,20 @@ type InviteRequest struct {
 	// body.
 	InviterUserID string
 
-	// Locale is the language to render the invitation in, typically the
-	// request's Accept-Language. A locale the catalog does not serve falls
-	// back to the platform default; see negotiateLocale.
+	// Locale is the invitee's explicitly named language -- the invitation
+	// chain's highest tier (OrgCreateInvitationRequest.locale). A value
+	// the catalog does not serve is skipped rather than refused: it is a
+	// preference, not a command. See invitationLocale for the whole chain.
 	Locale string
+
+	// AcceptLanguage is the creating request's Accept-Language header --
+	// the requester's own language, resolved by the frontend's chain and
+	// transported here. It is the chain's tier behind the declared value
+	// (and behind the recipient-profile tier, which this module does not
+	// implement), normalized ONCE at creation and stored on the row, so a
+	// later send renders the language the creation captured rather than
+	// whatever some other operator's request happens to carry.
+	AcceptLanguage string
 }
 
 // InviteResult is what a successful Invite produces.
@@ -259,7 +270,7 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 		Email:         address,
 		EmailIndex:    emailIndex,
 		InviterUserID: req.InviterUserID,
-		Locale:        s.negotiate(req.Locale),
+		Locale:        s.invitationLocale(req.Locale, req.AcceptLanguage),
 		TokenHash:     tokenHash,
 		Status:        InvitationStatusPending,
 		ExpiresAt:     s.now().Add(s.ttl),
@@ -696,10 +707,44 @@ func (s *InviteService) revokeAfterFailedDelivery(ctx context.Context, invitatio
 	}
 }
 
-// negotiate resolves the requested locale against the catalog the host
-// carries, read at call time.
-func (s *InviteService) negotiate(requested string) string {
-	return negotiateLocale(s.catalog(), requested)
+// invitationLocale resolves an invitation's render language at creation
+// time, through the invitation chain (highest tier first):
+//
+//   - the explicitly declared locale (OrgCreateInvitationRequest.locale),
+//     when the catalog actually serves it;
+//   - the recipient's stored profile locale -- NOT IMPLEMENTED: the
+//     invitee typically has no account yet, and this module wires no
+//     user-profile seam, so the tier is always skipped today. The boundary
+//     is recorded rather than silent because it is the one tier that needs
+//     another module's data (see AGENTS.md);
+//   - the requester's own language: the creating request's
+//     Accept-Language, which the frontend's chain resolved and
+//     transported. The requester is the person whose action produced the
+//     invitation, and their language is the only signal available when
+//     nothing else resolves -- reading it was deliberately NOT done once
+//     the recipient-profile tier was assumed to exist; under the chain
+//     ruling the requester tier is real, ordered below the recipient's own
+//     value;
+//   - the platform default (en-US), the terminal tier.
+//
+// The result is stored on the invitation row, so the send (possibly by a
+// different operator, later) renders the language captured at creation.
+// An unsupported declared value is skipped, never refused: it is a
+// preference, and the chain's lower tiers -- the requester's language
+// among them -- are exactly where such a value should land.
+func (s *InviteService) invitationLocale(declared, acceptLanguage string) string {
+	catalog := s.catalog()
+	if catalog == nil {
+		return invitationDefaultLocale
+	}
+	supported := catalog.Locales()
+	if declared != "" && slices.Contains(supported, declared) {
+		return declared
+	}
+	if locale, ok := i18n.Negotiate(acceptLanguage, supported); ok {
+		return locale
+	}
+	return invitationDefaultLocale
 }
 
 // catalog reads the merged message catalog from the host seam. It is a

@@ -400,7 +400,7 @@ func (m *Module) defaultWorkspaceName(ctx context.Context) string {
 	if catalog == nil {
 		return fallback()
 	}
-	name, err := catalog.Lookup(i18n.LocaleZHCN, msgDefaultWorkspaceName, nil)
+	name, err := catalog.Lookup(i18n.LocaleENUS, msgDefaultWorkspaceName, nil)
 	if err != nil {
 		obs.FromContext(ctx).Warn("org could not render the default workspace name",
 			"message_id", msgDefaultWorkspaceName, "error", err)
