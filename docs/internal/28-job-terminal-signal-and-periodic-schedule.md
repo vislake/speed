@@ -131,7 +131,7 @@
 
 1. **一套逻辑两个模式跑同一份代码**。调度器只用便携契约的一个方法(`Enqueue`),`StandaloneQueue` 与 `asynq.Queue` 的调度语义不会分叉(对比 S-B:窗口语义与 cron 语义是两套东西,同一个声明在两个模式下行为不同)。
 2. **去重复用已被七处证明的窗口化幂等键**。多副本下"每个副本都启动调度器"的安全性与今天的多副本宿主 ticker 完全同构——收敛靠窗口键,不依赖 asynq.Scheduler 的 leader 选举,也不依赖任何模式的特别能力。
-3. **打包纪律**。调度器在 `jobs` 根包,只 import pkgcore 与标准库;根包"零第三方依赖的非测试代码"保持不变(S-B 若用 `asynq.Scheduler`,要么在根包引入 asynq,要么再开子包,前者直接违反 `docs/internal/03` 的打包裁定)。
+3. **打包纪律**。调度器在 `jobs` 根包,只 import pkgcore 与标准库——不新增任何第三方 import,根包非测试代码既有的第三方依赖(`gorm.io/gorm`、`go.opentelemetry.io/otel`、`github.com/google/uuid`)不因它变化;S-B 若用 `asynq.Scheduler`,要么在根包引入 asynq,要么再开子包,前者直接违反 `docs/internal/03` 的打包裁定。
 4. **模块声明制闭合记录的缺口**。24 号文档普查行 4 与 compliance AGENTS.md 记录的缺口形态是"模块没有自己的 schedule 点,每个接入应用都要记得加一个"——声明制让模块**拥有**自己的默认排产(声明 = 任务类型 + 周期 + 租户作用域),宿主侧留总开关。反过来说,若改成"宿主逐条声明",忘记的代价原样保留,只是换了个人忘记。
 5. **反投机检查**:七处真实位点(其中四处正缺宿主 schedule 点)、两只真实宿主 ticker、一条在案的 roadmap 前置——不是先建后用。
 
@@ -187,6 +187,6 @@
 2. **`jobs.job.terminal` 的类型目录声明归属**。`EventRegistrar.Publishes` 的调用方按约定是模块,而 `jobs` 不是 `pkgcore.Module`。实现轮需要在"给非模块发布者开一条声明路径"与"沿用目录声明是契约、不是发布前置条件的现状(仅常量 + 文档)"之间裁定。
 3. **载荷是否携带 `Result` 体**。本文裁定不携带(事件是通知,行是数据面);若通知半边证明 asynq 的前置发布次序下无法用回读取结果,再重新评估。
 4. **声明是否携带 Enqueue 选项**(优先级/重试/超时)与宿主能否覆盖声明周期。今天的七处键与 handler 不携带额外选项,最小声明够用;宿主覆盖能力等真实诉求。
-5. **窗口键的最终格式**。七处前缀不统一(storage 是 `storage.sweep:` 而非任务类型前缀),迁移轮需要逐处 pin 出"调度器键 = 手动态键"的字符串,并写进各站点的窗口测试(先例:`retention_sweep_window_test.go`、`enqueue_window_test.go` 已用真实 `StandaloneQueue` 钉窗口性质)。
+5. **窗口键的最终格式**。七处前缀不统一(storage 是 `storage.sweep:` 而非任务类型前缀),迁移轮需要逐处 pin 出"调度器键 = 手动态键"的字符串,并写进各站点的窗口测试(先例:`go/compliance/retention_test.go` 的窗口套件、`go/pki/enqueue_window_test.go` 已用真实 `StandaloneQueue` 钉窗口性质)。
 6. **作业状态路由是否保留轮询驱动的 `NotifyOnCompletion` 调用**作为通知的第二条腿。保留 = 通知有两条腿(现有行为);退休 = 通知单靠事件 + 对账网。裁定取决于"通知丢失"的容忍度,属产品判断。
 7. **升级存量行的回填时点语义**:本文定为"加列时刻盖章";实现轮需在双方言(尤其 PostgreSQL 的 DDL 事务边界)下钉住这一点。
