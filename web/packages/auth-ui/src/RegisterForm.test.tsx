@@ -96,6 +96,7 @@ describe('RegisterForm', () => {
       email: 'alice@example.com',
       password: 's3cret-pass',
       locale: 'zh-CN',
+      timezone: expect.any(String),
     })
     // Registration never issues tokens.
     expect(harness.store.get()).toBeNull()
@@ -143,6 +144,7 @@ describe('RegisterForm', () => {
       password: 's3cret-pass',
       display_name: 'Li Lei',
       locale: 'zh-CN',
+      timezone: expect.any(String),
     })
   })
 
@@ -168,8 +170,36 @@ describe('RegisterForm', () => {
       email: 'alice@example.com',
       password: 's3cret-pass',
       locale: 'zh-CN',
+      timezone: expect.any(String),
     })
     expect('display_name' in body).toBe(false)
+  })
+
+  it('omit the timezone when the browser cannot answer, still registering', async () => {
+    // The timezone tier is lenient by contract (the backend stores an
+    // unusable value as empty and never refuses the registration), so an
+    // environment that cannot resolve a zone must not fail the submit --
+    // the request goes out carrying no timezone at all.
+    const resolvedOptions = vi
+      .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+      .mockImplementation(() => {
+        throw new Error('test: timezone resolution unavailable')
+      })
+    try {
+      const harness = makeHarness({ [REGISTER]: () => ALICE })
+      renderWithProviders(<RegisterForm session={harness.session} />)
+      await fillAndSubmit('alice@example.com', 's3cret-pass', ZH_LABELS)
+      await waitFor(() => expect(harness.calls).toHaveLength(1))
+      const body = harness.calls[0]?.options?.body as Record<string, unknown>
+      expect(body).toEqual({
+        email: 'alice@example.com',
+        password: 's3cret-pass',
+        locale: 'zh-CN',
+      })
+      expect('timezone' in body).toBe(false)
+    } finally {
+      resolvedOptions.mockRestore()
+    }
   })
 
   it('hand the created user to onRegistered when given, rendering no panel', async () => {
@@ -268,6 +298,7 @@ describe('RegisterForm', () => {
       email: 'alice@example.com',
       password: 's3cret-pass',
       locale: 'en-US',
+      timezone: expect.any(String),
     })
   })
 
@@ -298,6 +329,7 @@ describe('RegisterForm', () => {
       email: 'alice@example.com',
       password: 's3cret-pass',
       locale: 'en-US',
+      timezone: expect.any(String),
     })
   })
 

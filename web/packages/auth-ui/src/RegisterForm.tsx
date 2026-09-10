@@ -6,7 +6,9 @@
  * email/phone shape, never a single ambiguous identifier field). The
  * optional display name is trimmed and omitted when blank; the locale the
  * request declares is the session's current UI language, read at submit
- * time so a mid-flight language switch is honoured. Password policy and
+ * time so a mid-flight language switch is honoured, and the timezone is
+ * the browser's own report (guarded; see browserTimeZone) -- both are the
+ * backend's registration initial-value chains' first tiers. Password policy and
  * identifier canonical form live on the backend, whose code-level
  * answers -- authn.password_too_short and friends, and the
  * identifier-format refusals authn.invalid_email / authn.invalid_phone --
@@ -78,6 +80,28 @@ function isEmail(identifier: string): boolean {
   return identifier.includes('@')
 }
 
+/**
+ * The browser's IANA timezone, reported as the registration's initial
+ * timezone -- the backend's registration timezone chain's first tier (the
+ * browser report), read at submit time beside the locale.
+ *
+ * Guarded, and undefined rather than fatal when the environment cannot
+ * answer (a non-browser test renderer, an engine whose Intl is trimmed):
+ * the backend validates this field leniently BY CONTRACT -- an absent or
+ * unknown value is stored empty (the platform default UTC applies) and
+ * never refuses the registration -- so failing or refusing to submit over
+ * an unavailable timezone would be stricter than the backend itself. An
+ * empty answer is treated the same as no answer: nothing to report.
+ */
+function browserTimeZone(): string | undefined {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return zone === '' ? undefined : zone
+  } catch {
+    return undefined
+  }
+}
+
 export function RegisterForm({ session, onRegistered }: RegisterFormProps) {
   const { t, i18n } = useAuthUiTranslation()
   const form = useForm<RegisterFields>({
@@ -95,6 +119,10 @@ export function RegisterForm({ session, onRegistered }: RegisterFormProps) {
     const request: AuthnRegisterRequest = {
       password,
       locale: i18n.language,
+    }
+    const timezone = browserTimeZone()
+    if (timezone !== undefined) {
+      request.timezone = timezone
     }
     if (isEmail(identifier)) {
       request.email = identifier

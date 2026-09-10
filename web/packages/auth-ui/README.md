@@ -294,7 +294,15 @@ heuristic decides which slot the request carries, honouring the spec's
 separated email/phone shape rather than a single ambiguous identifier.
 The optional display name is trimmed and omitted when blank; the
 locale the request declares is the session's current UI language, read
-at submit time so a mid-flight language switch is honoured. Password
+at submit time so a mid-flight language switch is honoured, and the
+timezone is the browser's own report (`Intl.DateTimeFormat`), read the
+same moment -- both the first tiers of the backend's registration
+initial-value chains. The timezone read is guarded and its absence is
+never a submit failure: the backend validates the field leniently (an
+unusable or missing value is stored empty, the platform default UTC
+applying, and the registration still succeeds), so an environment whose
+`Intl` cannot answer registers without a timezone rather than refusing
+to submit. Password
 policy and identifier canonical form live on the backend, whose
 code-level answers (`authn.password_too_short` and friends, and the
 identifier-format refusals `authn.invalid_email` / `authn.invalid_phone`)
