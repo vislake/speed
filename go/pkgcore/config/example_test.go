@@ -143,6 +143,24 @@ func ExampleWithEnvPrefix() {
 	// 3123 app.db
 }
 
+// ExampleEnvName shows the derivation a host or a tool can print instead of
+// re-implementing: the environment variable name a config key is read from
+// under a prefix. Nesting becomes EnvSeparator, a single underscore inside a
+// segment stays, and a pinned field (config:"env=NAME") is read from its own
+// name whatever this returns for its key.
+func ExampleEnvName() {
+	for _, key := range []string{"database.dsn", "authn.pii_cipher_key", "port"} {
+		fmt.Println(config.EnvName(config.EnvPrefix, key))
+	}
+	fmt.Println(config.EnvName("APP_", "database.dsn"))
+
+	// Output:
+	// SPEED_DATABASE__DSN
+	// SPEED_AUTHN__PII_CIPHER_KEY
+	// SPEED_PORT
+	// APP_DATABASE__DSN
+}
+
 // ExampleVerify shows the check a host runs once it knows which bootstrap keys
 // its modules declared (the pkgcore Registry.Bootstrap seat): every declared
 // key must map onto a field of the host's loader target, and the error names

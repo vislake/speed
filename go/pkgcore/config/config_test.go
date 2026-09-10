@@ -1068,6 +1068,47 @@ func TestNew_DefaultPrefixIsSpeed(t *testing.T) {
 	}
 }
 
+// TestEnvName_SpellsTheDocumentedName pins the exported derivation on the
+// properties the package documents: each level of nesting is marked by
+// EnvSeparator, a single underscore inside a segment is preserved (it is not a
+// nesting marker), the prefix is taken as given -- the default EnvPrefix and
+// the WithEnvPrefix("APP_") form. The loader's own derivation is the same
+// function applied to its prefix, so the spelling this test pins is the
+// spelling the loader reads.
+func TestEnvName_SpellsTheDocumentedName(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		key    string
+		want   string
+	}{
+		{name: "the default prefix", prefix: EnvPrefix, key: "database.dsn", want: "SPEED_DATABASE__DSN"},
+		{name: "nesting marks every level", prefix: "SPEED_", key: "a.b.c", want: "SPEED_A__B__C"},
+		{name: "a single underscore inside a segment is preserved", prefix: "SPEED_", key: "authn.pii_cipher_key", want: "SPEED_AUTHN__PII_CIPHER_KEY"},
+		{name: "a key with no nesting", prefix: "SPEED_", key: "port", want: "SPEED_PORT"},
+		{name: "the WithEnvPrefix form", prefix: "APP_", key: "database.dsn", want: "APP_DATABASE__DSN"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := EnvName(tc.prefix, tc.key); got != tc.want {
+				t.Errorf("EnvName(%q, %q) = %q, want %q", tc.prefix, tc.key, got, tc.want)
+			}
+		})
+	}
+
+	// The loader's derivedEnvName is EnvName applied to the loader's prefix:
+	// one implementation, so a documented name can never drift from a read
+	// name.
+	l := New(WithEnvPrefix("APP_"))
+	if got, want := l.derivedEnvName("smtp.username"), EnvName("APP_", "smtp.username"); got != want {
+		t.Errorf("derivedEnvName(smtp.username) = %q with prefix APP_, want EnvName's %q", got, want)
+	}
+}
+
 // TestLoad_WithEnvPrefix_ReadsOnlyThePrefixesVariables pins that the prefix
 // swaps which variables carry the keys: APP_-prefixed names are read, and a
 // SPEED_-prefixed name is no longer a source at all.

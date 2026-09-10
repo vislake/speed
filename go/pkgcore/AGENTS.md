@@ -187,6 +187,8 @@ The contract on `WithParam`'s write side (its doc comment states it in full, and
 
 Priority, highest first: command-line flags, environment variables, config file, the defaults already on the target struct. `Database.DSN` maps to key `database.dsn` (segments joined by `KeyDelimiter`), flag `--database.dsn`, variable `SPEED_DATABASE__DSN` (`EnvPrefix` + `EnvSeparator`). Per-field options come from the `TagName` struct tag: `config:"required"`, `config:"-"`.
 
+`func EnvName(prefix, key string) string` is that variable spelling as an exported pure function -- the prefix, then the key uppercased with each level of nesting marked by `EnvSeparator` -- and the loader reads through it (`derivedEnvName` applies it to the loader's own prefix), so a document or tool that prints a variable name for a key cannot drift from the name the loader actually reads. A field pinned with `config:"env=NAME"` is read from that name whatever `EnvName` derives. The prefix must be a form `WithEnvPrefix` accepts (non-empty, ending in `_`); `EnvName` does not validate it.
+
 ### `pkgcore/i18n`
 
 The merged message catalog. `func NewBuilder() *Builder`; `func (*Builder) AddModule(module string, fsys fs.FS) error`; `func (*Builder) Build() *Catalog`. `func (*Catalog) Lookup(locale, code string, params map[string]any) (string, error)`; `func (*Catalog) LookupPlural(locale, code string, count int64, params map[string]any) (string, error)`; `func (*Catalog) Locales() []string`. Locale constants `LocaleZHCN` / `LocaleENUS`; sentinel errors `ErrEmptyModuleName`, `ErrInvalidModuleName`, `ErrDuplicateModule`, `ErrMissingLocaleFile`, `ErrUnsupportedLocale`, `ErrUnsupportedShape`, `ErrParityMismatch`, `ErrUnknownLocale`, `ErrUnknownCode`.

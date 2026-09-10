@@ -130,6 +130,18 @@ const EnvSeparator = "__"
 // "database.dsn". It is also the separator used in flag names.
 const KeyDelimiter = "."
 
+// EnvName spells a config key the way the environment carries it under prefix:
+// the prefix, then the key uppercased with each level of nesting marked by
+// EnvSeparator, so EnvPrefix and the key "database.dsn" give
+// SPEED_DATABASE__DSN. A field that pins its exact variable name with the env
+// struct tag option (config:"env=NAME") is read from that name instead: the
+// pin wins over this derivation, and EnvName itself always derives. The prefix
+// must be a form WithEnvPrefix accepts (EnvPrefix by default); no form is
+// validated here.
+func EnvName(prefix, key string) string {
+	return prefix + strings.ToUpper(strings.ReplaceAll(key, KeyDelimiter, EnvSeparator))
+}
+
 // TagName is the struct tag read by the loader for per-field options.
 const TagName = "config"
 
@@ -618,10 +630,11 @@ func (s *schema) envNameFor(l *Loader, key string) string {
 }
 
 // derivedEnvName spells a config key the way the environment carries it for
-// this loader: the prefix, then the key uppercased with each level of nesting
-// marked by EnvSeparator.
+// this loader. It applies EnvName to the loader's own prefix -- the single
+// implementation both share, so the name the loader reads and the name the
+// documented derivation reports can never drift.
 func (l *Loader) derivedEnvName(key string) string {
-	return l.prefix + strings.ToUpper(strings.ReplaceAll(key, KeyDelimiter, EnvSeparator))
+	return EnvName(l.prefix, key)
 }
 
 // field is one leaf of the target struct: a value a source can actually supply.
