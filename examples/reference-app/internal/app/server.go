@@ -39,6 +39,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/notification"
+	"github.com/vislake/speed/go/notification/staticaddr"
 
 	// Blank-imported for its init() side effect: obs.Init's local
 	// exporters wire a real /metrics scrape endpoint only when a local
@@ -1840,8 +1841,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// completed note-created or patient-reminder dispatch is drained by the
 	// same worker pool (its Register call declares the delivery job handler
 	// on the registry, and the drain loop below moves every handler onto
-	// the queue); and the user-address resolver is the demo directory that
-	// demo_notification.go owns. WithSubjectResolver hands the HTTP surface
+	// the queue); and the user-address resolver is notification/staticaddr
+	// over the demo directory demo_notification.go owns -- the demo users
+	// exist only as header values, so the operator-declared table is this
+	// app's whole address store. WithSubjectResolver hands the HTTP surface
 	// the same demo identity layer type org's handler uses -- its own
 	// instance keeps principalFallback unset, so this surface's caller is
 	// whoever the X-Demo-User-Id header says (see DemoOrgSubjectResolver's
@@ -1854,7 +1857,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		notification.WithContactEmailIndexer(contactEmailIndexer),
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),
 		notification.WithDeliveryQueue(standaloneQueue),
-		notification.WithUserAddressResolver(demoUserAddressResolver{}),
+		notification.WithUserAddressResolver(staticaddr.New(DemoUserAddresses)),
 		notification.WithSubjectResolver(DemoOrgSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}),
 	)
 

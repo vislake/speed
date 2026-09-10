@@ -14,7 +14,6 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -117,10 +116,11 @@ import (
 // in-process bus never redelivers), and the account cannot re-register,
 // so a clinic that never appeared would strand the registrant in the dead
 // end this file exists to close. Every step of provision is idempotent --
-// the tenant is derived from the user id, and org's tree and membership
-// writes and rbac's role and grant writes reconcile on a repeat, the
-// billing subscription step's Active check (ensureDemoSubscription) makes
-// an already-subscribed clinic a no-op, and the credit step's balance
+// the tenant is derived from the user id, org's EnsureRootSeat and
+// rbac's role and grant writes reconcile on a repeat, the billing
+// subscription step (ensureDemoSubscription, on
+// SubscriptionService.EnsureActive) makes an already-subscribed clinic a
+// no-op, and the credit step's balance
 // guard (grantDemoCredits) never double-seeds -- which is what makes a
 // FAILED attempt retryable: the retry job scheduled on
 // the app's own job queue (scheduleProvisionRetry) re-runs the same
@@ -495,9 +495,10 @@ func (p *SelfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 }
 
 // provision creates (or ensures, on a redelivery or a retry) the whole
-// clinic shape for userID in tenant clinic: the org tree root (named
-// after the name the registrant gave at registration, or the catalog
-// default), the membership, the built-in roles, the owner grant, the
+// clinic shape for userID in tenant clinic: the org tree root and the
+// registrant's seat in it (org's one idempotent EnsureRootSeat call; the
+// root is named after the name the registrant gave at registration, or
+// the catalog default), the built-in roles, the owner grant, the
 // clinic's subscription to the demo entitlement Plan (ensureDemoSubscription,
 // the same Active subscription the demo seeding gives a demo tenant -- the
 // grant that opens the app's gated AI routes to the clinic) and its demo
@@ -526,30 +527,19 @@ func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, c
 	}
 	tenantCtx := pkgcore.WithTenant(ctx, clinic)
 
-	// The org tree root: mirror org's own ensureRoot (go/org/events.go) --
-	// the tenant's root node, created when it has none, re-read when a
-	// concurrent delivery (a second replica's identical provisioning) won
-	// the creation race. The name and kind are org's own auto-created-root
-	// defaults when the registrant registered none of their own (see
-	// clinicRootName's doc comment), and the registrant's own display
-	// name otherwise -- the product answer for what a self-registered
-	// clinic is called (this file's header).
-	root, created, err := ensureClinicRoot(tenantCtx, p.orgModule.Tree(), p.clinicRootNameFor(userID, tenantCtx))
-	if err != nil {
-		return fmt.Errorf("reference-app: ensure the clinic's org root: %w", err)
-	}
-	log := obs.FromContext(ctx)
-	if created {
-		log.Debug("reference-app: created the clinic's org root",
-			"tenant_id", clinic, "root_node_id", root.ID, "root_name", root.Name)
-	}
-
-	// The membership: one seat per person per tenant; an already-present
-	// seat (a redelivery) is left exactly where it is.
-	if _, err := p.orgModule.Members().Add(tenantCtx, userID, root.ID); err != nil {
-		if !apperr.HasCode(err, org.ErrMembershipExists.Code) {
-			return fmt.Errorf("reference-app: add the registrant to the clinic org: %w", err)
-		}
+	// The org tree root and the registrant's seat in it: one idempotent
+	// call -- org's MemberService.EnsureRootSeat -- covering the chain's
+	// first two hops. An existing root and an existing seat are returned
+	// untouched (a redelivered or retried provisioning re-runs this
+	// safely, never renaming the root or re-binding the seat), and two
+	// replicas racing the clinic's first provisioning converge on one
+	// root and one seat. The root's name and kind are org's own
+	// auto-created-root defaults when the registrant registered none of
+	// their own (see clinicRootName's doc comment), and the registrant's
+	// own display name otherwise -- the product answer for what a
+	// self-registered clinic is called (this file's header).
+	if _, err := p.orgModule.Members().EnsureRootSeat(tenantCtx, userID, p.clinicRootNameFor(userID, tenantCtx), "workspace"); err != nil {
+		return fmt.Errorf("reference-app: ensure the clinic's root seat: %w", err)
 	}
 
 	// The owner grant: roles are tenant rows, so the built-in roles are
@@ -680,40 +670,6 @@ func (p *SelfServiceProvisioner) clinicRootName(ctx context.Context) string {
 		return fallback()
 	}
 	return name
-}
-
-// ensureClinicRoot returns the clinic tenant's root node, creating it
-// when the tenant has none yet -- the idempotent shape org's own
-// ensureRoot (go/org/events.go) uses, including the race handling: two
-// concurrent deliveries can both find no root, and the loser of that race
-// sees ErrRootAlreadyExists (from the pre-check or from the single-root
-// unique index) and re-reads instead of failing. created reports whether
-// this call created the root.
-func ensureClinicRoot(ctx context.Context, tree *org.TreeService, name string) (*org.OrgNode, bool, error) {
-	existing, err := tree.Root(ctx)
-	switch {
-	case err == nil:
-		return existing, false, nil
-	case !apperr.HasCode(err, org.ErrNodeNotFound.Code):
-		return nil, false, err
-	}
-
-	// "workspace" is org's own defaultRootKind literal (go/org/events.go):
-	// the same neutral kind org's auto path gives a brand-new user's root.
-	// Kind is the tenant's own business vocabulary and org enumerates none
-	// of it, so the automatic path's kind is deliberately the most neutral
-	// word available -- this host mirrors it, and a tenant renames the node
-	// (and, with it, whatever kind its own vocabulary needs) the moment the
-	// root means something specific to them.
-	created, err := tree.CreateRoot(ctx, name, "workspace")
-	if err == nil {
-		return created, true, nil
-	}
-	if apperr.HasCode(err, org.ErrRootAlreadyExists.Code) {
-		reRead, reReadErr := tree.Root(ctx)
-		return reRead, false, reReadErr
-	}
-	return nil, false, err
 }
 
 // ClinicTenantOf derives the clinic tenant id for userID. The derivation

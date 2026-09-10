@@ -6,12 +6,15 @@
 //
 // The glue is deliberately thin and deliberately demo-shaped:
 //
-//   - demoUserAddressResolver stands in for the user-address store a real
-//     host reads from (authn's users table, or a profile service): the demo
+//   - DemoUserAddresses stands in for the user-address store a real host
+//     reads from (authn's users table, or a profile service): the demo
 //     users of this app exist only as header values (demo_subject.go), with
-//     no address store behind them, so the resolver answers from a fixed
-//     table. A real resolver would read the address on file for the user id
-//     the delivery job asks about; this one returns the demo table's entry.
+//     no address store behind them, so the notification module is wired
+//     with go/notification/staticaddr over this fixed table (see
+//     server.go's assembly site). A real resolver would read the address on
+//     file for the user id the delivery job asks about; staticaddr returns
+//     the table's entry, and its package doc carries the seam's obligation
+//     -- the table is the operator's declaration of verified addresses.
 //
 //   - wireDemoNotification's note-created subscription is the reference
 //     app's instance of the canonical event-driven flow: a business module
@@ -101,28 +104,6 @@ var DemoUserAddresses = map[string]notification.UserAddresses{
 	DemoNotesCreatorUserID:      {Email: "user-creator-1@demo.example"},
 	DemoSmileSimRecipientUserID: {Phone: "+8613800138099"},
 }
-
-// demoUserAddressResolver is the reference app's implementation of
-// notification.UserAddressResolver: the host-side seam through which a user
-// delivery learns the recipient's outbound addresses.
-//
-// The resolver is read at SEND time by the delivery job, never at enqueue
-// time (see UserAddressResolver's doc comment), which is exactly why a
-// static table works for this app: nothing here needs an address to exist
-// before a dispatch is enqueued. A real deployment implements the same
-// interface over its own address store -- authn's users table or a profile
-// service -- and passes it through the same notification.WithUserAddressResolver
-// option; the seam is all the module knows about users, and the host's
-// implementation is all the module ever calls.
-type demoUserAddressResolver struct{}
-
-// Resolve implements notification.UserAddressResolver.
-func (demoUserAddressResolver) Resolve(_ context.Context, userID string) (notification.UserAddresses, error) {
-	return DemoUserAddresses[userID], nil
-}
-
-// compile-time check that demoUserAddressResolver satisfies the seam.
-var _ notification.UserAddressResolver = demoUserAddressResolver{}
 
 // demoPatientMessagePath is the demo patient-message route: POST it with a
 // JSON body naming a verified external contact of the caller's tenant

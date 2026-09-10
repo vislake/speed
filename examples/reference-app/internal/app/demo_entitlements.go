@@ -114,52 +114,24 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 // writes go through real billing.SubscriptionService calls under the
 // tenant's own context, never a direct database write.
 //
-// The Active check makes the call a no-op for a tenant that already
-// holds an Active subscription -- the convergence that keeps a repeated
-// provisioning (a redelivery or a retry) from stacking subscriptions --
-// and the plain-Go Activate call is the same stand-in for the payment
-// channel's confirmation the demo seed uses: a real deployment's
-// subscription would arrive here Active only after its first successful
-// payment event (go/billing/subscription.go's own Subscription doc
-// comment), a leg this app deliberately does not perform -- see this
-// file's package doc comment.
-//
-// The idempotence is bounded to one process's lifetime, stated honestly
-// rather than as an absolute: a subscription canceled during that
-// lifetime (flowtests/entitlements_flow_test.go's refusal leg does exactly that,
-// through a real Cancel call) is terminal and is never re-ensured while
-// the process lives -- the boot-time seed never re-runs, and a clinic's
-// provisioning never re-runs once its registration completed.
-// SubscriptionService.Active reads only status == "active" rows
-// (go/billing/subscription.go), so a later boot against the SAME
-// database finds no Active subscription where the boot-time seed's loop
-// runs again and re-creates and re-activates one -- accepted
-// self-healing for the demo tenants, the same bounded idempotence
-// grantDemoCredits shows toward a tenant that spent a seeded balance
-// down to exactly zero (demo_credits.go). "Canceled stays canceled" is
-// therefore true per boot, never per database file; what this app
-// guarantees for a running process is that it cannot silently
-// resubscribe a tenant an operator just took offline mid-session -- and
-// the refusal story flowtests/entitlements_flow_test.go drives is exactly that
-// in-process one.
+// The call is billing.SubscriptionService.EnsureActive, whose own
+// contract carries the convergence this app relies on: a tenant already
+// holding an Active subscription gets it back untouched (so a repeated
+// provisioning -- a redelivery or a retry -- never stacks
+// subscriptions), one with none gets a fresh create + activate, a
+// canceled row is never revived, and two racing creators converge on one
+// winner. The plain-Go activation inside EnsureActive is the same
+// stand-in for the payment channel's confirmation the demo seed uses: a
+// real deployment's subscription would arrive Active only after its first
+// successful payment event (go/billing/subscription.go's own Subscription
+// doc comment), a leg this app deliberately does not perform -- see this
+// file's package doc comment. This wrapper adds only the app's policy:
+// which Plan, whose tenant context, and the error text the boot seed and
+// the provisioning chain report.
 func ensureDemoSubscription(ctx context.Context, subs *billing.SubscriptionService, plan *billing.Plan, tenantID pkgcore.TenantID) error {
 	tenantCtx := pkgcore.WithTenant(ctx, tenantID)
-	active, err := subs.Active(tenantCtx)
-	if err != nil {
-		return fmt.Errorf("reference-app: read the active subscription of tenant %q: %w", tenantID, err)
-	}
-	if active != nil {
-		// Already holds an Active subscription from an earlier boot
-		// against the same database file (or from an operator's own
-		// doing) -- leave it exactly as it is, never replaced.
-		return nil
-	}
-	sub, err := subs.Create(tenantCtx, billing.CreateInput{PlanID: plan.ID})
-	if err != nil {
-		return fmt.Errorf("reference-app: create the subscription of tenant %q: %w", tenantID, err)
-	}
-	if _, err := subs.Activate(tenantCtx, sub.ID); err != nil {
-		return fmt.Errorf("reference-app: activate the subscription of tenant %q: %w", tenantID, err)
+	if _, err := subs.EnsureActive(tenantCtx, billing.CreateInput{PlanID: plan.ID}); err != nil {
+		return fmt.Errorf("reference-app: ensure the active subscription of tenant %q: %w", tenantID, err)
 	}
 	return nil
 }
