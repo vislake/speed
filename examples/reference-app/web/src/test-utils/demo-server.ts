@@ -29,11 +29,12 @@
  * (DEMO_READER_IDENTIFIER, the web mirror of the demo-reader@example.com
  * seed): its sign-in answers a principal of its own user and session,
  * the notes list serves it like any member's (the Go suite pins the
- * seeded reader's list as served: demo_users_test.go:212-224
- * (TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal)),
+ * seeded reader's list as served in demo_users_test.go's
+ * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal),
  * and a note create from that principal answers the 403 the write
  * gate gives a caller without notes:write (rbac.permission_denied,
- * asserted at flowtests/server_test.go:438-440). The platform-staff
+ * asserted in flowtests/server_test.go's
+ * TestBuildServer_PermissionGate_EnforcesTheNotesPermissions). The platform-staff
  * shape is the configured
  * account itself signed into the system pseudo-tenant -- the fixture's
  * tenantId option set to SYSTEM_PSEUDO_TENANT_ID ('system', the value
@@ -65,8 +66,8 @@
  * sign-in naming a tenant the account holds no membership in with the
  * unified 401 authn.invalid_credentials answer a wrong password also
  * gets, its no-membership reason surviving in the login history, never
- * the response (the acme-only account asking for tenant-globex:
- * demo_users_test.go:251-255, the history read at :262, both in
+ * the response (the acme-only account asking for tenant-globex, in
+ * demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal) -- a
  * refusal no journey drives, since the switch and sign-in surfaces a
  * browser reaches never ask for a tenant it was not granted.
@@ -208,9 +209,10 @@
  * stays on notes, the exact surface where the seed's grant asymmetry
  * lives: the list served like any member's, a create refused with
  * the rbac write gate's 403 -- the answers the Go suite pins for the
- * read-only member (its list served, demo_users_test.go:212-224,
+ * read-only member (its list served in demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal; its
- * create refused, flowtests/server_test.go:438-440). The read-denied
+ * create refused in flowtests/server_test.go's
+ * TestBuildServer_PermissionGate_EnforcesTheNotesPermissions). The read-denied
  * refusal of a caller without notes:read is the denyNotesRead switch's
  * answer, a
  * shape no seeded account carries.
