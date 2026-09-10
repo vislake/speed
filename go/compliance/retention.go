@@ -121,11 +121,12 @@ var retentionSweepSchedule = pkgcore.PeriodicTask{
 // RetentionService.SweepAllTenants discover which tenants to sweep,
 // without compliance importing org (or any other module that owns a
 // tenant directory) -- the same no-import-seam shape as org's own
-// Scope/FeatureGate interfaces and config's WithResolver. A host that
-// only ever schedules one tenant's sweep at a time (EnqueueRetentionSweep
-// called once per tenant from its own platform loop, the same shape
-// go/storage's EnqueueExpirySweep documents) needs no TenantLister at
-// all.
+// Scope/FeatureGate interfaces and config's WithResolver. Only the
+// whole-universe SweepAllTenants call needs it: a host that runs a
+// jobs.Scheduler sweeps every tenant through the declared per-tenant
+// schedule, expanded by the scheduler's own jobs.TenantLister seam, and a
+// manual EnqueueRetentionSweep call names its one tenant -- neither path
+// needs a compliance TenantLister wired through WithTenantLister.
 type TenantLister interface {
 	// ListTenants returns every tenant a retention sweep should cover.
 	// ctx carries no tenant of its own -- this is inherently a cross-
@@ -446,13 +447,17 @@ func (s *RetentionService) SweepAllTenants(ctx context.Context) (map[pkgcore.Ten
 }
 
 // EnqueueRetentionSweep enqueues the retention-sweep task for the tenant
-// ctx carries, mirroring go/storage's EnqueueExpirySweep: the host-facing
-// schedule point a platform loop calls once per tenant on its own timer,
-// relying on the task's window-scoped idempotency key
-// (retentionSweepIdempotencyKey) to collapse the enqueues of one
-// retentionSweepWindowSize window into one job. An enqueue whose clock has
-// moved into a later window (retentionSweepWindowStart) is a new job and
-// runs again -- this is what makes the sweep periodic on queues whose
+// ctx carries, mirroring go/storage's EnqueueExpirySweep -- the manual
+// entry point. The sweep's default schedule is the module's own: Register
+// declares it on the pkgcore.Registry.Schedules seat
+// (retentionSweepSchedule, a per-tenant task at the sweep's own window),
+// so a host that runs a jobs.Scheduler sweeps every tenant without writing
+// a schedule point of its own. The enqueue relies on the task's
+// window-scoped idempotency key (retentionSweepIdempotencyKey) to collapse
+// the enqueues of one retentionSweepWindowSize window into one job. An
+// enqueue whose clock has moved into a later window
+// (retentionSweepWindowStart) is a new job and runs again -- this is what
+// makes the sweep periodic on queues whose
 // idempotency is unconditional, and what keeps one dead-lettered sweep
 // from poisoning its tenant forever; see retentionSweepIdempotencyKey's
 // doc comment for the full window semantics. ctx must carry a tenant

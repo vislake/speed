@@ -29,9 +29,10 @@
 //
 //   - RetentionService: a per-tenant retention-window sweep (SweepTenant),
 //     a periodic jobs.Handler wrapping it (EnqueueRetentionSweep, the
-//     host-facing schedule point), and an optional TenantLister seam
-//     (SweepAllTenants) so a host that wants one scheduled task to cover
-//     every tenant can supply one without compliance importing org.
+//     manual entry point beside the schedule Register declares), and an
+//     optional TenantLister seam (SweepAllTenants) so a host that wants
+//     one call to cover every tenant can supply one without compliance
+//     importing org.
 //   - ErasureService: Erase, the right-to-erasure entry point, bypassing
 //     the retention window and calling every participant's Erase callback
 //     under an audited system context.

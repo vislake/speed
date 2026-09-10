@@ -10,15 +10,19 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file is the API-key expiry sweep: the jobs task a host schedules per
-// tenant on its own timer, which physically removes the APIKey rows (and
-// their apiKeyHashIndex companions) whose ExpiresAt has passed.
+// This file is the API-key expiry sweep: the jobs task the module declares
+// on the pkgcore.Registry.Schedules seat and enqueues per tenant, which
+// physically removes the APIKey rows (and their apiKeyHashIndex
+// companions) whose ExpiresAt has passed. A host that runs a jobs.Scheduler
+// over the finished registry sweeps every tenant without writing a schedule
+// point of its own; EnqueueAPIKeyExpirySweep below remains the manual entry
+// point.
 //
 // Nothing about correct authentication depends on the sweep: Authenticate
 // checks IsExpired against the caller's own clock on every call, so an
 // unswept, past-expiry row is refused correctly today -- the sweep only
 // reclaims disk (and the dead index rows Authenticate can no longer use).
-// That is what makes the sweep optional, host-scheduled work rather than a
+// That is what makes the sweep optional background work rather than a
 // correctness fix, and it is why an unwired queue is a plain error at the
 // enqueue point instead of a boot failure: a host that runs no workers has
 // nothing to enqueue onto, and its keys are not one day less secure for
@@ -27,10 +31,11 @@ import (
 // The per-tenant shape is forced by this module's own rules, not a choice:
 // APIKey is TenantScoped, every repository read goes through the
 // tenant-scope plugin, and this module holds no system-context grant -- so
-// the sweep operates on exactly the tenant its context carries, and a host
-// with many tenants schedules one task per tenant, exactly like go/storage's
-// own EnqueueExpirySweep (go/storage/cleanup.go), whose windowed
-// idempotency-key design this file mirrors.
+// the sweep operates on exactly the tenant its context carries, and the
+// per-tenant declaration expands through the host's scheduler into one task
+// per tenant, exactly like go/storage's own expiry sweep
+// (go/storage/cleanup.go), whose windowed idempotency-key design this file
+// mirrors.
 
 // jobTypeAPIKeyExpirySweep is the Task.Type of every expiry-sweep task this
 // module enqueues and handles, following the same "integration.<entity>.
@@ -100,8 +105,11 @@ var apiKeyExpirySweepSchedule = pkgcore.PeriodicTask{
 }
 
 // EnqueueAPIKeyExpirySweep enqueues the expiry-sweep task for the tenant ctx
-// carries. It is the host-facing schedule point: a host with workers runs it
-// on its own timer per tenant, and the task's window-scoped idempotency key
+// carries -- the manual entry point. The sweep's default schedule is the
+// module's own: Register declares it on the pkgcore.Registry.Schedules seat
+// (apiKeyExpirySweepSchedule, a per-tenant task at the sweep's own window),
+// so a host that runs a jobs.Scheduler sweeps every tenant without writing
+// a schedule point of its own. The task's window-scoped idempotency key
 // (apiKeyExpirySweepIdempotencyKey) collapses the enqueues of one
 // apiKeyExpirySweepWindowSize window into one job, so a tenant is never
 // swept by two workers at once -- and an enqueue whose clock has moved into
