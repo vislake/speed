@@ -93,17 +93,29 @@ paths:
                 $ref: '#/components/schemas/AuthnTokenPair'
         '401':
           description: >-
-            The identifier or password did not match any account
-            (authn.invalid_credentials -- one answer for every failure
-            reason, by design; see go/authn/errors.go).
+            The single answer to every failed sign-in
+            (authn.invalid_credentials, with no parameters): an unknown
+            identifier, a wrong password, an account with no password or
+            a suspended account, and a correct password whose account
+            resolves no active membership in the requested tenant --
+            membership is asked only after the password verified, so an
+            answer naming it would certify the password to an anonymous
+            caller. The real reason is recorded on the login-history row
+            for the operator and the account owner's own security page,
+            never returned (see go/authn/errors.go).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthnError'
         '403':
           description: >-
-            The account authenticated but is not an active member of the
-            requested tenant (authn.tenant_membership_required).
+            Password sign-in is turned off as a channel on this
+            deployment (authn.channel_disabled, with params.channel
+            naming the flag key -- "authn.password_login"). The channel
+            check runs before the identifier is read, so with the flag
+            off every request to this endpoint is refused identically,
+            and the flag is public configuration the login page reads
+            pre-authentication. It is the operation's only 403.
           content:
             application/json:
               schema:
