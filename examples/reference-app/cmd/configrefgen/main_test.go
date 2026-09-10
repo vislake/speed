@@ -80,3 +80,67 @@ func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 		t.Fatalf("run (stale --check) = %d, want 1 when an artifact is missing and another is out of date", code)
 	}
 }
+
+// TestRun_ReportsAUsageErrorOnAnUnknownFlag pins the flag-parsing refusal:
+// an argument the command does not define exits 2 without touching any
+// output.
+func TestRun_ReportsAUsageErrorOnAnUnknownFlag(t *testing.T) {
+	if code := run([]string{"--no-such-flag"}); code != 2 {
+		t.Fatalf("run with an unknown flag = %d, want 2", code)
+	}
+}
+
+// TestRun_WithoutRepoRootFlag_RefusesWhenNoneIsFound pins the no-flag run
+// mode's refusal: with no go.work in any ancestor of the working directory
+// there is no root to write into, and the command exits 2 rather than
+// guessing one. The working directory is a temp directory, which sits outside
+// any repository.
+func TestRun_WithoutRepoRootFlag_RefusesWhenNoneIsFound(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if code := run(nil); code != 2 {
+		t.Fatalf("run with no repository root above the working directory = %d, want 2", code)
+	}
+}
+
+// TestFindRepoRoot_DiscoversTheAncestorCarryingGoWork pins the discovery the
+// no-flag run mode depends on: a directory carrying go.work is its own
+// answer, and a nested directory resolves to the ancestor that carries it.
+func TestFindRepoRoot_DiscoversTheAncestorCarryingGoWork(t *testing.T) {
+	root := t.TempDir()
+	// The fixture only has to exist: findRepoRoot stats the file and never
+	// parses it.
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("// repository-root marker for findRepoRoot\n"), 0o644); err != nil {
+		t.Fatalf("write go.work: %v", err)
+	}
+	nested := filepath.Join(root, "examples", "reference-app")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", nested, err)
+	}
+
+	// The expectation is the physical spelling os.Getwd reports: findRepoRoot
+	// walks up from that spelling, and a temp directory may be reached through
+	// a symlink on some platforms.
+	t.Chdir(root)
+	physicalRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if got, err := findRepoRoot(); err != nil || got != physicalRoot {
+		t.Fatalf("findRepoRoot at the root = %q, %v; want %q, nil", got, err, physicalRoot)
+	}
+
+	t.Chdir(nested)
+	if got, err := findRepoRoot(); err != nil || got != physicalRoot {
+		t.Fatalf("findRepoRoot at a nested directory = %q, %v; want %q, nil", got, err, physicalRoot)
+	}
+}
+
+// TestFindRepoRoot_ReportsAFailureWithNoGoWorkAbove pins the walk's
+// termination: with no go.work in any ancestor, discovery fails cleanly
+// instead of looping at the filesystem root.
+func TestFindRepoRoot_ReportsAFailureWithNoGoWorkAbove(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if got, err := findRepoRoot(); err == nil {
+		t.Fatalf("findRepoRoot outside a repository = %q, want an error", got)
+	}
+}
