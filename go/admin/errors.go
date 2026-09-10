@@ -168,7 +168,7 @@ var (
 	// role catalog and bindings are the platform's internal domain,
 	// administered by hosts out of band, directly against rbac.Service
 	// under a system-tenant context (the shape the reference app's
-	// seedDemoPlatformStaff takes), never through this surface. This is
+	// SeedDemoPlatformStaff takes), never through this surface. This is
 	// refused unconditionally, never merely gated on a stricter
 	// permission: no admin permission is fine-grained enough to distinguish
 	// "may manage a customer tenant's roles" from "may delegate

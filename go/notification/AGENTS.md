@@ -19,7 +19,7 @@ below), the module's own OpenAPI fragment with a generated, compile-checked
 HTTP handler, the per-replica realtime hub behind the inbox stream, and the
 dual-dialect migration set. The reference app (`examples/reference-app`) is
 the mandatory first consumer: `internal/app/server.go` wires `notification.NewModule`
-through `Kernel.Bootstrap`, `internal/app/demo_notification.go` supplies the
+through `Kernel.Bootstrap`, `internal/app/demo/demo_notification.go` supplies the
 host-side demo seams, and `flowtests/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 
@@ -68,7 +68,7 @@ consults is the live registry list, read at call time, never a snapshot
 own `Register` ran). Business modules never depend on notification either:
 they publish domain events, and notification's consumption of them is the
 host's wiring, never the module's -- a host subscribes and calls
-`Deliveries().Dispatch` (the reference app's `wireDemoNotification` is that
+`Deliveries().Dispatch` (the reference app's `WireDemoNotification` is that
 glue), while the module's own `Register` subscribes to nothing but its
 inbox-created event for the local hub fan-out. That direction is what keeps
 the module a leaf of the dependency graph rather than a hub every other

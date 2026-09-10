@@ -48,7 +48,7 @@ import (
 // -- the granting-side twin of ErrImpersonationTargetForbidden's
 // subject-side refusal. Hosts seed and revoke system-domain grants out of
 // band, directly against rbac.Service under a system-tenant context, as
-// the reference app's seedDemoPlatformStaff does.
+// the reference app's SeedDemoPlatformStaff does.
 type RoleService struct {
 	svc *rbac.Service
 }
@@ -84,7 +84,7 @@ func (s *RoleService) require() (*rbac.Service, error) {
 // subject-side refusal -- see that sentinel's doc comment). Hosts seed
 // and revoke system-domain grants out of band, directly against
 // rbac.Service under a system-tenant context (the shape the reference
-// app's seedDemoPlatformStaff takes), which this refusal leaves untouched.
+// app's SeedDemoPlatformStaff takes), which this refusal leaves untouched.
 func (s *RoleService) checkTenantWritable(tenantID string) error {
 	if tenantID == "" {
 		return ErrTenantIDRequired
@@ -204,7 +204,7 @@ func (s *RoleService) RestoreRole(ctx context.Context, tenantID, userID, role, n
 // other write here runs: a host that needs built-in roles inside
 // rbac.SystemDomain (BuiltinRoleOwner carries every admin:* permission,
 // so its system-domain materialization is bootstrap business, exactly
-// like the reference app's seedDemoPlatformStaff) calls rbac.Service
+// like the reference app's SeedDemoPlatformStaff) calls rbac.Service
 // directly under a system-tenant context, never this wrapper.
 // No HTTP route exposes this either, for the identical reason
 // RestoreRole's own doc comment gives.

@@ -1008,7 +1008,7 @@ func (h *Handler) requestLocale(r *http.Request) string {
 //
 // The implementation is the host's to supply: in the reference app, the
 // demo identity layer reads a signed-in demo user from the same request
-// attribute its tenancy resolution wrote (internal/app's demo_subject.go);
+// attribute its tenancy resolution wrote (internal/app/demo's demo_subject.go);
 // in a host running the authn module, whatever connects a verified
 // principal to the request answers here. The module itself never reads the
 // caller's identity from a header, the context or the request path, and it
