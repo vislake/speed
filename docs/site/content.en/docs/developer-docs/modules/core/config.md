@@ -6,27 +6,31 @@ description: "Why config splits declaration from freeze across Register and Atta
 
 # config: dynamic settings that change hot
 
-config is the runtime half of configuration: the schema-first,
+config owns speed's runtime configuration layer: the schema-first,
 database-backed settings store whose values can change at runtime and
 take effect hot — feature-flag enablement, tenant brand items, default
 limits, AI-model defaults. Its scope model has three tiers (`system` →
 `tenant` → `user`, the last reserved and unimplemented) with reads
-falling back from the concrete tier to the wide one, and it is also
-the runtime half of feature flags: modules declare flags on pkgcore's
-registry; this module folds those declarations into its schema, walks
-flag dependency chains at runtime, and serves the enablement list to
-the frontend. It is among the always-on modules with no off switch.
+falling back from the concrete tier to the wide one, and it also owns
+feature flags at runtime: modules declare flags on pkgcore's registry;
+this module folds those declarations into its schema, walks flag
+dependency chains at runtime, and serves the enablement list to the
+frontend. It is among the always-on modules with no off switch.
 
 ## Responsibility and boundary
 
-- **Bootstrap configuration is not this module's business.** How to
+- **Bootstrap resolution is not this module's business.** How to
   reach infrastructure — DSNs, addresses, the deployment mode, the
   composition preset, the master key — is decided once at process
-  startup by `pkgcore/config`, a separate zero-dependency package this
-  module must never import. Mixing the two would create the
-  chicken-and-egg of "database connection string stored in the
-  database": bootstrap values are immutable at runtime by definition;
-  dynamic values exist precisely to be changed.
+  startup: the keys are declared on `pkgcore`'s bootstrap seat,
+  resolved by the general-purpose `pkgcore/config` loader (a separate
+  zero-dependency package this module must never import), and their
+  key-material derivation convention — one purpose string per declared
+  key path (`pkgcore.BootstrapKeyPurpose`), composed with
+  `dbkit.DeriveKey` — lives with that seat and toolkit. Mixing the two
+  would create the chicken-and-egg of "database connection string
+  stored in the database": bootstrap values are immutable at runtime
+  by definition; dynamic values exist precisely to be changed.
 - **It renders nothing.** `Locales()` returns an empty embed.FS; every
   user-facing string of its endpoints is a structured error code. The
   bilingual catalog renders content, never schemas — item descriptions

@@ -12,10 +12,16 @@ effect hot — feature-flag enablement, tenant brand items, default
 limits, AI-model defaults. Values live in the `configs` table under
 two scope tiers, `system` (platform-wide) → `tenant` (per-tenant
 overrides), with reads falling back from the narrow tier to the wide
-one and then to the schema default. The bootstrap half of
-configuration — process-startup flags, env and files — is a different
-package, `pkgcore/config`, which this module never imports; the module
-is the *runtime* half, required for any multi-tenant host.
+one and then to the schema default. speed's other configuration
+layer — process-start bootstrap input (flags, env and files) — is
+outside this module's scope: it is declared on `pkgcore`'s bootstrap
+seat (`Registry.Bootstrap`), resolved by the general-purpose
+`pkgcore/config` loader (host-driven against its own target struct;
+a zero-dependency package this module never imports), and its
+key-material derivation convention — one purpose string per declared
+key path (`pkgcore.BootstrapKeyPurpose`), composed with
+`dbkit.DeriveKey` — lives with that seat and toolkit. This module
+owns the runtime layer, and it is required for any multi-tenant host.
 
 Modules declare items and feature flags on the registry during
 `Register` (`reg.Config.Add(pkgcore.ConfigItem{Key, Type, Default,
