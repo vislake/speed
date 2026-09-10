@@ -30,6 +30,16 @@ import (
 // user-guide area beside the error-code index's own generated page.
 const sitePagePath = "docs/site/content.en/docs/user-guide/configuration.md"
 
+// The reference's two sections carry deliberately distinct record types. A
+// declaredBootstrapKey is process-start input: an environment variable (or
+// flag, or config-file entry) a host resolves once, fixed for the process's
+// lifetime, with no tenant dimension and no runtime edit surface. A
+// referenceItem is a runtime entry in the configs table: a per-tenant value an
+// operator edits while the process runs. The two differ in source, lifetime,
+// scope, value semantics, editor and failure consequence, so their field sets
+// stay separate and are never merged into one record type -- the module-tagged
+// row each section renders makes the sections comparable, not interchangeable.
+
 // referenceItem is one row of the reference: a runtime configuration item or
 // feature flag from the frozen schema.
 type referenceItem struct {
@@ -87,40 +97,43 @@ type referenceItem struct {
 
 // declaredBootstrapKey is one bootstrap key a platform module declared, as the
 // reference renders it: the declaration's own facts plus the environment
-// variable name the loader's default rule derives from the key path.
+// variable name the loader's default rule derives from the key path, as one
+// flat entry carrying its declaring module -- the shape the dynamic section's
+// rows carry too.
 type declaredBootstrapKey struct {
 	// Key is the dotted key path the module declared.
 	Key string `json:"key"`
+	// Module is the declaring module, the declaration's Group -- conventionally
+	// the key path's first segment. The Markdown groups its tables by it; the
+	// JSON twin carries it on every row and stays one flat list.
+	Module string `json:"module"`
 	// Env is the environment variable name the loader derives from Key under
 	// its default prefix (loader.EnvName(loader.EnvPrefix, Key)) -- the
 	// derivation an unpinned host field reads. A host may pin a different
 	// name for its own field; that choice is the host's, not this reference's.
 	Env string `json:"env"`
-	// Format is the declared value shape.
-	Format string `json:"format"`
-	// Default is the declared fallback statement.
-	Default string `json:"default"`
+	// Type is the declared value shape: "string", "int", "bool" or "hexkey".
+	Type string `json:"type"`
+	// UnsetFallback states in operator terms what an unset key resolves to.
+	// It is deliberately not the dynamic layer's "default": the two layers'
+	// fallbacks have different sources and different consequences.
+	UnsetFallback string `json:"unset_fallback"`
 	// Sensitive marks declared key material.
 	Sensitive bool `json:"sensitive"`
 	// Description is the declared contract text.
 	Description string `json:"description"`
 }
 
-// declaredModule groups one module's declared bootstrap keys.
-type declaredModule struct {
-	// Name is the module that declared them.
-	Name string `json:"module"`
-	// Keys are its declarations, ordered by key.
-	Keys []declaredBootstrapKey `json:"keys"`
-}
-
 // document is the assembled reference.
 type document struct {
 	// Items holds the dynamic layer's rows in rendering order.
 	Items []referenceItem
-	// DeclaredModules lists the platform module declarations, in module
-	// order.
-	DeclaredModules []declaredModule
+	// Declared holds the bootstrap layer's entries as one flat list, ordered
+	// by declaring module then key path. The Markdown groups it into one table
+	// per module for the human reader; the JSON twin renders the same list
+	// flat -- the grouping is a rendering choice, not a second shape of the
+	// facts.
+	Declared []declaredBootstrapKey
 }
 
 // buildDocument assembles the reference from the schema snapshot and the module
@@ -133,7 +146,7 @@ func buildDocument(descriptors []config.ConfigItemDescriptor, declared []pkgcore
 	}
 
 	doc := &document{}
-	doc.DeclaredModules = declaredKeys(declared)
+	doc.Declared = declaredKeys(declared)
 
 	for _, d := range descriptors {
 		module := d.Key
@@ -168,42 +181,42 @@ func buildDocument(descriptors []config.ConfigItemDescriptor, declared []pkgcore
 	return doc, nil
 }
 
-// declaredKeys folds the registry's declarations into per-module groups, in
-// module order with each module's keys ordered by key path, and fills every
-// row's Env cell from the loader's own derivation.
-func declaredKeys(declared []pkgcore.BootstrapKey) []declaredModule {
-	byModule := make(map[string][]declaredBootstrapKey)
+// declaredKeys folds the registry's declarations into one flat list ordered by
+// declaring module then key path, and fills every entry's Env cell from the
+// loader's own derivation.
+func declaredKeys(declared []pkgcore.BootstrapKey) []declaredBootstrapKey {
+	rows := make([]declaredBootstrapKey, 0, len(declared))
 	for _, key := range declared {
-		byModule[key.Group] = append(byModule[key.Group], declaredBootstrapKey{
-			Key:         key.Key,
-			Env:         loader.EnvName(loader.EnvPrefix, key.Key),
-			Format:      key.Format,
-			Default:     key.Default,
-			Sensitive:   key.Sensitive,
-			Description: key.Description,
+		rows = append(rows, declaredBootstrapKey{
+			Key:           key.Key,
+			Module:        key.Group,
+			Env:           loader.EnvName(loader.EnvPrefix, key.Key),
+			Type:          key.Format,
+			UnsetFallback: key.Default,
+			Sensitive:     key.Sensitive,
+			Description:   key.Description,
 		})
 	}
-
-	modules := make([]declaredModule, 0, len(byModule))
-	for name, keys := range byModule {
-		sort.Slice(keys, func(i, j int) bool { return keys[i].Key < keys[j].Key })
-		modules = append(modules, declaredModule{Name: name, Keys: keys})
-	}
-	sort.Slice(modules, func(i, j int) bool { return modules[i].Name < modules[j].Name })
-	return modules
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Module != rows[j].Module {
+			return rows[i].Module < rows[j].Module
+		}
+		return rows[i].Key < rows[j].Key
+	})
+	return rows
 }
 
-// marshalJSON renders the machine-readable twin: the bootstrap
-// declarations the reference's first section renders, plus the dynamic item
-// list its second section renders. The top level is a struct, not a map, so
-// the two sections keep the document's own order (slice order inside each is
-// already deterministic) rather than a map's key order.
+// marshalJSON renders the machine-readable twin: the bootstrap declarations
+// the reference's first section renders, as one flat entry list, plus the
+// dynamic item list its second section renders. The top level is a struct, not
+// a map, so the two sections keep the document's own order (slice order inside
+// each is already deterministic) rather than a map's key order.
 func (d *document) marshalJSON() string {
 	payload := struct {
-		BootstrapKeys []declaredModule `json:"bootstrap_keys"`
-		DynamicItems  []referenceItem  `json:"dynamic_items"`
+		BootstrapKeys []declaredBootstrapKey `json:"bootstrap_keys"`
+		DynamicItems  []referenceItem        `json:"dynamic_items"`
 	}{
-		BootstrapKeys: d.DeclaredModules,
+		BootstrapKeys: d.Declared,
 		DynamicItems:  d.Items,
 	}
 	out, err := json.MarshalIndent(payload, "", "  ")
@@ -240,9 +253,7 @@ func (d *document) counts() counts {
 			c.sensitive++
 		}
 	}
-	for _, m := range d.DeclaredModules {
-		c.declared += len(m.Keys)
-	}
+	c.declared = len(d.Declared)
 	return c
 }
 
@@ -293,19 +304,28 @@ const bootstrapIntro = "The bootstrap layer is the process-start input a speed-b
 const bootstrapSecretsNote = "Secret materials (Sensitive above) must come from a secret store in a real deployment, never from a committed file. The Unset fallback column states what an unset key resolves to; for key materials that is a documented, recognizable, NON-SECRET development default a real deployment must override, and each declaration's own text says what its key protects and how it is isolated from every other key.\n\n" +
 	"A deployment that would rather manage one secret than one per key can derive a declared key's material from a single 32-byte root key with `config.DeriveBootstrapKeyMaterial(rootKey, keyPath)`: the material is HKDF-SHA256 over a purpose string that embeds the declared key path verbatim -- `speed.config.master_key.v1` for `config.master_key`, `speed.authn.blind_index_key.v1` and `speed.authn.pii_cipher_key.v1` for authn's two, and `speed.notification.contact_index_key.v1`, `speed.org.invitation_email_index_key.v1` and `speed.pki.local_key_cipher_key.v1` for the remaining three. Which variable carries the root key, and which carries a single key's own override, is the host's choice: the names belong to the host, and the platform only receives the bytes. Precedence is the host's to apply, and the supported shape is \"explicit beats derived\" -- an individually configured key always wins over the value derived for it. Because a purpose embeds the declared key path, renaming a declared key path is a rotation of that key's material, and must ship as one."
 
-// renderDeclaredModules renders the per-module bootstrap-key declarations.
+// renderDeclaredModules renders the per-module bootstrap-key tables from the
+// flat declaration list: each declaring module opens its own table, the
+// human-readable counterpart of the JSON twin's flat entries.
 func (d *document) renderDeclaredModules() string {
 	var b strings.Builder
 	b.WriteString("### Bootstrap keys declared by platform modules\n\n")
 	b.WriteString("Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The tables below are rendered from `reg.Bootstrap` itself. The Env variable column is the name the loader derives from the key path under its default prefix, which is what an unpinned host field reads; a host that pins a different name for its own field is exercising its own naming choice.\n\n")
-	for _, module := range d.DeclaredModules {
-		b.WriteString("**" + module.Name + "**\n\n")
-		b.WriteString("| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |\n")
-		b.WriteString("|---|---|---|---|---|---|\n")
-		for _, key := range module.Keys {
-			sensitive := strconv.FormatBool(key.Sensitive)
-			b.WriteString("| `" + key.Key + "` | `" + key.Env + "` | " + key.Format + " | " + sensitive + " | " + escapeCell(key.Default) + " | " + escapeCell(key.Description) + " |\n")
+	module := ""
+	for _, key := range d.Declared {
+		if key.Module != module {
+			if module != "" {
+				b.WriteString("\n")
+			}
+			module = key.Module
+			b.WriteString("**" + module + "**\n\n")
+			b.WriteString("| Key | Env variable | Type | Sensitive | Unset fallback | What the key protects |\n")
+			b.WriteString("|---|---|---|---|---|---|\n")
 		}
+		sensitive := strconv.FormatBool(key.Sensitive)
+		b.WriteString("| `" + key.Key + "` | `" + key.Env + "` | " + key.Type + " | " + sensitive + " | " + escapeCell(key.UnsetFallback) + " | " + escapeCell(key.Description) + " |\n")
+	}
+	if module != "" {
 		b.WriteString("\n")
 	}
 	b.WriteString("A key belongs to exactly one configuration layer. A bootstrap key is process-start input, resolved once and fixed for the process's lifetime; a runtime item (the next section) is a per-tenant value an operator edits while the process runs. Declaring the same dotted key on both layers is refused at startup and in this generator, because one identifier cannot carry two meanings, two defaults and two edit surfaces.\n")
@@ -352,7 +372,7 @@ const dynamicIntro = "The dynamic layer holds the configuration an operator edit
 	"Sensitive items are encrypted at rest: the `configs` table stores `base64(ciphertext)` sealed by the host's `dbkit.Cipher` key, never plaintext, and are never served on the public endpoint, whose rows are exactly the items marked Public below (`/api/v1/config/public`, `config.PathPublic`). A Sensitive item's default is redacted in this very table (the `[redacted]` marker), because this document is a committed artifact a secret's plaintext has no more business crossing than the event bus."
 
 // dynamicFooter is the dynamic section's closing text.
-const dynamicFooter = "The owning module of each key is its dot-prefix (`authn.social.*` belongs to authn), the module whose runtime code reads the value; `Group` is the admin-console grouping the declaration carried. Feature flags are bool items whose \"enabled\" meaning is decided by `config.Service.IsEnabled`'s dependency walk over the flag graph. The JSON twin of this document carries each row as structured fields (`key`, `module`, `scope`, `sensitive`, `default`, ...) plus the module declarations. Concrete example rows of the `configs` table itself -- a platform row and a tenant override for authn and sharing items, the Sensitive handling included -- live in `docs/config-row-examples.json`."
+const dynamicFooter = "The owning module of each key is its dot-prefix (`authn.social.*` belongs to authn), the module whose runtime code reads the value; `Group` is the admin-console grouping the declaration carried. Feature flags are bool items whose \"enabled\" meaning is decided by `config.Service.IsEnabled`'s dependency walk over the flag graph. The JSON twin of this document carries both layers as flat row lists: a bootstrap entry holds `key`, `module`, `env`, `type`, `unset_fallback`, `sensitive` and `description`; a dynamic item's structured fields follow (`key`, `module`, `scope`, `sensitive`, `default`, ...). Concrete example rows of the `configs` table itself -- a platform row and a tenant override for authn and sharing items, the Sensitive handling included -- live in `docs/config-row-examples.json`."
 
 // moduleCount counts the distinct owning modules of dynamic items.
 func moduleCount(d *document) int {

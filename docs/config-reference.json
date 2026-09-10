@@ -1,77 +1,58 @@
 {
   "bootstrap_keys": [
     {
+      "key": "authn.blind_index_key",
       "module": "authn",
-      "keys": [
-        {
-          "key": "authn.blind_index_key",
-          "env": "SPEED_AUTHN__BLIND_INDEX_KEY",
-          "format": "hexkey",
-          "default": "documented non-secret development default",
-          "sensitive": true,
-          "description": "HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key."
-        },
-        {
-          "key": "authn.pii_cipher_key",
-          "env": "SPEED_AUTHN__PII_CIPHER_KEY",
-          "format": "hexkey",
-          "default": "documented non-secret development default",
-          "sensitive": true,
-          "description": "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below."
-        }
-      ]
+      "env": "SPEED_AUTHN__BLIND_INDEX_KEY",
+      "type": "hexkey",
+      "unset_fallback": "documented non-secret development default",
+      "sensitive": true,
+      "description": "HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key."
     },
     {
+      "key": "authn.pii_cipher_key",
+      "module": "authn",
+      "env": "SPEED_AUTHN__PII_CIPHER_KEY",
+      "type": "hexkey",
+      "unset_fallback": "documented non-secret development default",
+      "sensitive": true,
+      "description": "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below."
+    },
+    {
+      "key": "config.master_key",
       "module": "config",
-      "keys": [
-        {
-          "key": "config.master_key",
-          "env": "SPEED_CONFIG__MASTER_KEY",
-          "format": "hexkey",
-          "default": "documented non-secret development default",
-          "sensitive": true,
-          "description": "Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input."
-        }
-      ]
+      "env": "SPEED_CONFIG__MASTER_KEY",
+      "type": "hexkey",
+      "unset_fallback": "documented non-secret development default",
+      "sensitive": true,
+      "description": "Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input."
     },
     {
+      "key": "notification.contact_index_key",
       "module": "notification",
-      "keys": [
-        {
-          "key": "notification.contact_index_key",
-          "env": "SPEED_NOTIFICATION__CONTACT_INDEX_KEY",
-          "format": "hexkey",
-          "default": "documented non-secret development default",
-          "sensitive": true,
-          "description": "HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key."
-        }
-      ]
+      "env": "SPEED_NOTIFICATION__CONTACT_INDEX_KEY",
+      "type": "hexkey",
+      "unset_fallback": "documented non-secret development default",
+      "sensitive": true,
+      "description": "HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key."
     },
     {
+      "key": "org.invitation_email_index_key",
       "module": "org",
-      "keys": [
-        {
-          "key": "org.invitation_email_index_key",
-          "env": "SPEED_ORG__INVITATION_EMAIL_INDEX_KEY",
-          "format": "hexkey",
-          "default": "documented non-secret development default",
-          "sensitive": true,
-          "description": "HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key."
-        }
-      ]
+      "env": "SPEED_ORG__INVITATION_EMAIL_INDEX_KEY",
+      "type": "hexkey",
+      "unset_fallback": "documented non-secret development default",
+      "sensitive": true,
+      "description": "HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key."
     },
     {
+      "key": "pki.local_key_cipher_key",
       "module": "pki",
-      "keys": [
-        {
-          "key": "pki.local_key_cipher_key",
-          "env": "SPEED_PKI__LOCAL_KEY_CIPHER_KEY",
-          "format": "hexkey",
-          "default": "documented non-secret development default",
-          "sensitive": true,
-          "description": "AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one."
-        }
-      ]
+      "env": "SPEED_PKI__LOCAL_KEY_CIPHER_KEY",
+      "type": "hexkey",
+      "unset_fallback": "documented non-secret development default",
+      "sensitive": true,
+      "description": "AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one."
     }
   ],
   "dynamic_items": [

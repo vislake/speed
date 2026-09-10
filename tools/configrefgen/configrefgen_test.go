@@ -203,22 +203,18 @@ func TestRenderedDeclaredKeysMatchTheCensus(t *testing.T) {
 
 	var payload struct {
 		BootstrapKeys []struct {
-			Keys []struct {
-				Key string `json:"key"`
-			} `json:"keys"`
+			Key string `json:"key"`
 		} `json:"bootstrap_keys"`
 	}
 	if err := json.Unmarshal([]byte(doc.marshalJSON()), &payload); err != nil {
 		t.Fatalf("unmarshal the JSON twin: %v", err)
 	}
 	got := make(map[string]bool)
-	for _, module := range payload.BootstrapKeys {
-		for _, key := range module.Keys {
-			if got[key.Key] {
-				t.Errorf("docs/config-reference.json carries %s more than once", key.Key)
-			}
-			got[key.Key] = true
+	for _, key := range payload.BootstrapKeys {
+		if got[key.Key] {
+			t.Errorf("docs/config-reference.json carries %s more than once", key.Key)
 		}
+		got[key.Key] = true
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the JSON twin carries the bootstrap keys %v, want exactly the declared %v", sortedKeys(got), sortedKeys(want))
@@ -263,20 +259,16 @@ func TestRenderedEnvNamesMatchTheLoaderRule(t *testing.T) {
 
 	var payload struct {
 		BootstrapKeys []struct {
-			Keys []struct {
-				Key string `json:"key"`
-				Env string `json:"env"`
-			} `json:"keys"`
+			Key string `json:"key"`
+			Env string `json:"env"`
 		} `json:"bootstrap_keys"`
 	}
 	if err := json.Unmarshal([]byte(doc.marshalJSON()), &payload); err != nil {
 		t.Fatalf("unmarshal the JSON twin: %v", err)
 	}
 	got := make(map[string]string, len(declared))
-	for _, module := range payload.BootstrapKeys {
-		for _, key := range module.Keys {
-			got[key.Key] = key.Env
-		}
+	for _, key := range payload.BootstrapKeys {
+		got[key.Key] = key.Env
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the JSON twin carries the env names %v, want the loader rule's %v", got, want)
@@ -406,33 +398,44 @@ func TestSitePageCarriesFrontMatter(t *testing.T) {
 	}
 }
 
-// TestDeclaredModulesCoverTheCensus pins the per-module rendering against the
-// declarations themselves: every declared key appears exactly once, under the
-// module whose prefix its key path carries.
-func TestDeclaredModulesCoverTheCensus(t *testing.T) {
+// TestDeclaredKeysCoverTheCensus pins the flat declaration list against the
+// declarations themselves: every declared key appears exactly once, carrying
+// the module whose prefix its key path names, in the list's documented order --
+// by module, then by key path, the order both renderings walk.
+func TestDeclaredKeysCoverTheCensus(t *testing.T) {
 	declared := composeDeclarations(t)
 
-	modules := declaredKeys(declared)
-	seen := 0
-	for _, module := range modules {
-		for _, key := range module.Keys {
-			seen++
-			if !strings.HasPrefix(key.Key, module.Name+".") {
-				t.Errorf("key %s is grouped under %s, but does not carry that module's prefix", key.Key, module.Name)
-			}
+	rows := declaredKeys(declared)
+	if len(rows) != len(declared) {
+		t.Fatalf("the list covers %d declared keys, the census has %d", len(rows), len(declared))
+	}
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if seen[row.Key] {
+			t.Errorf("the list covers %s more than once", row.Key)
+		}
+		seen[row.Key] = true
+		if !strings.HasPrefix(row.Key, row.Module+".") {
+			t.Errorf("key %s carries module %s, but its key path does not carry that module's prefix", row.Key, row.Module)
 		}
 	}
-	if seen != len(declared) {
-		t.Errorf("the rendering covers %d declared keys, the census has %d", seen, len(declared))
+	if !sort.SliceIsSorted(rows, func(i, j int) bool {
+		if rows[i].Module != rows[j].Module {
+			return rows[i].Module < rows[j].Module
+		}
+		return rows[i].Key < rows[j].Key
+	}) {
+		t.Errorf("the declaration list is not ordered by module then key path")
 	}
 }
 
-// TestJSONTwinShapeIsPinned pins the restructure the JSON twin carries: the
-// top level holds exactly the two sections, and every bootstrap row holds
-// exactly the six declared fields. DisallowUnknownFields is the regression
-// latch for the fields this shape retired (a row's own module, a dangling
-// example), and the key-set comparison is the other direction -- a dropped
-// field fails as loudly as an unexpected one.
+// TestJSONTwinShapeIsPinned pins the shape the JSON twin carries: the top
+// level holds exactly the two sections, and bootstrap_keys is one flat list of
+// rows (the dynamic section's shape), each row holding exactly the seven
+// declared fields with its module on the row. DisallowUnknownFields is the
+// regression latch for the fields this shape retired (the per-module grouping,
+// the format/default spellings), and the raw-byte key-set comparison is the
+// other direction -- a dropped field fails as loudly as an unexpected one.
 func TestJSONTwinShapeIsPinned(t *testing.T) {
 	svc, declared := composeHost(t)
 	doc, err := buildDocument(svc.Describe(), declared)
@@ -455,60 +458,54 @@ func TestJSONTwinShapeIsPinned(t *testing.T) {
 	}
 
 	// The strict decode: any unknown field anywhere in the structures below
-	// (a top-level map key, a bootstrap group key, a bootstrap row key) fails.
+	// (a top-level map key, a bootstrap row key) fails, and a bootstrap row
+	// that still carried its module as a group key alongside a nested "keys"
+	// list would fail here as an unknown field.
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var payload struct {
 		BootstrapKeys []struct {
-			Module string `json:"module"`
-			Keys   []struct {
-				Key         string `json:"key"`
-				Env         string `json:"env"`
-				Format      string `json:"format"`
-				Default     string `json:"default"`
-				Sensitive   bool   `json:"sensitive"`
-				Description string `json:"description"`
-			} `json:"keys"`
+			Key           string `json:"key"`
+			Module        string `json:"module"`
+			Env           string `json:"env"`
+			Type          string `json:"type"`
+			UnsetFallback string `json:"unset_fallback"`
+			Sensitive     bool   `json:"sensitive"`
+			Description   string `json:"description"`
 		} `json:"bootstrap_keys"`
 		DynamicItems []json.RawMessage `json:"dynamic_items"`
 	}
 	if err := dec.Decode(&payload); err != nil {
 		t.Fatalf("strict decode of the JSON twin (an unknown field means a retired one crept back): %v", err)
 	}
-	totalRows := 0
-	for _, group := range payload.BootstrapKeys {
-		totalRows += len(group.Keys)
+	if len(payload.BootstrapKeys) != len(declared) {
+		t.Fatalf("the JSON twin renders %d bootstrap rows, the census declares %d", len(payload.BootstrapKeys), len(declared))
 	}
-	if totalRows != len(declared) {
-		t.Fatalf("the JSON twin renders %d bootstrap rows, the census declares %d", totalRows, len(declared))
-	}
-
-	// The exact field set per row, from the raw bytes.
-	var grouped struct {
-		BootstrapKeys []struct {
-			Keys []map[string]json.RawMessage `json:"keys"`
-		} `json:"bootstrap_keys"`
-	}
-	if err := json.Unmarshal([]byte(raw), &grouped); err != nil {
-		t.Fatalf("unmarshal the bootstrap groups: %v", err)
-	}
-	wantFields := map[string]bool{"key": true, "env": true, "format": true, "default": true, "sensitive": true, "description": true}
-	rows := 0
-	for _, module := range grouped.BootstrapKeys {
-		for _, row := range module.Keys {
-			rows++
-			if len(row) != len(wantFields) {
-				t.Fatalf("bootstrap row %v carries %d fields, want exactly %d (%v)", sortedRawKeys(row), len(row), len(wantFields), sortedRawKeys(wantFields))
-			}
-			for field := range wantFields {
-				if _, ok := row[field]; !ok {
-					t.Fatalf("bootstrap row %v is missing field %q", sortedRawKeys(row), field)
-				}
-			}
+	for _, row := range payload.BootstrapKeys {
+		if row.Module == "" {
+			t.Errorf("bootstrap row %q carries no module; every flat entry carries its own", row.Key)
 		}
 	}
-	if rows != len(declared) {
-		t.Fatalf("the row walk covered %d bootstrap rows, the census declares %d", rows, len(declared))
+
+	// The exact field set per row, from the raw bytes: the flat rows are
+	// entries, never per-module groups (a group would carry two fields here,
+	// not seven).
+	var section struct {
+		BootstrapKeys []map[string]json.RawMessage `json:"bootstrap_keys"`
+	}
+	if err := json.Unmarshal([]byte(raw), &section); err != nil {
+		t.Fatalf("unmarshal the bootstrap rows: %v", err)
+	}
+	wantFields := map[string]bool{"key": true, "module": true, "env": true, "type": true, "unset_fallback": true, "sensitive": true, "description": true}
+	for _, row := range section.BootstrapKeys {
+		if len(row) != len(wantFields) {
+			t.Fatalf("bootstrap row %v carries %d fields, want exactly %d (%v)", sortedRawKeys(row), len(row), len(wantFields), sortedRawKeys(wantFields))
+		}
+		for field := range wantFields {
+			if _, ok := row[field]; !ok {
+				t.Fatalf("bootstrap row %v is missing field %q", sortedRawKeys(row), field)
+			}
+		}
 	}
 }
 

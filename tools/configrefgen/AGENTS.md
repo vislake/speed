@@ -62,6 +62,15 @@ repository root is the base for the first three:
   through the real `pkgcore/config` loader by the unit suite; the JSON
   twin is derived from it.
 
+The two layers render distinct record types whose field sets are never
+merged: a bootstrap key is process-start input (its own source, lifetime,
+scope, value semantics, editor and failure consequence — an environment
+variable an operator sets for a whole process), while a dynamic item is a
+runtime per-tenant table entry an operator edits while the process runs.
+The JSON twin renders each layer as one flat list of module-tagged rows;
+the Markdown's per-module bootstrap tables group the same flat list for
+the human reader — a rendering choice, not a second shape of the facts.
+
 ## Gates
 
 - `docs-check.yml` runs `go run . --check` from this directory and

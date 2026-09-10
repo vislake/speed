@@ -6,13 +6,13 @@ package main
 // The layer's source is the modules themselves. Every platform module that
 // consumes process-start input declares it on the registry's bootstrap seat
 // (pkgcore.BootstrapKey, reg.Bootstrap.Add), and the generator renders those
-// declarations straight from the census -- what the key protects, its format,
-// whether it is secret material, and the fallback an operator should expect --
-// never from a hand-kept copy. A host's own bootstrap variables are the host's
-// business: they belong to the assembling application and are documented where
-// that host lives, so this repository-wide reference stays the platform
-// surface: the keys the modules declare, and the mechanism a host drives to
-// resolve them.
+// declarations straight from the census -- what the key protects, its value
+// type, whether it is secret material, and the fallback an operator should
+// expect when it is unset -- never from a hand-kept copy. A host's own
+// bootstrap variables are the host's business: they belong to the assembling
+// application and are documented where that host lives, so this
+// repository-wide reference stays the platform surface: the keys the modules
+// declare, and the mechanism a host drives to resolve them.
 //
 // One rule spans the two layers, and it is enforced here rather than rendered:
 // a key belongs to exactly one layer, so a bootstrap key that is also a
