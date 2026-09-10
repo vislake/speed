@@ -365,6 +365,11 @@ func TestPerTenantConcurrencyLimiting(t *testing.T) {
 		t.Fatalf("RegisterHandler(quick) error = %v", err)
 	}
 	startQueue(t, q)
+	// Registered after startQueue's Close cleanup, so cleaning up in LIFO
+	// order releases every blocked flood Handle before the drain waits: a
+	// failure mid-test must not leave a flood worker holding a row, its
+	// Handle still in flight, past the end of the test.
+	t.Cleanup(func() { close(flood.releaseCh) })
 
 	var floodIDs []JobID
 	for i := 0; i < 3; i++ {
@@ -441,6 +446,13 @@ func TestProgressReporting(t *testing.T) {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
 	startQueue(t, q)
+	// Registered after startQueue's Close cleanup, so cleaning up in LIFO
+	// order resumes the blocked Handle before the drain waits: a failure
+	// before the explicit resume below must not leave the worker
+	// mid-Handle past the end of the test.
+	var resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(h.resume) }) }
+	t.Cleanup(resume)
 
 	id, err := q.Enqueue(context.Background(), Task{Type: "progress", TenantID: "tenant-a"})
 	if err != nil {
@@ -458,7 +470,7 @@ func TestProgressReporting(t *testing.T) {
 		t.Errorf("Status while progress is mid-flight = %v, want %v", mid.Status, StatusRunning)
 	}
 
-	close(h.resume)
+	resume()
 	final := waitTerminal(t, q, ctx, id)
 	if final.ProgressPct != 90 || final.ProgressMsg != "step two" {
 		t.Errorf("final progress = (%d, %q), want (90, %q)", final.ProgressPct, final.ProgressMsg, "step two")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,7 +39,9 @@ import (
 // would reset -- rather than on a scheduling-dependent milestone inside the
 // worker. The attempt cannot finish inside that window however late the
 // worker runs: Handle blocks on release until after the second Start has
-// been attempted.
+// been attempted. release is closed on every path, the failing one
+// included: the cleanups below release before they drain the queue, so a
+// failed assertion can never strand a worker mid-Handle past this test.
 func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
@@ -47,6 +50,8 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 
 	var handles atomic.Int32
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
 	handler := NewHandlerFunc("double-run", func(context.Context, *Job, ProgressFn) (Result, error) {
 		handles.Add(1)
 		<-release
@@ -67,10 +72,14 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 		t.Fatalf("q1 Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = q1.Close(ctx)
 	})
+	// Registered after q1's Close cleanup above, so cleaning up in LIFO
+	// order releases every blocked Handle first and only then drains: a
+	// failure that leaves a worker mid-Handle must not outlive the test.
+	t.Cleanup(releaseAll)
 
 	id, err := q1.Enqueue(context.Background(), Task{Type: "double-run", TenantID: "tenant-a"})
 	if err != nil {
@@ -87,12 +96,13 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 	}
 	q2Err := q2.Start(context.Background())
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		releaseAll()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = q2.Close(ctx)
 	})
 
-	close(release)
+	releaseAll()
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	job := waitTerminal(t, q1, ctx, id)

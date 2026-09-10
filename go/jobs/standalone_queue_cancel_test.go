@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -66,6 +67,13 @@ func TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPers
 		t.Fatalf("RegisterHandler(sentinel) error = %v", err)
 	}
 	startQueue(t, q)
+	// Registered after startQueue's Close cleanup, so cleaning up in LIFO
+	// order releases the blocked Handle before the drain waits: an early
+	// failure must not leave the worker mid-Handle, its attempt in flight,
+	// past the end of the test.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(failer.releaseCh) }) }
+	t.Cleanup(release)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	id, err := q.Enqueue(ctx, Task{Type: "cancel-race.live", TenantID: "tenant-a"}, WithMaxRetries(0))
@@ -80,7 +88,7 @@ func TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPers
 	if err = q.Cancel(ctx, id); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}
-	close(failer.releaseCh)
+	release()
 
 	// With one worker, the sentinel Job cannot run until the cancelled
 	// Job's execute has returned -- so sentinelDone doubles as the
