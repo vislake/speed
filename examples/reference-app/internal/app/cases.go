@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/storage"
 
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
@@ -126,17 +127,8 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The body is bounded by casesMaxRequestBodyBytes BEFORE decoding, the
-	// identical shape notes' create handler and go/authn/handler.go's
-	// decodeJSON apply: a body that exceeds the bound fails with the same
-	// invalid-request-body error as malformed JSON, as soon as the read
-	// passes the limit rather than after the whole body has been buffered.
-	// Passing w lets net/http ask the server to close the connection after
-	// the oversized request.
-	r.Body = http.MaxBytesReader(w, r.Body, casesMaxRequestBodyBytes)
 	var body casesapi.CasesCreateCaseRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeCasesError(w, casesInvalidRequestBody.WithCause(err))
+	if !httpapi.DecodeJSON(w, r, casesMaxRequestBodyBytes, &body, casesInvalidRequestBody) {
 		return
 	}
 
@@ -255,26 +247,12 @@ func toCasesCase(record cases.Case, photos []cases.Photo) casesapi.CasesCase {
 	}
 }
 
-// writeCasesError writes err to w as a JSON {code, params} body, the same
-// structured-error envelope shape smilesim.go's own writeSmileSimError
-// produces, encoded through the spec fragment's CasesError type.
+// writeCasesError writes err to w as this domain's coded error envelope
+// (see pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else is folded into casesErrInternal so a caller never sees raw
+// Go error text either way.
 func writeCasesError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = casesErrInternal
-	}
-	envelope := casesapi.CasesError{Code: &appErr.Code}
-	// Params stays nil (and thus omitted, per its omitempty tag) unless
-	// the error actually carries parameters: a pointer to a nil map would
-	// marshal as "params": null instead of the key being absent, which is
-	// not the envelope shape the API documents for a parameter-less
-	// answer.
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, casesErrInternal)
 }
 
 // compile-time check that the demo notes resolver also satisfies the cases

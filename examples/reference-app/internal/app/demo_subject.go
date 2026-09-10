@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/sharing"
@@ -686,30 +687,19 @@ func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler, demoHeaderD
 
 // integrationErrInternal folds any error that is not itself an *apperr.Error
 // into go/integration's stable internal code -- the fallback the error
-// writer below applies, the same shape consult.go's own writeConsultError
-// gives its own module. It lives here with the rest of the integration gate
+// writer below applies. It lives here with the rest of the integration gate
 // glue it serves.
 var integrationErrInternal = apperr.Internal("integration.internal_error")
 
-// writeIntegrationError writes err to w as a JSON {code, params} body, the
-// same structured-error envelope shape consult.go's own writeConsultError
-// produces -- a stable code plus structured parameters, never localized text
-// (backend coding standard §6.2). It is the one error writer shared by the
-// integration gate above (guardIntegrationRoute) and the
+// writeIntegrationError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else is folded into integrationErrInternal so a caller never
+// sees raw Go error text either way. It is the one error writer shared by
+// the integration gate above (guardIntegrationRoute) and the
 // IntegrationWhoamiPath handler (integration_authenticate.go), which
 // translate coded integration/rbac errors into HTTP responses.
 func writeIntegrationError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = integrationErrInternal
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	envelope := map[string]any{"code": appErr.Code}
-	if appErr.Params != nil {
-		envelope["params"] = appErr.Params
-	}
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, integrationErrInternal)
 }
 
 // sharingResource is the resource half of sharing's owner-facing permission
@@ -862,22 +852,12 @@ func guardBillingRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisab
 }
 
 // writeBillingAuthzError writes an rbac denial or storage error to w as
-// the {code, params} envelope -- the same shape rbac's own middleware
-// writes and guardIntegrationRoute's writeIntegrationError produces, so a
-// caller of billing's routes cannot tell this hand-rolled gate's answers
-// apart from rbac.RequirePermissionFunc's on any other surface.
+// the coded error envelope (see pkgcore/httpapi) -- the same shape rbac's
+// own middleware writes, so a caller of billing's routes cannot tell this
+// hand-rolled gate's answers apart from rbac.RequirePermissionFunc's on
+// any other surface. A non-coded error falls back to rbac.ErrStorage.
 func writeBillingAuthzError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = rbac.ErrStorage
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	envelope := map[string]any{"code": appErr.Code}
-	if appErr.Params != nil {
-		envelope["params"] = appErr.Params
-	}
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, rbac.ErrStorage)
 }
 
 // orgNodesSubPath, orgMembersSubPath and orgInvitationsSubPath are org's
@@ -1249,21 +1229,14 @@ func nodeInScope(ctx context.Context, orgScope org.Scope, dataScope rbac.DataSco
 }
 
 // writeRBACGateError writes err (an *apperr.Error from go/rbac -- in
-// practice always ErrPermissionDenied or ErrStorage) as the same {code,
-// params} JSON envelope rbac.RequirePermissionFunc's own unexported
-// writeAuthzError produces. This app keeps its own copy of that shape
-// because enforceOrgNodeScope's refusal runs as a SEPARATE layer
+// practice always ErrPermissionDenied or ErrStorage) as the coded error
+// envelope (see pkgcore/httpapi), the same shape rbac's own middleware
+// writes. enforceOrgNodeScope's refusal runs as a SEPARATE layer
 // downstream of RequirePermissionFunc (see guardOrgRoute), and a caller
 // must see one consistent response shape regardless of which of the two
 // layers refused the request.
 func writeRBACGateError(w http.ResponseWriter, err *apperr.Error) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(err.Status)
-	envelope := map[string]any{"code": err.Code}
-	if err.Params != nil {
-		envelope["params"] = err.Params
-	}
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, err)
 }
 
 // MustResourceOf returns the shared resource half of the given permission

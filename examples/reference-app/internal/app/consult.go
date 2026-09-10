@@ -18,6 +18,7 @@ import (
 	"net/http"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 )
@@ -29,9 +30,14 @@ import (
 const ConsultSuggestPath = "/api/v1/consult/suggest"
 
 // consultErrInternal folds any error consult.Service.Suggest returns that
-// is not itself an *apperr.Error into a stable code, the same fallback
-// notes' own writeError applies (internal/notes/handler.go) -- a caller
-// never sees raw Go error text either way.
+// is not itself an *apperr.Error into a stable code, the fallback
+// writeConsultError applies -- a caller never sees raw Go error text
+// either way. dbkit.ErrRecordNotFound (an unknown or another tenant's note
+// id) and aigateway's own sentinels (ErrCredentialNotFound,
+// ErrUnroutedModel, ErrEntitlementDenied, ...) are already *apperr.Error
+// values, so the fallback only ever catches a genuinely unclassified
+// failure -- for example a raw transport error the OpenAI-compatible
+// provider did not itself wrap.
 var consultErrInternal = apperr.Internal("consult.internal_error")
 
 // wireConsult mounts ConsultSuggestPath on mux, backed by svc.
@@ -53,8 +59,7 @@ func wireConsult(mux *http.ServeMux, svc *consult.Service) {
 		var body struct {
 			NoteID string `json:"note_id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeConsultError(w, apperr.Invalid("consult.invalid_request_body").WithCause(err))
+		if !httpapi.DecodeJSON(w, r, 0, &body, apperr.Invalid("consult.invalid_request_body")) {
 			return
 		}
 		if body.NoteID == "" {
@@ -74,26 +79,10 @@ func wireConsult(mux *http.ServeMux, svc *consult.Service) {
 	})
 }
 
-// writeConsultError writes err to w as a JSON {code, params} body, the same
-// structured-error envelope shape notes' own writeError produces
-// (internal/notes/handler.go) -- a stable code plus structured parameters,
-// never localized text (backend coding standard §6.2).
+// writeConsultError writes err to w as this route's coded error envelope
+// (see pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else is folded into consultErrInternal so a caller never sees
+// raw Go error text either way.
 func writeConsultError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		// dbkit.ErrRecordNotFound (an unknown or another tenant's note id)
-		// and aigateway's own sentinels (ErrCredentialNotFound,
-		// ErrUnroutedModel, ErrEntitlementDenied, ...) are already
-		// *apperr.Error values, so this fallback only ever catches a
-		// genuinely unclassified failure -- for example a raw transport
-		// error the OpenAI-compatible provider did not itself wrap.
-		appErr = consultErrInternal
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	envelope := map[string]any{"code": appErr.Code}
-	if appErr.Params != nil {
-		envelope["params"] = appErr.Params
-	}
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, consultErrInternal)
 }

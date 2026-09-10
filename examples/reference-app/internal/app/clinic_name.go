@@ -6,6 +6,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
 // clinic_name.go mounts the reference-app's own tenant-identity answer:
@@ -60,15 +61,12 @@ type ClinicNameError struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// WriteClinicNameError writes err as the envelope answer.
+// WriteClinicNameError writes err as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else is folded into reference_app.internal_error so a caller
+// never sees raw Go error text either way.
 func WriteClinicNameError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = apperr.Internal("reference_app.internal_error")
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(ClinicNameError{Code: appErr.Code, Params: appErr.Params})
+	httpapi.WriteError(w, err, apperr.Internal("reference_app.internal_error"))
 }
 
 // WireClinicName mounts the clinic-name answer on mux. tree is the org

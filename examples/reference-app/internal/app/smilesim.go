@@ -40,6 +40,7 @@ import (
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/storage"
@@ -50,8 +51,8 @@ import (
 )
 
 // smileSimErrInternal folds any error this file's handlers surface that is
-// not itself an *apperr.Error into a stable code, the same fallback
-// consult.go's own writeConsultError applies.
+// not itself an *apperr.Error into a stable code, the fallback
+// writeSmileSimError applies.
 var smileSimErrInternal = apperr.Internal("smilesim.internal_error")
 
 // The simulate route's two request-shape envelopes, named declarations so
@@ -181,8 +182,7 @@ func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, m
 // the async job's id -- the simulation itself has not run yet.
 func (h *smilesimHandler) SmilesimSimulate(w http.ResponseWriter, r *http.Request) {
 	var body smilesimapi.SmilesimSimulateRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeSmileSimError(w, smilesimErrInvalidRequestBody.WithCause(err))
+	if !httpapi.DecodeJSON(w, r, 0, &body, smilesimErrInvalidRequestBody) {
 		return
 	}
 	if body.PhotoObjectID == "" {
@@ -553,24 +553,10 @@ func (h *smilesimHandler) ensureAttestedOutput(ctx context.Context, outputObject
 	}
 }
 
-// writeSmileSimError writes err to w as a JSON {code, params} body, the
-// same structured-error envelope shape consult.go's own writeConsultError
-// produces, encoded through the spec fragment's SmilesimError type.
+// writeSmileSimError writes err to w as this domain's coded error envelope
+// (see pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else is folded into smileSimErrInternal so a caller never sees
+// raw Go error text either way.
 func writeSmileSimError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = smileSimErrInternal
-	}
-	envelope := smilesimapi.SmilesimError{Code: &appErr.Code}
-	// Params stays nil (and thus omitted, per its omitempty tag) unless
-	// the error actually carries parameters: a pointer to a nil map would
-	// marshal as "params": null instead of the key being absent, which is
-	// not the envelope shape the API documents for a parameter-less
-	// answer.
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, smileSimErrInternal)
 }

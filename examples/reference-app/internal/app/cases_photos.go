@@ -54,6 +54,7 @@ import (
 	"strings"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/storage"
 
 	casesapi "github.com/vislake/speed/examples/reference-app/internal/cases/api"
@@ -124,13 +125,8 @@ const photoUploadMaxRequestBodyBytes = 32 << 20
 // protocol over the request's base64-encoded bytes and answering the
 // completed object's id. See this file's header for the full contract.
 func (h *casesHandler) CasesUploadPhoto(w http.ResponseWriter, r *http.Request) {
-	// The body is bounded before decoding, exactly as the create route
-	// bounds its own (see casesMaxRequestBodyBytes): the base64 payload
-	// feeds a decoder that would otherwise buffer whatever arrives.
-	r.Body = http.MaxBytesReader(w, r.Body, photoUploadMaxRequestBodyBytes)
 	var body casesapi.CasesUploadPhotoRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeCasesError(w, casesInvalidRequestBody.WithCause(err))
+	if !httpapi.DecodeJSON(w, r, photoUploadMaxRequestBodyBytes, &body, casesInvalidRequestBody) {
 		return
 	}
 

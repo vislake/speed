@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/rbac"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -125,18 +126,13 @@ type TeamMemberError struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// WriteTeamMemberError writes err as the envelope answer: an *apperr.Error
-// keeps its own code and status (org's coded storage errors pass through
-// as themselves, the same codes org's own routes answer), anything else
-// collapses to the internal fallback above.
+// WriteTeamMemberError writes err as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status (org's
+// coded storage errors pass through as themselves, the same codes org's
+// own routes answer), anything else collapses to the internal fallback
+// above.
 func WriteTeamMemberError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = teamMemberErrInternal
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(TeamMemberError{Code: appErr.Code, Params: appErr.Params})
+	httpapi.WriteError(w, err, teamMemberErrInternal)
 }
 
 // WriteTeamMembersJSON writes the 200 answer. A nil slice answers the

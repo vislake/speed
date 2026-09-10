@@ -16,6 +16,7 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
 // jsonContentType is the Content-Type every response below writes,
@@ -225,16 +226,8 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The body is bounded by maxRequestBodyBytes BEFORE decoding, exactly
-	// as go/authn/handler.go's decodeJSON bounds its own endpoints: a body
-	// that exceeds the bound fails with the same invalid-request-body error
-	// as malformed JSON, as soon as the read passes the limit rather than
-	// after the whole body has been buffered. Passing w lets net/http ask
-	// the server to close the connection after the oversized request.
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	var req api.NotesCreateNoteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, apperr.Invalid("notes.invalid_request_body").WithCause(err))
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, apperr.Invalid("notes.invalid_request_body")) {
 		return
 	}
 
@@ -578,31 +571,13 @@ func noteMutationError(err error, noteID string) error {
 	return err
 }
 
-// writeError writes err to w as a JSON {code, params} body -- the
-// spec-generated api.NotesError, whose shape is the structured-error
-// envelope already
-// used by go/tenancy/middleware.go's own (unexported) tenantErrorBody:
-// APIs return a stable code plus structured parameters, never localized
-// text. An err that is not an
-// *apperr.Error -- meaning something below this handler did not classify
-// it, such as pkgcore.ErrNoTenant -- is folded into errInternal so a
-// caller never sees raw Go error text either way.
+// writeError writes err to w as this module's coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else -- something below this handler did not classify it, such
+// as pkgcore.ErrNoTenant -- is folded into errInternal so a caller never
+// sees raw Go error text either way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = errInternal
-	}
-	envelope := api.NotesError{Code: &appErr.Code}
-	// Params stays nil (and thus omitted, per its omitempty tag) unless
-	// the error actually carries parameters: a pointer to a nil map would
-	// marshal as "params": null instead of the key being absent, which is
-	// not the shape the hand-written errorBody produced.
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, errInternal)
 }
 
 // SubjectResolver is the seam that answers "who created this note" for
