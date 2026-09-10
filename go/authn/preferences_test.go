@@ -369,16 +369,16 @@ func TestService_Preferences_RoundTripAndPartialUpdate(t *testing.T) {
 
 	// Refusals: the whole update is refused and NOTHING is written.
 	badLocale := "de-DE"
-	if _, err := f.svc.UpdatePreferences(t.Context(), user.ID, PreferencesPatch{Locale: &badLocale, Timezone: &timezone}); !errors.Is(err, ErrInvalidLocale) {
-		t.Errorf("UpdatePreferences(unshipped locale) error = %v, want ErrInvalidLocale", err)
+	if _, localeErr := f.svc.UpdatePreferences(t.Context(), user.ID, PreferencesPatch{Locale: &badLocale, Timezone: &timezone}); !errors.Is(localeErr, ErrInvalidLocale) {
+		t.Errorf("UpdatePreferences(unshipped locale) error = %v, want ErrInvalidLocale", localeErr)
 	}
 	badTimezone := "Mars/Olympus"
-	if _, err := f.svc.UpdatePreferences(t.Context(), user.ID, PreferencesPatch{Timezone: &badTimezone, Locale: &locale}); !errors.Is(err, ErrInvalidTimezone) {
-		t.Errorf("UpdatePreferences(unknown timezone) error = %v, want ErrInvalidTimezone", err)
+	if _, timezoneErr := f.svc.UpdatePreferences(t.Context(), user.ID, PreferencesPatch{Timezone: &badTimezone, Locale: &locale}); !errors.Is(timezoneErr, ErrInvalidTimezone) {
+		t.Errorf("UpdatePreferences(unknown timezone) error = %v, want ErrInvalidTimezone", timezoneErr)
 	}
 	localPseudoZone := "Local"
-	if _, err := f.svc.UpdatePreferences(t.Context(), user.ID, PreferencesPatch{Timezone: &localPseudoZone}); !errors.Is(err, ErrInvalidTimezone) {
-		t.Errorf("UpdatePreferences(process-local pseudo-zone) error = %v, want ErrInvalidTimezone", err)
+	if _, pseudoZoneErr := f.svc.UpdatePreferences(t.Context(), user.ID, PreferencesPatch{Timezone: &localPseudoZone}); !errors.Is(pseudoZoneErr, ErrInvalidTimezone) {
+		t.Errorf("UpdatePreferences(process-local pseudo-zone) error = %v, want ErrInvalidTimezone", pseudoZoneErr)
 	}
 	after, err := f.svc.Preferences(t.Context(), user.ID)
 	if err != nil {

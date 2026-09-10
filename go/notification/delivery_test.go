@@ -745,8 +745,8 @@ func TestDelivery_ExternalContactLocaleChain(t *testing.T) {
 
 	t.Run("an unset locale renders the platform default", func(t *testing.T) {
 		d := base
-		if err := env.dispatchAndAttempt(t, d); err != nil {
-			t.Fatalf("delivery attempt: %v", err)
+		if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+			t.Fatalf("delivery attempt: %v", attemptErr)
 		}
 		mails := env.host.mailer.messages()
 		if len(mails) != 1 {
