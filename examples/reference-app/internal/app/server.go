@@ -425,47 +425,27 @@ func (r DemoNotesSubjectResolver) Subject(req *http.Request) (string, bool) {
 // copy of the seam.
 var _ notes.SubjectResolver = DemoNotesSubjectResolver{}
 
-// OrgFeatureGate adapts a *config.Service that is filled in AFTER this
-// app's org.Module -- and its authn.Module -- are constructed into the
-// modules' FeatureGate seams, read lazily -- the
-// same "read a host seam at call time, never capture it at construction"
-// idiom go/org's own hostSeams applies throughout the module (see
-// go/org/events.go's doc comment on hostSeams for the identical reasoning).
+// The host's feature gate is one config-module read adapted to org's and
+// authn's identically shaped FeatureGate seams. Both modules must be part
+// of the single Kernel.Bootstrap call -- so their permissions, audit
+// actions, events and routes are declared there -- while the
+// *config.Service is only produced by configModule.Attach, strictly after
+// Bootstrap returns. The wiring therefore takes the config module's lazy
+// Handle (configModule.Handle(), captured where the config module is
+// built) and adapts its IsEnabled method value through each module's own
+// FeatureGateFunc: the handle resolves the Service per call, and reports
+// the config module's own not-attached refusal in the window before
+// Attach, so a read in that window fails closed instead of panicking on a
+// nil *config.Service.
 //
-// It exists because of a real ordering constraint in BuildServer: the
-// config module's Service is only produced by configModule.Attach, which
-// per its own contract runs strictly AFTER Kernel.Bootstrap returns -- and
-// org.Module must already be part of that same Bootstrap call so its
-// permissions, audit actions, events and routes are declared. Passing the
-// *config.Service variable directly to org.WithFeatureGate before Attach
-// has run would capture a non-nil FeatureGate interface wrapping a nil
-// *config.Service pointer, which panics the moment anything calls
-// IsEnabled on it. Holding a pointer to the variable instead, and
-// dereferencing it only when IsEnabled is actually called (during a real
-// HTTP request, long after BuildServer has finished wiring), sidesteps the
-// ordering problem entirely.
-type OrgFeatureGate struct{ Service **config.Service }
-
-// IsEnabled implements org.FeatureGate -- and, identically,
-// authn.FeatureGate, which is the same declaration under a different
-// module: go/authn's copy of the seam (go/authn/module.go) mirrors org's
-// shape exactly, and the two modules never import each other. One
-// adapter therefore serves both gates, and BuildServer passes the same
-// OrgFeatureGate value to org.WithFeatureGate and to authn.WithFeatureGate
-// (see the authn wiring below).
-func (g OrgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error) {
-	svc := *g.Service
-	if svc == nil {
-		return false, fmt.Errorf("reference-app: the config service is not attached yet")
-	}
-	return svc.IsEnabled(ctx, key)
-}
-
-// compile-time checks that OrgFeatureGate satisfies org.FeatureGate and
-// authn.FeatureGate, the two identical no-import declarations it serves.
+// The double assertion below is the compile-time proof that the two seams
+// really are one shape: the same config.Handle read adapts to both, which
+// is why the host needs no hand-written gate type of its own. (The nil
+// receiver is never called; building a method value on it proves the
+// conversion, and a nil handle fails closed anyway.)
 var (
-	_ org.FeatureGate   = OrgFeatureGate{}
-	_ authn.FeatureGate = OrgFeatureGate{}
+	_ org.FeatureGate   = org.FeatureGateFunc((*config.Handle)(nil).IsEnabled)
+	_ authn.FeatureGate = authn.FeatureGateFunc((*config.Handle)(nil).IsEnabled)
 )
 
 // SocialChannelFlagKey maps a configured social provider's Name() to the
@@ -564,8 +544,9 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 // OrgSubtreeResolverFor adapts org.Scope's Path method onto
 // rbac.SubtreeResolver's NodePath -- the two no-import seams differ just
 // enough (three return values vs. two; "not found" folded into an error vs.
-// a plain boolean) that an adapter is needed, unlike
-// OrgFeatureGate/FeatureGate's exact structural match. It returns the
+// a plain boolean) that an adapter is needed, unlike the feature-gate
+// seams' exact structural match (org.FeatureGateFunc over the config
+// module's Handle, above). It returns the
 // closure wrapped in rbac.SubtreeResolverFunc, so the wiring site passes
 // the option a value it already accepts. org.Scope is safe to capture
 // directly (unlike *config.Service in the readers below): orgModule.Scope()
@@ -591,16 +572,17 @@ func OrgSubtreeResolverFor(scope org.Scope) rbac.SubtreeResolverFunc {
 
 // SharingConfigReader adapts a *config.Service that is filled in AFTER
 // this app's sharing.Module is constructed into sharing.TenantConfigReader,
-// read lazily -- the identical ordering problem and the identical fix
-// OrgFeatureGate's own doc comment explains at length: configModule.Attach
-// (which produces the real *config.Service) runs strictly after
-// Kernel.Bootstrap returns, and sharing.Module must already be part of
-// that same Bootstrap call, so sharing.WithTenantConfigReader has to
-// receive something today that becomes live only later. Holding a
-// pointer to the configService variable, and dereferencing it only when
-// ShareDefaultExpiry is actually called (during a real request, long
-// after BuildServer has finished wiring), sidesteps the ordering problem
-// exactly like OrgFeatureGate does for org.FeatureGate.
+// read lazily: configModule.Attach (which produces the real
+// *config.Service) runs strictly after Kernel.Bootstrap returns, and
+// sharing.Module must already be part of that same Bootstrap call, so
+// sharing.WithTenantConfigReader has to receive something today that
+// becomes live only later. Holding a pointer to the configService
+// variable, and dereferencing it only when ShareDefaultExpiry is actually
+// called (during a real request, long after BuildServer has finished
+// wiring), sidesteps the ordering problem. Compliance's own
+// export-delivery reader needs none of this: compliance ships
+// NewConfigReader over the config module's Handle, so this app wires that
+// one directly.
 type SharingConfigReader struct{ Service **config.Service }
 
 // ShareDefaultExpiry implements sharing.TenantConfigReader.
@@ -615,30 +597,6 @@ func (r SharingConfigReader) ShareDefaultExpiry(ctx context.Context, tenant pkgc
 // compile-time check that SharingConfigReader satisfies
 // sharing.TenantConfigReader.
 var _ sharing.TenantConfigReader = SharingConfigReader{}
-
-// ComplianceConfigReader is compliance's own copy of SharingConfigReader,
-// adapting the same lazily-filled *config.Service into
-// compliance.ExportDeliveryExpiryReader. It is a separate type, not a
-// shared one, because the two seams are structurally different Go
-// interfaces (ShareDefaultExpiry vs ExportDeliveryExpiry, per each
-// module's own declared method name) even though their bodies both do
-// nothing but call config.Service.TenantDuration with a different config
-// key -- forcing one type to implement both method names would be a
-// coincidental unification neither module's own design asked for.
-type ComplianceConfigReader struct{ Service **config.Service }
-
-// ExportDeliveryExpiry implements compliance.ExportDeliveryExpiryReader.
-func (r ComplianceConfigReader) ExportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
-	svc := *r.Service
-	if svc == nil {
-		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
-	}
-	return svc.TenantDuration(ctx, compliance.ConfigExportDeliveryExpiry, tenant)
-}
-
-// compile-time check that ComplianceConfigReader satisfies
-// compliance.ExportDeliveryExpiryReader.
-var _ compliance.ExportDeliveryExpiryReader = ComplianceConfigReader{}
 
 // ServerConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
@@ -1345,12 +1303,43 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		hostByTenant[tenant] = host
 	}
 
-	// configService is also read here, lazily, by org's feature gate -- see
-	// OrgFeatureGate's own doc comment for why it cannot be handed
-	// configService directly at this point in the wiring.
+	// The config module shares notes' database and is given everything it
+	// needs to serve its two endpoints: the master cipher (notes declares a
+	// Sensitive item, so Attach would refuse a cipher-less module), a
+	// resolver, and the default anti-loss poller cadence. It is constructed
+	// ahead of org and authn because both wire reads into it below, before
+	// Attach exists: they take the module's lazy Handle (configModule.Handle,
+	// live from Attach on) and adapt it through each module's own
+	// FeatureGateFunc.
+	//
+	// The resolver is tenancy.NewDomainResolver -- deliberately NOT the
+	// authn-derived resolver that gates the notes API below -- and its
+	// default tenant is deliberately empty. config's public endpoints are
+	// pre-auth display decisions, the one case go/tenancy's DomainResolver
+	// doc comment blesses with unmatched-host leniency; an empty default
+	// tenant maps that leniency onto the endpoint's own "platform
+	// defaults" tier (a host that resolves to no tenant reads system-scope
+	// rows, never an error) -- a pre-auth display endpoint must render
+	// before any sign-in, so an unmatched host can never error the page.
+	// config's own internal resolver runs
+	// entirely independently of the outer tenancy.Middleware wired at the
+	// bottom of this function -- see this function's own middleware-chain
+	// comment below for why both coexist.
+	configModule := config.NewModule(db,
+		config.WithCipher(cipher),
+		config.WithResolver(tenancy.NewDomainResolver(
+			func(host string) (pkgcore.TenantID, bool) {
+				tid, ok := cfg.HostTenants[host]
+				return tid, ok
+			},
+			"",
+		)),
+	)
+	configHandle := configModule.Handle()
+
 	orgModule := org.NewModule(db,
 		org.WithEmailIndexer(orgIndexer),
-		org.WithFeatureGate(OrgFeatureGate{Service: &configService}),
+		org.WithFeatureGate(org.FeatureGateFunc(configHandle.IsEnabled)),
 		// principalFallback serves org's browser-shaped callers:
 		// org's two caller-scoped endpoints also serve the team surface's
 		// signed-in owner, whose requests carry a bearer
@@ -1505,17 +1494,17 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// The feature gate that makes authn's eight declared feature flags
 		// (authn.password_login, authn.sms_login, the five authn.social.*
 		// channels, authn.sso.oidc) effective at request time: the same
-		// lazy *config.Service adapter org's own gate uses above --
+		// config-module handle org's own gate above is adapted from --
 		// authn.FeatureGate is org.FeatureGate's identical declaration, and
-		// the config service is only produced by configModule.Attach, which
-		// runs after Bootstrap returns (OrgFeatureGate's doc comment).
-		// Without it this app's flags would be declarations with no
-		// enforcement: a row disabling authn.password_login would hide the
-		// login form while the password endpoint kept issuing tokens.
+		// the handle's reads report the config module's own not-attached
+		// refusal until configModule.Attach has run (after Bootstrap
+		// returns). Without it this app's flags would be declarations with
+		// no enforcement: a row disabling authn.password_login would hide
+		// the login form while the password endpoint kept issuing tokens.
 		// The channels this host assembles through
 		// cfg.SocialProviders are opened at the system tier after Attach by
 		// openConfiguredAuthnChannels, since their flags default OFF.
-		authn.WithFeatureGate(OrgFeatureGate{Service: &configService}),
+		authn.WithFeatureGate(authn.FeatureGateFunc(configHandle.IsEnabled)),
 	}
 	// The per-header vendor opt-in (APP_READ_FLY_CLIENT_IP), conditional on the
 	// deployment declaration: cfg.ReadFlyClientIP's 'true' declares this
@@ -1579,35 +1568,6 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// app uses that mechanism rather than dbkit's automatic
 	// AuditBus-driven write capture).
 	auditModule := audit.New(db)
-
-	// The config module shares notes' database and is given everything it
-	// needs to serve its two endpoints: the master cipher (notes declares a
-	// Sensitive item, so Attach would refuse a cipher-less module), a
-	// resolver, and the default anti-loss poller cadence.
-	//
-	// The resolver is tenancy.NewDomainResolver -- deliberately NOT the
-	// authn-derived resolver that gates the notes API below -- and its
-	// default tenant is deliberately empty. config's public endpoints are
-	// pre-auth display decisions, the one case go/tenancy's DomainResolver
-	// doc comment blesses with unmatched-host leniency; an empty default
-	// tenant maps that leniency onto the endpoint's own "platform
-	// defaults" tier (a host that resolves to no tenant reads system-scope
-	// rows, never an error) -- a pre-auth display endpoint must render
-	// before any sign-in, so an unmatched host can never error the page.
-	// config's own internal resolver runs
-	// entirely independently of the outer tenancy.Middleware wired at the
-	// bottom of this function -- see this function's own middleware-chain
-	// comment below for why both coexist.
-	configModule := config.NewModule(db,
-		config.WithCipher(cipher),
-		config.WithResolver(tenancy.NewDomainResolver(
-			func(host string) (pkgcore.TenantID, bool) {
-				tid, ok := cfg.HostTenants[host]
-				return tid, ok
-			},
-			"",
-		)),
-	)
 
 	// rbac needs nothing from this host but a database: it declares its own
 	// permissions during Register and reads EVERY module's declarations
@@ -1680,9 +1640,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// storageModule's own ObjectService -- sharing never imports go/storage
 	// itself (resolver.go's own doc comment explains why), so this
 	// composition is entirely this app's own, the same way every other
-	// no-import-edge seam in this file (OrgFeatureGate,
+	// no-import-edge seam in this file (the feature-gate adapters,
 	// DemoOrgSubjectResolverFor, ...) is wired. WithTenantConfigReader wires
-	// SharingConfigReader (defined above, alongside OrgFeatureGate), so a
+	// SharingConfigReader (defined above, alongside the feature gates), so a
 	// tenant's own sharing.default_expiry override -- once config.Service
 	// exists, after Attach below -- actually governs Service.Create's
 	// resolved expiry instead of always falling back to
@@ -1957,17 +1917,17 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// module, so this is where compliance.ExportService.Export gains its
 	// first genuine delivery path (a real, single-view go/sharing link)
 	// rather than refusing every call with ErrSharingRequired.
-	// WithExportConfigReader wires ComplianceConfigReader (defined above,
-	// alongside OrgFeatureGate and SharingConfigReader), so a tenant's own
-	// compliance.export_delivery_expiry override -- once config.Service
-	// exists, after Attach below -- actually governs
+	// WithExportConfigReader wires compliance.NewConfigReader over the
+	// config module's handle (captured above, alongside org's and authn's
+	// gates), so a tenant's own compliance.export_delivery_expiry override
+	// -- once config.Service exists, after Attach below -- actually governs
 	// ExportService.Export's minted delivery-link expiry instead of always
 	// falling back to defaultExportDeliveryExpiry.
 	complianceAuditRepo := audit.NewRepository(db)
 	complianceModule := compliance.NewModule(complianceAuditRepo,
 		compliance.WithQueue(standaloneQueue),
 		compliance.WithSharing(sharingModule.Service()),
-		compliance.WithExportConfigReader(ComplianceConfigReader{Service: &configService}),
+		compliance.WithExportConfigReader(compliance.NewConfigReader(configHandle)),
 	)
 
 	// adminModule is the reference app's mandatory first consumer of
@@ -2288,18 +2248,15 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		return nil, nil, nil, verifyErr
 	}
 	// Bind the org-backed half of the membership store here, only now that
-	// Bootstrap has run: the store's enumeration answer
-	// (signInMemberships.TenantsOf) takes an audited system-context grant
-	// through tenancy.WithSystemContext, which publishes its audit event on
-	// the bus Bootstrap finished wiring (reg.EventBus), and the purpose the
-	// grant names must be declared before any sign-in can ask the question
-	// -- the same once-per-boot, idempotent declaration a module's Register
-	// makes for its own purposes. Nothing before this point can serve a
-	// sign-in: authn answers membership questions only inside a Login or
-	// Refresh call, and the first ones reach the store with the demo seeds
-	// below.
-	pkgcore.RegisterSystemPurpose(signInTenantEnumerationPurpose)
-	memberships.attach(orgModule.Members(), reg.EventBus())
+	// Bootstrap has run: the store's enumeration answer delegates to org's
+	// own cross-tenant query, which org serves only an elevated context --
+	// the grant authn's resolveTenant takes under its own
+	// SystemPurposeSignInTenantEnumeration before it calls TenantsOf, and
+	// which authn's Register declared during the Bootstrap above. Nothing
+	// before this point can serve a sign-in: authn answers membership
+	// questions only inside a Login or Refresh call, and the first ones
+	// reach the store with the demo seeds below.
+	memberships.attach(orgModule.Members())
 	// The Attach calls below are the post-Bootstrap attach contract
 	// pkgcore.Kernel.Bootstrap's "Post-Bootstrap module steps" section
 	// states: each exactly once, after Bootstrap has returned, and each
@@ -2560,7 +2517,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	mux := http.NewServeMux()
 	obs.MountLiveness(mux)
 	orgGuardDeps := OrgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
-	adminHandler, authnHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
+	adminHandler, authnRoutes, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, mountErr
@@ -2945,11 +2902,11 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	topMux := http.NewServeMux()
 	// pkgcore.MountRoutes registers both branches at their exact paths and
 	// below them; see its own doc comment for why the dual registration is
-	// the only correct shape.
-	pkgcore.MountRoutes(topMux,
-		pkgcore.MountedRoute{Path: adminRoutePath, Handler: adminHandler},
-		pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnHandler},
-	)
+	// the only correct shape. authnRoutes is what authn.ExemptSubtree split
+	// out of the module route set (mountModuleRoutes above): the module's
+	// own subtree, carried here with its mount path attached.
+	topMuxBranches := append([]pkgcore.MountedRoute{{Path: adminRoutePath, Handler: adminHandler}}, authnRoutes...)
+	pkgcore.MountRoutes(topMux, topMuxBranches...)
 	topMux.Handle("/", restOfAppChain)
 
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
@@ -3105,32 +3062,18 @@ func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindInd
 //     ImpersonationMiddleware -- that decorator's effect is on the REST of
 //     the application's routes only"; "does NOT go through ordinary
 //     tenancy.Middleware tenant resolution").
-//   - authn's own mounted route (hostcore.AuthnAPIPath): authn's HTTP
-//     surface never
-//     sits downstream of tenancy.Middleware, per the module's own
-//     architecture (go/authn's routes resolve the tenant from the
-//     Principal's own claim, per operation, never from a tenant a
-//     middleware guessed). Composing it that way is also the only shape in
-//     which the enterprise-OIDC login-start path can work at all: its
-//     provider value is the dynamic "oidc:<tenant>" string a per-tenant
-//     literal allowlist entry (tenancy.WithAllowlist's exact-match form)
-//     cannot enumerate, and the path carries no Principal (it is the FIRST
-//     step of a sign-in), so a tenancy.Middleware in front of it refused
-//     every such request with tenancy.tenant_unresolved before authn's own
-//     OIDC logic ever saw it -- the CONFIRMED GAP this composition closes
-//     (see hostcore.AuthnAPIPath's own doc comment). authn.Middleware still
-//     runs outside everything (it wraps topMux itself), so a genuinely
-//     invalid bearer still 401s before this branch is reached; what is
-//     gone is only the tenancy layer, whose fail-closed default had no
-//     business deciding authn's own per-operation pre-auth question --
-//     authn's Handler itself decides, operation by operation, whether a
-//     Principal is required (go/authn/handler.go's requirePrincipal), the
-//     same self-gating the route table's public entry for this path
-//     already records. authn's allowlist entries are therefore gone from
-//     the tenancy chain below, and its handlers receive no tenant context
-//     from tenancy.Middleware -- they never read one (every authn
-//     operation derives what it needs from the verified Principal's own
-//     claims).
+//   - authn's own subtree, split out by authn.ExemptSubtree: the module
+//     owns the knowledge of which mounted routes are its own (everything at
+//     or below its mount point), and its doc comment (go/authn/routes.go)
+//     states why that subtree must sit outside the tenancy chain -- authn's
+//     routes resolve the tenant from the Principal's own claim per
+//     operation, and the enterprise-OIDC login start's dynamic
+//     "oidc:<tenant>" path is not even expressible as an exact (method,
+//     path) allowlist entry. authn.Middleware still runs outside everything
+//     (it wraps topMux itself), so a genuinely invalid bearer still 401s
+//     before this branch is reached; authn's Handler itself decides,
+//     operation by operation, whether a Principal is required
+//     (go/authn/handler.go's requirePrincipal).
 //
 // net/http's ServeMux (since Go 1.22) distinguishes an exact-match pattern
 // ("/api/v1/notes") from a subtree pattern ("/api/v1/notes/", matching
@@ -3151,19 +3094,17 @@ func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindInd
 // a mounted path has no declared decision. The two excepted paths are
 // decided by the same table (admin gated, authn public) and keep being
 // covered by its exhaustiveness check; only the DESTINATION of the
-// resulting handler differs.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnHandler http.Handler, err error) {
+// resulting handler differs. hostcore.AuthnAPIPath stays in use as the
+// route table's own name for authn's mount point (demo_subject.go's rules).
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnRoutes []pkgcore.MountedRoute, err error) {
 	guarded, err := rbac.GuardRoutes(az, reg.Routes.Routes(), DemoRouteRules(az, orgDeps, demoHeaderDisabled))
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, route := range guarded {
+	authnRoutes, rest := authn.ExemptSubtree(guarded)
+	for _, route := range rest {
 		if route.Path == adminRoutePath {
 			adminHandler = route.Handler
-			continue
-		}
-		if route.Path == hostcore.AuthnAPIPath {
-			authnHandler = route.Handler
 			continue
 		}
 		pkgcore.MountRoutes(mux, route)
@@ -3171,8 +3112,8 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 	if adminHandler == nil {
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
 	}
-	if authnHandler == nil {
+	if len(authnRoutes) == 0 {
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", hostcore.AuthnAPIPath)
 	}
-	return adminHandler, authnHandler, nil
+	return adminHandler, authnRoutes, nil
 }

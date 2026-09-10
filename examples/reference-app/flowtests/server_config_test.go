@@ -22,6 +22,7 @@ import (
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pki"
 )
 
@@ -782,21 +783,36 @@ func TestSocialChannelFlagKey_MapsEveryGatedProvider(t *testing.T) {
 	}
 }
 
-// TestOrgFeatureGate_NotAttachedYet_FailsClosed pins OrgFeatureGate's
-// ordering safety net directly: before BuildServer's configModule.Attach
-// has filled the service pointer (or when the gate outlives the variable
-// it points at), IsEnabled answers a coded error rather than panicking on
-// a nil *config.Service -- the failure mode the **service-pointer
-// indirection exists to avoid (internal/app/server.go's own doc comment).
-func TestOrgFeatureGate_NotAttachedYet_FailsClosed(t *testing.T) {
-	var svc *config.Service
-	gate := app.OrgFeatureGate{Service: &svc}
-	enabled, err := gate.IsEnabled(context.Background(), "any.key")
-	if err == nil {
-		t.Fatal("IsEnabled before attach error = nil, want the not-attached-yet error")
+// TestHostFeatureGate_BeforeConfigAttach_FailsClosed pins the host's gate
+// wiring as the host composes it: BuildServer adapts the config module's
+// lazy handle into org's and authn's FeatureGate seams
+// (org.FeatureGateFunc(configHandle.IsEnabled) and its authn twin,
+// internal/app/server.go), so before configModule.Attach has run the gate
+// must answer the config module's coded not-attached refusal rather than
+// panicking or fabricating a default.
+func TestHostFeatureGate_BeforeConfigAttach_FailsClosed(t *testing.T) {
+	handle := config.NewModule(nil).Handle()
+
+	// The same handle read, adapted through each module's own
+	// identically shaped seam -- exactly what BuildServer wires.
+	gates := map[string]interface {
+		IsEnabled(ctx context.Context, key string) (bool, error)
+	}{
+		"org":   org.FeatureGateFunc(handle.IsEnabled),
+		"authn": authn.FeatureGateFunc(handle.IsEnabled),
 	}
-	if enabled {
-		t.Fatal("IsEnabled before attach = true, want false")
+
+	for name, gate := range gates {
+		enabled, err := gate.IsEnabled(context.Background(), "any.key")
+		if err == nil {
+			t.Fatalf("%s gate: IsEnabled before config attach error = nil, want the not-attached refusal", name)
+		}
+		if !apperr.HasCode(err, config.ErrServiceNotAttached.Code) {
+			t.Fatalf("%s gate: IsEnabled before config attach error = %v, want code %q", name, err, config.ErrServiceNotAttached.Code)
+		}
+		if enabled {
+			t.Fatalf("%s gate: IsEnabled before config attach = true, want false", name)
+		}
 	}
 }
 

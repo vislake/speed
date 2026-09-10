@@ -240,7 +240,8 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 // org_listMembers (handler.go's OrgListMembers -> MemberService.List)
 // resolves through that exact seam. This is the seam actually being
 // exercised, not merely declared: see org.FeatureGate's own wiring in
-// internal/app/server.go (OrgFeatureGate) for the parallel no-import technique used for
+// internal/app/server.go (org.FeatureGateFunc over the config module's
+// Handle) for the parallel no-import technique used for
 // config, proven the same way by TestSystemFeatures_EnabledFlagChain_ResolvesDependencies
 // in config_public_endpoint_gates_test.go.
 func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *testing.T) {

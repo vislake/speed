@@ -174,7 +174,8 @@ type Option func(*Module)
 // always runs authn's Register before admin's, exactly the ordering this
 // lazy read depends on -- the same "read a host seam at call time, never
 // capture it before Bootstrap has finished" idiom org's own hostSeams and
-// the reference app's OrgFeatureGate both apply for the identical reason.
+// the reference app's config-handle gate adapters both apply for the
+// identical reason.
 func WithAuthn(authnModule *authn.Module) Option {
 	return func(m *Module) { m.authnModule = authnModule }
 }

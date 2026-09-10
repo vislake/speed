@@ -1,7 +1,8 @@
 // This file is this app's one concrete satisfier of go/sharing's
 // structurally-typed ResourceResolver seam (go/sharing/resolver.go) -- the
-// no-import-edge shape this codebase uses throughout (OrgFeatureGate over
-// *config.Service, DemoOrgSubjectResolverFor over rbac's Subject, ...) so
+// no-import-edge shape this codebase uses throughout (the config-handle
+// feature-gate adapters, DemoOrgSubjectResolverFor over rbac's Subject, ...)
+// so
 // sharing itself never imports go/storage (see resolver.go's own doc
 // comment for why). Every share this app's tests create points at a
 // go/storage object id, so storageSharingResolver is the only resolver
