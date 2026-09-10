@@ -13,11 +13,13 @@ aliases: ["/docs/quickstart"]
 > [!NOTE]
 > **还没有可用的发布版本。** v0.0.1 的 Go 模块曾发布——21 个模块 tag 由
 > Go module proxy 服务——随后 tag 被删除、该版本作废;npm 包从未发布。
-> 代理缓存不可改写,v0.0.1 在代理上仍可解析,但它已作废、不受支持。
-> 下面这条本地 checkout 路径(克隆加 `go run`)是当前唯一真实的方式。
-> 生成的起始项目处于过渡形态:require 的版本串由指向该 checkout 的
-> `replace` 指令覆盖(零占位版本与个别真实版本并存),`go.sum` 要等
-> 第一次消费侧 `go mod tidy` 才会生成。
+> 对该版本,代理的不可改写缓存只服务到一部分模块(21 个里 17 个可解析,
+> admin、ai-gateway、integration、saasctl 不可解析),完整的树则留在
+> 仓库自身历史的发布提交里可达;无论从哪条来源看,该版本都已作废、
+> 不受支持。下面这条本地 checkout 路径(克隆加 `go run`)是当前唯一
+> 真实的方式。生成的起始项目处于过渡形态:require 的版本串由指向该
+> checkout 的 `replace` 指令覆盖(零占位版本与个别真实版本并存),
+> `go.sum` 要等第一次消费侧 `go mod tidy` 才会生成。
 
 ## 1. 获取 checkout
 

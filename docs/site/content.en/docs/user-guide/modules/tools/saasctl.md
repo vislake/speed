@@ -19,12 +19,13 @@ Unlike every module in this reference, nothing assembles saasctl into a
 binary: it implements no `pkgcore.Module`, consumer code never imports
 it, and the reference app deliberately does not wire it — its consumers
 are the generated projects. It acts on the project boundary at
-development time, never inside a running kernel. Nothing publishes yet,
-so it runs from a checkout (`go run ./go/saasctl <command>` at the
-repository root). All four commands share an exit-code contract — **0**
-success and help, **2** usage errors, **1** execution errors — and take
-an optional `[go.mod]` argument, `./go.mod` by default; a `go.mod`
-with no speed requires is refused by name.
+development time, never inside a running kernel. No usable release is
+published yet, so it runs from a checkout
+(`go run ./go/saasctl <command>` at the repository root). All four
+commands share an exit-code contract — **0** success and help, **2**
+usage errors, **1** execution errors — and take an optional `[go.mod]`
+argument, `./go.mod` by default; a `go.mod` with no speed requires is
+refused by name.
 
 ## When to use it
 
@@ -79,8 +80,9 @@ carries, nothing else: third-party requires and their `// indirect`
 markers, `replace` blocks, comments and formatting survive byte for
 byte, since the parsed syntax tree is edited and reprinted through
 `golang.org/x/mod/modfile`, the go command's own parser. `--version` is
-required (nothing publishes yet, so the target version is never
-discovered) and validated against the release-version grammar. The
+required (no usable release is published yet and version discovery is
+not implemented — the operator supplies the target version) and
+validated against the release-version grammar. The
 result is re-parsed from bytes and structurally self-checked before
 anything is written back; the check also refuses a `replace`/`exclude`
 that defeats the rewritten requires — a clean report would lie about
@@ -163,11 +165,12 @@ The boot defaults: standalone mode, SQLite `app.db`, port 8080.
 201, but a password sign-in cannot succeed on the skeleton as shipped:
 there is no membership store, and authn's nil host-injected
 `MembershipReader` fails closed — both a wrong and a correct password
-answer 401 `authn.invalid_credentials`. Until the first release a
-generated project carries the transition state — placeholder-version
-requires, `replace` directives pointing at the checkout, no `go.sum`
-until the first consumer-side `go mod tidy` — and `upgrade` is the
-mechanism that first release will be consumed through.
+answer 401 `authn.invalid_credentials`. Until the next release lands, a
+generated project carries the transition state — version strings
+overridden by `replace` directives to the checkout (zero
+pseudo-versions and the few real versions mixed), no `go.sum` until
+the first consumer-side `go mod tidy` — and `upgrade` is the mechanism
+that release will be consumed through.
 
 ## An example session
 

@@ -6,8 +6,8 @@
 > permissions, organizations, subscription billing and metering, an AI gateway,
 > background jobs, media storage, notifications, observability and an operations
 > console already built in. It is not an application you run and not a repository you
-> fork. Nothing is published to a registry yet — the whole tree is a real, buildable
-> checkout, not a pre-release preview.
+> fork. No usable release is published to a registry yet — the whole tree is a real,
+> buildable checkout, not a pre-release preview.
 
 The documentation is organized in two main sections — User guides (for teams using
 speed modules in their own product) and Developer docs (for developers working on

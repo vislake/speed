@@ -14,14 +14,17 @@ it. You need a Go toolchain and nothing else.
 > [!NOTE]
 > **No usable release exists yet.** v0.0.1's Go modules were published —
 > 21 module tags served by the Go module proxy — then the tags were
-> deleted and the version voided; the npm packages never published. The
-> proxy cache is immutable, so v0.0.1 still resolves through it, but it
-> is voided and unsupported. The local-checkout path below — clone plus
-> `go run` — is the only real way to try speed today. Generated starter
-> projects carry the transition-state shape this implies: version
-> strings overridden by `replace` directives to the checkout (zero
-> pseudo-versions and the few real versions mixed), and no `go.sum`
-> until the first consumer-side `go mod tidy`.
+> deleted and the version voided; the npm packages never published. Of
+> that version the proxy's immutable cache still serves only part of
+> the module set (17 of the 21 modules resolve; admin, ai-gateway,
+> integration and saasctl do not), while the complete tree stays
+> reachable in this repository's history at the publish commit. Either
+> way it is voided and unsupported. The local-checkout path below —
+> clone plus `go run` — is the only real way to try speed today.
+> Generated starter projects carry the transition-state shape this
+> implies: version strings overridden by `replace` directives to the
+> checkout (zero pseudo-versions and the few real versions mixed), and
+> no `go.sum` until the first consumer-side `go mod tidy`.
 
 ## 1. Get a checkout
 

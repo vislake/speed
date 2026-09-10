@@ -98,8 +98,9 @@ which edits the parsed syntax tree and prints it back. Only the
 version token of each speed require changes; third-party requires
 with their `// indirect` markers, `replace` blocks, comments and
 formatting survive byte for byte, and the modules rewritten come from
-the file's own require lines. `--version` is required — nothing publishes yet —
-and the result is re-parsed and self-checked before writing back; the
+the file's own require lines. `--version` is required — no usable release
+is published yet, and version discovery is not implemented — and the result
+is re-parsed and self-checked before writing back; the
 check refuses a file whose `replace` or `exclude` defeats the rewrite
 (a module-to-module replace pinning another version wins at build
 time; an exclude of the target brands it unusable), since a clean

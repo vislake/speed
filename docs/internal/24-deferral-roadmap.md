@@ -26,7 +26,7 @@
 两项用户裁决标记(2026-09-08 裁决,记录于协调侧):
 
 - **★加排**:**GeoIP 类(GeoIP 许可证审查)与其余凭据类**一律记录待排期,不设里程碑;解除依赖外部前提达成(许可证过 license scanner、真实账户/凭据到位或政策变化)。
-- **◆M4-forward**:**真实发布类**原随 v1.0(M4)版本冻结与真实发布落地——发布前这些机制没有可作用的对象(零 tag 无基线、无发布事件可挂、无制品可扫)。首个真实发布 v0.0.1(2026-09-10)已提前落地该类的发布执行腿——Go 21 tag 推送发布成功;npm 十二包发布尝试失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,十二包零上 registry),待 org 侧关联后重发(见第 5 章)。类内其余机制仍随 v1.0(M4)。
+- **◆M4-forward**:**真实发布类**原随 v1.0(M4)版本冻结与真实发布落地——发布前这些机制没有可作用的对象(零 tag 无基线、无发布事件可挂、无制品可扫)。首个真实发布 v0.0.1(2026-09-10)已提前落地该类的发布执行腿——Go 21 个模块 tag 曾推送成功;npm 十二包发布尝试失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,十二包零上 registry);该版本随即作废(21 个模块 tag 已从远端与本地删除、版本号不复用,见第 5 章),org 侧关联后由下一个版本号的发布完整收敛。类内其余机制仍随 v1.0(M4)。
 
 ## 3. 用户裁决与闭合记录
 
@@ -93,11 +93,11 @@
 
 ## 5. 真实发布类(◆M4-forward)
 
-此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布 v0.0.1 的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/v0.0.1` tag 由 Go module proxy 服务;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212)。v0.0.1 首轮真实运行半成功:Go 21 tag 推送发布成功;npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry。半成功态的恢复机制已补齐(2026-09-10):tag 步对已存在的 tag 一律跳过(模块 tag 与仓库根 tag 同规),npm 步在发布前先探测 registry、对已存在的版本跳过,重发可从任意部分发布状态(前 k 包已上)收敛,任何已发布内容都不会被重复发布;待 org 侧关联 @speed scope(或等效配置)后重发即完整收敛。类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
+此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/<version>` tag 由 Go module proxy 服务;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212)。首个真实运行(v0.0.1)半成功:Go 21 个模块 tag 推送成功;npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry。该版本随后作废:21 个模块 tag 已从远端与本地删除、代理缓存不可改写使该版本号不可复用,下一次发布必须换新版本号——npm 半不再重发,org 侧关联 @speed scope(或等效配置)后由下一个版本号完整收敛。半成功态的恢复机制(已存在 tag 一律跳过——模块 tag 与仓库根 tag 同规;npm 步发布前先探测 registry、对已存在的版本跳过)保留为发布流水线的部分态语义,面向后续版本:任何已发布内容都不会被重复发布。类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
 
 补记(2026-09-10):上述跟踪清单之外另有两条同族行文残留,不在普查行内,已随文改述并在此补记——scaffold-verify.yml 触发注释(该文件 :36-39)原称 "release.yml carries no publish credential"、仓内无发布,与 5.4 行 51/52/80 已重述的 "release.yml dispatch 即发布" 前提相悖;web/.changeset/README.md 的版本现状句(该文件 :15-18)原称十二包全在 0.0.0、与 Go 半同处过渡态,与 5.3 行 85/130 记的直接 bump 落地相悖。
 
-**同一版本 tag 的语义(2026-09-10 定稿;权威叙述见 [02 仓库结构与发布](02-repo-and-release.md))**:模块 tag `go/<module>/<version>` 与根 tag `<version>` 并存、互不替代——模块 tag 是 Go module proxy 的解析面,钉在发布提交上(v0.0.1 的 21 个模块 tag 指向 `fbaaaf98`),永不重打或移动;根 tag 是版本里程碑参照,由发布运行在其 checkout(dispatch 时的 main 尖端)创建,因此 v0.0.1 重发时根 tag 指向的提交与 `fbaaaf98` 不同——**同一版本两个 tag 的 sha 不同是设计使然,不是漂移**。发布机制对两者一视同仁:已存在即跳过(模块 tag 与根 tag 同规),重发从任意部分状态收敛。
+**同一版本 tag 的语义(2026-09-10 定稿;权威叙述见 [02 仓库结构与发布](02-repo-and-release.md))**:模块 tag `go/<module>/<version>` 与根 tag `<version>` 并存、互不替代——模块 tag 是 Go module proxy 的解析面,钉在发布提交上(v0.0.1 的 21 个模块 tag 发布时指向 `fbaaaf98`,后随该版本作废从远端与本地删除),永不重打或移动;根 tag 是版本里程碑参照,由发布运行在其 checkout(dispatch 时的 main 尖端)创建,因此对早期版本的补发运行而言,根 tag 可能指向发布之后的修复提交,与模块 tag 不在同一提交上——**同一版本两个 tag 的 sha 不同是设计使然,不是漂移**。发布机制对两者一视同仁:已存在即跳过(模块 tag 与根 tag 同规),重发从任意部分状态收敛。
 
 ### 5.1 真实发布序列、发布凭据与发布衍生
 
@@ -105,7 +105,7 @@
 |---|---|---|---|---|
 | 165 | BLOCKED | `docs/internal/02-repo-and-release.md` | lockstep 真实发布未实现 | 部分落地:00e24732 v0.0.1 发布机制(Go tag 推送 + npm 发布至 GitHub Packages);docs/02 的"只读/未实现"行文已随 2026-09-10 机制与文档更新改述为现状(执行腿落地 + 模块/根 tag 语义,见本章导言) |
 | 33 | BLOCKED | `docs/internal/18-cicd.md` | release 流水线第 2/4/6/7 步接线未完成 | 部分落地:00e24732 接第 3 步(Go tag 推送)与第 4 步 npm 半程(直接 bump + npm publish 至 GitHub Packages);changesets 流程、2/5/6/7 步仍随 v1.0(M4);docs/18 注记文本未随动 |
-| 162 | BLOCKED | `docs/internal/18-cicd.md` | 真实 registry 发布与 goreleaser 未落地 | 部分落地:v0.0.1 起 Go 21 tag 经代理服务;npm 十二包发布尝试失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,十二包零上 registry),待 org 侧关联后重发;npmjs.org registry 与 goreleaser 仍随 v1.0(M4) |
+| 162 | BLOCKED | `docs/internal/18-cicd.md` | 真实 registry 发布与 goreleaser 未落地 | 部分落地:v0.0.1 的 Go 21 个模块 tag 曾发布经代理服务,该版本随后作废(tag 已从远端与本地删除、版本号不复用);npm 十二包发布尝试失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,十二包零上 registry),org 侧关联后由下一个版本号的发布收敛;npmjs.org registry 与 goreleaser 仍随 v1.0(M4) |
 | 160 | ROADMAP | `go/saasctl/AGENTS.md` | upgrade 无版本发现 | upgrade 版本发现未随 v0.0.1 首次发布落地,仍待后续发布配套 |
 | 201 | ROADMAP | `docs/internal/20-quality-and-security.md` | SBOM 与 npm provenance 未接线 | v0.0.1 发布不含 SBOM 与 provenance(npm 发布无 provenance 属性),仍随 v1.0(M4) |
 | 97 | ROADMAP | `tools/license_scan.py` | 传递(非直接)依赖与 reference-app 自身依赖的许可扫描未覆盖 | v0.0.1 发布未扩展传递依赖扫描,仍随发布准备(v1.0) |
@@ -114,9 +114,9 @@
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废(git 侧不可达);基线取自 Go module proxy 缓存的 v0.0.1 模块产物(spec 片段随模块分发、代理缓存不可改写),下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
-| 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废(git 侧不可达);基线取自 Go module proxy 缓存的 v0.0.1 模块产物(spec 片段随模块分发、代理缓存不可改写),下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
-| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废(git 侧不可达);基线取自 Go module proxy 缓存的 v0.0.1 模块产物(spec 片段随模块分发、代理缓存不可改写),下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
+| 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
+| 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
+| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
 | 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | 部分:api-sdk 发布期打包随 v0.0.1 直接 bump 发布落地(不经 changesets/发布期再生成——生成物已提交);oasdiff 基线门与浏览器腿仍随 v1.0(M4) |
 
 ### 5.3 发布机制装配(publint 与 changesets)
@@ -373,8 +373,8 @@
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
 | 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:02831bf3 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;生成器后归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外);残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
 | 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:02831bf3 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;生成器后归位 `tools/configrefgen`,漂移步改为工作目录 `tools/configrefgen` 下 `go run . --check`,PATH SET 改 `tools/configrefgen/**`,单测随 fast-check/full-check 的 `tools/configrefgen` 矩阵行;残余:站点版式与按版本发布随 M4 文档站完整化 |
-| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job;首轮真实运行半成功:Go 21 tag 已推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态恢复机制已落地(2026-09-10:跳过已存在 tag、npm 逐包已存在跳过,含根 tag,语义见第 5 章导言),待 org 侧关联 @speed scope(或等效配置)后重发即收敛;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
-| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言),待 org 侧关联 @speed scope(或等效配置)后重发即收敛 |
+| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job;首轮真实运行半成功:Go 21 个模块 tag 曾推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98;后随该版本作废从远端与本地删除),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态恢复机制已落地(2026-09-10:跳过已存在 tag、npm 逐包已存在跳过,含根 tag,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本号已不复用,org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
+| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 个模块 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本随后作废(21 个模块 tag 已从远端与本地删除、版本号不复用),org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛 |
 | 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | 闭:5cb0ce68 pre-auth 端点先 secured/versioned——移入 `/api/v1/config/...` 版本化前缀、两路径共享每地址限流预算、成功答案一分钟公开缓存 + `Vary: Host`(行内记录的前置条件达成);片段随 ba3ddb76 落地——`go/config/api/openapi.yaml` 声明 config_getPublicConfig/config_getSystemFeatures 两个操作,`*Module` 以编译期断言实现生成 `api.ServerInterface` 并经生成 wrapper 挂载 |
 | 154 | ROADMAP | `web/packages/api-client/src/config-fetcher.ts` | OpenAPI fragment for go/config pre-auth endpoints | 闭:ba3ddb76 go/config 片段落地并进合并文档与 `@speed/api-sdk`;前端手写面与之同步——config-fetcher 保持 per-key 映射层、路径常量与片段一致,片段生成的 hook(useConfigGetPublicConfig/useConfigGetSystemFeatures)为前端的主调用面;前置 secured/versioned 由 5cb0ce68 达成 |
 

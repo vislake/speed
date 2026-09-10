@@ -13,9 +13,10 @@ committed and verified.
   `@speed/ui-kit`), `access: public`, `baseBranch: main`. This is
   configuration only, no version bookkeeping.
 - This README. There are deliberately **no changeset entries** — a
-  changeset entry is a request for a version bump. The v0.0.1 release
+  changeset entry is a request for a version bump. The v0.0.1 attempt
   (2026-09-10) bumped the twelve packages straight to `0.0.1` without
-  the changesets flow, which is still not enabled; the Go half's
+  the changesets flow, which is still not enabled; the version was then
+  voided and no package ever reached a registry. The Go half's
   transition state is its own (see the repository release doc).
 
 ## The fixed group and why it is the only mode
@@ -57,8 +58,9 @@ python3 tools/release/lockstep-release.py v1.2.0   # offline verification
   dependency, no version/changelog script) — nothing in this repository
   runs changesets today, and this M0 round never calls it.
 - No `.changeset/*.md` entries exist, and no `CHANGELOG.md` files: the
-  v0.0.1 release went out by direct version bump, never through the
-  changesets flow, so there is nothing for changesets to record. The
+  v0.0.1 attempt was executed by direct version bump, never through the
+  changesets flow (no package reached a registry — the version was
+  voided), so there is nothing for changesets to record. The
   release round at M4 (the v1.0 release) adds the changesets
   invocation, generates the per-package changelogs, and publishes to
   the npm registry — wiring `publishConfig`, provenance and the `npm

@@ -108,9 +108,9 @@ the file's own requires. `--version` is required and validated against
 the release-version grammar; a second run over an already-rewritten
 file is a no-op. The command rewrites Go `go.mod` files only.
 
-The quickstart's present-state note applies here: no release version
-exists to move to yet, so a generated `go.mod`'s `replace` directives
-keep the local checkout authoritative for its build.
+The quickstart's present-state note applies here: no usable release
+version exists to move to yet, so a generated `go.mod`'s `replace`
+directives keep the local checkout authoritative for its build.
 
 ## Next steps
 
