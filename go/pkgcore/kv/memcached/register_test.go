@@ -56,6 +56,27 @@ func TestClientFromConfig_SplitsCommaSeparatedAddrs(t *testing.T) {
 	}
 }
 
+// TestBuiltinClose_ReleasesTheClientItBuilt drives the registration's
+// resource-ownership contract for the built-in "kv.memcached" seam: the
+// value Build hands back must carry the Close() error method that releases
+// the client the registration itself built from cfg, so Kernel.Bootstrap
+// records it and runs it -- at Shutdown, and on Bootstrap's own failure
+// path. Without a closer on the registration-built value, nothing anywhere
+// could release that client's pooled connections: the host never saw it.
+func TestBuiltinClose_ReleasesTheClientItBuilt(t *testing.T) {
+	impl, _, err := pkgcore.KVStoreRegistry.Build("kv.memcached", pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v, want nil", "kv.memcached", err)
+	}
+	closer, ok := impl.(interface{ Close() error })
+	if !ok {
+		t.Fatalf("Build(%q) returned %T, want a value whose Close() error releases the client the registration built", "kv.memcached", impl)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}
+
 // TestRegistration_WrapsTheHostBuiltClient pins the factory contract a host
 // follows on the name-registration path: the Registration carries the name
 // the host chose and the package's own exported Capabilities, and its New

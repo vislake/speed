@@ -8,9 +8,11 @@ package memcached
 // PresetDistributed or any other built-in Preset: it is honestly NOT
 // SurvivesRestart, so it is not a sane zero-configuration default for a
 // distributed deployment mode's preset the way kv.redis is. A host that
-// wants it wires it explicitly,
-// either through KVStoreRegistry.Build("kv.memcached", cfg) or by calling
-// NewKVStore directly and injecting it with pkgcore.WithKVStore.
+// wants it reaches it explicitly: through KVStoreRegistry.Build or a
+// Preset entry naming "kv.memcached" with its cfg,
+// through the Registration factory below wrapping a client the host built,
+// or by calling NewKVStore directly and injecting it with
+// pkgcore.WithKVStore.
 //
 // The trade this package accepts, same as kv/redis: a host that forgets to
 // import it turns "missing kv.memcached" from a compile-time failure into a
@@ -47,7 +49,12 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/kv/memcached: builtin kv.memcached seam: %w", err)
 			}
-			return NewKVStore(client), nil
+			// The client was built here, from cfg -- the registration owns
+			// it, not a host that never saw it -- so the returned value's
+			// Close() error releases it. Kernel.Bootstrap records that
+			// Close and runs it on Shutdown (or on its own failure path);
+			// see pkgcore.Registration's resource-ownership contract.
+			return &closableKVStore{KVStore: NewKVStore(client), closeClient: client.Close}, nil
 		},
 	})
 }
@@ -77,6 +84,28 @@ func Registration(name string, client *memcache.Client) pkgcore.Registration[pkg
 			return NewKVStore(client), nil
 		},
 	}
+}
+
+// closableKVStore is the value "kv.memcached"'s registration returns: the
+// store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
+// Close() error method that releases the client the registration built, per
+// the Registration-level resource-ownership contract. A host that calls
+// NewKVStore itself gets the bare store and keeps owning its client, exactly
+// as that constructor's own doc comment promises; only the preset-built
+// value carries the registration's closer. Close releases the client's idle
+// pooled connections -- gomemcache dials per operation, so there is no other
+// long-lived state to stop.
+type closableKVStore struct {
+	pkgcore.KVStore
+	closeClient func() error
+}
+
+// Close releases the client the registration built.
+func (s *closableKVStore) Close() error {
+	if s.closeClient != nil {
+		return s.closeClient()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails. Only ever called
