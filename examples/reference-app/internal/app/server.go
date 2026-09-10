@@ -21,6 +21,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
@@ -1026,7 +1028,159 @@ type ServerConfig struct {
 // tests pin the positive half of, and
 // examples/reference-app/integration_test/distributed_mode_test.go proves
 // end to end against real Docker-backed infrastructure.
+// serverBuild carries the assembly state BuildServer's phases hand each
+// other. BuildServer itself is the orchestration: it creates one
+// serverBuild and runs the phases in order, cleaning up on any failure.
+type serverBuild struct {
+	bus             pkgcore.EventBus
+	busCapabilities pkgcore.Capability
+	redisBus        *eventbusredis.EventBus
+	redisClient     *redis.Client
+	db              *gorm.DB
+
+	configService             *config.Service
+	rbacService               *rbac.Service
+	standaloneQueue           *jobs.StandaloneQueue
+	meteringModule            *metering.Module
+	smileSimReconcilerStop    func()
+	periodicTaskSchedulerStop func()
+
+	cipher              *dbkit.Cipher
+	orgIndexer          *dbkit.BlindIndexer
+	contactEmailIndexer *dbkit.BlindIndexer
+	contactPhoneIndexer *dbkit.BlindIndexer
+
+	hostByTenant map[pkgcore.TenantID]string
+
+	configModule        *config.Module
+	orgModule           *org.Module
+	pkiModule           *pki.Module
+	authnModule         *authn.Module
+	notesModule         *notes.Module
+	auditModule         *audit.Module
+	rbacModule          *rbac.Module
+	storageModule       *storage.Module
+	sharingModule       *sharing.Module
+	integrationModule   *integration.Module
+	demoModule          *demo.Module
+	notificationModule  *notification.Module
+	aiGatewayModule     *aigateway.Module
+	billingModule       *billing.Module
+	complianceModule    *compliance.Module
+	adminModule         *admin.Module
+	attestationService  *attestation.Service
+	authnUserLocales    AuthnUserLocales
+	gatewayEntitlements aigateway.EntitlementsFunc
+	memberships         *signInMemberships
+
+	reg     *pkgcore.Registry
+	handler http.Handler
+}
+
 func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() error, *compliance.Module, error) {
+	b := &serverBuild{}
+	if err := b.openInfrastructure(ctx, cfg); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := b.buildModules(ctx, cfg); err != nil {
+		_ = b.cleanup()
+		return nil, nil, nil, err
+	}
+	if err := b.bootstrapKernel(ctx, cfg); err != nil {
+		_ = b.cleanup()
+		return nil, nil, nil, err
+	}
+	if err := b.attachAndSeed(ctx, cfg); err != nil {
+		_ = b.cleanup()
+		return nil, nil, nil, err
+	}
+	if err := b.mountAppRoutes(ctx, cfg); err != nil {
+		_ = b.cleanup()
+		return nil, nil, nil, err
+	}
+	if err := b.seedAndServe(ctx, cfg); err != nil {
+		_ = b.cleanup()
+		return nil, nil, nil, err
+	}
+	return b.handler, b.cleanup, b.complianceModule, nil
+}
+
+// cleanup tears the process's infrastructure down in reverse order of
+// construction. Every close is attempted even when an earlier one failed;
+// the first error wins.
+func (b *serverBuild) cleanup() error {
+	var firstErr error
+	// keepErr records err as the cleanup failure only when it is the
+	// first one seen -- every close below is attempted regardless, so
+	// neither an early nor a late failure can hide the other. It is a
+	// helper rather than an inline "closeErr != nil && firstErr == nil"
+	// guard because the very first site would make that guard a
+	// tautology (firstErr is provably nil there).
+	keepErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if b.smileSimReconcilerStop != nil {
+		// Stopped first, before standaloneQueue.Close and the database
+		// close below: the reconciler sweep calls both
+		// standaloneQueue.Get and the database (through its own
+		// smilesim.ReservationStore), so it must not still be ticking
+		// against either while they are being torn down.
+		b.smileSimReconcilerStop()
+	}
+	if b.periodicTaskSchedulerStop != nil {
+		// Stopped next, before standaloneQueue.Close below for the
+		// same reason: the scheduler's tick body enqueues onto the
+		// queue's task table, so it must not still be ticking while
+		// the pool that drains it is being torn down (the blocking
+		// stop also guarantees no enqueue is in flight when Close
+		// runs -- see periodic_scheduler.go's own doc comment).
+		b.periodicTaskSchedulerStop()
+	}
+	if b.configService != nil {
+		keepErr(b.configService.Close())
+	}
+	if b.rbacService != nil {
+		keepErr(b.rbacService.Close())
+	}
+	if b.standaloneQueue != nil {
+		// StandaloneQueue.Close stops the dispatcher and waits for
+		// in-flight jobs to finish, bounded by the same timeout that
+		// bounds HTTP graceful shutdown. Close is idempotent, so an
+		// error path that runs before Start is ever called is safe.
+		queueCtx, cancel := context.WithTimeout(context.Background(), hostcore.ShutdownTimeout)
+		keepErr(b.standaloneQueue.Close(queueCtx))
+		cancel()
+	}
+	if b.meteringModule != nil {
+		// meteringModule.Stop stops both of metering's background
+		// pipelines -- the analytics recorder's flush loop and the
+		// dispatcher's outbox poll -- and delivers whatever the
+		// recorder still had buffered into the aggregator before
+		// returning (go/metering/analytics.go's shutdown contract:
+		// "an event is dropped, or delivered; it is never silently
+		// lost"). Both loops write the shared database, so they stop
+		// before sqlDB.Close below, the same "nothing drains against a
+		// connection being torn down" ordering every other stop above
+		// follows. Safe to call before Start, or more than once.
+		b.meteringModule.Stop()
+	}
+	if b.redisBus != nil {
+		b.redisBus.Close()
+	}
+	if b.redisClient != nil {
+		keepErr(b.redisClient.Close())
+	}
+	sqlDB, dbErr := b.db.DB()
+	keepErr(dbErr)
+	if sqlDB != nil {
+		keepErr(sqlDB.Close())
+	}
+	return firstErr
+}
+
+func (b *serverBuild) openInfrastructure(ctx context.Context, cfg ServerConfig) error {
 	// dbkit.Options.AuditBus is wired here (and notes.Note does implement
 	// dbkit.Auditable -- see its model.go), for org: org's OrgNode,
 	// Membership and Invitation models opt into dbkit.Auditable, so their
@@ -1086,10 +1240,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// process-global (authn.RegisterPIISerializer's own doc comment).
 	piiCipher, err := dbkit.NewCipher(cfg.AuthnPIICipherKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
+		return fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
 	}
 	if regErr := authn.RegisterPIISerializer(piiCipher); regErr != nil {
-		return nil, nil, nil, fmt.Errorf("reference-app: register authn's PII serializer: %w", regErr)
+		return fmt.Errorf("reference-app: register authn's PII serializer: %w", regErr)
 	}
 
 	// go/pki's LocalSigner private-key column needs its own serializer
@@ -1099,10 +1253,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// comment).
 	pkiLocalKeyCipher, err := dbkit.NewCipher(cfg.PKILocalKeyCipherKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
+		return fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
 	}
 	if regErr := pki.RegisterLocalKeySerializer(pkiLocalKeyCipher); regErr != nil {
-		return nil, nil, nil, fmt.Errorf("reference-app: register pki's local-key serializer: %w", regErr)
+		return fmt.Errorf("reference-app: register pki's local-key serializer: %w", regErr)
 	}
 
 	// The audit-capture bus is constructed here, before dbkit.Open wires
@@ -1117,23 +1271,17 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// own inside Bootstrap. busCapabilities declares what the chosen
 	// implementation genuinely carries, so the WithEventBus call below can
 	// declare it the way every other injection in this function does.
-	var (
-		bus             pkgcore.EventBus
-		busCapabilities pkgcore.Capability
-		redisBus        *eventbusredis.EventBus
-		redisClient     *redis.Client
-	)
 	if cfg.RedisAddr != "" {
-		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-		redisBus = eventbusredis.NewEventBus(redisClient)
-		bus = redisBus
-		busCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+		b.redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		b.redisBus = eventbusredis.NewEventBus(b.redisClient)
+		b.bus = b.redisBus
+		b.busCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 	} else {
-		bus = pkgcore.NewMemoryEventBus()
-		busCapabilities = 0
+		b.bus = pkgcore.NewMemoryEventBus()
+		b.busCapabilities = 0
 	}
 
-	db, err := dbkit.Open(ctx, dbkit.Options{
+	b.db, err = dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,
 		DSN:     cfg.SQLitePath,
 		// Org's automatic write capture publishes on bus -- see the long
@@ -1141,7 +1289,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// why the scope is org's own exported declaration and deliberately
 		// nothing else (notes.Note stays out: its module records its own
 		// trail through audit.Emit).
-		AuditBus:    bus,
+		AuditBus:    b.bus,
 		AuditModels: org.AuditableModels(),
 	})
 	if err != nil {
@@ -1150,10 +1298,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// Subscribe), but it exists -- close it so no startup error path
 		// leaks the handle. Every later error path runs the cleanup
 		// closure, which closes redisClient itself.
-		if redisClient != nil {
-			_ = redisClient.Close()
+		if b.redisClient != nil {
+			_ = b.redisClient.Close()
 		}
-		return nil, nil, nil, fmt.Errorf("reference-app: open database: %w", err)
+		return fmt.Errorf("reference-app: open database: %w", err)
 	}
 
 	// configService and rbacService are filled by their Attach calls below
@@ -1175,91 +1323,11 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// client this host owns (eventbusredis.EventBus never closes it), and
 	// the database last. Every close is attempted even when an earlier one
 	// failed; the first error wins.
-	var (
-		configService             *config.Service
-		rbacService               *rbac.Service
-		standaloneQueue           *jobs.StandaloneQueue
-		meteringModule            *metering.Module
-		smileSimReconcilerStop    func()
-		periodicTaskSchedulerStop func()
-	)
 
-	cleanup := func() error {
-		var firstErr error
-		// keepErr records err as the cleanup failure only when it is the
-		// first one seen -- every close below is attempted regardless, so
-		// neither an early nor a late failure can hide the other. It is a
-		// helper rather than an inline "closeErr != nil && firstErr == nil"
-		// guard because the very first site would make that guard a
-		// tautology (firstErr is provably nil there).
-		keepErr := func(err error) {
-			if err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-		if smileSimReconcilerStop != nil {
-			// Stopped first, before standaloneQueue.Close and the database
-			// close below: the reconciler sweep calls both
-			// standaloneQueue.Get and the database (through its own
-			// smilesim.ReservationStore), so it must not still be ticking
-			// against either while they are being torn down.
-			smileSimReconcilerStop()
-		}
-		if periodicTaskSchedulerStop != nil {
-			// Stopped next, before standaloneQueue.Close below for the
-			// same reason: the scheduler's tick body enqueues onto the
-			// queue's task table, so it must not still be ticking while
-			// the pool that drains it is being torn down (the blocking
-			// stop also guarantees no enqueue is in flight when Close
-			// runs -- see periodic_scheduler.go's own doc comment).
-			periodicTaskSchedulerStop()
-		}
-		if configService != nil {
-			keepErr(configService.Close())
-		}
-		if rbacService != nil {
-			keepErr(rbacService.Close())
-		}
-		if standaloneQueue != nil {
-			// StandaloneQueue.Close stops the dispatcher and waits for
-			// in-flight jobs to finish, bounded by the same timeout that
-			// bounds HTTP graceful shutdown. Close is idempotent, so an
-			// error path that runs before Start is ever called is safe.
-			queueCtx, cancel := context.WithTimeout(context.Background(), hostcore.ShutdownTimeout)
-			keepErr(standaloneQueue.Close(queueCtx))
-			cancel()
-		}
-		if meteringModule != nil {
-			// meteringModule.Stop stops both of metering's background
-			// pipelines -- the analytics recorder's flush loop and the
-			// dispatcher's outbox poll -- and delivers whatever the
-			// recorder still had buffered into the aggregator before
-			// returning (go/metering/analytics.go's shutdown contract:
-			// "an event is dropped, or delivered; it is never silently
-			// lost"). Both loops write the shared database, so they stop
-			// before sqlDB.Close below, the same "nothing drains against a
-			// connection being torn down" ordering every other stop above
-			// follows. Safe to call before Start, or more than once.
-			meteringModule.Stop()
-		}
-		if redisBus != nil {
-			redisBus.Close()
-		}
-		if redisClient != nil {
-			keepErr(redisClient.Close())
-		}
-		sqlDB, dbErr := db.DB()
-		keepErr(dbErr)
-		if sqlDB != nil {
-			keepErr(sqlDB.Close())
-		}
-		return firstErr
-	}
-
-	cipher, err := dbkit.NewCipher(cfg.ConfigKey)
+	b.cipher, err = dbkit.NewCipher(cfg.ConfigKey)
 	if err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: build the config master cipher: %w", err)
+		_ = b.cleanup()
+		return fmt.Errorf("reference-app: build the config master cipher: %w", err)
 	}
 
 	// Every encrypted column this app's modules own is bound through the
@@ -1267,14 +1335,15 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// the exact blind index column its lookups were designed against, so
 	// the host only supplies the keys (see registerModuleSerializers and
 	// buildModuleIndexers below for each step's contract).
-	if regErr := registerModuleSerializers(cipher); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, regErr
+	if regErr := registerModuleSerializers(b.cipher); regErr != nil {
+		_ = b.cleanup()
+		return regErr
 	}
-	orgIndexer, contactEmailIndexer, contactPhoneIndexer, indexErr := buildModuleIndexers(cfg)
+	var indexErr error
+	b.orgIndexer, b.contactEmailIndexer, b.contactPhoneIndexer, indexErr = buildModuleIndexers(cfg)
 	if indexErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, indexErr
+		_ = b.cleanup()
+		return indexErr
 	}
 
 	// hostByTenant is cfg.HostTenants' reverse index: which configured
@@ -1298,9 +1367,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// tenant's branded host would hand the invitee a link that brands
 	// someone else's tenant; a host wiring with neither source fails the
 	// link loudly, naming the missing knob, rather than guessing.
-	hostByTenant := make(map[pkgcore.TenantID]string, len(cfg.HostTenants))
+	b.hostByTenant = make(map[pkgcore.TenantID]string, len(cfg.HostTenants))
 	for host, tenant := range cfg.HostTenants {
-		hostByTenant[tenant] = host
+		b.hostByTenant[tenant] = host
 	}
 
 	// The config module shares notes' database and is given everything it
@@ -1325,8 +1394,13 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// entirely independently of the outer tenancy.Middleware wired at the
 	// bottom of this function -- see this function's own middleware-chain
 	// comment below for why both coexist.
-	configModule := config.NewModule(db,
-		config.WithCipher(cipher),
+	return nil
+}
+
+func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error {
+	var err error
+	b.configModule = config.NewModule(b.db,
+		config.WithCipher(b.cipher),
 		config.WithResolver(tenancy.NewDomainResolver(
 			func(host string) (pkgcore.TenantID, bool) {
 				tid, ok := cfg.HostTenants[host]
@@ -1335,10 +1409,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			"",
 		)),
 	)
-	configHandle := configModule.Handle()
+	configHandle := b.configModule.Handle()
 
-	orgModule := org.NewModule(db,
-		org.WithEmailIndexer(orgIndexer),
+	b.orgModule = org.NewModule(b.db,
+		org.WithEmailIndexer(b.orgIndexer),
 		org.WithFeatureGate(org.FeatureGateFunc(configHandle.IsEnabled)),
 		// principalFallback serves org's browser-shaped callers:
 		// org's two caller-scoped endpoints also serve the team surface's
@@ -1363,7 +1437,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 				return "", tenantErr
 			}
 			linkBase := ""
-			if host, ok := hostByTenant[tenant]; ok {
+			if host, ok := b.hostByTenant[tenant]; ok {
 				linkBase = "https://" + host
 			} else if cfg.PublicOrigin != "" {
 				linkBase = strings.TrimRight(cfg.PublicOrigin, "/")
@@ -1405,7 +1479,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// (wireSmilesimTerminalSignal, at its own assembly site below) is what
 	// settles the job's credit reservation and publishes its completion
 	// notification the moment that signal lands.
-	standaloneQueue = jobs.NewStandaloneQueue(db, jobs.WithEventBus(bus))
+	b.standaloneQueue = jobs.NewStandaloneQueue(b.db, jobs.WithEventBus(b.bus))
 
 	// pki owns authn's signing-key lifecycle: LocalSigner (its own
 	// zero-external-dependency default) generates and stores the key in
@@ -1431,7 +1505,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// (what ConfigFromEnv always leaves them at) keeps pki's own
 	// DefaultPropagationWindow / DefaultRenewalLeadTime /
 	// DefaultExpiryScanWindow in force.
-	pkiOpts := []pki.Option{pki.WithQueue(standaloneQueue)}
+	pkiOpts := []pki.Option{pki.WithQueue(b.standaloneQueue)}
 	if cfg.PKIPropagationWindow > 0 {
 		pkiOpts = append(pkiOpts, pki.WithPropagationWindow(cfg.PKIPropagationWindow))
 	}
@@ -1441,11 +1515,11 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	if cfg.PKIExpiryScanWindow > 0 {
 		pkiOpts = append(pkiOpts, pki.WithExpiryScanWindow(cfg.PKIExpiryScanWindow))
 	}
-	pkiModule := pki.NewModule(db, pkiOpts...)
+	b.pkiModule = pki.NewModule(b.db, pkiOpts...)
 
-	memberships := cfg.Memberships
-	if memberships == nil {
-		memberships = NewSignInMemberships()
+	b.memberships = cfg.Memberships
+	if b.memberships == nil {
+		b.memberships = NewSignInMemberships()
 	}
 	// The org-backed half of the membership store is bound AFTER Bootstrap,
 	// at the site just below the kernel call: TenantsOf's audited
@@ -1458,9 +1532,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	}
 
 	authnOpts := []authn.Option{
-		authn.WithKeySource(pkiModule.Service()),
+		authn.WithKeySource(b.pkiModule.Service()),
 		authn.WithBlindIndexKey(cfg.AuthnBlindIndexKey),
-		authn.WithMembershipReader(memberships),
+		authn.WithMembershipReader(b.memberships),
 		authn.WithDeploymentMode(cfg.DeploymentMode),
 		authn.WithSocialProviders(cfg.SocialProviders...),
 		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
@@ -1540,10 +1614,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	case cfg.DeploymentMode != pkgcore.DeploymentModeDistributed:
 		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)))
 	}
-	authnModule, err := authn.NewModule(db, authnOpts...)
+	b.authnModule, err = authn.NewModule(b.db, authnOpts...)
 	if err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
+		return fmt.Errorf("reference-app: build the authn module: %w", err)
 	}
 
 	// notes' creator seam is DemoNotesSubjectResolver (declared above):
@@ -1557,7 +1630,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// seeded accounts of demo_users.go create notes through their access
 	// tokens alone (see its own doc comment, and demo_subject.go's
 	// DemoNotesCreatorUserID).
-	notesModule := notes.NewModule(db, notes.WithSubjectResolver(DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}))
+	b.notesModule = notes.NewModule(b.db, notes.WithSubjectResolver(DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}))
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
 	// own database connection -- no new infra dependency is needed for
@@ -1567,7 +1640,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// (see the doc comment on db's own construction above for why this
 	// app uses that mechanism rather than dbkit's automatic
 	// AuditBus-driven write capture).
-	auditModule := audit.New(db)
+	b.auditModule = audit.New(b.db)
 
 	// rbac needs nothing from this host but a database: it declares its own
 	// permissions during Register and reads EVERY module's declarations
@@ -1594,9 +1667,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// module's declarations, by the time the drain loop below moves them
 	// onto the queue; the queue's retries are what converge a reap that
 	// hit a transient database failure.
-	rbacModule := rbac.NewModule(db,
-		rbac.WithSubtreeResolver(OrgSubtreeResolverFor(orgModule.Scope())),
-		rbac.WithQueue(standaloneQueue))
+	b.rbacModule = rbac.NewModule(b.db,
+		rbac.WithSubtreeResolver(OrgSubtreeResolverFor(b.orgModule.Scope())),
+		rbac.WithQueue(b.standaloneQueue))
 
 	// storageModule is the reference app's first consumer of go/storage.
 	// Its asynchronous work -- the thumbnail-derive task every completed
@@ -1605,7 +1678,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// -- runs on the host's standaloneQueue above
 	// (storage.WithQueue), drained and claimed below like every other
 	// registry-declared handler.
-	storageModule := storage.NewModule(db, storage.WithQueue(standaloneQueue))
+	b.storageModule = storage.NewModule(b.db, storage.WithQueue(b.standaloneQueue))
 
 	// attestationService is the reference app's AI-output attestation layer
 	// -- the real consumer of go/pki's X.509 layer that closes the "no real
@@ -1623,12 +1696,12 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// steps (EnsureSchema, EnsureAuthorityChain) run later, after
 	// Kernel.Bootstrap applied pki's migrations -- see that block's own
 	// comment.
-	attestationService := attestation.NewService(
-		pkiModule.CA(),
-		pki.NewCertificateRepository(db),
-		storageContentOpener{svc: storageModule.ObjectService()},
-		attestation.NewAttestationStore(db),
-		db,
+	b.attestationService = attestation.NewService(
+		b.pkiModule.CA(),
+		pki.NewCertificateRepository(b.db),
+		storageContentOpener{svc: b.storageModule.ObjectService()},
+		attestation.NewAttestationStore(b.db),
+		b.db,
 	)
 
 	// sharingModule is the reference app's first real consumer of
@@ -1647,9 +1720,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// exists, after Attach below -- actually governs Service.Create's
 	// resolved expiry instead of always falling back to
 	// defaultShareExpiry.
-	sharingModule := sharing.NewModule(db,
-		sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService(), attest: attestationService}),
-		sharing.WithTenantConfigReader(SharingConfigReader{Service: &configService}),
+	b.sharingModule = sharing.NewModule(b.db,
+		sharing.WithResourceResolver(&storageSharingResolver{svc: b.storageModule.ObjectService(), attest: b.attestationService}),
+		sharing.WithTenantConfigReader(SharingConfigReader{Service: &b.configService}),
 	)
 
 	// integrationModule is the reference app's mandatory first consumer of
@@ -1675,7 +1748,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// by this module's own tests, never need one).
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
-		integration.WithWebhookQueue(standaloneQueue),
+		integration.WithWebhookQueue(b.standaloneQueue),
 		integration.WithSubjectResolver(integration.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	}
 	if cfg.WebhookURLValidator != nil {
@@ -1684,7 +1757,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	if cfg.WebhookHTTPClient != nil {
 		integrationOpts = append(integrationOpts, integration.WithWebhookHTTPClient(cfg.WebhookHTTPClient))
 	}
-	integrationModule := integration.NewModule(db, integrationOpts...)
+	b.integrationModule = integration.NewModule(b.db, integrationOpts...)
 
 	// notificationModule is the reference app's first consumer of
 	// go/notification, wired end to end as the module's mandatory
@@ -1719,20 +1792,20 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// demo deliveries' recipient-language resolution -- see that type's own
 	// doc comment). It is built here, before either module registers, and
 	// reads the authn service lazily so the wiring order is not a hazard.
-	authnUserLocales := AuthnUserLocales{authn: authnModule}
+	b.authnUserLocales = AuthnUserLocales{authn: b.authnModule}
 
-	notificationModule := notification.NewModule(db,
+	b.notificationModule = notification.NewModule(b.db,
 		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)),
 		notification.WithMailFrom("notifications@reference-app.example"),
 		// Replies to a notification land in the support inbox; the
 		// APP_SMTP_REPLY_TO default, when configured, backs this up for any
 		// mail the modules do not stamp themselves.
 		notification.WithReplyTo("support@reference-app.example"),
-		notification.WithContactEmailIndexer(contactEmailIndexer),
-		notification.WithContactPhoneIndexer(contactPhoneIndexer),
-		notification.WithDeliveryQueue(standaloneQueue),
+		notification.WithContactEmailIndexer(b.contactEmailIndexer),
+		notification.WithContactPhoneIndexer(b.contactPhoneIndexer),
+		notification.WithDeliveryQueue(b.standaloneQueue),
 		notification.WithUserAddressResolver(staticaddr.New(DemoUserAddresses)),
-		notification.WithUserLocaleResolver(authnUserLocales),
+		notification.WithUserLocaleResolver(b.authnUserLocales),
 		notification.WithSubjectResolver(notification.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	)
 
@@ -1744,7 +1817,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// renders every dispatch from that frozen catalog -- a type whose copy
 	// lives outside the set can never render (internal/demo module.go's
 	// package comment says so at length).
-	demoModule := demo.NewModule()
+	b.demoModule = demo.NewModule()
 
 	// billingModule is the reference app's mandatory first consumer of
 	// go/billing -- a module API this app genuinely uses, both judgment
@@ -1775,7 +1848,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// nothing to poll -- an actual payment-gateway integration (a real
 	// Stripe/Alipay/WeChat sandbox charge) stays out of this app's
 	// scope.
-	billingModule := billing.NewModule(db, nil)
+	b.billingModule = billing.NewModule(b.db, nil)
 
 	// meteringModule is go/metering's seat in this app: admin's D9 usage
 	// dashboard reads its per-tenant summary rows (admin.WithMetering
@@ -1790,7 +1863,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// module.go's own doc comment), so its Register-time declarations --
 	// its two config items and its one published event -- and its
 	// migration set register and apply with every other module's below.
-	meteringModule = metering.NewModule(db)
+	b.meteringModule = metering.NewModule(b.db)
 
 	// aiGatewayModule is the reference app's mandatory first consumer of
 	// go/ai-gateway: the
@@ -1848,9 +1921,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// internal/smilesim/service.go's Simulate doc comment). The two must
 	// answer through the very same seam, or the pre-flight and the
 	// gateway's re-check could disagree about the same state.
-	gatewayEntitlements := aigateway.EntitlementsFunc(
+	b.gatewayEntitlements = aigateway.EntitlementsFunc(
 		func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
-			decision, checkErr := billingModule.Entitlements().Check(ctx, featureKey, requested)
+			decision, checkErr := b.billingModule.Entitlements().Check(ctx, featureKey, requested)
 			if checkErr != nil {
 				return aigateway.Decision{}, checkErr
 			}
@@ -1881,12 +1954,12 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// "ai.chat_tokens" -- is recorded through this tier alone, never also
 	// through the billing-grade Enqueue path, per go/metering/recorder.go's
 	// one-feature-one-tier rule.
-	meteringUsageRecorder := meteringModule.Recorder()
-	aiGatewayModule := aigateway.NewModule(db,
+	meteringUsageRecorder := b.meteringModule.Recorder()
+	b.aiGatewayModule = aigateway.NewModule(b.db,
 		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
 		aigateway.WithModelRoute(smilesim.LogicalModel, aigateway.ProviderOpenAICompatibleImage, "dall-e-3"),
-		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
-		aigateway.WithEntitlements(gatewayEntitlements),
+		aigateway.WithImageGeneration(b.standaloneQueue, b.storageModule.ObjectService()),
+		aigateway.WithEntitlements(b.gatewayEntitlements),
 		aigateway.WithUsageRecorder(aigateway.UsageRecorderFunc(
 			func(ctx context.Context, event aigateway.UsageEvent) error {
 				return meteringUsageRecorder.Record(ctx, metering.UsageEvent{
@@ -1923,10 +1996,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// -- once config.Service exists, after Attach below -- actually governs
 	// ExportService.Export's minted delivery-link expiry instead of always
 	// falling back to defaultExportDeliveryExpiry.
-	complianceAuditRepo := audit.NewRepository(db)
-	complianceModule := compliance.NewModule(complianceAuditRepo,
-		compliance.WithQueue(standaloneQueue),
-		compliance.WithSharing(sharingModule.Service()),
+	complianceAuditRepo := audit.NewRepository(b.db)
+	b.complianceModule = compliance.NewModule(complianceAuditRepo,
+		compliance.WithQueue(b.standaloneQueue),
+		compliance.WithSharing(b.sharingModule.Service()),
 		compliance.WithExportConfigReader(compliance.NewConfigReader(configHandle)),
 	)
 
@@ -1954,87 +2027,76 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// enqueues onto
 	// it rather than running compliance.ExportService.Export synchronously
 	// inside the request.
-	adminModule := admin.NewModule(db,
-		admin.WithAuthn(authnModule),
-		admin.WithOrg(orgModule),
-		admin.WithCompliance(complianceModule),
-		admin.WithNotification(notificationModule),
-		admin.WithMetering(meteringModule),
-		admin.WithBilling(billingModule),
-		admin.WithQueue(standaloneQueue),
+	b.adminModule = admin.NewModule(b.db,
+		admin.WithAuthn(b.authnModule),
+		admin.WithOrg(b.orgModule),
+		admin.WithCompliance(b.complianceModule),
+		admin.WithNotification(b.notificationModule),
+		admin.WithMetering(b.meteringModule),
+		admin.WithBilling(b.billingModule),
+		admin.WithQueue(b.standaloneQueue),
 	)
+	return nil
+}
+
+func (b *serverBuild) bootstrapKernel(ctx context.Context, cfg ServerConfig) error {
+	var err error
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
-	if regErr := migrationRegistry.Register(pkiModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.pkiModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(authnModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.authnModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(rbacModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.rbacModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(notesModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.notesModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(orgModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.orgModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(configModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.configModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(auditModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.auditModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(storageModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.storageModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(sharingModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.sharingModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(integrationModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.integrationModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	// demoModule is deliberately absent from this registry: it ships no
 	// migrations (its Migrations() is an empty FS -- see internal/demo's
 	// module doc), so there is nothing to register or apply for it.
-	if regErr := migrationRegistry.Register(notificationModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.notificationModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(aiGatewayModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.aiGatewayModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(billingModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.billingModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if regErr := migrationRegistry.Register(meteringModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.meteringModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	// complianceModule is deliberately absent from this registry too: it
 	// ships no migrations of its own (Migrations() is an empty FS) --
 	// every row it reads or writes lives in auditModule's own
 	// audit_events table, already registered above.
-	if regErr := migrationRegistry.Register(adminModule); regErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	if regErr := migrationRegistry.Register(b.adminModule); regErr != nil {
+		return fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
-	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
+	if applyErr := migrationRegistry.Apply(ctx, b.db, dbkit.DialectSQLite); applyErr != nil {
+		return fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
 	// Bootstrap registers the modules in argument order -- pki leads the
@@ -2198,10 +2260,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// itself. The no-concrete-infrastructure-implementation rule constrains
 	// business modules, not the application that assembles them.
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
-	kernelOptions = append(kernelOptions, pkgcore.WithEventBus(bus, busCapabilities))
+	kernelOptions = append(kernelOptions, pkgcore.WithEventBus(b.bus, b.busCapabilities))
 	if cfg.RedisAddr != "" {
 		kernelOptions = append(kernelOptions,
-			pkgcore.WithKVStore(kvredis.NewKVStore(redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+			pkgcore.WithKVStore(kvredis.NewKVStore(b.redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 	}
 	// The preset layer, composed explicitly: the standalone preset is the
 	// same base NewKernel would default to anyway, and each configured
@@ -2231,10 +2293,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, integrationModule, demoModule, notificationModule, aiGatewayModule, billingModule, meteringModule, complianceModule, adminModule, auditModule)
+	b.reg, err = pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, b.pkiModule, b.authnModule, b.notesModule, b.orgModule, b.configModule, b.rbacModule, b.storageModule, b.sharingModule, b.integrationModule, b.demoModule, b.notificationModule, b.aiGatewayModule, b.billingModule, b.meteringModule, b.complianceModule, b.adminModule, b.auditModule)
 	if err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
+		return fmt.Errorf("reference-app: bootstrap kernel: %w", err)
 	}
 	// The loader target must bind the bootstrap surface this composition
 	// declares: every key the modules above declared on the registry's
@@ -2243,10 +2304,14 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// this boot until the target grows the matching field, which is the point:
 	// a declared key the host never resolves is a key whose contract silently
 	// binds to nothing.
-	if verifyErr := verifyBootstrapBinding(reg); verifyErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, verifyErr
+	if verifyErr := verifyBootstrapBinding(b.reg); verifyErr != nil {
+		return verifyErr
 	}
+	return nil
+}
+
+func (b *serverBuild) attachAndSeed(ctx context.Context, cfg ServerConfig) error {
+	var err error
 	// Bind the org-backed half of the membership store here, only now that
 	// Bootstrap has run: the store's enumeration answer delegates to org's
 	// own cross-tenant query, which org serves only an elevated context --
@@ -2256,7 +2321,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// before this point can serve a sign-in: authn answers membership
 	// questions only inside a Login or Refresh call, and the first ones
 	// reach the store with the demo seeds below.
-	memberships.attach(orgModule.Members())
+	b.memberships.attach(b.orgModule.Members())
 	// The Attach calls below are the post-Bootstrap attach contract
 	// pkgcore.Kernel.Bootstrap's "Post-Bootstrap module steps" section
 	// states: each exactly once, after Bootstrap has returned, and each
@@ -2276,14 +2341,12 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// every spec-generated surface the module mounts reads the Service at
 	// call time through Handler's own Register-time forwarding wrapper, so
 	// nothing here needs the *integration.Service itself.
-	if _, attachErr := integrationModule.Attach(reg); attachErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
+	if _, attachErr := b.integrationModule.Attach(b.reg); attachErr != nil {
+		return fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
 	}
-	configService, err = configModule.Attach(reg)
+	b.configService, err = b.configModule.Attach(b.reg)
 	if err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: attach the config module: %w", err)
+		return fmt.Errorf("reference-app: attach the config module: %w", err)
 	}
 	// With the config service live, open the sign-in channels this host
 	// actually assembled: authn's social flags default OFF (a channel with
@@ -2295,33 +2358,30 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// channel does not exist. See openConfiguredAuthnChannels' own doc
 	// comment for the full reasoning. When cfg.SocialProviders is empty the
 	// step writes nothing at all.
-	if flagErr := openConfiguredAuthnChannels(ctx, configService, cfg.SocialProviders); flagErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, flagErr
+	if flagErr := openConfiguredAuthnChannels(ctx, b.configService, cfg.SocialProviders); flagErr != nil {
+		return flagErr
 	}
 	// OnConfigReady, when non-nil, receives the live *config.Service now
 	// that the channel-flag rows above are in place -- the post-Attach
 	// seam a test needs to write further rows through the real Set path
 	// (ServerConfig's field doc).
 	if cfg.OnConfigReady != nil {
-		cfg.OnConfigReady(configService)
+		cfg.OnConfigReady(b.configService)
 	}
 	// rbac's Attach must also come after Bootstrap, and for a sharper
 	// reason than config's: what it freezes is the snapshot of every
 	// permission every module declared, so a snapshot taken any earlier
 	// would be missing whatever registered after it -- and a permission
 	// missing from that catalog cannot be granted at all.
-	rbacService, err = rbacModule.Attach(reg)
+	b.rbacService, err = b.rbacModule.Attach(b.reg)
 	if err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: attach the rbac module: %w", err)
+		return fmt.Errorf("reference-app: attach the rbac module: %w", err)
 	}
-	if seedErr := seedDemoGrants(ctx, rbacService, cfg.HostTenants); seedErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, seedErr
+	if seedErr := seedDemoGrants(ctx, b.rbacService, cfg.HostTenants); seedErr != nil {
+		return seedErr
 	}
 	if cfg.OnRBACReady != nil {
-		cfg.OnRBACReady(rbacService)
+		cfg.OnRBACReady(b.rbacService)
 	}
 	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for a real
 	// buy-a-credit-pack flow -- see that function's own doc comment for
@@ -2333,9 +2393,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// tenant-acme to exercise the successful-generation leg, exactly the
 	// way seedDemoGrants' own roles are needed by every test that gates a
 	// route on a permission, demo password or not.
-	if seedErr := seedDemoCredits(ctx, billingModule.Credits(), cfg.HostTenants); seedErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, seedErr
+	if seedErr := seedDemoCredits(ctx, b.billingModule.Credits(), cfg.HostTenants); seedErr != nil {
+		return seedErr
 	}
 
 	// seedDemoEntitlements is the demo, NOT-a-real-purchase stand-in for
@@ -2351,9 +2410,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// aigateway.entitlement_denied. Running it here, before any route can
 	// serve, also means the seam is live (never nil and never judging an
 	// empty database) from the very first request.
-	if seedErr := seedDemoEntitlements(ctx, billingModule.Plans(), billingModule.Subscriptions(), cfg.HostTenants); seedErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, seedErr
+	if seedErr := seedDemoEntitlements(ctx, b.billingModule.Plans(), b.billingModule.Subscriptions(), cfg.HostTenants); seedErr != nil {
+		return seedErr
 	}
 
 	// notes' retention participant is registered here, after Bootstrap --
@@ -2367,9 +2425,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// shared-db shape every earlier host-side seam wiring in this file
 	// follows. Add returns ErrDuplicateRetentionParticipant on a repeated
 	// Name, refused here like any other wiring failure.
-	if err := reg.Retention.Add(notes.NewRetentionParticipant(notes.NewRepository(db))); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: register notes retention participant: %w", err)
+	if err := b.reg.Retention.Add(notes.NewRetentionParticipant(notes.NewRepository(b.db))); err != nil {
+		return fmt.Errorf("reference-app: register notes retention participant: %w", err)
 	}
 
 	// admin's role-management surface needs the real *rbac.Service --
@@ -2379,7 +2436,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// rather than a WithXxx(*rbac.Module) construction-time Option the
 	// way authn/org/compliance/notification are -- see AttachRBAC's own
 	// doc comment for the full reasoning.
-	adminModule.AttachRBAC(rbacService)
+	b.adminModule.AttachRBAC(b.rbacService)
 
 	// The ai-gateway platform credential: written only when cfg.AIGatewayAPIKey
 	// is set (see its own doc comment on ServerConfig for why the default is
@@ -2405,14 +2462,12 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			Purpose: aigateway.SystemPurposeCredentialWrite,
 		})
 		if sysErr != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: build the ai-gateway credential system context: %w", sysErr)
+			return fmt.Errorf("reference-app: build the ai-gateway credential system context: %w", sysErr)
 		}
-		if credErr := aiGatewayModule.Credentials().SetPlatformCredential(
+		if credErr := b.aiGatewayModule.Credentials().SetPlatformCredential(
 			sysCtx, aigateway.ProviderOpenAICompatible, cfg.AIGatewayAPIKey, cfg.AIGatewayBaseURL,
 		); credErr != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: set the ai-gateway platform credential: %w", credErr)
+			return fmt.Errorf("reference-app: set the ai-gateway platform credential: %w", credErr)
 		}
 	}
 	// The ai-gateway image-generation platform credential -- the same
@@ -2428,14 +2483,12 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			Purpose: aigateway.SystemPurposeCredentialWrite,
 		})
 		if sysErr != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: build the ai-gateway image credential system context: %w", sysErr)
+			return fmt.Errorf("reference-app: build the ai-gateway image credential system context: %w", sysErr)
 		}
-		if credErr := aiGatewayModule.Credentials().SetPlatformCredential(
+		if credErr := b.aiGatewayModule.Credentials().SetPlatformCredential(
 			sysCtx, aigateway.ProviderOpenAICompatibleImage, cfg.AIGatewayImageAPIKey, cfg.AIGatewayImageBaseURL,
 		); credErr != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: set the ai-gateway image platform credential: %w", credErr)
+			return fmt.Errorf("reference-app: set the ai-gateway image platform credential: %w", credErr)
 		}
 	}
 
@@ -2451,9 +2504,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// returns -- so the first enqueued job (a completed object's thumbnail
 	// derivation) waits only as long as a poll of the queue's own task
 	// table.
-	if err := jobs.Wire(ctx, standaloneQueue, reg.Jobs); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: wire the job queue: %w", err)
+	if err := jobs.Wire(ctx, b.standaloneQueue, b.reg.Jobs); err != nil {
+		return fmt.Errorf("reference-app: wire the job queue: %w", err)
 	}
 	// cfg.DisableQueueWorker skips Start entirely rather than merely
 	// declining to enqueue: jobs.Wire above still runs (so the queue's
@@ -2463,9 +2515,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// claim or execute a Job of any type -- see the DisableQueueWorker
 	// field's own doc comment (bootstrap.go) for why.
 	if !cfg.DisableQueueWorker {
-		if err := standaloneQueue.Start(ctx); err != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
+		if err := b.standaloneQueue.Start(ctx); err != nil {
+			return fmt.Errorf("reference-app: start the job queue: %w", err)
 		}
 		// Start the host's periodic-task scheduler on the same gate: a
 		// task this replica can never execute is pointless to enqueue, so
@@ -2486,18 +2537,17 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// periodicTaskSchedulerStop call, not be cut short by whatever
 		// cancels BuildServer's own ctx.
 		schedulerOpts := []jobs.SchedulerOption{
-			jobs.WithSchedules(reg.Schedules),
-			jobs.WithTenantLister(newPeriodicTenantUniverse(cfg.HostTenants, adminModule.Tenants())),
+			jobs.WithSchedules(b.reg.Schedules),
+			jobs.WithTenantLister(newPeriodicTenantUniverse(cfg.HostTenants, b.adminModule.Tenants())),
 		}
 		if cfg.PeriodicTaskInterval > 0 {
 			schedulerOpts = append(schedulerOpts, jobs.WithInterval(cfg.PeriodicTaskInterval))
 		}
-		scheduler := jobs.NewScheduler(standaloneQueue, schedulerOpts...)
+		scheduler := jobs.NewScheduler(b.standaloneQueue, schedulerOpts...)
 		if err := scheduler.Start(context.Background()); err != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: start the periodic-task scheduler: %w", err)
+			return fmt.Errorf("reference-app: start the periodic-task scheduler: %w", err)
 		}
-		periodicTaskSchedulerStop = scheduler.Stop
+		b.periodicTaskSchedulerStop = scheduler.Stop
 	}
 	// Start meteringModule's background pipelines now that Bootstrap has
 	// returned (Register attached the registry's bus onto its Aggregator,
@@ -2512,15 +2562,18 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// safe to call with ctx canceled or after a Stop (each loop no-ops a
 	// second Start; see analytics.go and dispatcher.go), and cleanup's
 	// meteringModule.Stop stops both loops and drains the recorder.
-	meteringModule.Start(ctx)
+	b.meteringModule.Start(ctx)
 
+	return nil
+}
+
+func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) error {
 	mux := http.NewServeMux()
 	obs.MountLiveness(mux)
-	orgGuardDeps := OrgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
-	adminHandler, authnRoutes, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
+	orgGuardDeps := OrgRouteGuardDeps{scope: b.orgModule.Scope(), members: b.orgModule.Members()}
+	adminHandler, authnRoutes, mountErr := mountModuleRoutes(mux, b.reg, b.rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, mountErr
+		return mountErr
 	}
 
 	// hostcore.RegisterMountedRoutes hands every obs.Middleware this
@@ -2535,7 +2588,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// traffic -- not after the server starts listening. Last registration
 	// wins, and every BuildServer call registers the same table, so the
 	// repeated calls this package's tests make are idempotent in effect.
-	hostcore.RegisterMountedRoutes(reg)
+	hostcore.RegisterMountedRoutes(b.reg)
 
 	// wireDemoNotification adds the reference app's demo glue on top of the
 	// mounted module routes: the subscription that turns notes' note-created
@@ -2549,7 +2602,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// its HTTP handler drives (see demo_notification.go for the seam
 	// contracts, and flowtests/notification_flow_test.go for the end-to-end legs).
 	// The call cannot fail: nothing it does returns an error.
-	wireDemoNotification(mux, reg.EventBus(), notificationModule, reg, authnUserLocales)
+	wireDemoNotification(mux, b.reg.EventBus(), b.notificationModule, b.reg, b.authnUserLocales)
 
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
 	// (consult.go): consultService shares notesModule's own
@@ -2559,7 +2612,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// aiGatewayModule's own Gateway, the same instance
 	// aiGatewayModule.Register validated. The call cannot fail: nothing it
 	// does returns an error.
-	consultService := consult.NewService(notes.NewRepository(db), aiGatewayModule.Gateway())
+	consultService := consult.NewService(notes.NewRepository(b.db), b.aiGatewayModule.Gateway())
 	wireConsult(mux, consultService)
 
 	// wireSmileSim mounts the image-generation half of go/ai-gateway's
@@ -2592,10 +2645,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// to completion -- or one whose settlement was in flight when this
 	// process last restarted -- still gets settled rather than staying
 	// Reserved forever.
-	smileSimReservationStore := smilesim.NewReservationStore(db)
+	smileSimReservationStore := smilesim.NewReservationStore(b.db)
 	if err := smileSimReservationStore.EnsureSchema(ctx); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
+		return fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
 	}
 	// smileSimulationStore is the per-photo result index (see
 	// internal/smilesim's package doc comment's "Per-photo result index"
@@ -2605,10 +2657,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// per-photo enumeration route (smilesim.go) has its data
 	// source. Same
 	// EnsureSchema-before-first-use shape as the reservation store above.
-	smileSimulationStore := smilesim.NewSimulationStore(db)
+	smileSimulationStore := smilesim.NewSimulationStore(b.db)
 	if err := smileSimulationStore.EnsureSchema(ctx); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim simulation index schema: %w", err)
+		return fmt.Errorf("reference-app: ensure smilesim simulation index schema: %w", err)
 	}
 	// The attestation layer's two boot steps run here, after Bootstrap (the
 	// pki migrations the CA chain's pki_authorities rows live in were
@@ -2620,25 +2671,23 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// authority every tenant's simulation-attestation certificate is
 	// signed under. A failure stops the boot: an app whose AI outputs
 	// cannot be attested must not start serving shares of them.
-	if err := attestationService.EnsureSchema(ctx); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: ensure attestation schema: %w", err)
+	if err := b.attestationService.EnsureSchema(ctx); err != nil {
+		return fmt.Errorf("reference-app: ensure attestation schema: %w", err)
 	}
-	if err := attestationService.EnsureAuthorityChain(ctx); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: ensure the attestation CA chain: %w", err)
+	if err := b.attestationService.EnsureAuthorityChain(ctx); err != nil {
+		return fmt.Errorf("reference-app: ensure the attestation CA chain: %w", err)
 	}
 	// The last argument is gatewayEntitlements -- the same adapter instance
 	// aiGatewayModule's WithEntitlements gate runs -- so Simulate can
 	// pre-flight the model-access gate before its credit reservation opens
 	// (see that binding's own comment above and internal/smilesim's
 	// Simulate doc comment).
-	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore, smileSimulationStore, gatewayEntitlements)
+	smileSimService := smilesim.NewService(b.aiGatewayModule.Gateway(), b.billingModule.Credits(), b.reg.EventBus(), b.standaloneQueue, smileSimReservationStore, smileSimulationStore, b.gatewayEntitlements)
 	// context.Background(), never ctx, per StartReconciler's own doc
 	// comment: the sweep must keep running until cleanup's own
 	// smileSimReconcilerStop call, not be cut short by whatever cancels
 	// BuildServer's own ctx.
-	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
+	b.smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
 	// memberships rides along as the recipient gate's membership answer --
 	// the SAME store authn's MembershipReader reads, attached to org above
 	// (see wireSmileSim's own doc comment and smilesim.go's
@@ -2647,7 +2696,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// the simulation-content route reads a generated image's stored bytes
 	// through the same instance the cases photo routes drive (see
 	// wireSmileSim's own doc comment).
-	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService(), attestationService)
+	wireSmileSim(mux, smileSimService, b.standaloneQueue, b.memberships, b.storageModule.ObjectService(), b.attestationService)
 
 	// wireSmilesimTerminalSignal subscribes smileSimService to the queue's
 	// terminal signal (jobs.job.terminal): a simulation's credit
@@ -2660,7 +2709,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// jobs.WithEventBus(bus) on the standaloneQueue construction above;
 	// smilesim_terminal.go's doc comment carries the install's full
 	// contract.
-	wireSmilesimTerminalSignal(reg, smileSimService)
+	wireSmilesimTerminalSignal(b.reg, smileSimService)
 
 	// WireClinicName mounts this host's own tenant-identity answer
 	// (clinic_name.go): the org root name of the tenant the
@@ -2670,7 +2719,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// demo roster's static copy has no entry. Mounted here among the
 	// other hand-written app routes, behind the same chain every
 	// authenticated route sits behind.
-	WireClinicName(mux, orgModule.Tree())
+	WireClinicName(mux, b.orgModule.Tree())
 
 	// wireTeamMembers mounts this host's own roster-with-identity answer
 	// (team_members.go): the tenant's org membership roster,
@@ -2686,10 +2735,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// read permission through the same rbac gate the org module route
 	// uses. The call cannot fail: nothing it does returns an error.
 	wireTeamMembers(mux, teamMembersDeps{
-		az:             rbacService,
-		members:        orgModule.Members(),
-		tree:           orgModule.Tree(),
-		users:          authnModule.Service().Users(),
+		az:             b.rbacService,
+		members:        b.orgModule.Members(),
+		tree:           b.orgModule.Tree(),
+		users:          b.authnModule.Service().Users(),
 		headerDisabled: cfg.DisableDemoUserHeader,
 	})
 
@@ -2713,17 +2762,16 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// type notes' module uses -- it satisfies the cases package's
 	// identical copy of the SubjectResolver declaration,
 	// compile-time-checked at the bottom of cases.go.
-	caseRepository := cases.NewRepository(db)
+	caseRepository := cases.NewRepository(b.db)
 	if err := caseRepository.EnsureSchema(ctx); err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: ensure cases schema: %w", err)
+		return fmt.Errorf("reference-app: ensure cases schema: %w", err)
 	}
 	// The photo-upload and photo-content routes (cases_photos.go) drive
 	// storageModule's own ObjectService -- the same instance the storage
 	// module's HTTP surface serves -- so the app's case surface and the
 	// module agree on what an object is and which tenant's rows each read
 	// (go/storage resolves the tenant from the request context itself).
-	wireCasesRoutes(mux, cases.NewService(caseRepository), DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}, storageModule.ObjectService())
+	wireCasesRoutes(mux, cases.NewService(caseRepository), DemoNotesSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}, b.storageModule.ObjectService())
 
 	// wireIntegrationAuthenticated mounts go/integration's
 	// mandatory-first-consumer route (integration_authenticate.go):
@@ -2739,7 +2787,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// Service.Authenticate's lookups unbounded (flowtests/apikey_authenticate_flow_test.go
 	// pins the order). The call cannot fail: nothing
 	// it does returns an error.
-	wireIntegrationAuthenticated(mux, integrationModule, reg.KVStore())
+	wireIntegrationAuthenticated(mux, b.integrationModule, b.reg.KVStore())
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
 	// tenancy.Middleware(authn.NewPrincipalResolver()). Running authn
@@ -2842,7 +2890,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// an impersonation grant must never substitute an authn operation's
 	// caller identity -- authn is the layer that MINTED the identities
 	// impersonation substitutes between.
-	restOfAppChain := admin.ImpersonationMiddleware(adminModule.Impersonation())(
+	restOfAppChain := admin.ImpersonationMiddleware(b.adminModule.Impersonation())(
 		tenancy.Middleware(authn.NewPrincipalResolver(), append(hostcore.PreAuthAllowlist(),
 			// tenancy.WithTenantStatusResolver is D4's enforcement seam
 			// (docs/internal/23-admin.md, go/tenancy/tenant_status.go):
@@ -2856,7 +2904,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			// route (notes, storage, org, ...) actually refusing that
 			// tenant's requests on the very next one, rather than being
 			// a ledger fact nothing downstream ever consults.
-			tenancy.WithTenantStatusResolver(adminModule.Tenants()),
+			tenancy.WithTenantStatusResolver(b.adminModule.Tenants()),
 			// sharing.PathAccess is the one genuinely public, unauthenticated
 			// route this app mounts: an anonymous visitor holding a bearer
 			// share token carries no Principal and therefore no tenant claim
@@ -2909,7 +2957,11 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	pkgcore.MountRoutes(topMux, topMuxBranches...)
 	topMux.Handle("/", restOfAppChain)
 
-	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
+	b.handler = authn.Middleware(b.authnModule.Service().Verifier())(topMux)
+	return nil
+}
+
+func (b *serverBuild) seedAndServe(ctx context.Context, cfg ServerConfig) error {
 	// The demo-user seeds run last, once the composed handler exists: they
 	// register the demo accounts through the same register route a browser
 	// would use, which needs the whole chain above it. Each seed is opt-in
@@ -2923,9 +2975,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// why. An empty
 	// variable skips the seed.
 	if cfg.DemoUsersPassword != "" {
-		if seedErr := seedDemoUsers(ctx, handler, authnModule.Service(), rbacService, orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
-			_ = cleanup()
-			return nil, nil, nil, seedErr
+		if seedErr := seedDemoUsers(ctx, b.handler, b.authnModule.Service(), b.rbacService, b.orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
+			return seedErr
 		}
 	}
 	// seedDemoPlatformStaff is admin's own first-consumer demo account
@@ -2934,9 +2985,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// admin:* permission included, since owner carries every
 	// permission any module declared.
 	if cfg.DemoPlatformStaffPassword != "" {
-		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, authnModule.Service(), cfg.DemoPlatformStaffPassword); seedErr != nil {
-			_ = cleanup()
-			return nil, nil, nil, seedErr
+		if _, seedErr := seedDemoPlatformStaff(ctx, b.handler, b.memberships, b.rbacService, b.authnModule.Service(), cfg.DemoPlatformStaffPassword); seedErr != nil {
+			return seedErr
 		}
 	}
 
@@ -2967,9 +3017,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// hook -- nil under the disabled default (APP_FAIL_SELF_SERVICE_PROVISION
 	// absent or 0), armed either by ConfigFromEnv's own env-driven parse or
 	// by a test's ServerConfig.
-	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), billingModule.Plans(), billingModule.Subscriptions(), billingModule.Credits(), standaloneQueue, cfg.FailSelfServiceProvision); wireErr != nil {
-		_ = cleanup()
-		return nil, nil, nil, wireErr
+	if wireErr := wireSelfService(ctx, b.reg, b.orgModule, b.rbacService, b.authnModule.Service(), b.billingModule.Plans(), b.billingModule.Subscriptions(), b.billingModule.Credits(), b.standaloneQueue, cfg.FailSelfServiceProvision); wireErr != nil {
+		return wireErr
 	}
 
 	// Serve the built frontend when this boot is configured with one
@@ -2986,9 +3035,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// frontend.go's package doc comment for this app's wiring and
 	// pkgcore/spa's for the full interception rules.
 	if cfg.WebDistDir != "" {
-		handler = withFrontend(cfg.WebDistDir, handler)
+		b.handler = withFrontend(cfg.WebDistDir, b.handler)
 	}
-	return handler, cleanup, complianceModule, nil
+	return nil
 }
 
 // registerModuleSerializers binds every encrypted column this app's modules
