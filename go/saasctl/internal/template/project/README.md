@@ -81,6 +81,7 @@ environment instead.
 | `APP_AUTHN_PII_CIPHER_KEY` | 64 hex characters: the AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets); parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
 | `APP_PKI_LOCAL_KEY_CIPHER_KEY` | 64 hex characters: the AES key that seals go/pki's persisted signing-key column; parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
 | `APP_REDIS_ADDR` | Redis `host:port`; when set, composes a real Redis-backed implementation of both the "eventbus" and "kv" seams (unset leaves both on the Preset's in-process default) |
+| `APP_OTLP_ENDPOINT` | OTLP/gRPC `host:port` traces and metrics are pushed to; when set, the OTLP exporters are composed and `/metrics` answers 404 by design (unset leaves the local exporters: stdout plus the Prometheus scrape endpoint `/metrics` serves) |
 | `APP_S3_ENDPOINT` | S3-compatible endpoint; together with the three variables below, composes a real ObjectStore for the "objectstore" seam -- all four are required together, a partial set is refused rather than silently ignored |
 | `APP_S3_BUCKET` | S3 bucket name |
 | `APP_S3_ACCESS_KEY` | S3 access key |

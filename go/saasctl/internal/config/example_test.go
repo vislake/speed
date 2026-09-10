@@ -85,6 +85,7 @@ go 1.25.0
 	// authn pii cipher key [redacted]   unset or empty (development default)
 	// pki local key cipher key [redacted]   unset or empty (development default)
 	// redis addr                    unset or empty (eventbus/kv stay on the in-process default)
+	// otlp endpoint                 unset or empty (observability stays on the local exporters)
 	// s3 endpoint                   unset or empty (objectstore stays on the local-directory default)
 	// s3 bucket                     unset or empty (objectstore stays on the local-directory default)
 	// s3 access key                 unset or empty (objectstore stays on the local-directory default)

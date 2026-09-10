@@ -251,6 +251,7 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 		AuthnBlindIndexKeyEnv:   "",
 		AuthnPIICipherKeyEnv:    "",
 		PKILocalKeyCipherKeyEnv: "",
+		OTLPEndpointEnv:         "",
 	}))
 	if err != nil {
 		t.Fatalf("Load with all-empty variables failed: %v", err)
@@ -260,7 +261,8 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 	}
 	if cfg.DeploymentModeFromEnv || cfg.PortFromEnv || cfg.SQLitePathFromEnv ||
 		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv ||
-		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv {
+		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv ||
+		cfg.OTLPEndpointFromEnv {
 		t.Error("set-but-empty variables must not be recorded as from-env")
 	}
 }
@@ -273,6 +275,7 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 func TestLoadReadsInfrastructureVariables(t *testing.T) {
 	cfg, err := Load("cli-app", envFromMap(map[string]string{
 		RedisAddrEnv:     "redis.internal:6379",
+		OTLPEndpointEnv:  "collector.internal:4317",
 		S3EndpointEnv:    "s3.internal:9000",
 		S3BucketEnv:      "smiles",
 		S3AccessKeyEnv:   "AKIAEXAMPLE",
@@ -290,6 +293,9 @@ func TestLoadReadsInfrastructureVariables(t *testing.T) {
 	}
 	if cfg.RedisAddr != "redis.internal:6379" || !cfg.RedisAddrFromEnv {
 		t.Errorf("RedisAddr = %q (fromEnv %v), want the set value recorded as from-env", cfg.RedisAddr, cfg.RedisAddrFromEnv)
+	}
+	if cfg.OTLPEndpoint != "collector.internal:4317" || !cfg.OTLPEndpointFromEnv {
+		t.Errorf("OTLPEndpoint = %q (fromEnv %v), want the set value recorded as from-env", cfg.OTLPEndpoint, cfg.OTLPEndpointFromEnv)
 	}
 	if cfg.S3Endpoint != "s3.internal:9000" || cfg.S3Bucket != "smiles" ||
 		cfg.S3AccessKey != "AKIAEXAMPLE" || cfg.S3SecretKey != "s3cr3t" || cfg.S3Region != "us-east-1" || !cfg.S3UseSSL {
@@ -322,12 +328,12 @@ func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with an empty environment failed: %v", err)
 	}
-	if cfg.RedisAddr != "" || cfg.S3Endpoint != "" || cfg.S3Bucket != "" || cfg.S3AccessKey != "" ||
+	if cfg.RedisAddr != "" || cfg.OTLPEndpoint != "" || cfg.S3Endpoint != "" || cfg.S3Bucket != "" || cfg.S3AccessKey != "" ||
 		cfg.S3SecretKey != "" || cfg.S3Region != "" || cfg.S3UseSSL || cfg.SMTPHost != "" ||
 		cfg.SMTPPort != 0 || cfg.SMTPUsername != "" || cfg.SMTPPassword != "" || cfg.SMSGatewayURL != "" {
 		t.Errorf("an empty environment must leave every infrastructure field at its zero value, got %+v", cfg)
 	}
-	if cfg.RedisAddrFromEnv || cfg.S3EndpointFromEnv || cfg.S3BucketFromEnv || cfg.S3AccessKeyFromEnv ||
+	if cfg.RedisAddrFromEnv || cfg.OTLPEndpointFromEnv || cfg.S3EndpointFromEnv || cfg.S3BucketFromEnv || cfg.S3AccessKeyFromEnv ||
 		cfg.S3SecretKeyFromEnv || cfg.S3RegionFromEnv || cfg.S3UseSSLFromEnv || cfg.SMTPHostFromEnv ||
 		cfg.SMTPPortFromEnv || cfg.SMTPUsernameFromEnv || cfg.SMTPPasswordFromEnv || cfg.SMSGatewayURLFromEnv {
 		t.Error("an empty environment must record every infrastructure field as not-from-env")
@@ -401,30 +407,29 @@ func TestLoadSMTPPortMustBeAValidNumber(t *testing.T) {
 	}
 }
 
-// envVarDeclPattern matches one "<identifier>Env = \"<VALUE>\"" constant
-// declaration, the exact shape every one of the twenty bootstrap
-// variable names takes in both the template's config.go and this
-// package's own const block -- an identifier ending in the literal "Env"
-// assigned a quoted environment-variable-name string literal, on its own
-// line inside a const block. Comment lines (including the #nosec
-// exceptions both sides carry on the two credential-shaped names) do not
-// match, since they do not fit the "identifier = "VALUE"" shape at all.
-var envVarDeclPattern = regexp.MustCompile(`(?m)^\s*[A-Za-z0-9]+Env\s*=\s*"([A-Za-z0-9_]+)"`)
+// envTagPattern matches one `config:"env=<NAME>"` struct-tag option, the
+// exact shape every one of the twenty-one bootstrap variable names takes
+// in the template's config.go: the name lives in its loader target
+// field's env tag, not in a constant (this package's own const block above
+// is the twin side of the same names). The tag is a raw string literal, so
+// a name ends at the closing quote -- a tag carrying further options
+// (nothing does today) would still expose its env name to this pattern.
+var envTagPattern = regexp.MustCompile(`config:"env=([A-Za-z0-9_]+)"`)
 
-// extractEnvVarNames returns the set of environment-variable-name string
-// values assigned to an "...Env"-suffixed identifier in src.
+// extractEnvVarNames returns the set of environment-variable names pinned
+// by env tags in src.
 func extractEnvVarNames(src string) map[string]bool {
 	names := map[string]bool{}
-	for _, m := range envVarDeclPattern.FindAllStringSubmatch(src, -1) {
+	for _, m := range envTagPattern.FindAllStringSubmatch(src, -1) {
 		names[m[1]] = true
 	}
 	return names
 }
 
 // TestAppConfigEnvSetMatchesTheTemplateExactly is the drift-proof set
-// equality between the two sides: it extracts every "...Env = "VALUE""
-// declaration from the embedded template's own config.go source text --
-// never a hand-maintained list this test could silently fall behind, so a
+// equality between the two sides: it extracts every env tag's variable
+// name from the embedded template's own config.go source text -- never a
+// hand-maintained list this test could silently fall behind, so a
 // template edit is caught even before anyone updates this file -- and
 // asserts the twin's own exported Env constants cover exactly that set, in
 // both directions. The twin's own side is built from the actual exported
@@ -445,7 +450,7 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 		DeploymentModeEnv: true, PortEnv: true, DBPathEnv: true,
 		ConfigKeyEnv: true, OrgIndexKeyEnv: true,
 		AuthnBlindIndexKeyEnv: true, AuthnPIICipherKeyEnv: true, PKILocalKeyCipherKeyEnv: true,
-		RedisAddrEnv:  true,
+		RedisAddrEnv: true, OTLPEndpointEnv: true,
 		S3EndpointEnv: true, S3BucketEnv: true, S3AccessKeyEnv: true, S3SecretKeyEnv: true,
 		S3RegionEnv: true, S3UseSSLEnv: true,
 		SMTPHostEnv: true, SMTPPortEnv: true, SMTPUsernameEnv: true, SMTPPasswordEnv: true,
@@ -466,11 +471,12 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 
 // TestAppConfigIsTheGeneratedProjectsTwin re-reads the embedded template
 // project's cmd/server/config.go and fails when the two sides drift: every
-// variable name, the parse order, the defaults, the two error format
-// strings and the two development key byte sequences. A template edit that
-// changes any of these without its twin failing is an edit this test
-// exists to make impossible -- a generated project booting on values
-// saasctl does not resolve would strand every project the CLI maintains.
+// variable name (each carried by a loader-target field's env tag in the
+// template), the resolution order, the defaults, the error format strings
+// and the development key byte sequences. A template edit that changes any
+// of these without its twin failing is an edit this test exists to make
+// impossible -- a generated project booting on values saasctl does not
+// resolve would strand every project the CLI maintains.
 func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	content, err := template.Project.ReadFile("project/cmd/server/config.go")
 	if err != nil {
@@ -478,40 +484,71 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}
 	src := string(content)
 
-	// The twenty variable names and the one scalar default, declared in
-	// the template as <local name> = "<value>" inside its const block.
-	for local, want := range map[string]string{
-		"deploymentModeEnv":       DeploymentModeEnv,
-		"portEnv":                 PortEnv,
-		"dbPathEnv":               DBPathEnv,
-		"configKeyEnv":            ConfigKeyEnv,
-		"orgIndexKeyEnv":          OrgIndexKeyEnv,
-		"authnBlindIndexKeyEnv":   AuthnBlindIndexKeyEnv,
-		"authnPIICipherKeyEnv":    AuthnPIICipherKeyEnv,
-		"pkiLocalKeyCipherKeyEnv": PKILocalKeyCipherKeyEnv,
-		"redisAddrEnv":            RedisAddrEnv,
-		"s3EndpointEnv":           S3EndpointEnv,
-		"s3BucketEnv":             S3BucketEnv,
-		"s3AccessKeyEnv":          S3AccessKeyEnv,
-		"s3SecretKeyEnv":          S3SecretKeyEnv,
-		"s3RegionEnv":             S3RegionEnv,
-		"s3UseSSLEnv":             S3UseSSLEnv,
-		"smtpHostEnv":             SMTPHostEnv,
-		"smtpPortEnv":             SMTPPortEnv,
-		"smtpUsernameEnv":         SMTPUsernameEnv,
-		"smtpPasswordEnv":         SMTPPasswordEnv,
-		"smsGatewayURLEnv":        SMSGatewayURLEnv,
-		"defaultPort":             defaultPort,
+	// The twenty-one variable pins: each hostConfig field carries one
+	// variable's exact name in its env tag -- the tag, not a constant, is
+	// where the template's variable names live, one pin per twin constant.
+	// The regex anchors on the field declaration's own line (a leading
+	// tab, so Port cannot match inside SMTPPort) and on the field's string
+	// type, the loader target's one text shape.
+	for _, pin := range []struct {
+		field string
+		env   string
+	}{
+		{"DeploymentMode", DeploymentModeEnv},
+		{"Port", PortEnv},
+		{"DBPath", DBPathEnv},
+		{"ConfigKey", ConfigKeyEnv},
+		{"OrgIndexKey", OrgIndexKeyEnv},
+		{"AuthnBlindIndexKey", AuthnBlindIndexKeyEnv},
+		{"AuthnPIICipherKey", AuthnPIICipherKeyEnv},
+		{"PKILocalKeyCipherKey", PKILocalKeyCipherKeyEnv},
+		{"RedisAddr", RedisAddrEnv},
+		{"OTLPEndpoint", OTLPEndpointEnv},
+		{"S3Endpoint", S3EndpointEnv},
+		{"S3Bucket", S3BucketEnv},
+		{"S3AccessKey", S3AccessKeyEnv},
+		{"S3SecretKey", S3SecretKeyEnv},
+		{"S3Region", S3RegionEnv},
+		{"S3UseSSL", S3UseSSLEnv},
+		{"SMTPHost", SMTPHostEnv},
+		{"SMTPPort", SMTPPortEnv},
+		{"SMTPUsername", SMTPUsernameEnv},
+		{"SMTPPassword", SMTPPasswordEnv},
+		{"SMSGatewayURL", SMSGatewayURLEnv},
 	} {
-		// gofmt aligns "=" across a const block's declarations, so the
-		// number of spaces before it varies with the block's longest name
-		// (s3EndpointEnv  = ..., s3BucketEnv    = ...); match any run of
-		// whitespace there rather than the single space a literal
-		// substring check would require.
-		decl := regexp.MustCompile(fmt.Sprintf(`%s\s*=\s*"%s"`, regexp.QuoteMeta(local), regexp.QuoteMeta(want)))
-		if !decl.MatchString(src) {
-			t.Errorf("template does not declare %s (want %q); the twin has drifted", local, want)
+		field := regexp.MustCompile(fmt.Sprintf("(?m)^\t%s\\s+string\\s+`config:\"env=%s\"`",
+			pin.field, regexp.QuoteMeta(pin.env)))
+		if !field.MatchString(src) {
+			t.Errorf("template's hostConfig lacks the %s string field tagged env=%s; the twin has drifted", pin.field, pin.env)
 		}
+	}
+
+	// The five key materials pass their variable's own name to parseKeyEnv
+	// -- the name a refusal reports -- so the literal a startup error
+	// prints and the tag the loader reads are pinned to be one name: the
+	// decode call reads the value of the `encoded := hc.<Field>` local the
+	// same branch declares, which is where the field and the reported name
+	// meet.
+	for _, key := range []struct{ field, env string }{
+		{"ConfigKey", ConfigKeyEnv},
+		{"OrgIndexKey", OrgIndexKeyEnv},
+		{"AuthnBlindIndexKey", AuthnBlindIndexKeyEnv},
+		{"AuthnPIICipherKey", AuthnPIICipherKeyEnv},
+		{"PKILocalKeyCipherKey", PKILocalKeyCipherKeyEnv},
+	} {
+		assign := fmt.Sprintf("encoded := hc.%s", key.field)
+		if !strings.Contains(src, assign) {
+			t.Errorf("template does not read %s through %q; the twin has drifted", key.env, assign)
+		}
+		if call := fmt.Sprintf(`parseKeyEnv("%s", encoded)`, key.env); !strings.Contains(src, call) {
+			t.Errorf("template does not decode %s through %s; the twin has drifted", key.env, call)
+		}
+	}
+
+	// The scalar defaults: the template's three constants are the twin's
+	// own values byte for byte.
+	if !strings.Contains(src, `defaultPort = "`+defaultPort+`"`) {
+		t.Errorf("template's defaultPort is not the twin's %q literal; the two defaults must be one value", defaultPort)
 	}
 	decl := fmt.Sprintf("configKeyHexLength = %d", configKeyHexLength)
 	if !strings.Contains(src, decl) {
@@ -553,7 +590,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		`(got some but not all of APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY)`; err.Error() != want {
 		t.Errorf("Load error = %q, want the template's %q", err, want)
 	}
-	if !strings.Contains(src, `"__APP_NAME__: an S3 ObjectStore composition needs %s set too (got some but not all of %s/%s/%s/%s)"`) {
+	if !strings.Contains(src, `"__APP_NAME__: an S3 ObjectStore composition needs %s set too (got some but not all of APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY)"`) {
 		t.Error("template's S3-completeness error format string drifted from the twin's")
 	}
 	if _, err := Load("__APP_NAME__", envFromMap(map[string]string{SMTPHostEnv: "h"})); err == nil {
@@ -561,13 +598,13 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	} else if want := `__APP_NAME__: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set`; err.Error() != want {
 		t.Errorf("Load error = %q, want the template's %q", err, want)
 	}
-	if !strings.Contains(src, `"__APP_NAME__: an SMTP Mailer composition needs both %s and %s set"`) {
+	if !strings.Contains(src, `"__APP_NAME__: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set"`) {
 		t.Error("template's SMTP-completeness error format string drifted from the twin's")
 	}
-	if !strings.Contains(src, `"__APP_NAME__: %s must be a valid bool, got %q: %w"`) {
+	if !strings.Contains(src, `"__APP_NAME__: APP_S3_USE_SSL must be a valid bool, got %q: %w"`) {
 		t.Error("template's S3-use-SSL bool-parse error format string drifted from the twin's")
 	}
-	if !strings.Contains(src, `"__APP_NAME__: %s must be a valid port number, got %q: %w"`) {
+	if !strings.Contains(src, `"__APP_NAME__: APP_SMTP_PORT must be a valid port number, got %q: %w"`) {
 		t.Error("template's SMTP-port parse error format string drifted from the twin's")
 	}
 
@@ -593,32 +630,31 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		}
 	}
 
-	// The parse order: configFromEnv reads deployment mode first and the
-	// org index key last, in the same order Load resolves its fields.
-	// configFromEnv reaches the five variables through the constants
-	// declared above the function, whose name/value pairs the const checks
-	// above pin, so the order check scans the function body for the first
-	// use of each constant name -- which is the read itself. Comments are
-	// stripped first, so prose inside the body cannot satisfy the check by
-	// text position either.
-	body := src[strings.Index(src, "func configFromEnv"):]
+	// The resolution order: serverConfigFrom reads the loaded surface in
+	// the same field order Load resolves its own -- which is also the order
+	// a first-failing variable surfaces in on both sides -- so the first
+	// use of each field marker in the function body must ascend. Comments
+	// are stripped first, so prose inside the body cannot satisfy the check
+	// by text position either.
+	body := src[strings.Index(src, "func serverConfigFrom"):]
 	body = regexp.MustCompile(`(?m)//.*$`).ReplaceAllString(body, "")
-	parseOrder := []string{
-		"deploymentModeEnv", "portEnv", "dbPathEnv", "configKeyEnv", "orgIndexKeyEnv",
-		"authnBlindIndexKeyEnv", "authnPIICipherKeyEnv", "pkiLocalKeyCipherKeyEnv",
-		"redisAddrEnv", "s3EndpointEnv", "s3BucketEnv", "s3AccessKeyEnv", "s3SecretKeyEnv",
-		"s3UseSSLEnv", "smtpHostEnv", "smtpPortEnv", "s3RegionEnv", "smtpUsernameEnv",
-		"smtpPasswordEnv", "smsGatewayURLEnv",
+	resolveOrder := []string{
+		"hc.DeploymentMode", "hc.Port", "hc.DBPath",
+		"hc.ConfigKey", "hc.OrgIndexKey", "hc.AuthnBlindIndexKey", "hc.AuthnPIICipherKey", "hc.PKILocalKeyCipherKey",
+		"hc.RedisAddr", "hc.OTLPEndpoint",
+		"hc.S3Endpoint", "hc.S3Bucket", "hc.S3AccessKey", "hc.S3SecretKey", "hc.S3UseSSL",
+		"hc.SMTPHost", "hc.SMTPPort",
+		"hc.S3Region", "hc.SMTPUsername", "hc.SMTPPassword", "hc.SMSGatewayURL",
 	}
 	last := -1
-	for _, marker := range parseOrder {
+	for _, marker := range resolveOrder {
 		pos := strings.Index(body, marker)
 		if pos < 0 {
-			t.Errorf("configFromEnv body lacks the variable %q", marker)
+			t.Errorf("serverConfigFrom body lacks the field %q", marker)
 			continue
 		}
 		if pos < last {
-			t.Errorf("configFromEnv reads %q out of Load's order", marker)
+			t.Errorf("serverConfigFrom reads %q out of Load's order", marker)
 		}
 		last = pos
 	}

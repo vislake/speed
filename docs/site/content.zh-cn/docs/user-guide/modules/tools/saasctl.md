@@ -108,8 +108,9 @@ saasctl config print [go.mod]
 展示生成项目启动配置的解析结果,生成 `cmd/server/config.go` 所解析
 的每个环境变量一行:部署形态、`PORT`、`APP_DB_PATH`、五份密钥材料
 (`APP_CONFIG_KEY`、`APP_ORG_INDEX_KEY`、`APP_AUTHN_BLIND_INDEX_KEY`、
-`APP_AUTHN_PII_CIPHER_KEY`、`APP_PKI_LOCAL_KEY_CIPHER_KEY`)以及
-`APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` 基础设施变量组。每行显示
+`APP_AUTHN_PII_CIPHER_KEY`、`APP_PKI_LOCAL_KEY_CIPHER_KEY`)、
+`APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` 基础设施变量组以及
+`APP_OTLP_ENDPOINT`。每行显示
 解析出的值与来源——是哪个变量带来的,还是回退到了哪个默认值。
 SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值仍然
 可见。密钥行——五份密钥材料、S3 密钥、SMTP 密码、SMS 网关 URL——

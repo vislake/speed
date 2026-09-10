@@ -171,8 +171,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// model, since GORM resolves a named serializer at struct-parse time --
 	// and made queryable by a SEPARATE HMAC key, cfg.OrgIndexKey: reusing
 	// cfg.ConfigKey for both would be exactly the AES-key-doubling-as-an-
-	// HMAC-key weakness dbkit warns about (see config.go's orgIndexKeyEnv
-	// doc comment).
+	// HMAC-key weakness dbkit warns about (see config.go's OrgIndexKey
+	// field doc comment).
 	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
 	// The column argument below is org's exported EmailIndexColumn, never
 	// a hand-typed literal, for the same reason the serializer registered
@@ -214,8 +214,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// distributed deployment mode is left deliberately UNWIRED -- authn.NewModule's own newOptions then
 	// fails closed with authn.ErrMissingDistributedSMSSender rather than
 	// this composition silently keeping a console sender nobody in a
-	// distributed replica pool is reading (see config.go's smsGatewayURLEnv
-	// doc comment). See buildServer's doc comment above for the
+	// distributed replica pool is reading (see config.go's SMSGatewayURL
+	// field doc comment). See buildServer's doc comment above for the
 	// MembershipReader absence.
 	authnOpts := []authn.Option{
 		authn.WithKeySource(pkiModule.Service()),

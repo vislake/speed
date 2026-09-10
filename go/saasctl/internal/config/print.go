@@ -67,6 +67,7 @@ var redactedEnv = map[string]bool{
 // cmd/server/config.go's own doc comments on what an empty value means.
 const (
 	unsetRedis        = "unset or empty (eventbus/kv stay on the in-process default)"
+	unsetOTLP         = "unset or empty (observability stays on the local exporters)"
 	unsetS3Group      = "unset or empty (objectstore stays on the local-directory default)"
 	unsetS3Optional   = "unset or empty (optional S3 refinement; used only when the group above is set)"
 	unsetSMTPGroup    = "unset or empty (mailer stays on the console default)"
@@ -96,6 +97,8 @@ The bootstrap variables:
   APP_AUTHN_PII_CIPHER_KEY  the authn PII cipher key (64 hex characters)
   APP_PKI_LOCAL_KEY_CIPHER_KEY the pki local-key cipher key (64 hex characters)
   APP_REDIS_ADDR          Redis address composing the eventbus/kv seams
+  APP_OTLP_ENDPOINT       OTLP/gRPC endpoint traces and metrics are pushed to
+                          (unset: the local exporters)
   APP_S3_ENDPOINT         S3-compatible endpoint (with bucket/access/secret
                           key below, required together)
   APP_S3_BUCKET           S3 bucket name
@@ -220,8 +223,9 @@ func print(modPath string) (string, error) {
 	effectiveDBPath := cfg.EffectiveDBPath(modPath)
 
 	// One row per bootstrap variable, in the order the generated app's own
-	// config.go parses them (deployment mode, port, database path, the
-	// five key materials, then the infrastructure groups). Every row names
+	// config.go resolves them (deployment mode, port, database path, the
+	// five key materials, then the infrastructure addresses and the OTLP
+	// endpoint). Every row names
 	// its environment variable, so the renderer below can decide its value
 	// column against redactedEnv -- the per-line choices are this table.
 	rows := []struct {
@@ -279,6 +283,10 @@ func print(modPath string) (string, error) {
 		{
 			"redis addr", appconfig.RedisAddrEnv, cfg.RedisAddr,
 			provenance(appconfig.RedisAddrEnv, cfg.RedisAddrFromEnv, unsetRedis),
+		},
+		{
+			"otlp endpoint", appconfig.OTLPEndpointEnv, cfg.OTLPEndpoint,
+			provenance(appconfig.OTLPEndpointEnv, cfg.OTLPEndpointFromEnv, unsetOTLP),
 		},
 		{
 			"s3 endpoint", appconfig.S3EndpointEnv, cfg.S3Endpoint,

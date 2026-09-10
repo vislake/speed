@@ -779,14 +779,15 @@ func TestReadmeGoVersionMatchesGoModTxt(t *testing.T) {
 // pair of backticks).
 var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
 
-// configGoEnvVarPattern matches one "<identifier>Env = \"<VALUE>\""
-// constant declaration in the template's config.go -- deliberately
-// duplicated from the identical pattern in
+// configGoEnvVarPattern matches one `config:"env=<NAME>"` struct-tag
+// option in the template's config.go -- the loader target's env tag is
+// where each bootstrap variable's name lives (the names are pinned, not
+// derived) -- deliberately duplicated from the identical pattern in
 // internal/appconfig/appconfig_test.go's own drift-proof test rather than
 // shared, since the two packages check two different kinds of drift (that
 // one checks the Go twin's parse behavior, this one checks the README's
 // prose) and neither should import the other's test helpers to do it.
-var configGoEnvVarPattern = regexp.MustCompile(`(?m)^\s*[A-Za-z0-9]+Env\s*=\s*"([A-Za-z0-9_]+)"`)
+var configGoEnvVarPattern = regexp.MustCompile(`config:"env=([A-Za-z0-9_]+)"`)
 
 // readEnvVarNamesFromConfigGo extracts the set of environment variable
 // names the embedded template's cmd/server/config.go actually parses.

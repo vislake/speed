@@ -113,6 +113,7 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 		"authn pii cipher key [redacted]   unset or empty (development default)\n" +
 		"pki local key cipher key [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
+		"otlp endpoint                 unset or empty (observability stays on the local exporters)\n" +
 		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +
 		"s3 bucket                     unset or empty (objectstore stays on the local-directory default)\n" +
 		"s3 access key                 unset or empty (objectstore stays on the local-directory default)\n" +
@@ -154,6 +155,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		appconfig.AuthnPIICipherKeyEnv:    "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
 		appconfig.PKILocalKeyCipherKeyEnv: "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
 		appconfig.RedisAddrEnv:            "redis.internal:6379",
+		appconfig.OTLPEndpointEnv:         "collector.internal:4317",
 		appconfig.S3EndpointEnv:           "s3.internal:9000",
 		appconfig.S3BucketEnv:             "smiles",
 		appconfig.S3AccessKeyEnv:          "AKIAEXAMPLE",
@@ -181,6 +183,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		"authn pii cipher key [redacted]   from APP_AUTHN_PII_CIPHER_KEY\n" +
 		"pki local key cipher key [redacted]   from APP_PKI_LOCAL_KEY_CIPHER_KEY\n" +
 		"redis addr       redis.internal:6379 from APP_REDIS_ADDR\n" +
+		"otlp endpoint    collector.internal:4317 from APP_OTLP_ENDPOINT\n" +
 		"s3 endpoint      s3.internal:9000 from APP_S3_ENDPOINT\n" +
 		"s3 bucket        smiles       from APP_S3_BUCKET\n" +
 		"s3 access key    AKIAEXAMPLE  from APP_S3_ACCESS_KEY\n" +

@@ -177,8 +177,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// distributed deployment mode is left deliberately UNWIRED -- authn.NewModule's own newOptions then
 	// fails closed with authn.ErrMissingDistributedSMSSender rather than
 	// this composition silently keeping a console sender nobody in a
-	// distributed replica pool is reading (see config.go's smsGatewayURLEnv
-	// doc comment). See buildServer's doc comment above for the
+	// distributed replica pool is reading (see config.go's SMSGatewayURL
+	// field doc comment). See buildServer's doc comment above for the
 	// MembershipReader absence.
 	authnOpts := []authn.Option{
 		authn.WithKeySource(pkiModule.Service()),

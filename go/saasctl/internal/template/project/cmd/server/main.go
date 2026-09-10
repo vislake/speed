@@ -17,6 +17,26 @@ import (
 	"syscall"
 
 	obs "github.com/vislake/speed/go/observability"
+	// Blank-imported for its init side effect: registers the OTLP exporter
+	// factory obs.WithOTLPEndpoint composes when APP_OTLP_ENDPOINT is set.
+	// Without this import, setting the endpoint fails obs.Init with an
+	// error naming the missing import; a deployment that removes this
+	// import must also stop setting APP_OTLP_ENDPOINT (and may drop the
+	// endpoint option below): the two are one wiring, split only because
+	// go/observability keeps its OTLP dependencies -- gRPC and protobuf --
+	// out of the package a consumer imports for the exporters it does
+	// want.
+	_ "github.com/vislake/speed/go/observability/exporter/otlp"
+	// Blank-imported for its init side effect: registers the local metrics
+	// reader the shared host kernel's /metrics route serves through
+	// obs.MetricsHandler. Without this import /metrics answers 404, which
+	// is go/observability's documented default for a host that never opted
+	// into the Prometheus exporter; with it the route serves this
+	// process's real scrape output while no OTLP endpoint is set. (Once
+	// APP_OTLP_ENDPOINT selects the OTLP exporters, /metrics answers 404
+	// again -- by design, since no local registry is being kept to
+	// scrape; the OTLP collector is where metrics go then.)
+	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
 
 	"__APP_NAME__/internal/hostcore"
 )
@@ -93,11 +113,26 @@ func run(baseCtx context.Context) error {
 		}
 	}()
 
+	// The obs.Init option set is the service name always, plus
+	// obs.WithOTLPEndpoint exactly when cfg.OTLPEndpoint is non-empty.
+	// The option is conditional rather than unconditional for the reason
+	// the APP_OTLP_ENDPOINT field's own doc comment in config.go gives:
+	// an explicitly empty endpoint carries no information an absent one
+	// does not, and the no-endpoint default -- the local exporters -- is
+	// what a deployment gets by saying nothing. cfg.OTLPEndpoint is the
+	// loader-resolved value, so this process reads the endpoint from the
+	// same surface as every other bootstrap value, never from the
+	// environment itself.
+	//
 	// obs.Init's shutdown must run during graceful shutdown so buffered
 	// spans and metrics are flushed rather than dropped when the process
 	// exits -- the same reason srv.Shutdown below is given a bounded context
 	// instead of just letting the process die.
-	obsShutdown, err := obs.Init(ctx, obs.WithServiceName("__APP_NAME__"))
+	obsOptions := []obs.Option{obs.WithServiceName("__APP_NAME__")}
+	if cfg.OTLPEndpoint != "" {
+		obsOptions = append(obsOptions, obs.WithOTLPEndpoint(cfg.OTLPEndpoint))
+	}
+	obsShutdown, err := obs.Init(ctx, obsOptions...)
 	if err != nil {
 		return fmt.Errorf("__APP_NAME__: init observability: %w", err)
 	}

@@ -2,9 +2,10 @@
 // consumer project: APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH, APP_CONFIG_KEY,
 // APP_ORG_INDEX_KEY, the three authn/pki key variables (APP_AUTHN_BLIND_INDEX_KEY,
 // APP_AUTHN_PII_CIPHER_KEY, APP_PKI_LOCAL_KEY_CIPHER_KEY), APP_REDIS_ADDR,
-// the APP_S3_* group, the APP_SMTP_* group and APP_SMS_GATEWAY_URL -- the
-// full twenty-variable surface -- resolved exactly as the generated
-// project's own cmd/server/config.go resolves them.
+// APP_OTLP_ENDPOINT, the APP_S3_* group, the APP_SMTP_* group and
+// APP_SMS_GATEWAY_URL -- the full twenty-one-variable surface -- resolved
+// exactly as the generated project's own cmd/server/config.go resolves
+// them.
 //
 // saasctl's db and config commands must see what the app they act on would
 // see: db migrate opens the same SQLite path the app's configFromEnv would
@@ -13,7 +14,7 @@
 // would refuse to boot, on the identical incomplete infrastructure group.
 // This package is therefore a deliberate, test-pinned twin of the embedded
 // template file internal/template/project/cmd/server/config.go -- the same
-// twenty variable names, the same defaults, the same completeness rules
+// twenty-one variable names, the same defaults, the same completeness rules
 // (an S3 group or an SMTP pair that is only partially set is refused, never
 // silently dropped to the Preset default), the same development key bytes
 // and the same malformed-value error texts, with the template's
@@ -23,10 +24,27 @@
 // APP_DB_PATH database path (defaultSQLitePath), which the generated
 // project freezes at materialization and which therefore cannot track a
 // later module-path rename (see defaultSQLitePath's own doc comment).
-// appconfig_test.go re-reads the embedded template and fails when the two
-// sides drift, so a template edit that renames a variable, changes a
-// default, reorders the parse or rewrites an error text fails here before
-// any generated app silently disagrees with the tool that maintains it.
+//
+// The twin is a sibling implementation, not a shared one, and that split is
+// deliberate. The template resolves its surface through go/pkgcore/config's
+// loader (each variable pinned by a field's env tag, three scalar defaults
+// pre-set on the target struct) and then transforms the loaded text -- hex
+// decoding, numeric and boolean parsing, the completeness refusals -- in the
+// same file; the template file is a build-ignored asset this module cannot
+// import, and the loader exposes no per-value provenance, which is exactly
+// what config print renders. So the twin carries the same transform against
+// its injectable LookupEnv source instead, and appconfig_test.go re-reads
+// the embedded template and fails when the two sides drift: the variable
+// names (the template's env tags against the exported constants above), the
+// defaults, the parse order, the error texts and the development key bytes
+// are all pinned, so a template edit that renames a variable, changes a
+// default, reorders the resolution or rewrites an error text fails here
+// before any generated app silently disagrees with the tool that maintains
+// it. The loader step the twin does not mirror is behavior-neutral by
+// construction: every template field is a string, so the loaded value is the
+// variable's text (or "" for an unset or emptied one) with the target's
+// defaults standing where no source supplied one -- the same values the
+// twin's direct lookups produce.
 //
 // The environment is injectable through LookupEnv so every caller can
 // decide its own source: the commands pass os.LookupEnv (a generated app
@@ -89,6 +107,14 @@ const (
 	// both the "eventbus" and "kv" seams. Empty -- the default -- leaves
 	// both seams on the Preset's in-process implementation.
 	RedisAddrEnv = "APP_REDIS_ADDR"
+
+	// OTLPEndpointEnv names the environment variable holding the OTLP/gRPC
+	// endpoint traces and metrics are pushed to. Empty -- the default --
+	// leaves obs.Init on the local exporters (stdout plus the Prometheus
+	// scrape endpoint the /metrics route serves); set, obs.Init composes
+	// the OTLP exporters and /metrics answers 404 by design -- there is
+	// no local registry to scrape.
+	OTLPEndpointEnv = "APP_OTLP_ENDPOINT"
 
 	// S3EndpointEnv, S3BucketEnv, S3AccessKeyEnv and S3SecretKeyEnv
 	// together compose a real S3-compatible ObjectStore for the
@@ -234,6 +260,11 @@ type Config struct {
 	// comment above.
 	RedisAddr string
 
+	// OTLPEndpoint, when non-empty, is handed to obs.Init as
+	// obs.WithOTLPEndpoint, pushing traces and metrics to it over OTLP --
+	// see OTLPEndpointEnv's own doc comment above.
+	OTLPEndpoint string
+
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
 	// compose a real S3-compatible ObjectStore for the "objectstore" seam
 	// when S3Endpoint is non-empty -- see S3EndpointEnv's own doc comment
@@ -264,9 +295,11 @@ type Config struct {
 
 	// DeploymentModeFromEnv through SMSGatewayURLFromEnv record, per field,
 	// whether the environment variable carried a non-empty value. Empty
-	// counts as unset, matching os.Getenv: the generated server cannot
-	// distinguish "set to empty" from "unset" either, and neither can this
-	// package.
+	// counts as unset, matching the generated app's own resolution (its
+	// loader-loaded string fields arrive as "" for both an unset and an
+	// emptied variable, and its transform treats "" as unset): a generated
+	// server cannot distinguish "set to empty" from "unset", and neither
+	// can this package.
 	DeploymentModeFromEnv       bool
 	PortFromEnv                 bool
 	SQLitePathFromEnv           bool
@@ -276,6 +309,7 @@ type Config struct {
 	AuthnPIICipherKeyFromEnv    bool
 	PKILocalKeyCipherKeyFromEnv bool
 	RedisAddrFromEnv            bool
+	OTLPEndpointFromEnv         bool
 	S3EndpointFromEnv           bool
 	S3BucketFromEnv             bool
 	S3AccessKeyFromEnv          bool
@@ -295,7 +329,7 @@ type Config struct {
 // the SQLite default, which is the fixed defaultSQLitePath literal -- the
 // one default the generated app freezes rather than derives, so deriving
 // it from the module path here would fork on a module rename (see
-// defaultSQLitePath's own doc comment) -- reading the twenty
+// defaultSQLitePath's own doc comment) -- reading the twenty-one
 // environment variables through lookup. The parse order, defaults,
 // completeness rules and failure texts mirror the generated configFromEnv
 // exactly, including its error contract: a mode that does not parse is
@@ -380,6 +414,12 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	redisAddr, _ := lookup(RedisAddrEnv)
 	cfg.RedisAddr = redisAddr
 	cfg.RedisAddrFromEnv = redisAddr != ""
+
+	// otlpEndpoint stays empty when unset, leaving obs.Init on the local
+	// exporters -- see OTLPEndpointEnv's own doc comment above.
+	otlpEndpoint, _ := lookup(OTLPEndpointEnv)
+	cfg.OTLPEndpoint = otlpEndpoint
+	cfg.OTLPEndpointFromEnv = otlpEndpoint != ""
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
 	// leaving the "objectstore" seam on the Preset's local-directory

@@ -122,11 +122,12 @@ saasctl config print [go.mod]
 
 Renders how a generated project's bootstrap configuration resolves,
 one row per variable of the env surface the generated
-`cmd/server/config.go` parses: the deployment mode, `PORT`,
+`cmd/server/config.go` resolves: the deployment mode, `PORT`,
 `APP_DB_PATH`, the five key materials (`APP_CONFIG_KEY`,
 `APP_ORG_INDEX_KEY`, `APP_AUTHN_BLIND_INDEX_KEY`,
-`APP_AUTHN_PII_CIPHER_KEY`, `APP_PKI_LOCAL_KEY_CIPHER_KEY`) and the
-`APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` infrastructure groups. Each
+`APP_AUTHN_PII_CIPHER_KEY`, `APP_PKI_LOCAL_KEY_CIPHER_KEY`), the
+`APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` infrastructure groups and
+`APP_OTLP_ENDPOINT`. Each
 row shows the resolved value and its provenance — the variable that
 carried it, or the default it fell back to. The SQLite path row reports
 the effective file, the raw value staying visible when a relative path
