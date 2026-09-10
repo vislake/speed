@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore/probe"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
@@ -29,9 +29,10 @@ import (
 // os.Args[1] is exactly this string.
 const healthcheckArg = "healthcheck"
 
-// healthcheckTimeout bounds runHealthcheck's own probe -- generous for a
+// healthcheckTimeout bounds this example's own probe -- generous for a
 // loopback call, but finite so a wedged server makes Docker's HEALTHCHECK
-// report unhealthy rather than hang indefinitely.
+// report unhealthy rather than hang indefinitely. It is this host's policy
+// value, handed to probe.WithTimeout by runHealthcheck below.
 const healthcheckTimeout = 3 * time.Second
 
 // observabilityOptions assembles the options run passes to obs.Init from
@@ -68,8 +69,6 @@ func observabilityOptions(cfg app.ServerConfig) []obs.Option {
 // ordinary Go practice of not unit-testing os.Exit/signal-handling glue.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == healthcheckArg {
-		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
-		defer cancel()
 		// The probe resolves its port through the same loader-driven
 		// bootstrap the server itself boots from -- ConfigFromEnv, the call
 		// run makes below -- so the two can never disagree about which port
@@ -83,7 +82,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
 			os.Exit(1)
 		}
-		if err := runHealthcheck(ctx, cfg.Port); err != nil {
+		if err := runHealthcheck(context.Background(), cfg.Port); err != nil {
 			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
 			os.Exit(1)
 		}
@@ -230,39 +229,21 @@ func run(baseCtx context.Context) error {
 }
 
 // runHealthcheck probes this same server's own HealthzPath over loopback and
-// reports whether it answered http.StatusOK -- see healthcheckArg's own doc
-// comment for why this exists and who calls it (this example's Dockerfile's
-// HEALTHCHECK, exec-form, re-invoking this binary with that argument rather
-// than shelling out to a probe tool the distroless/static runtime image does
-// not have). port is the resolved bootstrap Port: main.go's healthcheck
-// branch loads it through the very ConfigFromEnv call run boots from, so the
-// probe and the server agree on the port by construction. An empty port --
-// the shape a direct caller (or an explicitly emptied PORT variable) can
-// still hand this function -- falls back to DefaultPort, exactly as the
-// listener's own resolution does.
+// reports whether it answered 200 -- see healthcheckArg's own doc comment for
+// why this exists and who calls it (this example's Dockerfile's HEALTHCHECK,
+// exec-form, re-invoking this binary with that argument rather than shelling
+// out to a probe tool the distroless/static runtime image does not have).
+// port is the resolved bootstrap Port: main.go's healthcheck branch loads it
+// through the very ConfigFromEnv call run boots from, so the probe and the
+// server agree on the port by construction. An empty port -- the shape a
+// direct caller (or an explicitly emptied PORT variable) can still hand this
+// function -- falls back to DefaultPort, exactly as the listener's own
+// resolution does. The probe itself is pkgcore/probe's (see its Check: the
+// loopback dial is structural there), and healthcheckTimeout above is the
+// bound this host pins on it.
 func runHealthcheck(ctx context.Context, port string) error {
 	if port == "" {
 		port = app.DefaultPort
 	}
-	// #nosec G704 -- gosec's taint analysis flags this as SSRF because port
-	// is a parameter, but the host part of the URL is the literal constant
-	// "127.0.0.1", never anything port (or any other input) can influence;
-	// port only ever widens which LOCAL port this same process's own
-	// listener is probed on. Its value comes from the PORT environment
-	// variable an operator (or this example's Dockerfile ENV) sets, resolved
-	// by the same bootstrap loader the listener's own port resolution uses,
-	// never from a request this binary serves.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+hostcore.HealthzPath, nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- see the request construction above
-	if err != nil {
-		return fmt.Errorf("request %s: %w", hostcore.HealthzPath, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %d, want %d", hostcore.HealthzPath, resp.StatusCode, http.StatusOK)
-	}
-	return nil
+	return probe.Check(ctx, port, hostcore.HealthzPath, probe.WithTimeout(healthcheckTimeout))
 }
