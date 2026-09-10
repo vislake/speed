@@ -50,6 +50,26 @@ func mailerFor(t *testing.T, server *testutil.FakeSMTPServer, mode SMTPTLSMode, 
 	})
 }
 
+// mailerWithReplyTo is mailerFor's ReplyTo-flavored twin: the same fake-relay
+// wiring, plus the implementation-level Reply-To default the config carries.
+func mailerWithReplyTo(t *testing.T, server *testutil.FakeSMTPServer, replyTo string) Mailer {
+	t.Helper()
+	host, port, err := net.SplitHostPort(server.Addr())
+	if err != nil {
+		t.Fatalf("split relay address %q: %v", server.Addr(), err)
+	}
+	var portNumber int
+	if _, err := fmt.Sscanf(port, "%d", &portNumber); err != nil {
+		t.Fatalf("parse relay port %q: %v", port, err)
+	}
+	return NewSMTPMailer(SMTPConfig{
+		Host:               host,
+		Port:               portNumber,
+		InsecureSkipVerify: true,
+		ReplyTo:            replyTo,
+	})
+}
+
 // ---- SMTP wire tests -------------------------------------------------------
 
 // TestSMTPMailer_Send_DeliversOverAPlaintextRelay runs one complete
@@ -473,6 +493,107 @@ func TestSMTPMailer_Send_CancelledContextFailsBeforeDialing(t *testing.T) {
 	}
 }
 
+// TestBuildMessage_ReplyToHeaderShape asserts where the optional Reply-To
+// header lands: one extra line, after To and before Subject, with the bodies
+// and every other header the six-line shape TestBuildMessage_PinsTheHeaderShape
+// pins left in place.
+func TestBuildMessage_ReplyToHeaderShape(t *testing.T) {
+	t.Parallel()
+
+	msg := buildMessage(Mail{
+		From:    "ops@example.com",
+		To:      []string{"ada@example.com", "grace@example.com"},
+		ReplyTo: "support@example.com",
+		Subject: "plain ASCII subject",
+		Text:    "line one\nline two",
+	})
+
+	headerBlock, body, found := strings.Cut(string(msg), "\r\n\r\n")
+	if !found {
+		t.Fatalf("message has no header/body separator: %q", msg)
+	}
+	headers := strings.Split(headerBlock, "\r\n")
+	if len(headers) != 7 {
+		t.Fatalf("headers = %v, want seven lines", headers)
+	}
+	want := []string{
+		"From: ops@example.com",
+		"To: ada@example.com, grace@example.com",
+		"Reply-To: support@example.com",
+		"Subject: plain ASCII subject",
+		"", // Date, filled in below
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=utf-8",
+	}
+	for i, line := range want {
+		if line == "" {
+			continue
+		}
+		if headers[i] != line {
+			t.Errorf("header[%d] = %q, want %q", i, headers[i], line)
+		}
+	}
+	if _, err := time.Parse(time.RFC1123Z, strings.TrimPrefix(headers[4], "Date: ")); err != nil {
+		t.Errorf("Date header %q does not parse as RFC1123Z: %v", headers[4], err)
+	}
+	if body != "line one\r\nline two" {
+		t.Errorf("body = %q, want the CRLF-normalized text body", body)
+	}
+}
+
+// TestSMTPMailer_Send_ResolvesReplyTo pins the two-layer Reply-To rule on the
+// wire: the Mail's own value wins over SMTPConfig.ReplyTo, an empty one falls
+// back to the config, and neither set writes no Reply-To header at all.
+func TestSMTPMailer_Send_ResolvesReplyTo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		configReply string
+		mailReplyTo string
+		wantHeader  string // "" means the header must be absent
+	}{
+		{"the mail's own value wins", "config@example.com", "team@example.com", "Reply-To: team@example.com\r\n"},
+		{"an empty mail value falls back to the config", "config@example.com", "", "Reply-To: config@example.com\r\n"},
+		{"neither set writes no header", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
+			mailer := mailerWithReplyTo(t, server, tt.configReply)
+
+			mail := Mail{
+				From: "ops@example.com", To: []string{"ada@example.com"},
+				Subject: "reply-to resolution", Text: "body",
+			}
+			mail.ReplyTo = tt.mailReplyTo
+			if err := mailer.Send(context.Background(), mail); err != nil {
+				t.Fatalf("Send() error = %v, want nil", err)
+			}
+
+			exchanges := server.Take()
+			if len(exchanges) != 1 {
+				t.Fatalf("relay recorded %d exchanges, want 1", len(exchanges))
+			}
+			headerBlock, _, found := strings.Cut(exchanges[0].Msg, "\r\n\r\n")
+			if !found {
+				t.Fatalf("relay message has no header/body separator: %q", exchanges[0].Msg)
+			}
+			if tt.wantHeader == "" {
+				if strings.Contains(headerBlock, "Reply-To:") {
+					t.Errorf("header block carries a Reply-To, want none: %q", headerBlock)
+				}
+				return
+			}
+			if !strings.Contains(headerBlock, tt.wantHeader) {
+				t.Errorf("header block = %q, want it to carry %q", headerBlock, tt.wantHeader)
+			}
+		})
+	}
+}
+
 // ---- constructor and TLS-mode selection ------------------------------------
 
 // TestNewSMTPMailer_PanicsOnAnUnusableConfig pins which configurations are
@@ -490,6 +611,7 @@ func TestNewSMTPMailer_PanicsOnAnUnusableConfig(t *testing.T) {
 		{"a negative port", SMTPConfig{Host: "smtp.example.com", Port: -1}, "Port in 1..65535"},
 		{"an out-of-range port", SMTPConfig{Host: "smtp.example.com", Port: 65536}, "Port in 1..65535"},
 		{"an unknown TLS mode", SMTPConfig{Host: "smtp.example.com", Port: 25, TLSMode: SMTPTLSMode(99)}, "unknown SMTPTLSMode"},
+		{"a reply-to carrying a line break", SMTPConfig{Host: "smtp.example.com", Port: 25, ReplyTo: "ops@example.com\r\nBcc: sneaky@example.com"}, "line break in SMTPConfig.ReplyTo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

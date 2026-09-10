@@ -28,6 +28,14 @@ type Mail struct {
 	To      []string
 	Subject string
 
+	// ReplyTo is the optional address replies should go to instead of From,
+	// for a sender that is not a monitored inbox (a no-reply address, say).
+	// Empty means the transport's own default applies: the SMTP mailer falls
+	// back to SMTPConfig.ReplyTo when it is set, and a message whose mail and
+	// config both leave it empty carries no Reply-To header at all. The
+	// field's own value always wins over an implementation default.
+	ReplyTo string
+
 	// Text and HTML are the two renderings of the message body. When both are
 	// set, a recipient that supports HTML receives the HTML rendering and the
 	// others fall back to Text. When only one is set, it is sent as-is.
@@ -65,7 +73,8 @@ type Mailer interface {
 // This is the header-injection barrier for buildMessage's raw From/To/Subject
 // interpolation in smtp_mailer.go: every Mailer.Send calls validateMail first
 // and returns before reaching buildMessage, so a \r or \n in any of those
-// three fields never survives to be written as a header line. CodeQL's
+// fields -- or in the optional ReplyTo, which buildMessage interpolates the
+// same way -- never survives to be written as a header line. CodeQL's
 // go/email-injection alert on smtp_mailer.go does not recognize this
 // validate-then-return-early pattern as a sanitizing barrier across the two
 // separate call sites (Send validates, then later in the same function calls
@@ -86,11 +95,13 @@ func validateMail(mail Mail) error {
 			return fmt.Errorf("%w: To contains an empty recipient", ErrInvalidMail)
 		}
 	}
-	// Header fields end at the first CR or LF. Accepting one inside From, To or
-	// Subject would let a message smuggle extra headers into the SMTP
-	// conversation, so every implementation rejects them up front.
+	// Header fields end at the first CR or LF. Accepting one inside From, To,
+	// Subject or the optional ReplyTo would let a message smuggle extra
+	// headers into the SMTP conversation, so every implementation rejects them
+	// up front.
 	for _, field := range []struct{ name, value string }{
 		{"From", mail.From},
+		{"ReplyTo", mail.ReplyTo},
 		{"Subject", mail.Subject},
 	} {
 		if strings.ContainsAny(field.value, "\r\n") {
@@ -134,6 +145,9 @@ type consoleMailer struct {
 //	Hello Ada,
 //	[mail] end
 //
+// A message carrying a ReplyTo prints one extra line, [mail] reply-to: ...,
+// between the to and subject lines.
+//
 // Each line is prefixed so that a mail landing in a log stream is easy to
 // filter; each body block is bracketed by markers so that consecutive
 // messages cannot blur together. The mailer doubles as a test double for code
@@ -163,6 +177,9 @@ func (m *consoleMailer) Send(ctx context.Context, mail Mail) error {
 	var record bytes.Buffer
 	fmt.Fprintf(&record, "[mail] from: %s\n", mail.From)
 	fmt.Fprintf(&record, "[mail] to: %s\n", strings.Join(mail.To, ", "))
+	if mail.ReplyTo != "" {
+		fmt.Fprintf(&record, "[mail] reply-to: %s\n", mail.ReplyTo)
+	}
 	fmt.Fprintf(&record, "[mail] subject: %s\n", mail.Subject)
 	if mail.Text != "" {
 		record.WriteString("[mail] text/plain:\n")

@@ -48,6 +48,37 @@ func TestConsoleMailer_PrintFormat(t *testing.T) {
 	}
 }
 
+// TestConsoleMailer_PrintsTheReplyToLine pins the optional Reply-To line: a
+// message carrying one prints it between the to and subject lines, in the
+// same position buildMessage writes the header.
+func TestConsoleMailer_PrintsTheReplyToLine(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := newConsoleMailer(&out).Send(context.Background(), Mail{
+		From:    "notifications@example.com",
+		To:      []string{"ada@example.com"},
+		ReplyTo: "support@example.com",
+		Subject: "Your invoice #1042 is ready",
+		Text:    "Hello Ada.",
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v, want nil", err)
+	}
+
+	want := "" +
+		"[mail] from: notifications@example.com\n" +
+		"[mail] to: ada@example.com\n" +
+		"[mail] reply-to: support@example.com\n" +
+		"[mail] subject: Your invoice #1042 is ready\n" +
+		"[mail] text/plain:\n" +
+		"Hello Ada.\n" +
+		"[mail] end\n"
+	if got := out.String(); got != want {
+		t.Errorf("printed record = %q, want %q", got, want)
+	}
+}
+
 // TestConsoleMailer_OmitsTheEmptyBodySection checks the other two body
 // shapes: a text-only message prints no HTML section, and an HTML-only
 // message prints no text section.
@@ -158,6 +189,7 @@ func TestConsoleMailer_RejectsInvalidMail(t *testing.T) {
 		{"a newline in From", func(m *Mail) { m.From = "ops@example.com\r\nBcc: ada@example.com" }},
 		{"a newline in To", func(m *Mail) { m.To = []string{"ada@example.com\nbcc@example.com"} }},
 		{"a newline in Subject", func(m *Mail) { m.Subject = "subject\r\nInjected: header" }},
+		{"a newline in ReplyTo", func(m *Mail) { m.ReplyTo = "ops@example.com\r\nBcc: ada@example.com" }},
 		{"no body at all", func(m *Mail) { m.Text = ""; m.HTML = "" }},
 	}
 

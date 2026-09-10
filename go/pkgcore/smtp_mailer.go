@@ -63,6 +63,14 @@ type SMTPConfig struct {
 	// applies the SMTPTLSModeAuto convention.
 	TLSMode SMTPTLSMode
 
+	// ReplyTo is the implementation-level default Reply-To address: a Send
+	// whose Mail carries no ReplyTo of its own goes out with this one, and a
+	// Mail.ReplyTo always wins over it. Empty writes no Reply-To header for
+	// a message whose Mail leaves it empty too. A line break in this value is
+	// an unrecoverable wiring error and panics at construction, like every
+	// other unusable value in this config (see NewSMTPMailer).
+	ReplyTo string
+
 	// InsecureSkipVerify accepts a relay certificate that does not validate
 	// against the system roots, for relays on self-signed certificates. It
 	// disables certificate verification entirely, so it must never be enabled
@@ -84,8 +92,9 @@ type smtpMailer struct {
 // NewSMTPMailer returns a Mailer that delivers through the SMTP relay in cfg.
 // Nothing is dialed here: the relay is contacted on the first Send, so
 // constructing a mailer never blocks and never fails on a relay that is down.
-// An unusable configuration (empty host, out-of-range port, unknown TLSMode)
-// panics instead, because it is an unrecoverable wiring error at startup.
+// An unusable configuration (empty host, out-of-range port, unknown TLSMode,
+// a ReplyTo carrying a line break) panics instead, because it is an
+// unrecoverable wiring error at startup.
 func NewSMTPMailer(cfg SMTPConfig) Mailer {
 	if cfg.Host == "" {
 		panic("pkgcore: NewSMTPMailer requires a non-empty SMTPConfig.Host")
@@ -97,6 +106,9 @@ func NewSMTPMailer(cfg SMTPConfig) Mailer {
 	case SMTPTLSModeAuto, SMTPTLSModeStartTLS, SMTPTLSModeImplicitTLS:
 	default:
 		panic(fmt.Sprintf("pkgcore: NewSMTPMailer rejects unknown SMTPTLSMode %d", cfg.TLSMode))
+	}
+	if strings.ContainsAny(cfg.ReplyTo, "\r\n") {
+		panic("pkgcore: NewSMTPMailer rejects a line break in SMTPConfig.ReplyTo")
 	}
 	return &smtpMailer{cfg: cfg}
 }
@@ -135,6 +147,13 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	}
 	if mailErr := validateMail(mail); mailErr != nil {
 		return mailErr
+	}
+	// The message's own ReplyTo wins over the implementation-level default.
+	// mail is this Send's own copy of the value, so the fallback never writes
+	// back into the caller's Mail, and cfg.ReplyTo needs no re-validation
+	// here: NewSMTPMailer refused a line break in it at construction time.
+	if mail.ReplyTo == "" {
+		mail.ReplyTo = m.cfg.ReplyTo
 	}
 
 	addr := net.JoinHostPort(m.cfg.Host, strconv.Itoa(m.cfg.Port))
@@ -309,18 +328,23 @@ func (m *smtpMailer) authenticate(client *smtp.Client) error {
 // use come from the same multipart.Writer, because the header must be written
 // before the body but the writer's boundary is only settled once.
 //
-// buildMessage trusts mail.From/To/Subject to already be free of \r\n: its
-// only caller, Send, calls validateMail first and returns on any failure
-// before reaching this function, so the raw interpolation below cannot be
-// used for SMTP header injection. (CodeQL's go/email-injection flags this
-// function; see validateMail's doc comment in mailer.go for the full
-// reasoning -- reviewed and confirmed a false positive.)
+// buildMessage trusts mail.From/To/Subject and the optional mail.ReplyTo to
+// already be free of \r\n: its only caller, Send, calls validateMail first
+// and returns on any failure before reaching this function, and fills an
+// empty ReplyTo from SMTPConfig.ReplyTo, which the constructor refused a line
+// break in. The raw interpolation below therefore cannot be used for SMTP
+// header injection. (CodeQL's go/email-injection flags this function; see
+// validateMail's doc comment in mailer.go for the full reasoning -- reviewed
+// and confirmed a false positive.)
 func buildMessage(mail Mail) []byte {
 	contentType, body := renderBody(mail)
 
 	var message bytes.Buffer
 	fmt.Fprintf(&message, "From: %s\r\n", mail.From)
 	fmt.Fprintf(&message, "To: %s\r\n", strings.Join(mail.To, ", "))
+	if mail.ReplyTo != "" {
+		fmt.Fprintf(&message, "Reply-To: %s\r\n", mail.ReplyTo)
+	}
 	fmt.Fprintf(&message, "Subject: %s\r\n", encodeSubject(mail.Subject))
 	fmt.Fprintf(&message, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	message.WriteString("MIME-Version: 1.0\r\n")

@@ -23,11 +23,13 @@ import (
 //
 // What AssertConforms checks, in order: every rule pkgcore.ErrInvalidMail
 // documents (empty From, no recipients, an empty recipient, a header field
-// carrying a line break, and neither body set) is rejected by Send with an
-// error satisfying errors.Is(err, pkgcore.ErrInvalidMail), before anything
+// carrying a line break -- the optional ReplyTo included -- and neither body
+// set) is rejected by Send with an error satisfying
+// errors.Is(err, pkgcore.ErrInvalidMail), before anything
 // implementation-specific about the message runs; a Send that begins on an
 // already-cancelled context fails with that context's error instead of the
-// message going out; and a valid message reports success.
+// message going out; and a valid message reports success, with and without a
+// ReplyTo set.
 //
 // factory's Mailer must be able to accept a real, deliverable-shaped
 // message (a valid From, one recipient, a body) and report success for it —
@@ -65,6 +67,10 @@ func AssertConforms(t *testing.T, factory func() pkgcore.Mailer) {
 			mail: pkgcore.Mail{From: "ops@example.com", To: []string{"ada@example.com"}, Subject: "bad\r\nInjected: header", Text: "body"},
 		},
 		{
+			name: "reply_to_with_a_line_break",
+			mail: pkgcore.Mail{From: "ops@example.com", To: []string{"ada@example.com"}, ReplyTo: "ops@example.com\r\nBcc: sneaky@example.com", Text: "body"},
+		},
+		{
 			name: "neither_body_set",
 			mail: pkgcore.Mail{From: "ops@example.com", To: []string{"ada@example.com"}},
 		},
@@ -96,6 +102,16 @@ func AssertConforms(t *testing.T, factory func() pkgcore.Mailer) {
 		mailer := factory()
 		if err := mailer.Send(context.Background(), validMail); err != nil {
 			t.Errorf("Send() error = %v, want nil for a valid message", err)
+		}
+	})
+
+	t.Run("a_valid_message_with_a_reply_to_reports_success", func(t *testing.T) {
+		t.Helper()
+		mailer := factory()
+		mail := validMail
+		mail.ReplyTo = "support@example.com"
+		if err := mailer.Send(context.Background(), mail); err != nil {
+			t.Errorf("Send() error = %v, want nil for a valid message carrying a ReplyTo", err)
 		}
 	})
 }

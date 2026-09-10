@@ -577,6 +577,45 @@ func ExampleNewSMTPMailer() {
 	// mailer wired; the first Send dials the relay
 }
 
+// ExampleMail_replyTo shows the optional Reply-To field: replies to a message
+// sent from a no-reply address can be pointed at an inbox a person reads. The
+// console record prints one extra line for it, between the to and subject
+// lines, and the SMTP mailer accepts the same address as a config-level
+// default (SMTPConfig.ReplyTo) for every message whose Mail leaves ReplyTo
+// empty.
+func ExampleMail_replyTo() {
+	mailer := pkgcore.NewConsoleMailer()
+	err := mailer.Send(context.Background(), pkgcore.Mail{
+		From:    "notifications@example.com",
+		To:      []string{"ada@example.com"},
+		ReplyTo: "support@example.com",
+		Subject: "Your invoice #1042 is ready",
+		Text:    "Hello Ada, your invoice is ready to view.",
+	})
+	fmt.Println(err)
+
+	// A Mail.ReplyTo always wins over the SMTP mailer's config-level
+	// default; an empty one falls back to it. Nothing is dialed here -- the
+	// relay is contacted on the first Send.
+	notifications := pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
+		Host:    "smtp.example.com",
+		Port:    587,
+		ReplyTo: "support@example.com",
+	})
+	fmt.Println(notifications != nil)
+
+	// Output:
+	// [mail] from: notifications@example.com
+	// [mail] to: ada@example.com
+	// [mail] reply-to: support@example.com
+	// [mail] subject: Your invoice #1042 is ready
+	// [mail] text/plain:
+	// Hello Ada, your invoice is ready to view.
+	// [mail] end
+	// <nil>
+	// true
+}
+
 // ExampleNewConsoleSMSSender shows the zero-external-dependency SMS
 // transport: it prints every message to the writer it was given as one
 // record per send, instead of delivering it -- the standalone deployment

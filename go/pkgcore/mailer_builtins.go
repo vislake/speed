@@ -52,7 +52,10 @@ func newBuiltinMailerRegistry() *SeamRegistry[Mailer] {
 // unrecoverable-wiring-error convention for a caller that built an SMTPConfig
 // by hand) surface through a SeamRegistry.Build call that is documented to
 // return an error, never to panic. A numeric port outside 1..65535 is
-// refused for the same reason -- the constructor would panic over it.
+// refused for the same reason -- the constructor would panic over it -- and a
+// "reply_to" carrying a line break, because the constructor's own
+// line-break panic would otherwise be reachable through the error-returning
+// seam path.
 func smtpMailerFromConfig(cfg Config) (Mailer, error) {
 	host := cfg["host"]
 	if host == "" {
@@ -76,6 +79,15 @@ func smtpMailerFromConfig(cfg Config) (Mailer, error) {
 		return nil, fmt.Errorf("pkgcore: builtin mailer.smtp seam: %w", err)
 	}
 
+	// reply_to is an optional implementation-level default: every Send whose
+	// Mail carries no ReplyTo of its own goes out with this one. A line break
+	// would smuggle a header into the SMTP conversation, so it is refused
+	// here, at the same boundary as every other invalid Config value.
+	replyTo := cfg["reply_to"]
+	if strings.ContainsAny(replyTo, "\r\n") {
+		return nil, fmt.Errorf("pkgcore: builtin mailer.smtp seam: invalid \"reply_to\": must not contain a line break")
+	}
+
 	return NewSMTPMailer(SMTPConfig{
 		Host:               host,
 		Port:               port,
@@ -83,6 +95,7 @@ func smtpMailerFromConfig(cfg Config) (Mailer, error) {
 		Password:           cfg["password"],
 		TLSMode:            tlsMode,
 		InsecureSkipVerify: cfg["insecure_skip_verify"] == "true",
+		ReplyTo:            replyTo,
 	}), nil
 }
 

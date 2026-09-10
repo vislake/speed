@@ -48,6 +48,20 @@ func TestSMTPMailerFromConfig_InvalidTLSModeReturnsError(t *testing.T) {
 	}
 }
 
+// TestSMTPMailerFromConfig_ReplyToWithALineBreakReturnsError pins the
+// config-key layer of the Reply-To rule: a "reply_to" carrying a line break is
+// refused with an error, never handed to the constructor whose own line break
+// panic would swallow it.
+func TestSMTPMailerFromConfig_ReplyToWithALineBreakReturnsError(t *testing.T) {
+	_, err := smtpMailerFromConfig(Config{
+		"host":     "smtp.example.com",
+		"reply_to": "ops@example.com\r\nBcc: sneaky@example.com",
+	})
+	if err == nil {
+		t.Fatal("smtpMailerFromConfig() with a line break in reply_to succeeded, want an error")
+	}
+}
+
 func TestSMTPMailerFromConfig_InvalidPortReturnsError(t *testing.T) {
 	_, err := smtpMailerFromConfig(Config{"host": "smtp.example.com", "port": "not-a-number"})
 	if err == nil {
