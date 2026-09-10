@@ -212,14 +212,19 @@ describe('AccountView', () => {
     ).toBeInTheDocument()
 
     // One authenticated read per list -- the history one carrying its
-    // page-size query -- plus the sign-in itself, and nothing else.
+    // page-size query -- plus the preferences read the display-timezone
+    // chain and the preferences section share, plus the sign-in itself,
+    // and nothing else.
     expect(callsFor(rig, 'GET', '/api/v1/authn/sessions')).toHaveLength(1)
     const historyCalls = callsFor(rig, 'GET', '/api/v1/authn/login-history')
     expect(historyCalls).toHaveLength(1)
     expect(historyCalls[0]?.query).toBe('?limit=20')
     expect(historyCalls[0]?.authorization).toBe('Bearer access-1')
     expect(callsFor(rig, 'GET', '/api/v1/authn/identities')).toHaveLength(1)
-    expect(rig.calls).toHaveLength(4)
+    expect(
+      callsFor(rig, 'GET', '/api/v1/authn/me/preferences'),
+    ).toHaveLength(1)
+    expect(rig.calls).toHaveLength(5)
   })
 
   /** The authorize-URL journeys drive the add area's Google channel. */

@@ -68,6 +68,7 @@ import { listAdminTenants } from '../admin-api.js'
 import type { AdminTenant } from '../admin-api.js'
 import { demoTenantNameKey } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 
 /** The read gate's own refusal code: the rbac layer's 403, the only
  * ledger-read answer that is an authorization fact (the answer this
@@ -133,10 +134,12 @@ export function AdminView(): ReactElement {
       ? 'allowed'
       : 'pending'
 
+  const timeZone = usePreferredTimeZone()
   const formatDate = useMemo(() => {
     const formatter = new Intl.DateTimeFormat(i18n.language, {
       dateStyle: 'medium',
       timeStyle: 'short',
+      timeZone,
     })
     return (value: string | undefined): string => {
       if (value === undefined) {
@@ -145,7 +148,7 @@ export function AdminView(): ReactElement {
       const date = new Date(value)
       return Number.isNaN(date.getTime()) ? '' : formatter.format(date)
     }
-  }, [i18n.language])
+  }, [i18n.language, timeZone])
 
   const tenantColumns: readonly DataTableColumn<AdminTenant>[] = useMemo(
     () => [

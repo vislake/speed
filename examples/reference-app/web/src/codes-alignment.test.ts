@@ -173,6 +173,13 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
   'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
   'authn.invalid_phone': 'go/authn/errors.go:49 (ErrInvalidPhone)',
+  // The preferences PATCH's strict validation: the account page's
+  // PreferencesSection sends the language and timezone selects' values
+  // through the generated update operation, and a value the deployment
+  // cannot store answers with its own code -- text the surface renders
+  // beside its save-failed line.
+  'authn.invalid_locale': 'go/authn/errors.go:57 (ErrInvalidLocale)',
+  'authn.invalid_timezone': 'go/authn/errors.go:64 (ErrInvalidTimezone)',
   'authn.email_already_registered': 'go/authn/errors.go:62 (ErrEmailAlreadyRegistered)',
   'authn.phone_already_registered': 'go/authn/errors.go:66 (ErrPhoneAlreadyRegistered)',
   'authn.password_too_short': 'go/authn/errors.go:69 (ErrPasswordTooShort)',
@@ -524,7 +531,7 @@ describe('reachable-error whitelists vs the server code set', () => {
     // two directions keep it honest. The size guard makes a GO_PINNED
     // edit (in either direction) fail loudly here rather than silently
     // through the subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(78)
+    expect(Object.keys(GO_PINNED)).toHaveLength(80)
   })
 
   it('renders a bilingual text for every reachable smile-simulation code', () => {

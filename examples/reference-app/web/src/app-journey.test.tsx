@@ -476,13 +476,17 @@ describe('the app journey', () => {
     // notes read after its switch: the notes view's re-keyed query
     // refetches as the tenant change commits, the switch handler's
     // config refresh follows in the same turn.
-    await waitFor(() => expect(rig.calls).toHaveLength(34))
+    await waitFor(() => expect(rig.calls).toHaveLength(37))
     expect(configGets(rig)).toBe(3)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}${call.query}`)
     expect(trace).toEqual([
       'GET /api/v1/config/public',
       'POST /api/v1/authn/register',
       'POST /api/v1/authn/login/password',
+      // The signed-in frame's one profile-preference read (the
+      // language/timezone chain's profile tier, session-stable thanks
+      // to the app's staleness window) lands right behind the sign-in.
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/notes',
       'POST /api/v1/notes',
       'GET /api/v1/notes',
@@ -492,6 +496,10 @@ describe('the app journey', () => {
       'POST /api/v1/authn/tenant/switch',
       'GET /api/v1/notes',
       'GET /api/v1/config/public',
+      // The account page's first visit: the sections' preferences read
+      // (the earlier one was evicted with the departing tenant's
+      // ['tenant', tenantId] rows by the switch), then the list reads.
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/authn/sessions',
       'GET /api/v1/authn/login-history?limit=20',
       'GET /api/v1/authn/identities',
@@ -506,6 +514,7 @@ describe('the app journey', () => {
       'POST /api/v1/authn/mfa/totp/confirm',
       'POST /api/v1/authn/logout',
       'POST /api/v1/authn/login/password',
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/authn/sessions',
       'GET /api/v1/authn/login-history?limit=20',
       'GET /api/v1/authn/identities',
@@ -521,54 +530,55 @@ describe('the app journey', () => {
     expect(authOf(0)).toBeNull() // the pre-auth config fetch
     expect(authOf(1)).toBeNull() // register: a public route
     expect(authOf(2)).toBeNull() // the owner sign-in: still public
-    for (let index = 3; index <= 6; index += 1) {
+    for (let index = 3; index <= 7; index += 1) {
       expect(authOf(index)).toBe('Bearer access-1')
     }
-    expect(authOf(7)).toBe('Bearer access-2')
-    expect(authOf(8)).toBe('Bearer access-2') // the switch's revalidation
-    expect(authOf(9)).toBe('Bearer access-2')
-    expect(authOf(10)).toBe('Bearer access-3')
-    expect(authOf(11)).toBe('Bearer access-3') // the second switch's
-    // revalidation
-    for (let index = 12; index <= 21; index += 1) {
+    for (let index = 8; index <= 10; index += 1) {
+      expect(authOf(index)).toBe('Bearer access-2')
+    }
+    expect(authOf(9)).toBe('Bearer access-2') // the switch's revalidation
+    for (let index = 11; index <= 23; index += 1) {
       expect(authOf(index)).toBe('Bearer access-3')
     }
-    for (let index = 22; index <= 24; index += 1) {
+    for (let index = 24; index <= 26; index += 1) {
       expect(authOf(index)).toBe('Bearer access-4')
     }
-    expect(authOf(25)).toBeNull() // the re-login: public again
-    for (let index = 26; index <= 29; index += 1) {
+    expect(authOf(27)).toBeNull() // the re-login: public again
+    for (let index = 28; index <= 33; index += 1) {
       expect(authOf(index)).toBe('Bearer access-5')
     }
-    expect(authOf(30)).toBe('Bearer access-5') // the owner's sign-out
-    expect(authOf(31)).toBeNull() // the visitor's sign-in: public
-    expect(authOf(32)).toBe('Bearer access-6') // the frame's clinic-name
+    expect(authOf(34)).toBeNull() // the visitor's sign-in: public
+    expect(authOf(35)).toBe('Bearer access-6') // the frame's clinic-name
     // fetch: the clinic the visitor's sign-in landed in is not on the
     // demo roster, so the menu asks the app's tenant-identity answer
-    expect(authOf(33)).toBe('Bearer access-6') // the visitor's clinic
+    expect(authOf(36)).toBe('Bearer access-6') // the visitor's clinic
     // notes read
 
     expect(bodyOf(callOf(rig, 1))).toEqual({
       email: REGISTER_EMAIL,
       password: APP_PASSWORD,
       locale: 'zh-CN',
+      // The registration form reports the browser's timezone beside
+      // the language (the registration chain's first tier); the zone
+      // itself is the test environment's own.
+      timezone: expect.any(String),
     })
     expect(bodyOf(callOf(rig, 2))).toEqual({
       identifier: DEMO_OWNER_IDENTIFIER,
       password: APP_PASSWORD,
     })
-    expect(bodyOf(callOf(rig, 4))).toEqual({ text: NOTE_TEXT })
-    expect(bodyOf(callOf(rig, 6))).toEqual({ tenant_id: 'tenant-globex' })
-    expect(bodyOf(callOf(rig, 9))).toEqual({ tenant_id: 'tenant-acme' })
-    expect(bodyOf(callOf(rig, 18))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 20))).toEqual({ code: '000000' })
-    expect(bodyOf(callOf(rig, 21))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 5))).toEqual({ text: NOTE_TEXT })
+    expect(bodyOf(callOf(rig, 7))).toEqual({ tenant_id: 'tenant-globex' })
+    expect(bodyOf(callOf(rig, 10))).toEqual({ tenant_id: 'tenant-acme' })
+    expect(bodyOf(callOf(rig, 20))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 22))).toEqual({ code: '000000' })
     expect(bodyOf(callOf(rig, 23))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 25))).toEqual({
+    expect(bodyOf(callOf(rig, 25))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 27))).toEqual({
       identifier: DEMO_OWNER_IDENTIFIER,
       password: APP_PASSWORD,
     })
-    expect(bodyOf(callOf(rig, 31))).toEqual({
+    expect(bodyOf(callOf(rig, 34))).toEqual({
       identifier: REGISTER_EMAIL,
       password: APP_PASSWORD,
     })
@@ -607,19 +617,20 @@ describe('the app journey', () => {
     // (the refused create never touched the list data).
     expect(view.getByText(zhCN.notes.list.emptyTitle)).toBeInTheDocument()
 
-    await waitFor(() => expect(rig.calls).toHaveLength(4))
+    await waitFor(() => expect(rig.calls).toHaveLength(5))
     expect(configGets(rig)).toBe(1)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}`)
     expect(trace).toEqual([
       'GET /api/v1/config/public',
       'POST /api/v1/authn/login/password',
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/notes',
       'POST /api/v1/notes',
     ])
     expect(callOf(rig, 1).authorization).toBeNull()
     expect(callOf(rig, 2).authorization).toBe('Bearer access-1')
     expect(callOf(rig, 3).authorization).toBe('Bearer access-1')
-    expect(bodyOf(callOf(rig, 3))).toEqual({ text: READER_NOTE_TEXT })
+    expect(bodyOf(callOf(rig, 4))).toEqual({ text: READER_NOTE_TEXT })
   })
 
   it('answers a notes read refusal with the no-permission gate, no surface below the heading', async () => {
@@ -644,12 +655,13 @@ describe('the app journey', () => {
     ).not.toBeInTheDocument()
     expect(view.queryByText(zhCN.notes.list.emptyTitle)).not.toBeInTheDocument()
 
-    await waitFor(() => expect(rig.calls).toHaveLength(3))
+    await waitFor(() => expect(rig.calls).toHaveLength(4))
     expect(configGets(rig)).toBe(1)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}`)
     expect(trace).toEqual([
       'GET /api/v1/config/public',
       'POST /api/v1/authn/login/password',
+      'GET /api/v1/authn/me/preferences',
       'GET /api/v1/notes',
     ])
     expect(callOf(rig, 2).authorization).toBe('Bearer access-1')

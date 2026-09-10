@@ -275,3 +275,57 @@ describe('demo-server credit ledger', () => {
     })
   })
 })
+
+describe('demo-server preferences pair', () => {
+  const PREFERENCES_PATH = '/api/v1/authn/me/preferences'
+
+  /** One preferences call as the fetch stand-in records it. */
+  function preferencesCall(method: string, body: string = ''): RealCall {
+    return {
+      method,
+      path: PREFERENCES_PATH,
+      query: '',
+      authorization: 'Bearer access-1',
+      body,
+    }
+  }
+
+  it('serves the not-chosen state and merges PATCHes statefully, clearing on the empty string', async () => {
+    const respond = demoServer()
+
+    // The fresh account: both fields absent (the wire spelling of
+    // "not chosen", mirroring the real handler's str() projection).
+    const initial = await respond(preferencesCall('GET'))
+    expect(initial.status).toBe(200)
+    expect(await initial.json()).toEqual({})
+
+    // A partial PATCH replaces its field alone and answers the pair as
+    // stored.
+    const withLocale = await respond(
+      preferencesCall('PATCH', JSON.stringify({ locale: 'en-US' })),
+    )
+    expect(await withLocale.json()).toEqual({ locale: 'en-US' })
+
+    const withZone = await respond(
+      preferencesCall('PATCH', JSON.stringify({ timezone: 'Asia/Tokyo' })),
+    )
+    expect(await withZone.json()).toEqual({
+      locale: 'en-US',
+      timezone: 'Asia/Tokyo',
+    })
+
+    // Stateful across calls: a later GET serves what the PATCHes stored.
+    const readBack = await respond(preferencesCall('GET'))
+    expect(await readBack.json()).toEqual({
+      locale: 'en-US',
+      timezone: 'Asia/Tokyo',
+    })
+
+    // The empty string clears its field, the partial-update contract's
+    // clearing value.
+    const cleared = await respond(
+      preferencesCall('PATCH', JSON.stringify({ locale: '' })),
+    )
+    expect(await cleared.json()).toEqual({ timezone: 'Asia/Tokyo' })
+  })
+})

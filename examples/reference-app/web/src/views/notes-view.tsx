@@ -74,6 +74,7 @@ import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 import { CurrentClinicLine } from './current-clinic.js'
 import {
   clearNotesDraft,
@@ -263,12 +264,16 @@ export function NotesView(): ReactElement {
     return t(key)
   }
 
-  // Created-at cells render through Intl in the surface language;
+  // Created-at cells render through Intl in the surface language and
+  // the viewer's display timezone (usePreferredTimeZone's profile ->
+  // device -> UTC chain; every formatter passes it explicitly);
   // an unparseable value renders as an empty cell.
+  const timeZone = usePreferredTimeZone()
   const formatCreatedAt = useMemo(() => {
     const formatter = new Intl.DateTimeFormat(i18n.language, {
       dateStyle: 'medium',
       timeStyle: 'short',
+      timeZone,
     })
     return (value: string | undefined): string => {
       if (value === undefined) {
@@ -277,7 +282,7 @@ export function NotesView(): ReactElement {
       const date = new Date(value)
       return Number.isNaN(date.getTime()) ? '' : formatter.format(date)
     }
-  }, [i18n.language])
+  }, [i18n.language, timeZone])
 
   const columns: readonly DataTableColumn<NotesNote>[] = useMemo(
     () => [

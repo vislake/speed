@@ -55,6 +55,7 @@ import { CaseDetailView } from './views/case-detail-view.js'
 import { CasesCreateView } from './views/case-create-view.js'
 import { CasesView } from './views/cases-view.js'
 import { NotesView } from './views/notes-view.js'
+import { ProfilePreferenceSync } from './views/profile-preference-sync.js'
 import { TeamView } from './views/team-view.js'
 import { CreditsView } from './views/credits-view.js'
 import { SignInView } from './views/sign-in-view.js'
@@ -461,6 +462,11 @@ export function AppView(): ReactElement {
       userMenu={<UserMenu />}
       signIn={<SignInView />}
     >
+      {/* The host's profile -> instance language bridge: mounted once
+          inside the frame (see its own module header), rendering
+          nothing, so the signed-in account's stored language applies
+          wherever the frame lands. */}
+      <ProfilePreferenceSync />
       {content}
     </ProductShell>
   )

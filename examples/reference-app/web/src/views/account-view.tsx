@@ -52,6 +52,7 @@ import {
   BindingCallbackHandler,
   LoginHistorySection,
   MfaSection,
+  PreferencesSection,
   SessionsSection,
   SocialBindingsSection,
 } from '@speed/account-ui'
@@ -116,7 +117,8 @@ export interface AccountViewProps {
 /**
  * The account surface: heading, the in-flight binding completion when
  * the frame is at the binding subroute, then the account-ui sections --
- * sessions, login history, social bindings and multi-factor setup.
+ * preferences (language and timezone), sessions, login history, social
+ * bindings and multi-factor setup.
  */
 export function AccountView({
   bindingTarget,
@@ -182,6 +184,7 @@ export function AccountView({
         </Box>
       )}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <PreferencesSection />
         <SessionsSection />
         <LoginHistorySection />
         <SocialBindingsSection

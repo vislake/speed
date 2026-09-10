@@ -396,6 +396,15 @@ export interface DemoServerOptions {
    * offered by the add area. Stateful from there: a binding exchange
    * appends its identity for later list answers. */
   readonly initialIdentities?: readonly AuthnIdentity[]
+  /** The GET /api/v1/authn/me/preferences pair as first served; default
+   * {} -- both fields absent, the "not chosen" state a fresh account
+   * holds. Stateful from there: a PATCH merges into the stored pair
+   * (an absent field unchanged, an empty string clears) and answers
+   * the pair as stored, the real endpoint's partial-update contract. */
+  readonly initialPreferences?: {
+    readonly locale?: string
+    readonly timezone?: string
+  }
   /** The id of a bound identity whose unbind the server refuses with
    * the 409 authn.last_login_method a real account whose last sign-in
    * method is that binding answers; default undefined -- every unbind
@@ -943,6 +952,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     initialSessions,
     initialLoginAttempts,
     initialIdentities = [],
+    initialPreferences,
     refuseUnbindIdentityId,
     socialAuthorizeUrl = DEFAULT_SOCIAL_AUTHORIZE_URL,
     initialCases = [],
@@ -983,6 +993,25 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     ...(initialLoginAttempts ?? defaultLoginAttempts()),
   ]
   const identities: AuthnIdentity[] = [...initialIdentities]
+  // The stored preference pair, stateful per responder instance: a
+  // PATCH merges into it exactly as the real handler's partial update
+  // does (absent field unchanged, empty string clears -- and the pair
+  // is what a later GET serves).
+  const preferences: { locale?: string; timezone?: string } = {
+    ...(initialPreferences ?? {}),
+  }
+  /** The preferences wire shape: an empty (not-chosen) field is ABSENT,
+   * exactly as the real handler's str() projection serves it. */
+  function preferencesBody(): { locale?: string; timezone?: string } {
+    return {
+      ...(preferences.locale !== undefined && preferences.locale !== ''
+        ? { locale: preferences.locale }
+        : {}),
+      ...(preferences.timezone !== undefined && preferences.timezone !== ''
+        ? { timezone: preferences.timezone }
+        : {}),
+    }
+  }
   // The notes lists are stateful per responder instance and keyed by
   // tenant: a create appends the note later list answers of the same
   // tenant carry -- a switch to another tenant answers that tenant's
@@ -1772,6 +1801,21 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         return jsonResponse(200, { attempts: loginAttempts })
       case 'GET /api/v1/authn/identities':
         return jsonResponse(200, { identities })
+      case 'GET /api/v1/authn/me/preferences':
+        return jsonResponse(200, preferencesBody())
+      case 'PATCH /api/v1/authn/me/preferences': {
+        // The real endpoint's partial update: an absent field is left
+        // unchanged, an empty string clears, anything else replaces.
+        // The answer is the pair as stored afterwards.
+        const body = bodyObject(call)
+        if (typeof body.locale === 'string') {
+          preferences.locale = body.locale
+        }
+        if (typeof body.timezone === 'string') {
+          preferences.timezone = body.timezone
+        }
+        return jsonResponse(200, preferencesBody())
+      }
       case 'POST /api/v1/authn/sessions/revoke-others': {
         // Marks every non-current active row revoked, mirroring the
         // real handler's semantics; the answered count is what the

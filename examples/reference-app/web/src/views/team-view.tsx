@@ -97,6 +97,7 @@ import {
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { fetchTeamMembers } from '../team-api.js'
 import type { TeamMember } from '../team-api.js'
+import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 import { CurrentClinicLine } from './current-clinic.js'
 
 /** The read gate's own refusal code, like the notes surface's: the rbac
@@ -306,12 +307,16 @@ export function TeamView(): ReactElement {
     return t(key)
   }
 
-  // Cells render dates through Intl in the surface language; an
-  // unparseable value renders as an empty cell rather than throwing.
+  // Cells render dates through Intl in the surface language and the
+  // viewer's display timezone (usePreferredTimeZone's profile -> device
+  // -> UTC chain, passed explicitly); an unparseable value renders as
+  // an empty cell rather than throwing.
+  const timeZone = usePreferredTimeZone()
   const formatDate = useMemo(() => {
     const formatter = new Intl.DateTimeFormat(i18n.language, {
       dateStyle: 'medium',
       timeStyle: 'short',
+      timeZone,
     })
     return (value: string | undefined): string => {
       if (value === undefined) {
@@ -320,7 +325,7 @@ export function TeamView(): ReactElement {
       const date = new Date(value)
       return Number.isNaN(date.getTime()) ? '' : formatter.format(date)
     }
-  }, [i18n.language])
+  }, [i18n.language, timeZone])
 
   const memberColumns: readonly DataTableColumn<TeamMember>[] = useMemo(
     () => [
