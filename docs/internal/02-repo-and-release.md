@@ -50,8 +50,9 @@ speed/
 
 - **布局树的 `deploy/` 一节不存在于仓库中**：根目录没有 `docker-compose*.yml`，
   `grafana/` 编排目录也不存在。镜像构建走 `.github/workflows/reusable-docker-build.yml`
-  （reusable workflow，由 workflow_dispatch-only 的 `docker-image-ci.yml` 调用），
-  构建 `examples/reference-app/Dockerfile`（见 [18 CI/CD](18-cicd.md)）。`task dev`
+  （reusable workflow，由 `docker-image-ci.yml` 调用——后者在 push 到 main 且改动
+  命中其构建输入路径集时自动触发，另支持 `workflow_dispatch` 手动运行；路径集见
+  其文件头），构建 `examples/reference-app/Dockerfile`（见 [18 CI/CD](18-cicd.md)）。`task dev`
   按根 `CLAUDE.md` 与 [19 开发工作流](19-dev-workflow.md) 的约定跑单进程
   standalone 模式、SQLite、零外部依赖，不依赖 `docker compose`；分布式模式和
   可观测性栈的编排材料未落地，布局树里的 `deploy/` 一行按"规划"读，不按
