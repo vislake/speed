@@ -323,7 +323,7 @@ tenantless calls explicitly.
   row resolves to. `PermissionRead` ("ai-gateway:read") gates GET/HEAD.
   The Handler itself performs no permission check, exactly like every other
   module handler in this codebase: the host's router-level rbac gate
-  decides. The reference app's `aiGatewayPermissionFor` (`internal/app/demo_subject.go`)
+  decides. The reference app's `aiGatewayPermissionFor` (`internal/app/demo/demo_subject.go`)
   is the first concrete instance of that gate: GET/HEAD read, a
   `/platform`-suffixed path manage_platform, any other write.
 - Handler translation only, no new business decision (`handler.go`'s own
@@ -512,7 +512,7 @@ The reference app is also the credential-write surface's mandatory first
 consumer. Its demo boot (`internal/app/server.go`) writes the chat and image
 platform defaults from `SPEED_AIGATEWAY_*` configuration; those writes sit
 side by side with the module's own HTTP routes, mounted behind
-`internal/app/demo_subject.go`'s real rbac gate: `aiGatewayPermissionFor` selects among
+`internal/app/demo/demo_subject.go`'s real rbac gate: `aiGatewayPermissionFor` selects among
 the three permissions per request (see "Credential HTTP surface"), and the
 seeded demo role `demo-aigateway-tenant-writer` (granted aigateway:read +
 aigateway:write in every demo tenant, deliberately NOT
