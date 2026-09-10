@@ -21,6 +21,7 @@ describe('@speed/i18n main entry', () => {
       'defaultMissingKeyHandler',
       'matchSupportedLanguage',
       'normalizeLanguageTag',
+      'readSupportedLanguages',
       'registerNamespace',
       'switchLanguage',
       'useTranslation',
@@ -29,7 +30,8 @@ describe('@speed/i18n main entry', () => {
 
   it('exports the canonical constants and callables', () => {
     expect(i18nModule.DEFAULT_SUPPORTED_LANGUAGES).toEqual(['zh-CN', 'en-US'])
-    expect(i18nModule.DEFAULT_LANGUAGE).toBe('zh-CN')
+    expect(i18nModule.DEFAULT_LANGUAGE).toBe('en-US')
+    expect(typeof i18nModule.readSupportedLanguages).toBe('function')
     expect(typeof i18nModule.createI18n).toBe('function')
     expect(typeof i18nModule.switchLanguage).toBe('function')
     expect(typeof i18nModule.registerNamespace).toBe('function')

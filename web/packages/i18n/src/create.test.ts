@@ -53,7 +53,7 @@ afterEach(() => {
 describe('createI18n negotiation', () => {
   it('starts with the default language when every source is absent', () => {
     const { instance } = createTestI18n()
-    expect(instance.language).toBe('zh-CN')
+    expect(instance.language).toBe('en-US')
   })
 
   it('starts from the first matching navigator language', () => {
@@ -78,7 +78,7 @@ describe('createI18n negotiation', () => {
       urlParameterName: 'locale',
       searchParams: new URLSearchParams('lang=en-US&locale='),
     })
-    expect(instance.language).toBe('zh-CN')
+    expect(instance.language).toBe('en-US')
     const other = createI18n({
       storage: new MemoryStorage(),
       navigatorLanguages: [],
@@ -154,7 +154,7 @@ describe('createI18n negotiation', () => {
         navigatorLanguages: [],
         searchParams: new URLSearchParams(search),
       })
-      expect(instance.language, search).toBe('zh-CN')
+      expect(instance.language, search).toBe('en-US')
     }
     const emptyName = createI18n({
       storage: new MemoryStorage(),
@@ -162,7 +162,7 @@ describe('createI18n negotiation', () => {
       navigatorLanguages: [],
       searchParams: new URLSearchParams('?=en-US'),
     })
-    expect(emptyName.language).toBe('zh-CN')
+    expect(emptyName.language).toBe('en-US')
   })
 
   it('supports a custom supported-language set (defaultLanguage stays a member)', () => {
@@ -176,7 +176,7 @@ describe('createI18n negotiation', () => {
 
   it('runs without any storage when storage is explicitly null', () => {
     const instance = createI18n({ storage: null, navigatorLanguages: [] })
-    expect(instance.language).toBe('zh-CN')
+    expect(instance.language).toBe('en-US')
   })
 
   it('falls back to no stored choice when the storage read throws', () => {
@@ -185,7 +185,7 @@ describe('createI18n negotiation', () => {
       navigatorLanguages: [],
       searchParams: new URLSearchParams(),
     })
-    expect(instance.language).toBe('zh-CN')
+    expect(instance.language).toBe('en-US')
   })
 
   it('throws when the supported set is empty or the default is outside it', () => {
@@ -243,10 +243,10 @@ describe('createI18n negotiation', () => {
 describe('switchLanguage', () => {
   it('switches and persists the canonical tag under the locale key', async () => {
     const { instance, storage } = createTestI18n({ storedLanguage: null })
-    expect(instance.language).toBe('zh-CN')
-    await switchLanguage(instance, 'en_us')
     expect(instance.language).toBe('en-US')
-    expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBe('en-US')
+    await switchLanguage(instance, 'zh_cn')
+    expect(instance.language).toBe('zh-CN')
+    expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBe('zh-CN')
   })
 
   it('refuses a target outside the supported set without switching', async () => {
@@ -254,7 +254,7 @@ describe('switchLanguage', () => {
     await expect(switchLanguage(instance, 'fr-FR')).rejects.toThrow(
       /cannot switch to "fr-FR"/,
     )
-    expect(instance.language).toBe('zh-CN')
+    expect(instance.language).toBe('en-US')
     expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBeNull()
   })
 
@@ -316,9 +316,9 @@ describe('profile-language tier under late resolution', () => {
     // visit.
     const storage = new MemoryStorage()
     const visitOne = createI18n({ storage, navigatorLanguages: [] })
-    expect(visitOne.language).toBe('zh-CN')
-    await switchLanguage(visitOne, 'en-US', null)
     expect(visitOne.language).toBe('en-US')
+    await switchLanguage(visitOne, 'zh-CN', null)
+    expect(visitOne.language).toBe('zh-CN')
     // The manual-choice slot stays untouched: no stale trace to shadow the
     // tier when the profile changes.
     expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBeNull()
@@ -361,7 +361,7 @@ describe('missing-key discipline (no silent fallback across languages)', () => {
     const { instance, storage } = createTestI18n({ storedLanguage: null })
     // The loaded language starts with the key present...
     expect(instance.t('greeting.hello', { ns: 'welcome' })).toBe(
-      welcomeZh.greeting.hello,
+      welcomeEn.greeting.hello,
     )
     // ...then it goes missing in en-US only (zh-CN still has it, which is
     // exactly the trap a cross-language fallback would silently fall into).

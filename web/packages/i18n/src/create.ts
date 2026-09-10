@@ -55,7 +55,8 @@ export interface CreateI18nOptions {
   readonly supportedLanguages?: readonly string[]
   /**
    * Negotiation fallback when every source misses; must be a member of
-   * supportedLanguages. Defaults to DEFAULT_LANGUAGE (zh-CN). An unknown
+   * supportedLanguages. Defaults to DEFAULT_LANGUAGE (en-US), the platform
+   * default every locale chain in the stack terminates at. An unknown
    * browser language resolves here deliberately -- see README's "Language
    * negotiation" -- but a missing translation key never falls back across
    * languages (see "Missing keys").

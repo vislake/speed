@@ -25,7 +25,8 @@ nothing:
    parameter and a persisted manual choice still outrank it, in the chain
    order above).
 4. **Navigator languages**, in preference order.
-5. **The default language** -- `zh-CN`.
+5. **The default language** -- `en-US`, the platform default every chain
+   in the stack (backend content chains included) terminates at.
 
 ### Applying the profile language after creation
 
@@ -58,10 +59,10 @@ supported bare tag of the same language (`ja-JP` selects supported `ja`),
 and a bare request selects the unique supported tag carrying it (`en`
 selects `en-US` unless several supported tags share the primary subtag).
 
-An unknown browser language resolving to the zh-CN default is a deliberate
-negotiation default (this product's home language), documented and
-overridable. It is a different rule from the missing-key rule below, which
-never falls back.
+An unknown browser language resolving to the en-US default is a deliberate
+negotiation default, documented and overridable (`defaultLanguage`, which
+must remain a member of `supportedLanguages`). It is a different rule from
+the missing-key rule below, which never falls back.
 
 ```ts
 import { createI18n, switchLanguage } from '@speed/i18n'
@@ -79,6 +80,22 @@ instance still switches, so the promise resolves exactly when the language
 changed and a rejection always means the switch did not happen. Reads are
 protected the same way: a throwing storage read at creation falls back to
 "no stored choice", never to a failed creation.
+
+A surface that offers the languages the INSTANCE speaks (a language
+picker, a settings select) reads them off the instance rather than the
+package default, because a host may create the instance with a wider or
+narrower set:
+
+```ts
+import { readSupportedLanguages } from '@speed/i18n'
+
+const choices = readSupportedLanguages(i18n) // e.g. ['zh-CN', 'en-US']
+```
+
+`readSupportedLanguages` answers `[]` for an instance created without a
+pinned set -- a state `registerNamespace` and `switchLanguage` both refuse
+-- and filters out i18next's internal `cimode` meta language, so the
+picker never offers a non-language.
 
 ## React bindings
 

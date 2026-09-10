@@ -21,6 +21,7 @@ export {
   DEFAULT_SUPPORTED_LANGUAGES,
   normalizeLanguageTag,
   matchSupportedLanguage,
+  readSupportedLanguages,
 } from './languages.js'
 export { SPEED_LOCALE_STORAGE_KEY, type StorageLike } from './storage.js'
 export {

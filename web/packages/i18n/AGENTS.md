@@ -5,7 +5,10 @@
 The single i18n entry point for web packages: instance creation with
 negotiated start language (`createI18n`), the manual language switch
 (`switchLanguage`), per-namespace resource registration
-(`registerNamespace`), and the MUI localization bridge (`./mui-locale`).
+(`registerNamespace`), the instance's own supported-language read
+(`readSupportedLanguages`, exported for surfaces that render a language
+picker from the instance's real set rather than the package default), and
+the MUI localization bridge (`./mui-locale`).
 It wraps react-i18next/i18next and adds the platform's discipline on top:
 pinned supported-language sets, per-language coverage, key-set parity, and
 missing keys that warn and render as the key -- never another language's
@@ -46,6 +49,12 @@ catalog) and is non-negotiable here.
   `test-utils/locales/<namespace>/<lang>.json`; every language-text
   assertion imports those fixtures. Never inline a language literal, and
   keep fixture languages' key sets identical.
+- **The default language is `en-US`** -- the platform default every locale
+  chain in the stack terminates at (backend content chains included), so
+  the frontend and the backend land unknown-language requests on the same
+  language. `DEFAULT_SUPPORTED_LANGUAGES` still ships the zh-CN/en-US
+  pair; the default is a member of the supported set by construction
+  (createI18n refuses otherwise).
 - **The supported-language set is the contract.** Adding a language
   touches: `DEFAULT_SUPPORTED_LANGUAGES`/`DEFAULT_LANGUAGE` choices,
   the `muiLocaleFor` mapping (MUI localization must exist), fixture pairs

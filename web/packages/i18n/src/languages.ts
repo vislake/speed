@@ -4,7 +4,7 @@
  *
  * The chain, in priority order: URL parameter, manually persisted choice,
  * the signed-in user's profile locale, navigator languages, then the
- * default language.
+ * default language (en-US).
  * Every source that matches no supported language is skipped; the default
  * language wins only when every source misses, and the default is always a
  * member of the supported set -- an unknown language never selects anything
@@ -21,8 +21,8 @@
 /** The canonical language tags the platform ships. */
 export const DEFAULT_SUPPORTED_LANGUAGES = ['zh-CN', 'en-US'] as const
 
-/** Negotiation default: an unknown language resolves to zh-CN, never silently to English. */
-export const DEFAULT_LANGUAGE = 'zh-CN'
+/** Negotiation default: an unknown language resolves to en-US, the platform default every chain terminates at. */
+export const DEFAULT_LANGUAGE = 'en-US'
 
 /** True when the input parses as a BCP-47-style tag the negotiator can reason about. */
 const TAG_PATTERN = /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$/

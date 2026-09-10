@@ -132,11 +132,11 @@ describe('detectLanguage', () => {
         profileLanguage: '',
         navigatorLanguages: ['ja-JP'],
       }),
-    ).toBe('zh-CN')
+    ).toBe('en-US')
   })
 
   it('treats empty sources as absent', () => {
-    expect(detectLanguage({ ...base, urlLanguage: '' })).toBe('zh-CN')
+    expect(detectLanguage({ ...base, urlLanguage: '' })).toBe('en-US')
   })
 
   it('can still pick a language outside the default pair when supported', () => {
