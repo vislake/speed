@@ -26,14 +26,22 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// Capabilities is what "kv.memcached" declares about itself: honestly
+// MultiReplicaSafe alone, because many processes sharing one Memcached
+// deployment see the same state, while Memcached has no persistence
+// mechanism of any kind, so SurvivesRestart is deliberately absent -- see
+// the package doc comment. The built-in registration below and the
+// Registration factory a host wraps a self-built client in both declare
+// this one exported value, so the declaration a host reads off this package
+// and the one assembly validates cannot drift apart. A host injecting a
+// hand-built store with pkgcore.WithKVStore passes it as the injection's
+// capability argument.
+const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe
+
 func init() {
 	mustRegister(pkgcore.KVStoreRegistry, pkgcore.Registration[pkgcore.KVStore]{
-		Name: "kv.memcached",
-		// Honestly declared: many processes sharing one Memcached
-		// deployment see the same state (MultiReplicaSafe), but Memcached
-		// has no persistence mechanism of any kind, so SurvivesRestart is
-		// deliberately absent -- see the package doc comment.
-		Capabilities: pkgcore.MultiReplicaSafe,
+		Name:         "kv.memcached",
+		Capabilities: Capabilities,
 		New: func(cfg pkgcore.Config) (pkgcore.KVStore, error) {
 			client, err := clientFromConfig(cfg)
 			if err != nil {

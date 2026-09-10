@@ -24,6 +24,9 @@ func TestInit_RegistersKVRedisOnTheSharedRegistry(t *testing.T) {
 	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v", "kv.redis", caps, want)
 	}
+	if caps != Capabilities {
+		t.Errorf("Build(%q) capabilities = %v, want the exported Capabilities constant %v the host reads off this package", "kv.redis", caps, Capabilities)
+	}
 }
 
 // TestClientFromConfig_DefaultsAddrWhenUnset pins the fallback address a

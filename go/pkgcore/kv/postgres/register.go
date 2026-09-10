@@ -25,10 +25,20 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// Capabilities is what "kv.postgres" declares about itself: many replicas
+// may share one PostgreSQL database, and the entries the store writes to
+// its table outlive any one process -- exactly what the two bits mean. The
+// built-in registration below and the Registration factory a host wraps a
+// self-built pool in both declare this one exported value, so the
+// declaration a host reads off this package and the one assembly validates
+// cannot drift apart. A host injecting a hand-built store with
+// pkgcore.WithKVStore passes it as the injection's capability argument.
+const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+
 func init() {
 	mustRegister(pkgcore.KVStoreRegistry, pkgcore.Registration[pkgcore.KVStore]{
 		Name:         "kv.postgres",
-		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart,
+		Capabilities: Capabilities,
 		New: func(cfg pkgcore.Config) (pkgcore.KVStore, error) {
 			pool, err := poolFromConfig(cfg)
 			if err != nil {

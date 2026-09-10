@@ -27,6 +27,9 @@ func TestInit_RegistersEventBusRedisOnTheSharedRegistry(t *testing.T) {
 	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v", "eventbus.redis", caps, want)
 	}
+	if caps != Capabilities {
+		t.Errorf("Build(%q) capabilities = %v, want the exported Capabilities constant %v the host reads off this package", "eventbus.redis", caps, Capabilities)
+	}
 }
 
 // TestClientFromConfig_DefaultsAddrWhenUnset pins the fallback address a

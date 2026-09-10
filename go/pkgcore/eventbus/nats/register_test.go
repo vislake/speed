@@ -29,6 +29,9 @@ func TestInit_RegistersEventBusNatsOnTheSharedRegistry(t *testing.T) {
 	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v", "eventbus.nats", caps, want)
 	}
+	if caps != Capabilities {
+		t.Errorf("Build(%q) capabilities = %v, want the exported Capabilities constant %v the host reads off this package", "eventbus.nats", caps, Capabilities)
+	}
 }
 
 // TestConnFromConfig_DefaultsURLWhenUnset pins the fallback address a

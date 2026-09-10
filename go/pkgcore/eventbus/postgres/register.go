@@ -25,10 +25,21 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// Capabilities is what "eventbus.postgres" declares about itself: many
+// replicas may share one PostgreSQL database, and the outbox rows and
+// per-replica cursors the bus persists outlive any one process -- the
+// property this implementation exists to provide. The built-in registration
+// below and the Registration factory a host wraps a self-built pool in both
+// declare this one exported value, so the declaration a host reads off this
+// package and the one assembly validates cannot drift apart. A host
+// injecting a hand-built bus with pkgcore.WithEventBus passes it as the
+// injection's capability argument.
+const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+
 func init() {
 	mustRegister(pkgcore.EventBusRegistry, pkgcore.Registration[pkgcore.EventBus]{
 		Name:         "eventbus.postgres",
-		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart,
+		Capabilities: Capabilities,
 		New: func(cfg pkgcore.Config) (pkgcore.EventBus, error) {
 			pool, replicaID, err := poolAndReplicaFromConfig(cfg)
 			if err != nil {

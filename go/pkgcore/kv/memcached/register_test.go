@@ -25,6 +25,9 @@ func TestInit_RegistersKVMemcachedOnTheSharedRegistry(t *testing.T) {
 	if want := pkgcore.MultiReplicaSafe; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v (never SurvivesRestart)", "kv.memcached", caps, want)
 	}
+	if caps != Capabilities {
+		t.Errorf("Build(%q) capabilities = %v, want the exported Capabilities constant %v the host reads off this package", "kv.memcached", caps, Capabilities)
+	}
 }
 
 // TestClientFromConfig_DefaultsAddrsWhenUnset pins the fallback address a

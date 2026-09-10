@@ -24,6 +24,9 @@ func TestInit_RegistersKVPostgres(t *testing.T) {
 	if caps != want {
 		t.Errorf("KVStoreRegistry.Build() capabilities = %v, want %v", caps, want)
 	}
+	if caps != Capabilities {
+		t.Errorf("KVStoreRegistry.Build() capabilities = %v, want the exported Capabilities constant %v the host reads off this package", caps, Capabilities)
+	}
 }
 
 // TestPoolFromConfig_MissingDSN pins that a missing "dsn" config key is

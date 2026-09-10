@@ -27,6 +27,9 @@ func TestInit_RegistersObjectStoreS3OnTheSharedRegistry(t *testing.T) {
 	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v", "objectstore.s3", caps, want)
 	}
+	if caps != Capabilities {
+		t.Errorf("Build(%q) capabilities = %v, want the exported Capabilities constant %v the host reads off this package", "objectstore.s3", caps, Capabilities)
+	}
 }
 
 // TestInit_EmptyConfigRequiresConfig pins the documented gap

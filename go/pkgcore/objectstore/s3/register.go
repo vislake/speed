@@ -43,10 +43,21 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// Capabilities is what "objectstore.s3" declares about itself: any number of
+// replicas may address the same bucket, and the objects live inside the
+// S3-compatible service, whose durable storage outlives any one process --
+// the two claims the doc comment above spells out. The built-in registration
+// below and the Registration factory a host wraps a self-built Config in
+// both declare this one exported value, so the declaration a host reads off
+// this package and the one assembly validates cannot drift apart. A host
+// injecting a hand-built store with pkgcore.WithObjectStore passes it as the
+// injection's capability argument.
+const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+
 func init() {
 	mustRegister(pkgcore.ObjectStoreRegistry, pkgcore.Registration[pkgcore.ObjectStore]{
 		Name:         "objectstore.s3",
-		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart,
+		Capabilities: Capabilities,
 		New:          objectStoreFromConfig,
 	})
 }

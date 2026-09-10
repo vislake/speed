@@ -25,10 +25,20 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// Capabilities is what "eventbus.redis" declares about itself: many replicas
+// may share one Redis deployment, and the Redis Streams state the bus writes
+// outlives any one process, exactly what the two bits mean. The built-in
+// registration below and the Registration factory a host wraps a self-built
+// client in both declare this one exported value, so the declaration a host
+// reads off this package and the one assembly validates cannot drift apart.
+// A host injecting a hand-built bus with pkgcore.WithEventBus passes it as
+// the injection's capability argument.
+const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+
 func init() {
 	mustRegister(pkgcore.EventBusRegistry, pkgcore.Registration[pkgcore.EventBus]{
 		Name:         "eventbus.redis",
-		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart,
+		Capabilities: Capabilities,
 		New: func(cfg pkgcore.Config) (pkgcore.EventBus, error) {
 			client, err := clientFromConfig(cfg)
 			if err != nil {

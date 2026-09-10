@@ -33,10 +33,21 @@ import (
 // address.
 const defaultBucket = "speed-kv"
 
+// Capabilities is what "kv.nats" declares about itself: many replicas may
+// share one NATS deployment, and the JetStream KV buckets the store writes
+// to (file storage, the same configuration NewKVStore provisions and
+// adopts) outlive any one process -- exactly what the two bits mean. The
+// built-in registration below and the Registration factory a host wraps a
+// self-built connection in both declare this one exported value, so the
+// declaration a host reads off this package and the one assembly validates
+// cannot drift apart. A host injecting a hand-built store with
+// pkgcore.WithKVStore passes it as the injection's capability argument.
+const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+
 func init() {
 	mustRegister(pkgcore.KVStoreRegistry, pkgcore.Registration[pkgcore.KVStore]{
 		Name:         "kv.nats",
-		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart,
+		Capabilities: Capabilities,
 		New: func(cfg pkgcore.Config) (pkgcore.KVStore, error) {
 			conn, err := connFromConfig(cfg)
 			if err != nil {
