@@ -86,6 +86,15 @@ type ExternalIdentity struct {
 	// stored as given and never fetched by this module.
 	Avatar string
 
+	// Locale is the profile language the provider reported, or empty when
+	// the channel reports none. It is the social registration locale
+	// chain's declared tier: a new account minted from this sign-in stores
+	// the value when it names a language this module ships, and falls to
+	// the platform default otherwise (see registrationLocale). Provider
+	// values are untrusted input like every other field of this struct --
+	// validation is the chain's, not the provider's.
+	Locale string
+
 	// Raw is the provider's own user document, kept for support and for
 	// mapping fields this struct does not model. It is not indexed and
 	// never returned by an API.

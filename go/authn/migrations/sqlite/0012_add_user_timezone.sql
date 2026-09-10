@@ -1,0 +1,14 @@
+-- Adds users.timezone: the IANA timezone name (for example
+-- "Asia/Shanghai") whose local time this account's timestamps are rendered
+-- in. The column is NOT NULL with an empty string meaning "not chosen
+-- yet" (the platform default UTC applies), matching users.locale's own
+-- unset spelling beside it -- one representation of absence, so a read
+-- never has to distinguish NULL from empty and the preferences endpoint's
+-- clearing write is an ordinary value.
+--
+-- VARCHAR(64) is the column-width authority (see model.go's
+-- timezoneColumnWidth): the longest IANA zone names sit well under it, and
+-- the preferences endpoints validate a supplied name against the IANA
+-- database before it ever reaches this column, so an over-width write is
+-- a programming error rather than an input defect.
+ALTER TABLE users ADD COLUMN timezone VARCHAR(64) NOT NULL DEFAULT '';

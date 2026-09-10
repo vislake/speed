@@ -519,7 +519,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrAccountLocked",
       "kind": "declared",
-      "line": 303,
+      "line": 318,
       "module": "authn",
       "status": 429
     },
@@ -528,7 +528,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrAuthenticationRequired",
       "kind": "declared",
-      "line": 93,
+      "line": 108,
       "module": "authn",
       "status": 401
     },
@@ -537,7 +537,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrChannelDisabled",
       "kind": "declared",
-      "line": 313,
+      "line": 328,
       "module": "authn",
       "status": 403
     },
@@ -546,7 +546,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrDisplayNameTooLong",
       "kind": "declared",
-      "line": 82,
+      "line": 97,
       "module": "authn",
       "status": 400
     },
@@ -555,7 +555,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrEmailAlreadyRegistered",
       "kind": "declared",
-      "line": 62,
+      "line": 77,
       "module": "authn",
       "status": 409
     },
@@ -573,7 +573,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrIdentityAlreadyBound",
       "kind": "declared",
-      "line": 220,
+      "line": 235,
       "module": "authn",
       "status": 409
     },
@@ -582,7 +582,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrIdentityNotFound",
       "kind": "declared",
-      "line": 226,
+      "line": 241,
       "module": "authn",
       "status": 404
     },
@@ -591,7 +591,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrIdentityRequiresBinding",
       "kind": "declared",
-      "line": 216,
+      "line": 231,
       "module": "authn",
       "status": 409
     },
@@ -600,7 +600,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrInternal",
       "kind": "declared",
-      "line": 286,
+      "line": 301,
       "module": "authn",
       "status": 500
     },
@@ -623,6 +623,15 @@
       "status": 400
     },
     {
+      "code": "authn.invalid_locale",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInvalidLocale",
+      "kind": "declared",
+      "line": 57,
+      "module": "authn",
+      "status": 400
+    },
+    {
       "code": "authn.invalid_phone",
       "file": "go/authn/errors.go",
       "ident": "ErrInvalidPhone",
@@ -636,7 +645,16 @@
       "file": "go/authn/errors.go",
       "ident": "ErrInvalidRequestBody",
       "kind": "declared",
-      "line": 417,
+      "line": 432,
+      "module": "authn",
+      "status": 400
+    },
+    {
+      "code": "authn.invalid_timezone",
+      "file": "go/authn/errors.go",
+      "ident": "ErrInvalidTimezone",
+      "kind": "declared",
+      "line": 64,
       "module": "authn",
       "status": 400
     },
@@ -645,7 +663,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrLastLoginMethod",
       "kind": "declared",
-      "line": 232,
+      "line": 247,
       "module": "authn",
       "status": 409
     },
@@ -654,7 +672,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrMFAAlreadyEnrolled",
       "kind": "declared",
-      "line": 361,
+      "line": 376,
       "module": "authn",
       "status": 409
     },
@@ -663,7 +681,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrMFACodeUsed",
       "kind": "declared",
-      "line": 394,
+      "line": 409,
       "module": "authn",
       "status": 401
     },
@@ -672,7 +690,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrMFAInvalidCode",
       "kind": "declared",
-      "line": 379,
+      "line": 394,
       "module": "authn",
       "status": 401
     },
@@ -681,7 +699,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrMFANotEnrolled",
       "kind": "declared",
-      "line": 357,
+      "line": 372,
       "module": "authn",
       "status": 404
     },
@@ -690,7 +708,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrOAuthStateInvalid",
       "kind": "declared",
-      "line": 167,
+      "line": 182,
       "module": "authn",
       "status": 401
     },
@@ -699,7 +717,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrPasswordTooLong",
       "kind": "declared",
-      "line": 72,
+      "line": 87,
       "module": "authn",
       "status": 400
     },
@@ -708,7 +726,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrPasswordTooShort",
       "kind": "declared",
-      "line": 69,
+      "line": 84,
       "module": "authn",
       "status": 400
     },
@@ -717,7 +735,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrPasswordTooWeak",
       "kind": "declared",
-      "line": 86,
+      "line": 101,
       "module": "authn",
       "status": 400
     },
@@ -726,7 +744,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrPhoneAlreadyRegistered",
       "kind": "declared",
-      "line": 66,
+      "line": 81,
       "module": "authn",
       "status": 409
     },
@@ -735,7 +753,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrProviderUnknown",
       "kind": "declared",
-      "line": 176,
+      "line": 191,
       "module": "authn",
       "status": 400
     },
@@ -744,7 +762,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrRateLimited",
       "kind": "declared",
-      "line": 295,
+      "line": 310,
       "module": "authn",
       "status": 429
     },
@@ -753,7 +771,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrRedirectURINotAllowed",
       "kind": "declared",
-      "line": 171,
+      "line": 186,
       "module": "authn",
       "status": 400
     },
@@ -762,7 +780,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrRefreshTokenInvalid",
       "kind": "declared",
-      "line": 113,
+      "line": 128,
       "module": "authn",
       "status": 401
     },
@@ -771,7 +789,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrRefreshTokenReused",
       "kind": "declared",
-      "line": 119,
+      "line": 134,
       "module": "authn",
       "status": 401
     },
@@ -780,7 +798,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrRevocationCheckFailed",
       "kind": "declared",
-      "line": 147,
+      "line": 162,
       "module": "authn",
       "status": 500
     },
@@ -789,7 +807,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSearchCriteriaRequired",
       "kind": "declared",
-      "line": 58,
+      "line": 73,
       "module": "authn",
       "status": 400
     },
@@ -798,7 +816,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSessionNotFound",
       "kind": "declared",
-      "line": 407,
+      "line": 422,
       "module": "authn",
       "status": 404
     },
@@ -807,7 +825,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSessionRevoked",
       "kind": "declared",
-      "line": 109,
+      "line": 124,
       "module": "authn",
       "status": 401
     },
@@ -816,7 +834,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSMSDeliveryFailed",
       "kind": "declared",
-      "line": 351,
+      "line": 366,
       "module": "authn",
       "status": 500
     },
@@ -825,7 +843,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSocialExchangeFailed",
       "kind": "declared",
-      "line": 183,
+      "line": 198,
       "module": "authn",
       "status": 401
     },
@@ -834,7 +852,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSocialIdentityIncomplete",
       "kind": "declared",
-      "line": 190,
+      "line": 205,
       "module": "authn",
       "status": 400
     },
@@ -843,7 +861,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSOAllowedDomainsTooLong",
       "kind": "declared",
-      "line": 273,
+      "line": 288,
       "module": "authn",
       "status": 400
     },
@@ -852,7 +870,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSOClientIDTooLong",
       "kind": "declared",
-      "line": 268,
+      "line": 283,
       "module": "authn",
       "status": 400
     },
@@ -861,7 +879,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSODomainNotAllowed",
       "kind": "declared",
-      "line": 277,
+      "line": 292,
       "module": "authn",
       "status": 403
     },
@@ -870,7 +888,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSOIssuerNotAllowed",
       "kind": "declared",
-      "line": 242,
+      "line": 257,
       "module": "authn",
       "status": 400
     },
@@ -879,7 +897,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSOIssuerTooLong",
       "kind": "declared",
-      "line": 264,
+      "line": 279,
       "module": "authn",
       "status": 400
     },
@@ -888,7 +906,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSONotConfigured",
       "kind": "declared",
-      "line": 236,
+      "line": 251,
       "module": "authn",
       "status": 404
     },
@@ -897,7 +915,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSOTenantIDTooLong",
       "kind": "declared",
-      "line": 256,
+      "line": 271,
       "module": "authn",
       "status": 400
     },
@@ -906,7 +924,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrSSOTokenInvalid",
       "kind": "declared",
-      "line": 282,
+      "line": 297,
       "module": "authn",
       "status": 401
     },
@@ -915,7 +933,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrStepUpRequired",
       "kind": "declared",
-      "line": 398,
+      "line": 413,
       "module": "authn",
       "status": 403
     },
@@ -924,7 +942,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrTenantMembershipRequired",
       "kind": "declared",
-      "line": 133,
+      "line": 148,
       "module": "authn",
       "status": 403
     },
@@ -933,7 +951,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrTenantMembershipUnavailable",
       "kind": "declared",
-      "line": 141,
+      "line": 156,
       "module": "authn",
       "status": 403
     },
@@ -942,7 +960,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrTokenExpired",
       "kind": "declared",
-      "line": 105,
+      "line": 120,
       "module": "authn",
       "status": 401
     },
@@ -951,7 +969,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrTokenInvalid",
       "kind": "declared",
-      "line": 98,
+      "line": 113,
       "module": "authn",
       "status": 401
     },
@@ -960,7 +978,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrTokenVerificationFailed",
       "kind": "declared",
-      "line": 159,
+      "line": 174,
       "module": "authn",
       "status": 500
     },
@@ -969,7 +987,7 @@
       "file": "go/authn/errors.go",
       "ident": "ErrVerificationCodeInvalid",
       "kind": "declared",
-      "line": 340,
+      "line": 355,
       "module": "authn",
       "status": 401
     },
@@ -1830,10 +1848,10 @@
     },
     {
       "code": "integration.internal_error",
-      "file": "examples/reference-app/internal/app/demo_subject.go",
+      "file": "examples/reference-app/internal/app/integration_authenticate.go",
       "ident": "integrationErrInternal",
       "kind": "declared",
-      "line": 692,
+      "line": 41,
       "module": "integration",
       "status": 500
     },

@@ -113,6 +113,15 @@ type AuthnLoginWithSMSCodeRequest struct {
 	TenantID *string `json:"tenant_id,omitempty"`
 }
 
+// AuthnPreferences defines model for AuthnPreferences.
+type AuthnPreferences struct {
+	// Locale The language backend-generated content for this account renders in. Empty means "not chosen yet" and the platform default (en-US) applies; a stored value is always one of the languages the deployment's catalog ships.
+	Locale *string `json:"locale,omitempty"`
+
+	// Timezone The IANA timezone name (for example "Asia/Shanghai") this account's times are rendered in. Empty means "not chosen yet" and the platform default (UTC) applies.
+	Timezone *string `json:"timezone,omitempty"`
+}
+
 // AuthnPrincipal defines model for AuthnPrincipal.
 type AuthnPrincipal struct {
 	Amr       *[]string `json:"amr,omitempty"`
@@ -136,9 +145,14 @@ type AuthnRefreshTokenRequest struct {
 type AuthnRegisterRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
 	Email       *string `json:"email,omitempty"`
-	Locale      *string `json:"locale,omitempty"`
-	Password    string  `json:"password"`
-	Phone       *string `json:"phone,omitempty"`
+
+	// Locale Preferred language for backend-generated content addressed to this account. Registration validation is lenient: a value the deployment's catalog does not ship is stored as empty (the platform default en-US applies) rather than refusing the registration.
+	Locale   *string `json:"locale,omitempty"`
+	Password string  `json:"password"`
+	Phone    *string `json:"phone,omitempty"`
+
+	// Timezone The browser-reported IANA timezone name (for example "Asia/Shanghai"), the registration-time initial value of the account's display timezone. Lenient like locale: a name that is not a known IANA zone is stored as empty (the platform default UTC applies) rather than refusing the registration.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // AuthnRequestSMSCodeRequest defines model for AuthnRequestSMSCodeRequest.
@@ -211,6 +225,15 @@ type AuthnTokenPair struct {
 	RefreshToken *string `json:"refresh_token,omitempty"`
 }
 
+// AuthnUpdatePreferencesRequest defines model for AuthnUpdatePreferencesRequest.
+type AuthnUpdatePreferencesRequest struct {
+	// Locale The requested locale. Absent leaves the stored value unchanged; an empty string clears it; any other value must be one of the languages the deployment's catalog ships, or the update is refused with authn.invalid_locale and nothing is written.
+	Locale *string `json:"locale,omitempty"`
+
+	// Timezone The requested IANA timezone name. Absent leaves the stored value unchanged; an empty string clears it; any other value must be a known IANA zone (the process-local pseudo-zone is not storable), or the update is refused with authn.invalid_timezone and nothing is written.
+	Timezone *string `json:"timezone,omitempty"`
+}
+
 // AuthnUser defines model for AuthnUser.
 type AuthnUser struct {
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
@@ -218,9 +241,14 @@ type AuthnUser struct {
 	Email         *string    `json:"email,omitempty"`
 	EmailVerified *bool      `json:"email_verified,omitempty"`
 	ID            *string    `json:"id,omitempty"`
-	Locale        *string    `json:"locale,omitempty"`
-	Phone         *string    `json:"phone,omitempty"`
-	PhoneVerified *bool      `json:"phone_verified,omitempty"`
+
+	// Locale The language backend-generated content for this account renders in. Empty means "not chosen yet" and the platform default (en-US) applies.
+	Locale        *string `json:"locale,omitempty"`
+	Phone         *string `json:"phone,omitempty"`
+	PhoneVerified *bool   `json:"phone_verified,omitempty"`
+
+	// Timezone The IANA timezone name (for example "Asia/Shanghai") this account's times are rendered in. Empty means "not chosen yet" and the platform default (UTC) applies.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // AuthnVerifyStepUpRequest defines model for AuthnVerifyStepUpRequest.
@@ -246,6 +274,9 @@ type AuthnLoginWithSMSCodeJSONRequestBody = AuthnLoginWithSMSCodeRequest
 
 // AuthnRequestSMSCodeJSONRequestBody defines body for AuthnRequestSMSCode for application/json ContentType.
 type AuthnRequestSMSCodeJSONRequestBody = AuthnRequestSMSCodeRequest
+
+// AuthnUpdatePreferencesJSONRequestBody defines body for AuthnUpdatePreferences for application/json ContentType.
+type AuthnUpdatePreferencesJSONRequestBody = AuthnUpdatePreferencesRequest
 
 // AuthnVerifyStepUpJSONRequestBody defines body for AuthnVerifyStepUp for application/json ContentType.
 type AuthnVerifyStepUpJSONRequestBody = AuthnVerifyStepUpRequest
@@ -291,6 +322,12 @@ type ServerInterface interface {
 	// AuthnGetMe Return the caller's own authenticated identity.
 	// (GET /api/v1/authn/me)
 	AuthnGetMe(w http.ResponseWriter, r *http.Request)
+	// AuthnGetPreferences Return the caller's own locale and timezone preferences.
+	// (GET /api/v1/authn/me/preferences)
+	AuthnGetPreferences(w http.ResponseWriter, r *http.Request)
+	// AuthnUpdatePreferences Update the caller's own locale and timezone preferences.
+	// (PATCH /api/v1/authn/me/preferences)
+	AuthnUpdatePreferences(w http.ResponseWriter, r *http.Request)
 	// AuthnRegenerateRecoveryCodes Discard the caller's recovery codes and issue a fresh batch.
 	// (POST /api/v1/authn/mfa/recovery-codes/regenerate)
 	AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request)
@@ -472,6 +509,34 @@ func (siw *ServerInterfaceWrapper) AuthnGetMe(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AuthnGetMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AuthnGetPreferences operation middleware
+func (siw *ServerInterfaceWrapper) AuthnGetPreferences(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AuthnGetPreferences(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AuthnUpdatePreferences operation middleware
+func (siw *ServerInterfaceWrapper) AuthnUpdatePreferences(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AuthnUpdatePreferences(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -837,6 +902,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/authn/mfa/step-up", wrapper.AuthnVerifyStepUp)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/authn/tenant/switch", wrapper.AuthnSwitchTenant)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/authn/me", wrapper.AuthnGetMe)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/authn/me/preferences", wrapper.AuthnGetPreferences)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/authn/me/preferences", wrapper.AuthnUpdatePreferences)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/authn/sessions", wrapper.AuthnListSessions)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/authn/sessions/{sessionId}", wrapper.AuthnRevokeSession)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/authn/sessions/revoke-others", wrapper.AuthnRevokeOtherSessions)

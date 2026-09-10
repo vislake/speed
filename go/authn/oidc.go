@@ -915,7 +915,15 @@ func (s *SSOService) resolveAccount(
 		// membership or a session.
 		user := &User{
 			DisplayName: external.Name,
-			Status:      UserStatusActive,
+			// The registration initial-value chains apply to every account
+			// mint, this one included: the locale chain's declared tier is
+			// empty here -- no shipped channel's claim set is read for a
+			// profile language on the enterprise path -- so the field
+			// starts "not chosen yet" (the platform default en-US applies),
+			// and the timezone chain enters at the IP-resolution seam,
+			// exactly as the social mint's own comment describes.
+			Timezone: s.svc.registrationTimeZone(ctx, "", ip),
+			Status:   UserStatusActive,
 		}
 		if createErr := s.svc.users.Create(ctx, user); createErr != nil {
 			return nil, false, createErr

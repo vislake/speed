@@ -186,11 +186,24 @@ type RegisterInput struct {
 	Password string
 	// DisplayName is the name shown in the product.
 	DisplayName string
-	// Locale is the language backend-generated content for this user is
-	// rendered in.
+	// Locale is the caller-declared language for backend-generated content
+	// addressed to this account. It is one TIER of the registration locale
+	// chain, not the stored value: an unusable value is skipped (the
+	// registration is lenient) and AcceptLanguage stands next in the chain
+	// -- see registrationLocale.
 	Locale string
+	// AcceptLanguage is the request's Accept-Language header, the transport
+	// channel the frontend's own language chain sends its resolved
+	// language through. It is the registration locale chain's second tier.
+	AcceptLanguage string
+	// Timezone is the caller-declared IANA timezone name -- the
+	// registration form's browser report -- and the registration timezone
+	// chain's first tier, lenient like Locale: an unusable name is skipped
+	// rather than refused, with the TimeZoneResolver and then "not chosen
+	// yet" behind it (see registrationTimeZone).
+	Timezone string
 	// IP is the requesting client's address, for the registration rate
-	// limit.
+	// limit and for the timezone chain's IP-resolution tier.
 	IP string
 }
 
@@ -286,6 +299,13 @@ type Service struct {
 	// one of them; empty keeps every request recording its direct
 	// connection address. See that option's doc comment.
 	trustedProxies []netip.Prefix
+
+	// timezoneResolver is WithTimeZoneResolver's value: the registration
+	// timezone chain's IP-resolution tier. Nil -- the default, and the
+	// reference app's wiring -- skips the tier, and the chain ends at "not
+	// chosen yet"; see TimeZoneResolver for why this seam is not
+	// fail-closed.
+	timezoneResolver TimeZoneResolver
 
 	// vendorClientIPHeaders is WithVendorClientIPHeaders' validated value:
 	// the single-hop vendor client-address headers this deployment's proxy
@@ -443,6 +463,7 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		secureCookies:         cfg.secureCookies,
 		trustedProxies:        slices.Clone(cfg.trustedProxyNets),
 		vendorClientIPHeaders: slices.Clone(cfg.vendorClientIPHeaders),
+		timezoneResolver:      cfg.timezoneResolver,
 
 		authCount:    authCount,
 		authDuration: authDuration,
@@ -518,9 +539,17 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 		return nil, ErrDisplayNameTooLong.WithParam("max_length", displayNameWidth)
 	}
 
+	// Both preferences are resolved here, at the account's initialization,
+	// and written in the same insert that creates it -- never a second
+	// update -- so a newly registered account carries its initial locale
+	// and timezone from the first read anyone can make. Both chains are
+	// lenient (registrationLocale / registrationTimeZone): an unusable
+	// declared value is skipped rather than refused, and the chains end at
+	// empty, whose effective defaults are the platform's en-US and UTC.
 	user := &User{
 		DisplayName:   in.DisplayName,
-		Locale:        in.Locale,
+		Locale:        registrationLocale(in.Locale, in.AcceptLanguage),
+		Timezone:      s.registrationTimeZone(ctx, in.Timezone, in.IP),
 		Status:        UserStatusActive,
 		EmailVerified: false,
 		PhoneVerified: false,

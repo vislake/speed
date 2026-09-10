@@ -40,8 +40,8 @@ var authnTables = []string{
 	"user_mfa_factors", "user_recovery_codes",
 }
 
-// TestMigrations_ZeroToHead_Postgres proves authn's nine migrations
-// (0001..0009) apply cleanly from zero on real PostgreSQL and produce every
+// TestMigrations_ZeroToHead_Postgres proves authn's migrations
+// (0001..0012) apply cleanly from zero on real PostgreSQL and produce every
 // table this module owns. testutil.NewPostgresDB itself already fails the
 // test outright if dbkit.MigrationRegistry.Apply returns an error, so
 // reaching the assertions below is already proof migration application
@@ -78,5 +78,13 @@ func TestMigrations_ZeroToHead_Postgres(t *testing.T) {
 		if !migrator.HasColumn(c.table, c.column) {
 			t.Errorf("table %q has no column %q after applying every migration from zero", c.table, c.column)
 		}
+	}
+
+	// The newest migration's own column, pinned separately: the
+	// one-column-per-table list above predates 0012, and a column an
+	// ALTER-added migration contributes to a table the list already covers
+	// is exactly the shape its loop cannot reach.
+	if !migrator.HasColumn("users", "timezone") {
+		t.Errorf("users has no timezone column after applying every migration from zero: migration 0012_add_user_timezone did not run or was altered")
 	}
 }

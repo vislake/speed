@@ -2537,3 +2537,201 @@ func attemptResponseIP(attempts []api.AuthnLoginAttempt, attemptID string) strin
 	}
 	return ""
 }
+
+// doHandlerJSONWithHeaders is doHandlerJSON plus request headers, for the
+// operations whose behavior reads one (the preferences endpoints' body
+// only, but registration's and the SMS request's Accept-Language): the
+// header is the transport channel the frontend's language chain sends its
+// resolved value through, so these tests must carry it as faithfully as
+// the browser would.
+func doHandlerJSONWithHeaders(t *testing.T, h *Handler, method, path string, body any, headers [][2]string, principal *Principal) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		reader = bytes.NewReader(raw)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	for _, kv := range headers {
+		req.Header.Set(kv[0], kv[1])
+	}
+	if principal != nil {
+		req = req.WithContext(WithPrincipal(req.Context(), *principal))
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestHandler_Preferences_RoundTrip drives GET/PATCH
+// /api/v1/authn/me/preferences over the real HTTP path: a fresh account
+// reads back the empty pair ("not chosen yet"), a PATCH sets and a second
+// PATCH clears with the empty-string spelling, both refusals answer their
+// own coded 400s, and every answer echoes the pair as stored.
+func TestHandler_Preferences_RoundTrip(t *testing.T) {
+	t.Parallel()
+	h, f := newTestHandler(t)
+	f.registerUser(t, "prefs-http@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "prefs-http@example.com", Password: testPassword, IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	principal := principalFor(pair)
+
+	rec := doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/me/preferences", nil, principal)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got := decodeBody[api.AuthnPreferences](t, rec)
+	if got.Locale != nil || got.Timezone != nil {
+		t.Fatalf("fresh GET = %+v, want both fields absent (the wire spelling of \"not chosen yet\")", got)
+	}
+
+	rec = doHandlerJSON(t, h, http.MethodPatch, "/api/v1/authn/me/preferences", api.AuthnUpdatePreferencesRequest{
+		Locale: strPtr("zh-CN"), Timezone: strPtr("Asia/Shanghai"),
+	}, principal)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got = decodeBody[api.AuthnPreferences](t, rec)
+	if got.Locale == nil || *got.Locale != "zh-CN" || got.Timezone == nil || *got.Timezone != "Asia/Shanghai" {
+		t.Fatalf("PATCH response = %+v, want the stored pair echoed", got)
+	}
+
+	rec = doHandlerJSON(t, h, http.MethodPatch, "/api/v1/authn/me/preferences", api.AuthnUpdatePreferencesRequest{
+		Timezone: strPtr(""),
+	}, principal)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clearing PATCH status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got = decodeBody[api.AuthnPreferences](t, rec)
+	if got.Timezone != nil {
+		t.Fatalf("after clearing, Timezone = %v, want it absent (the cleared state)", got.Timezone)
+	}
+	if got.Locale == nil || *got.Locale != "zh-CN" {
+		t.Fatalf("after clearing the timezone, Locale = %v, want the untouched %q", got.Locale, "zh-CN")
+	}
+
+	rec = doHandlerJSON(t, h, http.MethodPatch, "/api/v1/authn/me/preferences", api.AuthnUpdatePreferencesRequest{
+		Locale: strPtr("de-DE"),
+	}, principal)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unshipped-locale PATCH status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if errResp := decodeAuthnError(t, rec); errResp.Code == nil || *errResp.Code != ErrInvalidLocale.Code {
+		t.Errorf("error code = %v, want %q", errResp.Code, ErrInvalidLocale.Code)
+	}
+
+	rec = doHandlerJSON(t, h, http.MethodPatch, "/api/v1/authn/me/preferences", api.AuthnUpdatePreferencesRequest{
+		Timezone: strPtr("Local"),
+	}, principal)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("pseudo-zone PATCH status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if errResp := decodeAuthnError(t, rec); errResp.Code == nil || *errResp.Code != ErrInvalidTimezone.Code {
+		t.Errorf("error code = %v, want %q", errResp.Code, ErrInvalidTimezone.Code)
+	}
+
+	// The refusals wrote nothing: the stored pair still reads back as the
+	// last accepted update left it.
+	rec = doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/me/preferences", nil, principal)
+	got = decodeBody[api.AuthnPreferences](t, rec)
+	if got.Locale == nil || *got.Locale != "zh-CN" || got.Timezone != nil {
+		t.Errorf("final GET = %+v, want (zh-CN, absent)", got)
+	}
+}
+
+// TestHandler_Preferences_RequiresAuthentication pins that both preference
+// operations sit behind RequireAuthenticated like every other protected
+// operation: no Principal in the request context answers 401 before the
+// operation body runs.
+func TestHandler_Preferences_RequiresAuthentication(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t)
+
+	for _, tc := range []struct {
+		name string
+		rec  *httptest.ResponseRecorder
+	}{
+		{"get", doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/me/preferences", nil, nil)},
+		{"patch", doHandlerJSON(t, h, http.MethodPatch, "/api/v1/authn/me/preferences", api.AuthnUpdatePreferencesRequest{Locale: strPtr("en-US")}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", tc.rec.Code, http.StatusUnauthorized)
+			}
+			if errResp := decodeAuthnError(t, tc.rec); errResp.Code == nil || *errResp.Code != ErrAuthenticationRequired.Code {
+				t.Errorf("error code = %v, want %q", errResp.Code, ErrAuthenticationRequired.Code)
+			}
+		})
+	}
+}
+
+// TestHandler_Register_InitialPreferencesFromBodyAndHeader pins the
+// registration endpoint's tier wiring end to end: the body's declared
+// timezone and the request's Accept-Language reach the stored row (visible
+// in the 201 response), a declared value that cannot be stored is lenient
+// -- the registration still succeeds and the field comes back empty.
+func TestHandler_Register_InitialPreferencesFromBodyAndHeader(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t)
+
+	rec := doHandlerJSONWithHeaders(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+		Email: strPtr("prefs-register@example.com"), Password: testPassword, DisplayName: strPtr("Prefs Register"),
+		Timezone: strPtr("Asia/Shanghai"),
+	}, [][2]string{{"Accept-Language", "zh-CN, en;q=0.8"}}, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	resp := decodeBody[api.AuthnUser](t, rec)
+	if resp.Locale == nil || *resp.Locale != "zh-CN" {
+		t.Errorf("response Locale = %v, want the header-negotiated %q", resp.Locale, "zh-CN")
+	}
+	if resp.Timezone == nil || *resp.Timezone != "Asia/Shanghai" {
+		t.Errorf("response Timezone = %v, want the body's %q", resp.Timezone, "Asia/Shanghai")
+	}
+
+	rec = doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+		Email: strPtr("prefs-lenient@example.com"), Password: testPassword, DisplayName: strPtr("Prefs Lenient"),
+		Locale: strPtr("de-DE"), Timezone: strPtr("Mars/Olympus"),
+	}, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("lenient registration status = %d, want %d (an unstorable preference must never refuse a registration); body = %s",
+			rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	resp = decodeBody[api.AuthnUser](t, rec)
+	if resp.Locale != nil || resp.Timezone != nil {
+		t.Errorf("lenient registration preferences = (%v, %v), want both absent", resp.Locale, resp.Timezone)
+	}
+}
+
+// TestHandler_RequestSMSCode_CarriesAcceptLanguageToTheLanguageChain pins
+// the handler leg of the SMS language chain: the request's Accept-Language
+// reaches the send path, so the same account's code renders in the
+// request's language rather than the stored one.
+func TestHandler_RequestSMSCode_CarriesAcceptLanguageToTheLanguageChain(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	h, f := newTestHandler(t, WithSMSSender(pkgcore.NewConsoleSMSSender(&buf)))
+	if _, err := f.svc.Register(t.Context(), RegisterInput{
+		Phone: testPhone, Password: testPassword, DisplayName: "Phone User", Locale: "zh-CN",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	rec := doHandlerJSONWithHeaders(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{
+		Phone: testPhone,
+	}, [][2]string{{"Accept-Language", "en-US"}}, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	if sent := buf.String(); !strings.Contains(sent, smsEnUSMarker) {
+		t.Errorf("sent SMS %q, want the request-nominated %q template", sent, smsEnUSMarker)
+	}
+}

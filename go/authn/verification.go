@@ -18,6 +18,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 
 	"github.com/vislake/speed/go/authn/locales"
 
@@ -72,12 +73,14 @@ const (
 	// see verifyPhoneLoginCode's own doc comment.
 	maxMarkAttemptRetries = 5
 
-	// DefaultLocale is the language backend-generated content renders in
-	// when the intended recipient has not chosen one -- User.Locale is
-	// empty, or a login has not resolved to a user at all yet. It matches
-	// @speed/i18n's own negotiation order, which ends in this same
-	// default.
-	DefaultLocale = "zh-CN"
+	// DefaultLocale is the platform default language: the tier
+	// backend-generated content renders in when the intended recipient has
+	// not chosen one -- User.Locale is empty, or a login has not resolved
+	// to a user at all yet -- and the last tier of every locale chain this
+	// module runs. en-US is the same default @speed/i18n's own negotiation
+	// order ends in, so the two halves of the stack agree on where a chain
+	// that resolves nothing lands.
+	DefaultLocale = i18n.LocaleENUS
 )
 
 // VerificationCode is one issued one-time code. IDENTITY-domain data: it is
@@ -214,6 +217,13 @@ func (r *VerificationCodeRepository) Consume(ctx context.Context, id string, at 
 type RequestSMSCodeInput struct {
 	// Phone is the account's phone number, in any formatting.
 	Phone string
+	// AcceptLanguage is the request's Accept-Language header: the
+	// transport channel the frontend's language chain sends its resolved
+	// language through, and the first tier of the SMS body's language
+	// chain -- the requester is the recipient of a sign-in code, so the
+	// request's own language outranks the account's stored locale (see
+	// smsLocale).
+	AcceptLanguage string
 	// IP is the requesting client's address, for the send-side rate
 	// limit.
 	IP string
@@ -334,7 +344,7 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 		return createErr
 	}
 
-	text, err := renderSMSCode(user.Locale, code, int(s.smsCodeTTL/time.Minute))
+	text, err := renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, int(s.smsCodeTTL/time.Minute))
 	if err != nil {
 		obs.FromContext(ctx).Error("sms verification code message could not be rendered", "error", err)
 		return ErrInternal.WithCause(err)
@@ -650,15 +660,21 @@ var (
 // catalog, and it is safe only because the message this module renders
 // through it never needs another module's text: an SMS body is composed
 // and delivered synchronously, inside the request that asked for the code,
-// from a bundle whose two files (and their key parity) this module already
+// from a bundle whose files (and their key parity) this module already
 // owns and already tests in errors_test.go's sibling assertions. Reaching
 // for the shared Registry here would mean threading a *pkgcore.Registry
-// reference into Service for the sole benefit of one message, when the two
+// reference into Service for the sole benefit of one message, when the
 // files this function reads are already right here.
+//
+// The language set is supportedLocales(), the module's single statement of
+// which languages it ships -- the same set the preference validation and
+// the Accept-Language negotiation read (preferences.go) -- so adding a
+// language cannot update one consumer and miss this one.
 func loadSMSLocaleMessages() (map[string]map[string]string, error) {
 	smsLocaleOnce.Do(func() {
-		result := make(map[string]map[string]string, 2)
-		for _, language := range []string{"zh-CN", "en-US"} {
+		languages := supportedLocales()
+		result := make(map[string]map[string]string, len(languages))
+		for _, language := range languages {
 			raw, err := locales.FS.ReadFile(language + ".toml")
 			if err != nil {
 				smsLocaleErr = fmt.Errorf("authn: read embedded %s locale: %w", language, err)
@@ -674,6 +690,25 @@ func loadSMSLocaleMessages() (map[string]map[string]string, error) {
 		smsLocaleMessages = result
 	})
 	return smsLocaleMessages, smsLocaleErr
+}
+
+// smsLocale applies the SMS body's language chain. Its shape is the
+// "requester is recipient" tier of the module's locale chains: the request
+// that asked for the code comes from the person about to receive it, so
+// the request's own language (the frontend chain's resolved value,
+// transported in Accept-Language) outranks the account's stored locale,
+// which is only the fallback for a client that sent no usable header.
+// DefaultLocale closes the chain -- an empty or unknown stored locale
+// renders in the platform default rather than failing a delivery that
+// cannot be retried in another language.
+func smsLocale(acceptLanguage, stored string) string {
+	if locale, ok := i18n.Negotiate(acceptLanguage, supportedLocales()); ok {
+		return locale
+	}
+	if locale, ok := canonicalLocale(stored); ok && locale != "" {
+		return locale
+	}
+	return DefaultLocale
 }
 
 // renderSMSCode composes the SMS body for a phone-login verification code

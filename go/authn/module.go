@@ -266,6 +266,11 @@ type options struct {
 	// featureGate makes the module's declared feature flags effective at
 	// request time; nil keeps every channel enabled. See FeatureGate.
 	featureGate FeatureGate
+
+	// timezoneResolver is the registration timezone chain's IP-resolution
+	// tier. Nil skips the tier; see WithTimeZoneResolver and
+	// TimeZoneResolver.
+	timezoneResolver TimeZoneResolver
 }
 
 // Option configures the authn module and the service inside it.
@@ -652,6 +657,25 @@ func WithSMSCodeMaxAttempts(n int) Option {
 // hole.
 func WithFeatureGate(gate FeatureGate) Option {
 	return func(o *options) { o.featureGate = gate }
+}
+
+// WithTimeZoneResolver supplies the seam through which registration asks
+// which timezone a client IP belongs to -- the registration timezone
+// chain's third tier, behind the caller's own browser report and the
+// provider's profile (none of the shipped social channels reports one).
+//
+// It is optional, and NOT fail-closed, unlike WithMembershipReader: the
+// tier is a convenience whose absence degrades to "not chosen yet" (the
+// platform default UTC) rather than refusing anything, because a
+// registration must not fail over an optional signal and an empty timezone
+// is a state the account can change at will. A resolver that errors or
+// answers a name the IANA database does not know is treated identically to
+// one that was never wired -- the tier is skipped and logged, never
+// silently stored half-validated. A host wires one only when it actually
+// runs a geo-IP data source (and has settled that source's licence); the
+// module ships no implementation and the reference app wires none.
+func WithTimeZoneResolver(resolver TimeZoneResolver) Option {
+	return func(o *options) { o.timezoneResolver = resolver }
 }
 
 // newOptions applies opts over the defaults and rejects a configuration the

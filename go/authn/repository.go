@@ -231,6 +231,58 @@ func (r *UserRepository) ReplacePasswordHashIfStillCurrent(ctx context.Context, 
 	return res.RowsAffected == 1, nil
 }
 
+// UpdatePreferences overwrites the users row's locale and timezone columns
+// with the values named by the caller, and returns the row as stored after
+// the write.
+//
+// A nil pointer means "leave that column unchanged" and a non-nil pointer
+// means "set it" -- including a pointer to the empty string, which is the
+// clearing value the column's own contract defines (empty means "not
+// chosen yet"). That partial shape is why the update is built as a
+// column-named Select over a zero-valued struct rather than a plain
+// Updates: GORM's struct update skips every zero-valued field, so a
+// cleared locale would silently not be written. Selecting the named
+// columns explicitly admits their zero values, exactly as
+// UserIdentityRepository.TouchLogin's own column-level write does (and for
+// the same reason: an emptied column must take effect).
+//
+// Named columns also keep the write a single-column-precision update in
+// the concurrency sense the two guarded writers above state: a preference
+// change racing a simultaneous password change or verification flag
+// cannot overwrite the other's column, because the SET clause names only
+// what this call was asked to change.
+//
+// Results: the row as stored afterwards; ErrNotFound when no row carries
+// userID (both dialects report zero affected rows for an update whose
+// WHERE matched nothing, and report a matched row even when every set
+// value equals its current one, so the distinction is reliable on both).
+// A call naming neither column is a pure read of the row.
+func (r *UserRepository) UpdatePreferences(ctx context.Context, userID string, locale, timezone *string) (*User, error) {
+	columns := make([]string, 0, 2)
+	updates := &User{}
+	if locale != nil {
+		updates.Locale = *locale
+		columns = append(columns, "locale")
+	}
+	if timezone != nil {
+		updates.Timezone = *timezone
+		columns = append(columns, "timezone")
+	}
+	if len(columns) > 0 {
+		res := r.db.WithContext(ctx).
+			Where("id = ?", userID).
+			Select(columns).
+			Updates(updates)
+		if res.Error != nil {
+			return nil, res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil, ErrNotFound
+		}
+	}
+	return r.FindByID(ctx, userID)
+}
+
 // FindByID returns the user with the given id, or ErrNotFound.
 func (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error) {
 	var u User

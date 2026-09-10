@@ -550,7 +550,15 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 		Password:    req.Password,
 		DisplayName: deref(req.DisplayName),
 		Locale:      deref(req.Locale),
-		IP:          h.clientIP(r),
+		// The request's own language, resolved by the frontend's chain and
+		// transported in this header, is the locale chain's tier behind the
+		// body's declared value; the timezone is the browser's report from
+		// the registration form. Both are the chain's first/second tiers
+		// only -- Service.Register validates leniently and stores what
+		// survives the chain (see registrationLocale/registrationTimeZone).
+		AcceptLanguage: r.Header.Get("Accept-Language"),
+		Timezone:       deref(req.Timezone),
+		IP:             h.clientIP(r),
 	})
 	if err != nil {
 		writeAppError(w, err)
@@ -627,7 +635,11 @@ func (h *Handler) AuthnRequestSMSCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.RequestSMSCode(r.Context(), RequestSMSCodeInput{Phone: req.Phone, IP: h.clientIP(r)}); err != nil {
+	if err := h.svc.RequestSMSCode(r.Context(), RequestSMSCodeInput{
+		Phone:          req.Phone,
+		AcceptLanguage: r.Header.Get("Accept-Language"),
+		IP:             h.clientIP(r),
+	}); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -707,6 +719,50 @@ func (h *Handler) AuthnGetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toPrincipalResponse(principal))
+}
+
+// AuthnGetPreferences implements api.ServerInterface: the caller's own
+// stored locale and timezone, the pair the settings surface reads before
+// rendering its controls. Reading is per-principal by construction -- the
+// account is the Principal's own user id, never a request field.
+func (h *Handler) AuthnGetPreferences(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	prefs, err := h.svc.Preferences(r.Context(), principal.UserID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toPreferencesResponse(prefs))
+}
+
+// AuthnUpdatePreferences implements api.ServerInterface: the partial
+// preference update (absent field = unchanged, empty string = cleared --
+// see PreferencesPatch). Validation is the strict kind, so an unstorable
+// value answers the coded 400 with nothing written, and the response
+// echoes the pair as stored AFTER the update, which is what lets the
+// settings surface confirm a clearing (the field comes back empty) rather
+// than having to infer it.
+func (h *Handler) AuthnUpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var req api.AuthnUpdatePreferencesRequest
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
+		return
+	}
+	prefs, err := h.svc.UpdatePreferences(r.Context(), principal.UserID, PreferencesPatch{
+		Locale:   req.Locale,
+		Timezone: req.Timezone,
+	})
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toPreferencesResponse(prefs))
 }
 
 // AuthnSocialAuthorize implements api.ServerInterface.
@@ -1048,9 +1104,24 @@ func toUserResponse(user *User) api.AuthnUser {
 		Phone:         str(user.Phone),
 		DisplayName:   &user.DisplayName,
 		Locale:        str(user.Locale),
+		Timezone:      str(user.Timezone),
 		EmailVerified: &user.EmailVerified,
 		PhoneVerified: &user.PhoneVerified,
 		CreatedAt:     &createdAt,
+	}
+}
+
+// toPreferencesResponse converts prefs to its spec-generated JSON response
+// type, mapping the empty (not-chosen) value to an absent wire field
+// through str, the same conversion every other response in this module
+// uses: a client reads a missing field as "not chosen yet", which is
+// exactly what the empty column means, and a cleared preference therefore
+// comes back as the field's absence rather than as a distinguishable
+// second spelling of the same state.
+func toPreferencesResponse(prefs PreferencesInput) api.AuthnPreferences {
+	return api.AuthnPreferences{
+		Locale:   str(prefs.Locale),
+		Timezone: str(prefs.Timezone),
 	}
 }
 

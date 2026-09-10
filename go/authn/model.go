@@ -107,6 +107,12 @@ const (
 	// identityAvatarURLWidth is the VARCHAR width of
 	// user_identities.avatar_url (migration 0005).
 	identityAvatarURLWidth = 512
+	// timezoneColumnWidth is the VARCHAR width of users.timezone
+	// (migration 0012). Every name the preferences validation admits is a
+	// real IANA zone name, which sits far under the width; the constant
+	// exists so the bound is stated once and the migration's declared width
+	// has a Go-side twin.
+	timezoneColumnWidth = 64
 )
 
 // truncateToColumnWidth bounds an untrusted free-text value -- a
@@ -332,6 +338,15 @@ type User struct {
 	// the operator's UI language. Empty means "not chosen yet"; the caller
 	// falls back to the platform default.
 	Locale string `gorm:"size:16;not null"`
+
+	// Timezone is the IANA timezone name (for example "Asia/Shanghai")
+	// this account's timestamps are DISPLAYED in -- nothing on the backend
+	// renders in it today, and stored instants stay UTC; it is the stored
+	// value every display site's timezone chain reads first. Empty means
+	// "not chosen yet" and the chain falls through to the device timezone
+	// and then to UTC. Written through the preferences endpoints
+	// (preferences.go), validated against the IANA database there.
+	Timezone string `gorm:"size:64;not null"`
 
 	// Status is one of the UserStatus* constants.
 	Status string `gorm:"size:32;not null"`

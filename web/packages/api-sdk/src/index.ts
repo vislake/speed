@@ -24,7 +24,10 @@ export interface AuthnRegisterRequest {
   phone?: string;
   password: string;
   display_name?: string;
+  /** Preferred language for backend-generated content addressed to this account. Registration validation is lenient: a value the deployment's catalog does not ship is stored as empty (the platform default en-US applies) rather than refusing the registration. */
   locale?: string;
+  /** The browser-reported IANA timezone name (for example "Asia/Shanghai"), the registration-time initial value of the account's display timezone. Lenient like locale: a name that is not a known IANA zone is stored as empty (the platform default UTC applies) rather than refusing the registration. */
+  timezone?: string;
 }
 
 export interface AuthnUser {
@@ -32,7 +35,10 @@ export interface AuthnUser {
   email?: string;
   phone?: string;
   display_name?: string;
+  /** The language backend-generated content for this account renders in. Empty means "not chosen yet" and the platform default (en-US) applies. */
   locale?: string;
+  /** The IANA timezone name (for example "Asia/Shanghai") this account's times are rendered in. Empty means "not chosen yet" and the platform default (UTC) applies. */
+  timezone?: string;
   email_verified?: boolean;
   phone_verified?: boolean;
   created_at?: string;
@@ -77,6 +83,20 @@ export interface AuthnTokenPair {
   refresh_token?: string;
   refresh_expires_at?: string;
   principal?: AuthnPrincipal;
+}
+
+export interface AuthnPreferences {
+  /** The language backend-generated content for this account renders in. Empty means "not chosen yet" and the platform default (en-US) applies; a stored value is always one of the languages the deployment's catalog ships. */
+  locale?: string;
+  /** The IANA timezone name (for example "Asia/Shanghai") this account's times are rendered in. Empty means "not chosen yet" and the platform default (UTC) applies. */
+  timezone?: string;
+}
+
+export interface AuthnUpdatePreferencesRequest {
+  /** The requested locale. Absent leaves the stored value unchanged; an empty string clears it; any other value must be one of the languages the deployment's catalog ships, or the update is refused with authn.invalid_locale and nothing is written. */
+  locale?: string;
+  /** The requested IANA timezone name. Absent leaves the stored value unchanged; an empty string clears it; any other value must be a known IANA zone (the process-local pseudo-zone is not storable), or the update is refused with authn.invalid_timezone and nothing is written. */
+  timezone?: string;
 }
 
 export interface AuthnSocialAuthorizeResponse {
@@ -2479,6 +2499,140 @@ export function useAuthnGetMe<TData = Awaited<ReturnType<typeof authnGetMe>>, TE
 
 
 
+
+/**
+ * @summary Return the caller's own locale and timezone preferences.
+ */
+export const authnGetPreferences = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnPreferences>(
+      {url: `/api/v1/authn/me/preferences`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAuthnGetPreferencesQueryKey = () => {
+    return [
+    `/api/v1/authn/me/preferences`
+    ] as const;
+    }
+
+
+export const getAuthnGetPreferencesQueryOptions = <TData = Awaited<ReturnType<typeof authnGetPreferences>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnGetPreferences>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAuthnGetPreferencesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof authnGetPreferences>>> = ({ signal }) => authnGetPreferences(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof authnGetPreferences>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AuthnGetPreferencesQueryResult = NonNullable<Awaited<ReturnType<typeof authnGetPreferences>>>
+export type AuthnGetPreferencesQueryError = unknown
+
+
+/**
+ * @summary Return the caller's own locale and timezone preferences.
+ */
+
+export function useAuthnGetPreferences<TData = Awaited<ReturnType<typeof authnGetPreferences>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnGetPreferences>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAuthnGetPreferencesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * A partial update: an absent field leaves the stored value unchanged, and an empty string clears it (the platform default applies again). A non-empty value must be storable -- the locale one of the languages the deployment's catalog ships, the timezone a known IANA zone name -- or the update is refused with a coded 400 and nothing is written.
+ * @summary Update the caller's own locale and timezone preferences.
+ */
+export const authnUpdatePreferences = (
+    authnUpdatePreferencesRequest: AuthnUpdatePreferencesRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnPreferences>(
+      {url: `/api/v1/authn/me/preferences`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: authnUpdatePreferencesRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnUpdatePreferencesMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnUpdatePreferences>>, TError,{data: AuthnUpdatePreferencesRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnUpdatePreferences>>, TError,{data: AuthnUpdatePreferencesRequest}, TContext> => {
+
+const mutationKey = ['authnUpdatePreferences'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnUpdatePreferences>>, {data: AuthnUpdatePreferencesRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnUpdatePreferences(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnUpdatePreferencesMutationResult = NonNullable<Awaited<ReturnType<typeof authnUpdatePreferences>>>
+    export type AuthnUpdatePreferencesMutationBody = AuthnUpdatePreferencesRequest
+    export type AuthnUpdatePreferencesMutationError = AuthnError
+
+    /**
+ * @summary Update the caller's own locale and timezone preferences.
+ */
+export const useAuthnUpdatePreferences = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnUpdatePreferences>>, TError,{data: AuthnUpdatePreferencesRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnUpdatePreferences>>,
+        TError,
+        {data: AuthnUpdatePreferencesRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnUpdatePreferencesMutationOptions(options));
+    }
 
 /**
  * Includes revoked sessions -- Status tells them apart -- so the owner can see which device they signed out and when. is_current marks the session the request's own access token belongs to.

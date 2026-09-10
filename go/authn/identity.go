@@ -561,7 +561,18 @@ func (s *Service) resolveSocialAccount(
 
 	user := &User{
 		DisplayName: external.Name,
-		Status:      UserStatusActive,
+		// The registration chains' social shape, resolved at this account's
+		// initialization and written by the insert below like every other
+		// column here. Locale: the provider-reported profile language when
+		// it names a shipped one (Google is the shipped channel that
+		// reports one), else empty -- the callback request carries no
+		// browser-reported language of its own, and the platform default
+		// closes the chain. Timezone: no shipped social channel reports
+		// one, so the chain enters at the IP-resolution seam and its
+		// absence leaves "not chosen yet" (see registrationTimeZone).
+		Locale:   registrationLocale(external.Locale, ""),
+		Timezone: s.registrationTimeZone(ctx, "", ip),
+		Status:   UserStatusActive,
 	}
 	if linkable {
 		user.Email = email

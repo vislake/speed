@@ -129,6 +129,17 @@ there is no intent for the module to enforce.
 | `RedirectAllowlist`, `NewRedirectAllowlist` | Exact-match redirect URI validation. |
 | `PermissionSSOManage` | The one permission this module declares, for writing a tenant's SSO configuration. |
 
+### Preferences (locale and timezone)
+
+| Symbol | Purpose |
+|---|---|
+| `Service.Preferences(ctx, userID)`, `Service.UpdatePreferences(ctx, userID, patch)` (`preferences.go`) | The stored locale/timezone pair: read, and partial update (nil field = unchanged, non-nil + `""` = cleared), returning the pair as stored afterwards. |
+| `PreferencesInput`, `PreferencesPatch` | The pair, and the three-state partial-update shape the PATCH contract needs. |
+| `GET/PATCH /api/v1/authn/me/preferences` (`authn_getPreferences` / `authn_updatePreferences`) | The HTTP surface, per-principal by construction. An unstorable value answers `authn.invalid_locale`/`authn.invalid_timezone` (400); the empty value is the "not chosen yet" state and reaches the wire as an absent field, like every other response in this module. |
+| `DefaultTimezone = "UTC"`, `DefaultLocale = "en-US"` | The platform defaults: the last tier of every chain, applied when the stored value is empty. |
+| `TimeZoneResolver`, `WithTimeZoneResolver` | The registration timezone chain's IP-resolution tier. Optional, and deliberately NOT fail-closed — see below. |
+| `canonicalLocale`, `canonicalTimezone`, `registrationLocale`, `registrationTimeZone`, `smsLocale`, `supportedLocales` (unexported) | The validation and chain rules themselves; `supportedLocales()` derives the module's language set from its embedded locale files, the single source the validation, the SMS loader and the Accept-Language negotiation all read. |
+
 ### Phone-plus-SMS-code sign-in
 
 | Symbol | Purpose |
@@ -234,6 +245,53 @@ exploited horizontal-privilege-escalation entry point in a multi-tenant product.
 The same rule governs revocation: an immediate-mode check that cannot reach the
 key-value store returns `ErrRevocationCheckFailed`, and the middleware refuses.
 A revocation check that could not run is not a revocation check that passed.
+
+### Preferences are lenient at registration and strict at PATCH
+
+Locale and timezone reach an account through two write paths with two
+different validation contracts, and both are deliberate. Registration
+(`Service.Register`, and the social/SSO account mints) is LENIENT: each
+value resolves through its chain, a value that cannot be stored is skipped
+rather than refused, and the registration succeeds with the field's empty
+("not chosen yet") state when no tier yields a storable value. The
+preferences PATCH is STRICT: an unstorable value is a coded 400 and
+nothing is written. The split exists because a sign-up must not fail over
+an optional preference someone can fix in settings a minute later, while
+an explicit preference change is a real request that deserves a real
+refusal.
+
+The chains (each ending at the platform default, `en-US` for language,
+`UTC` for timezone):
+
+- Registration locale: the declared `body.locale` (or, for a social mint,
+  the provider-reported profile locale — Google is the shipped channel
+  that reports one, read as the standard `locale` claim) → the request's
+  `Accept-Language`, the transport channel the frontend's own language
+  chain sent its resolved value through → empty.
+- Registration timezone: the declared browser report (`RegisterForm`'s
+  `Intl.DateTimeFormat` value) → a provider profile field (none of the
+  five shipped social channels reports one; the OAuth callback carries no
+  browser value either, which is why the social chain enters at the next
+  tier) → `TimeZoneResolver.TimeZoneForIP` → empty.
+- The SMS body (the "requester is recipient" shape — the person requesting
+  the code is the person receiving it): `Accept-Language` (the frontend
+  chain's value) → the account's stored locale → `DefaultLocale`.
+
+`TimeZoneResolver` is the one seam here that deliberately does NOT fail
+closed: a nil resolver, a resolver error, or an answer that is not a known
+IANA zone all yield the empty string and the registration proceeds,
+because the tier is a convenience whose absence only means the account
+starts at the platform default. `canonicalTimezone` re-validates whatever
+the resolver answered, so a wrong zone can never be stored silently; an
+invalid stored value would be worse than none.
+
+Two implementation facts that must survive refactors: `preferences.go`
+carries `_ "time/tzdata"` so `time.LoadLocation`'s validation runs
+identically in deployments whose image has no system zoneinfo — removing
+that import makes validation environment-dependent — and
+`supportedLocales()` derives the shipped language set from the embedded
+locale files rather than a hardcoded pair, so validation, the SMS loader
+and the negotiation cannot disagree about which languages exist.
 
 ### Immediate revocation is enforced by default, not by host ceremony
 

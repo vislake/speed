@@ -503,6 +503,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthnPrincipal'
+  /api/v1/authn/me/preferences:
+    get:
+      operationId: authn_getPreferences
+      tags: [authn (authenticated)]
+      summary: Return the caller's own locale and timezone preferences.
+      responses:
+        '200':
+          description: The caller's stored preferences; an empty field means "not chosen yet".
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnPreferences'
+    patch:
+      operationId: authn_updatePreferences
+      tags: [authn (authenticated)]
+      summary: Update the caller's own locale and timezone preferences.
+      description: >-
+        A partial update: an absent field leaves the stored value unchanged,
+        and an empty string clears it (the platform default applies again).
+        A non-empty value must be storable -- the locale one of the languages
+        the deployment's catalog ships, the timezone a known IANA zone name
+        -- or the update is refused with a coded 400 and nothing is written.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnUpdatePreferencesRequest'
+      responses:
+        '200':
+          description: The caller's preferences as stored after the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnPreferences'
+        '400':
+          description: >-
+            A supplied locale or timezone value is not storable
+            (authn.invalid_locale, authn.invalid_timezone).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
   /api/v1/authn/sessions:
     get:
       operationId: authn_listSessions
@@ -590,6 +633,20 @@ components:
           type: string
         locale:
           type: string
+          description: >-
+            Preferred language for backend-generated content addressed to
+            this account. Registration validation is lenient: a value the
+            deployment's catalog does not ship is stored as empty (the
+            platform default en-US applies) rather than refusing the
+            registration.
+        timezone:
+          type: string
+          description: >-
+            The browser-reported IANA timezone name (for example
+            "Asia/Shanghai"), the registration-time initial value of the
+            account's display timezone. Lenient like locale: a name that is
+            not a known IANA zone is stored as empty (the platform default
+            UTC applies) rather than refusing the registration.
     AuthnUser:
       type: object
       properties:
@@ -603,6 +660,16 @@ components:
           type: string
         locale:
           type: string
+          description: >-
+            The language backend-generated content for this account renders
+            in. Empty means "not chosen yet" and the platform default
+            (en-US) applies.
+        timezone:
+          type: string
+          description: >-
+            The IANA timezone name (for example "Asia/Shanghai") this
+            account's times are rendered in. Empty means "not chosen yet"
+            and the platform default (UTC) applies.
         email_verified:
           type: boolean
         phone_verified:
@@ -679,6 +746,40 @@ components:
           type: array
           items:
             type: string
+    AuthnPreferences:
+      type: object
+      properties:
+        locale:
+          type: string
+          description: >-
+            The language backend-generated content for this account renders
+            in. Empty means "not chosen yet" and the platform default
+            (en-US) applies; a stored value is always one of the languages
+            the deployment's catalog ships.
+        timezone:
+          type: string
+          description: >-
+            The IANA timezone name (for example "Asia/Shanghai") this
+            account's times are rendered in. Empty means "not chosen yet"
+            and the platform default (UTC) applies.
+    AuthnUpdatePreferencesRequest:
+      type: object
+      properties:
+        locale:
+          type: string
+          description: >-
+            The requested locale. Absent leaves the stored value unchanged;
+            an empty string clears it; any other value must be one of the
+            languages the deployment's catalog ships, or the update is
+            refused with authn.invalid_locale and nothing is written.
+        timezone:
+          type: string
+          description: >-
+            The requested IANA timezone name. Absent leaves the stored value
+            unchanged; an empty string clears it; any other value must be a
+            known IANA zone (the process-local pseudo-zone is not storable),
+            or the update is refused with authn.invalid_timezone and nothing
+            is written.
     AuthnSocialAuthorizeResponse:
       type: object
       properties:

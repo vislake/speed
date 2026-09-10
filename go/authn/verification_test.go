@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -697,4 +698,98 @@ func containsString(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// smsZhCNMarker and smsEnUSMarker are stable substrings of the two shipped
+// templates for authn.sms.verification_code, used to tell which language a
+// delivered body renders in without depending on the code or minutes values.
+const (
+	smsZhCNMarker = "验证码"
+	smsEnUSMarker = "verification code"
+)
+
+// TestSMSLocale_Chain drives the SMS body's language chain at the rule's
+// level: the request's own language (transporting the frontend chain's
+// resolved value) outranks the account's stored locale, the stored locale
+// is the fallback for a request that sent no usable header, and the
+// platform default closes a chain that resolves nothing.
+func TestSMSLocale_Chain(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name           string
+		acceptLanguage string
+		stored         string
+		want           string
+	}{
+		{"request language outranks the stored locale", "en-US", "zh-CN", "en-US"},
+		{"request language prefix matches", "zh", "en-US", "zh-CN"},
+		{"stored locale answers when the request sent nothing", "", "zh-CN", "zh-CN"},
+		{"stored locale answers when the request matches nothing", "fr-FR", "zh-CN", "zh-CN"},
+		{"stored value that is not a shipped language is skipped", "", "de-DE", DefaultLocale},
+		{"an empty chain lands on the platform default", "", "", DefaultLocale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := smsLocale(tc.acceptLanguage, tc.stored); got != tc.want {
+				t.Errorf("smsLocale(%q, %q) = %q, want %q", tc.acceptLanguage, tc.stored, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequestSMSCode_LanguageChain_DeliversInTheNegotiatedLanguage pins the
+// chain end to end through the real send path: the same account (stored
+// locale zh-CN) receives an English body when the request carries an
+// en-US Accept-Language and a Chinese body when it carries none, and a
+// request whose header matches nothing falls back to the stored locale.
+func TestRequestSMSCode_LanguageChain_DeliversInTheNegotiatedLanguage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name           string
+		acceptLanguage string
+		wantMarker     string
+	}{
+		{"request language wins over the stored locale", "en-US", smsEnUSMarker},
+		{"stored locale answers a request with no header", "", smsZhCNMarker},
+		{"stored locale answers a request matching nothing", "fr-FR", smsZhCNMarker},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			f := newSMSServiceFixture(t, &buf)
+			if _, err := f.svc.Register(t.Context(), RegisterInput{
+				Phone: testPhone, Password: testPassword, DisplayName: "Phone User",
+				Locale: "zh-CN",
+			}); err != nil {
+				t.Fatalf("Register() error = %v", err)
+			}
+			if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{
+				Phone: testPhone, AcceptLanguage: tc.acceptLanguage, IP: "203.0.113.77",
+			}); err != nil {
+				t.Fatalf("RequestSMSCode() error = %v", err)
+			}
+			if sent := buf.String(); !strings.Contains(sent, tc.wantMarker) {
+				t.Errorf("sent SMS %q, want it to carry the %q template", sent, tc.wantMarker)
+			}
+		})
+	}
+
+	t.Run("an account with no stored locale receives the platform default", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		f := newSMSServiceFixture(t, &buf)
+		registerPhoneUser(t, f, testPhone, testTenantA)
+		if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{
+			Phone: testPhone, IP: "203.0.113.78",
+		}); err != nil {
+			t.Fatalf("RequestSMSCode() error = %v", err)
+		}
+		if sent := buf.String(); !strings.Contains(sent, smsEnUSMarker) {
+			t.Errorf("sent SMS %q, want the platform default's %q template", sent, smsEnUSMarker)
+		}
+	})
 }

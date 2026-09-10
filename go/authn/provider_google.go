@@ -103,12 +103,19 @@ func (p *GoogleProvider) discover(ctx context.Context) (*oidc.Provider, error) {
 }
 
 // googleClaims is the subset of Google's ID token this module reads.
+//
+// Locale is the profile language Google reports ("locale", a standard
+// OpenID Connect claim, with the account's own preferred language in it).
+// It feeds a minted account's initial locale through
+// ExternalIdentity.Locale; like every other claim here it is untrusted
+// input, validated by the registration chain rather than believed.
 type googleClaims struct {
 	Subject       string   `json:"sub"`
 	Email         string   `json:"email"`
 	EmailVerified flexBool `json:"email_verified"`
 	Name          string   `json:"name"`
 	Picture       string   `json:"picture"`
+	Locale        string   `json:"locale"`
 }
 
 // Exchange implements SocialProvider.
@@ -161,6 +168,7 @@ func (p *GoogleProvider) Exchange(ctx context.Context, code, redirectURI string)
 		EmailVerified: bool(claims.EmailVerified) && claims.Email != "",
 		Name:          claims.Name,
 		Avatar:        claims.Picture,
+		Locale:        strings.TrimSpace(claims.Locale),
 		Raw:           raw,
 	}, nil
 }

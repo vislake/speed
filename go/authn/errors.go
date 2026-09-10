@@ -48,6 +48,21 @@ var (
 	// canonical form.
 	ErrInvalidPhone = apperr.Invalid("authn.invalid_phone")
 
+	// ErrInvalidLocale is returned by the preferences PATCH when a
+	// supplied locale is neither empty (the clearing value) nor one of the
+	// languages this module ships. It is a strict-path refusal only:
+	// registration validates the same field leniently and stores an
+	// unusable value as empty rather than refusing (see the fragment's
+	// field descriptions and registrationLocale).
+	ErrInvalidLocale = apperr.Invalid("authn.invalid_locale")
+
+	// ErrInvalidTimezone is returned by the preferences PATCH when a
+	// supplied timezone is neither empty (the clearing value) nor a known
+	// IANA zone name (the process-local pseudo-zone included). Like
+	// ErrInvalidLocale it is strict-path only: registration's lenient
+	// validation stores an unusable name as empty instead.
+	ErrInvalidTimezone = apperr.Invalid("authn.invalid_timezone")
+
 	// ErrSearchCriteriaRequired is returned by SearchUsers when a
 	// UserSearchQuery names none of Email, Phone or DisplayNamePrefix. A
 	// query that could only ever mean "every user in the platform" is
@@ -425,6 +440,8 @@ var errorCodes = []string{
 	ErrIdentifierRequired.Code,
 	ErrInvalidEmail.Code,
 	ErrInvalidPhone.Code,
+	ErrInvalidLocale.Code,
+	ErrInvalidTimezone.Code,
 	ErrSearchCriteriaRequired.Code,
 	ErrEmailAlreadyRegistered.Code,
 	ErrPhoneAlreadyRegistered.Code,
