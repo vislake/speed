@@ -70,10 +70,11 @@ name: security
 # produce a permanently red check):
 #   * trivy (container image scanning): the repository builds a real
 #     image (examples/reference-app/Dockerfile, proven via
-#     docker-image-ci.yml calling reusable-docker-build.yml), but the
-#     image build is workflow_dispatch-only -- there is no STANDING image
-#     this job could reach to scan on its own every-PR/daily schedule,
-#     only an on-demand one a human triggers by hand.
+#     docker-image-ci.yml calling reusable-docker-build.yml), but that
+#     workflow builds only on push to main behind a path set (plus
+#     workflow_dispatch -- its own header) and its images carry
+#     run-scoped CI proof tags -- there is no STANDING image this job
+#     could reach to scan on its own every-PR/daily schedule.
 #
 # SECRETS: the repo holds no real credentials of any kind and must never
 # acquire any; CI secrets belong to GitHub Environments. Every tool
