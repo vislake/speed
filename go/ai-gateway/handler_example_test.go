@@ -47,7 +47,10 @@ func ExampleHandler() {
 		fmt.Println("new cipher:", err)
 		return
 	}
-	dbkit.RegisterEncryptedSerializer(aigateway.CredentialAPIKeySerializerName, cipher)
+	if regErr := aigateway.RegisterCredentialAPIKeySerializer(cipher); regErr != nil {
+		fmt.Println("register serializer:", regErr)
+		return
+	}
 
 	db, err := dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,

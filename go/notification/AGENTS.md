@@ -294,14 +294,19 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
 
 The host also supplies structural, no-import seams the module consumes as
 interfaces it declares -- never as imported packages: `SubjectResolver` (the
-HTTP caller's identity, per operation), `UserAddressResolver` (above), the
-encrypted-address serializer registration (the exported
-`ContactAddressSerializerName` the host binds through
-`dbkit.RegisterEncryptedSerializer` before any contact row is read or
-written, following org's precedent), and the registry slices
-(`handlerHost`/`contactHost`/`deliveryHost`) through which the services read
-the merged catalog, the bus and the mailer. The host implements, the module
-consumes; a hand-built host in a test satisfies the same interfaces.
+HTTP caller's identity, per operation, with `SubjectResolverFunc` as its
+func-to-interface adapter so a host wires a closure), `UserAddressResolver`
+(above), the encrypted-address serializer registration (the module's own
+`RegisterContactAddressSerializer(cipher)` binds the exported
+`ContactAddressSerializerName` before any contact row is read or written,
+following org's and pki's precedent, and refuses a nil cipher rather than
+registering one that would store plaintext), the two blind-index
+constructors (`NewContactEmailIndexer`/`NewContactPhoneIndexer`, each over
+the module's own `AddressIndexColumn` and channel normalizer), and the
+registry slices (`handlerHost`/`contactHost`/`deliveryHost`) through which
+the services read the merged catalog, the bus and the mailer. The host
+implements, the module consumes; a hand-built host in a test satisfies the
+same interfaces.
 
 ## Delivery pipeline
 

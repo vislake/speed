@@ -748,12 +748,15 @@ func toSnakeCase(name string) string {
 // secret store, and it must differ from the encryption key.
 var testIndexerKey = []byte("org-test-blind-index-key-32bytes")
 
-// newTestEmailIndexer builds the blind indexer the module requires.
+// newTestEmailIndexer builds the blind indexer the module requires, through
+// the module's own constructor so the fixture suite pins the column and
+// normalizer the module ships (a hand-typed literal here could drift from
+// the schema without any test noticing).
 func newTestEmailIndexer(t *testing.T) *dbkit.BlindIndexer {
 	t.Helper()
-	indexer, err := dbkit.NewBlindIndexer("email_index", testIndexerKey, dbkit.NormalizeEmail)
+	indexer, err := NewEmailIndexer(testIndexerKey)
 	if err != nil {
-		t.Fatalf("NewBlindIndexer: %v", err)
+		t.Fatalf("NewEmailIndexer: %v", err)
 	}
 	return indexer
 }

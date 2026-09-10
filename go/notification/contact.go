@@ -88,6 +88,62 @@ const ContactAddressSerializerName = "notification_address_enc"
 // schema (address_index_column_test.go).
 const AddressIndexColumn = "address_index"
 
+// RegisterContactAddressSerializer wires cipher into GORM's serializer
+// registry under ContactAddressSerializerName, so VerifiedContact.Address
+// is transparently sealed on write and opened on read. It is the
+// host-facing half of the registration ContactAddressSerializerName's own
+// doc comment documents.
+//
+// Call it during host bootstrap, BEFORE opening the *gorm.DB this module's
+// models live in: GORM's registry is process-global and is consulted while
+// a model's schema is parsed, so registering afterwards leaves the parsed
+// schema pointing at nothing. It is deliberately NOT done inside
+// Module.Register -- by then the database is already open, and Register is
+// forbidden from doing anything but declare.
+//
+// A nil cipher is refused rather than registered: a model whose serializer
+// silently does nothing would store a patient's address in plaintext, which
+// is the one outcome the encrypted column exists to prevent. The cipher's
+// key MUST be a different secret from the HMAC key passed to the indexer
+// constructors below -- an AES key and a blind-index key that are the same
+// 32 bytes weaken both.
+func RegisterContactAddressSerializer(cipher *dbkit.Cipher) error {
+	if cipher == nil {
+		return fmt.Errorf("notification: RegisterContactAddressSerializer requires a cipher for %q", ContactAddressSerializerName)
+	}
+	dbkit.RegisterEncryptedSerializer(ContactAddressSerializerName, cipher)
+	return nil
+}
+
+// NewContactEmailIndexer builds the blind indexer
+// WithContactEmailIndexer accepts, over this module's own AddressIndexColumn
+// and dbkit.NormalizeEmail.
+//
+// The column argument travels as AddressIndexColumn rather than a
+// host-typed string for the reason that constant's doc comment gives:
+// dbkit refuses an EMPTY column name but has no guard for a non-empty wrong
+// one, so a host that spelled the column itself could register an indexer
+// that only fails the day someone calls Equal on it. Handing the constant's
+// ownership to this constructor removes that failure mode at the source;
+// dbkit's own empty-column refusal still applies to it.
+//
+// key must be exactly 32 bytes and a secret used for nothing else (see
+// dbkit.NewBlindIndexer). One key may serve both this indexer and
+// NewContactPhoneIndexer: the two normalizers keep the indexed inputs in
+// disjoint canonical forms, so a shared key leaks nothing between them.
+func NewContactEmailIndexer(key []byte) (*dbkit.BlindIndexer, error) {
+	return dbkit.NewBlindIndexer(AddressIndexColumn, key, dbkit.NormalizeEmail)
+}
+
+// NewContactPhoneIndexer is NewContactEmailIndexer's phone-channel twin:
+// the same column and key contract, indexing under dbkit.NormalizePhoneE164
+// instead. A host wires both channels' indexers -- the module's Register
+// refuses a contact service without either -- and may give them the same
+// 32-byte key for the reason NewContactEmailIndexer documents.
+func NewContactPhoneIndexer(key []byte) (*dbkit.BlindIndexer, error) {
+	return dbkit.NewBlindIndexer(AddressIndexColumn, key, dbkit.NormalizePhoneE164)
+}
+
 // VerifiedContact is one external recipient's consent-gated address inside
 // one tenant: a patient's phone number or email address that may receive
 // messages only after it has been verified, or has been attested to by a

@@ -8,6 +8,8 @@ package org_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -165,15 +167,13 @@ func Example_membershipAndScope() {
 	}
 
 	// The invitation address is encrypted at rest and made queryable by an
-	// HMAC blind index. The indexer's column argument is the module's
-	// exported org.EmailIndexColumn -- the blind-index column's exact SQL
-	// name, carried as a referenced constant rather than a hand-typed string
-	// (see its doc comment for why dbkit cannot guard a wrong one). The key
-	// below is a literal only because this is an example; a host injects it
-	// from its own secret store, and it must be a DIFFERENT secret from the
-	// encryption key.
-	indexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn,
-		[]byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
+	// HMAC blind index. Both halves are wired through the module's own
+	// constructors, so the indexer's column and the serializer's name never
+	// cross this boundary as hand-typed strings (see NewEmailIndexer's and
+	// RegisterEmailSerializer's own doc comments for why). The keys below are
+	// literals only because this is an example; a host injects them from its
+	// own secret store, and they must be DIFFERENT secrets from each other.
+	indexer, err := org.NewEmailIndexer([]byte("example-blind-index-key-32-bytes"))
 	if err != nil {
 		fmt.Println("blind indexer:", err)
 		return
@@ -183,7 +183,10 @@ func Example_membershipAndScope() {
 		fmt.Println("cipher:", err)
 		return
 	}
-	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
+	if regErr := org.RegisterEmailSerializer(cipher); regErr != nil {
+		fmt.Println("register serializer:", regErr)
+		return
+	}
 
 	// WithInvitationEmailDisabled keeps this example's output free of the
 	// standalone mode's console mailer. A host that lets org deliver the
@@ -314,8 +317,7 @@ func ExampleMemberService_TenantsOf() {
 	// invitation half needs; the example wires the same minimal set
 	// Example_membershipAndScope uses, with the invitation email disabled so
 	// nothing goes out through the console mailer.
-	indexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn,
-		[]byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
+	indexer, err := org.NewEmailIndexer([]byte("example-blind-index-key-32-bytes"))
 	if err != nil {
 		fmt.Println("blind indexer:", err)
 		return
@@ -499,4 +501,50 @@ func ExampleMemberService_EnsureRootSeat() {
 
 func init() {
 	pkgcore.RegisterSystemPurpose(orgExampleTenantsOfPurpose)
+}
+
+// ExampleSubjectResolverFunc wires org's caller-identity seam with a
+// closure: the adapter gives a plain (r *http.Request) (string, bool)
+// function the Subject method WithSubjectResolver takes, so a host whose
+// resolver is one closure needs no type declaration. A real resolver must
+// derive the caller from a source the server itself verified; this example
+// reads a header only to keep the shape visible.
+func ExampleSubjectResolverFunc() {
+	resolver := org.SubjectResolverFunc(func(r *http.Request) (string, bool) {
+		userID := r.Header.Get("X-Verified-User")
+		return userID, userID != ""
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Verified-User", "u-42")
+	userID, ok := resolver.Subject(req)
+	fmt.Println(userID, ok)
+	// Output: u-42 true
+}
+
+// ExampleRegisterEmailSerializer registers the Invitation.Email column's
+// cipher through the module's own registrar and builds the matching blind
+// indexer through the module's own constructor: the module owns both the
+// GORM serializer name and the index column, so neither crosses the host's
+// wiring as a hand-typed string. A nil cipher is refused rather than
+// registered -- a model whose serializer silently did nothing would store
+// invitation addresses in plaintext.
+func ExampleRegisterEmailSerializer() {
+	cipher, err := dbkit.NewCipher([]byte("example-email-cipher-key-32bytes"))
+	if err != nil {
+		fmt.Println("cipher:", err)
+		return
+	}
+	if err := org.RegisterEmailSerializer(cipher); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+	if _, err := org.NewEmailIndexer([]byte("example-blind-index-key-32-bytes")); err != nil {
+		fmt.Println("indexer:", err)
+		return
+	}
+	if err := org.RegisterEmailSerializer(nil); err != nil {
+		fmt.Println("the nil cipher is refused")
+	}
+	// Output: the nil cipher is refused
 }

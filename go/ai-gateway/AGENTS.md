@@ -41,10 +41,11 @@ tenantless calls explicitly.
   order. Platform data, not tenant data (see `model.go`'s doc comment):
   queried through a plain `*gorm.DB`, never `dbkit.Repository[T]`, tested
   with `tenancytest.AssertNotTenantScoped`. The API key column is encrypted
-  at rest through `CredentialAPIKeySerializerName`, a host-registered
-  `dbkit.RegisterEncryptedSerializer` call before `dbkit.Open` -- no blind
-  index, since a credential is only ever looked up by (provider, scope,
-  tenant), never by its own value.
+  at rest through `CredentialAPIKeySerializerName`, bound by the module's own
+  `RegisterCredentialAPIKeySerializer(cipher)` before `dbkit.Open` (a nil
+  cipher is refused, never registered) -- no blind index, since a credential
+  is only ever looked up by (provider, scope, tenant), never by its own
+  value.
 - A credential stored with an empty `base_url` is legal to store (the write
   API documents an omitted `baseUrl` as leaving a provider default in
   effect) and fails distinguishably at call time: both registry

@@ -35,7 +35,9 @@ func newWebhookTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}
-	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
+	if regErr := RegisterWebhookSecretSerializer(cipher); regErr != nil {
+		t.Fatalf("RegisterWebhookSecretSerializer: %v", regErr)
+	}
 	return newTestDB(t)
 }
 

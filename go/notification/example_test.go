@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -313,4 +315,53 @@ func ExamplePreferenceService() {
 	// result channels: [in_app]
 	// appointment channels: [in_app email sms]
 	// stored rows: 1
+}
+
+// ExampleSubjectResolverFunc wires notification's caller-identity seam with
+// a closure: the adapter gives a plain (r *http.Request) (string, bool)
+// function the Subject method WithSubjectResolver takes, so a host whose
+// resolver is one closure needs no type declaration. A real resolver must
+// derive the caller from a source the server itself verified; this example
+// reads a header only to keep the shape visible.
+func ExampleSubjectResolverFunc() {
+	resolver := notification.SubjectResolverFunc(func(r *http.Request) (string, bool) {
+		userID := r.Header.Get("X-Verified-User")
+		return userID, userID != ""
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Verified-User", "u-42")
+	userID, ok := resolver.Subject(req)
+	fmt.Println(userID, ok)
+	// Output: u-42 true
+}
+
+// ExampleRegisterContactAddressSerializer registers the VerifiedContact
+// address column's cipher through the module's own registrar and builds
+// both channel indexers through the module's own constructors: the module
+// owns the serializer name, the index column and each channel's normalizer,
+// so none of them crosses the host's wiring as a hand-typed string. One
+// blind-index key may serve both channels; it must be a different secret
+// from the cipher's.
+func ExampleRegisterContactAddressSerializer() {
+	cipher, err := dbkit.NewCipher([]byte("example-contacts-cipher-32-bytes"))
+	if err != nil {
+		fmt.Println("cipher:", err)
+		return
+	}
+	if err := notification.RegisterContactAddressSerializer(cipher); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+	key := []byte("example-blind-index-key-32-bytes")
+	if _, err := notification.NewContactEmailIndexer(key); err != nil {
+		fmt.Println("email indexer:", err)
+		return
+	}
+	if _, err := notification.NewContactPhoneIndexer(key); err != nil {
+		fmt.Println("phone indexer:", err)
+		return
+	}
+	fmt.Println("registered and indexed")
+	// Output: registered and indexed
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm/schema"
 
 	"github.com/vislake/speed/go/dbkit"
 )
@@ -75,5 +76,24 @@ func TestParseEventTypes_CorruptValue_ReturnsError(t *testing.T) {
 	invalid := datatypes.JSON([]byte(`not json`))
 	if _, err := parseEventTypes(invalid); err == nil {
 		t.Error("parseEventTypes(corrupt) error = nil, want a decode error")
+	}
+}
+
+func TestRegisterWebhookSecretSerializer_RefusesNilCipher(t *testing.T) {
+	if err := RegisterWebhookSecretSerializer(nil); err == nil {
+		t.Fatal("RegisterWebhookSecretSerializer(nil) = nil error, want a refusal")
+	}
+}
+
+func TestRegisterWebhookSecretSerializer_WiresTheNamedSerializer(t *testing.T) {
+	cipher, err := dbkit.NewCipher(testWebhookCipherKey)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	if regErr := RegisterWebhookSecretSerializer(cipher); regErr != nil {
+		t.Fatalf("RegisterWebhookSecretSerializer: %v", regErr)
+	}
+	if _, ok := schema.GetSerializer(WebhookSecretSerializerName); !ok {
+		t.Fatalf("no GORM serializer is registered under %q after RegisterWebhookSecretSerializer", WebhookSecretSerializerName)
 	}
 }

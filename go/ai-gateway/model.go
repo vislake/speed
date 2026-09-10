@@ -1,6 +1,11 @@
 package aigateway
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/vislake/speed/go/dbkit"
+)
 
 // CredentialScope names which tier of the ai_gateway_credentials table a
 // credential row sits at, mirroring go/config's own Scope tier exactly
@@ -31,6 +36,33 @@ const (
 // own at all: a credential is always looked up by (provider, scope,
 // tenant), never by the key's own value.
 const CredentialAPIKeySerializerName = "aigateway_credential_api_key"
+
+// RegisterCredentialAPIKeySerializer wires cipher into GORM's serializer
+// registry under CredentialAPIKeySerializerName, so a stored credential's
+// api_key column is transparently sealed on write and opened on read. It is
+// the host-facing half of the registration that constant's own doc comment
+// documents.
+//
+// Call it during host bootstrap, BEFORE opening the *gorm.DB this module's
+// models live in: GORM's registry is process-global and is consulted while
+// a model's schema is parsed, so registering afterwards leaves the parsed
+// schema pointing at nothing. It is deliberately NOT done inside
+// Module.Register -- by then the database is already open, and Register is
+// forbidden from doing anything but declare.
+//
+// A nil cipher is refused rather than registered: a model whose serializer
+// silently does nothing would store a provider API key in plaintext, which
+// is the one outcome the encrypted column exists to prevent. The cipher's
+// key MUST be a different secret from any HMAC blind-index key elsewhere in
+// the host's wiring; this module itself needs no blind index (a credential
+// is looked up by provider, scope and tenant, never by its own value).
+func RegisterCredentialAPIKeySerializer(cipher *dbkit.Cipher) error {
+	if cipher == nil {
+		return fmt.Errorf("aigateway: RegisterCredentialAPIKeySerializer requires a cipher for %q", CredentialAPIKeySerializerName)
+	}
+	dbkit.RegisterEncryptedSerializer(CredentialAPIKeySerializerName, cipher)
+	return nil
+}
 
 // credentialRow is one stored row of the shared ai_gateway_credentials
 // table.

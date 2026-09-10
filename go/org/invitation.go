@@ -58,6 +58,51 @@ const EmailSerializerName = "org_email_enc"
 // gorm tag and the migrated schema (email_index_column_drift_test.go).
 const EmailIndexColumn = "email_index"
 
+// RegisterEmailSerializer wires cipher into GORM's serializer registry
+// under EmailSerializerName, so Invitation.Email is transparently sealed
+// on write and opened on read. It is the host-facing half of the
+// registration EmailSerializerName's own doc comment documents.
+//
+// Call it during host bootstrap, BEFORE opening the *gorm.DB org's models
+// live in: GORM's registry is process-global and is consulted while a
+// model's schema is parsed, so registering afterwards leaves the parsed
+// schema pointing at nothing. It is deliberately NOT done inside
+// Module.Register -- by then the database is already open, and Register is
+// forbidden from doing anything but declare.
+//
+// A nil cipher is refused rather than registered: a model whose serializer
+// silently does nothing would store the address in plaintext, which is the
+// one outcome the encrypted column exists to prevent. The cipher's key MUST
+// be a different secret from the HMAC key passed to NewEmailIndexer -- an
+// AES key and a blind-index key that are the same 32 bytes weaken both.
+func RegisterEmailSerializer(cipher *dbkit.Cipher) error {
+	if cipher == nil {
+		return fmt.Errorf("org: RegisterEmailSerializer requires a cipher for %q", EmailSerializerName)
+	}
+	dbkit.RegisterEncryptedSerializer(EmailSerializerName, cipher)
+	return nil
+}
+
+// NewEmailIndexer builds the blind indexer WithEmailIndexer accepts, over
+// this module's own EmailIndexColumn and dbkit.NormalizeEmail -- the exact
+// column and canonical form the schema and the invitation lookups were
+// designed around.
+//
+// The column argument travels as EmailIndexColumn rather than a host-typed
+// string for the reason that constant's doc comment gives: dbkit refuses an
+// EMPTY column name but has no guard for a non-empty wrong one, so a host
+// that spelled the column itself could register an indexer that only fails
+// the day someone calls Equal on it. Handing the constant's ownership to
+// this constructor removes that failure mode at the source; dbkit's own
+// empty-column refusal still applies to it.
+//
+// key must be exactly 32 bytes and a secret used for nothing else (see
+// dbkit.NewBlindIndexer); an invitation whose address cannot be indexed can
+// never be found again, so the key must not change between restarts.
+func NewEmailIndexer(key []byte) (*dbkit.BlindIndexer, error) {
+	return dbkit.NewBlindIndexer(EmailIndexColumn, key, dbkit.NormalizeEmail)
+}
+
 // The lifecycle states an Invitation can be in. Closed set, kept in Go for
 // the same reason MembershipStatus* are: PostgreSQL has enum types and
 // SQLite does not, so the column is a plain VARCHAR on both engines.

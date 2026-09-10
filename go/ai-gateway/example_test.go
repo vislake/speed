@@ -60,7 +60,10 @@ func Example() {
 		fmt.Println("new cipher:", err)
 		return
 	}
-	dbkit.RegisterEncryptedSerializer(aigateway.CredentialAPIKeySerializerName, cipher)
+	if regErr := aigateway.RegisterCredentialAPIKeySerializer(cipher); regErr != nil {
+		fmt.Println("register serializer:", regErr)
+		return
+	}
 
 	db, err := dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,
@@ -88,7 +91,11 @@ func Example() {
 	// Store the platform-wide credential. A real deployment builds this
 	// system context through tenancy.WithSystemContext, which additionally
 	// publishes an audit event; this example uses the raw primitive
-	// directly for self-containment.
+	// directly for self-containment. Module.Register is what normally
+	// declares the purpose, and the registration is idempotent, so
+	// declaring it here keeps the example runnable on its own rather than
+	// only after some other test has bootstrapped this module.
+	pkgcore.RegisterSystemPurpose(aigateway.SystemPurposeCredentialWrite)
 	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 		Actor:   "example-bootstrap",
 		Purpose: aigateway.SystemPurposeCredentialWrite,
@@ -194,7 +201,10 @@ func Example_generateImage() {
 		fmt.Println("new cipher:", err)
 		return
 	}
-	dbkit.RegisterEncryptedSerializer(aigateway.CredentialAPIKeySerializerName, cipher)
+	if regErr := aigateway.RegisterCredentialAPIKeySerializer(cipher); regErr != nil {
+		fmt.Println("register serializer:", regErr)
+		return
+	}
 
 	db, err := dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,

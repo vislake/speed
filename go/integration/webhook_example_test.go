@@ -94,7 +94,10 @@ func ExampleModule_webhookDelivery() {
 		fmt.Println("cipher:", err)
 		return
 	}
-	dbkit.RegisterEncryptedSerializer(integration.WebhookSecretSerializerName, cipher)
+	if regErr := integration.RegisterWebhookSecretSerializer(cipher); regErr != nil {
+		fmt.Println("register serializer:", regErr)
+		return
+	}
 
 	mapping := integration.EventMapping{
 		InternalType:  "org.member.joined",

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
@@ -45,7 +46,9 @@ func registerCredentialSerializer() {
 		if err != nil {
 			panic(fmt.Sprintf("aigateway test: NewCipher on the fixed 32-byte fixture key: %v", err))
 		}
-		dbkit.RegisterEncryptedSerializer(CredentialAPIKeySerializerName, cipher)
+		if regErr := RegisterCredentialAPIKeySerializer(cipher); regErr != nil {
+			panic(fmt.Sprintf("aigateway test: RegisterCredentialAPIKeySerializer: %v", regErr))
+		}
 	})
 }
 
@@ -165,5 +168,24 @@ func TestCredentialRow_APIKeyIsEncryptedAtRest(t *testing.T) {
 	}
 	if readBack.APIKey != plaintext {
 		t.Fatalf("decrypted api_key = %q, want %q", readBack.APIKey, plaintext)
+	}
+}
+
+func TestRegisterCredentialAPIKeySerializer_RefusesNilCipher(t *testing.T) {
+	if err := RegisterCredentialAPIKeySerializer(nil); err == nil {
+		t.Fatal("RegisterCredentialAPIKeySerializer(nil) = nil error, want a refusal")
+	}
+}
+
+func TestRegisterCredentialAPIKeySerializer_WiresTheNamedSerializer(t *testing.T) {
+	cipher, err := dbkit.NewCipher([]byte(testCipherKey))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	if regErr := RegisterCredentialAPIKeySerializer(cipher); regErr != nil {
+		t.Fatalf("RegisterCredentialAPIKeySerializer: %v", regErr)
+	}
+	if _, ok := schema.GetSerializer(CredentialAPIKeySerializerName); !ok {
+		t.Fatalf("no GORM serializer is registered under %q after RegisterCredentialAPIKeySerializer", CredentialAPIKeySerializerName)
 	}
 }

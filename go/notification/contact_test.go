@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 
 	"github.com/vislake/speed/go/notification/locales"
 )
@@ -55,18 +56,22 @@ func registerContactSerializer() {
 		if err != nil {
 			panic(fmt.Sprintf("notification test: NewCipher on the fixed 32-byte fixture key: %v", err))
 		}
-		dbkit.RegisterEncryptedSerializer(ContactAddressSerializerName, cipher)
+		if regErr := RegisterContactAddressSerializer(cipher); regErr != nil {
+			panic(fmt.Sprintf("notification test: RegisterContactAddressSerializer: %v", regErr))
+		}
 	})
 }
 
 // testEmailIndexer returns the email blind indexer the module's Register
 // would receive through WithContactEmailIndexer, bound to the dev email
-// index key and dbkit.NormalizeEmail.
+// index key -- built through the module's own constructor, so the fixture
+// suite pins the column and normalizer the module ships rather than
+// restating them by hand.
 func testEmailIndexer(t *testing.T) *dbkit.BlindIndexer {
 	t.Helper()
-	indexer, err := dbkit.NewBlindIndexer("address_index", []byte(testEmailIndexKey), dbkit.NormalizeEmail)
+	indexer, err := NewContactEmailIndexer([]byte(testEmailIndexKey))
 	if err != nil {
-		t.Fatalf("NewBlindIndexer(email): %v", err)
+		t.Fatalf("NewContactEmailIndexer: %v", err)
 	}
 	return indexer
 }
@@ -75,9 +80,9 @@ func testEmailIndexer(t *testing.T) *dbkit.BlindIndexer {
 // dbkit.NormalizePhoneE164.
 func testPhoneIndexer(t *testing.T) *dbkit.BlindIndexer {
 	t.Helper()
-	indexer, err := dbkit.NewBlindIndexer("address_index", []byte(testPhoneIndexKey), dbkit.NormalizePhoneE164)
+	indexer, err := NewContactPhoneIndexer([]byte(testPhoneIndexKey))
 	if err != nil {
-		t.Fatalf("NewBlindIndexer(phone): %v", err)
+		t.Fatalf("NewContactPhoneIndexer: %v", err)
 	}
 	return indexer
 }
@@ -1639,5 +1644,79 @@ func assertRetryAfterSecondsValue(t *testing.T, err error, want int) {
 	}
 	if got := appErr.Params["retry_after_seconds"]; got != want {
 		t.Errorf("retry_after_seconds param = %v, want %d", got, want)
+	}
+}
+
+func TestRegisterContactAddressSerializer_RefusesNilCipher(t *testing.T) {
+	if err := RegisterContactAddressSerializer(nil); err == nil {
+		t.Fatal("RegisterContactAddressSerializer(nil) = nil error, want a refusal")
+	}
+}
+
+func TestRegisterContactAddressSerializer_WiresTheNamedSerializer(t *testing.T) {
+	cipher, err := dbkit.NewCipher([]byte(testCipherKey))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	if regErr := RegisterContactAddressSerializer(cipher); regErr != nil {
+		t.Fatalf("RegisterContactAddressSerializer: %v", regErr)
+	}
+	if _, ok := schema.GetSerializer(ContactAddressSerializerName); !ok {
+		t.Fatalf("no GORM serializer is registered under %q after RegisterContactAddressSerializer", ContactAddressSerializerName)
+	}
+}
+
+func TestContactIndexerConstructors_BindKeyAndNormalizer(t *testing.T) {
+	// Delegation proof for both channels: a literal dbkit construction over
+	// the module's own exported column and normalizer must produce the
+	// identical index value, so each constructor truly hands dbkit that pair
+	// (the column binding itself is pinned by AddressIndexColumn's drift
+	// test, since Index never reads the column).
+	email, err := NewContactEmailIndexer([]byte(testEmailIndexKey))
+	if err != nil {
+		t.Fatalf("NewContactEmailIndexer: %v", err)
+	}
+	gotEmail, err := email.Index("patient@example.com")
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	wantEmail, err := dbkit.NewBlindIndexer(AddressIndexColumn, []byte(testEmailIndexKey), dbkit.NormalizeEmail)
+	if err != nil {
+		t.Fatalf("NewBlindIndexer: %v", err)
+	}
+	wantEmailValue, err := wantEmail.Index("patient@example.com")
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if gotEmail != wantEmailValue {
+		t.Fatalf("email Index(patient@example.com) = %q, want %q", gotEmail, wantEmailValue)
+	}
+
+	phone, err := NewContactPhoneIndexer([]byte(testPhoneIndexKey))
+	if err != nil {
+		t.Fatalf("NewContactPhoneIndexer: %v", err)
+	}
+	gotPhone, err := phone.Index(testPhone)
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	wantPhone, err := dbkit.NewBlindIndexer(AddressIndexColumn, []byte(testPhoneIndexKey), dbkit.NormalizePhoneE164)
+	if err != nil {
+		t.Fatalf("NewBlindIndexer: %v", err)
+	}
+	wantPhoneValue, err := wantPhone.Index(testPhone)
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if gotPhone != wantPhoneValue {
+		t.Fatalf("phone Index(%s) = %q, want %q", testPhone, gotPhone, wantPhoneValue)
+	}
+
+	// dbkit's key-shape refusal still applies through both constructors.
+	if _, err := NewContactEmailIndexer([]byte("too-short")); err == nil {
+		t.Fatal("NewContactEmailIndexer(short key) = nil error, want dbkit's 32-byte refusal")
+	}
+	if _, err := NewContactPhoneIndexer([]byte("too-short")); err == nil {
+		t.Fatal("NewContactPhoneIndexer(short key) = nil error, want dbkit's 32-byte refusal")
 	}
 }

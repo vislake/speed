@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"gorm.io/datatypes"
@@ -16,6 +17,32 @@ const (
 	tableWebhookSubscriptions = "integration_webhook_subscriptions"
 	tableWebhookDeliveries    = "integration_webhook_deliveries"
 )
+
+// RegisterWebhookSecretSerializer wires cipher into GORM's serializer
+// registry under WebhookSecretSerializerName, so
+// WebhookSubscription.Secret is transparently sealed on write and opened on
+// read. It is the host-facing half of the registration
+// WebhookSecretSerializerName's own doc comment documents.
+//
+// Call it during host bootstrap, BEFORE opening the *gorm.DB this module's
+// models live in: GORM's registry is process-global and is consulted while
+// a model's schema is parsed, so registering afterwards leaves the parsed
+// schema pointing at nothing. It is deliberately NOT done inside
+// Module.Register -- by then the database is already open, and Register is
+// forbidden from doing anything but declare.
+//
+// A nil cipher is refused rather than registered: a subscription whose
+// secret silently stored unencrypted would let anyone who can read the
+// table forge deliveries to the subscriber. The cipher's key MUST be a
+// different secret from any HMAC blind-index key (this module needs no
+// blind index: no lookup ever finds a subscription by its secret's value).
+func RegisterWebhookSecretSerializer(cipher *dbkit.Cipher) error {
+	if cipher == nil {
+		return fmt.Errorf("integration: RegisterWebhookSecretSerializer requires a cipher for %q", WebhookSecretSerializerName)
+	}
+	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
+	return nil
+}
 
 // WebhookSecretSerializerName is the GORM serializer name
 // WebhookSubscription.Secret is encrypted under.
