@@ -187,7 +187,7 @@ type hostConfig struct {
 
 	// OrgIndexKey names APP_ORG_INDEX_KEY: the hex-encoded 32-byte HMAC
 	// key an org-wiring project's blind indexer is built from
-	// (dbkit.NewBlindIndexer). It is a SEPARATE bootstrap secret from
+	// (org.NewEmailIndexer). It is a SEPARATE bootstrap secret from
 	// ConfigKey on purpose: an org-wiring project reuses the config
 	// cipher (built from ConfigKey) to also encrypt org's Invitation
 	// Email column, and dbkit's own rule is that an AES key must never

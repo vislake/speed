@@ -365,12 +365,12 @@ type hostConfig struct {
 	// non-empty value, BuildServer stops reading EVERY demo identity header
 	// this app ships -- DemoUserHeader (demo_subject.go's "X-Demo-User") AND
 	// DemoOrgUserHeader ("X-Demo-User-Id", the attribution header
-	// DemoOrgSubjectResolver and DemoNotesSubjectResolver read) -- uniformly:
+	// DemoOrgSubjectResolverFor and DemoNotesSubjectResolver read) -- uniformly:
 	//
 	//   - every permission-gated route resolves its acting Subject from the
 	//     verified authn Principal alone, through DemoSubjectResolverFor(true)
 	//     (see that function's own doc comment);
-	//   - every attribution seam DemoOrgSubjectResolver serves (org's
+	//   - every attribution seam DemoOrgSubjectResolverFor serves (org's
 	//     caller-scoped invitation endpoints, the notification module's whole
 	//     surface, integration's creator reads) and DemoNotesSubjectResolver
 	//     serves (notes' create handler, the cases surface) resolves its
@@ -446,13 +446,13 @@ type hostConfigKeyConfig struct {
 type hostConfigKeyOrg struct {
 	// Invitation_Email_Index_Key names APP_ORG_INDEX_KEY: the 32-byte HMAC key
 	// org.WithEmailIndexer's blind indexer is built from
-	// (dbkit.NewBlindIndexer), resolved through the loader's derive path
+	// (org.NewEmailIndexer), resolved through the loader's derive path
 	// exactly like the config key above (explicit 64 hex characters, else the
 	// APP_ROOT_KEY derivation, else DevOrgIndexKey). It is a SEPARATE bootstrap
 	// secret from the config cipher key on purpose: this app reuses the config
 	// cipher (built from APP_CONFIG_KEY) to also encrypt org's Invitation.Email
-	// column (registered under org.EmailSerializerName), and dbkit's own rule
-	// is that an AES key must never double as an HMAC key -- see
+	// column (registered through org.RegisterEmailSerializer), and dbkit's own
+	// rule is that an AES key must never double as an HMAC key -- see
 	// go/org/invitation.go's EmailSerializerName doc comment. Introducing this
 	// one additional key, distinct from the cipher key, is what keeps that rule
 	// real rather than aspirational in this app's own wiring. An invitation
@@ -469,13 +469,15 @@ type hostConfigKeyOrg struct {
 type hostConfigKeyNotification struct {
 	// Contact_Index_Key names APP_NOTIFICATION_INDEX_KEY: the 32-byte HMAC key
 	// the blind indexers over the notification module's encrypted contact
-	// addresses are built from (dbkit.NewBlindIndexer), resolved through the
-	// loader's derive path exactly like the two keys above (explicit 64 hex
-	// characters, else the APP_ROOT_KEY derivation, else
+	// addresses are built from
+	// (notification.NewContactEmailIndexer/NewContactPhoneIndexer), resolved
+	// through the loader's derive path exactly like the two keys above
+	// (explicit 64 hex characters, else the APP_ROOT_KEY derivation, else
 	// DevNotificationIndexKey). It is a SEPARATE bootstrap secret from the
 	// config cipher key for the same reason the org key above gives: this app
 	// reuses the config cipher to also encrypt notification's Contact.Address
-	// column (registered under notification.ContactAddressSerializerName), and
+	// column (registered through
+	// notification.RegisterContactAddressSerializer), and
 	// dbkit's own rule is that an AES key must never double as an HMAC key. One
 	// HMAC key serves both the email and the phone indexers, exactly as authn's
 	// single blind-index key serves both of its indexers -- the two normalizers

@@ -325,8 +325,7 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"topMux.Handle(hostcore.AuthnAPIPath, authnMux)",
-			"topMux.Handle(hostcore.AuthnAPIPath+\"/\", authnMux)",
+			"pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})",
 			"mountModuleRoutes(authnMux, moduleMux, reg)",
 			"strings.HasPrefix(route.Path, hostcore.AuthnAPIPath)",
 			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
@@ -484,23 +483,23 @@ func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T
 	}
 }
 
-// TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn pins the
-// org invitation indexer's column argument in every org-wiring selection:
-// it must be org's exported EmailIndexColumn, never a hand-typed literal,
-// for the reason org's own doc comments give (dbkit.NewBlindIndexer
-// refuses an EMPTY column name but has no guard for a non-empty wrong one,
-// so the exact SQL name must cross the package boundary as a referenced
-// constant, not a string that can drift from the schema). The literal the
-// fix replaced matched the real column, so the defect was dormant -- no
-// behavioural test could fail on it -- which is exactly why the template
-// source itself is pinned here: these build-ignored files never compile,
-// and a hand-typed column name that drifted from org's schema would ship
-// into every consumer project saasctl new materializes before anything
-// anywhere failed. The selections that wire no org module must not
-// reference the constant at all.
+// TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn pins how
+// every org-wiring selection binds org's encrypted invitation column: the
+// serializer through org's own registrar and the indexer through org's own
+// constructor, so neither the GORM serializer name nor the index column
+// crosses the wiring as a hand-typed string (org's own doc comments give
+// the reason: dbkit refuses an EMPTY column name but has no guard for a
+// non-empty wrong one, so the exact SQL name must stay owned by the package
+// that pins it to the schema). The template source itself is what gets
+// pinned here: these build-ignored files never compile in this repository,
+// so a selection that drifted back to constructing the indexer by hand
+// would ship into every consumer project `saasctl new` materializes before
+// anything anywhere failed. The selections that wire no org module must
+// mention neither call.
 func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T) {
-	const wantConst = "dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)"
-	const wantLiteral = `dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)`
+	const wantRegistrar = "org.RegisterEmailSerializer(cipher)"
+	const wantConstructor = "org.NewEmailIndexer(cfg.OrgIndexKey)"
+	const stale = "dbkit.NewBlindIndexer("
 	for _, key := range validSelectionKeys {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
 		content, err := fs.ReadFile(Project, path)
@@ -510,15 +509,15 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 		src := string(content)
 		switch key {
 		case "authn+org", "authn+org+rbac":
-			if !strings.Contains(src, wantConst) {
-				t.Errorf("%s does not build its org invitation indexer over org.EmailIndexColumn; the column name must travel as org's exported constant, never a hand-typed literal", key)
+			if !strings.Contains(src, wantRegistrar) || !strings.Contains(src, wantConstructor) {
+				t.Errorf("%s does not bind org's encrypted column through org's own registrar and indexer constructor", key)
 			}
-			if strings.Contains(src, wantLiteral) {
-				t.Errorf("%s still hands dbkit.NewBlindIndexer the hand-typed column literal; reference org.EmailIndexColumn instead", key)
+			if strings.Contains(src, stale) {
+				t.Errorf("%s still constructs a blind indexer over dbkit directly; go/org owns its index column", key)
 			}
 		default:
-			if strings.Contains(src, wantConst) || strings.Contains(src, wantLiteral) {
-				t.Errorf("%s wires no org module, so its server.go must construct no org invitation indexer", key)
+			if strings.Contains(src, wantRegistrar) || strings.Contains(src, wantConstructor) {
+				t.Errorf("%s wires no org module, so its server.go must register no org serializer and build no org indexer", key)
 			}
 		}
 	}
@@ -634,7 +633,8 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	}
 
 	// The generated mountModuleRoutes split and the topMux dispatch,
-	// spelled as the templates spell it.
+	// spelled as the templates spell it -- pkgcore.MountRoutes is the
+	// mounting rule both sides share.
 	const authnAPIPath = "/api/v1/authn"
 	authnMux := http.NewServeMux()
 	protectedMux := http.NewServeMux()
@@ -643,10 +643,7 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 		if strings.HasPrefix(route.Path, authnAPIPath) {
 			target = authnMux
 		}
-		target.Handle(route.Path, route.Handler)
-		if !strings.HasSuffix(route.Path, "/") {
-			target.Handle(route.Path+"/", route.Handler)
-		}
+		pkgcore.MountRoutes(target, route)
 	}
 
 	if shape == composedShapeLegacy {
@@ -682,8 +679,7 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	}
 
 	topMux := http.NewServeMux()
-	topMux.Handle(authnAPIPath, authnMux)
-	topMux.Handle(authnAPIPath+"/", authnMux)
+	pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: authnAPIPath, Handler: authnMux})
 	topMux.Handle("/", tenancy.Middleware(authn.NewPrincipalResolver(),
 		tenancy.WithAllowlist(http.MethodGet, "/healthz"),
 		tenancy.WithAllowlist(http.MethodHead, "/healthz"),
@@ -707,7 +703,7 @@ func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 		}
 		server := string(content)
 		for _, marker := range []string{
-			"topMux.Handle(hostcore.AuthnAPIPath, authnMux)",
+			"pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})",
 			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
 		} {
 			if !strings.Contains(server, marker) {

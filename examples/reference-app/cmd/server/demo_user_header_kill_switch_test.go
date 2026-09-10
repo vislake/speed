@@ -12,6 +12,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -31,7 +32,7 @@ func withTestPrincipal(r *http.Request, userID, tenantID string) *http.Request {
 // SECOND demo identity header: cfg.DisableDemoUserHeader
 // (APP_DISABLE_DEMO_USER_HEADER, internal/app/server.go) is the kill switch this file
 // proves closes the hole on BOTH headers -- the rbac gate's X-Demo-User
-// and the attribution seams' X-Demo-User-Id (DemoOrgSubjectResolver /
+// and the attribution seams' X-Demo-User-Id (DemoOrgSubjectResolverFor /
 // DemoNotesSubjectResolver) -- and proves it changes nothing when left at
 // its default.
 
@@ -181,7 +182,7 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 // TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface is the
 // mandatory regression on the SECOND demo identity
 // header this app reads: DemoOrgUserHeader ("X-Demo-User-Id", internal/app/server.go)
-// names the acting user for every attribution seam DemoOrgSubjectResolver
+// names the acting user for every attribution seam DemoOrgSubjectResolverFor
 // and DemoNotesSubjectResolver serve -- notes' create handler, the cases
 // surface, org's caller-scoped invitation endpoints and the notification
 // module's whole surface. Without the switch's extension the kill switch
@@ -199,7 +200,7 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 //     creator-blindness holds regardless: even
 //     with the switch OFF the list reads no creator, but the create
 //     attribution half of this leg stays the real impersonation gate.)
-//   - the notification inbox (a DemoOrgSubjectResolver surface): with the
+//   - the notification inbox (a DemoOrgSubjectResolverFor surface): with the
 //     switch ON, a request carrying NO demo header must resolve from the
 //     verified Principal instead of being refused as subject-less, and a
 //     request carrying a foreign X-Demo-User-Id must answer the same
@@ -330,7 +331,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 	})
 }
 
-// TestDemoOrgSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader is
+// TestDemoOrgSubjectResolverFor_HeaderDisabled_UsesPrincipalIgnoresHeader is
 // the unit-level pin for the headerDisabled branch of the resolver that
 // serves org's, notification's and integration's caller-scoped surfaces
 // (internal/app/server.go): given a request carrying BOTH DemoOrgUserHeader and a
@@ -340,7 +341,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 // (header-enabled) resolver must keep its header-only contract:
 // the header wins when present, and a header-less request with
 // only a Principal still fails closed.
-func TestDemoOrgSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *testing.T) {
+func TestDemoOrgSubjectResolverFor_HeaderDisabled_UsesPrincipalIgnoresHeader(t *testing.T) {
 	const principalUserID = "real-unprivileged-user"
 
 	withBoth := func() *http.Request {
@@ -349,7 +350,7 @@ func TestDemoOrgSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *tes
 		return withTestPrincipal(r, principalUserID, "tenant-acme")
 	}
 
-	disabled := app.DemoOrgSubjectResolver{HeaderDisabled: true}
+	disabled := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(true, false))
 	userID, ok := disabled.Subject(withBoth())
 	if !ok {
 		t.Fatal("the disabled resolver reported no subject for a request with a verified principal and a demo header")
@@ -369,14 +370,14 @@ func TestDemoOrgSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *tes
 
 	// The zero value stays identical to the header-only
 	// resolver: the header wins over the Principal...
-	got, ok := (app.DemoOrgSubjectResolver{}).Subject(withBoth())
+	got, ok := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, false)).Subject(withBoth())
 	if !ok || got != app.DemoNotesCreatorUserID {
 		t.Fatalf("default org resolver = (%q, %v), want the header's %q -- the header-enabled default must be unchanged",
 			got, ok, app.DemoNotesCreatorUserID)
 	}
 	// ...and a header-less, Principal-only request still fails closed.
 	principalOnly := withTestPrincipal(requestInTenant(http.MethodGet, "tenant-acme"), principalUserID, "tenant-acme")
-	if _, has := (app.DemoOrgSubjectResolver{}).Subject(principalOnly); has {
+	if _, has := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, false)).Subject(principalOnly); has {
 		t.Fatal("the default org resolver resolved a subject from the Principal alone; it must stay header-only")
 	}
 }
@@ -472,7 +473,7 @@ func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *t
 	}
 }
 
-// TestDemoOrgSubjectResolver_PrincipalFallback_UsesPrincipalWhenNoHeader
+// TestDemoOrgSubjectResolverFor_PrincipalFallback_UsesPrincipalWhenNoHeader
 // pins org's exception to the header-only contract: org's
 // wiring sets principalFallback (internal/app/server.go's org.NewModule option), so a
 // header-less request carrying a verified Principal resolves as that
@@ -481,10 +482,10 @@ func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *t
 // affordance, unchanged), the zero-value resolver stays header-only (the
 // pinned refusal above), and a request with neither source still fails
 // closed.
-func TestDemoOrgSubjectResolver_PrincipalFallback_UsesPrincipalWhenNoHeader(t *testing.T) {
+func TestDemoOrgSubjectResolverFor_PrincipalFallback_UsesPrincipalWhenNoHeader(t *testing.T) {
 	const principalUserID = "real-signed-in-owner"
 
-	withFallback := app.DemoOrgSubjectResolver{PrincipalFallback: true}
+	withFallback := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, true))
 
 	// Header-less, Principal-only: the browser shape -- resolved as the
 	// Principal, never refused.
@@ -515,7 +516,7 @@ func TestDemoOrgSubjectResolver_PrincipalFallback_UsesPrincipalWhenNoHeader(t *t
 
 	// The zero value stays header-only -- the pinned notification and
 	// integration contract untouched by org's exception.
-	zeroValue := app.DemoOrgSubjectResolver{}
+	zeroValue := org.SubjectResolverFunc(app.DemoOrgSubjectResolverFor(false, false))
 	if _, has := zeroValue.Subject(principalOnly); has {
 		t.Fatal("the zero-value org resolver resolved a subject from the Principal alone; principalFallback must be opt-in")
 	}

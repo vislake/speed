@@ -228,22 +228,24 @@ func run(baseCtx context.Context) error {
 	return hostcore.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "reference-app", string(cfg.DeploymentMode))
 }
 
-// runHealthcheck probes this same server's own HealthzPath over loopback and
-// reports whether it answered 200 -- see healthcheckArg's own doc comment for
-// why this exists and who calls it (this example's Dockerfile's HEALTHCHECK,
-// exec-form, re-invoking this binary with that argument rather than shelling
-// out to a probe tool the distroless/static runtime image does not have).
+// runHealthcheck probes this same server's own liveness endpoint over
+// loopback and reports whether it answered 200 -- see healthcheckArg's own
+// doc comment for why this exists and who calls it (this example's
+// Dockerfile's HEALTHCHECK, exec-form, re-invoking this binary with that
+// argument rather than shelling out to a probe tool the distroless/static
+// runtime image does not have).
 // port is the resolved bootstrap Port: main.go's healthcheck branch loads it
 // through the very ConfigFromEnv call run boots from, so the probe and the
 // server agree on the port by construction. An empty port -- the shape a
 // direct caller (or an explicitly emptied PORT variable) can still hand this
 // function -- falls back to DefaultPort, exactly as the listener's own
 // resolution does. The probe itself is pkgcore/probe's (see its Check: the
-// loopback dial is structural there), and healthcheckTimeout above is the
-// bound this host pins on it.
+// loopback dial is structural there), healthcheckTimeout above is the
+// bound this host pins on it, and the path is observability's own
+// HealthzPath -- the same constant obs.MountLiveness mounts it at.
 func runHealthcheck(ctx context.Context, port string) error {
 	if port == "" {
 		port = app.DefaultPort
 	}
-	return probe.Check(ctx, port, hostcore.HealthzPath, probe.WithTimeout(healthcheckTimeout))
+	return probe.Check(ctx, port, obs.HealthzPath, probe.WithTimeout(healthcheckTimeout))
 }

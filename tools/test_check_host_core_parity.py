@@ -35,15 +35,12 @@ import check_host_core_parity as m  # noqa: E402
 CORE_BODY = '''// Package hostcore is the shared host kernel.
 package hostcore
 
-import "net/http"
+// AuthnAPIPath is authn's own mount point.
+const AuthnAPIPath = "/api/v1/authn"
 
-// HealthzPath is the liveness path.
-const HealthzPath = "/healthz"
-
-// HealthzHandler always returns 200.
-func HealthzHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-}
+// PreAuthAllowlist returns the tenancy options exempting the pre-auth
+// surface.
+func PreAuthAllowlist() []tenancy.MiddlewareOption { return nil }
 '''
 CANONICAL = "//go:build ignore\n\n" + CORE_BODY
 
@@ -72,7 +69,7 @@ class CopyParity(unittest.TestCase):
         self.assertEqual(m.scan(make_tree(base_files())), [])
 
     def test_content_drift_fires_with_a_diff(self):
-        root = make_tree(base_files(app=CORE_BODY.replace("/healthz", "/healthz2")))
+        root = make_tree(base_files(app=CORE_BODY.replace("/api/v1/authn", "/api/v1/authn2")))
         findings = m.scan(root)
         self.assertEqual(len(findings), 1)
         self.assertIn("drifted apart", findings[0])
@@ -109,8 +106,8 @@ class NoForkRules(unittest.TestCase):
             base_files(
                 extra={
                     "examples/reference-app/internal/app/server.go": (
-                        "package app\n\n// HealthzPath re-declares the shared name.\n"
-                        "const HealthzPath = \"/healthz\"\n"
+                        "package app\n\n// AuthnAPIPath re-declares the shared name.\n"
+                        "const AuthnAPIPath = \"/api/v1/authn\"\n"
                     ),
                 }
             )
@@ -119,10 +116,10 @@ class NoForkRules(unittest.TestCase):
         # Two findings, both true: the declaration fork, and the
         # kernel-owned path literal it reintroduces.
         self.assertTrue(
-            any("declares HealthzPath" in f for f in findings), findings
+            any("declares AuthnAPIPath" in f for f in findings), findings
         )
         self.assertTrue(
-            any('"/healthz"' in f for f in findings), findings
+            any('"/api/v1/authn"' in f for f in findings), findings
         )
 
     def test_forked_declaration_in_the_template_fires(self):
@@ -130,14 +127,14 @@ class NoForkRules(unittest.TestCase):
             base_files(
                 extra={
                     "go/saasctl/internal/template/project/cmd/server/server.go": (
-                        "package main\n\nfunc MountRoute() {}\n"
+                        "package main\n\nfunc PreAuthAllowlist() {}\n"
                     ),
                 }
             )
         )
         findings = m.scan(root)
         self.assertEqual(len(findings), 1)
-        self.assertIn("declares MountRoute", findings[0])
+        self.assertIn("declares PreAuthAllowlist", findings[0])
 
     def test_use_is_not_a_declaration(self):
         root = make_tree(
@@ -146,7 +143,7 @@ class NoForkRules(unittest.TestCase):
                     "examples/reference-app/internal/app/server.go": (
                         "package app\n\n"
                         "import \"example.com/app/internal/hostcore\"\n\n"
-                        "func build() { hostcore.MountLiveness(nil) }\n"
+                        "func build() { _ = hostcore.PreAuthAllowlist() }\n"
                     ),
                 }
             )

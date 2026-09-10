@@ -6,10 +6,12 @@ Two hosts compose HTTP servers from the same platform modules: the
 reference app (examples/reference-app) and the project skeleton
 `saasctl new` materializes from the embedded tree under
 go/saasctl/internal/template/project. Their host-neutral half -- the
-liveness endpoints (paths, handlers, mount rule), the four pre-auth
-allowlist entries, the mounted-route label seed and the
-serve/graceful-shutdown lifecycle -- lives in ONE file, package hostcore,
-carried byte-identically by both hosts:
+eight pre-auth allowlist entries, authn's mount path, the mounted-route
+label seed and the serve/graceful-shutdown lifecycle -- lives in ONE file,
+package hostcore, carried byte-identically by both hosts (the liveness
+route set itself is the platform's, observability's MountLiveness, and the
+module-route mounting rule is pkgcore.MountRoutes; this kernel composes
+them):
 
   canonical:  go/saasctl/internal/template/project/internal/hostcore/hostcore.go
               (a template .go file, so it opens with the build-ignore
@@ -84,23 +86,27 @@ BUILD_IGNORE_LINE = "//go:build ignore"
 
 # Package hostcore's exported surface: a host may not declare any of these
 # outside its own copy of the shared file (see the module docstring).
+# The liveness route set (HealthzPath, MetricsPath, HealthzHandler, and the
+# MountLiveness that registers them) is deliberately absent: it is the
+# platform's now (go/observability/liveness.go, mounted by obs.MountLiveness),
+# exactly like the exact+subtree route registration (pkgcore.MountRoutes),
+# so a host reaches both through their platform packages and the kernel no
+# longer declares them at all.
 HOSTCORE_IDENTIFIERS = (
-    "HealthzPath",
-    "MetricsPath",
     "AuthnAPIPath",
     "ReadHeaderTimeout",
     "ShutdownTimeout",
-    "HealthzHandler",
-    "MetricsHandler",
-    "MountLiveness",
     "PreAuthAllowlist",
-    "MountRoute",
     "RegisterMountedRoutes",
     "ServeUntilShutdown",
 )
 
 # Expressions the shared kernel owns: their appearance in a non-test .go
-# file outside the two copies means a host re-grew that piece.
+# file outside the two copies means a host re-grew that piece. The path
+# literals stay on this list even though their constants moved to
+# go/observability -- a host literal for any of them is drift whichever
+# package owns the constant (obs.HealthzPath, obs.MetricsPath, and
+# hostcore.AuthnAPIPath respectively).
 HOSTCORE_SENTINELS = (
     "ListenAndServe",
     "BaseContext",

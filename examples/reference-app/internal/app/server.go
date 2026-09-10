@@ -40,14 +40,16 @@ import (
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/notification/staticaddr"
+	obs "github.com/vislake/speed/go/observability"
 
 	// Blank-imported for its init() side effect: obs.Init's local
 	// exporters wire a real /metrics scrape endpoint only when a local
 	// metrics reader has been registered (go/observability's own doc
 	// comment on Init and RegisterLocalMetricsReader) -- this is what
-	// MetricsHandler below actually serves once main.go's run has called
-	// obs.Init. Without this import, obs.Init still runs (traces and
-	// metrics both go to stdout), but MetricsHandler answers 404.
+	// obs.MountLiveness's metrics route actually serves once main.go's run
+	// has called obs.Init. Without this import, obs.Init still runs
+	// (traces and metrics both go to stdout), but the metrics route
+	// answers 404.
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
 
 	// Blank-imported for its init() side effect: registers the OTLP/gRPC
@@ -92,14 +94,16 @@ const (
 )
 
 // The host-neutral kernel this app shares with every generated project --
-// the liveness endpoints and their pre-auth allowlist entries, the
-// route-mounting rule, the mounted-route label seed, the path/timeout
-// constants and the serve/graceful-shutdown lifecycle -- lives in
-// internal/hostcore, byte-identical to the copy `saasctl new` embeds
-// (tools/check_host_core_parity.py enforces the equality). What this file
-// keeps is the host-specific half: ServerConfig's defaults above, this
-// app's own composition (BuildServer), and its host-owned route guards
-// and demo identity layer.
+// the pre-auth allowlist entries, authn's mount path, the mounted-route
+// label seed, the timeout constants and the serve/graceful-shutdown
+// lifecycle -- lives in internal/hostcore, byte-identical to the copy
+// `saasctl new` embeds (tools/check_host_core_parity.py enforces the
+// equality). The liveness routes themselves are the platform's now
+// (obs.MountLiveness and its paths), as is the module-route mounting rule
+// (pkgcore.MountRoutes), so both hosts call the platform rather than
+// restating either. What this file keeps is the host-specific half:
+// ServerConfig's defaults above, this app's own composition (BuildServer),
+// and its host-owned route guards and demo identity layer.
 
 // DevConfigKey is the master key used when APP_CONFIG_KEY is unset. It is
 // the ascending 0x00..0x1f byte sequence -- a recognizable constant, never
@@ -233,7 +237,7 @@ var DemoHostTenants = map[string]pkgcore.TenantID{
 // org -- the two sit at the same dependency tier, peers, neither importing
 // the other -- so whatever answers authn's two membership questions must
 // be supplied by the assembling application, exactly like
-// DemoNotesSubjectResolver and OrgSubtreeResolver below are. The app's
+// DemoNotesSubjectResolver and OrgSubtreeResolverFor below are. The app's
 // membership store starts empty, and who fills it depends on the boot:
 //
 //   - Every boot seeds the fixed demo header actors' rbac grants
@@ -252,51 +256,56 @@ var DemoHostTenants = map[string]pkgcore.TenantID{
 //     flowtests/server_test.go, flowtests/authn_e2e_test.go), keeping a reference to the same
 //     store BuildServer itself wires.
 
-// DemoOrgUserHeader is the header DemoOrgSubjectResolver reads to identify the
-// HTTP caller: the stand-in for the verified access-token claims a real
-// deployment's resolver would read, in exactly the spirit of
-// DemoHostTenants' own disclaimer above. A caller sets it to whatever user
-// id it wants to act as, with no verification whatsoever -- which is fine
-// for this reference app's own demonstration purposes and would be a
-// critical vulnerability in any real deployment.
+// DemoOrgUserHeader is the header the demo identity closure
+// DemoOrgSubjectResolverFor builds reads to identify the HTTP caller: the
+// stand-in for the verified access-token claims a real deployment's
+// resolver would read, in exactly the spirit of DemoHostTenants' own
+// disclaimer above. A caller sets it to whatever user id it wants to act
+// as, with no verification whatsoever -- which is fine for this reference
+// app's own demonstration purposes and would be a critical vulnerability
+// in any real deployment.
 const DemoOrgUserHeader = "X-Demo-User-Id"
 
-// DemoOrgSubjectResolver supplies the caller identity to every module that
-// declares the same structurally identical SubjectResolver seam: org's two
-// caller-scoped endpoints (creating and accepting an invitation), every
-// notification endpoint (which resolves its caller's inbox, contacts and
-// preferences through it) and integration's creator reads. It exists only
-// so this reference app has *some* way to demonstrate those endpoints end
-// to end through a caller-chosen identity.
+// DemoOrgSubjectResolverFor returns the demo identity closure every module
+// that declares the structurally identical SubjectResolver seam resolves
+// its callers through: org's two caller-scoped endpoints (creating and
+// accepting an invitation), every notification endpoint (which resolves
+// its caller's inbox, contacts and preferences through it) and
+// integration's creator reads. Each module's own func adapter wraps it at
+// the wiring site (org.SubjectResolverFunc and the two siblings -- see the
+// compile-time checks below), so no host-side named type is needed to
+// satisfy the seam. It exists only so this reference app has *some* way to
+// demonstrate those endpoints end to end through a caller-chosen identity.
 //
-// In its default, header-enabled wiring, who a caller is is the
-// X-Demo-User-Id header value, and nothing else: the resolver never falls
-// back to the verified Principal authn.Middleware leaves in the request
-// context, and an authenticated caller with no demo header gets the
-// module's own per-operation 401 (notification.subject_unresolved,
-// integration.subject_unresolved, org's sibling), never a fabricated user
-// id. That header-only refusal is pinned behaviour of this app's rig
-// (flowtests/notification_flow_test.go's subject-less leg; demoRouteGuards names the
-// path routePublic for the same reason) -- for notification's and
-// integration's surfaces it stays exactly that, because no browser-shaped
-// flow reaches them.
+// It fails closed: no header, and no verified Principal in the wiring that
+// reads one, reports ("", false), and the module's own per-operation
+// refusal (notification.subject_unresolved,
+// integration.subject_unresolved, org's sibling) is what a caller then
+// sees. Resolution order in the header-enabled wiring: the X-Demo-User-Id
+// header when present (the pre-auth flows' affordance); else, when
+// principalFallback is set (org's wiring only), the verified Principal;
+// else fail closed. In the headerDisabled wiring, the verified Principal
+// alone.
 //
-// The principalFallback field is a deliberate exception for ORG's wiring
-// alone, the same shape DemoNotesSubjectResolver's
-// header-then-Principal fallback gives notes' and cases' creator
-// seams: org's caller-scoped endpoints also serve browser-shaped callers --
-// a signed-in clinic owner whose requests carry a bearer token and no demo
-// header -- so the org module is wired with principalFallback set, and a
-// header-less request with a verified Principal resolves as that
-// Principal's user. The field's zero value (notification's, integration's
-// and every test's instance) keeps the header-only resolver,
+// principalFallback is the deliberate exception for ORG's wiring alone, the
+// same shape DemoNotesSubjectResolver's header-then-Principal fallback
+// gives notes' and cases' creator seams: org's caller-scoped endpoints also
+// serve browser-shaped callers -- a signed-in clinic owner whose requests
+// carry a bearer token and no demo header -- so the org module is wired
+// with principalFallback true, and a header-less request with a verified
+// Principal resolves as that Principal's user. false (notification's,
+// integration's and every test's wiring) keeps the header-only resolver,
 // preserving the pinned refusal where it belongs.
 //
-// The headerDisabled field is the other deliberate exception to the
-// "never falls back to the Principal" rule: an operator who sets
-// APP_DISABLE_DEMO_USER_HEADER has declared this deployment reads no demo
-// header at all, so the only identity left to resolve a caller from is the
-// verified Principal.
+// headerDisabled is the other deliberate exception to the "never falls back
+// to the Principal" rule: an operator who sets APP_DISABLE_DEMO_USER_HEADER
+// has declared this deployment reads no demo header at all, so the only
+// identity left to resolve a caller from is the verified Principal.
+// BuildServer passes cfg.DisableDemoUserHeader here, which is what extends
+// the kill switch -- alone it would only reach DemoUserHeader in the rbac
+// gate -- to the org, notification and integration surfaces this closure
+// serves. See the DisableDemoUserHeader field's own doc comment
+// (bootstrap.go) for the full contract.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real SubjectResolver must derive the caller from a source the server
@@ -304,83 +313,40 @@ const DemoOrgUserHeader = "X-Demo-User-Id"
 // unauthenticated, client-supplied header like this one -- see
 // org.SubjectResolver's own doc comment for the same rule stated as a hard
 // requirement.
-//
-// headerDisabled carries the value of cfg.DisableDemoUserHeader
-// (APP_DISABLE_DEMO_USER_HEADER) BuildServer wired this resolver with. The
-// zero value keeps the header-only resolver; the disabled wiring is what
-// an operator setting the kill switch gets, and it
-// is the point of this field: it is what extends the kill switch -- which
-// alone would only reach DemoUserHeader in the rbac gate -- to this
-// resolver (and the org, notification and integration surfaces it serves),
-// which would otherwise honor X-Demo-User-Id unconditionally. With
-// headerDisabled set, Subject reads
-// no header at all and resolves the caller from the verified authn
-// Principal alone -- the identity authn.Middleware proved -- failing
-// closed exactly like the header-only shape when no Principal exists. See
-// the DisableDemoUserHeader field's own doc comment (bootstrap.go) for the
-// full contract.
-type DemoOrgSubjectResolver struct {
-	// HeaderDisabled carries cfg.DisableDemoUserHeader
-	// (APP_DISABLE_DEMO_USER_HEADER): when true, Subject reads no demo
-	// header at all and resolves the verified authn Principal alone,
-	// failing closed without one -- see the type's own doc comment for
-	// the full contract. The zero value keeps the header-first resolver.
-	HeaderDisabled bool
-
-	// PrincipalFallback lets ORG's wiring (this file's org.NewModule
-	// option) resolve a header-less request from the verified Principal
-	// authn.Middleware left in the request context -- the browser-shaped
-	// caller org's team surface needs. Zero value keeps the
-	// header-only contract (see the type's own doc comment).
-	PrincipalFallback bool
-}
-
-// Subject implements org.SubjectResolver, notification.SubjectResolver and
-// integration.SubjectResolver -- the three modules that declare the
-// identical seam, since all three share the identical
-// (r *http.Request) (string, bool) shape with the identical fail-closed
-// contract, and this app already has one instance to hand each of them. It
-// fails closed: no header, no verified Principal in the wiring that reads
-// one, reports ("", false), and the module's own per-operation refusal
-// (notification.subject_unresolved,
-// integration.subject_unresolved, org's sibling) is what a caller then
-// sees.
-//
-// Resolution order in the header-enabled wiring: the X-Demo-User-Id header
-// when present (the pre-auth flows' affordance); else, when
-// principalFallback is set (org's wiring only), the verified Principal;
-// else fail closed. In the headerDisabled wiring, the verified Principal
-// alone.
-func (r DemoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
-	if !r.HeaderDisabled {
-		if userID := req.Header.Get(DemoOrgUserHeader); userID != "" {
-			return userID, true
-		}
-		if r.PrincipalFallback {
-			if principal, ok := authn.PrincipalFromContext(req.Context()); ok && principal.UserID != "" {
-				return principal.UserID, true
+func DemoOrgSubjectResolverFor(headerDisabled, principalFallback bool) func(*http.Request) (string, bool) {
+	return func(req *http.Request) (string, bool) {
+		if !headerDisabled {
+			if userID := req.Header.Get(DemoOrgUserHeader); userID != "" {
+				return userID, true
 			}
+			if principalFallback {
+				if principal, ok := authn.PrincipalFromContext(req.Context()); ok && principal.UserID != "" {
+					return principal.UserID, true
+				}
+			}
+			return "", false
 		}
-		return "", false
+		principal, ok := authn.PrincipalFromContext(req.Context())
+		if !ok || principal.UserID == "" {
+			return "", false
+		}
+		return principal.UserID, true
 	}
-	principal, ok := authn.PrincipalFromContext(req.Context())
-	if !ok || principal.UserID == "" {
-		return "", false
-	}
-	return principal.UserID, true
 }
 
-// compile-time checks that DemoOrgSubjectResolver satisfies the identical
-// SubjectResolver seam the three modules it serves declare.
+// compile-time checks that the closure DemoOrgSubjectResolverFor returns
+// satisfies the identical SubjectResolver seam the three modules it serves
+// declare -- wrapped by each module's own func adapter, exactly as the
+// wiring sites below pass it.
 var (
-	_ org.SubjectResolver          = DemoOrgSubjectResolver{}
-	_ notification.SubjectResolver = DemoOrgSubjectResolver{}
-	_ integration.SubjectResolver  = DemoOrgSubjectResolver{}
+	_ org.SubjectResolver          = org.SubjectResolverFunc(DemoOrgSubjectResolverFor(false, false))
+	_ notification.SubjectResolver = notification.SubjectResolverFunc(DemoOrgSubjectResolverFor(false, false))
+	_ integration.SubjectResolver  = integration.SubjectResolverFunc(DemoOrgSubjectResolverFor(false, false))
 )
 
 // DemoNotesSubjectResolver is what notes' create handler resolves the
 // creating user from -- the notes.NewModule option BuildServer wires
-// below. It is DemoOrgSubjectResolver's behavior plus one source: like
+// below. It is DemoOrgSubjectResolverFor's behavior plus one source: like
 // its sibling it reads the X-Demo-User-Id header first, the attribution
 // affordance every flow helper in this package sends and the namespace
 // demo_notification.go's address table keys on; and only when no header
@@ -394,23 +360,22 @@ var (
 // ordinary skip (see demo_notification.go's DemoUserAddresses).
 //
 // Notes' creator seam is not alone in having this second source:
-// org's caller-scoped endpoints share it -- the org module's
-// DemoOrgSubjectResolver instance is wired with the type's
-// principalFallback field set, giving org the
-// identical header-then-Principal shape (see DemoOrgSubjectResolver's own
+// org's caller-scoped endpoints share it -- the org module is wired with
+// DemoOrgSubjectResolverFor's principalFallback true, giving org the
+// identical header-then-Principal shape (see DemoOrgSubjectResolverFor's own
 // doc comment). The notification module's caller-scoped endpoints keep the
 // header-only read, because its subject-less refusal is a pinned behaviour
 // of this app's rig -- and a request that reaches those surfaces without
 // the header stays refused rather than acting as the principal's user id.
 //
 // This is a placeholder, not a pattern to copy into a real deployment:
-// the header is exactly as unverifiable here as in DemoOrgSubjectResolver,
+// the header is exactly as unverifiable here as in DemoOrgSubjectResolverFor,
 // and a real deployment's resolver reads the creating user from the
 // verified token the notes create handler already stands behind.
 //
 // headerDisabled carries the value of cfg.DisableDemoUserHeader
 // (APP_DISABLE_DEMO_USER_HEADER) BuildServer wired this resolver with --
-// the sibling of DemoOrgSubjectResolver's own field of the same name, and
+// the sibling of DemoOrgSubjectResolverFor's own headerDisabled argument, and
 // what extends the kill switch to this resolver: without it, a caller
 // could still name any creator through X-Demo-User-Id on notes' and
 // cases' surfaces while the rbac header alone was disabled. The
@@ -588,66 +553,32 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 	return nil
 }
 
-// OrgSubtreeResolver adapts org.Scope's Path method onto rbac.SubtreeResolver's
-// NodePath -- the two no-import seams differ just enough (three return
-// values vs. two; "not found" folded into an error vs. a plain boolean)
-// that a one-line wrapper is needed, unlike OrgFeatureGate/FeatureGate's
-// exact structural match above. org.Scope is safe to hold directly (unlike
-// *config.Service above): orgModule.Scope() is available the moment
-// org.NewModule returns, with no Attach-ordering constraint, so this
-// adapter captures it at construction rather than reading it lazily.
-type OrgSubtreeResolver struct{ Scope org.Scope }
-
-// NodePath implements rbac.SubtreeResolver.
-func (r OrgSubtreeResolver) NodePath(ctx context.Context, nodeID string) (string, bool, error) {
-	path, err := r.Scope.Path(ctx, nodeID)
-	if err != nil {
-		if apperr.HasCode(err, org.ErrNodeNotFound.Code) {
-			// rbac's own contract: an unresolvable node DENIES the binding
-			// that named it rather than erroring, so the caller's Can/
-			// DataScope decision reports "no such node" as ok == false,
-			// never widening to the tenant (SubtreeResolver's own doc
-			// comment).
-			return "", false, nil
+// OrgSubtreeResolverFor adapts org.Scope's Path method onto
+// rbac.SubtreeResolver's NodePath -- the two no-import seams differ just
+// enough (three return values vs. two; "not found" folded into an error vs.
+// a plain boolean) that an adapter is needed, unlike
+// OrgFeatureGate/FeatureGate's exact structural match. It returns the
+// closure wrapped in rbac.SubtreeResolverFunc, so the wiring site passes
+// the option a value it already accepts. org.Scope is safe to capture
+// directly (unlike *config.Service in the readers below): orgModule.Scope()
+// is available the moment org.NewModule returns, with no Attach-ordering
+// constraint.
+func OrgSubtreeResolverFor(scope org.Scope) rbac.SubtreeResolverFunc {
+	return func(ctx context.Context, nodeID string) (string, bool, error) {
+		path, err := scope.Path(ctx, nodeID)
+		if err != nil {
+			if apperr.HasCode(err, org.ErrNodeNotFound.Code) {
+				// rbac's own contract: an unresolvable node DENIES the binding
+				// that named it rather than erroring, so the caller's Can/
+				// DataScope decision reports "no such node" as ok == false,
+				// never widening to the tenant (SubtreeResolver's own doc
+				// comment).
+				return "", false, nil
+			}
+			return "", false, err
 		}
-		return "", false, err
+		return path, true, nil
 	}
-	return path, true, nil
-}
-
-// compile-time check that OrgSubtreeResolver satisfies rbac.SubtreeResolver.
-var _ rbac.SubtreeResolver = OrgSubtreeResolver{}
-
-// readTenantDurationConfig is the shared core SharingConfigReader and
-// ComplianceConfigReader below both call into: it resolves key's
-// tenant-then-system-then-schema-default effective value through cfg
-// (go/config's own three-tier resolution, Service.Get's own doc comment)
-// and reports ok = false when it resolved at the schema default -- i.e.
-// neither a tenant nor a system row exists at all -- exactly the
-// "tenant has configured none" signal both go/sharing's TenantConfigReader
-// and go/compliance's ExportDeliveryExpiryReader document. Using Get
-// (rather than the type-erasing config.GetTyped) is what makes that
-// distinction visible at all: GetTyped throws away Value.Scope, so it
-// cannot tell a genuinely unset key from one that happens to resolve to
-// its own declared Default.
-func readTenantDurationConfig(ctx context.Context, cfg *config.Service, key string, tenant pkgcore.TenantID) (time.Duration, bool, error) {
-	tenantCtx := pkgcore.WithTenant(ctx, tenant)
-	v, err := cfg.Get(tenantCtx, key)
-	if err != nil {
-		return 0, false, err
-	}
-	if v.Scope == "" {
-		// Resolved to the schema default: no explicit tenant or system row
-		// exists, so report "unconfigured" and let the caller's own
-		// fallback (identical to that same schema Default) apply, exactly
-		// as if no reader were wired at all.
-		return 0, false, nil
-	}
-	d, ok := v.Data.(time.Duration)
-	if !ok {
-		return 0, false, fmt.Errorf("reference-app: config key %q did not resolve to a duration value", key)
-	}
-	return d, true, nil
 }
 
 // SharingConfigReader adapts a *config.Service that is filled in AFTER
@@ -670,7 +601,7 @@ func (r SharingConfigReader) ShareDefaultExpiry(ctx context.Context, tenant pkgc
 	if svc == nil {
 		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
 	}
-	return readTenantDurationConfig(ctx, svc, sharing.ConfigDefaultExpiry, tenant)
+	return svc.TenantDuration(ctx, sharing.ConfigDefaultExpiry, tenant)
 }
 
 // compile-time check that SharingConfigReader satisfies
@@ -683,7 +614,7 @@ var _ sharing.TenantConfigReader = SharingConfigReader{}
 // shared one, because the two seams are structurally different Go
 // interfaces (ShareDefaultExpiry vs ExportDeliveryExpiry, per each
 // module's own declared method name) even though their bodies both do
-// nothing but call readTenantDurationConfig with a different config
+// nothing but call config.Service.TenantDuration with a different config
 // key -- forcing one type to implement both method names would be a
 // coincidental unification neither module's own design asked for.
 type ComplianceConfigReader struct{ Service **config.Service }
@@ -694,7 +625,7 @@ func (r ComplianceConfigReader) ExportDeliveryExpiry(ctx context.Context, tenant
 	if svc == nil {
 		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
 	}
-	return readTenantDurationConfig(ctx, svc, compliance.ConfigExportDeliveryExpiry, tenant)
+	return svc.TenantDuration(ctx, compliance.ConfigExportDeliveryExpiry, tenant)
 }
 
 // compile-time check that ComplianceConfigReader satisfies
@@ -838,7 +769,7 @@ type ServerConfig struct {
 	// identity source away from the demo headers: every permission-gated
 	// route's SubjectResolver through DemoSubjectResolverFor(true), and
 	// every attribution seam through headerDisabled
-	// DemoOrgSubjectResolver/DemoNotesSubjectResolver instances -- see
+	// DemoOrgSubjectResolverFor/DemoNotesSubjectResolver instances -- see
 	// the DisableDemoUserHeader field's own doc comment (bootstrap.go) for
 	// why this exists
 	// and exactly what it changes. ConfigFromEnv sets it from
@@ -1361,74 +1292,20 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		return nil, nil, nil, fmt.Errorf("reference-app: build the config master cipher: %w", err)
 	}
 
-	// org's Invitation.Email column is encrypted at rest under this same
-	// cipher (registered here, before anything touches the Invitation
-	// model, since GORM resolves a named serializer at struct-parse time)
-	// and made queryable by a SEPARATE HMAC key -- see OrgIndexKeyEnv's own
-	// doc comment for why reusing cfg.ConfigKey for both would be exactly
-	// the AES-key-doubling-as-an-HMAC-key weakness dbkit warns against.
-	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
-	// The column argument below is org's exported EmailIndexColumn rather
-	// than a hand-typed literal for the reason the notification block just
-	// below documents: dbkit.NewBlindIndexer refuses an EMPTY column name
-	// but has no guard for a non-empty wrong one -- a hand-typed literal
-	// that drifted from the real column would fail only when someone
-	// called Equal on the indexer. The
-	// exported constant travels from the package that owns the schema,
-	// pinned by org's own suite (go/org/email_index_column_drift_test.go).
-	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
-	if err != nil {
+	// Every encrypted column this app's modules own is bound through the
+	// module that owns it: the module knows its GORM serializer name and
+	// the exact blind index column its lookups were designed against, so
+	// the host only supplies the keys (see registerModuleSerializers and
+	// buildModuleIndexers below for each step's contract).
+	if regErr := registerModuleSerializers(cipher); regErr != nil {
 		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
+		return nil, nil, nil, regErr
 	}
-
-	// notification's Contact.Address column is encrypted at rest under this
-	// same config cipher (registered here, before anything touches the
-	// Contact model, since GORM resolves a named serializer at struct-parse
-	// time) and made queryable by a SEPARATE HMAC key -- see
-	// the Notification field's own doc comment (bootstrap.go) for why reusing
-	// cfg.ConfigKey for both would be exactly the AES-key-doubling-as-an-
-	// HMAC-key weakness dbkit warns against. One key serves the email and
-	// the phone indexers alike (authn's single blind-index key precedent);
-	// both index the SAME column (verified_contacts.address_index), and the
-	// column argument below is notification's exported AddressIndexColumn
-	// rather than a hand-typed string because dbkit.NewBlindIndexer refuses
-	// an EMPTY column name but has no guard for a non-empty wrong one -- a
-	// hand-typed literal that drifted from the real column would fail only
-	// when someone called Equal on the indexers. The
-	// per-indexer error text below still names which of the two failed.
-	dbkit.RegisterEncryptedSerializer(notification.ContactAddressSerializerName, cipher)
-	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizeEmail)
-	if err != nil {
+	orgIndexer, contactEmailIndexer, contactPhoneIndexer, indexErr := buildModuleIndexers(cfg)
+	if indexErr != nil {
 		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
+		return nil, nil, nil, indexErr
 	}
-	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
-	}
-
-	// ai-gateway's ai_gateway_credentials.api_key column is encrypted at
-	// rest under this same config cipher, registered here for the identical
-	// "before anything touches the model" reason as org's and notification's
-	// registrations immediately above. Unlike those two, no separate HMAC
-	// key is needed: a credential is only ever looked up by (provider,
-	// scope, tenant_id), never by its own value, so reusing cfg.ConfigKey's
-	// cipher carries none of the AES-key-doubling-as-an-HMAC-key risk their
-	// comments warn about -- there is no second, HMAC construction here to
-	// double as.
-	dbkit.RegisterEncryptedSerializer(aigateway.CredentialAPIKeySerializerName, cipher)
-
-	// integration's WebhookSubscription.Secret column is encrypted at rest
-	// under this same config cipher, registered here for the identical
-	// "before anything touches the model" reason as every registration
-	// above. A webhook secret must be READ BACK IN PLAINTEXT to sign
-	// every delivery attempt, never merely compared, so no separate HMAC
-	// blind index is needed here either -- the identical reasoning
-	// aigateway.CredentialAPIKeySerializerName's own registration comment
-	// gives.
-	dbkit.RegisterEncryptedSerializer(integration.WebhookSecretSerializerName, cipher)
 
 	// hostByTenant is cfg.HostTenants' reverse index: which configured
 	// host belongs to a given tenant, the first source an invitation's
@@ -1469,13 +1346,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// instance falls back to the verified Principal when no demo header
 		// is present, the same header-then-Principal shape
 		// DemoNotesSubjectResolver gives notes' and cases' creator seams.
-		// The notification and integration modules keep the flag unset (see
-		// DemoOrgSubjectResolver's own doc comment for why their
+		// The notification and integration modules keep the flag false (see
+		// DemoOrgSubjectResolverFor's own doc comment for why their
 		// header-only refusal stays pinned).
-		org.WithSubjectResolver(DemoOrgSubjectResolver{
-			HeaderDisabled:    cfg.DisableDemoUserHeader,
-			PrincipalFallback: true,
-		}),
+		org.WithSubjectResolver(org.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, true))),
 		org.WithMailFrom("invitations@reference-app.example"),
 		org.WithInvitationLinkBuilder(func(ctx context.Context, token string) (string, error) {
 			tenant, tenantErr := pkgcore.MustTenantFromContext(ctx)
@@ -1712,8 +1586,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// rbac needs nothing from this host but a database: it declares its own
 	// permissions during Register and reads EVERY module's declarations
 	// once, in Attach, after Bootstrap. WithSubtreeResolver IS wired, onto
-	// orgModule's own Scope (OrgSubtreeResolver below, an adapter over the
-	// two seams' slightly different signatures -- see its own doc comment):
+	// orgModule's own Scope (OrgSubtreeResolverFor below, an adapter over
+	// the two seams' slightly different signatures -- see its own doc
+	// comment):
 	// this app's organization tree is real (flowtests/org_flow_test.go's multi-level
 	// DSO tree, and the subtree-scoped grant test),
 	// so a node-scoped rbac binding must actually resolve against it rather
@@ -1734,7 +1609,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// onto the queue; the queue's retries are what converge a reap that
 	// hit a transient database failure.
 	rbacModule := rbac.NewModule(db,
-		rbac.WithSubtreeResolver(OrgSubtreeResolver{Scope: orgModule.Scope()}),
+		rbac.WithSubtreeResolver(OrgSubtreeResolverFor(orgModule.Scope())),
 		rbac.WithQueue(standaloneQueue))
 
 	// storageModule is the reference app's first consumer of go/storage.
@@ -1780,7 +1655,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// itself (resolver.go's own doc comment explains why), so this
 	// composition is entirely this app's own, the same way every other
 	// no-import-edge seam in this file (OrgFeatureGate,
-	// DemoOrgSubjectResolver, ...) is wired. WithTenantConfigReader wires
+	// DemoOrgSubjectResolverFor, ...) is wired. WithTenantConfigReader wires
 	// SharingConfigReader (defined above, alongside OrgFeatureGate), so a
 	// tenant's own sharing.default_expiry override -- once config.Service
 	// exists, after Attach below -- actually governs Service.Create's
@@ -1803,7 +1678,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// (see their own doc comments on ServerConfig above): nil in every
 	// production boot, which leaves go/integration's SSRF protection
 	// exactly as strict as its default. WithSubjectResolver wires the
-	// identical DemoOrgSubjectResolver
+	// identical DemoOrgSubjectResolverFor
 	// instance org's and notification's own wiring already share -- it is
 	// what lets the module's spec-generated HTTP surface (mounted below
 	// through the generic mountModuleRoutes loop) resolve a creator for
@@ -1815,7 +1690,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(standaloneQueue),
-		integration.WithSubjectResolver(DemoOrgSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}),
+		integration.WithSubjectResolver(integration.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	}
 	if cfg.WebhookURLValidator != nil {
 		integrationOpts = append(integrationOpts, integration.WithWebhookURLValidator(cfg.WebhookURLValidator))
@@ -1848,7 +1723,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// app's whole address store. WithSubjectResolver hands the HTTP surface
 	// the same demo identity layer type org's handler uses -- its own
 	// instance keeps principalFallback unset, so this surface's caller is
-	// whoever the X-Demo-User-Id header says (see DemoOrgSubjectResolver's
+	// whoever the X-Demo-User-Id header says (see DemoOrgSubjectResolverFor's
 	// own doc comment on why the two wirings differ) -- the module
 	// resolves identity per operation and never reads it from the request
 	// otherwise.
@@ -1859,7 +1734,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),
 		notification.WithDeliveryQueue(standaloneQueue),
 		notification.WithUserAddressResolver(staticaddr.New(DemoUserAddresses)),
-		notification.WithSubjectResolver(DemoOrgSubjectResolver{HeaderDisabled: cfg.DisableDemoUserHeader}),
+		notification.WithSubjectResolver(notification.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	)
 
 	// demoModule is the carrier of the app's demo notification type
@@ -2617,7 +2492,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	meteringModule.Start(ctx)
 
 	mux := http.NewServeMux()
-	hostcore.MountLiveness(mux)
+	obs.MountLiveness(mux)
 	orgGuardDeps := OrgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
 	adminHandler, authnHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
@@ -2626,8 +2501,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	}
 
 	// hostcore.RegisterMountedRoutes hands every obs.Middleware this
-	// process later constructs this app's REAL route table -- /healthz,
-	// /metrics (which no module registered) and every route
+	// process later constructs this app's REAL route table -- obs's two
+	// liveness paths (which no module registered) and every route
 	// mountModuleRoutes just mounted on mux -- so the route-label limiter
 	// the middleware builds reserves a slot for each real route BEFORE any
 	// request traffic arrives; see its own doc comment for the mechanism
@@ -2989,10 +2864,13 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	)
 
 	topMux := http.NewServeMux()
-	topMux.Handle(adminRoutePath, adminHandler)
-	topMux.Handle(adminRoutePath+"/", adminHandler)
-	topMux.Handle(hostcore.AuthnAPIPath, authnHandler)
-	topMux.Handle(hostcore.AuthnAPIPath+"/", authnHandler)
+	// pkgcore.MountRoutes registers both branches at their exact paths and
+	// below them; see its own doc comment for why the dual registration is
+	// the only correct shape.
+	pkgcore.MountRoutes(topMux,
+		pkgcore.MountedRoute{Path: adminRoutePath, Handler: adminHandler},
+		pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnHandler},
+	)
 	topMux.Handle("/", restOfAppChain)
 
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
@@ -3077,6 +2955,63 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	return handler, cleanup, complianceModule, nil
 }
 
+// registerModuleSerializers binds every encrypted column this app's modules
+// own, one module-owned registrar per column: each module knows the GORM
+// serializer name its schema expects, so the name never crosses this
+// boundary as a hand-typed string. All four registrations must happen
+// before anything touches the models -- GORM resolves a named serializer
+// while it parses the schema -- which is also why this is a host step at
+// all rather than something Module.Register could do (by then the database
+// is open, and Register is forbidden from doing anything but declare).
+//
+// cipher is the one config cipher that seals every one of these columns;
+// each registrar refuses a nil cipher rather than registering one that
+// would silently store plaintext. Because that shared cipher is the only
+// input, evaluating all four before reporting the first failure is
+// equivalent to failing fast on it.
+func registerModuleSerializers(cipher *dbkit.Cipher) error {
+	for _, registration := range []struct {
+		what string
+		err  error
+	}{
+		{"org email serializer", org.RegisterEmailSerializer(cipher)},
+		{"notification contact-address serializer", notification.RegisterContactAddressSerializer(cipher)},
+		{"ai-gateway credential serializer", aigateway.RegisterCredentialAPIKeySerializer(cipher)},
+		{"integration webhook-secret serializer", integration.RegisterWebhookSecretSerializer(cipher)},
+	} {
+		if registration.err != nil {
+			return fmt.Errorf("reference-app: register the %s: %w", registration.what, registration.err)
+		}
+	}
+	return nil
+}
+
+// buildModuleIndexers builds the blind indexers the org and notification
+// modules query their encrypted columns through, each through the module's
+// own constructor: the module owns its index column and canonical form, so
+// neither crosses this boundary as a hand-typed string. org's invitation
+// addresses and notification's verified contacts are made queryable by
+// SEPARATE HMAC keys -- see the Org and Notification fields' own doc
+// comments (bootstrap.go) for why reusing cfg.ConfigKey for both would be
+// exactly the AES-key-doubling-as-an-HMAC-key weakness dbkit warns
+// against. One key serves notification's email and phone indexers alike
+// (authn's single blind-index key precedent).
+func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindIndexer, *dbkit.BlindIndexer, error) {
+	orgIndexer, err := org.NewEmailIndexer(cfg.OrgIndexKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
+	}
+	contactEmailIndexer, err := notification.NewContactEmailIndexer(cfg.NotificationIndexKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
+	}
+	contactPhoneIndexer, err := notification.NewContactPhoneIndexer(cfg.NotificationIndexKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
+	}
+	return orgIndexer, contactEmailIndexer, contactPhoneIndexer, nil
+}
+
 // mountModuleRoutes copies every route reg's modules mounted onto mux,
 // with TWO deliberate exceptions, each mounted by BuildServer on its own
 // topMux branch directly behind authn.Middleware and nothing else -- see
@@ -3126,9 +3061,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 // POST, since a redirect is not guaranteed to preserve the method or body
 // across every client. pkgcore.MountedRoute's own doc comment says the
 // Handler "serves every request below Path", meaning it must be reachable
-// at Path itself AND at everything nested below it; the dual registration
-// that satisfies that contract is the shared kernel's, so every plain
-// route below mounts through hostcore.MountRoute (see its doc comment).
+// at Path itself AND at everything nested below it; that contract's one
+// implementation is pkgcore.MountRoutes (see its doc comment), which is
+// what every plain route below mounts through.
 //
 // Every route also passes through GuardModuleRoute on the way out, which
 // is where rbac's permission gate is applied -- see demo_subject.go's
@@ -3152,7 +3087,7 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 			authnHandler = handler
 			continue
 		}
-		hostcore.MountRoute(mux, route.Path, handler)
+		pkgcore.MountRoutes(mux, pkgcore.MountedRoute{Path: route.Path, Handler: handler})
 	}
 	if adminHandler == nil {
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)

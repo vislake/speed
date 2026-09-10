@@ -20,6 +20,7 @@ import (
 	// its other infrastructure seams compose under (see buildServer's own
 	// kernel-wiring comment below for the full reasoning).
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
@@ -31,12 +32,13 @@ import (
 	"__APP_NAME__/internal/hostcore"
 )
 
-// The liveness routes' paths and handlers, the pre-auth allowlist set
-// and the route-mounting rule are the shared host kernel's
-// (internal/hostcore), byte-identical to the reference app's copy: this
-// file names them through hostcore rather than restating them, so a
-// generated project and the reference app keep composing the same host
-// surface.
+// The liveness routes' paths and handlers are observability's
+// (obs.MountLiveness), the module-route mounting rule is pkgcore's
+// (pkgcore.MountRoutes), and the pre-auth allowlist set is the shared host
+// kernel's (internal/hostcore, byte-identical to the reference app's copy):
+// this file names them through those packages rather than restating any of
+// them, so a generated project and the reference app keep composing the
+// same host surface.
 
 // buildServer wires this project's Kernel, the modules the generator
 // selected for it, their migrations, and the middleware chain into a
@@ -172,17 +174,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// and made queryable by a SEPARATE HMAC key, cfg.OrgIndexKey: reusing
 	// cfg.ConfigKey for both would be exactly the AES-key-doubling-as-an-
 	// HMAC-key weakness dbkit warns about (see config.go's OrgIndexKey
-	// field doc comment).
-	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
-	// The column argument below is org's exported EmailIndexColumn, never
-	// a hand-typed literal, for the same reason the serializer registered
-	// above is an exported constant: dbkit.NewBlindIndexer refuses an
-	// EMPTY column name but has no guard for a non-empty wrong one, so the
-	// exact SQL column name must travel from the package that owns the
-	// schema -- pinned there against the model's gorm tag and the migrated
-	// schema -- rather than be spelled out here where it could drift from
-	// org's wiring contract.
-	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
+	// field doc comment). The module's own registrar and constructor own
+	// the serializer name and the index column, so neither crosses this
+	// wiring as a hand-typed string (see org.NewEmailIndexer's own doc
+	// comment).
+	if regErr := org.RegisterEmailSerializer(cipher); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("__APP_NAME__: register org's email serializer: %w", regErr)
+	}
+	orgIndexer, err := org.NewEmailIndexer(cfg.OrgIndexKey)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("__APP_NAME__: build the org email indexer: %w", err)
@@ -336,7 +336,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// authn's own subtree (hostcore.AuthnAPIPath) to authnMux, everything else to
 	// moduleMux -- never by a per-route enumeration.
 	moduleMux := http.NewServeMux()
-	hostcore.MountLiveness(moduleMux)
+	obs.MountLiveness(moduleMux)
 	authnMux := http.NewServeMux()
 	if err := mountModuleRoutes(authnMux, moduleMux, reg); err != nil {
 		_ = cleanup()
@@ -367,8 +367,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// routes that must work with no Principal: healthz, metrics and
 	// config's two pre-auth display endpoints.
 	topMux := http.NewServeMux()
-	topMux.Handle(hostcore.AuthnAPIPath, authnMux)
-	topMux.Handle(hostcore.AuthnAPIPath+"/", authnMux)
+	pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})
 	topMux.Handle("/", tenancy.Middleware(authn.NewPrincipalResolver(), hostcore.PreAuthAllowlist()...)(moduleMux))
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
 	return handler, cleanup, nil
@@ -385,17 +384,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 // nothing outside that subtree ever is. (authn owns the whole prefix: no
 // other module mounts under /api/v1/authn.)
 //
-// net/http's ServeMux (since Go 1.22) distinguishes an exact-match pattern
-// from a subtree pattern (one ending in "/", matching everything below
-// it): registering only the subtree pattern would make ServeMux redirect a
-// bare request for the exact path with an HTTP redirect instead of serving
-// it directly -- which would silently break a POST, since a redirect is
-// not guaranteed to preserve the method or body across every client.
-// pkgcore.MountedRoute's own doc comment says the Handler "serves every
-// request below Path", meaning it must be reachable at Path itself AND at
-// everything nested below it -- so both patterns are registered explicitly
-// here, pointing at the same Handler, instead of relying on ServeMux's
-// implicit redirect-on-missing-slash behavior.
+// Each route mounts through pkgcore.MountRoutes, whose own doc comment
+// carries the exact-plus-subtree registration rule and the reasoning
+// behind it.
 
 func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Registry) error {
 	for _, route := range reg.Routes.Routes() {
@@ -403,7 +394,7 @@ func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Regis
 		if strings.HasPrefix(route.Path, hostcore.AuthnAPIPath) {
 			target = authnMux
 		}
-		hostcore.MountRoute(target, route.Path, route.Handler)
+		pkgcore.MountRoutes(target, route)
 	}
 	return nil
 }

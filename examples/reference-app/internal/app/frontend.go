@@ -46,9 +46,8 @@ package app
 import (
 	"net/http"
 
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore/spa"
-
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 )
 
 // withFrontend wraps next -- BuildServer's fully composed API handler,
@@ -59,7 +58,7 @@ import (
 func withFrontend(dir string, next http.Handler) http.Handler {
 	return spa.New(dir, next,
 		spa.WithServerPrefix("/api"),
-		spa.WithServerPath(hostcore.HealthzPath),
-		spa.WithServerPath(hostcore.MetricsPath),
+		spa.WithServerPath(obs.HealthzPath),
+		spa.WithServerPath(obs.MetricsPath),
 	)
 }

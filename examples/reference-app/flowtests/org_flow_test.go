@@ -150,7 +150,7 @@ type orgListMembersResponse struct {
 //
 // subjectUserID is a separate thing from the token, the same split
 // createNoteAs's own doc comment (server_test.go) explains for notes: it is
-// the X-Demo-User-Id header org's own SubjectResolver (DemoOrgSubjectResolver
+// the X-Demo-User-Id header org's own SubjectResolver (DemoOrgSubjectResolverFor
 // in internal/app/server.go) reads to name WHO is acting, for the two operations that
 // resolve a caller identity (creating and accepting an invitation). Empty
 // omits the header entirely, which the operations that resolve no caller
@@ -384,7 +384,7 @@ func containsUserID(members []orgMembership, userID string) bool {
 // owner whose browser requests carry a bearer token and NEITHER demo
 // header -- the exact shape the team surface's invite flow produces -- can
 // create an invitation. A header-less request resolves through the
-// verified Principal (DemoOrgSubjectResolver's principalFallback wiring);
+// verified Principal (DemoOrgSubjectResolverFor's principalFallback wiring);
 // without it the request would be refused with org.subject_unresolved even
 // though the rbac gate ahead of it had already let the same principal
 // through.
@@ -393,7 +393,7 @@ func containsUserID(members []orgMembership, userID string) bool {
 // test grants the registered account the owner role through the live rbac
 // service (the demo seeding grants only the header actors), so the whole
 // composed gate -- rbac's DemoSubjectResolver falling back to the verified
-// Principal, then org's own DemoOrgSubjectResolver with principalFallback
+// Principal, then org's own DemoOrgSubjectResolverFor with principalFallback
 // -- is exercised with no demo header anywhere on the wire.
 func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t *testing.T) {
 	// The server is built by hand rather than through buildOrgTestServer

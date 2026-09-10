@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -24,12 +23,12 @@ import (
 // TestRunHealthcheck_OKResponse_Succeeds proves the success half of
 // runHealthcheck's contract: a listener answering HealthzPath with 200
 // reports no error. This is the shape the running server itself produces
-// (HealthzHandler in internal/app/server.go always answers 200 with no tenant
-// required), and it is the shape this example's Dockerfile's HEALTHCHECK
+// (obs.HealthzHandler, which obs.MountLiveness mounts here, always answers
+// 200 with no tenant required), and it is the shape this example's Dockerfile's HEALTHCHECK
 // depends on to report the container healthy.
 func TestRunHealthcheck_OKResponse_Succeeds(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(hostcore.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(obs.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -50,7 +49,7 @@ func TestRunHealthcheck_OKResponse_Succeeds(t *testing.T) {
 // treat that as a failure.
 func TestRunHealthcheck_NonOKResponse_Fails(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(hostcore.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(obs.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	port := startLoopbackServer(t, mux)
@@ -89,7 +88,7 @@ func TestRunHealthcheck_EmptyPort_UsesDefaultPort(t *testing.T) {
 		t.Skipf("DefaultPort %s is not free on this machine: %v", app.DefaultPort, err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc(hostcore.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(obs.HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: mux}}

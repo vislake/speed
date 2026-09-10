@@ -68,7 +68,7 @@ type testListAPIKeysResponse struct {
 // sends X-Demo-User-Id (DemoNotesCreatorUserID, this app's one shared
 // creator-attribution identity): integration_createAPIKey attributes the
 // new key's CreatedBy through integration.SubjectResolver
-// (DemoOrgSubjectResolver in internal/app/server.go, the identical seam instance org's
+// (DemoOrgSubjectResolverFor in internal/app/server.go, the identical seam instance org's
 // and notification's own caller-scoped endpoints already share), which
 // reads that same header. list, rotate and revoke never read it at all --
 // see integration.SubjectResolver's own doc comment for why only Create

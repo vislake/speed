@@ -226,7 +226,7 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 // DemoNotesCreatorUserID, this app's one shared creator-attribution
 // identity: integration_createWebhookSubscription attributes the new
 // subscription's CreatedBy through integration.SubjectResolver
-// (DemoOrgSubjectResolver in internal/app/server.go -- the identical seam instance
+// (DemoOrgSubjectResolverFor in internal/app/server.go -- the identical seam instance
 // integration_createAPIKey already reads), which reads that same
 // header; a create without it is refused 401 integration.subject_unresolved,
 // never attributed to a default user. token selects the tenant the

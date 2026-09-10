@@ -70,7 +70,7 @@ import (
 // verified Principal alone, this header not consulted at all, and
 // the SAME switch reaches the attribution header this app's other
 // resolver family reads (DemoOrgUserHeader, "X-Demo-User-Id", server.go)
-// -- DemoOrgSubjectResolver and DemoNotesSubjectResolver are wired with
+// -- DemoOrgSubjectResolverFor and DemoNotesSubjectResolver are wired with
 // headerDisabled then, so notes' create handler, the cases surface, org's
 // caller-scoped endpoints and the notification surface resolve from the
 // verified Principal too. Left unset (the default),
@@ -239,7 +239,7 @@ const BillingRoutePath = "/api/v1/billing"
 //
 // org's path is gated for real, like storage's and sharing's: org's Handler
 // performs no PERMISSION check of its own -- it resolves a caller's raw
-// identity through SubjectResolver (DemoOrgSubjectResolver in server.go)
+// identity through SubjectResolver (DemoOrgSubjectResolverFor in server.go)
 // for the two invitation operations, org_createInvitation and
 // org_acceptInvitation, and reads only the tenant from context for every
 // other operation -- so this router gate is where the example enforces
@@ -302,7 +302,7 @@ const BillingRoutePath = "/api/v1/billing"
 // notification's path is routePublic for the same structural reason org's
 // and authn's are: notification.Handler resolves and requires its own
 // caller identity per operation through SubjectResolver
-// (DemoOrgSubjectResolver in server.go -- the same seam instance org's
+// (DemoOrgSubjectResolverFor in server.go -- the same seam instance org's
 // own caller-scoped endpoints use; notes' create handler resolves through
 // its own DemoNotesSubjectResolver, which additionally accepts the
 // verified Principal, its comment saying why notes alone gets that

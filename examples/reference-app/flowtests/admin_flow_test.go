@@ -263,7 +263,7 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	}
 
 	// First half: cross-tenant search by email -- resolved BEFORE the
-	// invitation is accepted, because org's SubjectResolver (DemoOrgSubjectResolver)
+	// invitation is accepted, because org's SubjectResolver (DemoOrgSubjectResolverFor)
 	// identifies the accepting caller ONLY from the X-Demo-User-Id header
 	// it is given, never from the verified Principal (its own doc comment
 	// says so explicitly); the membership org creates is therefore bound

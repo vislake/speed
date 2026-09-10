@@ -27,7 +27,8 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // fixtureIndexHTML is the fixture index.html: the same mount-point shape
@@ -192,7 +193,7 @@ func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 
 	// /healthz stays the probe endpoint behind its own path, and the
 	// frontend must not swallow it as an unknown path.
-	rec = serveFrontendRequest(t, http.MethodGet, hostcore.HealthzPath)
+	rec = serveFrontendRequest(t, http.MethodGet, obs.HealthzPath)
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
 		t.Fatalf("GET /healthz = %d %q, want 200 %q", rec.Code, rec.Body, "ok")
 	}

@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	obs "github.com/vislake/speed/go/observability"
@@ -58,7 +57,7 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			req, err := http.NewRequest(method, srv.URL+hostcore.HealthzPath, nil)
+			req, err := http.NewRequest(method, srv.URL+obs.HealthzPath, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}
@@ -66,12 +65,12 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 			resp, err := srv.Client().Do(req)
 			if err != nil {
-				t.Fatalf("%s %s (Host=%q): %v", method, hostcore.HealthzPath, host, err)
+				t.Fatalf("%s %s (Host=%q): %v", method, obs.HealthzPath, host, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("%s %s (Host=%q) status = %d, want 200", method, hostcore.HealthzPath, host, resp.StatusCode)
+				t.Fatalf("%s %s (Host=%q) status = %d, want 200", method, obs.HealthzPath, host, resp.StatusCode)
 			}
 		}
 	}
@@ -91,23 +90,23 @@ func (failingResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 
 func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+hostcore.HealthzPath, hostcore.HealthzHandler)
+	obs.MountLiveness(mux)
 
 	// The same construction BuildServer uses: tenancy.Middleware wrapping
 	// the mux, allowlisting both GET and HEAD for HealthzPath -- see
 	// internal/app/server.go's own comment on why HEAD needs its own entry too.
 	handler := tenancy.Middleware(failingResolver{},
-		tenancy.WithAllowlist(http.MethodGet, hostcore.HealthzPath),
-		tenancy.WithAllowlist(http.MethodHead, hostcore.HealthzPath),
+		tenancy.WithAllowlist(http.MethodGet, obs.HealthzPath),
+		tenancy.WithAllowlist(http.MethodHead, obs.HealthzPath),
 	)(mux)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, hostcore.HealthzPath, nil)
+		req := httptest.NewRequest(method, obs.HealthzPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, hostcore.HealthzPath, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, obs.HealthzPath, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -116,17 +115,17 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	// RFC 9110) even though the handler wrote one, so asserting on it only
 	// for the GET request keeps this test honest about what HEAD actually
 	// guarantees.
-	req := httptest.NewRequest(http.MethodGet, hostcore.HealthzPath, nil)
+	req := httptest.NewRequest(http.MethodGet, obs.HealthzPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Body.String() != "ok" {
-		t.Fatalf("GET %s body = %q, want %q", hostcore.HealthzPath, rec.Body.String(), "ok")
+		t.Fatalf("GET %s body = %q, want %q", obs.HealthzPath, rec.Body.String(), "ok")
 	}
 
 	// Sanity check, proving the allowlist -- not general leniency in
-	// HealthzHandler or the mux -- is what let the requests above through:
-	// the identical failing resolver still fails closed (403) for a path
-	// that was never allowlisted.
+	// obs.HealthzHandler or the mux -- is what let the requests above
+	// through: the identical failing resolver still fails closed (403) for
+	// a path that was never allowlisted.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req2)
@@ -157,35 +156,35 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // BuildServer may no longer need its explicit HEAD allowlist entry.
 func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+hostcore.HealthzPath, hostcore.HealthzHandler)
+	obs.MountLiveness(mux)
 
-	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, hostcore.HealthzPath))(mux)
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, obs.HealthzPath))(mux)
 
-	req := httptest.NewRequest(http.MethodHead, hostcore.HealthzPath, nil)
+	req := httptest.NewRequest(http.MethodHead, obs.HealthzPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", hostcore.HealthzPath, rec.Code)
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", obs.HealthzPath, rec.Code)
 	}
 }
 
 // TestBuildServer_Metrics_NoTenantRequired proves /metrics responds through
 // the real composed server regardless of Host, mirroring
 // TestBuildServer_Healthz_NoTenantRequired above for the other route
-// BuildServer allowlists (see internal/app/server.go's MetricsPath doc comment: a
-// scraper, like a liveness probe, has no demo Host to send and must not
-// depend on one).
+// BuildServer allowlists (see obs.MetricsPath's and obs.MountLiveness's own
+// doc comments: a scraper, like a liveness probe, has no demo Host to send
+// and must not depend on one).
 //
-// Unlike the healthz version, this does not assert on a literal 200:
-// MetricsHandler (internal/app/server.go) serves whatever obs.MetricsHandler() currently
+// Unlike the healthz version, this does not assert on a literal 200: the
+// mounted metrics route serves whatever obs.MetricsHandler() currently
 // returns, and -- like every other test that drives BuildServer directly in
 // this file -- this test never calls obs.Init, so MetricsHandler answers
 // its documented "before Init has run" 404 here, not a real scrape (see
 // MetricsHandler's own doc comment in go/observability/init.go). The
 // property this test level can honestly verify is narrower, but is the one
 // actually in question here: tenancy.Middleware's allowlist let the
-// request through to MetricsHandler at all, for every Host, instead of
+// request through to the metrics route at all, for every Host, instead of
 // rejecting it with 403 -- ErrTenantUnresolved is the ONLY status
 // Middleware itself ever produces (go/tenancy/middleware.go), so "not 403"
 // is a precise proof of "no tenant required" at this level.
@@ -198,7 +197,7 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			req, err := http.NewRequest(method, srv.URL+hostcore.MetricsPath, nil)
+			req, err := http.NewRequest(method, srv.URL+obs.MetricsPath, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}
@@ -206,13 +205,13 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 
 			resp, err := srv.Client().Do(req)
 			if err != nil {
-				t.Fatalf("%s %s (Host=%q): %v", method, hostcore.MetricsPath, host, err)
+				t.Fatalf("%s %s (Host=%q): %v", method, obs.MetricsPath, host, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode == http.StatusForbidden {
 				t.Fatalf("%s %s (Host=%q) status = %d, want anything but 403 (tenant resolution must not be required for this route)",
-					method, hostcore.MetricsPath, host, resp.StatusCode)
+					method, obs.MetricsPath, host, resp.StatusCode)
 			}
 		}
 	}
@@ -250,23 +249,23 @@ func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+hostcore.MetricsPath, hostcore.MetricsHandler)
+	obs.MountLiveness(mux)
 
 	// The same construction BuildServer uses: tenancy.Middleware wrapping
 	// the mux, allowlisting both GET and HEAD for MetricsPath -- see
 	// internal/app/server.go's own comment on why HEAD needs its own entry too.
 	handler := tenancy.Middleware(failingResolver{},
-		tenancy.WithAllowlist(http.MethodGet, hostcore.MetricsPath),
-		tenancy.WithAllowlist(http.MethodHead, hostcore.MetricsPath),
+		tenancy.WithAllowlist(http.MethodGet, obs.MetricsPath),
+		tenancy.WithAllowlist(http.MethodHead, obs.MetricsPath),
 	)(mux)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, hostcore.MetricsPath, nil)
+		req := httptest.NewRequest(method, obs.MetricsPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, hostcore.MetricsPath, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, obs.MetricsPath, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -301,16 +300,16 @@ func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // entry for MetricsPath.
 func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+hostcore.MetricsPath, hostcore.MetricsHandler)
+	obs.MountLiveness(mux)
 
-	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, hostcore.MetricsPath))(mux)
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, obs.MetricsPath))(mux)
 
-	req := httptest.NewRequest(http.MethodHead, hostcore.MetricsPath, nil)
+	req := httptest.NewRequest(http.MethodHead, obs.MetricsPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", hostcore.MetricsPath, rec.Code)
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", obs.MetricsPath, rec.Code)
 	}
 }
 

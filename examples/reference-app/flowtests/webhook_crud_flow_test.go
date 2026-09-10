@@ -102,7 +102,7 @@ type webhookDeliveriesResponse struct {
 // additionally sends X-Demo-User-Id (DemoNotesCreatorUserID, this app's one
 // shared creator-attribution identity): integration_createWebhookSubscription
 // attributes the new subscription's CreatedBy through
-// integration.SubjectResolver (DemoOrgSubjectResolver in internal/app/server.go), which
+// integration.SubjectResolver (DemoOrgSubjectResolverFor in internal/app/server.go), which
 // reads that same header -- an empty user sends neither demo header, the
 // no-identity-at-all shape the permission-gate test below drives. body, when
 // non-nil, is sent as the JSON request body with the application/json

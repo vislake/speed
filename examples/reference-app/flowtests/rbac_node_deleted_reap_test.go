@@ -90,7 +90,7 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 	// narrowing -- are still not exercised by this file's assertions, which
 	// read Can and the binding rows directly; the seam is wired for the
 	// restore-side consumer, not for them.
-	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(app.OrgSubtreeResolver{Scope: orgModule.Scope()}))
+	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(app.OrgSubtreeResolverFor(orgModule.Scope())))
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(orgModule); regErr != nil {

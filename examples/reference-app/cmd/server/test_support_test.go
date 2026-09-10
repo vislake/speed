@@ -345,7 +345,7 @@ func decodeCasesResponse(t *testing.T, resp *http.Response) (testCase, string) {
 }
 
 // notifRequest issues method against srv.URL+path with a bearer token, the
-// acting subject (the X-Demo-User-Id header DemoOrgSubjectResolver reads;
+// acting subject (the X-Demo-User-Id header DemoOrgSubjectResolverFor reads;
 // empty omits it) and an optional JSON body, and requires the response to
 // carry wantStatus, decoding it into out (nil to skip decoding, for empty
 // responses like the 204s and the demo route's 202). The envelope of every
