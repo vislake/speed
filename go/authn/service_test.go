@@ -22,6 +22,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 const (
@@ -37,6 +38,7 @@ type serviceFixture struct {
 	svc     *Service
 	db      *gorm.DB
 	kv      pkgcore.KVStore
+	bus     pkgcore.EventBus
 	clock   *testutil.Clock
 	members *testutil.Memberships
 	events  *testutil.EventRecorder
@@ -53,6 +55,16 @@ func newServiceFixture(t *testing.T, extra ...Option) *serviceFixture {
 
 func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) *serviceFixture {
 	t.Helper()
+	return newServiceFixtureOn(t, pkgcore.NewMemoryEventBus(), kv, extra...)
+}
+
+// newServiceFixtureOn is newServiceFixtureWithKV over an injected bus: the
+// service is wired exactly the same way, but bus is the one the test
+// provides, so a test can observe the service's own publishes (the sign-in
+// tenant enumeration's audited system-context grant among them) or drive a
+// publish failure the in-memory bus cannot produce.
+func newServiceFixtureOn(t *testing.T, bus pkgcore.EventBus, kv pkgcore.KVStore, extra ...Option) *serviceFixture {
+	t.Helper()
 
 	db := testutil.NewDB(t)
 	clock := testutil.NewClock(time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC))
@@ -60,7 +72,6 @@ func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) 
 
 	keys := testutil.NewKeySource(t, "kid-test")
 
-	bus := pkgcore.NewMemoryEventBus()
 	events := testutil.NewEventRecorder()
 	events.Subscribe(bus, EventUserCreated, EventUserLoggedIn, EventLoginFailed,
 		EventSessionRevoked, EventSessionReplayDetected, EventTenantSwitched,
@@ -78,7 +89,7 @@ func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) 
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	return &serviceFixture{svc: svc, db: db, kv: kv, clock: clock, members: members, events: events, keys: keys}
+	return &serviceFixture{svc: svc, db: db, kv: kv, bus: bus, clock: clock, members: members, events: events, keys: keys}
 }
 
 // registerUser creates an account and records its membership of tenants.
@@ -1841,5 +1852,208 @@ func TestService_Register_ConcurrentDuplicatePhoneAnswersTheCodedConflict(t *tes
 				t.Fatalf("%d of %d racing registrations succeeded, want exactly 1", successes, racers)
 			}
 		})
+	}
+}
+
+// recordingMembershipReader wraps a MembershipReader and records, per call,
+// the system context the call was made under -- the observable half of the
+// elevation resolveTenant performs before the cross-tenant enumeration.
+type recordingMembershipReader struct {
+	inner MembershipReader
+
+	mu    sync.Mutex
+	calls []membershipCall
+}
+
+// membershipCall is one recorded invocation: which method ran, and the
+// system reason its context carried (sawSystem false when it carried none).
+type membershipCall struct {
+	method    string
+	reason    pkgcore.SystemReason
+	sawSystem bool
+}
+
+func (r *recordingMembershipReader) ActiveMembership(ctx context.Context, userID string, tenantID pkgcore.TenantID) (bool, error) {
+	r.record("ActiveMembership", ctx)
+	return r.inner.ActiveMembership(ctx, userID, tenantID)
+}
+
+func (r *recordingMembershipReader) TenantsOf(ctx context.Context, userID string) ([]pkgcore.TenantID, error) {
+	r.record("TenantsOf", ctx)
+	return r.inner.TenantsOf(ctx, userID)
+}
+
+func (r *recordingMembershipReader) record(method string, ctx context.Context) {
+	reason, ok := pkgcore.SystemReasonFromContext(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, membershipCall{method: method, reason: reason, sawSystem: ok})
+}
+
+// callsOfMethod returns every recorded call to method, in order.
+func (r *recordingMembershipReader) callsOfMethod(method string) []membershipCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []membershipCall
+	for _, call := range r.calls {
+		if call.method == method {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
+// refusingBus fails Publish for one event type while delegating everything
+// else to the wrapped bus: the in-memory bus cannot produce a publish
+// failure, and tenancy.WithSystemContext fails the whole grant closed when
+// one happens.
+type refusingBus struct {
+	pkgcore.EventBus
+	eventType string
+}
+
+func (b *refusingBus) Publish(ctx context.Context, evt pkgcore.Event) error {
+	if evt.Type == b.eventType {
+		return errors.New("refusingBus: publish refused")
+	}
+	return b.EventBus.Publish(ctx, evt)
+}
+
+var _ pkgcore.EventBus = (*refusingBus)(nil)
+
+// TestService_Login_NoRequestedTenant_EnumeratesUnderTheAuditedSystemContext
+// pins the elevation: a no-tenant sign-in asks which tenants the account
+// belongs to, and that cross-tenant question reaches the reader under the
+// module's own audited system-context grant -- actor the account asking,
+// purpose SystemPurposeSignInTenantEnumeration -- with the matching
+// tenancy.system_context.entered event published exactly once.
+func TestService_Login_NoRequestedTenant_EnumeratesUnderTheAuditedSystemContext(t *testing.T) {
+	t.Parallel()
+
+	members := testutil.NewMemberships()
+	reader := &recordingMembershipReader{inner: members}
+
+	bus := pkgcore.NewMemoryEventBus()
+	var enteredMu sync.Mutex
+	var entered []tenancy.SystemContextEnteredEvent
+	bus.Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
+		if payload, ok := evt.Payload.(tenancy.SystemContextEnteredEvent); ok {
+			enteredMu.Lock()
+			entered = append(entered, payload)
+			enteredMu.Unlock()
+		}
+		return nil
+	})
+	f := newServiceFixtureOn(t, bus, pkgcore.NewMemoryKVStore(), WithMembershipReader(reader))
+
+	user, err := f.svc.Register(t.Context(), RegisterInput{
+		Email: "enumeration@example.com", Password: testPassword, DisplayName: "Enumeration User",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	members.Add(user.ID, testTenantA)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "enumeration@example.com", Password: testPassword, IP: "203.0.113.9",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if pair.Principal.TenantID != testTenantA {
+		t.Fatalf("signed into tenant %q, want %q", pair.Principal.TenantID, testTenantA)
+	}
+
+	calls := reader.callsOfMethod("TenantsOf")
+	if len(calls) != 1 {
+		t.Fatalf("TenantsOf was called %d times, want 1", len(calls))
+	}
+	if !calls[0].sawSystem {
+		t.Fatal("TenantsOf ran without a system context; the enumeration must be elevated")
+	}
+	if calls[0].reason.Actor != user.ID {
+		t.Errorf("system reason actor = %q, want the account asking %q", calls[0].reason.Actor, user.ID)
+	}
+	if calls[0].reason.Purpose != SystemPurposeSignInTenantEnumeration {
+		t.Errorf("system reason purpose = %q, want %q", calls[0].reason.Purpose, SystemPurposeSignInTenantEnumeration)
+	}
+
+	enteredMu.Lock()
+	defer enteredMu.Unlock()
+	if len(entered) != 1 {
+		t.Fatalf("tenancy.system_context.entered published %d times, want exactly 1 per enumeration", len(entered))
+	}
+	if entered[0].Actor != user.ID || entered[0].Purpose != SystemPurposeSignInTenantEnumeration {
+		t.Errorf("audit event = {actor %q, purpose %q}, want {%q, %q}",
+			entered[0].Actor, entered[0].Purpose, user.ID, SystemPurposeSignInTenantEnumeration)
+	}
+}
+
+// TestService_Login_RequestedTenant_DoesNotElevate pins the other half of
+// the elevation contract: a sign-in that names its tenant asks a
+// tenant-scoped membership question inside that tenant, so no system
+// context is taken and no enumeration is performed.
+func TestService_Login_RequestedTenant_DoesNotElevate(t *testing.T) {
+	t.Parallel()
+
+	members := testutil.NewMemberships()
+	reader := &recordingMembershipReader{inner: members}
+	f := newServiceFixture(t, WithMembershipReader(reader))
+
+	user, err := f.svc.Register(t.Context(), RegisterInput{
+		Email: "scoped@example.com", Password: testPassword, DisplayName: "Scoped User",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	members.Add(user.ID, testTenantA)
+
+	if _, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "scoped@example.com", Password: testPassword, TenantID: testTenantA, IP: "203.0.113.9",
+	}); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	active := reader.callsOfMethod("ActiveMembership")
+	if len(active) != 1 {
+		t.Fatalf("ActiveMembership was called %d times, want 1", len(active))
+	}
+	if active[0].sawSystem {
+		t.Fatal("ActiveMembership ran under a system context; only the cross-tenant enumeration takes the grant")
+	}
+	if n := len(reader.callsOfMethod("TenantsOf")); n != 0 {
+		t.Fatalf("TenantsOf was called %d times for a tenant-scoped sign-in, want 0", n)
+	}
+}
+
+// TestService_Login_EnumerationGrantWithoutAuditRecord_FailsClosed pins the
+// fail-closed leg: when the audited grant cannot be recorded (the bus
+// refuses the system-context event), no enumeration runs and the sign-in
+// folds the refusal into the uniform invalid-credentials answer -- nobody
+// signs in on the strength of an unrecorded cross-tenant read.
+func TestService_Login_EnumerationGrantWithoutAuditRecord_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	members := testutil.NewMemberships()
+	reader := &recordingMembershipReader{inner: members}
+	bus := &refusingBus{EventBus: pkgcore.NewMemoryEventBus(), eventType: tenancy.EventSystemContextEntered}
+	f := newServiceFixtureOn(t, bus, pkgcore.NewMemoryKVStore(), WithMembershipReader(reader))
+
+	user, err := f.svc.Register(t.Context(), RegisterInput{
+		Email: "no-audit@example.com", Password: testPassword, DisplayName: "Unaudited User",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	members.Add(user.ID, testTenantA)
+
+	_, err = f.svc.Login(t.Context(), LoginInput{
+		Identifier: "no-audit@example.com", Password: testPassword, IP: "203.0.113.9",
+	})
+	if !apperr.HasCode(err, ErrInvalidCredentials.Code) {
+		t.Fatalf("Login() error = %v, want the uniform %q refusal", err, ErrInvalidCredentials.Code)
+	}
+	if n := len(reader.callsOfMethod("TenantsOf")); n != 0 {
+		t.Fatalf("TenantsOf ran %d times with the audit record unwritable, want 0", n)
 	}
 }

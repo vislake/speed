@@ -2,6 +2,7 @@ package authn
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"slices"
@@ -244,6 +245,25 @@ func TestModule_RegisterDeclaresItsSurface(t *testing.T) {
 	// and needs authentication rather than authorization.
 	if perms := reg.Permissions.Permissions(); !slices.Equal(perms, []string{PermissionSSOManage}) {
 		t.Errorf("Permissions() = %v, want exactly %v", perms, []string{PermissionSSOManage})
+	}
+}
+
+// TestModule_Register_DeclaresTheSignInEnumerationPurpose pins the
+// declaration the elevation depends on: resolveTenant takes its audited
+// system-context grant under SystemPurposeSignInTenantEnumeration, so
+// Register -- the module's own declaration point -- must make that purpose
+// valid for a bootstrapped host.
+func TestModule_Register_DeclaresTheSignInEnumerationPurpose(t *testing.T) {
+	t.Parallel()
+
+	if err := newTestModule(t).Register(newTestRegistry()); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor:   "u-1",
+		Purpose: SystemPurposeSignInTenantEnumeration,
+	}); err != nil {
+		t.Fatalf("WithSystemContext with the module's own purpose: %v", err)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/tenancy"
 
 	obs "github.com/vislake/speed/go/observability"
 )
@@ -169,6 +170,17 @@ type MembershipReader interface {
 	// TenantsOf lists the tenants userID is an active member of, in the
 	// order the caller should prefer them. Sign-in with no explicitly
 	// requested tenant uses the first.
+	//
+	// TenantsOf is called -- and only ever called -- under an elevated
+	// context: resolveTenant takes the audited system-context grant
+	// (tenancy.WithSystemContext, actor userID, purpose
+	// SystemPurposeSignInTenantEnumeration) before this call and passes
+	// that context here, because the question spans tenants by definition
+	// and a reader backed by real membership rows gates the cross-tenant
+	// read on exactly that grant. An implementation therefore does not
+	// invent an elevation of its own; it may rely on the passed context
+	// already carrying the system reason, and must still fail closed if it
+	// does not.
 	TenantsOf(ctx context.Context, userID string) ([]pkgcore.TenantID, error)
 }
 
@@ -341,6 +353,16 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	if kv == nil {
 		return nil, errors.New("authn: NewService requires a key-value store")
 	}
+
+	// A freshly built Service must be able to take its one system context
+	// (the sign-in tenant enumeration) without its embedder having
+	// remembered a separate declaration, so the purpose is declared here as
+	// well as in Module.Register -- idempotent by contract, and the same
+	// purpose twice changes nothing. Without this, a Service built directly
+	// through NewService would fail its no-tenant sign-in with a refusal
+	// folded into the uniform invalid-credentials answer, which is the
+	// hardest possible place to diagnose a missing declaration.
+	pkgcore.RegisterSystemPurpose(SystemPurposeSignInTenantEnumeration)
 
 	cfg, err := newOptions(opts)
 	if err != nil {
@@ -1078,6 +1100,15 @@ func (s *Service) mintPairWithAMR(ctx context.Context, user *User, session *Sess
 // user's first tenant when none was requested. It never falls back to a
 // permissive answer.
 //
+// The no-tenant branch takes the audited system-context grant this module
+// declares for its own tenant enumeration (SystemPurposeSignInTenantEnumeration,
+// actor = the user asking, via tenancy.WithSystemContext) and calls
+// MembershipReader.TenantsOf under that elevated context -- the question
+// spans tenants by definition, so the authn side of the house takes the
+// grant itself and the reader never has to invent one. A grant that cannot
+// be taken fails closed through the same ErrTenantMembershipUnavailable
+// path as a failing reader, so the classification below is unaffected.
+//
 // It always answers with the same distinguishable errors
 // (ErrTenantMembershipRequired, ErrTenantMembershipUnavailable); whether a
 // call site lets that answer reach its caller or folds it into a uniform
@@ -1138,7 +1169,24 @@ func (s *Service) resolveTenant(ctx context.Context, userID string, requested pk
 		return requested, nil
 	}
 
-	tenants, err := s.membership.TenantsOf(ctx, userID)
+	// The enumeration spans tenants by definition, so the reader is handed
+	// an elevated context: the audited system-context grant, attributed to
+	// the account asking about its own memberships, is taken here and the
+	// elevated context -- never the caller's original one -- goes to
+	// TenantsOf (MembershipReader's own doc comment states the
+	// precondition). A grant that cannot be taken (no bus, a failing audit
+	// publish) folds into the same fail-closed refusal as any other
+	// membership failure at this call site, so the classification contract
+	// above is unchanged: the refusal is never "no membership".
+	sysCtx, err := tenancy.WithSystemContext(ctx, s.bus, pkgcore.SystemReason{
+		Actor:   userID,
+		Purpose: SystemPurposeSignInTenantEnumeration,
+	})
+	if err != nil {
+		obs.FromContext(ctx).Error("membership lookup failed", "user_id", userID, "error", err)
+		return "", ErrTenantMembershipUnavailable.WithCause(err)
+	}
+	tenants, err := s.membership.TenantsOf(sysCtx, userID)
 	if err != nil {
 		obs.FromContext(ctx).Error("membership lookup failed", "user_id", userID, "error", err)
 		return "", ErrTenantMembershipUnavailable.WithCause(err)

@@ -181,6 +181,18 @@ const (
 	ConfigKeySMSCodeMaxAttempts = "authn.sms_code_max_attempts"
 )
 
+// SystemPurposeSignInTenantEnumeration is the pkgcore.SystemPurpose this
+// module declares for the one system context it takes: the cross-tenant
+// "which tenants does this account belong to" read
+// (MembershipReader.TenantsOf) a no-tenant sign-in performs. The question
+// spans organizations by definition, so no tenant-scoped context could
+// answer it; the read is reserved for the authn side of the house, and it
+// is taken through tenancy.WithSystemContext with the account itself as
+// the actor, which publishes a tenancy.system_context.entered audit event
+// on every use. Register declares the purpose (idempotent, the module
+// convention), so a host that bootstraps this module never has to.
+const SystemPurposeSignInTenantEnumeration pkgcore.SystemPurpose = "speed.authn.sign_in_tenant_enumeration"
+
 // FeatureGate reports whether a feature flag is enabled for the tenant the
 // context carries (or platform-wide when it carries none).
 //
@@ -841,6 +853,15 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	m.svc = svc
+
+	// The one system context this module takes -- the sign-in tenant
+	// enumeration -- names this purpose, so it must be registered before
+	// the first no-tenant sign-in reaches resolveTenant. Registering it
+	// here, in the module's own registration, is the convention every
+	// module follows for its own purposes (pkgcore.RegisterSystemPurpose
+	// is idempotent); a Service built directly through NewService relies
+	// on its embedder doing the same.
+	pkgcore.RegisterSystemPurpose(SystemPurposeSignInTenantEnumeration)
 
 	if err := reg.AuditActions.Add(auditActions...); err != nil {
 		return err
