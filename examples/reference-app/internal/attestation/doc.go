@@ -27,9 +27,10 @@
 // # What is attested, and when
 //
 // An output is registered and attested when the app first observes its
-// generating job as succeeded -- the poll-driven completion definition
-// internal/smilesim's NotifyOnCompletion already established (go/jobs
-// offers no job-completion hook; see that method's doc comment). The
+// generating job as succeeded -- the completion definition
+// internal/smilesim's Service establishes for a simulation: the job's
+// terminal status, which the queue's terminal signal and the job-status
+// route's poll alike report (see that package's doc comment). The
 // observations that make an output visible to its own tenant -- the
 // job-status poll, the per-photo enumeration and the simulation-content
 // read, all in internal/app/smilesim.go -- each call EnsureAttested for a

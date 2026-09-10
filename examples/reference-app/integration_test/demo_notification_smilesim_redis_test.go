@@ -27,7 +27,8 @@
 // exact subscription exists: flowtests/smilesim_flow_test.go's
 // TestSmileSimulation_CompletionNotifiesTheNamedRecipient drives the whole
 // pipeline (storage upload, go/ai-gateway's async image job against a
-// scripted OpenAI-compatible endpoint, NotifyOnCompletion's publish) over
+// scripted OpenAI-compatible endpoint, the completion publish the
+// terminal signal drives) over
 // the in-process EventBus and asserts the resulting SMS. That test cannot
 // exercise the cross-instance shape this file targets, precisely because
 // the in-process bus delivers the publisher's own Go value unchanged to a
@@ -50,7 +51,8 @@
 // publishing a REAL smilesim.SimulationCompletedPayload-shaped
 // pkgcore.Event directly onto the shared Redis stream, from an
 // independent *eventbusredis.EventBus instance this test owns -- exactly
-// the shape internal/smilesim.Service.NotifyOnCompletion publishes, just
+// the shape internal/smilesim's Service publishes for a completed
+// simulation, just
 // from a bus instance that is not the subprocess's own, which is what
 // makes the delivery genuinely cross-instance (pkgcore/eventbus/redis's
 // deliverRemote path, JSON-decoded to map[string]any) rather than the

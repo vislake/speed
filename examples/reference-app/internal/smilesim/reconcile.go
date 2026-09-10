@@ -16,21 +16,24 @@ import (
 // DefaultPollInterval plays for its own cache, applied here to
 // creditReservation rows instead of configuration cache entries: the
 // durable store (reservation_store.go) is always the source of truth, and
-// this sweep is the net that heals a reservation no client ever polls to
-// completion, or one whose in-flight settlement was lost to a process
-// restart. Five minutes is short enough that a genuinely abandoned
-// reservation is corrected well within a support conversation's timescale,
-// and long enough that a healthy poll-driven settlement (the ordinary
-// path, still handled first by NotifyOnCompletion on every read) resolves
-// the row long before the sweep would ever reach it.
+// this sweep is the net that heals a reservation whose terminal transition
+// no driver observed -- the queue's terminal signal dropped or never
+// delivered to this replica, a client that never polled the job-status
+// route, a settlement in flight lost to a process restart. Five minutes is
+// short enough that a genuinely abandoned reservation is corrected well
+// within a support conversation's timescale, and long enough that a healthy
+// settlement (the terminal signal's subscriber acting at the transition
+// itself, or the poll route's second leg) resolves the row long before the
+// sweep would ever reach it.
 const DefaultReconcileInterval = 5 * time.Minute
 
 // ReconcileOutstandingCredits lists every reservation store.listAll still
 // has on file, across every tenant, and settles each whose job has
-// already reached a terminal status -- the same settleCredit logic
-// NotifyOnCompletion's poll-driven path already runs, reused verbatim so
-// there is exactly one place that decides what "settle" means. It returns
-// the number of reservations it actually settled during this call.
+// already reached a terminal status -- the same settleCredit logic every
+// other settlement driver runs (OnJobTerminal's signal-driven path and
+// NotifyOnCompletion's poll-driven leg alike), reused verbatim so there is
+// exactly one place that decides what "settle" means. It returns the
+// number of reservations it actually settled during this call.
 //
 // A row whose job id carries orphanRefundJobIDPrefix (see
 // reservation_store.go) is settled differently, by design: it records an

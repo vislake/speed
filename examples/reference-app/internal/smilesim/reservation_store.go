@@ -54,9 +54,10 @@ const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditR
 )`
 
 // creditReservation is the durable record of one credit reservation
-// Simulate opened and that neither NotifyOnCompletion's poll-driven path
-// nor the reconciliation sweep (reconcile.go) has yet settled -- see this
-// package's doc comment's "Credit accounting" section.
+// Simulate opened and that no settlement driver has yet acted on -- the
+// terminal signal's subscriber, the poll-driven leg or the reconciliation
+// sweep (reconcile.go) -- see this package's doc comment's "Credit
+// accounting" section.
 //
 // It is platform data, like go/jobs' own jobRecord and go/config's row:
 // it carries a real, unenforced tenant_id column rather than implementing
@@ -71,10 +72,11 @@ const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditR
 // A row's mere existence IS "not settled": save inserts it the moment
 // Simulate's PreDeduct and the resulting enqueue both succeed, and delete
 // removes it the moment settleCredit's Confirm/Refund succeeds --
-// whichever of NotifyOnCompletion's poll-driven call or the reconciliation
-// sweep gets there first, since both funnel through the identical
-// settleCredit -> store.delete sequence (see settleCredit's own doc
-// comment in service.go). The one other writer is Simulate's refund-failure
+// whichever settlement driver gets there first (the terminal signal's
+// subscriber, a poll-driven call, or a reconciliation sweep), since all of
+// them funnel through the identical settleCredit -> store.delete sequence
+// (see settleCredit's own doc comment in service.go). The one other writer
+// is Simulate's refund-failure
 // path: a reservation whose immediate refund could not run is recorded
 // here under a synthetic job id (orphanRefundJobIDPrefix) so the sweep can
 // refund it without ever needing a job to poll -- see that constant's own
@@ -170,9 +172,9 @@ func (s *ReservationStore) get(ctx context.Context, jobID jobs.JobID) (creditRes
 // delete removes jobID's reservation row -- called once settleCredit's
 // Confirm/Refund has already succeeded, so the row's presence keeps
 // meaning "not yet settled" for exactly as long as it exists. jobID
-// carrying no row is not an error: NotifyOnCompletion's poll-driven path
-// and ReconcileOutstandingCredits' sweep may race to settle the same job,
-// and whichever loses finds nothing left to delete.
+// carrying no row is not an error: settlement drivers may race to settle
+// the same job (the terminal signal against a poll, a sweep against
+// either), and whichever loses finds nothing left to delete.
 func (s *ReservationStore) delete(ctx context.Context, jobID jobs.JobID) error {
 	return s.db.WithContext(ctx).Delete(&creditReservation{}, "job_id = ?", string(jobID)).Error
 }

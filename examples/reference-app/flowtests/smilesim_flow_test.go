@@ -477,9 +477,11 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 // TestSmileSimulation_CompletionNotifiesTheNamedRecipient proves the
 // named-recipient addition end to end: a POST /simulate naming a
 // recipient_user_id gets that recipient an SMS once the job succeeds --
-// internal/smilesim's Service publishes EventSimulationCompleted (from
-// NotifyOnCompletion, called by the job-status route this test polls
-// exactly like the earlier image-to-image test above), internal/app/demo_notification.go's
+// internal/smilesim's Service publishes EventSimulationCompleted (driven
+// by the queue's terminal signal, with this test's own poll of the
+// job-status route -- exactly like the earlier image-to-image test above
+// -- riding along as the second leg),
+// internal/app/demo_notification.go's
 // subscription turns that into a notification.Dispatch of
 // demo.TypeKeySimulationReady, and the delivery job renders and sends it
 // over the sms-only channel that type declares.
@@ -549,10 +551,10 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	}
 
 	// The delivery job runs asynchronously off the same StandaloneQueue --
-	// waitForSmileSimSucceeded's own polling already forced
-	// NotifyOnCompletion to publish the event by the time this point is
-	// reached, but the notification.deliver job it triggers still needs
-	// its own worker turn.
+	// the completion event is out by the time this point is reached (the
+	// terminal signal drives it, and waitForSmileSimSucceeded's own
+	// polling rides along as the second leg), but the notification.deliver
+	// job it triggers still needs its own worker turn.
 	eventually(t, 4*time.Second, "the simulation-ready SMS", func() bool {
 		return len(smsLinesTo(sms, "+8613800138099")) == 1
 	})

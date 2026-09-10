@@ -257,11 +257,14 @@ func (h *smilesimHandler) SmilesimGetJob(w http.ResponseWriter, r *http.Request,
 	}
 
 	// A no-op unless Simulate was given a recipient for this job and
-	// job has just reached a terminal status for the first time --
-	// see NotifyOnCompletion's own doc comment for why this poll
-	// route is where that check happens. A failure here is logged and
-	// swallowed: the notification side channel must never turn an
-	// otherwise-successful status read into an error response.
+	// job has just reached a terminal status for the first time. The
+	// primary settlement/notification driver is the queue's terminal
+	// signal (wireSmilesimTerminalSignal); this call is the second leg,
+	// so a transition this replica never saw a signal for still settles
+	// and delivers on the next poll -- see NotifyOnCompletion's own doc
+	// comment. A failure here is logged and swallowed: the notification
+	// side channel must never turn an otherwise-successful status read
+	// into an error response.
 	if notifyErr := h.svc.NotifyOnCompletion(r.Context(), job); notifyErr != nil {
 		observability.FromContext(r.Context()).Warn("smilesim completion notification failed",
 			"job_id", jobID, "error", notifyErr)
