@@ -328,15 +328,15 @@ func noteIDs(notes []Note) []string {
 // surfaces, the reason the helper exists at all), and any other error is
 // a genuine failure, not "gone".
 func TestHardDeleteSaysGone_PinsTheGoneClassification(t *testing.T) {
-	if hardDeleteSaysGone(nil) {
-		t.Error("hardDeleteSaysGone(nil) = true, want false -- nil is the success answer")
+	if dbkit.IsRecordNotFound(nil) {
+		t.Error("dbkit.IsRecordNotFound(nil) = true, want false -- nil is the success answer")
 	}
 	notFound := dbkit.ErrRecordNotFound.WithParam("id", "some-note")
-	if !hardDeleteSaysGone(notFound) {
-		t.Error("hardDeleteSaysGone(record-not-found, decorated) = false, want true -- the code match must survive WithParam decoration")
+	if !dbkit.IsRecordNotFound(notFound) {
+		t.Error("dbkit.IsRecordNotFound(record-not-found, decorated) = false, want true -- the code match must survive WithParam decoration")
 	}
-	if hardDeleteSaysGone(context.DeadlineExceeded) {
-		t.Error("hardDeleteSaysGone(unrelated error) = true, want false -- only the record-not-found code means gone")
+	if dbkit.IsRecordNotFound(context.DeadlineExceeded) {
+		t.Error("dbkit.IsRecordNotFound(unrelated error) = true, want false -- only the record-not-found code means gone")
 	}
 }
 

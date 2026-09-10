@@ -256,9 +256,9 @@ func (h *casesHandler) CasesGetPhotoContent(w http.ResponseWriter, r *http.Reque
 // the wrapped internal error.
 func casesPhotoProtocolError(err error, stage string) *apperr.Error {
 	switch {
-	case hasCasesPhotoCode(err, storage.ErrTypeNotAllowed.Code),
-		hasCasesPhotoCode(err, storage.ErrPixelLimitExceeded.Code),
-		hasCasesPhotoCode(err, storage.ErrImageUnreadable.Code):
+	case apperr.HasCode(err, storage.ErrTypeNotAllowed.Code),
+		apperr.HasCode(err, storage.ErrPixelLimitExceeded.Code),
+		apperr.HasCode(err, storage.ErrImageUnreadable.Code):
 		// The probe refused the bytes: not an acceptable image (the
 		// declared-type mismatch is deliberately absent -- this op
 		// declares no type, so storage's type_mismatch is unreachable
@@ -284,17 +284,8 @@ func casesPhotoProtocolError(err error, stage string) *apperr.Error {
 // reclaimed) answers the same cases.photo_not_found a case that never
 // referenced it answers, and every other failure is internal.
 func CasesPhotoReadError(err error) *apperr.Error {
-	if hasCasesPhotoCode(err, storage.ErrObjectNotFound.Code) {
+	if apperr.HasCode(err, storage.ErrObjectNotFound.Code) {
 		return ErrPhotoNotFound
 	}
 	return apperr.Internal("cases.internal_error").WithCause(err)
-}
-
-// hasCasesPhotoCode reports whether err is, or wraps, an *apperr.Error
-// carrying code, matched by Code rather than by identity (apperr.WithParam
-// always derives a new *apperr.Error, so pointer identity is not stable
-// across decoration).
-func hasCasesPhotoCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }

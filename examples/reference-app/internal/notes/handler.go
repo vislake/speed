@@ -572,7 +572,7 @@ func (h *Handler) NotesRestoreNote(w http.ResponseWriter, r *http.Request, noteI
 // unchanged -- an *apperr.Error already speaks a module code (or fails to
 // decode as one and is folded into notes.internal_error by writeError).
 func noteMutationError(err error, noteID string) error {
-	if appErr, ok := apperr.As(err); ok && appErr.Code == dbkit.ErrRecordNotFound.Code {
+	if dbkit.IsRecordNotFound(err) {
 		return ErrNoteNotFound.WithParam("note_id", noteID)
 	}
 	return err

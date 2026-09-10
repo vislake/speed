@@ -79,7 +79,7 @@ func TestSimulationOptions_Validate_RejectsEveryIllegalValue(t *testing.T) {
 			if !ok {
 				t.Fatalf("Validate error = %v, want an *apperr.Error", err)
 			}
-			if appErr.Code != tt.wantErr {
+			if !apperr.HasCode(err, tt.wantErr) {
 				t.Errorf("Validate error code = %q, want %q", appErr.Code, tt.wantErr)
 			}
 		})

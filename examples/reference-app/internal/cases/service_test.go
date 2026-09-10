@@ -322,10 +322,10 @@ func TestService_Create_PhotoAlreadyAttached(t *testing.T) {
 	}
 
 	_, _, err := svc.Create(ctxA, CreateInput{PatientName: "Second Case", PhotoObjectIDs: []string{"photo-shared"}, CreatorUserID: "user-1"})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrPhotoAlreadyAttached.Code {
+	if !apperr.HasCode(err, ErrPhotoAlreadyAttached.Code) {
 		t.Fatalf("second Create() error = %v, want code %q", err, ErrPhotoAlreadyAttached.Code)
 	}
+	appErr, _ := apperr.As(err)
 	if appErr.Params["object_id"] != "photo-shared" {
 		t.Fatalf("ErrPhotoAlreadyAttached params = %v, want object_id = photo-shared", appErr.Params)
 	}

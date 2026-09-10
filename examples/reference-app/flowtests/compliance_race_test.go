@@ -19,7 +19,7 @@ import (
 // TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean
 // pins the race tolerance both of notes' destructive participant
 // callbacks carry (see internal/notes/retention_participant.go's
-// hardDeleteSaysGone): when a retention sweep and an on-demand erasure
+// dbkit.IsRecordNotFound calls): when a retention sweep and an on-demand erasure
 // converge on the SAME rows -- a soft-deleted note past the retention
 // cutoff is exactly what both target -- whichever removes a row first
 // makes the other's Repository.HardDelete, issued after its own candidate

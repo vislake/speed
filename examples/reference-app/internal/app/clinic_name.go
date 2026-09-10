@@ -89,7 +89,7 @@ func WireClinicName(mux *http.ServeMux, tree *org.TreeService) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(ClinicNameResponse{Name: root.Name})
-		case orgCodeIs(err, org.ErrNodeNotFound.Code):
+		case apperr.HasCode(err, org.ErrNodeNotFound.Code):
 			// The tenant context is real but no org tree exists in it
 			// yet (a tenant between provisioning steps, or a context
 			// that is not a customer tenant at all). There is no name to

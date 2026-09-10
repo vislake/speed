@@ -1071,7 +1071,7 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 			// A job the queue no longer has -- its retention passed -- is
 			// omitted per this method's own "Recorded limitation" section;
 			// any other read failure still fails the whole enumeration.
-			if !isJobNotFound(getErr) {
+			if !apperr.HasCode(getErr, jobs.ErrJobNotFound.Code) {
 				return nil, fmt.Errorf("smilesim: fetch status for recorded simulation job %q: %w", row.JobID, getErr)
 			}
 			continue
@@ -1103,17 +1103,4 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 		outcomes = append(outcomes, outcome)
 	}
 	return outcomes, nil
-}
-
-// isJobNotFound reports whether err is, or wraps, a jobs.ErrJobNotFound
-// answer -- matched on the error's code rather than errors.Is, because
-// apperr-derived answers (WithParam/WithCause) are new *apperr.Error
-// values whose chain does not carry the original sentinel (the same
-// matching rule go/jobs' own tests apply).
-func isJobNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		return false
-	}
-	return appErr.Code == jobs.ErrJobNotFound.Code
 }

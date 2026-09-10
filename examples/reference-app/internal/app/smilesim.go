@@ -414,7 +414,7 @@ func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r 
 
 	obj, rc, err := h.objects.OpenContent(r.Context(), match.OutputObjectID)
 	if err != nil {
-		if hasCasesPhotoCode(err, storage.ErrObjectNotFound.Code) {
+		if apperr.HasCode(err, storage.ErrObjectNotFound.Code) {
 			writeSmileSimError(w, smileSimErrOutputNotFound)
 			return
 		}

@@ -215,7 +215,7 @@ func TestCheckContent_RevokedCertificate_AnswersErrAttestationFailed(t *testing.
 	// same apperr.As code check pki's own tests make of its refusals
 	// (WithParam derives a fresh coded error, so errors.Is on the bare
 	// sentinel never held even inside pki).
-	if coded, ok := apperr.As(err); !ok || coded.Code != pki.ErrCertificateRevoked.Code {
+	if !apperr.HasCode(err, pki.ErrCertificateRevoked.Code) {
 		t.Errorf("CheckContent error = %v, want the refusing stage's code %q preserved through the wrap for the log", err, pki.ErrCertificateRevoked.Code)
 	}
 }

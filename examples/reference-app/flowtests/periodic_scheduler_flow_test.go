@@ -119,7 +119,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/storage"
 )
 
@@ -352,7 +351,7 @@ func observeExpirySweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 		return false, "list = " + objectIDs(listed.Objects) + ", want only the survivor"
 	}
 
-	if _, err := objects.FindByID(acmeCtx, expiringID); !errIsRecordNotFound(err) {
+	if _, err := objects.FindByID(acmeCtx, expiringID); !dbkit.IsRecordNotFound(err) {
 		return false, "expired object's row still exists (FindByID err = " + errString(err) + ")"
 	}
 	survivorRow, err := objects.FindByID(acmeCtx, survivorID)
@@ -368,17 +367,6 @@ func observeExpirySweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 		return false, "survivor's bytes are gone from the object-store root (" + errString(err) + ")"
 	}
 	return true, ""
-}
-
-// errIsRecordNotFound reports whether err is dbkit's record-not-found
-// answer. Repository methods return dbkit.ErrRecordNotFound.WithParam
-// ("id", ...) -- a derived *Error, never the sentinel pointer itself -- so
-// the match compares apperr codes (apperr.As plus the code constant), the
-// idiom go/storage's own tests use; errors.Is would compare *Error
-// pointers and never match a derived value.
-func errIsRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }
 
 // objectIDs renders a list's object ids for a snapshot detail line.
@@ -651,7 +639,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 		t.Fatalf("post-sweep list = %+v, want only the survivor", final.Objects)
 	}
 
-	if _, findErr := objects.FindByID(acmeCtx, expiring.ID); !errIsRecordNotFound(findErr) {
+	if _, findErr := objects.FindByID(acmeCtx, expiring.ID); !dbkit.IsRecordNotFound(findErr) {
 		t.Fatalf("the sweep-expired object's row is still present (FindByID err = %v)", findErr)
 	}
 	survivorRow, err := objects.FindByID(acmeCtx, survivor.ID)

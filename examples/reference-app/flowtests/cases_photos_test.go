@@ -224,7 +224,7 @@ func TestCasesPhotos_UploadOversize_Refused(t *testing.T) {
 // CasesPhotoReadError's classification directly: a content read whose
 // object no longer exists -- a deleted or reclaimed object, which the
 // storage module answers with the decorated storage.object_not_found
-// code (matched by Code, never identity, exactly as hasCasesPhotoCode
+// code (matched by Code, never identity, exactly as apperr.HasCode
 // documents) -- maps onto the same cases.photo_not_found a case that
 // never referenced the object answers, and any other failure maps onto
 // the internal fallback carrying the original cause.

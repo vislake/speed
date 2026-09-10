@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -375,7 +376,7 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 func addDemoOrgMembership(ctx context.Context, orgModule *org.Module, userID string) error {
 	root, err := orgModule.Tree().Root(ctx)
 	if err != nil {
-		if !orgCodeIs(err, org.ErrNodeNotFound.Code) {
+		if !apperr.HasCode(err, org.ErrNodeNotFound.Code) {
 			return fmt.Errorf("look up tenant's org root: %w", err)
 		}
 		root, err = orgModule.Tree().CreateRoot(ctx, "Demo Tenant", "group")
@@ -384,7 +385,7 @@ func addDemoOrgMembership(ctx context.Context, orgModule *org.Module, userID str
 		}
 	}
 	if _, err := orgModule.Members().Add(ctx, userID, root.ID); err != nil {
-		if !orgCodeIs(err, org.ErrMembershipExists.Code) {
+		if !apperr.HasCode(err, org.ErrMembershipExists.Code) {
 			return fmt.Errorf("add member to org roster: %w", err)
 		}
 	}

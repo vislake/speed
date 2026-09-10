@@ -126,22 +126,6 @@ func hardDeleteSystemCtx(t *testing.T, ctx context.Context) context.Context {
 	return elevated
 }
 
-// isHardDeleteRefused reports whether err is
-// dbkit.ErrHardDeleteRequiresSystemContext, matched by Code rather than by
-// identity (apperr.WithParam always derives a new *apperr.Error, so pointer
-// identity is not stable across the decoration HardDelete applies).
-func isHardDeleteRefused(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrHardDeleteRequiresSystemContext.Code
-}
-
-// isRecordNotFound reports whether err is dbkit.ErrRecordNotFound, matched
-// by Code on the same convention isHardDeleteRefused follows.
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
-}
-
 // TestRepository_AssertIsolated runs the mandatory tenant-isolation
 // suite (the multi-tenant isolation discipline) against
 // notes' real dbkit.Repository[Note] usage. Note is tenant data, not
@@ -282,7 +266,7 @@ func TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved(t *testing.T) {
 		t.Fatalf("raw notes count after HardDelete() = %d, want 0 (the row must be physically gone, not merely marked)", rawCount)
 	}
 
-	if err := repo.HardDelete(sysCtx, note.ID); !isRecordNotFound(err) {
+	if err := repo.HardDelete(sysCtx, note.ID); !dbkit.IsRecordNotFound(err) {
 		t.Fatalf("second HardDelete() error = %v, want ErrRecordNotFound (the row is gone, not hidden)", err)
 	}
 }
@@ -304,7 +288,7 @@ func TestRepository_HardDelete_PlainTenantContext_Refused(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if err := repo.HardDelete(ctx, note.ID); !isHardDeleteRefused(err) {
+	if err := repo.HardDelete(ctx, note.ID); !apperr.HasCode(err, dbkit.ErrHardDeleteRequiresSystemContext.Code) {
 		t.Fatalf("HardDelete() on a plain tenant-scoped context error = %v, want ErrHardDeleteRequiresSystemContext", err)
 	}
 

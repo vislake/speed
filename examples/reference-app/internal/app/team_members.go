@@ -283,7 +283,7 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 	root, err := deps.tree.Root(ctx)
 	switch {
 	case err == nil:
-	case orgCodeIs(err, org.ErrNodeNotFound.Code):
+	case apperr.HasCode(err, org.ErrNodeNotFound.Code):
 		// A tenant with no org tree has no members to name: the empty
 		// roster, exactly as org's own handler answers it.
 		WriteTeamMembersJSON(w, nil)

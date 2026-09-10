@@ -6,7 +6,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // NewRetentionParticipant returns notes' pkgcore.RetentionParticipant --
@@ -62,9 +61,10 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 			reaped := 0
 			for _, row := range rows {
 				err := repo.HardDelete(ctx, row.ID)
-				if hardDeleteSaysGone(err) {
+				if dbkit.IsRecordNotFound(err) {
 					// Already removed between the list above and this
-					// delete -- see hardDeleteSaysGone's doc comment.
+					// delete -- dbkit.IsRecordNotFound's gone answer,
+					// never a partial failure.
 					continue
 				}
 				if err != nil {
@@ -91,9 +91,10 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 			erased := 0
 			for _, row := range rows {
 				err := repo.HardDelete(ctx, row.ID)
-				if hardDeleteSaysGone(err) {
+				if dbkit.IsRecordNotFound(err) {
 					// Already removed between the list above and this
-					// delete -- see hardDeleteSaysGone's doc comment.
+					// delete -- dbkit.IsRecordNotFound's gone answer,
+					// never a partial failure.
 					continue
 				}
 				if err != nil {
@@ -122,21 +123,4 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 			return repo.List(ctx)
 		},
 	}
-}
-
-// hardDeleteSaysGone reports whether err is the "the row is already gone"
-// answer a Repository.HardDelete gives when its physical DELETE matched no
-// row -- whether because the row never existed under ctx's tenant, or
-// because a concurrent removal (the other compliance orchestrator, or a
-// re-run of this one) got there between this callback's candidate list and
-// its own delete. It is matched by Code rather than by identity
-// (apperr.WithParam always derives a new *apperr.Error, so pointer
-// identity is not stable across the decoration the underlying repository
-// applies), the same way service.go's isRecordNotFound helper matches.
-func hardDeleteSaysGone(err error) bool {
-	if err == nil {
-		return false
-	}
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }

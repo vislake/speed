@@ -288,18 +288,9 @@ func isReaderLiveAtNode(ctx context.Context, svc *rbac.Service, sub rbac.Subject
 			return false, restoreErr
 		}
 		return true, nil
-	case isRBACBindingNotFound(err):
+	case apperr.HasCode(err, rbac.ErrBindingNotFound.Code):
 		return false, nil
 	default:
 		return false, err
 	}
-}
-
-// isRBACBindingNotFound reports whether err is rbac.ErrBindingNotFound,
-// matched on its Code the way apperr's own doc comment prescribes (match
-// on Code through As, never on pointer identity, since WithParam/WithCause
-// always derive a new *apperr.Error instance).
-func isRBACBindingNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == rbac.ErrBindingNotFound.Code
 }

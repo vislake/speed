@@ -85,7 +85,7 @@ func demoEntitlementPlan(ctx context.Context, plans *billing.PlanService) (*bill
 	// string), stamping exactly demoEntitlementGrants onto it.
 	plan, err := plans.Resolve(ctx, "", DemoEntitlementPlanKey)
 	if err != nil {
-		if appErr, ok := apperr.As(err); !ok || appErr.Code != billing.ErrPlanNotFound.Code {
+		if !apperr.HasCode(err, billing.ErrPlanNotFound.Code) {
 			return nil, fmt.Errorf("reference-app: resolve the demo entitlement plan: %w", err)
 		}
 		demoPlan := &billing.Plan{

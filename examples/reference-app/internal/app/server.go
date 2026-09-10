@@ -601,7 +601,7 @@ type OrgSubtreeResolver struct{ Scope org.Scope }
 func (r OrgSubtreeResolver) NodePath(ctx context.Context, nodeID string) (string, bool, error) {
 	path, err := r.Scope.Path(ctx, nodeID)
 	if err != nil {
-		if appErr, ok := apperr.As(err); ok && appErr.Code == org.ErrNodeNotFound.Code {
+		if apperr.HasCode(err, org.ErrNodeNotFound.Code) {
 			// rbac's own contract: an unresolvable node DENIES the binding
 			// that named it rather than erroring, so the caller's Can/
 			// DataScope decision reports "no such node" as ok == false,

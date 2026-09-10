@@ -371,7 +371,7 @@ func (s *Service) List(ctx context.Context) ([]Case, error) {
 func (s *Service) Get(ctx context.Context, caseID string) (Case, []Photo, error) {
 	record, err := s.repo.FindByID(ctx, caseID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return Case{}, nil, ErrNotFound
 		}
 		return Case{}, nil, err
@@ -381,15 +381,6 @@ func (s *Service) Get(ctx context.Context, caseID string) (Case, []Photo, error)
 		return Case{}, nil, err
 	}
 	return toCase(*record), toPhotos(photoRecords), nil
-}
-
-// isRecordNotFound reports whether err is dbkit's not-found error, matched
-// by Code rather than by identity (apperr.WithParam always derives a new
-// *apperr.Error, so pointer identity is not stable across the decoration
-// the underlying repository applies).
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }
 
 // toCase maps a caseRecord row onto the exported Case value.

@@ -38,8 +38,7 @@ func TestService_Simulate_InsufficientCredits_RefusesBeforeAnyEnqueue(t *testing
 	if jobID != "" {
 		t.Errorf("Simulate returned job id %q on refusal, want empty", jobID)
 	}
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != "billing.insufficient_credits" {
+	if !apperr.HasCode(err, "billing.insufficient_credits") {
 		t.Fatalf("Simulate error = %v, want a coded billing.insufficient_credits error", err)
 	}
 	if queue.enqueueCalls != 0 {

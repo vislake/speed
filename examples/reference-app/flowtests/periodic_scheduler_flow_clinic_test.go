@@ -42,6 +42,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/admin"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/storage"
 )
@@ -143,7 +144,7 @@ func observeClinicSweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 		return false, "list = " + objectIDs(listed.Objects) + ", want no objects left under the clinic"
 	}
 
-	if _, err := objects.FindByID(clinicCtx, expiringID); !errIsRecordNotFound(err) {
+	if _, err := objects.FindByID(clinicCtx, expiringID); !dbkit.IsRecordNotFound(err) {
 		return false, "expired object's row still exists (FindByID err = " + errString(err) + ")"
 	}
 
@@ -395,7 +396,7 @@ func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegiste
 		t.Fatalf("post-sweep clinic list = %+v, want no objects left under the clinic", final.Objects)
 	}
 
-	if _, findErr := objects.FindByID(pkgcore.WithTenant(context.Background(), clinic), expiring.ID); !errIsRecordNotFound(findErr) {
+	if _, findErr := objects.FindByID(pkgcore.WithTenant(context.Background(), clinic), expiring.ID); !dbkit.IsRecordNotFound(findErr) {
 		t.Fatalf("the sweep-expired clinic object's row is still present (FindByID err = %v)", findErr)
 	}
 	if _, err := os.Stat(clinicBytesPath); !os.IsNotExist(err) {

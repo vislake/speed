@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -378,7 +379,7 @@ func isReaderLiveAtScope(ctx context.Context, svc *rbac.Service, sub rbac.Subjec
 			return false, restoreErr
 		}
 		return true, nil
-	case isRBACBindingNotFound(err):
+	case apperr.HasCode(err, rbac.ErrBindingNotFound.Code):
 		return false, nil
 	default:
 		return false, err

@@ -1592,7 +1592,7 @@ func seedDemoReaderRole(ctx context.Context, svc *rbac.Service) error {
 		DescriptionKey: "rbac.role.member",
 		Permissions:    []string{notes.PermissionRead},
 	})
-	if err != nil && !isAlreadyDefined(err) {
+	if err != nil && !apperr.HasCode(err, rbac.ErrDuplicateRole.Code) {
 		return err
 	}
 	return nil
@@ -1618,17 +1618,8 @@ func seedDemoAIGatewayTenantWriterRole(ctx context.Context, svc *rbac.Service) e
 		DescriptionKey: "rbac.role.member",
 		Permissions:    []string{aigateway.PermissionRead, aigateway.PermissionWrite},
 	})
-	if err != nil && !isAlreadyDefined(err) {
+	if err != nil && !apperr.HasCode(err, rbac.ErrDuplicateRole.Code) {
 		return err
 	}
 	return nil
-}
-
-// isAlreadyDefined reports whether err is rbac's duplicate-role conflict.
-// Classification goes through the CODE, not errors.Is against the
-// sentinel: every WithParam call derives a new *apperr.Error, so the
-// exported vars are templates rather than singletons.
-func isAlreadyDefined(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == rbac.ErrDuplicateRole.Code
 }

@@ -25,17 +25,6 @@ import (
 // same point it attaches the store's org-backed half.
 const signInTenantEnumerationPurpose pkgcore.SystemPurpose = "reference-app.sign_in_tenant_enumeration"
 
-// orgCodeIs reports whether err is a go/org application error carrying
-// code -- the matching convention go/org/errors.go's own index documents:
-// org's exported errors are *apperr.Error builders whose WithParam and
-// WithCause derivations return a NEW instance, so a caller matches a
-// decorated error with apperr.As and a Code comparison, never with == or
-// errors.Is against the declared var.
-func orgCodeIs(err error, code string) bool {
-	orgErr, ok := apperr.As(err)
-	return ok && orgErr.Code == code
-}
-
 // signInMemberships is the authn.MembershipReader this app wires authn's
 // WithMembershipReader seam to (BuildServer), and therefore the answer to
 // the two questions authn must ask about an account before it may act in a
@@ -184,7 +173,7 @@ func (m *signInMemberships) ActiveMembership(ctx context.Context, userID string,
 		switch {
 		case err == nil:
 			return member != nil, nil
-		case !orgCodeIs(err, org.ErrMembershipNotFound.Code):
+		case !apperr.HasCode(err, org.ErrMembershipNotFound.Code):
 			return false, err
 		}
 	}

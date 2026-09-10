@@ -495,8 +495,7 @@ func TestService_Simulate_InvalidOptions_RefusedBeforeReservationOrEnqueue(t *te
 			if jobID != "" {
 				t.Errorf("Simulate returned job id %q on refusal, want empty", jobID)
 			}
-			appErr, ok := apperr.As(err)
-			if !ok || appErr.Code != attempt.wantErr {
+			if !apperr.HasCode(err, attempt.wantErr) {
 				t.Fatalf("Simulate error = %v, want coded %s", err, attempt.wantErr)
 			}
 		})
@@ -958,8 +957,7 @@ func TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Simulate with a refusing entitlement gate succeeded (job %q), want aigateway.entitlement_denied", jobID)
 	}
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != aigateway.ErrEntitlementDenied.Code {
+	if !apperr.HasCode(err, aigateway.ErrEntitlementDenied.Code) {
 		t.Fatalf("Simulate error = %v, want the gateway's own coded aigateway.entitlement_denied answer", err)
 	}
 	if queue.enqueueCalls != 0 {
