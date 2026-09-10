@@ -39,6 +39,7 @@ package s3
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -109,7 +110,10 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // pkgcore's own smtpMailerFromConfig, the fields NewObjectStore itself
 // panics on missing are checked first and reported as
 // pkgcore.ErrMissingSeamConfig instead, because none of endpoint, bucket or
-// the credential pair has a safe default.
+// the credential pair has a safe default. The optional "bucket_lookup" key
+// is parsed through parseBucketLookup, so an unknown value comes back as an
+// error rather than panicking through the Build call that is documented to
+// return one.
 func objectStoreFromConfig(cfg pkgcore.Config) (pkgcore.ObjectStore, error) {
 	endpoint := cfg["endpoint"]
 	bucket := cfg["bucket"]
@@ -122,12 +126,34 @@ func objectStoreFromConfig(cfg pkgcore.Config) (pkgcore.ObjectStore, error) {
 		)
 	}
 
+	bucketLookup, err := parseBucketLookup(cfg["bucket_lookup"])
+	if err != nil {
+		return nil, fmt.Errorf("pkgcore/objectstore/s3: builtin objectstore.s3 seam: %w", err)
+	}
+
 	return NewObjectStore(Config{
-		Endpoint:  endpoint,
-		Bucket:    bucket,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
-		Region:    cfg["region"],
-		UseSSL:    cfg["use_ssl"] == "true",
+		Endpoint:     endpoint,
+		Bucket:       bucket,
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		Region:       cfg["region"],
+		UseSSL:       cfg["use_ssl"] == "true",
+		BucketLookup: bucketLookup,
 	}), nil
+}
+
+// parseBucketLookup maps a Config string onto a BucketLookupType, defaulting
+// to BucketLookupAuto -- the same default the zero-value Config.BucketLookup
+// carries -- for an unset value.
+func parseBucketLookup(raw string) (BucketLookupType, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return BucketLookupAuto, nil
+	case "path":
+		return BucketLookupPath, nil
+	case "virtual_host":
+		return BucketLookupVirtualHost, nil
+	default:
+		return 0, fmt.Errorf("invalid \"bucket_lookup\" %q: want one of \"auto\", \"path\", \"virtual_host\"", raw)
+	}
 }
