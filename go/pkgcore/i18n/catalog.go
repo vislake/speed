@@ -14,15 +14,15 @@ import (
 
 // LocaleZHCN and LocaleENUS name the catalog's two seed languages. They are
 // naming conveniences for callers that want the zh-CN/en-US pair by hand
-// -- the zh-CN default of the negotiation chain, the lookup tests -- not a
-// closed list: the catalog serves exactly the languages modules ship
-// locale files for, and a language added later is one more file, never a
-// change here.
+// -- the en-US platform default of the negotiation chains, the lookup
+// tests -- not a closed list: the catalog serves exactly the languages
+// modules ship locale files for, and a language added later is one more
+// file, never a change here.
 const (
-	// LocaleZHCN is Simplified Chinese, the default language of the
-	// negotiation chain.
+	// LocaleZHCN is Simplified Chinese.
 	LocaleZHCN = "zh-CN"
-	// LocaleENUS is American English.
+	// LocaleENUS is American English, the platform default language of the
+	// negotiation chains.
 	LocaleENUS = "en-US"
 )
 
