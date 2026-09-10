@@ -208,7 +208,7 @@ CREATE UNIQUE INDEX uq_billing_subscriptions_one_active
     ON billing_subscriptions (tenant_id) WHERE status = 'active';
 ```
 
-- 两个方言都原生支持部分唯一索引(SQLite ≥ 3.8.0 与 PostgreSQL),语句逐字一致,能通过迁移对齐门(`tools/check_migration_parity.py` 的文本对齐),不需要 exceptions 条目;新增 0007 一对(双方言手写、同文本);版本未发布(v0.0.0)、零部署,无既有数据需要先体检。
+- 两个方言都原生支持部分唯一索引(SQLite ≥ 3.8.0 与 PostgreSQL),语句逐字一致,能通过迁移对齐门(`tools/check_migration_parity.py` 的文本对齐),不需要 exceptions 条目;新增 0007 一对(双方言手写、同文本);v0.0.1 已作废(21 个模块 tag 已从远端与本地删除,代理缓存不可撤回)、零部署,无既有数据需要先体检。
 - 有索引时 `EnsureActive` 的并发语义:两个并发 ensure 各建一条 created 行都合法;先激活者拿下索引,后者的 `Activate` 得到 duplicate-key 错——`EnsureActive` 捕获它、重读 Active、返回赢家的行(org `EnsureRoot` 吸收创建竞态的同一惯用法;`errors.Is(err, gorm.ErrDuplicatedKey)` 的先例在 go/org/tree.go 的 `CreateRoot`)。输者的 created 行留为惰性孤儿。
 - 无索引时(若 Q1 被推迟):两条 active 并存的窗口与宿主手工 ensure 的现状完全相同——`EnsureActive` 的文档必须如实写明这一点,不能假装原子。
 - **代价与它裁定的问题**:索引把"多订阅并存不支持"从 v0 的假设变成不变量。这正是 AGENTS.md 记录为未定的 "uniqueness decision";收紧方向与现状(`Active` 的假设、权益判定只认一条)一致,反向(真多订阅)需要的是另一套设计(Active 的签名、权益合并规则),不会被这条索引堵死任何已承诺的能力。既有测试中没有任何一个在同一租户下激活两条订阅(已核对 billing 各测试文件与 integration_test;subscription_test.go 的并发用例是同一条订阅上的 Cancel/MarkPastDue 竞态)。
