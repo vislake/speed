@@ -34,6 +34,11 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
     the census it was calibrated against.
   * main's --update refusal path -- a measured total breaching the
     floor is refused with its total named, and nothing is recorded.
+  * measure_module_coverage's failure diagnostic -- a red go test run
+    raises with BOTH captured streams, labeled and bounded: the failing
+    test's "--- FAIL: TestName" line, which go test prints to stdout,
+    stays readable from CI even when stderr is empty, and an oversized
+    stream keeps only its tail with the truncation named.
   * short_toolchain -- the go version line's short form.
   * The gating rule's fail direction -- the mechanism must not go soft
     on the decline it exists to catch -- is proven against the real
@@ -483,6 +488,77 @@ class UpdateRefusal(unittest.TestCase):
             self.assertFalse(
                 (root / "tools" / m.BASELINE_FILE_NAME).exists()
             )
+
+
+class MeasurementFailureDiagnostic(unittest.TestCase):
+    """measure_module_coverage's failure message: a red suite raises
+    RuntimeError carrying BOTH captured streams, labeled and bounded.
+    go test prints a failing test's own output -- the "--- FAIL:
+    TestName" line and its log -- to stdout, so a message built from
+    stderr alone left a red run with an empty body and no way to name
+    the failing test from CI."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = pathlib.Path(tmp.name)
+        self.module_dir = "go/widgets"
+        module = self.root / self.module_dir
+        module.mkdir(parents=True)
+        (module / "go.mod").write_text("module example.com/widgets\n")
+
+    def _fail_with(self, stdout, stderr):
+        """Run measure_module_coverage with a stubbed go test that
+        exited 1 with the given captured streams, returning the raised
+        RuntimeError's message."""
+        proc = unittest.mock.Mock(returncode=1, stdout=stdout, stderr=stderr)
+        with unittest.mock.patch.object(
+            m.subprocess, "run", return_value=proc
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                m.measure_module_coverage(self.root, self.module_dir)
+        return str(raised.exception)
+
+    def test_stdout_carries_the_failing_test_verdict(self):
+        # The regression this pins: with only stderr in the message, a
+        # red run whose failure lives on stdout (as go test prints it)
+        # reported no failing test name.
+        stdout = (
+            "=== RUN   TestWidget\n"
+            "    widget_test.go:9: Add(2,2) = 4, want 5\n"
+            "--- FAIL: TestWidget (0.00s)\n"
+            "FAIL\n"
+            "FAIL\texample.com/widgets\t0.005s\n"
+        )
+        message = self._fail_with(stdout, "")
+        self.assertIn("--- FAIL: TestWidget", message)
+        self.assertIn("Add(2,2) = 4, want 5", message)
+        self.assertIn("exit 1", message)
+        self.assertIn(self.module_dir, message)
+
+    def test_both_streams_are_labeled_and_present(self):
+        stdout, stderr = "go test stdout body\n", "go: tooling stderr\n"
+        message = self._fail_with(stdout, stderr)
+        self.assertIn("stdout (%d chars):\ngo test stdout body"
+                      % len(stdout), message)
+        self.assertIn("stderr (%d chars):\ngo: tooling stderr"
+                      % len(stderr), message)
+
+    def test_each_stream_keeps_only_its_bounded_tail(self):
+        text = "HEAD-MARKER " + "x" * 5000 + "\nTAIL-MARKER verdict\n"
+        message = self._fail_with(text, "")
+        self.assertIn("TAIL-MARKER verdict", message)
+        self.assertNotIn("HEAD-MARKER", message)
+        self.assertIn(
+            "stdout (last %d of %d chars)" % (m.STREAM_TAIL_LIMIT, len(text)),
+            message,
+        )
+        self.assertIn("stderr (empty)", message)
+
+    def test_empty_streams_are_named_empty(self):
+        message = self._fail_with("", "")
+        self.assertIn("stdout (empty)", message)
+        self.assertIn("stderr (empty)", message)
 
 
 class Toolchain(unittest.TestCase):

@@ -247,6 +247,16 @@ TOLERANCE_STATEMENTS = 2
 # the aggregate.
 DIAGNOSTIC_LIMIT = 30
 
+# The cap, in characters, on each captured stream's retained tail in
+# measure_module_coverage's failure message (captured_streams_report).
+# A failing go test run prints the failing test's own output -- the
+# "--- FAIL: TestName" line and the test's log -- to STDOUT, keeping
+# stderr for go's own tooling errors, so the failure message must carry
+# both streams or the failing test is invisible from CI. The tail is
+# what is kept: a run's verdict lines print at its end. Bounded so a
+# huge log cannot bury the CI output.
+STREAM_TAIL_LIMIT = 2000
+
 # The profile format line for one function block:
 #   go/pkgcore/kernel.go:12.17,18.2 3 2
 # path:startline.startcol,endline.endcol <numstmt> <count>
@@ -486,6 +496,33 @@ class ModuleMeasurement:
     profile_text: str
 
 
+def captured_streams_report(stdout: str, stderr: str) -> str:
+    """The labeled, bounded stdout/stderr tails for
+    measure_module_coverage's failure message.
+
+    `go test` prints a failing test's own output -- the "--- FAIL:
+    TestName" line and the test's log -- to stdout, keeping stderr for
+    go's own tooling errors; a message built from stderr alone left a
+    red test run's failure body empty and the failing test unnameable
+    from CI. Each stream is labeled with its own name and what was
+    retained: the last STREAM_TAIL_LIMIT characters (a run's verdict
+    lines print at its end), "empty" for a stream that captured
+    nothing -- so which stream carried the failure, and how much of it
+    a truncated view shows, is readable from the message alone."""
+    lines = []
+    for name, text in (("stdout", stdout), ("stderr", stderr)):
+        if text.strip() == "":
+            lines.append("%s (empty)" % name)
+            continue
+        tail = text[-STREAM_TAIL_LIMIT:]
+        if len(tail) < len(text):
+            label = "%s (last %d of %d chars)" % (name, len(tail), len(text))
+        else:
+            label = "%s (%d chars)" % (name, len(text))
+        lines.append("%s:\n%s" % (label, tail.rstrip("\n")))
+    return "\n".join(lines)
+
+
 def measure_module_coverage(
     root: pathlib.Path, module_dir: str
 ) -> ModuleMeasurement:
@@ -509,7 +546,9 @@ def measure_module_coverage(
     directory, but the parse only needs the statement census, so an
     absolute temp path works too) and removed afterwards. A failing
     suite fails the measurement -- a baseline can only ever be recorded
-    against a green tree.
+    against a green tree -- and the RuntimeError carries both captured
+    streams (captured_streams_report), so the failing test's name, which
+    go test prints to stdout, stays legible from CI.
 
     -count=1 forces every package to run for real. Without it the run
     is not a measurement: go test treats -coverprofile as a cacheable
@@ -544,7 +583,11 @@ def measure_module_coverage(
         if proc.returncode != 0:
             raise RuntimeError(
                 "go test -coverprofile failed in %s (exit %d):\n%s"
-                % (module_dir, proc.returncode, proc.stderr[-2000:])
+                % (
+                    module_dir,
+                    proc.returncode,
+                    captured_streams_report(proc.stdout, proc.stderr),
+                )
             )
         profile_text = pathlib.Path(profile).read_text(encoding="utf-8")
     finally:
