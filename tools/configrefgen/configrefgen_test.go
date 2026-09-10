@@ -78,7 +78,7 @@ func TestConfigExampleYAMLLoadsThroughTheLoader(t *testing.T) {
 	}{
 		{"authn.blind_index_key", cfg.Authn.Blind_Index_Key},
 		{"authn.pii_cipher_key", cfg.Authn.PII_Cipher_Key},
-		{"config.master_key", cfg.Config.Master_Key},
+		{"config.cipher_key", cfg.Config.Cipher_Key},
 		{"notification.contact_index_key", cfg.Notification.Contact_Index_Key},
 		{"org.invitation_email_index_key", cfg.Org.Invitation_Email_Index_Key},
 		{"pki.local_key_cipher_key", cfg.Pki.Local_Key_Cipher_Key},

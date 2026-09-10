@@ -90,7 +90,7 @@ type Service struct {
 	// check fails closed on that rather than skipping itself.
 	kv pkgcore.KVStore
 
-	// cipher is the host's master-key cipher, nil when the host injected
+	// cipher is the host's cipher, nil when the host injected
 	// none. Attach refuses a schema containing Sensitive items without one
 	// (ErrCipherRequired), so at service time a nil cipher implies the
 	// schema has no Sensitive items and encryption is never needed.

@@ -30,7 +30,7 @@ weight: 98
 六枚密钥材料(authn、org、notification、pki、config 各自声明)有文档化的
 **非密钥**开发默认值,真实部署必须从密钥库覆盖。平台为派生定下两件稳定
 契约:声明的键路径在引导席位固定其 purpose 串(`pkgcore.BootstrapKeyPurpose`,
-目的串内嵌键路径,如 `speed.config.master_key.v1`),`dbkit.DeriveKey`
+目的串内嵌键路径,如 `speed.config.cipher_key.v1`),`dbkit.DeriveKey`
 (HKDF-SHA256)再把根密钥与该 purpose 变成该键的 32 字节材料——一枚 32 字节
 根密钥即可服务全部六枚。宿主自行为根密钥与每个单键选择变量名,平台只接收
 字节。显式配置的单键始终胜过为其派生的值;重命名声明的键路径即轮换,必须

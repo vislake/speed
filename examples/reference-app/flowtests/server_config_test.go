@@ -397,7 +397,7 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 		got     []byte
 		keyPath string
 	}{
-		{"ConfigKey", cfg.ConfigKey, "config.master_key"},
+		{"ConfigKey", cfg.ConfigKey, "config.cipher_key"},
 		{"OrgIndexKey", cfg.OrgIndexKey, "org.invitation_email_index_key"},
 		{"NotificationIndexKey", cfg.NotificationIndexKey, "notification.contact_index_key"},
 		{"PKILocalKeyCipherKey", cfg.PKILocalKeyCipherKey, "pki.local_key_cipher_key"},
@@ -514,7 +514,7 @@ func TestDeclaredBootstrapKeys_ReconcileWithResolvedKeyMaterial(t *testing.T) {
 	// The resolved material per declared key path, keyed by the path
 	// spelling the declaration uses.
 	resolved := map[string][]byte{
-		"config.master_key":              cfg.ConfigKey,
+		"config.cipher_key":              cfg.ConfigKey,
 		"org.invitation_email_index_key": cfg.OrgIndexKey,
 		"notification.contact_index_key": cfg.NotificationIndexKey,
 		"pki.local_key_cipher_key":       cfg.PKILocalKeyCipherKey,

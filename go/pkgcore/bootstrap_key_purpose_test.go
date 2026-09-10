@@ -16,7 +16,7 @@ import (
 var bootstrapKeyPurposeCases = []struct{ keyPath, purpose string }{
 	{"authn.blind_index_key", "speed.authn.blind_index_key.v1"},
 	{"authn.pii_cipher_key", "speed.authn.pii_cipher_key.v1"},
-	{"config.master_key", "speed.config.master_key.v1"},
+	{"config.cipher_key", "speed.config.cipher_key.v1"},
 	{"notification.contact_index_key", "speed.notification.contact_index_key.v1"},
 	{"org.invitation_email_index_key", "speed.org.invitation_email_index_key.v1"},
 	{"pki.local_key_cipher_key", "speed.pki.local_key_cipher_key.v1"},
@@ -66,9 +66,9 @@ func TestBootstrapKeyPurpose_RefusesMalformedPaths(t *testing.T) {
 	for _, tt := range []struct{ name, keyPath string }{
 		{"empty", ""},
 		{"only-dot", "."},
-		{"leading-dot", ".config.master_key"},
-		{"trailing-dot", "config.master_key."},
-		{"doubled-dot", "config..master_key"},
+		{"leading-dot", ".config.cipher_key"},
+		{"trailing-dot", "config.cipher_key."},
+		{"doubled-dot", "config..cipher_key"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

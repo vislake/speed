@@ -255,7 +255,7 @@ type hostConfig struct {
 
 	// RootKey names APP_ROOT_KEY: a single hex-encoded 32-byte high-entropy
 	// root secret that, when set, derives ALL SIX of the key materials this app
-	// otherwise requires individually (Config.Master_Key, Org, Notification,
+	// otherwise requires individually (Config.Cipher_Key, Org, Notification,
 	// Pki, Authn.Blind_Index_Key and Authn.PII_Cipher_Key below) once per
 	// declared bootstrap key path, via the two platform contracts the
 	// derivation composes (pkgcore.BootstrapKeyPurpose over the path, then
@@ -281,7 +281,7 @@ type hostConfig struct {
 
 	// Config carries the key material the config module declares on the
 	// registry's bootstrap seat. The group exists so the loader target's key
-	// path (config.master_key) is exactly the declared key's spelling:
+	// path (config.cipher_key) is exactly the declared key's spelling:
 	// config.Verify compares them literally, which is how a boot proves this
 	// target binds what the module's declaration promises.
 	Config hostConfigKeyConfig
@@ -442,11 +442,11 @@ type hostConfig struct {
 }
 
 // hostConfigKeyConfig carries the key material the config module declares: the
-// parent and child names spell the declared key path config.master_key
+// parent and child names spell the declared key path config.cipher_key
 // literally, which config.Verify compares against the declaration.
 type hostConfigKeyConfig struct {
-	// Master_Key names APP_CONFIG_KEY: the hex-encoded 32-byte master key the
-	// config module seals Sensitive values with (config.WithCipher over
+	// Cipher_Key names APP_CONFIG_KEY: the hex-encoded 32-byte AES cipher key
+	// the config module seals Sensitive values with (config.WithCipher over
 	// dbkit.NewCipher). It is the bootstrap configuration this app's own configs
 	// table must never hold -- the key that encrypts the table cannot live in
 	// the table -- so it comes from the process environment like every other
@@ -456,8 +456,8 @@ type hostConfigKeyConfig struct {
 	// boot fails with a precise message rather than surfacing later as an
 	// opaque dbkit.NewCipher error.
 	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key config.master_key, which Verify compares literally.
-	Master_Key string `config:"env=APP_CONFIG_KEY"`
+	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key config.cipher_key, which Verify compares literally.
+	Cipher_Key string `config:"env=APP_CONFIG_KEY"`
 }
 
 // hostConfigKeyOrg carries the key material org declares: the parent and child
@@ -466,7 +466,7 @@ type hostConfigKeyOrg struct {
 	// Invitation_Email_Index_Key names APP_ORG_INDEX_KEY: the hex-encoded
 	// 32-byte HMAC key org.WithEmailIndexer's blind indexer is built from
 	// (dbkit.NewBlindIndexer). It is a SEPARATE bootstrap secret from the
-	// config master key on purpose: this app reuses the config cipher (built
+	// config cipher key on purpose: this app reuses the config cipher (built
 	// from APP_CONFIG_KEY) to also encrypt org's Invitation.Email column
 	// (registered under org.EmailSerializerName), and dbkit's own rule is that
 	// an AES key must never double as an HMAC key -- see go/org/invitation.go's
@@ -487,7 +487,7 @@ type hostConfigKeyNotification struct {
 	// Contact_Index_Key names APP_NOTIFICATION_INDEX_KEY: the hex-encoded
 	// 32-byte HMAC key the blind indexers over the notification module's
 	// encrypted contact addresses are built from (dbkit.NewBlindIndexer). It is
-	// a SEPARATE bootstrap secret from the config master key for the same
+	// a SEPARATE bootstrap secret from the config cipher key for the same
 	// reason the org key above gives: this app reuses the config cipher to also
 	// encrypt notification's Contact.Address column (registered under
 	// notification.ContactAddressSerializerName), and dbkit's own rule is that
@@ -649,7 +649,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	// an opaque cipher error; hex.DecodeString rejects anything that is not
 	// valid lowercase-or-uppercase hex, and the length check parseHexKeyEnv runs
 	// first rejects anything that does not decode to exactly 32 bytes.
-	configKey, err := resolveKey(rootKey, "config.master_key", "APP_CONFIG_KEY", hc.Config.Master_Key, DevConfigKey)
+	configKey, err := resolveKey(rootKey, "config.cipher_key", "APP_CONFIG_KEY", hc.Config.Cipher_Key, DevConfigKey)
 	if err != nil {
 		return ServerConfig{}, err
 	}

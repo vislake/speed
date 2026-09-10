@@ -99,8 +99,8 @@ type exampleBootstrapConfig struct {
 }
 
 type exampleKeyConfig struct {
-	//nolint:staticcheck // the field name must lowercase to the dotted key config.master_key that config.example.yaml spells.
-	Master_Key string
+	//nolint:staticcheck // the field name must lowercase to the dotted key config.cipher_key that config.example.yaml spells.
+	Cipher_Key string
 }
 
 type exampleKeyAuthn struct {

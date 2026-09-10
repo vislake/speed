@@ -123,10 +123,10 @@ func TestBootstrapRegistrar_Keys_ReturnsRegistrationOrderCopy(t *testing.T) {
 	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	first := bootstrapDecl()
 	second := BootstrapKey{
-		Key:         "config.master_key",
+		Key:         "config.cipher_key",
 		Format:      "hexkey",
 		Sensitive:   true,
-		Description: "Master key the config module seals Sensitive values with.",
+		Description: "The AES cipher key the config module seals Sensitive values with.",
 		Group:       "config",
 	}
 	if err := reg.Bootstrap.Add(first, second); err != nil {

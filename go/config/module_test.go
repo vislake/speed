@@ -330,7 +330,7 @@ func TestModule_Attach_RequiresACipherForSensitiveDeclarations(t *testing.T) {
 }
 
 // TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
-// this module's contract names: the master key behind the cipher that seals
+// this module's contract names: the cipher key behind the cipher that seals
 // Sensitive values. It is declared on the bootstrap layer precisely because the
 // key that encrypts the configs table cannot be a row in it, so the runtime
 // schema must stay free of the identifier.
@@ -342,11 +342,11 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 
 	declared := reg.Bootstrap.Keys()
 	if len(declared) != 1 {
-		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the master key", len(declared), declared)
+		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the cipher key", len(declared), declared)
 	}
 	key := declared[0]
-	if key.Key != "config.master_key" {
-		t.Errorf("declared key = %q, want config.master_key", key.Key)
+	if key.Key != "config.cipher_key" {
+		t.Errorf("declared key = %q, want config.cipher_key", key.Key)
 	}
 	if key.Format != "hexkey" || !key.Sensitive {
 		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)

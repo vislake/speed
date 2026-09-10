@@ -109,7 +109,7 @@ var serviceTestSchemaFlags = []pkgcore.FeatureFlag{
 }
 
 // buildTestCipher returns a fresh AES-GCM cipher over a random 32-byte key,
-// the shape a host's master key has. Used by this file and by http_test.go.
+// the shape a host's cipher key has. Used by this file and by http_test.go.
 func buildTestCipher(t *testing.T) *dbkit.Cipher {
 	t.Helper()
 	key := make([]byte, 32)

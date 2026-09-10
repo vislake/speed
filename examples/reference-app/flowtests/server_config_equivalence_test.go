@@ -82,7 +82,7 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		rootKey = decoded
 	}
 
-	configKey, err := legacyResolveKey(rootKey, "config.master_key", "APP_CONFIG_KEY", app.DevConfigKey)
+	configKey, err := legacyResolveKey(rootKey, "config.cipher_key", "APP_CONFIG_KEY", app.DevConfigKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}

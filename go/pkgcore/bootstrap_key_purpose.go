@@ -40,7 +40,7 @@ var ErrInvalidBootstrapKeyPath = errors.New("pkgcore: invalid bootstrap key path
 // is likewise the host's policy, never this function's.
 //
 // keyPath is a dotted bootstrap key path as BootstrapKey.Key carries it, for
-// example "config.master_key". The path must be non-empty and carry no empty
+// example "config.cipher_key". The path must be non-empty and carry no empty
 // segment (a leading, trailing or doubled dot); a path that is not fails with
 // ErrInvalidBootstrapKeyPath.
 //
@@ -60,7 +60,7 @@ var ErrInvalidBootstrapKeyPath = errors.New("pkgcore: invalid bootstrap key path
 //
 //	authn.blind_index_key                -> speed.authn.blind_index_key.v1
 //	authn.pii_cipher_key                 -> speed.authn.pii_cipher_key.v1
-//	config.master_key                    -> speed.config.master_key.v1
+//	config.cipher_key                    -> speed.config.cipher_key.v1
 //	notification.contact_index_key       -> speed.notification.contact_index_key.v1
 //	org.invitation_email_index_key       -> speed.org.invitation_email_index_key.v1
 //	pki.local_key_cipher_key             -> speed.pki.local_key_cipher_key.v1

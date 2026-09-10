@@ -15,7 +15,7 @@ speed 的动态配置模块:schema 先行、数据库承载的设置库,值可�
 `pkgcore/config` 解析(宿主自己的目标结构体驱动),该零依赖包本模块
 绝不导入;声明键材料的派生约定——每个键路径一个 purpose 串
 (`pkgcore.BootstrapKeyPurpose`),配合 `dbkit.DeriveKey`——也在席位
-与工具箱侧。本模块在席位上只声明一枚自己的键(`config.master_key`),
+与工具箱侧。本模块在席位上只声明一枚自己的键(`config.cipher_key`),
 不拥有该层任何机制。它拥有运行时层,对多租户宿主是必需的:任何其他
 模块的行为都可能受它服务的开关或限额支配。
 

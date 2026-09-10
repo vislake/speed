@@ -19,13 +19,13 @@
       "description": "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below."
     },
     {
-      "key": "config.master_key",
+      "key": "config.cipher_key",
       "module": "config",
-      "env": "SPEED_CONFIG__MASTER_KEY",
+      "env": "SPEED_CONFIG__CIPHER_KEY",
       "type": "hexkey",
       "unset_fallback": "documented non-secret development default",
       "sensitive": true,
-      "description": "Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input."
+      "description": "The AES cipher key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input."
     },
     {
       "key": "notification.contact_index_key",

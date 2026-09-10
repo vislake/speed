@@ -38,14 +38,14 @@ import (
 // the registry's bootstrap seat and this app's loader target binds: authn's
 // two key materials, org's invitation-address blind-index key, notification's
 // contact-address blind-index key, pki's local-key cipher key and config's
-// master key. Each module's own bootstrapKeyDecl is the spelling's source;
+// cipher key. Each module's own bootstrapKeyDecl is the spelling's source;
 // verifyBootstrapBinding checks this same set against the live registry, so a
 // module-side rename fails the boot rather than silently drifting from this
 // fixture.
 var platformDeclaredKeys = []string{
 	"authn.blind_index_key",
 	"authn.pii_cipher_key",
-	"config.master_key",
+	"config.cipher_key",
 	"notification.contact_index_key",
 	"org.invitation_email_index_key",
 	"pki.local_key_cipher_key",
@@ -139,8 +139,8 @@ func TestServerConfigFrom_RefusesAMalformedIndividualKey(t *testing.T) {
 		set     func(hc *hostConfig, value string)
 	}{
 		{
-			"config.master_key", "APP_CONFIG_KEY",
-			func(hc *hostConfig, value string) { hc.Config.Master_Key = value },
+			"config.cipher_key", "APP_CONFIG_KEY",
+			func(hc *hostConfig, value string) { hc.Config.Cipher_Key = value },
 		},
 		{
 			"org.invitation_email_index_key", "APP_ORG_INDEX_KEY",
@@ -237,7 +237,7 @@ func TestParseHexKeyEnv(t *testing.T) {
 // that cannot derive refusing too.
 func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
 	const envName = "APP_CONFIG_KEY"
-	keyPath := "config.master_key"
+	keyPath := "config.cipher_key"
 	devDefault := []byte("dev-default-key-material")
 	rootKey := bytes.Repeat([]byte{0x5a}, 32)
 
@@ -501,7 +501,7 @@ func TestVerifyBootstrapBinding(t *testing.T) {
 		return reg
 	}
 
-	if err := verifyBootstrapBinding(registry("config.master_key", "authn.pii_cipher_key")); err != nil {
+	if err := verifyBootstrapBinding(registry("config.cipher_key", "authn.pii_cipher_key")); err != nil {
 		t.Fatalf("verifyBootstrapBinding with declared keys the target binds: %v", err)
 	}
 
@@ -514,7 +514,7 @@ func TestVerifyBootstrapBinding(t *testing.T) {
 	original := hostBootstrapKeys
 	t.Cleanup(func() { hostBootstrapKeys = original })
 	hostBootstrapKeys = append(append([]string{}, original...), "hostkeywithoutfield")
-	if err := verifyBootstrapBinding(registry("config.master_key")); err == nil {
+	if err := verifyBootstrapBinding(registry("config.cipher_key")); err == nil {
 		t.Fatal("verifyBootstrapBinding accepted a host key the target does not bind")
 	} else if !strings.Contains(err.Error(), "hostkeywithoutfield") {
 		t.Errorf("host-key refusal does not name the key: %v", err)

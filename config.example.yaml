@@ -76,14 +76,15 @@ authn:
   pii_cipher_key: REPLACE_WITH_64_HEX_CHARS
 
 config:
-  # Master key the config module seals every Sensitive dynamic-configuration
-  # value with; the key that encrypts the configs table cannot live in the
-  # table, so it comes from the host's process-start input.
-  #   env:  SPEED_CONFIG__MASTER_KEY=...
-  #   flag: --config.master_key=...
+  # The AES cipher key the config module seals every Sensitive
+  # dynamic-configuration value with; the key that encrypts the configs
+  # table cannot live in the table, so it comes from the host's process-start
+  # input.
+  #   env:  SPEED_CONFIG__CIPHER_KEY=...
+  #   flag: --config.cipher_key=...
   # A real deployment injects this key from a secret store, or derives it
   # from one 32-byte root key; see docs/config-reference.md.
-  master_key: REPLACE_WITH_64_HEX_CHARS
+  cipher_key: REPLACE_WITH_64_HEX_CHARS
 
 notification:
   # HMAC key the notification module's blind indexers index its encrypted

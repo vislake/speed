@@ -335,17 +335,17 @@ func ExampleBootstrapRegistrar() {
 // the derivation is deterministic, renaming a declared key path is a
 // rotation of that key's material, never a plain edit.
 func ExampleBootstrapKeyPurpose() {
-	purpose, err := pkgcore.BootstrapKeyPurpose("config.master_key")
+	purpose, err := pkgcore.BootstrapKeyPurpose("config.cipher_key")
 	fmt.Println(purpose, err)
 
 	// A path that is empty or carries an empty segment (a doubled dot here)
 	// is refused at the call site, before anything is derived under a
 	// purpose nobody meant to freeze.
-	_, err = pkgcore.BootstrapKeyPurpose("config..master_key")
+	_, err = pkgcore.BootstrapKeyPurpose("config..cipher_key")
 	fmt.Println(errors.Is(err, pkgcore.ErrInvalidBootstrapKeyPath))
 
 	// Output:
-	// speed.config.master_key.v1 <nil>
+	// speed.config.cipher_key.v1 <nil>
 	// true
 }
 

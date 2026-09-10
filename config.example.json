@@ -4,7 +4,7 @@
     "pii_cipher_key": "REPLACE_WITH_64_HEX_CHARS"
   },
   "config": {
-    "master_key": "REPLACE_WITH_64_HEX_CHARS"
+    "cipher_key": "REPLACE_WITH_64_HEX_CHARS"
   },
   "dbpath": "app.db",
   "deploymentmode": "standalone",

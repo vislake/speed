@@ -22,7 +22,7 @@ const (
 )
 
 // bootstrapKeyDecl is the process-start key material this module's cipher
-// depends on: the master key the host builds its dbkit.Cipher from
+// depends on: the AES cipher key the host builds its dbkit.Cipher from
 // (WithCipher) and every Sensitive item's stored value is sealed with.
 //
 // It is a bootstrap key rather than a configuration item for the reason the
@@ -30,11 +30,11 @@ const (
 // live in the configs table. It is also its own secret, never a value derived
 // from another module's key material.
 var bootstrapKeyDecl = pkgcore.BootstrapKey{
-	Key:         "config.master_key",
+	Key:         "config.cipher_key",
 	Format:      "hexkey",
 	Default:     "documented non-secret development default",
 	Sensitive:   true,
-	Description: "Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input.",
+	Description: "The AES cipher key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input.",
 	Group:       moduleName,
 }
 
@@ -65,9 +65,9 @@ type Module struct {
 	// itself performs no I/O until Attach.
 	db *gorm.DB
 
-	// cipher is the host's master-key cipher for Sensitive items
-	// (WithCipher). Nil means no Sensitive item may be declared or
-	// served -- Attach refuses such a schema with ErrCipherRequired.
+	// cipher is the host's cipher for Sensitive items (WithCipher). Nil
+	// means no Sensitive item may be declared or served -- Attach refuses
+	// such a schema with ErrCipherRequired.
 	cipher *dbkit.Cipher
 
 	// resolver maps an unauthenticated request to the tenant its public
@@ -116,7 +116,7 @@ type Module struct {
 // Option configures a Module built by NewModule.
 type Option func(*Module)
 
-// WithCipher wires the master-key cipher Attach uses to seal and unseal
+// WithCipher wires the cipher Attach uses to seal and unseal
 // Sensitive configuration values at rest (dbkit's AES-GCM field-level
 // machinery). A module whose schema declares no Sensitive items needs no
 // cipher; one that does, and is Attached without one, fails with
