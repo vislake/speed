@@ -72,3 +72,35 @@ func Example() {
 	// Output:
 	// <nil> true MultiReplicaSafe|SurvivesRestart
 }
+
+// ExampleRegistration shows the name-registration path for a typed
+// configuration the flat pkgcore.Config cannot express: the host builds the
+// pool itself -- here with a DSN carrying its own TLS parameters, the shape
+// strings squeezed into keys cannot express -- wraps it in the registration
+// factory with the replica's stable ID, registers it under a name of its
+// own (the built-in "eventbus.postgres" name is taken), and names that
+// registration in a Preset entry. The host keeps ownership: the factory's
+// New returns the bare bus over the host's pool, so Kernel.Shutdown never
+// touches either, and the host closes both when it shuts down. pgxpool.New
+// dials nothing, so the closed-port DSN keeps this example hermetic.
+func ExampleRegistration() {
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		fmt.Println("pool:", err)
+		return
+	}
+	defer pool.Close()
+
+	name := "eventbus.postgres.host"
+	if regErr := pkgcore.EventBusRegistry.Register(eventbuspostgres.Registration(name, pool, "replica-host")); regErr != nil {
+		fmt.Println("register:", regErr)
+		return
+	}
+
+	preset := pkgcore.PresetStandalone.With("eventbus", pkgcore.SeamPreset{Implementation: name})
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
+	fmt.Println(err, reg.EventBus() != nil)
+
+	// Output:
+	// <nil> true
+}

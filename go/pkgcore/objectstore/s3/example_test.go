@@ -6,6 +6,7 @@ package s3_test
 // silently rotting.
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -53,4 +54,38 @@ func Example() {
 
 	// Output:
 	// <nil> true MultiReplicaSafe|SurvivesRestart
+}
+
+// ExampleRegistration shows the name-registration path for this seam, where
+// the typed configuration is the Config itself: the host assembles it in
+// code -- here from credentials resolved by its own secret machinery -- and
+// wraps it in the registration factory instead of flattening it into the
+// string-keyed pkgcore.Config. The factory's result registers under a name
+// of the host's own (the built-in "objectstore.s3" name is taken) and is
+// named in a Preset entry. The host keeps ownership: the factory's New
+// returns the bare store, so Kernel.Shutdown never touches it, and there is
+// no client this package would close. Nothing here dials; the service is
+// contacted on the store's first operation.
+func ExampleRegistration() {
+	storeCfg := s3.Config{
+		Endpoint:  "s3.internal:9000",
+		Bucket:    "objects",
+		AccessKey: "access-key",
+		SecretKey: "secret-key",
+		Region:    "us-east-1",
+		UseSSL:    true,
+	}
+
+	name := "objectstore.s3.prod"
+	if err := pkgcore.ObjectStoreRegistry.Register(s3.Registration(name, storeCfg)); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+
+	preset := pkgcore.PresetStandalone.With("objectstore", pkgcore.SeamPreset{Implementation: name})
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
+	fmt.Println(err, reg.ObjectStore() != nil)
+
+	// Output:
+	// <nil> true
 }

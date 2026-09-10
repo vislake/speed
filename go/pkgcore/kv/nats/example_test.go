@@ -68,3 +68,35 @@ func Example() {
 	// Output:
 	// false
 }
+
+// ExampleRegistration shows the name-registration path for a typed
+// configuration the flat pkgcore.Config cannot express: the host dials the
+// connection itself -- here with a private CA pool -- picks the bucket in
+// code, wraps both in the registration factory, registers the result under
+// a name of its own (the built-in "kv.nats" name is taken), and names that
+// registration in a Preset entry. The host keeps ownership: the factory's
+// New returns the bare store over the host's connection, so Kernel.Shutdown
+// never touches either, and the host closes both when it shuts down.
+//
+// Like ExampleNewKVStore above, this example carries no "Output:" comment:
+// the factory's New provisions the JetStream bucket, a real round trip no
+// example can perform without a live server, so the whole registration is
+// compiled -- and so still guards against the shown API drifting -- but
+// never executed.
+func ExampleRegistration() {
+	conn, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	name := "kv.nats.host"
+	if err := pkgcore.KVStoreRegistry.Register(kvnats.Registration(name, conn, "speed-kv")); err != nil {
+		panic(err)
+	}
+
+	preset := pkgcore.PresetStandalone.With("kv", pkgcore.SeamPreset{Implementation: name})
+	if _, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background()); err != nil {
+		panic(err)
+	}
+}

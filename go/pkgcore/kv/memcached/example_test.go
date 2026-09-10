@@ -6,6 +6,7 @@ package memcached_test
 // silently rotting.
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -52,4 +53,32 @@ func Example() {
 
 	// Output:
 	// <nil> true MultiReplicaSafe
+}
+
+// ExampleRegistration shows the name-registration path for a configuration
+// the flat pkgcore.Config cannot express -- here a per-server topology
+// assembled in code, the shape a host reaches for when the server list is
+// computed rather than configured. The host builds the client itself, wraps
+// it in the registration factory, registers it under a name of its own (the
+// built-in "kv.memcached" name is taken), and names that registration in a
+// Preset entry. The host keeps ownership: the factory's New returns the
+// bare store over the host's client, so Kernel.Shutdown never touches
+// either, and the host closes both when it shuts down. Nothing here dials;
+// gomemcache connects per operation.
+func ExampleRegistration() {
+	client := memcache.New("cache-a.internal:11211", "cache-b.internal:11211")
+	defer client.Close()
+
+	name := "kv.memcached.host"
+	if err := pkgcore.KVStoreRegistry.Register(kvmemcached.Registration(name, client)); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+
+	preset := pkgcore.PresetStandalone.With("kv", pkgcore.SeamPreset{Implementation: name})
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
+	fmt.Println(err, reg.KVStore() != nil)
+
+	// Output:
+	// <nil> true
 }

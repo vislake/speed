@@ -6,6 +6,8 @@ package redis_test
 // rotting.
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
@@ -47,4 +49,35 @@ func Example() {
 
 	// Output:
 	// <nil> true MultiReplicaSafe|SurvivesRestart
+}
+
+// ExampleRegistration shows the name-registration path for a typed
+// configuration the flat pkgcore.Config cannot express: the host builds the
+// client itself -- here carrying TLS material -- wraps it in the
+// registration factory, registers it under a name of its own (the built-in
+// "kv.redis" name is taken), and names that registration in a Preset entry.
+// One client can back several seams this way: the same object also goes to
+// eventbus/redis.Registration. The host keeps ownership: the factory's New
+// returns the bare store over the host's client, so Kernel.Shutdown never
+// touches either, and the host closes both when it shuts down. Nothing here
+// dials, because go-redis connects lazily.
+func ExampleRegistration() {
+	client := redis.NewClient(&redis.Options{
+		Addr:      "redis.internal:6379",
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+	})
+	defer client.Close()
+
+	name := "kv.redis.host"
+	if err := pkgcore.KVStoreRegistry.Register(kvredis.Registration(name, client)); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+
+	preset := pkgcore.PresetStandalone.With("kv", pkgcore.SeamPreset{Implementation: name})
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
+	fmt.Println(err, reg.KVStore() != nil)
+
+	// Output:
+	// <nil> true
 }

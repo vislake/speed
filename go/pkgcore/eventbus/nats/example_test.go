@@ -7,6 +7,8 @@ package nats_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 
 	natslib "github.com/nats-io/nats.go"
@@ -61,4 +63,40 @@ func Example() {
 
 	// Output:
 	// <nil> true MultiReplicaSafe|SurvivesRestart
+}
+
+// ExampleRegistration shows the name-registration path for a typed
+// configuration the flat pkgcore.Config cannot express: the host dials the
+// connection itself -- here with a private CA pool -- wraps it in the
+// registration factory, registers it under a name of its own (the built-in
+// "eventbus.nats" name is taken), and names that registration in a Preset
+// entry. The host keeps ownership: the factory's New returns the bare bus
+// over the host's connection, so Kernel.Shutdown never touches either, and
+// the host closes both when it shuts down. The URL points at a closed port
+// so this example stays hermetic: RetryOnFailedConnect keeps the dial from
+// failing synchronously, and no event is published here anyway.
+func ExampleRegistration() {
+	conn, err := natslib.Connect("127.0.0.1:1",
+		natslib.RetryOnFailedConnect(true),
+		natslib.MaxReconnects(-1),
+		natslib.Secure(&tls.Config{MinVersion: tls.VersionTLS12, RootCAs: x509.NewCertPool()}),
+	)
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.Close()
+
+	name := "eventbus.nats.host"
+	if regErr := pkgcore.EventBusRegistry.Register(eventbusnats.Registration(name, conn)); regErr != nil {
+		fmt.Println("register:", regErr)
+		return
+	}
+
+	preset := pkgcore.PresetStandalone.With("eventbus", pkgcore.SeamPreset{Implementation: name})
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
+	fmt.Println(err, reg.EventBus() != nil)
+
+	// Output:
+	// <nil> true
 }

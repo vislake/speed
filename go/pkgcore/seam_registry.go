@@ -44,7 +44,11 @@ type Config map[string]string
 // Registration whose New creates no owned resources simply does not
 // implement Close, and Bootstrap has nothing to record. A host that builds
 // the implementation itself and injects it with WithEventBus or one of its
-// siblings keeps owning its lifecycle, exactly as it always did.
+// siblings keeps owning its lifecycle, exactly as it always did -- and so
+// does a host that registers a self-built object through a distributed
+// implementation package's Registration factory, whose New returns the
+// bare implementation with no closer: the host closes its own object, and
+// Kernel.Shutdown never touches it.
 type Registration[T any] struct {
 	// Name identifies the implementation within its seam, for example
 	// "eventbus.memory" or "eventbus.redis". It is what a Preset's per-seam
@@ -78,6 +82,20 @@ type Registration[T any] struct {
 // implementation the same way, by calling Register on the matching
 // package-level registry before it bootstraps a Kernel that names it in a
 // Preset.
+//
+// For pkgcore's own distributed implementations (the seven Redis-,
+// PostgreSQL-, NATS-, Memcached- and S3-backed ones), the package
+// carrying the implementation also exports a Registration factory that
+// wraps a host-built client, connection, pool or typed Config --
+// eventbus/redis.Registration, kv/postgres.Registration and so on -- and
+// that is the recommended form of host registration for a typed
+// configuration the flat Config cannot express: the host builds the
+// object, wraps it, registers the result under a name of its own (the
+// built-in name is already taken) and names that name in a Preset entry,
+// so flipping between deployments stays a configuration change. The
+// factory preserves the host's ownership: its New returns the bare
+// implementation over the host's object and ignores the entry's Config,
+// as each factory's own doc comment states.
 //
 // A SeamRegistry is safe for concurrent Register and Build calls.
 type SeamRegistry[T any] struct {
