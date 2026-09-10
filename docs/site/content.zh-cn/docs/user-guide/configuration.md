@@ -23,9 +23,8 @@ weight: 98
 单下划线不是嵌套标记)。`WithEnvPrefix` 可为变量已带别的前缀的宿主替换前缀,
 字段也可以用 `config:"env=PORT"` 钉住精确的变量名。
 
-启动层文件源的成对完整示例随仓库提交:仓库根 `config.example.yaml` 与其派生的
-`config.example.json`(平台键 + 宿主自有键的写法演示,两种格式等价),可直接
-作为复制模板。
+启动层文件源的成对完整示例随仓库提交:`docs/config.example.yaml` 与其派生的
+`docs/config.example.json`(平台键,两种格式等价),可直接作为复制模板。
 
 六枚密钥材料(authn、org、notification、pki、config 各自声明)有文档化的
 **非密钥**开发默认值,真实部署必须从密钥库覆盖。平台为派生定下两件稳定

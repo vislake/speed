@@ -84,7 +84,7 @@ name: docs-check
 #     Go install, sharing that toolchain with the markdown-example
 #     check). The reference -- docs/config-reference.md, its
 #     machine-readable twin docs/config-reference.json, the derived
-#     config.example.json and the docs
+#     docs/config.example.json and the docs
 #     site's copy of the reference page -- is generated from the live
 #     configuration schema and the modules' own declarations: the
 #     generator composes a schema-only host (the platform modules that
@@ -102,7 +102,7 @@ name: docs-check
 #     The generator's own unit suite (tools/configrefgen/*_test.go, run
 #     by the tools/configrefgen matrix row in fast-check and
 #     full-check) pins the load-verification of
-#     config.example.yaml and its JSON twin, the rendered-keys-vs-
+#     docs/config.example.yaml and its JSON twin, the rendered-keys-vs-
 #     census correspondence in both directions, and
 #     byte-determinism;
 #     the PATH SET below adds the declaration sites so an item or key
@@ -211,9 +211,9 @@ name: docs-check
 #   go/org/module.go               declaring side, the api-contract pattern
 #   go/notification/module.go      the same for a module that declares no
 #                                schema but does declare a bootstrap key
-#   config.example.yaml          the load-verified bootstrap file-format
+#   docs/config.example.yaml     the load-verified bootstrap file-format
 #                                example (self-test on change)
-#   config.example.json          its derived JSON counterpart, which the
+#   docs/config.example.json     its derived JSON counterpart, which the
 #                                same gate checks for drift (self-test on
 #                                change)
 #   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
@@ -257,8 +257,8 @@ on:
       - go/pki/module.go
       - go/org/module.go
       - go/notification/module.go
-      - config.example.yaml
-      - config.example.json
+      - docs/config.example.yaml
+      - docs/config.example.json
       - .github/actions/setup-hugo-env/**
       - .github/actions/setup-go-env/**
       - .github/workflows/docs-check.yml

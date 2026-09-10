@@ -25,7 +25,7 @@ belong in that host's own docs.
 | `document.go` | Assembly of the reference and all rendering (Markdown, JSON, site page) |
 | `bootstrap.go` | The bootstrap layer's assembly rule: a key belongs to exactly one layer (a key declared on both fails the generator) |
 | `outputs.go` | The write path and the `--check` drift gate |
-| `config_example.go` | The loader-shaped target struct `config.example.yaml` is load-verified against |
+| `config_example.go` | The loader-shaped target struct `docs/config.example.yaml` is load-verified against |
 | `configrefgen_test.go`, `main_test.go` | Unit suites: rendered-keys-vs-census correspondence, byte determinism, `run()` end-to-end over a throwaway root |
 
 ## Command contract
@@ -41,13 +41,14 @@ as the nearest ancestor carrying `go.work` (or pass `--repo-root`).
 
 ## The four artifacts
 
-Every output is deterministic and byte-identical across runs; the
-repository root is the base for the first three:
+Every output is deterministic and byte-identical across runs; paths are
+relative to the repository root:
 
 - `docs/config-reference.md`
 - `docs/config-reference.json`
-- `config.example.json` — the JSON counterpart of `config.example.yaml`,
-  DERIVED from it so the pair cannot disagree about a key or a value
+- `docs/config.example.json` — the JSON counterpart of
+  `docs/config.example.yaml`, DERIVED from it so the pair cannot disagree
+  about a key or a value
 - `docs/site/content.en/docs/user-guide/configuration.md` — the docs
   site's copy of the reference
 
@@ -58,9 +59,9 @@ repository root is the base for the first three:
   declarations, never a hand-kept list.
 - The bootstrap layer: `reg.Bootstrap.Keys()` — the modules' own
   `pkgcore.BootstrapKey` declarations.
-- `config.example.yaml` (hand-written source, repository root): loaded
-  through the real `pkgcore/config` loader by the unit suite; the JSON
-  twin is derived from it.
+- `docs/config.example.yaml` (hand-written source): loaded through the
+  real `pkgcore/config` loader by the unit suite; the JSON twin is
+  derived from it.
 
 The two layers render distinct record types whose field sets are never
 merged: a bootstrap key is process-start input (its own source, lifetime,
@@ -76,7 +77,7 @@ the human reader — a rendering choice, not a second shape of the facts.
 - `docs-check.yml` runs `go run . --check` from this directory and
   fails when any committed artifact is stale. Its PATH SET names this
   directory (self-trigger on change), `go/config/**`, the declaring
-  modules' `module.go` files, `config.example.yaml`/`.json` and the
+  modules' `module.go` files, `docs/config.example.yaml`/`.json` and the
   artifact consumers.
 - `fast-check.yml` and `full-check.yml` each carry a
   `tools/configrefgen` matrix row (the reusable go-module-ci workflow:
@@ -98,8 +99,10 @@ the human reader — a rendering choice, not a second shape of the facts.
   `config.EnvName` (go/pkgcore/config), never a re-derived spelling** —
   one implementation, so the documented name can never drift from the
   name the loader actually reads.
-- **Values in `config.example.yaml` are demonstration values** (`app.db`
-  and friends), never a real host's names or paths.
+- **Values in `docs/config.example.yaml` are placeholders**
+  (`REPLACE_WITH_64_HEX_CHARS`), never real key material, and the file
+  carries no host's own keys, names or paths: it is the platform key
+  surface alone.
 - `tools/check_markdown_examples.py` scans every `AGENTS.md`: a fenced
   `go` block in this file that opens with its own `package` clause is
   really built (its `github.com/vislake/speed/go/...` imports are

@@ -45,10 +45,10 @@
 //     the four-source chain, the prefix option, pinned variable names, and
 //     Verify's binding check).
 //
-// The outputs are docs/config-reference.md and docs/config-reference.json at
-// the repository root, config.example.json (the JSON counterpart of the
-// committed YAML config-file example, derived so the pair cannot drift), and
-// the documentation site's copy of the reference
+// The outputs are docs/config-reference.md and docs/config-reference.json,
+// docs/config.example.json (the JSON counterpart of the committed YAML
+// config-file example docs/config.example.yaml, derived so the pair cannot
+// drift), and the documentation site's copy of the reference
 // (docs/site/content.en/docs/user-guide/configuration.md). Every output is
 // deterministic and byte-identical across runs.
 //

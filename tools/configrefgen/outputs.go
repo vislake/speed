@@ -30,7 +30,7 @@ func renderOutputs(root string, doc *document) ([]outputFile, error) {
 	return []outputFile{
 		{path: "docs/config-reference.md", content: doc.renderMarkdown()},
 		{path: "docs/config-reference.json", content: doc.marshalJSON()},
-		{path: "config.example.json", content: jsonExample},
+		{path: configExampleJSONPath, content: jsonExample},
 		{path: sitePagePath, content: doc.sitePage()},
 	}, nil
 }

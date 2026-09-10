@@ -40,82 +40,95 @@ func repoRootFromTest(t *testing.T) string {
 }
 
 // TestConfigExampleYAMLLoadsThroughTheLoader is the load-verification of
-// the repository-root config.example.yaml: the file must genuinely parse
+// the committed docs/config.example.yaml: the file must genuinely parse
 // through go/pkgcore/config's loader against the loader-shaped target
 // struct this package carries -- the six platform keys parsing to their
-// placeholder, the host-own demonstration keys to their values -- with the
-// documented precedence chain (flags > env > file > struct defaults) pinned
-// on the real file's own keys.
+// placeholder -- with the documented precedence chain (flags > env > file >
+// struct defaults) pinned on the platform keys themselves.
 func TestConfigExampleYAMLLoadsThroughTheLoader(t *testing.T) {
 	root := repoRootFromTest(t)
-	path := filepath.Join(root, "config.example.yaml")
+	path := filepath.Join(root, configExampleYAMLPath)
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("config.example.yaml missing at repository root: %v", err)
+		t.Fatalf("%s missing: %v", configExampleYAMLPath, err)
 	}
 
-	// The file alone: every key the file supplies resolves, the keys it
-	// leaves unset keep the struct defaults.
+	// Every platform key the file supplies, addressed by its nested field.
+	platformKeys := []struct {
+		key string
+		got func(exampleBootstrapConfig) string
+	}{
+		{"authn.blind_index_key", func(c exampleBootstrapConfig) string { return c.Authn.Blind_Index_Key }},
+		{"authn.pii_cipher_key", func(c exampleBootstrapConfig) string { return c.Authn.PII_Cipher_Key }},
+		{"config.cipher_key", func(c exampleBootstrapConfig) string { return c.Config.Cipher_Key }},
+		{"notification.contact_index_key", func(c exampleBootstrapConfig) string { return c.Notification.Contact_Index_Key }},
+		{"org.invitation_email_index_key", func(c exampleBootstrapConfig) string { return c.Org.Invitation_Email_Index_Key }},
+		{"pki.local_key_cipher_key", func(c exampleBootstrapConfig) string { return c.Pki.Local_Key_Cipher_Key }},
+	}
+
+	// The file alone: every key the file supplies resolves to its
+	// placeholder, outranking the struct default.
 	cfg, err := loadConfigExample(path)
 	if err != nil {
-		t.Fatalf("loading config.example.yaml through the loader failed: %v", err)
+		t.Fatalf("loading %s through the loader failed: %v", configExampleYAMLPath, err)
 	}
-	if cfg.DeploymentMode != "standalone" {
-		t.Errorf("DeploymentMode = %q, want the file's standalone", cfg.DeploymentMode)
-	}
-	if cfg.Port != "8080" {
-		t.Errorf("Port = %q, want the struct default 8080 (file spelling must decode)", cfg.Port)
-	}
-	if cfg.DBPath != "app.db" {
-		t.Errorf("DBPath = %q, want the file's app.db", cfg.DBPath)
-	}
-
-	// The platform block: all six declared keys the file supplies parse
-	// into their nested fields, carrying the file's placeholder value
-	// verbatim.
-	for _, tc := range []struct {
-		key string
-		got string
-	}{
-		{"authn.blind_index_key", cfg.Authn.Blind_Index_Key},
-		{"authn.pii_cipher_key", cfg.Authn.PII_Cipher_Key},
-		{"config.cipher_key", cfg.Config.Cipher_Key},
-		{"notification.contact_index_key", cfg.Notification.Contact_Index_Key},
-		{"org.invitation_email_index_key", cfg.Org.Invitation_Email_Index_Key},
-		{"pki.local_key_cipher_key", cfg.Pki.Local_Key_Cipher_Key},
-	} {
-		if tc.got != configExampleKeyPlaceholder {
-			t.Errorf("%s = %q, want the file's placeholder %s", tc.key, tc.got, configExampleKeyPlaceholder)
+	for _, tc := range platformKeys {
+		if got := tc.got(cfg); got != configExampleKeyPlaceholder {
+			t.Errorf("%s = %q, want the file's placeholder %s", tc.key, got, configExampleKeyPlaceholder)
 		}
 	}
 
-	// Environment beats the file: SPEED_DEPLOYMENTMODE and SPEED_SMTP__PORT
-	// outrank the file's own values for the same keys.
+	// Environment beats the file: the double underscore in
+	// SPEED_AUTHN__BLIND_INDEX_KEY spells the two key-path segments, and the
+	// variable outranks the file's own value for the same key.
 	cfg = exampleBootstrapDefaults()
 	loader := configLoaderFor(path, nil, []string{
-		"SPEED_DEPLOYMENTMODE=distributed",
-		"SPEED_SMTP__PORT=25",
+		"SPEED_AUTHN__BLIND_INDEX_KEY=env-blind-index-key",
 	})
 	if err := loader.Load(&cfg); err != nil {
 		t.Fatalf("loader with env failed: %v", err)
 	}
-	if cfg.DeploymentMode != "distributed" {
-		t.Errorf("DeploymentMode = %q, want the environment's distributed (env must outrank the file)", cfg.DeploymentMode)
-	}
-	if cfg.SMTP.Port != 25 {
-		t.Errorf("SMTP.Port = %d, want 25 from SPEED_SMTP__PORT", cfg.SMTP.Port)
+	if cfg.Authn.Blind_Index_Key != "env-blind-index-key" {
+		t.Errorf("Authn.Blind_Index_Key = %q, want the environment's env-blind-index-key (env must outrank the file)", cfg.Authn.Blind_Index_Key)
 	}
 
-	// Flags beat the environment: --deploymentmode=standalone outranks the
-	// SPEED_DEPLOYMENTMODE=distributed env above.
+	// Flags beat the environment: --config.cipher_key outranks the
+	// SPEED_CONFIG__CIPHER_KEY env below.
 	cfg = exampleBootstrapDefaults()
-	loader = configLoaderFor(path, []string{"--deploymentmode=standalone"}, []string{
-		"SPEED_DEPLOYMENTMODE=distributed",
+	loader = configLoaderFor(path, []string{"--config.cipher_key=flag-cipher-key"}, []string{
+		"SPEED_CONFIG__CIPHER_KEY=env-cipher-key",
 	})
 	if err := loader.Load(&cfg); err != nil {
 		t.Fatalf("loader with flag failed: %v", err)
 	}
-	if cfg.DeploymentMode != "standalone" {
-		t.Errorf("DeploymentMode = %q, want the flag's standalone (flags must outrank the environment)", cfg.DeploymentMode)
+	if cfg.Config.Cipher_Key != "flag-cipher-key" {
+		t.Errorf("Config.Cipher_Key = %q, want the flag's flag-cipher-key (flags must outrank the environment)", cfg.Config.Cipher_Key)
+	}
+
+	// A single underscore is never a nesting marker: SPEED_AUTHN_BLIND_INDEX_KEY
+	// maps onto no target field, so the file's value for authn.blind_index_key
+	// stands untouched.
+	cfg = exampleBootstrapDefaults()
+	loader = configLoaderFor(path, nil, []string{
+		"SPEED_AUTHN_BLIND_INDEX_KEY=single-underscore",
+	})
+	if err := loader.Load(&cfg); err != nil {
+		t.Fatalf("loader with the single-underscore variable failed: %v", err)
+	}
+	if cfg.Authn.Blind_Index_Key != configExampleKeyPlaceholder {
+		t.Errorf("Authn.Blind_Index_Key = %q, want the file's placeholder %s: SPEED_AUTHN_BLIND_INDEX_KEY must not resolve to authn.blind_index_key", cfg.Authn.Blind_Index_Key, configExampleKeyPlaceholder)
+	}
+
+	// The fourth source: with no file at all (the loader skips an absent one
+	// silently) and no env or flags, the target's own defaults stand.
+	cfg = exampleBootstrapDefaults()
+	loader = configLoaderFor(filepath.Join(root, "absent.example.yaml"), nil, nil)
+	if err := loader.Load(&cfg); err != nil {
+		t.Fatalf("loader with an absent file failed: %v", err)
+	}
+	for _, tc := range platformKeys {
+		if got := tc.got(cfg); got != configExampleStructDefault {
+			t.Errorf("%s = %q, want the struct default %s", tc.key, got, configExampleStructDefault)
+		}
 	}
 }
 
@@ -129,7 +142,7 @@ func TestConfigExampleJSONLoadsThroughTheLoader(t *testing.T) {
 	root := repoRootFromTest(t)
 	jsonPath := filepath.Join(root, configExampleJSONPath)
 	if _, err := os.Stat(jsonPath); err != nil {
-		t.Fatalf("%s missing at repository root: %v", configExampleJSONPath, err)
+		t.Fatalf("%s missing: %v", configExampleJSONPath, err)
 	}
 
 	fromJSON, err := loadConfigExample(jsonPath)

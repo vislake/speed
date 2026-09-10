@@ -33,10 +33,14 @@ func fakeRepoRoot(t *testing.T) string {
 func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 	root := fakeRepoRoot(t)
 
-	// The JSON example is derived from config.example.yaml, which lives at the
-	// real repository root rather than in the throwaway one: the fake root
-	// carries only the generated artifacts, so the derivation source is linked
-	// in.
+	// The JSON example is derived from docs/config.example.yaml, which lives
+	// in the real tree rather than in the throwaway one: the fake root
+	// carries only the generated artifacts, so the derivation source is
+	// linked in -- under the docs/ directory the write pass would create for
+	// the derived artifact anyway.
+	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(configExampleYAMLPath)), 0o755); err != nil {
+		t.Fatalf("mkdir the derivation source's directory: %v", err)
+	}
 	if err := os.Symlink(filepath.Join(repoRootFromTest(t), configExampleYAMLPath), filepath.Join(root, configExampleYAMLPath)); err != nil {
 		t.Fatalf("symlink %s: %v", configExampleYAMLPath, err)
 	}
@@ -70,11 +74,11 @@ func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 		t.Fatalf("remove config-reference.md: %v", err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(root, "config.example.json"),
-		[]byte("{\"deploymentmode\": \"distributed\"}\n"),
+		filepath.Join(root, configExampleJSONPath),
+		[]byte("{\"authn\": {\"blind_index_key\": \"tampered\"}}\n"),
 		0o644,
 	); err != nil {
-		t.Fatalf("tamper config.example.json: %v", err)
+		t.Fatalf("tamper %s: %v", configExampleJSONPath, err)
 	}
 	if code := run([]string{"--repo-root", root, "--check"}); code != 1 {
 		t.Fatalf("run (stale --check) = %d, want 1 when an artifact is missing and another is out of date", code)

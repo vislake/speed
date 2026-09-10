@@ -124,9 +124,9 @@ paths = [
 ]
 
 [[allowlists]]
-description = "the repository-root config.example.yaml / config.example.json pair and tools/configrefgen/config_example.go's placeholder constant: the pair is the committed config-file template whose whole purpose is showing the platform key surface's shape with the literal placeholder REPLACE_WITH_64_HEX_CHARS in every key slot -- never a real value, and the file's own header tells a reader to generate one with `openssl rand -hex 32` and keep it out of the repository; config_example.go's configExampleKeyPlaceholder defines that same literal as the constant the load-verification test compares the parsed file against, so it carries no key material either. Mirrors the examples/reference-app/.env.example block above for the same placeholder; scoped by path so generic-api-key keeps firing on genuine secret-shaped values everywhere else"
+description = "the committed docs/config.example.yaml / docs/config.example.json pair and tools/configrefgen/config_example.go's placeholder constant: the pair is the committed config-file template whose whole purpose is showing the platform key surface's shape with the literal placeholder REPLACE_WITH_64_HEX_CHARS in every key slot -- never a real value, and the file's own header tells a reader to generate one with `openssl rand -hex 32` and keep it out of the repository; config_example.go's configExampleKeyPlaceholder defines that same literal as the constant the load-verification test compares the parsed file against, so it carries no key material either. Mirrors the examples/reference-app/.env.example block above for the same placeholder; scoped by path so generic-api-key keeps firing on genuine secret-shaped values everywhere else"
 paths = [
-  "config.example.yaml",
-  "config.example.json",
+  "docs/config.example.yaml",
+  "docs/config.example.json",
   "tools/configrefgen/config_example.go",
 ]

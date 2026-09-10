@@ -1,7 +1,6 @@
 # config.example.yaml -- a template for the optional config-file source of
 # go/pkgcore/config's bootstrap loader. Copy it, replace the placeholder
-# values with real ones, adjust the host-own block to your own keys, and
-# point config.WithConfigFile at the copy.
+# values with real ones, and point config.WithConfigFile at the copy.
 #
 # The loader accepts YAML or JSON; config.example.json beside this file is
 # the same example in the other format. It is DERIVED from this file by
@@ -12,9 +11,9 @@
 # The loader resolves every bootstrap key from four sources, highest priority
 # first:
 #
-#   1. command-line flags        --deploymentmode=distributed
-#   2. environment variables     SPEED_DEPLOYMENTMODE=distributed
-#   3. this config file          deploymentmode: distributed
+#   1. command-line flags        --authn.blind_index_key=...
+#   2. environment variables     SPEED_AUTHN__BLIND_INDEX_KEY=...
+#   3. this config file          authn.blind_index_key: ...
 #   4. the defaults the host already set on its target struct
 #
 # An absent file is skipped silently (it is a local-development convenience,
@@ -23,13 +22,14 @@
 # and matching is case-insensitive in every source.
 #
 # The env spelling of a key replaces each "." level of nesting with a double
-# underscore and prefixes SPEED_: the key "database.dsn" is read from
-# SPEED_DATABASE__DSN, "smtp.port" from SPEED_SMTP__PORT. A single
-# underscore is never a nesting marker: SPEED_DATABASE_DSN does not resolve
-# to database.dsn. Field names map to keys lowercased and dotted, so the
-# target struct field Database.DSN is the key "database.dsn".
+# underscore and prefixes SPEED_: the key "authn.blind_index_key" is read
+# from SPEED_AUTHN__BLIND_INDEX_KEY. A single underscore is never a nesting
+# marker: SPEED_AUTHN_BLIND_INDEX_KEY does not resolve to
+# authn.blind_index_key. Field names map to keys lowercased and dotted, so
+# the target struct field Authn.Blind_Index_Key is the key
+# "authn.blind_index_key".
 #
-# The first block below is the platform key surface: the process-start key
+# The key set below is the platform key surface: the process-start key
 # material the platform modules declare on the registry's bootstrap seat and
 # a host must feed. A real deployment injects each key from a secret store,
 # or derives it from one 32-byte root key through the platform composition:
@@ -37,10 +37,6 @@
 # path, and dbkit.DeriveKey turns the root key plus that purpose into the
 # key's material. docs/config-reference.md's bootstrap section states each
 # key's contract, purpose string and unset fallback.
-#
-# The second block demonstrates a host's own keys going through this same
-# file: a host's fields, value types and nesting, not part of the platform
-# surface.
 #
 # IMPORTANT: this file is a template to copy, not a file any process in this
 # repository reads: nothing here points WithConfigFile at it (an absent
@@ -54,7 +50,8 @@
 # The exact key set the platform modules declare, grouped by declaring
 # module. REPLACE_WITH_64_HEX_CHARS stands in for a hex-encoded 32-byte key
 # (`openssl rand -hex 32`); never commit real material -- a real deployment
-# injects each key from a secret store or derives it from the root key above.
+# injects each key from a secret store, or derives it from one 32-byte root
+# key through the platform composition described above.
 
 authn:
   # HMAC key authn indexes its users.email_index and phone_index
@@ -114,46 +111,3 @@ pki:
   # A real deployment injects this key from a secret store, or derives it
   # from one 32-byte root key; see docs/config-reference.md.
   local_key_cipher_key: REPLACE_WITH_64_HEX_CHARS
-
-# --- A host's own keys, demonstration only ---------------------------------
-# These are NOT platform keys. They show how a host's own target-struct
-# fields, value types and nesting map onto this same file and the four
-# sources above, spelled in the loader's SPEED_ family; a host whose
-# variables already carry another prefix pins its fields' exact variable
-# names with config:"env=NAME" instead.
-
-# Deployment topology the process runs as. Required: no source may leave it
-# unset. Equivalent writings:
-#   env:  SPEED_DEPLOYMENTMODE=standalone
-#   flag: --deploymentmode=standalone
-deploymentmode: standalone
-
-# HTTP listen port the server binds. Defaults to 8080 when no source
-# supplies it (the target struct's own default).
-#   env:  SPEED_PORT=8080
-#   flag: --port=8080
-port: "8080"
-
-# SQLite database file the standalone deployment mode opens.
-#   env:  SPEED_DBPATH=app.db
-#   flag: --dbpath=app.db
-dbpath: app.db
-
-# The infrastructure seams a process composes through real implementations.
-# A nested struct contributes its field names as further key segments, so
-# the block below maps to the keys redis.addr, smtp.host, smtp.port,
-# smtp.username and smtp.password, with env spellings SPEED_REDIS__ADDR,
-# SPEED_SMTP__HOST, SPEED_SMTP__PORT and so on (--redis.addr=...,
-# --smtp.host=... as flags). Unset, each seam stays on its in-process
-# default, exactly like a host's own unset fallbacks.
-redis:
-  addr: ""
-
-smtp:
-  host: ""
-  # A numeric value is decoded into the target field's type: this example
-  # file is genuinely loaded by the loader in tools/configrefgen's unit test,
-  # which pins the flag > env > file > defaults precedence on it.
-  port: 0
-  username: ""
-  password: ""
