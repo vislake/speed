@@ -21,6 +21,15 @@ Publishable set (derived at runtime, never hand-maintained):
     both ways, so a module missing from go.work (or a go.work entry whose
     directory carries no go.mod) fails the plan loudly instead of being
     silently skipped.
+  * repo root tag: the bare version itself (v0.0.1, v1.2.0, v1.2.0-rc.1,
+    ...) -- one repository-level tag per release, the version milestone
+    reference. It coexists with the module tags and substitutes for
+    neither: module tags are the Go module-proxy resolution surface,
+    pinned to the commit the modules were published from; the root tag
+    marks when the version milestone was recorded and is created at the
+    release run's checkout (the dispatch-time main tip), so it may point
+    at a different commit than the module tags -- by design, documented
+    in docs/internal/02-repo-and-release.md.
   * npm packages: every web/packages/* directory with a package.json,
     versioned by the changesets fixed group in web/.changeset/config.json
     (which must cover exactly the packages found -- the npm mirror of the
@@ -37,12 +46,13 @@ Publishable set (derived at runtime, never hand-maintained):
 Modes:
 
   Default (a VERSION argument, no flags): offline verification / dry run.
-  Prints the full plan -- every go/ module with the tag it would get,
-  every npm package with the version the fixed group would bump it to --
-  then the preflight results, and closes with one aggregated line
-  reporting the module and package counts the tree carries. Exit 0 means
-  the plan is consistent. Nothing is tagged, written, fetched or
-  published.
+  Prints the full plan -- every go/ module with the module tag it would
+  get, the repo root tag (the bare version itself, the release's
+  milestone reference), every npm package with the version the fixed
+  group would bump it to -- then the preflight results, and closes with
+  one aggregated line reporting the module and package counts the tree
+  carries. Exit 0 means the plan is consistent. Nothing is tagged,
+  written, fetched or published.
 
   --self-test: runs this script's unittest suite offline (temp sandboxes
   only; see test_lockstep_release.py). Proves the verification gates and,
@@ -79,15 +89,17 @@ Preflight checks (a failing check exits 1; a [warn] line passes):
      rather than at `git tag`. This is the exact contract the CI workflow
      enforces on its version input; the two executable copies must stay
      in step (both cite the regex).
-  2. No module tag for this version exists (git tag -l, per module
-     tag) -- existing same-version tags warn: they are the fingerprint
-     of a partially completed release (the Go tags landed, the npm half
-     did not), which a re-dispatch of the release workflow must be able
-     to walk past. Offline that half-success state is indistinguishable
-     from a fully completed release, so the double-publish protection
-     lives on the publish side (the tag step skips a tag that already
-     exists; npm publish of an already-published version fails loudly
-     on its own), not here.
+  2. No tag for this version exists (git tag -l over the module tags
+     go/<module>/<version> and the repo root tag <version>) -- existing
+     same-version tags warn: they are the fingerprint of a partially
+     completed release (the Go tags landed, the npm half did not),
+     which a re-dispatch of the release workflow must be able to walk
+     past. Offline that half-success state is indistinguishable from a
+     fully completed release, so the double-publish protection lives on
+     the publish side (the tag step skips any tag that already exists,
+     module tags and the repo root tag alike; the npm step probes the
+     registry for each @speed/<package>@<version> before publishing and
+     skips one that is already there), not here.
   3. The go/ tree is complete against go.work in both directions.
   4. web/ package versions are uniform and the changesets fixed group
      covers exactly the packages that exist.
@@ -506,36 +518,46 @@ def load_changesets_fixed_group(repo_root: str) -> set[str]:
 def check_tag_collision(repo_root: str, version: str, go_modules: list[str]) -> list[str]:
     """Return the preflight line(s) reporting the tag-collision check.
 
-    Existing same-version module tags do not fail the plan: they mark a
-    re-run of a partially completed release -- the Go tags landed, the
-    npm half did not -- and a re-dispatch of the release workflow must be
-    able to walk that state. Offline the half-success state is
-    indistinguishable from a fully completed release (both show the same
-    tags in the same checkout), so this check cannot tell a re-run from a
-    double-publish attempt and the protection lives on the publish side
-    instead, where each leg is safe on its own: the workflow's tag step
-    skips a tag that already exists (a released tag is never re-created
-    or moved -- module proxies cache it), and npm publish of an
-    already-published version fails loudly by itself. The result is one
-    [ok] line when no wanted tag exists, one [warn] line naming the
-    existing tags when a re-run is in progress; the caller prints both as
-    preflight results and exits 0 either way.
+    The wanted set is every tag a release run creates for this version:
+    the module tags go/<module>/<version> plus the repo root tag -- the
+    bare version itself, the version milestone reference that the
+    workflow creates at its own checkout alongside the module tags.
+
+    Existing same-version tags do not fail the plan: they mark a re-run
+    of a partially completed release -- the Go tags landed, the npm half
+    did not -- and a re-dispatch of the release workflow must be able to
+    walk that state. Offline the half-success state is indistinguishable
+    from a fully completed release (both show the same tags in the same
+    checkout), so this check cannot tell a re-run from a double-publish
+    attempt and the protection lives on the publish side instead, where
+    each leg is safe on its own: the workflow's tag step skips a tag
+    that already exists -- module tags and the repo root tag alike, a
+    released tag is never re-created or moved, module proxies cache it
+    -- and the npm step probes the registry for each
+    @speed/<package>@<version> before publishing and skips one that is
+    already there, so a re-run converges from any partial state instead
+    of failing on the first duplicate. The result is one [ok] line when
+    no wanted tag exists, one [warn] line naming the existing tags when
+    a re-run is in progress; the caller prints both as preflight results
+    and exits 0 either way.
     """
     tags = list_existing_tags(repo_root)
-    wanted = [f"{GO_DIR_NAME}/{d}/{version}" for d in go_modules]
+    wanted = [f"{GO_DIR_NAME}/{d}/{version}" for d in go_modules] + [version]
     existing = sorted(t for t in wanted if t in tags)
     if not existing:
         return [
             f"[ok] no existing tag for version {version} (git tag -l over "
-            f"all {len(go_modules)} module tags)"
+            f"all {_n(len(go_modules), 'module tag')} and the repo root "
+            "tag)"
         ]
     return [
         "[warn] version " + version + " is already partially released: "
         + ", ".join(existing)
-        + " exist -- the Go half of this release landed but the npm half "
-        "did not; the publish job skips the existing tags and re-walks "
-        "the npm half, where an already-published version fails loudly "
-        "on its own"
+        + " exist -- a re-dispatch of the release workflow skips every "
+        "existing tag (module tags and the repo root tag alike; a "
+        "released tag is never re-created or moved) and re-walks the "
+        "npm half, where the registry probe skips each version that "
+        "already exists, so the run converges from any partial state"
     ]
 
 
@@ -597,6 +619,9 @@ def print_plan(
     print(f"  Go modules: go.work use entries under go/ -- "
           f"{_n(len(go_modules), 'publishable module')}, one tag "
           "go/<module>/<version> each")
+    print(f"  repo root tag: {version} -- the version milestone "
+          "reference, created at the release run's checkout (see the "
+          "tag list below)")
     if consumers:
         print("  Consumers: " + ", ".join(consumers) + " -- go.work module(s) "
               "outside go/, published never, tagged never (they pin "
@@ -609,6 +634,13 @@ def print_plan(
     print(f"Go modules -> tags (Go multi-module repo convention):")
     for d in go_modules:
         print(f"  {GO_DIR_NAME}/{d} -> {GO_DIR_NAME}/{d}/{version}")
+    print(f"  repo tag {version} -- milestone reference: the one tag that")
+    print(f"  says this repository is at {version}. It is created at the")
+    print("  release run's checkout -- which for a re-run may be a newer")
+    print("  commit than the module tags above point at (released module")
+    print("  tags never move). The two coexist, neither substitutes for")
+    print("  the other, and their same-version commits may differ -- by")
+    print("  design (docs/internal/02-repo-and-release.md)")
     print()
     print("npm packages -> the web/.changeset fixed group bumps all of them "
           f"to {version[1:]} together (current versions must be uniform):")
@@ -620,9 +652,12 @@ def print_plan(
         print(f"  {line}")
     print()
     if applying:
-        print(f"Local application only (--allow-local-tag-creation): creating "
-              f"{_n(len(go_modules), 'local, lightweight, never-pushed tag')} "
-              "at HEAD in this checkout.")
+        local_tag_word = _n(
+            len(go_modules) + 1, "local, lightweight, never-pushed tag"
+        )
+        print("Local application only (--allow-local-tag-creation): "
+              f"creating {local_tag_word} -- one per module plus the repo "
+              "root tag -- at HEAD in this checkout.")
     else:
         print("Dry run: nothing was tagged, written or published, and no "
               "network was touched. The tree keeps its pre-release "
@@ -638,7 +673,12 @@ def print_plan(
 def create_local_tags(
     repo_root: str, version: str, go_modules: list[str]
 ) -> None:
-    """Create one local lightweight tag per module (gated apply mode)."""
+    """Create local lightweight tags at HEAD -- one per module plus the
+    repo root tag (the bare version itself) -- gated apply mode. The
+    set mirrors what the release workflow pushes for one version: the
+    module tags are the Go module-proxy resolution surface, and the root
+    tag is the version milestone reference created at the release run's
+    own checkout."""
     for d in go_modules:
         tag = f"{GO_DIR_NAME}/{d}/{version}"
         # Failure aborts the whole run: the hatch applies exactly once to
@@ -646,6 +686,8 @@ def create_local_tags(
         # checkout already holds this version's tags.
         run_git(repo_root, "tag", tag)
         print(f"  tag {tag}")
+    run_git(repo_root, "tag", version)
+    print(f"  tag {version} (repo root tag -- milestone reference)")
 
 
 def print_apply_not_done() -> None:
@@ -806,10 +848,11 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Derive and verify the lockstep release plan for one version, "
             "offline (M0). Default mode prints the plan -- every go/ module "
-            "with its go/<module>/<version> tag and every web/ package with "
-            "the version the changesets fixed group bumps it to -- and "
-            "exits 0 only when the plan is consistent. Nothing is tagged, "
-            "written or published by default."
+            "with its go/<module>/<version> tag, the repo root tag (the "
+            "bare version, the version milestone reference), and every "
+            "web/ package with the version the changesets fixed group "
+            "bumps it to -- and exits 0 only when the plan is consistent. "
+            "Nothing is tagged, written or published by default."
         ),
         epilog=(
             "This is the command behind the root Taskfile.yml's release:plan "
@@ -930,7 +973,8 @@ def main(argv: list[str] | None = None) -> int:
         applying=args.apply,
     )
     if args.apply:
-        print(f"creating {len(go_modules)} local tags in {repo_root}:")
+        print(f"creating {len(go_modules) + 1} local tags (one per module "
+              f"plus the repo root tag {version}) in {repo_root}:")
         try:
             create_local_tags(repo_root, version, go_modules)
         except ReleaseError as exc:

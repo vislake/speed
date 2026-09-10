@@ -10,14 +10,17 @@ name: release
 # for the npm half) and exits 0 only when: the version has release-version
 # form; the go/ tree is complete against go.work; web/ package versions
 # are uniform and the web/.changeset fixed group covers exactly the
-# packages that exist; and no module tag for the version exists -- an
-# existing same-version tag only warns ([warn] in the plan): it marks a
-# re-run of a partially completed release whose Go tags landed but whose
-# npm half did not, which job `publish` recovers by skipping the existing
-# tags and re-walking the npm half. The job then runs the coordinator's
-# own self-tests. Job `publish` (needs: verify, and the workflow's write
-# permissions live there, not on `verify`) performs the release the
-# verified plan names.
+# packages that exist; and no tag for the version exists -- module tags
+# go/<module>/<version> or the repo root tag (the bare version, the
+# release's milestone reference) -- an existing same-version tag only
+# warns ([warn] in the plan): it marks a re-run of a partially completed
+# release whose Go tags landed but whose npm half did not, which job
+# `publish` recovers by skipping every existing tag and re-walking the
+# npm half, where a registry probe skips each package@version that is
+# already there. The job then runs the coordinator's own self-tests.
+# Job `publish` (needs: verify, and the workflow's write permissions
+# live there, not on `verify`) performs the release the verified plan
+# names.
 #
 # THE v0.0.1 DISPOSITION (mechanism landed 2026-09-10; the dispatch is
 # the first real end-to-end run): the first real release uses both
@@ -33,6 +36,16 @@ name: release
 #     character -- its gated local-only apply mode exists to exercise
 #     tag creation against scratch repositories; pushing is a workflow
 #     concern, never a script one.
+#     With the module tags the workflow also pushes the repo root tag
+#     v0.0.1 -- the version milestone reference: one repository-level
+#     tag per release saying "the repository is at this version",
+#     created at THIS run's checkout (the dispatch-time main tip) under
+#     the same skip-if-exists rule. The root tag and the module tags of
+#     one version are not expected to share a commit: the module tags
+#     stay pinned to their publish commit (fbaaaf98 for v0.0.1) and
+#     never move, while the root tag may sit on post-release fix
+#     commits -- by design; the full semantics of the two are
+#     documented in docs/internal/02-repo-and-release.md.
 #   * The twelve npm packages (the web/.changeset fixed group) publish at
 #     0.0.1 to the GitHub Packages npm registry
 #     (https://npm.pkg.github.com) under the @speed scope, each from its
@@ -56,29 +69,37 @@ name: release
 #      as pure functions in tools/release/lockstep-release.py -- is
 #      prepared before dispatch and pushed to main; this workflow tags
 #      whatever commit the run checked out, never a commit it rewrites.
-#   2. Creates and pushes the module tags go/<module>/<version>, the
-#      module set derived from go.work with the coordinator's own
-#      parser, so the tag set cannot drift from the verified plan. The
-#      step is idempotent over a re-run: when the verify job's [warn]
-#      line appears (a partially completed release -- Go tags landed,
-#      npm half did not), each derived tag that already exists is
-#      skipped -- a released tag is never re-created or moved, module
-#      proxies cache it -- and only the new tags are pushed. When all of
-#      them exist the push is skipped entirely and the run re-walks the
-#      npm half; a full-success re-run of a used version still fails
-#      loudly at npm publish of an already-published version, the
-#      intended double-publish guard.
+#   2. Creates and pushes this version's tags: the module tags
+#      go/<module>/<version> -- the module set derived from go.work
+#      with the coordinator's own parser, so the tag set cannot drift
+#      from the verified plan -- plus the repo root tag, the bare
+#      version itself, the release's milestone reference created at
+#      this run's own checkout. The step is idempotent over a re-run:
+#      when the verify job's [warn] line appears (a partially completed
+#      release -- Go tags landed, npm half did not), each derived tag
+#      that already exists is skipped -- module tags and the repo root
+#      tag alike, a released tag is never re-created or moved, module
+#      proxies cache it -- and only the new tags are pushed. When all
+#      of them exist the push is skipped entirely and the run re-walks
+#      the npm half.
 #   3. Publishes the npm half: pinned pnpm install --frozen-lockfile and
 #      a filtered workspace build (the same toolchain and shape the
-#      npm-package-ci workflow uses), then one `npm publish --registry
-#      https://npm.pkg.github.com` per package in dependency order. npm
+#      npm-package-ci workflow uses), then, per package in dependency
+#      order, `npm publish --registry https://npm.pkg.github.com`. npm
 #      knows no workspace: protocol, so each manifest's @speed sibling
 #      specifiers (workspace:* in the committed tree; pnpm-lock.yaml
 #      records workspace members as links, never versions) are rewritten
 #      to the exact release version on the runner copy first -- the
 #      rewrite pnpm publish performs at pack time, made explicit -- and
 #      a pre-release version (v0.0.1-rc.1 form) publishes under the
-#      `next` dist-tag.
+#      `next` dist-tag. The loop is idempotent over a re-run, mirroring
+#      the tag step: before each publish it probes the registry for
+#      @speed/<package>@<version> (npm view against
+#      https://npm.pkg.github.com, through the same ~/.npmrc credential
+#      the publish uses) and skips a version that is already there --
+#      no version is ever published twice (the skip is the
+#      double-publish guard on this leg), and a re-run converges from
+#      any partial npm state, the first k packages published included.
 #
 # STILL DEFERRED (this header is the authority): npmjs.org registry
 # publishing; changesets-driven versioning and npm provenance; SBOMs and
@@ -171,8 +192,9 @@ jobs:
         run: |
           echo "offline verification green for ${{ inputs.version }}."
           echo "The publish job of this run performs the real release for"
-          echo "that version: Go module tags pushed, the twelve @speed npm"
-          echo "packages published to the GitHub Packages registry."
+          echo "that version: the module tags and the repo root tag"
+          echo "pushed, the twelve @speed npm packages published to the"
+          echo "GitHub Packages registry."
 
   publish:
     name: Publish ${{ inputs.version }} (Go tags and npm packages)
@@ -201,7 +223,7 @@ jobs:
             exit 1
           fi
           echo "version input '$VERSION' has release-version form"
-      - name: Push the Go module tags for this version
+      - name: Push the Go module and repo root tags for this version
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -236,13 +258,25 @@ jobs:
                   print(f"go/{entry[3:]}/{sys.argv[1]}")
           PYEOF
           mapfile -t tags < /tmp/module-tags.txt
+          # The repo root tag -- the bare version itself -- is the
+          # version milestone reference: the one repository-level tag
+          # per release. It joins the module tags under the same
+          # skip-if-exists rule and is created at THIS checkout (the
+          # dispatch-time main tip). For a re-run of a version released
+          # earlier it may therefore point at a NEWER commit than the
+          # existing module tags, which stay pinned to their publish
+          # commit and never move -- the two are not expected to share
+          # a commit; that difference is by design (documented in
+          # docs/internal/02-repo-and-release.md).
+          tags+=("$VERSION")
           # Re-run recovery: when a partially completed release (Go tags
           # landed, npm half did not) is re-dispatched, derived tags may
           # already exist. A released tag is never re-created or moved
-          # (module proxies cache it), so skip each existing tag, tag and
-          # push only the new ones, and skip the push when all exist.
-          # The checkout carries the tags (fetch-depth: 0 above), so the
-          # existence check sees the same tag set the push would create.
+          # (module proxies cache it), so skip each existing tag --
+          # module tags and the repo root tag alike -- tag and push only
+          # the new ones, and skip the push when all exist. The checkout
+          # carries the tags (fetch-depth: 0 above), so the existence
+          # check sees the same tag set the push would create.
           new_tags=()
           for t in "${tags[@]}"; do
             if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
@@ -252,16 +286,25 @@ jobs:
             fi
           done
           if [ "${#new_tags[@]}" -eq 0 ]; then
-            echo "no new tags: every module tag for this version already exists"
-            echo " -- the Go half was released before; this run re-walks the npm half"
+            echo "no new tags: every tag for this version already exists"
+            echo " -- this version was released before; this run re-walks"
+            echo " the npm half, skipping the versions the registry has"
           else
-            echo "Tagging ${#new_tags[@]} new module(s) at the verified checkout:"
+            if [ "${#new_tags[@]}" -eq 1 ]; then
+              echo "Tagging 1 new tag at the verified checkout:"
+            else
+              echo "Tagging ${#new_tags[@]} new tags at the verified checkout:"
+            fi
             for t in "${new_tags[@]}"; do
               git tag "$t"
               echo "  tag $t"
             done
             git push origin "${new_tags[@]/#/refs/tags/}"
-            echo "pushed ${#new_tags[@]} module tags"
+            if [ "${#new_tags[@]}" -eq 1 ]; then
+              echo "pushed 1 tag"
+            else
+              echo "pushed ${#new_tags[@]} tags"
+            fi
           fi
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
         # The same reusable setup npm-package-ci uses: Node from
@@ -300,6 +343,20 @@ jobs:
           packages="tokens i18n api-client ui-kit api-sdk auth-core layout-kit billing-ui tenancy-ui auth-ui account-ui product-shell"
           for p in $packages; do
             pkg_json="web/packages/$p/package.json"
+            # Re-run recovery on the npm side, mirroring the tag step: a
+            # partial publish state (the first k packages made it up)
+            # must not fail the re-dispatch. Probe the registry for the
+            # exact version first and skip the publish when it is
+            # already there -- the probe is read-only and goes through
+            # the same ~/.npmrc credential the publish uses (packages:
+            # write implies read for the owning installation), and a
+            # version that exists is never published or overwritten
+            # again.
+            if npm view "@speed/$p@$VERSION_NO_V" \
+                --registry https://npm.pkg.github.com --json >/dev/null 2>&1; then
+              echo "@speed/$p@$VERSION_NO_V already exists on the registry -- skipped (re-run recovery)"
+              continue
+            fi
             # npm knows no workspace: protocol -- rewrite the @speed
             # sibling specifiers (workspace:* in the committed tree) to
             # the exact release version on this runner copy, mirroring
@@ -332,6 +389,7 @@ jobs:
           done
       - name: Report
         run: |
-          echo "released ${{ inputs.version }}: Go module tags pushed and the"
-          echo "twelve @speed packages published to the GitHub Packages"
-          echo "registry (https://npm.pkg.github.com/@speed)."
+          echo "release run for ${{ inputs.version }} complete: the tag"
+          echo "step finished (new tags pushed, existing tags skipped)"
+          echo "and the npm half finished (new versions published,"
+          echo "versions already on the registry skipped)."

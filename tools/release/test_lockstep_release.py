@@ -29,17 +29,19 @@ What the suite proves (M0 exit-condition evidence):
     in line order; a consumer-shaped go.mod is left alone; an untidy or
     mismatched replace raises UncleanableReplaceError.
   * The CLI gates: usage errors exit 2, --apply without the escape hatch
-    exits 3 with the M4/v1.0 refusal, and a version whose module tags
-    already exist passes with a [warn] line -- the recovery path a
-    re-dispatch of a partially completed release needs (the Go tags
-    landed, the npm half did not).
+    exits 3 with the M4/v1.0 refusal, and a version any of whose tags
+    already exist -- module tags go/<module>/<version> or the repo root
+    tag (the bare version) -- passes with a [warn] line: the recovery
+    path a re-dispatch of a partially completed release needs (the Go
+    tags landed, the npm half did not).
   * The sandbox end-to-end proof: a scratch git repository built from the
     live tree's module metadata (go.work, go/*/go.mod, web/packages/*
     package.json files, web/.changeset/config.json) produces, in default
     mode, the aggregated one-version plan at exit 0; the hatched --apply
-    mode creates exactly the expected tag set -- 21 tags, one version,
-    nothing extra -- and the real repository's tag set is untouched
-    before and after. The npm half of the proof reports which gate ran:
+    mode creates exactly the expected tag set -- one tag per module plus
+    the repo root tag, one version, nothing extra -- and the real
+    repository's tag set is untouched before and after. The npm half of
+    the proof reports which gate ran:
     the uniform-version JSON assertion always, and -- when pnpm is on
     PATH and web/node_modules exists in the live checkout -- a real
     `pnpm pack` of every package proving the workspace:* rewrite that
@@ -627,8 +629,14 @@ class SandboxProofTest(unittest.TestCase):
         return sb
 
     def expected_sandbox_tags(self, sb: str) -> list[str]:
+        """The tag set a release run creates for SELFTEST_VERSION: one
+        module tag per module plus the repo root tag (the bare version,
+        the milestone reference the workflow pushes at its checkout)."""
         modules, _consumers = rel.derive_go_modules(sb)
-        return sorted(f"go/{d}/{SELFTEST_VERSION}" for d in modules)
+        return sorted(
+            [f"go/{d}/{SELFTEST_VERSION}" for d in modules]
+            + [SELFTEST_VERSION]
+        )
 
     def test_end_to_end_proof(self) -> None:
         """Default plan, hard refusal, hatched local tags: one version set."""
@@ -648,6 +656,12 @@ class SandboxProofTest(unittest.TestCase):
             self.assertIn(closing, out)
             self.assertIn(
                 "go/dbkit -> go/dbkit/" + SELFTEST_VERSION, out
+            )
+            # The plan names the repo root tag (the bare version) as the
+            # version milestone reference, distinct from the module tags.
+            self.assertIn(
+                "repo tag " + SELFTEST_VERSION + " -- milestone reference",
+                out,
             )
             self.assertEqual(rel.list_existing_tags(sb), set())
 
@@ -790,6 +804,35 @@ class SandboxProofTest(unittest.TestCase):
                 f"-> {SELFTEST_VERSION}",
                 out,
             )
+
+    def test_existing_root_tag_warns_and_passes(self) -> None:
+        """The repo root tag alone already present warns and exits 0.
+
+        The root tag (the bare version) is part of the wanted tag set a
+        release run creates -- the workflow pushes it at its own
+        checkout alongside the module tags -- so an existing root tag is
+        as much a fingerprint of a partially completed release as an
+        existing module tag, and the plan accepts the used version again
+        with a [warn] line naming it, exactly like the module-tags case
+        above.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            sb = self.build_sandbox(tmp)
+            rel.run_git(sb, "tag", SELFTEST_VERSION)
+            rc, out, err = run_cli(sb, SELFTEST_VERSION)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(err, "")
+            warn_line = next(
+                line for line in out.splitlines() if "[warn]" in line
+            )
+            listed = warn_line.split("partially released: ", 1)[1].split(
+                " exist", 1
+            )[0]
+            self.assertEqual(
+                [SELFTEST_VERSION],
+                [t.strip() for t in listed.split(",")],
+            )
+            self.assertIn("Dry run:", out)
 
 
 if __name__ == "__main__":
