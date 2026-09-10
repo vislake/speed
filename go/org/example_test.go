@@ -393,6 +393,110 @@ func ExampleMemberService_TenantsOf() {
 // boot for the purposes its glue takes system contexts for.
 var orgExampleTenantsOfPurpose = pkgcore.SystemPurpose("org.example.tenants_of")
 
+// ExampleTreeService_EnsureRoot shows the boot-time half of "a tenant has a
+// tree": one call creates the root on the first boot and returns the stored
+// one on every boot after, so a restart re-asserts instead of colliding. The
+// name and kind are consulted only when a root genuinely has to be created.
+func ExampleTreeService_EnsureRoot() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:org_example_ensure_root?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+	module := org.NewModule(db)
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(module); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	ctx = pkgcore.WithTenant(ctx, "acme-dental")
+	tree := module.Tree()
+
+	created, err := tree.EnsureRoot(ctx, "Acme Dental", "group")
+	if err != nil {
+		fmt.Println("first ensure:", err)
+		return
+	}
+	fmt.Printf("first call created: %s (%s)\n", created.Name, created.Kind)
+
+	// The second call -- the next boot -- passes a different name on
+	// purpose: an existing root is never renamed by an ensure, its stored
+	// name and kind win.
+	again, err := tree.EnsureRoot(ctx, "Renamed Practice", "workspace")
+	if err != nil {
+		fmt.Println("second ensure:", err)
+		return
+	}
+	fmt.Printf("second call kept: %s (%s), same node: %t\n", again.Name, again.Kind, again.ID == created.ID)
+
+	// Output:
+	// first call created: Acme Dental (group)
+	// second call kept: Acme Dental (group), same node: true
+}
+
+// ExampleMemberService_EnsureRootSeat shows placing a person into a tenant
+// before any organization tree exists: one call ensures the tree root and
+// the person's seat at it, and a repeat -- the next boot -- creates nothing
+// twice.
+func ExampleMemberService_EnsureRootSeat() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:org_example_ensure_root_seat?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+	module := org.NewModule(db)
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(module); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	ctx = pkgcore.WithTenant(ctx, "acme-dental")
+	members := module.Members()
+
+	seat, err := members.EnsureRootSeat(ctx, "user-owner", "Acme Dental", "group")
+	if err != nil {
+		fmt.Println("first ensure:", err)
+		return
+	}
+	root, err := module.Tree().Root(ctx)
+	if err != nil {
+		fmt.Println("root:", err)
+		return
+	}
+	fmt.Printf("seat at the root: %t, active: %t\n", seat.NodeID == root.ID, seat.IsActive())
+
+	again, err := members.EnsureRootSeat(ctx, "user-owner", "Acme Dental", "group")
+	if err != nil {
+		fmt.Println("second ensure:", err)
+		return
+	}
+	fmt.Printf("same seat: %t\n", again.ID == seat.ID)
+
+	// Output:
+	// seat at the root: true, active: true
+	// same seat: true
+}
+
 func init() {
 	pkgcore.RegisterSystemPurpose(orgExampleTenantsOfPurpose)
 }

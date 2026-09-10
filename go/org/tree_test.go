@@ -332,6 +332,54 @@ func TestTreeService_CreateRoot_InvalidName(t *testing.T) {
 	}
 }
 
+// TestTreeService_EnsureRoot_CreatesOnceThenReturnsTheStoredRoot pins the
+// idempotence contract every boot-time caller leans on: the first call is
+// what creates, every later call -- with whatever name and kind it passes
+// -- returns the root already there, unchanged.
+func TestTreeService_EnsureRoot_CreatesOnceThenReturnsTheStoredRoot(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	created, err := tree.EnsureRoot(ctx, "Demo Tenant", "group")
+	if err != nil {
+		t.Fatalf("first EnsureRoot: %v", err)
+	}
+	if created.Name != "Demo Tenant" || created.Kind != "group" || created.ParentID != "" {
+		t.Fatalf("first EnsureRoot produced %+v, want a root named Demo Tenant of kind group", created)
+	}
+
+	// The name and kind of a repeat are consulted only when a root must be
+	// created; a tenant that already has one keeps its stored values.
+	again, err := tree.EnsureRoot(ctx, "Renamed Tenant", "workspace")
+	if err != nil {
+		t.Fatalf("second EnsureRoot: %v", err)
+	}
+	if again.ID != created.ID {
+		t.Fatalf("second EnsureRoot root id = %q, want the first root %q", again.ID, created.ID)
+	}
+	if again.Name != "Demo Tenant" || again.Kind != "group" {
+		t.Errorf("second EnsureRoot returned %+v, want the stored root unchanged (Demo Tenant/group)", again)
+	}
+
+	// Each tenant still gets exactly its own root.
+	other, err := tree.EnsureRoot(tenantCtx("tenant-b"), "Other Tenant", "group")
+	if err != nil {
+		t.Fatalf("EnsureRoot(tenant-b): %v", err)
+	}
+	if other.ID == created.ID {
+		t.Error("tenant-b's root is tenant-a's root")
+	}
+}
+
+func TestTreeService_EnsureRoot_InvalidName_IsRefusedAtTheCreate(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	if _, err := tree.EnsureRoot(ctx, "", "group"); !apperr.HasCode(err, ErrNodeNameRequired.Code) {
+		t.Errorf("EnsureRoot(empty name) error = %v, want org.node_name_required", err)
+	}
+}
+
 func TestTreeService_CreateChild(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")

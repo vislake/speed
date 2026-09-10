@@ -346,9 +346,14 @@ func (m *Module) handleUserCreated(ctx context.Context, evt pkgcore.Event) error
 }
 
 // ensureRoot returns the tenant's root node, creating it when the tenant has
-// none yet. Two concurrent deliveries can both find no root; the loser of
-// that race sees ErrRootAlreadyExists and re-reads instead of failing, which
-// is what makes the whole handler safe to repeat.
+// none yet, and is safe to repeat: TreeService.EnsureRoot absorbs the race
+// between two concurrent deliveries that both find no root, so the loser
+// re-reads the winner's root instead of failing, which is what makes the
+// whole handler safe to repeat.
+//
+// The existence check stays here rather than delegating it along with the
+// creation, so the localized workspace name is rendered only when a root
+// genuinely has to be created.
 func (m *Module) ensureRoot(ctx context.Context) (*OrgNode, error) {
 	switch root, err := m.tree.Root(ctx); {
 	case err == nil:
@@ -356,15 +361,7 @@ func (m *Module) ensureRoot(ctx context.Context) (*OrgNode, error) {
 	case !apperr.HasCode(err, ErrNodeNotFound.Code):
 		return nil, err
 	}
-
-	root, err := m.tree.CreateRoot(ctx, m.defaultWorkspaceName(ctx), defaultRootKind)
-	if err == nil {
-		return root, nil
-	}
-	if apperr.HasCode(err, ErrRootAlreadyExists.Code) || apperr.HasCode(err, ErrDuplicateSiblingName.Code) {
-		return m.tree.Root(ctx)
-	}
-	return nil, err
+	return m.tree.EnsureRoot(ctx, m.defaultWorkspaceName(ctx), defaultRootKind)
 }
 
 // defaultRootKind is the Kind a workspace root created for a brand-new user

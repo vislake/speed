@@ -460,6 +460,37 @@ func (s *MemberService) Add(ctx context.Context, userID, nodeID string) (*Member
 	return m, nil
 }
 
+// EnsureRootSeat ensures userID holds an active seat at the caller tenant's
+// root, creating the tenant's tree root -- named rootName, kind rootKind --
+// when the tenant has none yet.
+//
+// It is "make this person a member of this tenant" as one idempotent call,
+// for the boot-time and provisioning paths that place a person before any
+// organization tree exists: repeated calls create nothing twice and move
+// nobody. The root comes from TreeService.EnsureRoot, so a tenant that
+// already has a tree keeps its stored root whatever name the caller passes;
+// the seat comes from the same ensure core Add and the authn.user.created
+// subscriber share, so a repeat returns the existing membership untouched
+// wherever the person sits -- one seat per person per tenant, and an
+// ensure never drags a member out of a deeper node a later flow placed them
+// in.
+//
+// A membership created here is not announced as org.member.joined: like Add,
+// this call writes the row silently, and the caller that needs the event
+// published is the caller that publishes it (the authn.user.created
+// subscriber is that caller for the accounts it provisions).
+func (s *MemberService) EnsureRootSeat(ctx context.Context, userID, rootName, rootKind string) (*Membership, error) {
+	root, err := s.tree.EnsureRoot(ctx, rootName, rootKind)
+	if err != nil {
+		return nil, err
+	}
+	membership, _, err := s.ensure(ctx, userID, root.ID)
+	if err != nil {
+		return nil, err
+	}
+	return membership, nil
+}
+
 // ensure idempotently gives userID an active membership at nodeID and
 // reports whether it created one. An existing membership is returned
 // untouched -- it is NOT re-bound to nodeID, because a redelivered event

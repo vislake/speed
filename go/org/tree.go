@@ -197,6 +197,38 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 	return &node, nil
 }
 
+// EnsureRoot returns the caller tenant's root node, creating it from name
+// and kind when the tenant has none yet.
+//
+// It is idempotent and safe to call on every boot and from every
+// redelivery: an existing root is returned untouched -- name and kind are
+// consulted only when a root must be created, and a re-run never renames
+// what is already there -- and the race between two concurrent creators is
+// absorbed rather than surfaced: the caller that loses the insert re-reads
+// the winner's root instead of reporting ErrRootAlreadyExists or
+// ErrDuplicateSiblingName. Both codes are absorbed because which index
+// answers a losing root insert is not something the caller can control: a
+// root's parent_id is the empty-string sentinel, so the sibling-name index
+// that orders siblings also covers a second root of the same name, and
+// uq_org_nodes_single_root covers a second root of any name.
+func (s *TreeService) EnsureRoot(ctx context.Context, name, kind string) (*OrgNode, error) {
+	switch root, err := s.repo.findRoot(ctx); {
+	case err == nil:
+		return root, nil
+	case !apperr.HasCode(err, ErrNodeNotFound.Code):
+		return nil, err
+	}
+
+	root, err := s.CreateRoot(ctx, name, kind)
+	if err == nil {
+		return root, nil
+	}
+	if apperr.HasCode(err, ErrRootAlreadyExists.Code) || apperr.HasCode(err, ErrDuplicateSiblingName.Code) {
+		return s.repo.findRoot(ctx)
+	}
+	return nil, err
+}
+
 // CreateChild creates a node beneath parentID.
 //
 // The child's path and depth are derived from the parent's stored path, not

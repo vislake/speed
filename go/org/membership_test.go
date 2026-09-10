@@ -233,6 +233,74 @@ func TestMemberService_Add_EmptyUserID(t *testing.T) {
 	}
 }
 
+// TestMemberService_EnsureRootSeat_CreatesOnceThenReturnsTheSameSeat pins
+// the idempotence a boot-time placement leans on: the first call creates the
+// tenant root and the seat, every later call creates neither.
+func TestMemberService_EnsureRootSeat_CreatesOnceThenReturnsTheSameSeat(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+
+	first, err := m.Members().EnsureRootSeat(ctx, "u-1", "Demo Tenant", "group")
+	if err != nil {
+		t.Fatalf("first EnsureRootSeat: %v", err)
+	}
+	root, err := m.Tree().Root(ctx)
+	if err != nil {
+		t.Fatalf("Root: %v", err)
+	}
+	if root.Name != "Demo Tenant" || root.Kind != "group" {
+		t.Errorf("tenant root = %+v, want the root named Demo Tenant of kind group", root)
+	}
+	if first.NodeID != root.ID || !first.IsActive() {
+		t.Errorf("EnsureRootSeat produced %+v, want an active seat at the root %q", first, root.ID)
+	}
+
+	second, err := m.Members().EnsureRootSeat(ctx, "u-1", "Demo Tenant", "group")
+	if err != nil {
+		t.Fatalf("second EnsureRootSeat: %v", err)
+	}
+	if second.ID != first.ID || second.NodeID != first.NodeID {
+		t.Errorf("second EnsureRootSeat returned %+v, want the first seat %+v", second, first)
+	}
+	rows, err := m.Members().Repository().List(ctx)
+	if err != nil {
+		t.Fatalf("List memberships: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("after two EnsureRootSeat calls the tenant holds %d membership rows, want 1", len(rows))
+	}
+}
+
+// TestMemberService_EnsureRootSeat_LeavesAnExistingDeeperSeatWhereItIs pins
+// the never-rebinds half: a person a flow already placed at a deeper node is
+// not dragged up to the root by a later boot-time ensure, and a tenant that
+// already has a tree keeps its stored root whatever name the caller passes.
+func TestMemberService_EnsureRootSeat_LeavesAnExistingDeeperSeatWhereItIs(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, _ := seedTree(t, m.Tree(), ctx)
+
+	placed, err := m.Members().Add(ctx, "u-1", left.ID)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := m.Members().EnsureRootSeat(ctx, "u-1", "Renamed Tenant", "group")
+	if err != nil {
+		t.Fatalf("EnsureRootSeat: %v", err)
+	}
+	if got.ID != placed.ID || got.NodeID != left.ID {
+		t.Errorf("EnsureRootSeat returned %+v, want the existing seat %+v still at %q", got, placed, left.ID)
+	}
+	stillRoot, err := m.Tree().Root(ctx)
+	if err != nil {
+		t.Fatalf("Root: %v", err)
+	}
+	if stillRoot.ID != root.ID || stillRoot.Name != root.Name {
+		t.Errorf("tenant root = %+v, want the pre-existing root %+v unchanged", stillRoot, root)
+	}
+}
+
 // TestMemberService_ensure_IsIdempotentAndNeverRebinds pins the property the
 // whole event-subscriber contract rests on: repeating the call changes
 // nothing, and in particular does NOT move an existing member to the node the

@@ -215,6 +215,7 @@ Every method takes the tenant from `ctx` and nothing else. There is no parameter
 | `Get(ctx, nodeID)` | Another tenant's id reports `org.node_not_found`, never a distinguishable error |
 | `Children(ctx, nodeID)` | Direct children, by name. An unknown node errors rather than returning an empty list |
 | `CreateRoot(ctx, name, kind)` | One per tenant; a second reports `org.root_already_exists` |
+| `EnsureRoot(ctx, name, kind)` | The idempotent counterpart, for boot-time and provisioning paths: an existing root is returned untouched (`name`/`kind` are consulted only when one must be created, and a re-run never renames), and the loser of a concurrent create race re-reads the winner's root instead of surfacing an error |
 | `CreateChild(ctx, parentID, name, kind)` | Path and depth are derived from the parent's stored **path**, so a fresh row can never carry a depth that disagrees with it |
 | `Rename(ctx, nodeID, name)` | Never touches `Path`. Renaming to the current name is a no-op, not a self-collision |
 | `Move(ctx, nodeID, newParentID)` | Carries the whole subtree. See the limitation below |
@@ -230,6 +231,7 @@ Every method takes the tenant from `ctx` and nothing else. There is no parameter
 | `func NewMemberService(db *gorm.DB, tree *TreeService) *MemberService` | Publishes nothing until a host wires it through `Register` |
 | `Get(ctx, userID)` | `org.membership_not_found` for a stranger and for another tenant's member alike |
 | `Add(ctx, userID, nodeID)` | One seat per person per tenant; a second reports `org.membership_exists` |
+| `EnsureRootSeat(ctx, userID, rootName, rootKind)` | "Make this person a member of this tenant" as one idempotent call, for paths that place a person before any tree exists: the tenant root is ensured through `EnsureRoot`, the seat through the same core `Add` and the `authn.user.created` subscriber share, so a repeat creates nothing twice and never moves a member out of a deeper node. Publishes no `org.member.joined` — like `Add`, the caller that needs the event published is the caller that publishes it |
 | `List(ctx, nodeID)` | The **subtree** roster: standing at a group returns every store's members under it |
 | `Remove(ctx, userID)` | Mark-delete. Publishes `org.member.removed`. Refuses the tenant's last **active** member (`org.member_not_removable`) |
 | `Restore(ctx, membershipID)` | Undoes one membership's own mark-delete; takes the membership's own id, never a user id — see "Soft deletion" |
