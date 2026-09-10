@@ -196,12 +196,10 @@
 | 133 | ROADMAP | `go/compliance/doc.go` | subject-scoped export("this is your data")未实现 | subject-scoped export 产品未决定(条件性 future work) |
 | 137 | ROADMAP | `go/integration/AGENTS.md` | dead_letter 三种成因无法经 Status 区分 | dead_letter 成因程序化区分反投机:等真实需要(现 LastError 自由文本已记录) |
 | 140 | ROADMAP | `go/notification/delivery.go` | double-send 窗口未收窄 | double-send 窗口收窄需 transport 回执类跨 seam 设计(ProviderReceiptID 已预留) |
-| 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | pre-auth 端点 secured/versioned 前不建 OpenAPI fragment(已记录);前端手写接缝保持同步 |
 | 147 | ROADMAP | `go/jobs/job.go` | Cancel 不抢占运行中 Handle | StandaloneQueue 不抢占为文档化限制;补抢占需协作取消语义设计(asynq 半已改进) |
 | 148 | ROADMAP | `go/storage/AGENTS.md` | key 空间回收 sweep 未做 | key 空间回收需扩展 ObjectStore seam(本地+S3 两实现)跨切面设计 |
 | 149 | ROADMAP | `go/dbkit/AGENTS.md` | 盲索引轮换的重算 jobs 任务未实现 | 盲索引轮换重算任务:双列迁移/容忍错窗决策+dbkit 不能 import jobs,需所属模块承载 |
 | 150 | ROADMAP | `go/metering/AGENTS.md` | 分布式聚合后端未实现 | 分布式聚合后端需基础设施设计(进程内聚合+跨副本重建已记录) |
-| 154 | ROADMAP | `web/packages/api-client/src/config-fetcher.ts` | OpenAPI fragment for go/config pre-auth endpoints | pre-auth 端点 secured/versioned 前不建 OpenAPI fragment(已记录);前端手写接缝保持同步 |
 | 159 | ROADMAP | `go/admin/AGENTS.md` | 冒充请求期间下游模块审计捕获行只带 id 无 display name | 下游捕获行实名需 user-lookup seam 或 grant-row 快照设计;admin 自身行已实名 |
 | 161 | ROADMAP | `docs/internal/16-verification.md` | WithSystemContext 符号级静态检查缺口 | WithSystemContext 符号级检查需 pkgcore 子包化等 API 结构决策(depguard 仅 import 粒度) |
 | 168 | ROADMAP | `docs/internal/06-billing-and-metering.md` | metering.overage_threshold.crossed 无通知订阅方 | overage 通知订阅:通知类型/模板归属为未定设计 |
@@ -376,6 +374,8 @@
 | 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:02831bf3 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;残余:站点版式与按版本发布随 M4 文档站完整化 |
 | 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job;首轮真实运行半成功:Go 21 tag 已推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态恢复机制已落地(2026-09-10:跳过已存在 tag、npm 逐包已存在跳过,含根 tag,语义见第 5 章导言),待 org 侧关联 @speed scope(或等效配置)后重发即收敛;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
 | 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言),待 org 侧关联 @speed scope(或等效配置)后重发即收敛 |
+| 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | 闭:5cb0ce68 pre-auth 端点先 secured/versioned——移入 `/api/v1/config/...` 版本化前缀、两路径共享每地址限流预算、成功答案一分钟公开缓存 + `Vary: Host`(行内记录的前置条件达成);片段随 ba3ddb76 落地——`go/config/api/openapi.yaml` 声明 config_getPublicConfig/config_getSystemFeatures 两个操作,`*Module` 以编译期断言实现生成 `api.ServerInterface` 并经生成 wrapper 挂载 |
+| 154 | ROADMAP | `web/packages/api-client/src/config-fetcher.ts` | OpenAPI fragment for go/config pre-auth endpoints | 闭:ba3ddb76 go/config 片段落地并进合并文档与 `@speed/api-sdk`;前端手写面与之同步——config-fetcher 保持 per-key 映射层、路径常量与片段一致,片段生成的 hook(useConfigGetPublicConfig/useConfigGetSystemFeatures)为前端的主调用面;前置 secured/versioned 由 5cb0ce68 达成 |
 
 **部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
 
@@ -391,7 +391,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 
 档位判定以普查逐条记录为底;直接核读 31 条(A 13、L 6、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
-### 10.1 已闭于 main(A,46 项)
+### 10.1 已闭于 main(A,47 项)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -441,6 +441,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 71 | `CLAUDE.md` | census 自指措辞 4 处(行 8×2 "this census's `go/dbkit` entry records" 与 "this census's `go/dbkit` entry has the detail";行 11 "the auth-ui census entry below";行 13 "the auth-ui census defers to this shell";原记行 12/14 锚已校为行 11/13) | 4 处实测均在(抽查已核);按"可改可留"全部保留并记因——四句均为 census 条目间互指(指向 go/dbkit、auth-ui 条目),属导航措辞而非流程措辞;原记引语 "The census closes with…" 经 CLAUDE.md 全史检索不存在,已从记录删除 |
 | 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | 闭:1f3257ba 随片段并入合并文档改写为现状(future-work 句由 merge 成员段落取代;另见第 9 章普查行 153 同批闭) |
 | 30 | `.github/workflows/release.yml` | Report 步 echo "Real publishing is scheduled for the v1.0 release at M4, by design of this M0 round"(运行时文本保留 M0/M4 承诺;job name 的 "(M0)" 反而删了,不一致) | 闭:00e24732(2026-09-10)随 v0.0.1 发布机制改写——Report 步与头注现述验证+发布现状(M0/M4 承诺句已删);由 10.3 移档于此 |
+| 70 | `web/packages/api-client/README.md` | 286 行表格 "(no spec fragment exists yet)" — "yet" 残余(低信号;config-fetcher.ts 同义句已改),未改未声明(已被现状取代) | 闭:ba3ddb76 README 表格行改述为现状——两个路径常量与 go/config 的 OpenAPI 片段同步(片段生成 `@speed/api-sdk` 的 `useConfigGetPublicConfig`/`useConfigGetSystemFeatures`);api-client 包内该句无残留;由 10.3 移档于此 |
 
 ### 10.2 台账缓办(L,9 项)
 
@@ -456,7 +457,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)x1/(D5)x1/(P2-2)x3/(P2-3)x1 共 6 处仍在(P2-6@184、D5@223、P2-2@279/335/373、P2-3@946);抽查已核 |
 
-### 10.3 真剩余(R,16 项;未来文本修复候选)
+### 10.3 真剩余(R,15 项;未来文本修复候选)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -475,4 +476,3 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 40 | `.github/workflows/fast-check.yml` | react-hooks ESLint 插件不存在 | fast-check 头注 react-hooks "无阻塞声明"前提已过时,声明在配置头内 |
 | 42 | `web/packages/auth-core/AGENTS.md` | 整文件未清理:两条 C 类 deferral 语句残留 | auth-core AGENTS:171 "Planned for a later round." 仍在;抽查已核 |
 | 68 | `web/packages/tenancy-ui/AGENTS.md` | 整文件未清理:'needs a round of its own' 轮次语句与 docs/internal/12-frontend.md 出处引用 | tenancy-ui AGENTS:18 "needs a round of its own" 仍在;抽查已核 |
-| 70 | `web/packages/api-client/README.md` | 286 行表格 "(no spec fragment exists yet)" — "yet" 残余(低信号;config-fetcher.ts 同义句已改),未改未声明 | api-client README:286 "no spec fragment exists yet" 的 "yet" 仍在(go/config 确无 fragment,措辞级);抽查已核 |
