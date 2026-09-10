@@ -39,6 +39,14 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// tenantErrorBody is the {code, params} refusal envelope these tests decode
+// Middleware's responses as: the machine-readable code is the API's
+// contract, and the client resolves its text against its own catalog.
+type tenantErrorBody struct {
+	Code   string         `json:"code"`
+	Params map[string]any `json:"params,omitempty"`
+}
+
 func TestMiddleware_Success_InjectsResolvedTenantIntoContext(t *testing.T) {
 	tests := []struct {
 		name   string

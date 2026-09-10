@@ -1,17 +1,13 @@
 package tenancy
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
-
-// tenantErrorContentType is the Content-Type Middleware sets when it writes
-// ErrTenantUnresolved as a response body.
-const tenantErrorContentType = "application/json; charset=utf-8"
 
 // ErrTenantUnresolved is the structured error Middleware writes to the
 // response when a request's tenant cannot be resolved and the request's
@@ -219,27 +215,15 @@ func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) 
 	}
 }
 
-// tenantErrorBody is the JSON shape written for ErrTenantUnresolved,
-// matching the {code, params} structured-error envelope convention: the
-// machine-readable code is the API's contract, and the client resolves
-// its text against its own catalog.
-type tenantErrorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// writeError writes appErr to w as a JSON body -- ErrTenantUnresolved,
-// ErrTenantSuspended or ErrTenantStatusUnavailable, Middleware's three
-// possible refusals. The underlying Resolver/TenantStatusResolver error,
-// if any, is deliberately never included in the body: it may carry
-// internal detail from whatever produced it -- an authenticated-request
-// Resolver's token-validation internals, for one -- and internal detail
-// must never reach an API response.
+// writeError writes appErr to w as the coded error envelope (see
+// pkgcore/httpapi) -- ErrTenantUnresolved, ErrTenantSuspended or
+// ErrTenantStatusUnavailable, Middleware's three possible refusals. The
+// underlying Resolver/TenantStatusResolver error, if any, is deliberately
+// never included in the body: it may carry internal detail from whatever
+// produced it -- an authenticated-request Resolver's token-validation
+// internals, for one -- and internal detail must never reach an API
+// response. A typed *apperr.Error is always coded, so the fallback (used
+// only for a non-*apperr.Error) is the value itself.
 func writeError(w http.ResponseWriter, appErr *apperr.Error) {
-	w.Header().Set("Content-Type", tenantErrorContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(tenantErrorBody{
-		Code:   appErr.Code,
-		Params: appErr.Params,
-	})
+	httpapi.WriteError(w, appErr, appErr)
 }

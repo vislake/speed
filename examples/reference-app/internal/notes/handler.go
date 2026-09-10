@@ -19,8 +19,8 @@ import (
 	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
-// jsonContentType is the Content-Type every response below writes,
-// matching go/tenancy/middleware.go's own tenantErrorContentType constant.
+// jsonContentType is the Content-Type every response below writes, the
+// same JSON type the coded refusals carry (see pkgcore/httpapi).
 const jsonContentType = "application/json; charset=utf-8"
 
 // ErrTextRequired is returned when a create-note request's text is empty
