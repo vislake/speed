@@ -180,12 +180,12 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // beside its save-failed line.
   'authn.invalid_locale': 'go/authn/errors.go:57 (ErrInvalidLocale)',
   'authn.invalid_timezone': 'go/authn/errors.go:64 (ErrInvalidTimezone)',
-  'authn.email_already_registered': 'go/authn/errors.go:62 (ErrEmailAlreadyRegistered)',
-  'authn.phone_already_registered': 'go/authn/errors.go:66 (ErrPhoneAlreadyRegistered)',
-  'authn.password_too_short': 'go/authn/errors.go:69 (ErrPasswordTooShort)',
-  'authn.password_too_long': 'go/authn/errors.go:72 (ErrPasswordTooLong)',
-  'authn.display_name_too_long': 'go/authn/errors.go:82 (ErrDisplayNameTooLong)',
-  'authn.password_too_weak': 'go/authn/errors.go:86 (ErrPasswordTooWeak)',
+  'authn.email_already_registered': 'go/authn/errors.go:77 (ErrEmailAlreadyRegistered)',
+  'authn.phone_already_registered': 'go/authn/errors.go:81 (ErrPhoneAlreadyRegistered)',
+  'authn.password_too_short': 'go/authn/errors.go:84 (ErrPasswordTooShort)',
+  'authn.password_too_long': 'go/authn/errors.go:87 (ErrPasswordTooLong)',
+  'authn.display_name_too_long': 'go/authn/errors.go:97 (ErrDisplayNameTooLong)',
+  'authn.password_too_weak': 'go/authn/errors.go:101 (ErrPasswordTooWeak)',
   // authn.token_invalid -- the composed authn.Middleware's answer for a
   // request that presented an access token the verifier refused (a
   // tampered or otherwise invalid token; an expired one is answered
@@ -203,44 +203,44 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // the anonymous request first with tenancy.tenant_unresolved, verified
   // on the composed stack; that code therefore lives in
   // WHITELISTED_BEYOND_THIS_APP below, not here.
-  'authn.token_invalid': 'go/authn/errors.go:98 (ErrTokenInvalid)',
-  'authn.token_expired': 'go/authn/errors.go:105 (ErrTokenExpired)',
-  'authn.session_revoked': 'go/authn/errors.go:109 (ErrSessionRevoked)',
-  'authn.refresh_token_invalid': 'go/authn/errors.go:113 (ErrRefreshTokenInvalid)',
-  'authn.refresh_token_reused': 'go/authn/errors.go:119 (ErrRefreshTokenReused)',
-  'authn.tenant_membership_required': 'go/authn/errors.go:133 (ErrTenantMembershipRequired)',
-  'authn.tenant_membership_unavailable': 'go/authn/errors.go:141 (ErrTenantMembershipUnavailable)',
-  'authn.oauth_state_invalid': 'go/authn/errors.go:167 (ErrOAuthStateInvalid)',
-  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:171 (ErrRedirectURINotAllowed)',
-  'authn.provider_unknown': 'go/authn/errors.go:176 (ErrProviderUnknown)',
-  'authn.social_exchange_failed': 'go/authn/errors.go:183 (ErrSocialExchangeFailed)',
-  'authn.identity_requires_binding': 'go/authn/errors.go:216 (ErrIdentityRequiresBinding)',
-  'authn.identity_already_bound': 'go/authn/errors.go:220 (ErrIdentityAlreadyBound)',
-  'authn.identity_not_found': 'go/authn/errors.go:226 (ErrIdentityNotFound)',
-  'authn.last_login_method': 'go/authn/errors.go:232 (ErrLastLoginMethod)',
-  'authn.rate_limited': 'go/authn/errors.go:295 (ErrRateLimited)',
-  'authn.account_locked': 'go/authn/errors.go:303 (ErrAccountLocked)',
-  'authn.channel_disabled': 'go/authn/errors.go:313 (ErrChannelDisabled)',
-  'authn.verification_code_invalid': 'go/authn/errors.go:340 (ErrVerificationCodeInvalid)',
-  'authn.mfa_not_enrolled': 'go/authn/errors.go:357 (ErrMFANotEnrolled)',
-  'authn.mfa_already_enrolled': 'go/authn/errors.go:361 (ErrMFAAlreadyEnrolled)',
+  'authn.token_invalid': 'go/authn/errors.go:113 (ErrTokenInvalid)',
+  'authn.token_expired': 'go/authn/errors.go:120 (ErrTokenExpired)',
+  'authn.session_revoked': 'go/authn/errors.go:124 (ErrSessionRevoked)',
+  'authn.refresh_token_invalid': 'go/authn/errors.go:128 (ErrRefreshTokenInvalid)',
+  'authn.refresh_token_reused': 'go/authn/errors.go:134 (ErrRefreshTokenReused)',
+  'authn.tenant_membership_required': 'go/authn/errors.go:148 (ErrTenantMembershipRequired)',
+  'authn.tenant_membership_unavailable': 'go/authn/errors.go:156 (ErrTenantMembershipUnavailable)',
+  'authn.oauth_state_invalid': 'go/authn/errors.go:182 (ErrOAuthStateInvalid)',
+  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:186 (ErrRedirectURINotAllowed)',
+  'authn.provider_unknown': 'go/authn/errors.go:191 (ErrProviderUnknown)',
+  'authn.social_exchange_failed': 'go/authn/errors.go:198 (ErrSocialExchangeFailed)',
+  'authn.identity_requires_binding': 'go/authn/errors.go:231 (ErrIdentityRequiresBinding)',
+  'authn.identity_already_bound': 'go/authn/errors.go:235 (ErrIdentityAlreadyBound)',
+  'authn.identity_not_found': 'go/authn/errors.go:241 (ErrIdentityNotFound)',
+  'authn.last_login_method': 'go/authn/errors.go:247 (ErrLastLoginMethod)',
+  'authn.rate_limited': 'go/authn/errors.go:310 (ErrRateLimited)',
+  'authn.account_locked': 'go/authn/errors.go:318 (ErrAccountLocked)',
+  'authn.channel_disabled': 'go/authn/errors.go:328 (ErrChannelDisabled)',
+  'authn.verification_code_invalid': 'go/authn/errors.go:355 (ErrVerificationCodeInvalid)',
+  'authn.mfa_not_enrolled': 'go/authn/errors.go:372 (ErrMFANotEnrolled)',
+  'authn.mfa_already_enrolled': 'go/authn/errors.go:376 (ErrMFAAlreadyEnrolled)',
   // authn.mfa_code_used -- the spent-code answer (a code that passed
   // the real check but whose single-use guard already consumed it),
   // distinguished from the never-valid authn.mfa_invalid_code.
-  'authn.mfa_invalid_code': 'go/authn/errors.go:379 (ErrMFAInvalidCode)',
-  'authn.mfa_code_used': 'go/authn/errors.go:394 (ErrMFACodeUsed)',
-  'authn.step_up_required': 'go/authn/errors.go:398 (ErrStepUpRequired)',
-  'authn.session_not_found': 'go/authn/errors.go:407 (ErrSessionNotFound)',
+  'authn.mfa_invalid_code': 'go/authn/errors.go:394 (ErrMFAInvalidCode)',
+  'authn.mfa_code_used': 'go/authn/errors.go:409 (ErrMFACodeUsed)',
+  'authn.step_up_required': 'go/authn/errors.go:413 (ErrStepUpRequired)',
+  'authn.session_not_found': 'go/authn/errors.go:422 (ErrSessionNotFound)',
   // go/rbac/errors.go -- the permission-denied sentinel the notes route's
   // rbac gate answers with.
   'rbac.permission_denied': 'go/rbac/errors.go:56 (ErrPermissionDenied)',
   // examples/reference-app/internal/notes/handler.go -- the notes module
   // handler's own sentinels.
-  'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31 (ErrTextRequired)',
+  'notes.text_required': 'examples/reference-app/internal/notes/handler.go:32 (ErrTextRequired)',
   // The two declarations below sit after the maxRequestBodyBytes
   // constant block above ErrTextTooLong.
-  'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:80 (ErrTextTooLong)',
-  'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:84 (errInternal)',
+  'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:81 (ErrTextTooLong)',
+  'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:85 (errInternal)',
   // examples/reference-app/internal/cases/service.go -- the cases
   // domain layer's own sentinels: the create/read refusals the cases
   // fragment documents, reachable text on the cases surface's routes.
@@ -257,53 +257,53 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // upload/content route sentinels (surface orchestration codes; the
   // photo_content_too_large answers both the upload route and the
   // content route).
-  'cases.photo_content_required': 'examples/reference-app/internal/app/cases_photos.go:73 (ErrPhotoContentRequired)',
-  'cases.photo_content_invalid': 'examples/reference-app/internal/app/cases_photos.go:78 (ErrPhotoContentInvalid)',
-  'cases.photo_content_too_large': 'examples/reference-app/internal/app/cases_photos.go:85 (ErrPhotoContentTooLarge)',
-  'cases.photo_rejected': 'examples/reference-app/internal/app/cases_photos.go:93 (ErrPhotoRejected)',
-  'cases.photo_not_found': 'examples/reference-app/internal/app/cases_photos.go:100 (ErrPhotoNotFound)',
+  'cases.photo_content_required': 'examples/reference-app/internal/app/cases_photos.go:75 (ErrPhotoContentRequired)',
+  'cases.photo_content_invalid': 'examples/reference-app/internal/app/cases_photos.go:80 (ErrPhotoContentInvalid)',
+  'cases.photo_content_too_large': 'examples/reference-app/internal/app/cases_photos.go:87 (ErrPhotoContentTooLarge)',
+  'cases.photo_rejected': 'examples/reference-app/internal/app/cases_photos.go:95 (ErrPhotoRejected)',
+  'cases.photo_not_found': 'examples/reference-app/internal/app/cases_photos.go:102 (ErrPhotoNotFound)',
   // examples/reference-app/internal/app/cases.go -- the case surface's
   // handler-level envelopes (the internal fallback writeCasesError
   // folds every non-apperr error into, and the shared malformed-body
   // sentinel every body-reading cases route writes -- both kept as
   // named declarations so the audits that cite them have a stable
   // site).
-  'cases.internal_error': 'examples/reference-app/internal/app/cases.go:58 (casesErrInternal)',
+  'cases.internal_error': 'examples/reference-app/internal/app/cases.go:59 (casesErrInternal)',
   'cases.invalid_request_body': 'examples/reference-app/internal/app/cases.go:66 (casesInvalidRequestBody)',
   // examples/reference-app/internal/smilesim/options.go -- the option
   // validation sentinels (named declarations the surface's option
   // pickers made reachable text).
-  'smilesim.unsupported_smile_style': 'examples/reference-app/internal/smilesim/options.go:154 (ErrUnsupportedSmileStyle)',
-  'smilesim.unsupported_tooth_shade': 'examples/reference-app/internal/smilesim/options.go:158 (ErrUnsupportedToothShade)',
-  'smilesim.strength_out_of_range': 'examples/reference-app/internal/smilesim/options.go:162 (ErrStrengthOutOfRange)',
+  'smilesim.unsupported_smile_style': 'examples/reference-app/internal/smilesim/options.go:152 (ErrUnsupportedSmileStyle)',
+  'smilesim.unsupported_tooth_shade': 'examples/reference-app/internal/smilesim/options.go:156 (ErrUnsupportedToothShade)',
+  'smilesim.strength_out_of_range': 'examples/reference-app/internal/smilesim/options.go:160 (ErrStrengthOutOfRange)',
   // examples/reference-app/internal/app/smilesim.go -- the smile-simulation
   // surface's handler-level sentinels (the internal envelope, the
   // simulate route's request-shape refusals, the recipient gate, the
   // poll/content routes' not-found answers and the simulation-content
   // route's refusals).
-  'smilesim.internal_error': 'examples/reference-app/internal/app/smilesim.go:55 (smileSimErrInternal)',
-  'smilesim.invalid_request_body': 'examples/reference-app/internal/app/smilesim.go:66 (smilesimErrInvalidRequestBody)',
-  'smilesim.photo_object_id_required': 'examples/reference-app/internal/app/smilesim.go:70 (smilesimErrPhotoObjectIDRequired)',
-  'smilesim.simulation_not_found': 'examples/reference-app/internal/app/smilesim.go:82 (smileSimErrSimulationNotFound)',
-  'smilesim.output_not_ready': 'examples/reference-app/internal/app/smilesim.go:86 (smileSimErrOutputNotReady)',
-  'smilesim.output_not_found': 'examples/reference-app/internal/app/smilesim.go:91 (smileSimErrOutputNotFound)',
-  'smilesim.recipient_not_in_tenant': 'examples/reference-app/internal/app/smilesim.go:446 (smilesimErrRecipientNotInTenant)',
+  'smilesim.internal_error': 'examples/reference-app/internal/app/smilesim.go:56 (smileSimErrInternal)',
+  'smilesim.invalid_request_body': 'examples/reference-app/internal/app/smilesim.go:67 (smilesimErrInvalidRequestBody)',
+  'smilesim.photo_object_id_required': 'examples/reference-app/internal/app/smilesim.go:71 (smilesimErrPhotoObjectIDRequired)',
+  'smilesim.simulation_not_found': 'examples/reference-app/internal/app/smilesim.go:83 (smileSimErrSimulationNotFound)',
+  'smilesim.output_not_ready': 'examples/reference-app/internal/app/smilesim.go:87 (smileSimErrOutputNotReady)',
+  'smilesim.output_not_found': 'examples/reference-app/internal/app/smilesim.go:92 (smileSimErrOutputNotFound)',
+  'smilesim.recipient_not_in_tenant': 'examples/reference-app/internal/app/smilesim.go:485 (smilesimErrRecipientNotInTenant)',
   // go/jobs/job.go -- the not-found sentinel the job-status handler
   // passes through for an unknown or another tenant's job id.
-  'jobs.job_not_found': 'go/jobs/job.go:201 (ErrJobNotFound)',
+  'jobs.job_not_found': 'go/jobs/job.go:202 (ErrJobNotFound)',
   // go/billing/errors.go -- the credit-reservation refusal a simulate
   // answers when the tenant's balance cannot cover one generation.
-  'billing.insufficient_credits': 'go/billing/errors.go:73 (ErrInsufficientCredits)',
+  'billing.insufficient_credits': 'go/billing/errors.go:98 (ErrInsufficientCredits)',
   // go/billing/errors.go -- the handler-level envelope the credits
   // surface's two GETs fold an unclassifiable failure into.
   // billing.invalid_limit and billing.invalid_request stay out of the
   // enumeration because the credits view never sends a limit -- the
   // server's default window is the read it needs -- so neither 400 is
   // reachable on this surface.
-  'billing.internal_error': 'go/billing/errors.go:174 (ErrInternal)',
+  'billing.internal_error': 'go/billing/errors.go:197 (ErrInternal)',
   // go/ai-gateway/errors.go -- the entitlement-gate refusal a simulate
   // answers for a tenant whose subscription lacks the image model.
-  'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:42 (ErrEntitlementDenied)',
+  'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:32 (ErrEntitlementDenied)',
   // go/sharing/errors.go and go/sharing/ratelimit.go -- the sharing
   // module's sentinels the two share surfaces made reachable text (the
   // clinic share action's POST /api/v1/sharing/shares can be answered
@@ -313,10 +313,10 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // limit, the granted-but-unopenable 502 and the internal envelope.
   // The route-level rbac answer the share action can draw is the
   // already-pinned rbac.permission_denied above).
-  'sharing.internal_error': 'go/sharing/errors.go:92 (ErrInternal)',
-  'sharing.not_accessible': 'go/sharing/errors.go:60 (ErrNotAccessible)',
-  'sharing.resource_unavailable': 'go/sharing/errors.go:111 (ErrResourceUnavailable)',
-  'sharing.rate_limited': 'go/sharing/ratelimit.go:79 (ErrRateLimited)',
+  'sharing.internal_error': 'go/sharing/errors.go:97 (ErrInternal)',
+  'sharing.not_accessible': 'go/sharing/errors.go:66 (ErrNotAccessible)',
+  'sharing.resource_unavailable': 'go/sharing/errors.go:116 (ErrResourceUnavailable)',
+  'sharing.rate_limited': 'go/sharing/ratelimit.go:97 (ErrRateLimited)',
   // go/org/errors.go -- the org-module sentinels the team surface's
   // invite send and its reads can be answered with. org.invalid_email
   // is the create's address refusal (an address the caller typed),
@@ -352,7 +352,7 @@ const WHITELISTED_BEYOND_THIS_APP: Readonly<Record<string, string>> = {
     'stays OFF -- an exchange attempt here refuses at the channel gate (go/authn/' +
     'identity.go, SocialCallback\'s gate, which runs before any identity analysis) ' +
     'with authn.channel_disabled. The code therefore has no in-app answer.',
-  // go/authn/errors.go:93 (ErrAuthenticationRequired) -- the sentinel
+  // go/authn/errors.go:108 (ErrAuthenticationRequired) -- the sentinel
   // citation sits here because the composed stack cannot answer with
   // the code (see the token_invalid citation above for who writes each
   // and why the switch route cannot draw the no-credential answer).
