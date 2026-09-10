@@ -95,7 +95,9 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
   不答 403」)是各消费模块的职责——本模块只回答什么开着,别无其他。
 - **端点**——两个预认证 GET/HEAD 端点挂在导出的 `PathPublic`
   (`/api/v1/config/public`)与 `PathSystemFeatures`(`/api/v1/config/features`)
-  常量上,宿主在租户中间件 allowlist 里指名它们。两者经宿主接线的
+  常量上,宿主在租户中间件 allowlist 里指名它们;两者由模块自带的
+  OpenAPI 片段声明(`config_getPublicConfig` / `config_getSystemFeatures`,
+  生成进 `@speed/api-sdk`)。两者经宿主接线的
   `tenancy.Resolver` 解析请求租户,查不到即回落平台默认值——绝不
   报错,因为渲染不出来的登录页才是最糟的失败模式。一个未设值或损坏
   的 Public 项只会被快照跳过,绝不允许拖垮端点(连带登录页)。
@@ -106,8 +108,10 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
   语义都在 `Service` 里;绕过它的人实现的只是错误子集。
 - `configs` 表是平台数据——刻意不是 `dbkit.TenantScoped`——它是
   仓库规则的成文例外,不是租户数据该抄的样板。
-- 两个端点没有 OpenAPI 片段(契约在 `http.go` 加测试);前端经
-  `@speed/api-client` 的键入包装消费。也没有配置*编辑*界面。
+- 两个端点的线上契约就是模块自带的 OpenAPI 片段
+  (`api/openapi.yaml`);前端的逐键读取与开关查询仍走
+  `@speed/api-client` 的类型化封装——它是生成操作之下的映射层。
+  也没有配置*编辑*界面。
 - 持久审计行只在组装了 `compliance` 模块时存在(它订阅变更事件);
   没有它时,审计对你为必选就把发布失败当回事。
 - 配置项描述是代码里的单语言散文,尚未成为目录消息 id。

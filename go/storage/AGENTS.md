@@ -334,10 +334,10 @@ magic numbers:
 
 ### The HTTP surface — `handler.go`, `api/`
 
-`api/openapi.yaml` is the module's OpenAPI fragment, one of the ten
+`api/openapi.yaml` is the module's OpenAPI fragment, one of the eleven
 platform-module fragments the merged document carries (org, storage,
-notification, sharing, pki, admin, integration, ai-gateway, billing and
-authn; the reference app's own notes, cases and smilesim fragments are
+notification, sharing, pki, admin, integration, ai-gateway, billing,
+authn and config; the reference app's own notes, cases and smilesim fragments are
 the app's own API, not merge members): paths all `/api/v1/storage/...`,
 operationIds `storage_<action><Resource>`, schemas `Storage<Type>`, tag
 `storage`, **no `tenant_id` anywhere on the surface** (the tenant comes from

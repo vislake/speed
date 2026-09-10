@@ -10,8 +10,8 @@ description: "合并 API 文档的生成类型面——orval 产物经唯一手�
 TanStack Query hooks 与响应模型,都由 orval——固定在 8.17.0,经
 `pnpm dlx` 运行,所以 orval 从不进入 workspace 的 lockfile——从
 `contracts/speed.yaml` 生成;这份合并文档由固定版本的 redocly
-`join` 十个平台模块 fragment(admin、ai-gateway、authn、billing、
-integration、notification、org、pki、sharing、storage)而来。
+`join` 十一个平台模块 fragment(admin、ai-gateway、authn、billing、
+config、integration、notification、org、pki、sharing、storage)而来。
 `src/` 里除一个文件外全是生成器产物,盖着带固定 orval 版本的
 DO-NOT-EDIT 头:生成器与已提交产物之间的工具漂移,会以头部本身的
 diff 显现。

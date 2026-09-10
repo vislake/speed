@@ -77,8 +77,8 @@ and `src/` must keep passing it on every regeneration.
 ## What ships vs. what is deferred
 
 The generated surface over the merged document (`src/index.ts` --
-orval input is `contracts/speed.yaml`, the redocly `join` of the ten
-platform-module fragments: admin, ai-gateway, authn, billing,
+orval input is `contracts/speed.yaml`, the redocly `join` of the eleven
+platform-module fragments: admin, ai-gateway, authn, billing, config,
 integration, notification, org, pki, sharing and storage -- every
 platform module with an HTTP fragment is a merge member; the
 reference app's own notes, cases and smilesim fragments are NOT

@@ -163,10 +163,14 @@ flowchart LR
 - **`user` scope is refused, not half-built** (`ErrUserScopeUnavailable`)
   — a third tier needs its own storage, resolution and entitlement
   design, not a validation-list addition.
-- **No OpenAPI fragment for the two endpoints** — their contract lives
-  in doc comments and tests; the frontend consumes them through
-  hand-written typed wrappers, recorded as a limitation rather than
-  silently generated wrong.
+- **The fragment owns the wire contract; the per-key layer stays
+  hand-written** — the two endpoints are declared by `api/openapi.yaml`
+  (`config_getPublicConfig` / `config_getSystemFeatures`), and the
+  generated operations that fragment produces (`@speed/api-sdk`'s
+  `useConfigGetPublicConfig` / `useConfigGetSystemFeatures`) are the
+  primary call surface; the public-config body is a record of dynamic
+  keys, though, so `@speed/api-client`'s typed wrappers remain the
+  per-key mapping layer rather than being replaced by generation.
 
 ## Stable surface
 
@@ -175,8 +179,10 @@ The Register/Attach seam (`ErrAlreadyAttached`, `ErrCipherRequired`,
 `GetTyped`, `Set`, `Watch`, `IsEnabled`, `EnabledFlags`,
 `PublicSnapshot`, `Refresh`, `Close`), the scope vocabulary and its
 entitlements, the `ConfigItem`/`FeatureFlag` declaration contracts,
-the exported `PathPublic`/`PathSystemFeatures` constants and the two
-endpoints' response shapes, the `config.item.changed` event shape, and
+the exported `PathPublic`/`PathSystemFeatures` constants, the two
+endpoints' OpenAPI fragment (`api/openapi.yaml`), its generated
+`api.ServerInterface` and the endpoints' response shapes, the
+`config.item.changed` event shape, and
 the `config.*` error-code family.
 
 ## Source

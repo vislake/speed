@@ -2,26 +2,25 @@
  * Typed fetchers for go/config's two pre-auth public endpoints.
  *
  * Both endpoints resolve tenant entirely server-side, from the
- * request's host (go/config/http.go's handlePublic / handleFeatures) --
- * never from a header or query parameter -- so neither function below
- * accepts a tenant argument of any kind. Passing one would be a silent
- * no-op at best.
+ * request's host (go/config/http.go's ConfigGetPublicConfig /
+ * ConfigGetSystemFeatures) -- never from a header or query parameter --
+ * so neither function below accepts a tenant argument of any kind.
+ * Passing one would be a silent no-op at best.
  *
  * The path constants mirror go/config's own PathPublic /
- * PathSystemFeatures exactly. No OpenAPI fragment exists for either
- * endpoint yet, so no generator keeps these two constants and the two
- * response shapes in sync with the backend -- a real, hand-maintained
- * seam, not an oversight.
+ * PathSystemFeatures exactly, and go/config's OpenAPI fragment
+ * (api/openapi.yaml, config_getPublicConfig / config_getSystemFeatures)
+ * declares the same pair into @speed/api-sdk -- so the generated
+ * useConfigGetPublicConfig / useConfigGetSystemFeatures hooks are the
+ * primary call surface for these endpoints.
  *
- * The generated operations an OpenAPI fragment would produce are the
- * intended primary call surface for these endpoints; this module stays the
- * mapping layer over them either way, because the generated type for the
- * public-config body can only be a record of dynamic keys -- the config
- * schema is extensible per module, so the per-key typing the hooks below
- * expose cannot come from a generated type. A consumer of the endpoints
- * should therefore keep calling these fetchers (and the hooks built on
- * them) rather than a generated operation, and a generated operation, once
- * it exists, must agree with the constants here on the two paths.
+ * This module stays the mapping layer under them: the generated type for
+ * the public-config body can only be a record of dynamic keys -- the
+ * config schema is extensible per module, so the per-key typing the hooks
+ * below expose cannot come from a generated type. The hand-maintained
+ * part is therefore the per-key mapping itself, not the wire contract,
+ * which the fragment now owns; a generated operation must keep agreeing
+ * with the two path constants here.
  */
 
 import type { RequestFn, RequestOptions } from './client.js'

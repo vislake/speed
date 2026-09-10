@@ -49,6 +49,11 @@
             "name": "storage",
             "dir": "go/storage/api",
             "merge_rank": 10
+        },
+        {
+            "name": "config",
+            "dir": "go/config/api",
+            "merge_rank": 11
         }
     ],
     "app_owned": [

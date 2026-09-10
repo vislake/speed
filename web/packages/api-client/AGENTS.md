@@ -113,8 +113,10 @@ HTTP through it.
 `src/config-fetcher.ts` -- typed wrappers around go/config's two
 pre-auth endpoints (`PathPublic` / `PathSystemFeatures`), built on the
 `RequestFn` seam above. Both path constants are hand-kept in sync with
-the Go side (no OpenAPI fragment exists for these endpoints yet). The
-generated operations an OpenAPI fragment would produce are the intended
+the Go side (go/config ships an OpenAPI fragment declaring the pair as
+`config_getPublicConfig` / `config_getSystemFeatures`). The generated
+operations that fragment produces -- `@speed/api-sdk`'s
+`useConfigGetPublicConfig` / `useConfigGetSystemFeatures` -- are the
 primary call surface for those endpoints; these wrappers remain the
 per-key mapping layer over them, because the generated type for the
 public-config body can only be a record of dynamic keys -- the per-key

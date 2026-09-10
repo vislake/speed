@@ -76,8 +76,8 @@ orval 固定在 8.17.0,从不进入工作区 lockfile:按需经 `pnpm dlx` 拉
 
 ## 设计:合并文档覆盖什么
 
-输入是 `contracts/speed.yaml`——固定版本 redocly `join` 十个平台模
-块片段(admin、ai-gateway、authn、billing、integration、
+输入是 `contracts/speed.yaml`——固定版本 redocly `join` 十一个平台模
+块片段(admin、ai-gateway、authn、billing、config、integration、
 notification、org、pki、sharing、storage)的产物。成员资格由模块驱
 动:每个带 HTTP 片段的平台模块都是成员,而参考应用自己的片段(notes、
 cases、smilesim)刻意不是——它们是应用自己的 API,由 app 自有生成

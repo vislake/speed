@@ -59,11 +59,11 @@ flowchart LR
 - **变更事件就是审计记录**——模块不依赖审计消费者存在;谁订阅谁就拿到谁、何时、何事、旧→新。代价如实记录:未组装 compliance 消费者的宿主,必须把发布失败自行当作可行动信号。
 - **pre-auth 端点回退平台默认、绝不报错**——未匹配的 Host、失败的解析器或根本没有解析器都以 200 读默认值,因为登录页渲染不出来才是最糟的失败模式;单个未设置或不可解码的条目从公开快照中省略,而非拖着端点为所有租户宕掉。
 - **`user` 层被拒绝而非半建**(`ErrUserScopeUnavailable`)——第三层需要自己的存储、解析与资格设计,不是往校验清单加一行。
-- **两个端点没有 OpenAPI 片段**——契约住在文档注释与测试里;前端经手写类型化封装消费,如实记录为局限而非悄悄生成错的东西。
+- **线上契约归片段,逐键层仍手写**——两个端点由 `api/openapi.yaml` 声明(`config_getPublicConfig` / `config_getSystemFeatures`),它生成的操作为主消费面;但公开配置 body 只能记成动态键映射,`@speed/api-client` 的类型化封装因此保留为逐键映射层,而不是被生成取代。
 
 ## 对外的稳定面
 
-Register/Attach 接缝(`ErrAlreadyAttached`/`ErrCipherRequired`/`ErrServiceNotAttached`)、`Service` 的读写面(`Get`/`GetTyped`/`Set`/`Watch`/`IsEnabled`/`EnabledFlags`/`PublicSnapshot`/`Refresh`/`Close`)、作用域词汇及其资格、`ConfigItem`/`FeatureFlag` 声明契约、导出的 `PathPublic`/`PathSystemFeatures` 常量与两个端点的响应形态、`config.item.changed` 事件形态,以及 `config.*` 错误码族。
+Register/Attach 接缝(`ErrAlreadyAttached`/`ErrCipherRequired`/`ErrServiceNotAttached`)、`Service` 的读写面(`Get`/`GetTyped`/`Set`/`Watch`/`IsEnabled`/`EnabledFlags`/`PublicSnapshot`/`Refresh`/`Close`)、作用域词汇及其资格、`ConfigItem`/`FeatureFlag` 声明契约、导出的 `PathPublic`/`PathSystemFeatures` 常量、两个端点的 OpenAPI 片段(`api/openapi.yaml`)、其生成的 `api.ServerInterface` 与两个端点的响应形态、`config.item.changed` 事件形态,以及 `config.*` 错误码族。
 
 ## Source
 

@@ -15,6 +15,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/config/api"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
@@ -72,11 +73,18 @@ func (r staticHostResolver) Resolve(req *http.Request) (pkgcore.TenantID, error)
 }
 
 // mountRoutes mounts every route the registry collected onto a fresh mux,
-// the way a host mounts module routes on its own router.
+// the way a host mounts module routes on its own router: the exact path plus
+// its subtree variant, since MountedRoute's Handler "serves every request
+// below Path" and net/http serves a bare exact-path request directly only
+// when the exact pattern is registered (see the reference app's
+// mountModuleRoutes).
 func mountRoutes(reg *pkgcore.Registry) *http.ServeMux {
 	mux := http.NewServeMux()
 	for _, route := range reg.Routes.Routes() {
 		mux.Handle(route.Path, route.Handler)
+		if !strings.HasSuffix(route.Path, "/") {
+			mux.Handle(route.Path+"/", route.Handler)
+		}
 	}
 	return mux
 }
@@ -151,7 +159,7 @@ func doRequestFromIP(t *testing.T, mux *http.ServeMux, method, path, host, remot
 	return httpResponse{recorder: rec, body: rec.Body.Bytes()}
 }
 
-// publicSnapshotBody is the wire shape handlePublic documents: a
+// publicSnapshotBody is the wire shape ConfigGetPublicConfig documents: a
 // config object plus a features array.
 type publicSnapshotBody struct {
 	Config   map[string]any `json:"config"`
@@ -165,13 +173,14 @@ func decodeBody(t *testing.T, resp httpResponse, out any) {
 	}
 }
 
-// decodeErrorEnvelope returns the whole structured refusal body, so a test
-// can assert on the params a denial carries and not only on its code.
-func decodeErrorEnvelope(t *testing.T, resp httpResponse) errorEnvelope {
+// decodeErrorEnvelope returns the whole structured refusal body -- the
+// fragment's api.ConfigError, the shape both endpoint methods write -- so a
+// test can assert on the params a denial carries and not only on its code.
+func decodeErrorEnvelope(t *testing.T, resp httpResponse) api.ConfigError {
 	t.Helper()
-	var envelope errorEnvelope
+	var envelope api.ConfigError
 	decodeBody(t, resp, &envelope)
-	if envelope.Code == nil {
+	if envelope.Code == "" {
 		t.Fatalf("error response carries no code: %s", resp.body)
 	}
 	return envelope
@@ -179,7 +188,7 @@ func decodeErrorEnvelope(t *testing.T, resp httpResponse) errorEnvelope {
 
 func decodeErrorCode(t *testing.T, resp httpResponse) string {
 	t.Helper()
-	return *decodeErrorEnvelope(t, resp).Code
+	return decodeErrorEnvelope(t, resp).Code
 }
 
 func TestHTTP_Public_ResolvesTheTenantOverridesByHost(t *testing.T) {
@@ -448,6 +457,32 @@ func TestHTTP_PreAuthEndpoints_ServeUnderTheModuleScopedVersionedPrefix(t *testi
 	}
 }
 
+// TestHTTP_PreAuthEndpoints_ServeOnlyTheirDeclaredPaths pins the routing the
+// fragment's generated wrapper gives the module: the handler answers exactly
+// the two literal paths api/openapi.yaml declares. A request below a mounted
+// prefix -- the subtree variant mountRoutes registers alongside each route --
+// is therefore refused as not found rather than answered with a snapshot,
+// so the fragment, not the handler's own dispatch, is what defines the
+// endpoints' surface.
+func TestHTTP_PreAuthEndpoints_ServeOnlyTheirDeclaredPaths(t *testing.T) {
+	_, mux := newHTTPHarness(t, nil)
+	for _, path := range []string{PathPublic + "/", PathSystemFeatures + "/", PathPublic + "/extra"} {
+		resp := doRequest(t, mux, http.MethodGet, path, "studio-a.example.com")
+		if resp.recorder.Code != http.StatusNotFound {
+			t.Fatalf("GET %s = %d, want 404: the fragment declares two paths and the handler serves only those (body: %s)",
+				path, resp.recorder.Code, resp.body)
+		}
+	}
+	// The declared paths themselves still answer, which is what makes the
+	// refusals above a statement about the surface and not about the mount.
+	for _, path := range []string{PathPublic, PathSystemFeatures} {
+		resp := doRequest(t, mux, http.MethodGet, path, "studio-a.example.com")
+		if resp.recorder.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200 (body: %s)", path, resp.recorder.Code, resp.body)
+		}
+	}
+}
+
 func TestHTTP_PreAuthEndpoints_RefuseOnceTheAddressBudgetIsSpent(t *testing.T) {
 	_, mux := newHTTPHarness(t, nil)
 	const spent = "203.0.113.7:5555"
@@ -477,15 +512,19 @@ func TestHTTP_PreAuthEndpoints_RefuseOnceTheAddressBudgetIsSpent(t *testing.T) {
 			t.Fatalf("GET %s past the budget = %d, want 429 (body: %s)", path, resp.recorder.Code, resp.body)
 		}
 		envelope := decodeErrorEnvelope(t, resp)
-		if *envelope.Code != ErrRateLimited.Code {
-			t.Fatalf("GET %s past the budget error code = %q, want %q", path, *envelope.Code, ErrRateLimited.Code)
+		if envelope.Code != ErrRateLimited.Code {
+			t.Fatalf("GET %s past the budget error code = %q, want %q", path, envelope.Code, ErrRateLimited.Code)
 		}
-		if dimension := envelope.Params["dimension"]; dimension != "ip" {
+		if envelope.Params == nil {
+			t.Fatalf("GET %s past the budget carried no params: %s", path, resp.body)
+		}
+		params := *envelope.Params
+		if dimension := params["dimension"]; dimension != "ip" {
 			t.Fatalf("GET %s past the budget reported dimension %v, want %q", path, dimension, "ip")
 		}
-		if retry, ok := envelope.Params["retry_after_seconds"].(float64); !ok || retry <= 0 {
+		if retry, ok := params["retry_after_seconds"].(float64); !ok || retry <= 0 {
 			t.Fatalf("GET %s past the budget reported retry_after_seconds %v, want a positive whole-second wait",
-				path, envelope.Params["retry_after_seconds"])
+				path, params["retry_after_seconds"])
 		}
 		if cc := resp.recorder.Header().Get("Cache-Control"); cc != "no-store" {
 			t.Fatalf("GET %s past the budget Cache-Control = %q, want %q", path, cc, "no-store")

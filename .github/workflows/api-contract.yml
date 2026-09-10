@@ -70,11 +70,12 @@ name: api-contract
 #     fragment's own porcelain gate fails the job if the committed
 #     artifact is not what the spec generates. A step per fragment keeps
 #     each fragment's failure unambiguous in the job log. The fragments
-#     are the ten platform-module fragments org, storage, notification,
-#     sharing, pki, admin, integration, ai-gateway, billing and authn;
-#     the full list lives in tools/api_fragments.json, the source of
-#     truth. The reference app's own notes, cases and smilesim fragments
-#     are not part of this pipeline: they regenerate through the app's
+#     are the eleven platform-module fragments org, storage,
+#     notification, sharing, pki, admin, integration, ai-gateway,
+#     billing, config and authn; the full list lives in
+#     tools/api_fragments.json, the source of truth. The reference app's
+#     own notes, cases and smilesim fragments are not part of this
+#     pipeline: they regenerate through the app's
 #     own generation leg, the consumer-shaped twin of this one that the
 #     app runs for its own merged document and SDK (Taskfile's
 #     api:gen:app task and full-check.yml's reference-app job;
@@ -82,8 +83,8 @@ name: api-contract
 #   * Spec merge + info stamp + naming-convention lint: the pinned
 #     redocly CLI 2.51.1 (the same `pnpm --package=@redocly/cli@2.51.1
 #     dlx redocly ...` invocation as Taskfile's api:merge task) `join`s
-#     all ten platform-module fragments (admin, ai-gateway, authn,
-#     billing, integration, notification, org, pki, sharing and
+#     all eleven platform-module fragments (admin, ai-gateway, authn,
+#     billing, config, integration, notification, org, pki, sharing and
 #     storage) into contracts/speed.yaml, then
 #     web/scripts/redocly-join-fixup.mjs stamps the merged document's
 #     info block (join keeps the FIRST fragment's info; without the
@@ -173,6 +174,7 @@ name: api-contract
 #   go/ai-gateway/api/**
 #   go/authn/api/**
 #   go/billing/api/**
+#   go/config/api/**
 #   (every platform module fragment above joins the merge and the
 #   orval leg below -- every platform module with an HTTP fragment is a
 #   merge member; the reference app's own notes, cases and smilesim
@@ -225,6 +227,7 @@ on:
       - go/admin/api/**
       - go/integration/api/**
       - go/ai-gateway/api/**
+      - go/config/api/**
       - tools/api_fragments.json
       - tools/check_api_fragments.py
       - tools/test_check_api_fragments.py
@@ -255,6 +258,7 @@ on:
       - go/admin/api/**
       - go/integration/api/**
       - go/ai-gateway/api/**
+      - go/config/api/**
       - tools/api_fragments.json
       - tools/check_api_fragments.py
       - tools/test_check_api_fragments.py
@@ -535,6 +539,34 @@ jobs:
             echo "artifact + implementation ship in the same PR."
             exit 1
           fi
+      - name: Regenerate config's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task's config leg --
+        # keep the two in lockstep (both pin the generator at v2.8.0).
+        # Run from the fragment's own directory, where oapi-codegen.yaml's
+        # paths are relative, mirroring the org, storage, notification,
+        # sharing, admin, integration, ai-gateway and billing steps above
+        # exactly.
+        # config's fragment feeds the merge and orval below, like every
+        # platform module's fragment does (see the api:merge task).
+        run: |
+          cd go/config/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: config's generated artifact must match the committed spec
+        # Porcelain gate, not git diff --exit-code -- see the org
+        # gate's comment above for why.
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git status --porcelain --untracked-files=all
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/config/api/config-server.gen.go is"
+            echo "not what go/config/api/openapi.yaml generates -- did you"
+            echo "change the spec without running 'task api:gen' and"
+            echo "committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          fi
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
         # Mirrors the npm CI jobs (reusable-npm-package-ci.yml): the same
         # composite action, the same single version sources (web/.nvmrc,
@@ -565,6 +597,7 @@ jobs:
             go/pki/api/openapi.yaml \
             go/sharing/api/openapi.yaml \
             go/storage/api/openapi.yaml \
+            go/config/api/openapi.yaml \
             -o contracts/speed.yaml
       - name: Stamp the merged document's info block (deterministic post-join fixup)
         # redocly's join keeps the FIRST input's info block, so without
@@ -597,10 +630,10 @@ jobs:
         run: |
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
             git status --porcelain --untracked-files=all
-            echo "error: merging the ten platform fragments (plus the"
+            echo "error: merging the eleven platform fragments (plus the"
             echo "info-block stamp) left the tree dirty. The checked-in"
-            echo "contracts/speed.yaml is not what the ten platform-module"
-            echo "fragments (admin, ai-gateway, authn, billing,"
+            echo "contracts/speed.yaml is not what the eleven platform-module"
+            echo "fragments (admin, ai-gateway, authn, billing, config,"
             echo "integration, notification, org, pki,"
             echo "sharing and storage) merge -- and"
             echo "web/scripts/redocly-join-fixup.mjs stamps -- to"
@@ -624,7 +657,7 @@ jobs:
         # Run from web/ with the relative config path, then the
         # nodenext fixup rewrites the mutator import to its explicit .js
         # form (why: @speed/api-sdk's AGENTS.md). The input is the merged
-        # document produced above -- the ten platform-module fragments
+        # document produced above -- the eleven platform-module fragments
         # (see the api:merge task); the reference app's own fragments
         # feed its own app-owned SDK instead (Taskfile's api:gen:app).
         run: |
@@ -639,8 +672,8 @@ jobs:
             git status --porcelain --untracked-files=all
             echo "error: regenerating from the committed spec left the tree"
             echo "dirty. The checked-in web/packages/api-sdk/src/index.ts is"
-            echo "not what the merged document (the ten platform-module"
-            echo "fragments: admin, ai-gateway, authn, billing,"
+            echo "not what the merged document (the eleven platform-module"
+            echo "fragments: admin, ai-gateway, authn, billing, config,"
             echo "integration, notification, org, pki, sharing and"
             echo "storage) generates --"
             echo "did you"
@@ -654,7 +687,7 @@ jobs:
         # The compile-enforcement half: if a spec change (and with it the
         # generated interface) outgrew its Handler -- org's,
         # storage's, notification's, sharing's, pki's, admin's,
-        # integration's, ai-gateway's or billing's -- this build of the
+        # integration's, ai-gateway's, billing's or config's -- this build of the
         # reference app fails on the owning handler's compile-time
         # assertion and shows exactly which method is missing. This same
         # reference-app build is the compile-enforcement leg for every

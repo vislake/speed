@@ -1261,6 +1261,44 @@ export interface StorageError {
   params?: StorageErrorParams;
 }
 
+/**
+ * Public items keyed by their configuration key. The set of keys is dynamic -- each module declares its own Public items on pkgcore's registry -- so no closed property schema exists for it; a value is a string, boolean or integer (a duration as its canonical "1m30s" text). An item with no value at any reachable scope and no declared Default is omitted rather than reported as null.
+ */
+export type ConfigPublicSnapshotConfig = { [key: string]: unknown };
+
+/**
+ * The public display answer: every Public configuration item's effective value for the tenant, plus the enabled feature flags. Never carries a Sensitive value -- Sensitive and Public are mutually exclusive by declaration validation.
+ */
+export interface ConfigPublicSnapshot {
+  /** Public items keyed by their configuration key. The set of keys is dynamic -- each module declares its own Public items on pkgcore's registry -- so no closed property schema exists for it; a value is a string, boolean or integer (a duration as its canonical "1m30s" text). An item with no value at any reachable scope and no declared Default is omitted rather than reported as null. */
+  config: ConfigPublicSnapshotConfig;
+  /** The enabled feature-flag keys, sorted ascending. Always present -- an empty list is `[]`, never null. Each key is a flag whose effective value and every flag it depends on report enabled. */
+  features: string[];
+}
+
+/**
+ * The enablement half of the public snapshot, on its own.
+ */
+export interface ConfigSystemFeatures {
+  /** The enabled feature-flag keys, sorted ascending. Always present -- an empty list is `[]`, never null. */
+  features: string[];
+}
+
+/**
+ * Structured parameters for the code, when any apply.
+ */
+export type ConfigErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text: code is a stable machine-readable identifier naming exactly one failure, and params carries the structured per-code details when the failure has any. The server never renders a message -- a client maps each code to its own locale's text.
+ */
+export interface ConfigError {
+  /** The structured code naming this failure. */
+  code: string;
+  /** Structured parameters for the code, when any apply. */
+  params?: ConfigErrorParams;
+}
+
 export type AuthnSocialAuthorizeParams = {
 redirect_uri: string;
 };
@@ -7634,3 +7672,139 @@ export const useStorageCompleteObject = <TError = StorageError,
       > => {
       return useMutation(getStorageCompleteObjectMutationOptions(options));
     }
+
+/**
+ * The pre-auth display answer for the tenant the request's host resolves to: every Public item's effective value plus the sorted list of enabled feature flags, exactly what a login page needs to render its brand and chrome. `config` is keyed by configuration key and its entries are dynamic -- modules declare their own Public items against pkgcore's registry, so no closed property set exists here; a value is the JSON native its declared type has (string, boolean, integer) and a duration renders as its canonical "1m30s" text. `features` is never absent and never null: an empty enablement list is `[]`. No Sensitive item can appear (pkgcore's declaration validation makes Sensitive and Public mutually exclusive), so the snapshot is safe to serve to anyone.
+ * An item the resolve walk cannot serve is omitted from `config` rather than failing the response -- an item with no value at any reachable scope and no declared Default, or one whose stored row cannot be decoded under its declared type. Per-item tolerance is this endpoint's contract: one unset or corrupt item must not take the endpoint, and with it the login page, down for every tenant.
+ * Each value is resolved narrow-to-wide for the resolved tenant: the tenant tier first, then the platform (system) tier, then the item's declared default.
+ * @summary Read the tenant's public configuration snapshot.
+ */
+export const configGetPublicConfig = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<ConfigPublicSnapshot>(
+      {url: `/api/v1/config/public`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getConfigGetPublicConfigQueryKey = () => {
+    return [
+    `/api/v1/config/public`
+    ] as const;
+    }
+
+
+export const getConfigGetPublicConfigQueryOptions = <TData = Awaited<ReturnType<typeof configGetPublicConfig>>, TError = ConfigError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof configGetPublicConfig>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getConfigGetPublicConfigQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof configGetPublicConfig>>> = ({ signal }) => configGetPublicConfig(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof configGetPublicConfig>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ConfigGetPublicConfigQueryResult = NonNullable<Awaited<ReturnType<typeof configGetPublicConfig>>>
+export type ConfigGetPublicConfigQueryError = ConfigError
+
+
+/**
+ * @summary Read the tenant's public configuration snapshot.
+ */
+
+export function useConfigGetPublicConfig<TData = Awaited<ReturnType<typeof configGetPublicConfig>>, TError = ConfigError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof configGetPublicConfig>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getConfigGetPublicConfigQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The enablement half of the public snapshot alone, for a client that only needs to know what is on: the sorted list of declared feature flags that IsEnabled reports enabled for the tenant the request's host resolves to -- a flag's effective value at every tier (tenant row, else system row, else its declared default) and every flag it depends on, recursively. Never absent and never null: an empty enablement list is `[]`. Everything config_getPublicConfig documents applies here unchanged -- host-based tenant resolution, pre-auth status, the method contract, the item-level `features` semantics and the caching contract.
+ * @summary Read the tenant's enabled feature-flag list.
+ */
+export const configGetSystemFeatures = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<ConfigSystemFeatures>(
+      {url: `/api/v1/config/features`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getConfigGetSystemFeaturesQueryKey = () => {
+    return [
+    `/api/v1/config/features`
+    ] as const;
+    }
+
+
+export const getConfigGetSystemFeaturesQueryOptions = <TData = Awaited<ReturnType<typeof configGetSystemFeatures>>, TError = ConfigError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof configGetSystemFeatures>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getConfigGetSystemFeaturesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof configGetSystemFeatures>>> = ({ signal }) => configGetSystemFeatures(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof configGetSystemFeatures>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ConfigGetSystemFeaturesQueryResult = NonNullable<Awaited<ReturnType<typeof configGetSystemFeatures>>>
+export type ConfigGetSystemFeaturesQueryError = ConfigError
+
+
+/**
+ * @summary Read the tenant's enabled feature-flag list.
+ */
+
+export function useConfigGetSystemFeatures<TData = Awaited<ReturnType<typeof configGetSystemFeatures>>, TError = ConfigError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof configGetSystemFeatures>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getConfigGetSystemFeaturesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

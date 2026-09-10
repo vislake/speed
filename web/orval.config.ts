@@ -17,8 +17,8 @@
  * produced by redocly's `join` of the module fragments (Taskfile's
  * api:merge task -- `task api:gen` depends on it, so a fragment edit can
  * never regenerate from a stale committed merge). The merge joins the
- * ten platform-module fragments -- admin, ai-gateway, authn, billing,
- * integration, notification, org, pki, sharing and storage: every
+ * eleven platform-module fragments -- admin, ai-gateway, authn, billing,
+ * config, integration, notification, org, pki, sharing and storage: every
  * platform module with an HTTP fragment belongs to the merged document
  * and this generated surface, which the api-contract consistency gates
  * pin and which does not rot from being uncalled

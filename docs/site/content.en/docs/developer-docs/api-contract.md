@@ -52,7 +52,7 @@ generated function and hook names, so the conventions are enforced by
 redocly lint rules, not by etiquette.
 
 The merged document is `contracts/speed.yaml`, produced by pinned
-redocly `join` (the `api:merge` task) from the ten platform-module
+redocly `join` (the `api:merge` task) from the eleven platform-module
 fragments, and committed as a release artifact. Membership is
 module-driven: every platform module with an HTTP fragment joins the
 merge and the platform SDK, whether or not any in-workspace page

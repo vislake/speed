@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"errors"
@@ -83,6 +84,23 @@ func openModuleTestDB(t *testing.T) *gorm.DB {
 // the way a host that never wired a real bus or KV store does.
 func newPlainRegistry() *pkgcore.Registry {
 	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+}
+
+// TestModule_OpenAPISpec_DeclaresBothEndpointPaths pins the fragment's
+// binding to the module's exported path constants: api/openapi.yaml is what
+// the generated api.ServerInterface and the application-wide merged
+// contracts/speed.yaml derive from, so a path that moved in only one of the
+// two places would ship a spec the endpoints do not serve.
+func TestModule_OpenAPISpec_DeclaresBothEndpointPaths(t *testing.T) {
+	spec := NewModule(nil).OpenAPISpec()
+	if len(spec) == 0 {
+		t.Fatal("OpenAPISpec() is empty; the module ships api/openapi.yaml")
+	}
+	for _, path := range []string{PathPublic, PathSystemFeatures} {
+		if !bytes.Contains(spec, []byte(path)) {
+			t.Errorf("OpenAPISpec() does not mention %q -- the fragment must declare every path the module mounts", path)
+		}
+	}
 }
 
 func TestModule_Register_MountsBothConfigRoutesInOrder(t *testing.T) {

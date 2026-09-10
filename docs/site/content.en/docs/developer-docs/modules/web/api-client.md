@@ -124,7 +124,9 @@ predicate; the reserved `ERROR_CODE_NETWORK` / `ERROR_CODE_TIMEOUT` /
 its console-backed default; the two pre-auth config fetchers
 (`fetchPublicConfig` / `fetchSystemFeatures` over
 `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH`, hand-kept in sync with
-`go/config`, which owns no spec fragment for either endpoint); and the
+`go/config` and its OpenAPI fragment — the fragment's generated
+operations are the primary call surface, these wrappers the per-key
+mapping layer under them); and the
 `./react` subpath's `usePublicConfig` / `useFeature` — one fetch shared
 per `RequestFn` identity, `useFeature` composing on that same cache and
 defaulting to `false` while loading or on error, never throwing.

@@ -38,12 +38,14 @@ one place: its bootstrap builds one client and binds it into the
 generated surface ([@speed/api-sdk](/docs/user-guide/modules/web/api-sdk/))
 with `bindRequestFn`. You rarely call the client directly — generated
 operations do, and transport behaviour changes by reconfiguring this
-one client, never generated code. Use the client's own functions only
-where no spec fragment exists: `go/config`'s two pre-auth endpoints
-are hand-kept (see [config](/docs/user-guide/modules/core/config/)),
-via `fetchPublicConfig`/`fetchSystemFeatures`, or via the
-`usePublicConfig`/`useFeature` hooks of the `@speed/api-client/react`
-subpath when you render React.
+one client, never generated code. The typed config wrappers are the
+per-key layer under those generated operations:
+[config](/docs/user-guide/modules/core/config/)'s two pre-auth
+endpoints do have generated operations, but their public-config body
+is a record of dynamic keys, so `fetchPublicConfig`/
+`fetchSystemFeatures` — or the `usePublicConfig`/`useFeature` hooks of
+the `@speed/api-client/react` subpath when you render React — remain
+what a host calls for per-key reads and flag lookups.
 
 ## Installation and wiring
 

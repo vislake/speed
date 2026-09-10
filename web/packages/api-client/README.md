@@ -159,14 +159,15 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   throwing, so a consumer such as a `NavItem`'s `requiredFeature` field
   stays hidden until the flag is confirmed on rather than flashing.
   The `features` access is null-guarded defensively: the response
-  shape is a hand-maintained seam with no spec fragment behind it yet, so
-  a payload whose `features` is absent or `null` reads as "nothing
-  enabled" rather than throwing during render. Once an OpenAPI fragment
-  for these endpoints lands, the generated operations become the primary
-  call surface while this hook (and the fetchers under it) stay as the
-  per-key layer: a generated type for the public-config body can only be
-  a record of dynamic keys, so the flag lookup the hook performs cannot
-  come from generation.
+  shape is a hand-maintained seam, so a payload whose `features` is
+  absent or `null` reads as "nothing enabled" rather than throwing
+  during render. go/config ships an OpenAPI fragment declaring both
+  endpoints, and the generated operations it produces
+  (`@speed/api-sdk`'s `useConfigGetPublicConfig` /
+  `useConfigGetSystemFeatures`) are the primary call surface; this hook
+  (and the fetchers under it) stay as the per-key layer: a generated
+  type for the public-config body can only be a record of dynamic keys,
+  so the flag lookup the hook performs cannot come from generation.
   `fetchSystemFeatures` (above) remains the direct route to that
   endpoint for a caller that genuinely wants it standalone.
 - Neither hook accepts or infers a tenant -- both endpoints resolve
@@ -288,7 +289,7 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 | `Reporter` / `createConsoleReporter()` | type / function | The diagnostics seam and its console-backed default. |
 | `fetchPublicConfig(api, options?)` | function | GETs `CONFIG_PUBLIC_PATH` (go/config's `PathPublic`); resolves `PublicConfigResponse`. |
 | `fetchSystemFeatures(api, options?)` | function | GETs `SYSTEM_FEATURES_PATH` (go/config's `PathSystemFeatures`); resolves `SystemFeaturesResponse`. |
-| `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings (`/api/v1/config/public`, `/api/v1/config/features`), hand-kept in sync with go/config (no spec fragment exists yet). |
+| `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings (`/api/v1/config/public`, `/api/v1/config/features`), hand-kept in sync with go/config and with its OpenAPI fragment (generated into `@speed/api-sdk`'s `useConfigGetPublicConfig` / `useConfigGetSystemFeatures`). |
 | `PublicConfigResponse` / `SystemFeaturesResponse` / `ConfigFetchOptions` | type | Wire shapes for the two fetchers above; no tenant field anywhere -- both endpoints resolve tenant server-side from the request host. |
 | `usePublicConfig(api)` *(`@speed/api-client/react`)* | hook | Fetches once per `api` identity and shares the result -- loading/error/data plus a `refresh()` -- with every other instance backed by the same `api`. See "Config hooks" above and the package `AGENTS.md` for the caching contract. |
 | `useFeature(api, key)` *(`@speed/api-client/react`)* | hook | `boolean`, composed on `usePublicConfig`'s cache -- `false` while loading and on error, never throws. |

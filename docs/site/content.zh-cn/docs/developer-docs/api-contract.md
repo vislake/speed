@@ -43,7 +43,7 @@ schema 名 `<Module><Type>`——因为合并文档与生成出来的名字都�
 lint 规则强制,不靠自觉。
 
 合并文档是 `contracts/speed.yaml`,由钉定的 redocly `join`(`api:merge`
-任务)把十个平台模块 fragment 并成,提交为发布物之一。合并成员由模
+任务)把十一个平台模块 fragment 并成,提交为发布物之一。合并成员由模
 块归属决定:凡带 HTTP fragment 的平台模块一律进合并与平台 SDK,不
 论工作区里有没有页面消费它。speed 是以库分发的平台,SDK 覆盖的是
 平台本身,不是 demo 应用碰巧调用的那部分——而没人调用的生成面不会

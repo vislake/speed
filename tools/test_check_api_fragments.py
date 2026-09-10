@@ -449,8 +449,8 @@ class CheckApiFragmentsTest(unittest.TestCase):
             "(this is the check the api-contract job's drift step runs); "
             f"found {len(problems)} drift(s)",
         )
-        self.assertEqual(n_frags, 10)
-        self.assertEqual(n_merged, 10)
+        self.assertEqual(n_frags, 11)
+        self.assertEqual(n_merged, 11)
         self.assertEqual(n_app_owned, 3)
 
 

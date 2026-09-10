@@ -10,8 +10,8 @@ description: "The generated typed surface of the merged API document — orval o
 operation functions, TanStack Query hooks and response models generated
 by orval — pinned at 8.17.0 and run through `pnpm dlx`, so orval never
 enters the workspace lockfile — from `contracts/speed.yaml`, the merged
-document that pinned redocly `join`s from the ten platform-module
-fragments (admin, ai-gateway, authn, billing, integration,
+document that pinned redocly `join`s from the eleven platform-module
+fragments (admin, ai-gateway, authn, billing, config, integration,
 notification, org, pki, sharing, storage). Everything in `src/` except
 one file is generator output, stamped with a DO-NOT-EDIT header that
 carries the pinned orval version: tool drift between the generator and

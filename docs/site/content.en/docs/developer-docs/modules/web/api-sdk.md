@@ -94,8 +94,8 @@ generator drift fails CI instead of shipping an unbuildable package.
 ## Design: what the merged document covers
 
 The input is `contracts/speed.yaml`, the pinned-redocly `join` of the
-ten platform-module fragments (admin, ai-gateway, authn, billing,
-integration, notification, org, pki, sharing, storage). Membership is
+eleven platform-module fragments (admin, ai-gateway, authn, billing,
+config, integration, notification, org, pki, sharing, storage). Membership is
 module-driven: every platform module with an HTTP fragment is a member,
 while the
 reference app's own fragments (notes, cases, smilesim) are deliberately

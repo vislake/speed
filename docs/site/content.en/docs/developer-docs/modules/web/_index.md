@@ -52,12 +52,16 @@ package page below returns to. The division of labour, in layer order:
 
 The frontend never sees a Go module — it consumes the backend's
 contracts, and only in two forms. Most traffic rides the merged OpenAPI
-document: the ten platform modules' fragments joined into one spec,
+document: the eleven platform modules' fragments joined into one spec,
 from which `@speed/api-sdk` (platform operations) and each product's
 own app-owned SDK (its own operations) are generated — the
 [API contract](/docs/developer-docs/api-contract/) page explains the
-split and the generation machinery. Where no fragment exists (config's
-two pre-auth endpoints), typed hand-written wrappers carry the call.
+split and the generation machinery. Typed hand-written wrappers sit
+under the generated hooks rather than beside them: config's two
+pre-auth endpoints ride generated operations like every other platform
+surface, and `fetchPublicConfig`/`useFeature` remain the per-key
+mapping layer over the endpoints' dynamic config keys, which a
+generated type can only record as a dynamic map.
 Package to module: the authn module's operations back the session
 family, config's endpoints back `fetchPublicConfig`/`useFeature`,
 billing's read operations back `billing-ui` — the [frontend

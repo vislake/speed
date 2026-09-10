@@ -1,0 +1,320 @@
+openapi: 3.0.3
+info:
+  title: config
+  description: >-
+    The module's two pre-auth display endpoints, deliberately gated as one
+    pair: /api/v1/config/public answers the tenant's whole public display
+    snapshot -- every Public configuration item's effective value plus every
+    enabled feature flag -- and /api/v1/config/features answers the
+    enablement half alone. This fragment follows the operationId
+    (config_<verb><Resource>) and schema-name (Config<Type>) naming
+    conventions of the repository's OpenAPI fragments. task api:gen
+    regenerates config-server.gen.go (in this directory) from this file,
+    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    Both operations are deliberately unauthenticated: config.PathPublic and
+    config.PathSystemFeatures are a login page's dependency -- the brand
+    items, default limits and flag list a sign-in screen renders before any
+    sign-in has happened -- so their answers must never depend on a
+    credential. This fragment therefore carries no `security` scheme and no
+    tenant input of any kind: no tenant path segment, no query parameter,
+    no request header. The tenant is resolved server-side from the
+    request's Host through the host-wired tenancy.Resolver -- custom domain
+    first, platform subdomain second, platform defaults last -- and that
+    resolution never fails a request: an unmatched host, a resolver error
+    or no resolver at all reads the platform-default tier with a 200, the
+    deliberate unauthenticated-display rule (see module.go's WithResolver).
+    A host MUST allowlist these two exact (GET, path) pairs with
+    tenancy.WithAllowlist -- module.go's exported PathPublic and
+    PathSystemFeatures constants are what the allowlist call names, so a
+    path change cannot silently drift out of sync with it, and the
+    reference app's middleware allowlist does exactly that.
+
+    Both operations consume one per-caller-address rate-limit budget, keyed
+    on the direct connection's address (r.RemoteAddr, never a
+    caller-supplied forwarded header): together they serve one page load's
+    worth of the same display answer, so a client fetching both is not
+    meant to split its budget across two paths. An address past its budget
+    is refused with config.rate_limited on either operation; the check
+    fails closed, so an unavailable limiter store is a 500, never an
+    unthrottled serve.
+
+    Both operations declare the module's caching contract the same way: a
+    successful answer is cacheable for one bounded minute (Cache-Control:
+    public, max-age=60) and names the request dimension it varies on (Vary:
+    Host); every refusal (405, 429, 500) carries Cache-Control: no-store
+    instead. The pinned minute is the one staleness bound no event can
+    reach: a configuration write publishes config.item.changed, which
+    invalidates the module's process-local cache the moment it lands -- an
+    origin replica never answers from a superseded row -- while a copy a
+    browser or an intermediary already holds can only expire with the
+    freshness lifetime it was handed.
+
+    This fragment is part of the application-wide contracts/speed.yaml
+    merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
+    generation input: every platform module with an HTTP fragment joins the
+    merged document and the generated @speed/api-sdk.
+  version: 0.0.0
+paths:
+  /api/v1/config/public:
+    get:
+      operationId: config_getPublicConfig
+      tags: [config]
+      summary: Read the tenant's public configuration snapshot.
+      description: >-
+        The pre-auth display answer for the tenant the request's host
+        resolves to: every Public item's effective value plus the sorted
+        list of enabled feature flags, exactly what a login page needs to
+        render its brand and chrome. `config` is keyed by configuration key
+        and its entries are dynamic -- modules declare their own Public
+        items against pkgcore's registry, so no closed property set exists
+        here; a value is the JSON native its declared type has (string,
+        boolean, integer) and a duration renders as its canonical "1m30s"
+        text. `features` is never absent and never null: an empty
+        enablement list is `[]`. No Sensitive item can appear (pkgcore's
+        declaration validation makes Sensitive and Public mutually
+        exclusive), so the snapshot is safe to serve to anyone.
+
+        An item the resolve walk cannot serve is omitted from `config`
+        rather than failing the response -- an item with no value at any
+        reachable scope and no declared Default, or one whose stored row
+        cannot be decoded under its declared type. Per-item tolerance is
+        this endpoint's contract: one unset or corrupt item must not take
+        the endpoint, and with it the login page, down for every tenant.
+
+        Each value is resolved narrow-to-wide for the resolved tenant: the
+        tenant tier first, then the platform (system) tier, then the item's
+        declared default.
+      responses:
+        '200':
+          description: >-
+            The public snapshot for the tenant the request's host resolves
+            to, or the platform-default tier when it resolves to none.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: >-
+                Always "public, max-age=60" on a successful answer: public
+                configuration is display-only, per-tenant content that
+                changes only when an operator writes a row.
+            Vary:
+              schema:
+                type: string
+              description: >-
+                Always "Host" on a successful answer: the snapshot is
+                resolved for the tenant the request's host maps to, and an
+                intermediary that normalizes the authority must not be free
+                to collapse two tenants' answers into one cache entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigPublicSnapshot'
+        '405':
+          description: >-
+            The request's method is neither GET nor HEAD. code is always
+            config.method_not_allowed, and the response carries
+            `Allow: GET, HEAD`.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always "no-store" on every refusal this endpoint writes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigError'
+        '429':
+          description: >-
+            The caller's address has spent the request budget shared by
+            both operations (ratelimit.go). code is always
+            config.rate_limited, with a "dimension" parameter naming the
+            tripped dimension ("ip") and a "retry_after_seconds" parameter
+            naming how long until the window recovers.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: >-
+                Always "no-store": a cached 429 would keep refusing
+                requests past the window its own retry_after_seconds
+                announced.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigError'
+        '500':
+          description: >-
+            The configs table could not be read, or the rate limiter's
+            store could not answer the check (it fails closed): code is
+            always config.storage_error. The same status answers
+            config.service_not_attached in the wiring window between the
+            module's Register and Attach, a host wiring bug -- neither
+            response ever carries the underlying cause.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: >-
+                Always "no-store": a cached 500 would hide the recovery of
+                whatever failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigError'
+  /api/v1/config/features:
+    get:
+      operationId: config_getSystemFeatures
+      tags: [config]
+      summary: Read the tenant's enabled feature-flag list.
+      description: >-
+        The enablement half of the public snapshot alone, for a client that
+        only needs to know what is on: the sorted list of declared feature
+        flags that IsEnabled reports enabled for the tenant the request's
+        host resolves to -- a flag's effective value at every tier (tenant
+        row, else system row, else its declared default) and every flag it
+        depends on, recursively. Never absent and never null: an empty
+        enablement list is `[]`. Everything
+        config_getPublicConfig documents applies here unchanged --
+        host-based tenant resolution, pre-auth status, the method contract,
+        the item-level `features` semantics and the caching contract.
+      responses:
+        '200':
+          description: >-
+            The enabled feature flags for the tenant the request's host
+            resolves to, or the platform-default tier when it resolves to
+            none.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: >-
+                Always "public, max-age=60" on a successful answer -- see
+                config_getPublicConfig's own header.
+            Vary:
+              schema:
+                type: string
+              description: >-
+                Always "Host" on a successful answer -- see
+                config_getPublicConfig's own header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigSystemFeatures'
+        '405':
+          description: >-
+            The request's method is neither GET nor HEAD. code is always
+            config.method_not_allowed, and the response carries
+            `Allow: GET, HEAD`.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always "no-store" on every refusal this endpoint writes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigError'
+        '429':
+          description: >-
+            The caller's address has spent the request budget shared by
+            both operations (ratelimit.go). code is always
+            config.rate_limited, with a "dimension" parameter naming the
+            tripped dimension ("ip") and a "retry_after_seconds" parameter
+            naming how long until the window recovers.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: >-
+                Always "no-store": a cached 429 would keep refusing
+                requests past the window its own retry_after_seconds
+                announced.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigError'
+        '500':
+          description: >-
+            The configs table could not be read, or the rate limiter's
+            store could not answer the check (it fails closed): code is
+            always config.storage_error. The same status answers
+            config.service_not_attached in the wiring window between the
+            module's Register and Attach, a host wiring bug -- neither
+            response ever carries the underlying cause.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: >-
+                Always "no-store": a cached 500 would hide the recovery of
+                whatever failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigError'
+components:
+  schemas:
+    ConfigPublicSnapshot:
+      type: object
+      description: >-
+        The public display answer: every Public configuration item's
+        effective value for the tenant, plus the enabled feature flags.
+        Never carries a Sensitive value -- Sensitive and Public are
+        mutually exclusive by declaration validation.
+      required:
+        - config
+        - features
+      properties:
+        config:
+          type: object
+          additionalProperties: true
+          description: >-
+            Public items keyed by their configuration key. The set of keys
+            is dynamic -- each module declares its own Public items on
+            pkgcore's registry -- so no closed property schema exists for
+            it; a value is a string, boolean or integer (a duration as its
+            canonical "1m30s" text). An item with no value at any reachable
+            scope and no declared Default is omitted rather than reported
+            as null.
+        features:
+          type: array
+          items:
+            type: string
+          description: >-
+            The enabled feature-flag keys, sorted ascending. Always present
+            -- an empty list is `[]`, never null. Each key is a flag whose
+            effective value and every flag it depends on report enabled.
+    ConfigSystemFeatures:
+      type: object
+      description: The enablement half of the public snapshot, on its own.
+      required:
+        - features
+      properties:
+        features:
+          type: array
+          items:
+            type: string
+          description: >-
+            The enabled feature-flag keys, sorted ascending. Always present
+            -- an empty list is `[]`, never null.
+    ConfigError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text: code is a stable machine-readable
+        identifier naming exactly one failure, and params carries the
+        structured per-code details when the failure has any. The server
+        never renders a message -- a client maps each code to its own
+        locale's text.
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: The structured code naming this failure.
+        params:
+          type: object
+          additionalProperties: true
+          description: Structured parameters for the code, when any apply.

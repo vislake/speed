@@ -108,7 +108,9 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
 - **Endpoints** — two pre-auth GET/HEAD endpoints at the exported
   `PathPublic` (`/api/v1/config/public`) and `PathSystemFeatures`
   (`/api/v1/config/features`) constants, named by hosts in their
-  tenant-middleware allowlists. Both resolve the request's tenant
+  tenant-middleware allowlists, declared by the module's OpenAPI
+  fragment (`config_getPublicConfig` / `config_getSystemFeatures`,
+  generated into `@speed/api-sdk`). Both resolve the request's tenant
   through the host-wired `tenancy.Resolver` and fall back to platform
   defaults — never an error — because a login page that fails to
   render is the worst failure mode. One unset or corrupt public item
@@ -123,9 +125,11 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
 - The `configs` table is platform data — deliberately not
   `dbkit.TenantScoped` — so it is the documented exception to the
   repository rules, not a pattern for tenant-owned data to copy.
-- No OpenAPI fragment exists for the two endpoints (their contract is
-  `http.go` plus tests); the frontend consumes them through
-  `@speed/api-client`'s typed wrappers. No config-*editing* UI ships.
+- The two endpoints' wire contract is the module's OpenAPI fragment
+  (`api/openapi.yaml`); the frontend's per-key reads and flag lookups
+  still go through `@speed/api-client`'s typed wrappers, which remain
+  the mapping layer under the generated operations. No
+  config-*editing* UI ships.
 
 ## Source
 

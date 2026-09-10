@@ -34,10 +34,11 @@ storage API:错误 `code` 在消费方自己的目录里映射成双语文本;�
 你很少直接调客户端——生成的操作替你调;要改传输行为,改的是这一个
 客户端,绝不是生成代码。
 
-只有不存在 spec fragment 的地方才动用本包自己的函数:`go/config`
-的两个免认证端点是手工维护的(见
-[config](/zh-cn/docs/user-guide/modules/core/config/)),由主入口的
-`fetchPublicConfig`/`fetchSystemFeatures` 提供;渲染 React 时也可用
+config 的类型化封装是生成操作之下的逐键层:`go/config`
+的两个免认证端点确有生成操作,但它们的公开配置 body 只能记成动态
+映射(见 [config](/zh-cn/docs/user-guide/modules/core/config/)),
+所以逐键读取与开关查询仍然用主入口的
+`fetchPublicConfig`/`fetchSystemFeatures`;渲染 React 时也可用
 `@speed/api-client/react` 子路径的 `usePublicConfig`/`useFeature`
 两个 hook。
 

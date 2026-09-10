@@ -2,15 +2,15 @@
 title: API reference
 weight: 5
 bookToC: false
-description: "The complete platform API reference, rendered from the merged OpenAPI contract of the ten platform modules — every operation, parameter, schema and error a speed-based service exposes."
+description: "The complete platform API reference, rendered from the merged OpenAPI contract of the eleven platform modules — every operation, parameter, schema and error a speed-based service exposes."
 ---
 
 # API reference
 
 The complete HTTP API of a speed-based service, rendered from the
-merged OpenAPI contract of the ten platform modules (authn,
+merged OpenAPI contract of the eleven platform modules (authn,
 notification, billing, admin, ai-gateway, integration, org, pki,
-sharing and storage). The contract is the single source of truth —
+sharing, storage and config). The contract is the single source of truth —
 spec first, generated surfaces in lockstep — so what you see here is
 exactly what a composed service answers on `/api/v1/...`.
 

@@ -2,13 +2,13 @@
 title: API 参考
 weight: 5
 bookToC: false
-description: "完整的平台 API 参考,由十平台模块的合并 OpenAPI 契约渲染——speed 服务暴露的每个操作、参数、schema 与错误。"
+description: "完整的平台 API 参考,由十一平台模块的合并 OpenAPI 契约渲染——speed 服务暴露的每个操作、参数、schema 与错误。"
 ---
 
 # API 参考
 
-speed 服务的完整 HTTP API,由十平台模块(authn、notification、billing、
-admin、ai-gateway、integration、org、pki、sharing、storage)的合并
+speed 服务的完整 HTTP API,由十一平台模块(authn、notification、billing、
+admin、ai-gateway、integration、org、pki、sharing、storage、config)的合并
 OpenAPI 契约渲染。契约是单一真源——先契约后代码,生成面锁步——所以
 你在这里看到的就是组合服务在 `/api/v1/...` 上实际应答的内容。
 

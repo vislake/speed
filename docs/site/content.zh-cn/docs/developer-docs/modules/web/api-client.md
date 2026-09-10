@@ -97,8 +97,9 @@ trace id——降级成合成的 `client.http.401`。
 `DEFAULT_RETRY_POLICY` 与纯函数 `retryDelayMs` / `retryAfterDelayMs`;
 带 console 默认实现的 `Reporter` 缝;两个 pre-auth config 抓取器
 (`fetchPublicConfig` / `fetchSystemFeatures`,走
-`CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH`,与 `go/config` 手工
-保持同步——两个端点都没有 spec 片段);以及 `./react` 子路径的
+`CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH`,与 `go/config` 及其
+OpenAPI 片段手工保持同步——片段生成的操作为主消费面,这两个封装是
+其下的逐键映射层);以及 `./react` 子路径的
 `usePublicConfig` / `useFeature`——每个 `RequestFn` 身份共享一次抓
 取,`useFeature` 在同一缓存上合成、加载中或出错时默认 `false`,从不
 抛出。

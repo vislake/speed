@@ -89,9 +89,9 @@ consumer-shell discipline.
 ## Generated surface (the merged document)
 
 orval input is the merged `contracts/speed.yaml` -- the `task api:merge`
-leg (pinned redocly `join`) joining the ten platform-module fragments
-(admin, ai-gateway, authn, billing, integration, notification, org,
-pki, sharing and storage) -- linted against `redocly.yaml`'s naming
+leg (pinned redocly `join`) joining the eleven platform-module fragments
+(admin, ai-gateway, authn, billing, config, integration, notification,
+org, pki, sharing and storage) -- linted against `redocly.yaml`'s naming
 rules. `task api:gen`'s frontend leg runs orval over that merged
 document, so a platform fragment only reaches this package by entering
 the merge, and every platform module with an HTTP fragment is a merge
