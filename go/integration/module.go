@@ -510,6 +510,16 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Jobs.Handle(jobTypeAPIKeyExpirySweep, apiKeyExpirySweepHandler{module: m}); err != nil {
 		return err
 	}
+	// Declare the API-key expiry sweep's periodic schedule alongside its
+	// handler: declaring means scheduled, so a host that runs a
+	// jobs.Scheduler over the registry's declarations sweeps every
+	// tenant's expired keys at the module's own window cadence without
+	// writing a schedule point of its own. The declaration follows the
+	// handler registration unconditionally, the same way the handler
+	// itself does -- no declaration may outlive its executor.
+	if err := reg.Schedules.Add(apiKeyExpirySweepSchedule); err != nil {
+		return err
+	}
 
 	m.handler = NewHandler(m, m.subject)
 	reg.Routes.Mount(apiPath, m.handler)

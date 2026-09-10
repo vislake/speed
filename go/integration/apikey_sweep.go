@@ -66,16 +66,37 @@ func apiKeyExpirySweepWindowStart(now time.Time) time.Time {
 	return now.Truncate(apiKeyExpirySweepWindowSize)
 }
 
+// apiKeyExpirySweepKeyPrefix is the prefix of every API-key expiry-sweep
+// idempotency key. It is a named constant because two derivations must
+// agree on it byte for byte: apiKeyExpirySweepIdempotencyKey below, and
+// the declaration (apiKeyExpirySweepSchedule) a jobs.Scheduler composes
+// keys from with its own window derivation -- one window must resolve one
+// key through both paths.
+const apiKeyExpirySweepKeyPrefix = "integration.sweep:"
+
 // apiKeyExpirySweepIdempotencyKey derives the jobs idempotency key of one
 // expiry-sweep window for a tenant, per the rule that an idempotency key
 // derives from the business operation, never random: the operation one key
 // names is "the sweep of windowStart", not "some sweep or other" -- a
 // periodic task's identity inherently includes WHICH period it is for. The
-// "integration.sweep:" prefix keeps the key inside the module's namespace
+// apiKeyExpirySweepKeyPrefix keeps the key inside the module's namespace
 // within the shared queue store, and the RFC 3339 window stamp keeps the
 // key readable while staying unambiguous.
 func apiKeyExpirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return "integration.sweep:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+	return apiKeyExpirySweepKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+}
+
+// apiKeyExpirySweepSchedule is the module's declaration of the API-key
+// expiry sweep on the pkgcore.Registry.Schedules seat: a per-tenant task
+// at the sweep's own window, keyed with the same prefix and window
+// function the manual EnqueueAPIKeyExpirySweep path uses, so a scheduler
+// tick and a manual enqueue landing in one window resolve one key and
+// dedupe onto one job.
+var apiKeyExpirySweepSchedule = pkgcore.PeriodicTask{
+	Type:      jobTypeAPIKeyExpirySweep,
+	Every:     apiKeyExpirySweepWindowSize,
+	Scope:     pkgcore.PeriodicScopePerTenant,
+	KeyPrefix: apiKeyExpirySweepKeyPrefix,
 }
 
 // EnqueueAPIKeyExpirySweep enqueues the expiry-sweep task for the tenant ctx

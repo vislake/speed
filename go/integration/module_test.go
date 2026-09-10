@@ -28,6 +28,20 @@ func TestModule_DependsOn_Empty(t *testing.T) {
 	}
 }
 
+func TestModule_Register_DeclaresTheAPIKeyExpirySweepSchedule(t *testing.T) {
+	m := NewModule(newTestDB(t))
+	reg := newTestRegistry(t)
+
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	decls := reg.Schedules.Declarations()
+	if len(decls) != 1 || decls[0] != apiKeyExpirySweepSchedule {
+		t.Errorf("Register declared %+v, want exactly the API-key expiry-sweep schedule %+v", decls, apiKeyExpirySweepSchedule)
+	}
+}
+
 func TestModule_Register_DeclaresPermissionsAndAuditActions(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)

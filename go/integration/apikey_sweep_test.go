@@ -139,6 +139,45 @@ func TestService_EnqueueAPIKeyExpirySweep_ShapesTheTask(t *testing.T) {
 	}
 }
 
+// TestAPIKeyExpirySweepKeyMatchesTheSchedulerDerivation pins the schedule
+// migration's key identity: the same (task type, tenant, window) must
+// resolve one idempotency key through the module's own schedule point and
+// through the jobs.Scheduler's derivation over the module's declaration,
+// or a scheduler tick and a manual enqueue landing in one window would
+// run the sweep twice. The key literal below is the pinned string.
+func TestAPIKeyExpirySweepKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
+	windowStart := now.Truncate(apiKeyExpirySweepWindowSize)
+
+	// Path one: the module's own schedule point, through the recording
+	// queue.
+	fq := &fakeQueue{}
+	svc := attachedService(t, WithWebhookQueue(fq), withClock(func() time.Time { return now }))
+	if err := svc.EnqueueAPIKeyExpirySweep(ctxFor(testTenant)); err != nil {
+		t.Fatalf("EnqueueAPIKeyExpirySweep: %v", err)
+	}
+	if len(fq.tasks) != 1 {
+		t.Fatalf("len(fq.tasks) = %d, want 1", len(fq.tasks))
+	}
+	manual := fq.tasks[0].IdempotencyKey
+	if want := "integration.sweep:tenant-1:2026-09-07T10:00:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	// Path two: the scheduler's own derivation over the declaration, for
+	// the same (tenant, window).
+	decl := apiKeyExpirySweepSchedule
+	if decl.Type != jobTypeAPIKeyExpirySweep || decl.Every != apiKeyExpirySweepWindowSize {
+		t.Errorf("declaration = %+v, want the site's own type %q and window %s", decl, jobTypeAPIKeyExpirySweep, apiKeyExpirySweepWindowSize)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePerTenant {
+		t.Errorf("declaration scope = %q, want %q", decl.Scope, pkgcore.PeriodicScopePerTenant)
+	}
+	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, testTenant, windowStart); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
+	}
+}
+
 // TestService_EnqueueAPIKeyExpirySweep_WindowKey_CollapsesSameWindow_OpensNext
 // pins the window semantics that make the sweep periodic: two enqueues
 // within one apiKeyExpirySweepWindowSize window derive the same idempotency
