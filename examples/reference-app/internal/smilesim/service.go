@@ -26,16 +26,22 @@
 // the very request handler that just created the row. What this Service
 // DOES own is EventSimulationCompleted (mirroring notes' identical "a
 // business module publishes a fact, notification consumes it" shape --
-// notifications are event-driven): Simulate
-// remembers the caller-supplied recipient against the job it started, and
-// NotifyOnCompletion -- called by internal/app's existing job-status poll
-// route on every read, which a real client already does to learn when a
-// generation is done -- publishes the event exactly once, the first time
-// it observes that job at a terminal status. This adds no new job type
-// and no change to go/jobs or go/ai-gateway: it reuses the polling this
-// app's UI already needs to do anyway, rather than inventing a
-// job-completion hook go/jobs' own Handler contract does not offer (only
-// OnFailure exists, and this is not a failure path).
+// notifications are event-driven): Simulate remembers the caller-supplied
+// recipient against the job it started, and the job's terminal transition
+// publishes the event exactly once for that job.
+//
+// Two drivers feed that one publish. The queue's terminal signal
+// (jobs.EventJobTerminal) is the primary one: internal/app subscribes
+// OnJobTerminal to it at assembly time, so a generation's completion --
+// settlement included -- happens at the transition itself, with no client
+// poll involved. NotifyOnCompletion, called by internal/app's job-status
+// poll route on every read, stays as the second leg for a transition this
+// replica never saw a signal for (a delivery the bus dropped, a boot that
+// installed the subscription after the transition, a recipient recorded
+// only after it). Both drivers go through the once-only latch
+// publishCompletionEvent holds, so whichever arrives first publishes and
+// the other finds nothing left to do. Neither driver adds a job type, and
+// neither changes any go/jobs or go/ai-gateway surface.
 //
 // The recipient/notified bookkeeping is a plain in-memory map, matching
 // this app's other demo-only, single-process conveniences
@@ -96,11 +102,13 @@
 // status through the same jobs.Queue a real client would poll and
 // settling any that have already reached a terminal one --
 // StartReconciler wraps that sweep in a ticker loop cmd/server starts once
-// at boot, mirroring go/config's own anti-loss poller. NotifyOnCompletion's
-// poll-driven call stays the fast path (a client that IS still polling
-// observes settlement the instant the job finishes, with no
-// sweep-interval delay); the sweep is the net underneath it, not a
-// replacement for it.
+// at boot, mirroring go/config's own anti-loss poller. The queue's terminal
+// signal is the fast path: OnJobTerminal (terminal_signal.go) settles a
+// job's reservation at the transition itself, with no poll and no
+// sweep-interval delay. NotifyOnCompletion's poll-driven call stays a
+// second settlement leg for a transition the signal never reached this
+// replica for; the sweep is the net underneath both, not a replacement for
+// either.
 //
 // A Service built with a nil CreditService, a nil store or a nil
 // jobs.Queue performs no credit accounting/reconciliation at all -- the
@@ -349,7 +357,8 @@ type Service struct {
 	simulations *SimulationStore
 
 	// queue is the jobs.Queue ReconcileOutstandingCredits polls for each
-	// outstanding reservation's current job status -- the SAME queue
+	// outstanding reservation's current job status and OnJobTerminal reads
+	// a succeeded job back through for its result -- the SAME queue
 	// go/ai-gateway's own job handler runs on, never a second queue of
 	// this Service's own. Nil is legal: ReconcileOutstandingCredits and
 	// StartReconciler are then no-ops, and Simulate performs no credit
@@ -359,8 +368,10 @@ type Service struct {
 	// store.
 	queue jobs.Queue
 
-	// bus is where NotifyOnCompletion publishes EventSimulationCompleted.
-	// Nil is legal: NotifyOnCompletion is then simply a no-op -- the
+	// bus is where EventSimulationCompleted is published: OnJobTerminal's
+	// signal-driven path and NotifyOnCompletion's poll-driven leg both
+	// publish through it (publishCompletionEvent). Nil is legal: the
+	// publish is then simply a no-op -- the
 	// same nil-legal convention the credits field above documents, where
 	// an unwired optional dependency enforces nothing rather than
 	// panicking (go/ai-gateway's own Entitlements option is the same
@@ -713,29 +724,23 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 	return jobID, nil
 }
 
-// NotifyOnCompletion publishes EventSimulationCompleted for job, exactly
-// once, the first time this is called after job has reached a terminal
-// status (StatusSucceeded, StatusDeadLetter or StatusCancelled) -- a no-op
-// for a job still pending/running/retrying, for a job Simulate was never
-// given a recipient for, and for a job already notified.
+// NotifyOnCompletion is the poll-driven leg of the completion path: called
+// after a read of job's status, it settles the job's credit reservation
+// once job is terminal (StatusSucceeded, StatusDeadLetter or
+// StatusCancelled) and publishes EventSimulationCompleted for it through
+// the shared latch -- exactly once for the job, however many drivers
+// observe that terminal status. It is a no-op for a job still
+// pending/running/retrying, for a job Simulate was never given a
+// recipient for, and for a job whose notification another driver (the
+// queue's terminal signal, OnJobTerminal) already published.
 //
-// "Already notified" is recorded as the latch below, and the latch records
-// an ACCEPTED delivery, never an attempted one: it is set, under one
-// lock, immediately before the publish is attempted -- so two concurrent
-// callers (two overlapping poll requests) can never both publish for the
-// same job -- and rolled back when the publish is refused (bus.Publish
-// returns an error), so a refused delivery stays retryable by the next
-// poll of this job instead of being skipped forever as "already
-// notified". That retryability matters because this method's callers log
-// and swallow its error: internal/app's job-status route (this app's one
-// caller) must not turn a status read into an error response over the
-// notification side channel, so a publish failure is invisible to the
-// caller -- and an attempt-only latch would make that invisible failure
-// permanent. With the rollback, the very next poll after a transient
-// publish failure re-attempts the delivery. (A concurrent caller that
-// observed a claim during a failing publish and returned nil loses
-// nothing: the claim is rolled back, so some later poll of this job still
-// retries.)
+// The signal-driven path is the primary driver and settles at the
+// transition itself; this leg stays for what a signal can miss -- a
+// delivery this replica never received, a boot that installed the
+// subscription after the transition, a recipient Simulate recorded after
+// it -- and it settles/notifies through the very same code
+// (settleCredit, then publishCompletionEvent and its latch), so the two
+// legs can never double-deliver one job's notification.
 //
 // Everything this method does after the terminal-status check -- the
 // credit settlement and the event publish -- is durable bookkeeping for a
@@ -746,23 +751,13 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 // credit settlement (Confirm/Refund are only healed by a later poll or
 // the reconciliation sweep) or kill the event publish mid-delivery (a
 // refused publish is retryable, but the one subscriber-side dispatch it
-// would have driven is not -- see the publish call's own comment). The
-// claim-latch and its rollback stay ordinary lock-guarded memory
-// operations, deliberately not affected by ctx.
-//
-// The recipients and notified entries for job are deleted once its
-// terminal outcome is fully processed -- on the success path, right after
-// an accepted publish, and on the bus-less path, where no delivery can
-// ever exist -- so the two maps stay bounded by outstanding
-// (undelivered or still-pending) notifications instead of growing with
-// every job ever simulated (see Service's field comment on mu).
+// would have driven is not -- see the publish call's own comment).
 //
 // Callers that poll job status -- internal/app's job-status route is this
 // app's one caller -- call this after every read they make, terminal or
 // not; the method itself decides whether there is anything to do. See the
-// package doc comment's "Completion notification" section for why this
-// poll-driven shape exists instead of a job-completion hook go/jobs does
-// not offer.
+// package doc comment's "Completion notification" section for the two
+// drivers' division of labor.
 func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 	if job == nil {
 		return nil
@@ -785,6 +780,44 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		return err
 	}
 
+	return s.publishCompletionEvent(persistCtx, job)
+}
+
+// publishCompletionEvent is the delivery half both completion drivers share
+// (NotifyOnCompletion's poll-driven leg and OnJobTerminal's signal-driven
+// one): it publishes EventSimulationCompleted for a terminal job through
+// the once-only latch, so that -- whichever driver runs first, and however
+// many times a duplicate terminal observation arrives -- a job's recipient
+// gets the event at most once.
+//
+// "Already notified" is recorded as the latch below, and the latch records
+// an ACCEPTED delivery, never an attempted one: it is set, under one
+// lock, immediately before the publish is attempted -- so two concurrent
+// callers (two overlapping polls, or a poll racing the terminal signal)
+// can never both publish for the same job -- and rolled back when the
+// publish is refused (bus.Publish returns an error), so a refused
+// delivery stays retryable by the next observation of this job instead of
+// being skipped forever as "already notified". That retryability matters
+// because both drivers' callers log and swallow its error: internal/app's
+// job-status route (this app's one poll caller) must not turn a status
+// read into an error response over the notification side channel, and the
+// queue's publish pass re-runs the subscription that raised the error.
+// With the rollback, the very next poll or republished signal after a
+// transient publish failure re-attempts the delivery. (A concurrent
+// caller that observed a claim during a failing publish and returned nil
+// loses nothing: the claim is rolled back, so some later observation of
+// this job still retries.)
+//
+// The claim-latch and its rollback are ordinary lock-guarded memory
+// operations, deliberately untouched by ctx.
+//
+// The recipients and notified entries for job are deleted once its
+// terminal outcome is fully processed -- on the success path, right after
+// an accepted publish, and on the bus-less path, where no delivery can
+// ever exist -- so the two maps stay bounded by outstanding
+// (undelivered or still-pending) notifications instead of growing with
+// every job ever simulated (see Service's field comment on mu).
+func (s *Service) publishCompletionEvent(ctx context.Context, job *jobs.Job) error {
 	if s.bus == nil {
 		// No deliverer is wired (see Service's own doc comment on the bus
 		// field): nothing is published and nothing is latched -- with no
@@ -826,22 +859,23 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		}
 	}
 
-	// The publish runs on persistCtx for the same reason the settlement
-	// just above does: this job is terminal, and the publish is the one
-	// dispatch attempt this observation drives. A publish refused for a
-	// genuine reason stays retryable (the claim rolls back below), but a
-	// publish killed by the poller's own disconnect would take the
-	// subscriber-side dispatch -- the notification module's enqueue of the
-	// delivery job -- down with it, and the subscription logs and swallows
-	// that failure, so nothing would ever retry it.
-	if err := s.bus.Publish(persistCtx, pkgcore.Event{
+	// ctx is already the cancel-free derivation its driver drew (see
+	// NotifyOnCompletion's persistCtx comment): this job is terminal, and
+	// the publish is the one dispatch attempt this observation drives. A
+	// publish refused for a genuine reason stays retryable (the claim
+	// rolls back below), but a publish killed by the caller's own
+	// disconnect would take the subscriber-side dispatch -- the
+	// notification module's enqueue of the delivery job -- down with it,
+	// and the subscription logs and swallows that failure, so nothing
+	// would ever retry it.
+	if err := s.bus.Publish(ctx, pkgcore.Event{
 		Type:     EventSimulationCompleted,
 		TenantID: job.TenantID,
 		Payload:  payload,
 	}); err != nil {
 		// The delivery was not accepted, so the claim must not stand as
 		// "already notified" -- see this method's own doc comment for why
-		// the notification must stay retryable by a later poll.
+		// the notification must stay retryable by a later observation.
 		s.mu.Lock()
 		delete(s.notified, job.ID)
 		s.mu.Unlock()
@@ -861,8 +895,9 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 	return nil
 }
 
-// settleCredit is the credit half both NotifyOnCompletion's poll-driven
-// path and ReconcileOutstandingCredits' sweep call: Confirm on a succeeded
+// settleCredit is the credit half every settlement driver calls --
+// OnJobTerminal's signal-driven path, NotifyOnCompletion's poll-driven leg
+// and ReconcileOutstandingCredits' sweep alike: Confirm on a succeeded
 // job, Refund on a dead-lettered or cancelled one, against the SAME
 // reservation Simulate opened for job -- see the package doc comment's
 // "Credit accounting" and "Settlement reachability" sections and
