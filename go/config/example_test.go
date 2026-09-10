@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -173,4 +174,117 @@ func ExampleService_Describe() {
 	// brand.custom_theme: type=bool public=false has_default=true
 	// brand.site_name: type=string public=true has_default=true
 	// true
+}
+
+// shareExpiryModule declares one duration-valued config item, the shape a
+// tenant-configurable duration seam (a share link's expiry default, an
+// export's delivery window) reads through Service.TenantDuration.
+type shareExpiryModule struct{}
+
+var _ pkgcore.Module = (*shareExpiryModule)(nil)
+
+func (*shareExpiryModule) Name() string         { return "share-expiry" }
+func (*shareExpiryModule) DependsOn() []string  { return nil }
+func (*shareExpiryModule) Migrations() embed.FS { return embed.FS{} }
+func (*shareExpiryModule) Locales() embed.FS    { return embed.FS{} }
+func (*shareExpiryModule) OpenAPISpec() []byte  { return nil }
+
+func (*shareExpiryModule) Register(reg *pkgcore.Registry) error {
+	return reg.Config.Add(pkgcore.ConfigItem{
+		Key:         "share.default_expiry",
+		Type:        "duration",
+		Default:     24 * time.Hour,
+		Description: "How long a public share link stays valid",
+		Group:       "share",
+	})
+}
+
+// ExampleService_TenantDuration shows the read a tenant-configurable
+// duration seam is built from: with no explicit row the schema default is
+// reported as UNCONFIGURED (ok=false), so the caller applies its own
+// fallback rather than mistaking the default for a configured value; a
+// system row then serves every tenant, and a tenant row wins for that
+// tenant alone. The tenant comes from the parameter, never from ctx.
+func ExampleService_TenantDuration() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:config_example_tenant_duration?mode=memory&cache=shared",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	configModule := config.NewModule(db, config.WithPollInterval(0))
+	migrations := dbkit.NewMigrationRegistry()
+	if err = migrations.Register(configModule); err != nil {
+		panic(err)
+	}
+	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, &shareExpiryModule{}, configModule)
+	if err != nil {
+		panic(err)
+	}
+	svc, err := configModule.Attach(reg)
+	if err != nil {
+		panic(err)
+	}
+	defer svc.Close()
+
+	_, configured, durErr := svc.TenantDuration(ctx, "share.default_expiry", "acme")
+	if durErr != nil {
+		panic(durErr)
+	}
+	if configured {
+		panic("expected an unconfigured duration before any row exists")
+	}
+	fmt.Println("before any row: unconfigured")
+
+	// A system row is the platform-wide fallback every tenant resolves to.
+	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+		Actor:   "example-bootstrap",
+		Purpose: config.SystemPurposeSystemWrite,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err = svc.Set(sysCtx, config.ScopeSystem, "share.default_expiry",
+		config.Value{Data: 2 * time.Hour}, "ops-1"); err != nil {
+		panic(err)
+	}
+	systemExpiry, configured, durErr := svc.TenantDuration(ctx, "share.default_expiry", "acme")
+	if durErr != nil {
+		panic(durErr)
+	}
+	if !configured {
+		panic("expected the system row to be reported as configured")
+	}
+	fmt.Println("system row:", systemExpiry)
+
+	// A tenant row overrides it for that tenant alone.
+	tenantCtx := pkgcore.WithTenant(ctx, "acme")
+	if err = svc.Set(tenantCtx, config.ScopeTenant, "share.default_expiry",
+		config.Value{Data: 30 * time.Minute}, "alice"); err != nil {
+		panic(err)
+	}
+	tenantExpiry, configured, durErr := svc.TenantDuration(ctx, "share.default_expiry", "acme")
+	if durErr != nil || !configured {
+		panic(durErr)
+	}
+	fmt.Println("acme's own row:", tenantExpiry)
+
+	otherExpiry, configured, durErr := svc.TenantDuration(ctx, "share.default_expiry", "globex")
+	if durErr != nil || !configured {
+		panic(durErr)
+	}
+	fmt.Println("globex still sees:", otherExpiry)
+
+	// Output:
+	// before any row: unconfigured
+	// system row: 2h0m0s
+	// acme's own row: 30m0s
+	// globex still sees: 2h0m0s
 }

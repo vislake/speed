@@ -457,6 +457,79 @@ func TestService_GetTyped_ReadsFlagsAsBools(t *testing.T) {
 	}
 }
 
+func TestService_TenantDuration_NoRowReportsUnconfigured(t *testing.T) {
+	svc := attachDefaultServiceForTest(t)
+	got, ok, err := svc.TenantDuration(context.Background(), "brand.welcome_interval", "tenant-a")
+	if err != nil {
+		t.Fatalf("TenantDuration: %v", err)
+	}
+	if ok || got != 0 {
+		t.Fatalf("TenantDuration with no row = (%v, %v), want (0, false): the schema default must be reported as unconfigured, never echoed as a value", got, ok)
+	}
+}
+
+func TestService_TenantDuration_ResolvesTenantThenSystemThenDefault(t *testing.T) {
+	svc := attachDefaultServiceForTest(t)
+	if err := svc.Set(systemWriteCtx(t), ScopeSystem, "brand.welcome_interval", Value{Data: 2 * time.Minute}, "ops-1"); err != nil {
+		t.Fatalf("system Set: %v", err)
+	}
+
+	// System row: every tenant sees it, reported as configured.
+	for _, tenant := range []pkgcore.TenantID{"tenant-a", "tenant-b"} {
+		got, ok, err := svc.TenantDuration(context.Background(), "brand.welcome_interval", tenant)
+		if err != nil {
+			t.Fatalf("TenantDuration under %s: %v", tenant, err)
+		}
+		if !ok || got != 2*time.Minute {
+			t.Fatalf("TenantDuration under %s = (%v, %v), want (2m, true)", tenant, got, ok)
+		}
+	}
+
+	// Tenant row: the override wins for that tenant only.
+	if err := svc.Set(tenantA(), ScopeTenant, "brand.welcome_interval", Value{Data: 30 * time.Second}, "alice"); err != nil {
+		t.Fatalf("tenant Set: %v", err)
+	}
+	if got, ok, err := svc.TenantDuration(context.Background(), "brand.welcome_interval", "tenant-a"); err != nil || !ok || got != 30*time.Second {
+		t.Fatalf("TenantDuration under tenant-a = (%v, %v, %v), want (30s, true, nil)", got, ok, err)
+	}
+	if got, ok, err := svc.TenantDuration(context.Background(), "brand.welcome_interval", "tenant-b"); err != nil || !ok || got != 2*time.Minute {
+		t.Fatalf("TenantDuration under tenant-b = (%v, %v, %v), want the system row (2m, true, nil)", got, ok, err)
+	}
+}
+
+func TestService_TenantDuration_TakesTheTenantFromTheParameter(t *testing.T) {
+	svc := attachDefaultServiceForTest(t)
+	if err := svc.Set(tenantA(), ScopeTenant, "brand.welcome_interval", Value{Data: 30 * time.Second}, "alice"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// tenant-a carries its own override in ctx, but the lookup asks for
+	// tenant-b: the parameter decides, so the ctx tenant's row is invisible
+	// and the answer falls through to "unconfigured".
+	got, ok, err := svc.TenantDuration(tenantA(), "brand.welcome_interval", "tenant-b")
+	if err != nil {
+		t.Fatalf("TenantDuration: %v", err)
+	}
+	if ok || got != 0 {
+		t.Fatalf("TenantDuration(ctx tenant-a, tenant-b) = (%v, %v), want (0, false): the parameter must override the ctx tenant", got, ok)
+	}
+}
+
+func TestService_TenantDuration_RejectsWrongTypesAndUnknownKeys(t *testing.T) {
+	svc := attachDefaultServiceForTest(t)
+
+	if _, _, err := svc.TenantDuration(context.Background(), "brand.site_name", "tenant-a"); err == nil {
+		t.Fatal("TenantDuration on a string item succeeded")
+	} else {
+		assertCode(t, err, ErrTypedValueMismatch)
+	}
+	if _, _, err := svc.TenantDuration(context.Background(), "brand.nonexistent", "tenant-a"); err == nil {
+		t.Fatal("TenantDuration on an unknown key succeeded")
+	} else {
+		assertCode(t, err, ErrUnknownKey)
+	}
+}
+
 func TestService_Set_RejectsUnknownKeys(t *testing.T) {
 	svc := attachDefaultServiceForTest(t)
 	err := svc.Set(tenantA(), ScopeTenant, "brand.nonexistent", Value{Data: "x"}, "alice")

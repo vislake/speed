@@ -214,6 +214,49 @@ func GetTyped[T any](svc *Service, ctx context.Context, key string) (T, error) {
 	return out, nil
 }
 
+// TenantDuration resolves key to its effective duration value for tenant
+// and reports whether an explicit row produced it, the three-tier
+// resolution (tenant, then system, then schema default) with the one
+// distinction a tenant-configurable duration seam needs: ok is true when a
+// tenant- or system-tier row supplied the value, and false when resolution
+// fell through to the key's own schema default -- "this tenant has
+// configured none" -- in which case the caller applies its own fallback,
+// identical to that default, exactly as if no reader had been wired at all.
+//
+// tenant comes from the parameter, never from ctx: the caller is the module
+// that already resolved its own tenant (a share's tenant, an export's
+// tenant) and hands this primitive that value; whatever tenant ctx carries
+// is replaced for the lookup. Get rather than GetTyped is deliberate --
+// GetTyped throws Value.Scope away, so it cannot tell a genuinely unset key
+// from one that happens to resolve to its own declared Default.
+//
+// A key whose declared Type is not a duration fails with
+// ErrTypedValueMismatch -- checked before the row test, so a wrongly-typed
+// key refuses immediately rather than only once someone sets a row; an
+// unknown key fails with ErrUnknownKey, and a key with neither a row nor a
+// declared default fails with ErrItemUnset, both through Get.
+func (s *Service) TenantDuration(ctx context.Context, key string, tenant pkgcore.TenantID) (time.Duration, bool, error) {
+	v, err := s.Get(pkgcore.WithTenant(ctx, tenant), key)
+	if err != nil {
+		return 0, false, err
+	}
+	d, isDuration := v.Data.(time.Duration)
+	if !isDuration {
+		// Checked before the scope test below so a wrongly-typed key fails
+		// the same way whether or not a row happens to exist: a string item
+		// read as a duration is a wiring mistake, and a refusal that only
+		// surfaced once someone configured the key would be a latent trap.
+		return 0, false, ErrTypedValueMismatch.WithParam("key", key)
+	}
+	if v.Scope == "" {
+		// Resolved to the schema default: no explicit tenant or system row
+		// exists, so report "unconfigured" rather than echoing a default
+		// the caller cannot distinguish from a configured one.
+		return 0, false, nil
+	}
+	return d, true, nil
+}
+
 // Set writes v.Data as the value of key at scope. The value is validated
 // against the key's schema entry (declared Type, declared Min/Max bounds)
 // before anything is stored, the row's canonical form is encrypted when

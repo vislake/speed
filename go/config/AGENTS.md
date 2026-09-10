@@ -7,7 +7,7 @@ It sits directly above `pkgcore`, `dbkit` and `tenancy` — among the always-on 
 | Concern | Where |
 |---|---|
 | `Module`, the Register/Attach wiring seam, `Option`s (`WithCipher`, `WithResolver`, `WithPollInterval`), the `SystemPurposeSystemWrite` audited purpose | `module.go` |
-| `Service`, the entire read/write surface: `Get`, `GetTyped`, `Set`, `Watch`, `IsEnabled`, `EnabledFlags`, `PublicSnapshot`, `Refresh`, `Close`, scope resolution and its entitlements, change-event publishing | `service.go` |
+| `Service`, the entire read/write surface: `Get`, `GetTyped`, `TenantDuration` (the three-tier duration primitive a tenant-configurable duration seam reads: `(time.Duration, bool, error)` with `ok=false` meaning "no explicit tenant or system row", plus the wrong-type refusal checked before the row test), `Set`, `Watch`, `IsEnabled`, `EnabledFlags`, `PublicSnapshot`, `Refresh`, `Close`, scope resolution and its entitlements, change-event publishing | `service.go` |
 | Canonical values: the one stored/text form per item type, encode/decode, range enforcement against declared bounds | `values.go` |
 | Item/flag schema folding: defaults, `Sensitive`, `Public`, `Group`, bounds, flag dependency and cycle validation, `ErrSchemaConflict` classes | `schema.go` |
 | Row persistence over the `configs` table: exact (key, scope, tenant) get, primary-key upsert, watermark query | `store.go` |
