@@ -326,7 +326,7 @@ func assertRateLimited(t *testing.T, err error, wantDimension string) {
 	if !ok {
 		t.Fatalf("error %v is not an *apperr.Error, want the contact_rate_limited denial", err)
 	}
-	if appErr.Code != ErrContactRateLimited.Code {
+	if !apperr.HasCode(err, ErrContactRateLimited.Code) {
 		t.Fatalf("error code = %s, want %s", appErr.Code, ErrContactRateLimited.Code)
 	}
 	if appErr.Status != http.StatusTooManyRequests {
@@ -1634,7 +1634,7 @@ func assertRetryAfterSecondsValue(t *testing.T, err error, want int) {
 	if !ok {
 		t.Fatalf("error %v is not an *apperr.Error, want the contact_rate_limited denial", err)
 	}
-	if appErr.Code != ErrContactRateLimited.Code {
+	if !apperr.HasCode(err, ErrContactRateLimited.Code) {
 		t.Fatalf("error code = %s, want %s", appErr.Code, ErrContactRateLimited.Code)
 	}
 	if got := appErr.Params["retry_after_seconds"]; got != want {

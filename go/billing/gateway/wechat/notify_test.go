@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // signedNotifyBody builds a realistic WeChat Pay webhook envelope, its
@@ -154,7 +155,7 @@ func TestGateway_VerifyWebhook_InvalidSignature(t *testing.T) {
 	headers, body := signedNotifyBody(t, wrongPriv, cfg.APIv3Key, eventTypeTransactionSuccess, txn)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid", err)
 	}
 }
@@ -172,7 +173,7 @@ func TestGateway_VerifyWebhook_WrongAPIv3Key(t *testing.T) {
 	headers, body := signedNotifyBody(t, platformPriv, wrongKey, eventTypeTransactionSuccess, txn) // encrypted under a DIFFERENT key than cfg.APIv3Key
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -186,7 +187,7 @@ func TestGateway_VerifyWebhook_MissingSignatureHeaders(t *testing.T) {
 	}
 
 	_, err = gw.VerifyWebhook(context.Background(), map[string][]string{}, []byte(`{}`))
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid", err)
 	}
 }
@@ -208,7 +209,7 @@ func TestGateway_VerifyWebhook_UnrecognizedEventType(t *testing.T) {
 	headers, body := signedNotifyBody(t, platformPriv, cfg.APIv3Key, "PAYSCORE.USER_OPEN_SERVICE", txn)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -234,7 +235,7 @@ func TestGateway_VerifyWebhook_RefundEventTypeWithTransactionResource_Refused(t 
 	headers, body := signedNotifyBody(t, platformPriv, cfg.APIv3Key, "REFUND.SUCCESS", txn)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -265,7 +266,7 @@ func TestGateway_VerifyWebhook_StaleTimestamp_Refused(t *testing.T) {
 	headers, body := signedNotifyBodyAt(t, platformPriv, cfg.APIv3Key, eventTypeTransactionSuccess, txn, stale)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid (a stale notification is a replay and must be refused)", err)
 	}
 }
@@ -306,7 +307,7 @@ func TestGateway_VerifyWebhook_MissingAttach(t *testing.T) {
 	headers, body := signedNotifyBody(t, platformPriv, cfg.APIv3Key, eventTypeTransactionSuccess, txn)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -448,7 +449,7 @@ func TestGateway_VerifyWebhook_RefundAbnormalAndClosed_Refused(t *testing.T) {
 			headers, body := signedRefundNotifyBody(t, platformPriv, cfg.APIv3Key, "REFUND."+status, refund)
 
 			_, err = gw.VerifyWebhook(context.Background(), headers, body)
-			if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+			if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 				t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized for a REFUND.%s notification", err, status)
 			}
 		})
@@ -473,7 +474,7 @@ func TestGateway_VerifyWebhook_RefundStatusEventTypeMismatch_Refused(t *testing.
 	headers, body := signedRefundNotifyBody(t, platformPriv, cfg.APIv3Key, "REFUND.SUCCESS", refund)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized for an event_type/refund_status mismatch", err)
 	}
 }
@@ -495,7 +496,7 @@ func TestGateway_VerifyWebhook_RefundMissingIdentifiers_Refused(t *testing.T) {
 	headers, body := signedRefundNotifyBody(t, platformPriv, cfg.APIv3Key, "REFUND.SUCCESS", refund)
 
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized for a refund resource missing out_trade_no", err)
 	}
 }

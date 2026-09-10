@@ -165,11 +165,8 @@ func TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres(t *testing.T
 // there are two rather than one. Matched on Code the way every other test
 // in this module does (apperr's builders derive a new value per
 // decoration, so a decorated error is never identical to the sentinel it
-// came from -- see service.go's hasCode).
+// came from -- see apperr.HasCode's own doc comment).
 func isExpectedLoserError(err error) bool {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		return false
-	}
-	return appErr.Code == authn.ErrRefreshTokenReused.Code || appErr.Code == authn.ErrSessionRevoked.Code
+	return apperr.HasCode(err, authn.ErrRefreshTokenReused.Code) ||
+		apperr.HasCode(err, authn.ErrSessionRevoked.Code)
 }

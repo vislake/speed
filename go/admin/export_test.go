@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // TestExportService_Enqueue_EmptyTenantID_Refused pins the up-front
@@ -23,7 +24,7 @@ func TestExportService_Enqueue_EmptyTenantID_Refused(t *testing.T) {
 	env := buildTestAdminModule(t)
 
 	_, err := env.Admin.Export().Enqueue(context.Background(), "", "operator-1")
-	if !isCode(err, ErrTenantIDRequired.Code) {
+	if !apperr.HasCode(err, ErrTenantIDRequired.Code) {
 		t.Fatalf("Enqueue() with empty tenantID error = %v, want %s", err, ErrTenantIDRequired.Code)
 	}
 }
@@ -37,7 +38,7 @@ func TestExportService_Enqueue_EmptyOperatorUserID_Refused(t *testing.T) {
 	env := buildTestAdminModule(t)
 
 	_, err := env.Admin.Export().Enqueue(context.Background(), "some-tenant", "")
-	if !isCode(err, ErrExportOperatorRequired.Code) {
+	if !apperr.HasCode(err, ErrExportOperatorRequired.Code) {
 		t.Fatalf("Enqueue() with empty operatorUserID error = %v, want %s", err, ErrExportOperatorRequired.Code)
 	}
 }

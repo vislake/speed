@@ -11,6 +11,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 
 	"github.com/vislake/speed/go/org/locales"
@@ -217,7 +218,7 @@ func TestHandleUserCreated_NoPublisher_Noop(t *testing.T) {
 	}
 
 	ctx := tenantCtx("tenant-a")
-	if _, err := m.Tree().Root(ctx); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.Tree().Root(ctx); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Root() error = %v, want org.node_not_found -- nothing should have been created", err)
 	}
 }
@@ -243,7 +244,7 @@ func TestHandleUserCreated_UnknownPayloadShape_LogsAndReturnsNil(t *testing.T) {
 	}
 
 	ctx := tenantCtx("tenant-a")
-	if _, err := m.Tree().Root(ctx); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.Tree().Root(ctx); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Root() error = %v, want org.node_not_found -- an unusable payload must create nothing", err)
 	}
 }

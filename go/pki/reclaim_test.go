@@ -5,6 +5,8 @@ import (
 	"crypto"
 	"errors"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // newReclaimTestService returns a Service over a fresh test database like
@@ -75,7 +77,7 @@ func TestService_ReclaimRetired_DestroysTheOwnedRetiredKeysMaterial(t *testing.T
 		t.Errorf("Failed = %v, want nil", report.Failed)
 	}
 
-	if _, err := localKeys.FindByKeyRef(ctx, keyRef); !isKeyNotFound(err) {
+	if _, err := localKeys.FindByKeyRef(ctx, keyRef); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("FindByKeyRef after reclaim = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -115,12 +117,12 @@ func TestService_ReclaimRetired_TouchesOnlyRetiredKeys(t *testing.T) {
 	for _, row := range seeded {
 		_, err := localKeys.FindByKeyRef(ctx, keyRefs[row.status])
 		if row.status == SigningKeyStatusRetired {
-			if !isKeyNotFound(err) {
+			if !apperr.HasCode(err, ErrKeyNotFound.Code) {
 				t.Errorf("retired key %s material still present after reclaim: FindByKeyRef = %v, want ErrKeyNotFound", row.kid, err)
 			}
 			continue
 		}
-		if isKeyNotFound(err) {
+		if apperr.HasCode(err, ErrKeyNotFound.Code) {
 			t.Errorf("%s key %s material was destroyed by reclaim, want it to survive", row.status, row.kid)
 		} else if err != nil {
 			t.Errorf("FindByKeyRef for %s key %s: %v", row.status, row.kid, err)
@@ -157,7 +159,7 @@ func TestService_ReclaimRetired_DoesNotTouchKeysOwnedByAnotherSigner(t *testing.
 		t.Errorf("Failed = %v, want nil", report.Failed)
 	}
 
-	if _, err := localKeys.FindByKeyRef(ctx, foreignKeyRef); isKeyNotFound(err) {
+	if _, err := localKeys.FindByKeyRef(ctx, foreignKeyRef); apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("foreign-owned retired key's material was destroyed by reclaim, want it to survive")
 	} else if err != nil {
 		t.Errorf("FindByKeyRef for the foreign-owned key: %v", err)

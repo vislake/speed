@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/org"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres
@@ -53,7 +54,7 @@ func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres(t 
 		t.Errorf("Get(recreated): %v", err)
 	}
 	_, err = tree.CreateChild(ctx, root.ID, "North Region", "region")
-	if !hasCode(err, org.ErrDuplicateSiblingName.Code) {
+	if !apperr.HasCode(err, org.ErrDuplicateSiblingName.Code) {
 		t.Errorf("a second live sibling with the same name error = %v, want org.duplicate_sibling_name", err)
 	}
 }
@@ -79,7 +80,7 @@ func TestTreeService_Restore_RecreatesLiveTree_Postgres(t *testing.T) {
 	if err := tree.Delete(ctx, child.ID, false); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := tree.Get(ctx, child.ID); !hasCode(err, org.ErrNodeNotFound.Code) {
+	if _, err := tree.Get(ctx, child.ID); !apperr.HasCode(err, org.ErrNodeNotFound.Code) {
 		t.Fatalf("Get(deleted child) = %v, want org.node_not_found", err)
 	}
 
@@ -151,7 +152,7 @@ func TestMemberService_Remove_ThenAdd_SameUser_Succeeds_Postgres(t *testing.T) {
 
 	// The seat is still exclusive among LIVE rows on PostgreSQL too: a second
 	// Add for the same user is still refused.
-	if _, err := members.Add(ctx, "u-returning", left.ID); !hasCode(err, org.ErrMembershipExists.Code) {
+	if _, err := members.Add(ctx, "u-returning", left.ID); !apperr.HasCode(err, org.ErrMembershipExists.Code) {
 		t.Errorf("second live Add error = %v, want org.membership_exists", err)
 	}
 }
@@ -183,7 +184,7 @@ func TestMemberService_Restore_ThenGet_Postgres(t *testing.T) {
 	if err := members.Remove(ctx, "u-member"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if _, err := members.Get(ctx, "u-member"); !hasCode(err, org.ErrMembershipNotFound.Code) {
+	if _, err := members.Get(ctx, "u-member"); !apperr.HasCode(err, org.ErrMembershipNotFound.Code) {
 		t.Fatalf("Get(removed member) = %v, want org.membership_not_found", err)
 	}
 
@@ -245,13 +246,13 @@ func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds_Postgres(t *testin
 	}
 
 	// The narrowed index still enforces one LIVE root per tenant.
-	if _, err := tree.CreateRoot(ctx, "Another Root", "group"); !hasCode(err, org.ErrRootAlreadyExists.Code) {
+	if _, err := tree.CreateRoot(ctx, "Another Root", "group"); !apperr.HasCode(err, org.ErrRootAlreadyExists.Code) {
 		t.Errorf("a second live root error = %v, want org.root_already_exists", err)
 	}
 
 	// Restoring the original root collides with the live replacement at the
 	// database and answers the coded slot-taken error.
-	if _, err := tree.Restore(ctx, original.ID); !hasCode(err, org.ErrDuplicateSiblingName.Code) {
+	if _, err := tree.Restore(ctx, original.ID); !apperr.HasCode(err, org.ErrDuplicateSiblingName.Code) {
 		t.Errorf("Restore of the original root whose root slot was re-taken = %v, want the coded org.duplicate_sibling_name", err)
 	}
 }

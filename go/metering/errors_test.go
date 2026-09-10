@@ -86,8 +86,8 @@ func TestHasCode(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := hasCode(tc.err, tc.code); got != tc.want {
-				t.Errorf("hasCode(%v, %q) = %v, want %v", tc.err, tc.code, got, tc.want)
+			if got := apperr.HasCode(tc.err, tc.code); got != tc.want {
+				t.Errorf("apperr.HasCode(%v, %q) = %v, want %v", tc.err, tc.code, got, tc.want)
 			}
 		})
 	}

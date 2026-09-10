@@ -191,7 +191,7 @@ func TestCredentialService_SetTenantCredential_BlockedBaseURL_Refused(t *testing
 				t.Fatalf("SetTenantCredential(baseURL %q) = %v, want ErrBaseURLBlocked -- a blocked destination must be refused before it is stored", tc.baseURL, err)
 			}
 			// Nothing was stored: the tenant still resolves nothing.
-			if _, err := svc.Resolve(acmeCtx, ProviderOpenAICompatible); !hasCode(err, ErrCredentialNotFound.Code) {
+			if _, err := svc.Resolve(acmeCtx, ProviderOpenAICompatible); !apperr.HasCode(err, ErrCredentialNotFound.Code) {
 				t.Fatalf("Resolve after a refused write = %v, want ErrCredentialNotFound -- the refusal must store no row", err)
 			}
 		})
@@ -214,10 +214,10 @@ func TestCredentialService_SetTenantCredential_ResolvedBlockedHost_RefusalDoesNo
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")
 
 	err := svc.SetTenantCredential(acmeCtx, ProviderOpenAICompatible, "sk-test", "http://localhost:9000/v1")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLBlocked.Code {
+	if !apperr.HasCode(err, ErrBaseURLBlocked.Code) {
 		t.Fatalf("SetTenantCredential(localhost) = %v, want ErrBaseURLBlocked", err)
 	}
+	found, _ := apperr.As(err)
 	if ip, present := found.Params["ip"]; present {
 		t.Fatalf("the resolution path's refusal carries the resolved address %v in its params -- an internal-DNS oracle for the caller; want no ip param", ip)
 	}
@@ -233,10 +233,10 @@ func TestCredentialService_SetTenantCredential_BlockedLiteralIP_RefusalCarriesTh
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")
 
 	err := svc.SetTenantCredential(acmeCtx, ProviderOpenAICompatible, "sk-test", "http://127.0.0.1:9000/v1")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLBlocked.Code {
+	if !apperr.HasCode(err, ErrBaseURLBlocked.Code) {
 		t.Fatalf("SetTenantCredential(127.0.0.1) = %v, want ErrBaseURLBlocked", err)
 	}
+	found, _ := apperr.As(err)
 	if got := found.Params["ip"]; got != "127.0.0.1" {
 		t.Fatalf("ip param = %v, want the literal address %q the caller typed", got, "127.0.0.1")
 	}
@@ -309,7 +309,7 @@ func TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersi
 	if err == nil {
 		t.Fatal("SetTenantCredential accepted and stored a loopback base URL -- the P0 the SSRF round closes; the write must be refused")
 	}
-	if _, err := svc.Resolve(acmeCtx, ProviderOpenAICompatible); !hasCode(err, ErrCredentialNotFound.Code) {
+	if _, err := svc.Resolve(acmeCtx, ProviderOpenAICompatible); !apperr.HasCode(err, ErrCredentialNotFound.Code) {
 		t.Fatalf("Resolve after the refused write = %v, want ErrCredentialNotFound -- the refusal must store no row", err)
 	}
 }

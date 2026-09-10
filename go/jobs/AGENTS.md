@@ -346,7 +346,7 @@ See `example_test.go`'s `Example`/`ExampleNewHandlerFunc` (compiled and run, `St
 
 **`go mod tidy` correctly keeps `testcontainers-go/modules/redis` in `go.mod`/`go.sum` even though it is imported only behind the `integration` build tag** — a plain `go mod tidy` (no `-tags` flag needed; this Go toolchain does not even expose one on `mod tidy`) considers build-tag-gated files in the *main* module when computing required modules. Worth knowing before "cleaning up" this dependency on the assumption that a plain `go test ./...` never needing it means `go mod tidy` would drop it — it does not.
 
-`isJobNotFound` (`job_test.go`) matches `ErrJobNotFound` by `.Code` via `apperr.As`, not by identity — the same discipline `dbkit`'s own `isRecordNotFound` test helpers use. `integration_test/` defines its own small equivalents locally where needed (test helpers are never part of a package's importable surface regardless of which package they live in, so nothing here crosses a package boundary in the way a shared-helper duplication would).
+The tests match `ErrJobNotFound` by `.Code` via `apperr.HasCode`, not by identity — `WithParam`/`WithCause` derive a new `*apperr.Error`, so a comparison against the sentinel var would never see the value a caller actually got back.
 
 ## Rules
 
@@ -395,7 +395,7 @@ See `example_test.go`'s `Example`/`ExampleNewHandlerFunc` (compiled and run, `St
 
 | Sentinel | Triggered by | Handling |
 |---|---|---|
-| `ErrJobNotFound` (`jobs.job_not_found`) | `Queue.Get`/`Cancel` for an id that does not exist, or exists under a tenant `ctx` cannot access — both implementations | Match with `apperr.As(err).Code`, not identity — see `isJobNotFound` in `job_test.go`. Not a bug to handle specially: this is the deliberately-collapsed "not found or not yours" response |
+| `ErrJobNotFound` (`jobs.job_not_found`) | `Queue.Get`/`Cancel` for an id that does not exist, or exists under a tenant `ctx` cannot access — both implementations | Match with `apperr.HasCode(err, ErrJobNotFound.Code)`, not identity. Not a bug to handle specially: this is the deliberately-collapsed "not found or not yours" response |
 | `ErrInvalidTask` (`jobs.invalid_task`) | `Enqueue`, for an empty `Task.Type` or `Task.TenantID` — both implementations | Fix the caller; nothing is persisted |
 | `ErrDuplicateHandlerType` (`jobs.duplicate_handler_type`) | `RegisterHandler`, for a `Type` already registered on that instance — both implementations | Almost always a wiring bug |
 | `ErrHandlerNotRegistered` (`jobs.handler_not_registered`) | A worker claims a `Job` whose `Type` has no registered `Handler` — both implementations, same sentinel | Treated as an ordinary `Handle` failure (retried, then dead-lettered) — check `DeadLetterJobs` and the structured "job exhausted retries"/"Retry exhausted" log line, then fix the missing `RegisterHandler` call |

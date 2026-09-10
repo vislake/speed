@@ -374,8 +374,7 @@ func TestQueue_ProcessTask_HandlerNotRegistered(t *testing.T) {
 
 	err := q.processTaskUncancelled(context.Background(), task, "job-1", obs.FromContext(context.Background()))
 
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != jobs.ErrHandlerNotRegistered.Code {
+	if !apperr.HasCode(err, jobs.ErrHandlerNotRegistered.Code) {
 		t.Errorf("processTask() error = %v, want ErrHandlerNotRegistered (code %q)", err, jobs.ErrHandlerNotRegistered.Code)
 	}
 }

@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -193,21 +192,12 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 func (s *TenantService) Status(ctx context.Context, tenant pkgcore.TenantID) (tenancy.TenantStatus, error) {
 	t, err := s.repo.Get(ctx, string(tenant))
 	if err != nil {
-		if isTenantNotFound(err) {
+		if apperr.HasCode(err, ErrTenantNotFound.Code) {
 			return tenancy.TenantStatusActive, nil
 		}
 		return "", err
 	}
 	return t.Status, nil
-}
-
-// isTenantNotFound reports whether err is ErrTenantNotFound, classifying
-// by Code through apperr.As rather than by pointer identity -- the same
-// convention isGrantNotFound (impersonation_service.go) documents in
-// full.
-func isTenantNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrTenantNotFound.Code
 }
 
 // compile-time check that *TenantService satisfies
@@ -239,12 +229,12 @@ var _ tenancy.TenantStatusResolver = (*TenantService)(nil)
 //
 // admin sits at the top of the module dependency graph and is the one
 // module permitted to import the concrete packages below it directly, so
-// this decodes directly into org's own org.NodeCreated struct rather than
-// probing a JSON map by hand the way org's own cross-module subscriber
-// must for authn's event -- but it still round-trips through JSON
-// rather than a direct type assertion, because a cross-replica delivery
-// over pkgcore's Redis EventBus arrives as a map[string]any, never as the
-// publisher's own struct.
+// this decodes directly into org's own org.NodeCreated struct through
+// pkgcore.DecodeEventPayload rather than probing JSON keys by hand the way
+// org's own cross-module subscriber must for authn's event -- still through
+// the JSON round-trip, never a direct type assertion, because a
+// cross-replica delivery over pkgcore's Redis EventBus arrives as a
+// map[string]any, never as the publisher's own struct.
 func (s *TenantService) handleOrgNodeCreated(ctx context.Context, evt pkgcore.Event) error {
 	log := obs.FromContext(ctx)
 
@@ -255,7 +245,7 @@ func (s *TenantService) handleOrgNodeCreated(ctx context.Context, evt pkgcore.Ev
 	}
 
 	var payload org.NodeCreated
-	if err := decodeEventPayload(evt.Payload, &payload); err != nil {
+	if err := pkgcore.DecodeEventPayload(evt.Payload, &payload); err != nil {
 		log.Warn("admin ignored an org.node.created event with an unrecognized payload",
 			"event_type", evt.Type, "error", err)
 		return nil
@@ -271,16 +261,4 @@ func (s *TenantService) handleOrgNodeCreated(ctx context.Context, evt pkgcore.Ev
 			"tenant_id", evt.TenantID, "error", err)
 	}
 	return nil
-}
-
-// decodeEventPayload round-trips payload through JSON into out, which
-// works uniformly whether payload arrived as the publisher's own struct
-// (a same-replica, in-process delivery) or as a map[string]any (a
-// cross-replica delivery over pkgcore's Redis EventBus).
-func decodeEventPayload(payload any, out any) error {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(encoded, out)
 }

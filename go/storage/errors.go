@@ -14,14 +14,6 @@ import (
 // be required for the errors' own suite to compile.
 const moduleName = "storage"
 
-// hasCode reports whether err is, or wraps, an *apperr.Error with the given
-// code. Codes are compared rather than pointers because WithParam and
-// WithCause derive a new *apperr.Error every time.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
-}
-
 // The apperr half of the storage error index. Every exported error below
 // is an *apperr.Error builder whose Code follows the <module>.<reason>
 // convention: match a decorated error with apperr.As(err) and compare its

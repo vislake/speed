@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -25,22 +26,22 @@ const rolesSystemDomainForbiddenCode = "admin.roles_system_domain_forbidden"
 func TestRoleService_BeforeAttachRBAC_FailsClosed(t *testing.T) {
 	svc := NewRoleService()
 
-	if _, err := svc.DeclaredPermissions(); !isCode(err, ErrRBACServiceRequired.Code) {
+	if _, err := svc.DeclaredPermissions(); !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Errorf("DeclaredPermissions() error = %v, want %s", err, ErrRBACServiceRequired.Code)
 	}
-	if _, err := svc.DefineRole(context.Background(), "tenant-a", rbac.RoleDefinition{Key: "custom"}); !isCode(err, ErrRBACServiceRequired.Code) {
+	if _, err := svc.DefineRole(context.Background(), "tenant-a", rbac.RoleDefinition{Key: "custom"}); !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Errorf("DefineRole() error = %v, want %s", err, ErrRBACServiceRequired.Code)
 	}
-	if err := svc.AssignRole(context.Background(), "tenant-a", "user-1", "custom", ""); !isCode(err, ErrRBACServiceRequired.Code) {
+	if err := svc.AssignRole(context.Background(), "tenant-a", "user-1", "custom", ""); !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Errorf("AssignRole() error = %v, want %s", err, ErrRBACServiceRequired.Code)
 	}
-	if err := svc.RevokeRole(context.Background(), "tenant-a", "user-1", "custom", ""); !isCode(err, ErrRBACServiceRequired.Code) {
+	if err := svc.RevokeRole(context.Background(), "tenant-a", "user-1", "custom", ""); !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Errorf("RevokeRole() error = %v, want %s", err, ErrRBACServiceRequired.Code)
 	}
-	if err := svc.RestoreRole(context.Background(), "tenant-a", "user-1", "custom", ""); !isCode(err, ErrRBACServiceRequired.Code) {
+	if err := svc.RestoreRole(context.Background(), "tenant-a", "user-1", "custom", ""); !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Errorf("RestoreRole() error = %v, want %s", err, ErrRBACServiceRequired.Code)
 	}
-	if err := svc.EnsureBuiltinRoles(context.Background(), "tenant-a"); !isCode(err, ErrRBACServiceRequired.Code) {
+	if err := svc.EnsureBuiltinRoles(context.Background(), "tenant-a"); !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Errorf("EnsureBuiltinRoles() error = %v, want %s", err, ErrRBACServiceRequired.Code)
 	}
 }
@@ -81,7 +82,7 @@ func TestRoleService_DefineRole_EmptyTenantID_Refused(t *testing.T) {
 	env.Admin.AttachRBAC(env.RBAC)
 
 	_, err := env.Admin.Roles().DefineRole(context.Background(), "", rbac.RoleDefinition{Key: "custom", Permissions: []string{PermissionAccess}})
-	if !isCode(err, ErrTenantIDRequired.Code) {
+	if !apperr.HasCode(err, ErrTenantIDRequired.Code) {
 		t.Fatalf("DefineRole() with empty tenantID error = %v, want %s", err, ErrTenantIDRequired.Code)
 	}
 }
@@ -234,7 +235,7 @@ func TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate(t *testin
 		Key:         "self-escalation",
 		Permissions: []string{PermissionImpersonate},
 	})
-	if !isCode(err, rolesSystemDomainForbiddenCode) {
+	if !apperr.HasCode(err, rolesSystemDomainForbiddenCode) {
 		t.Fatalf("DefineRole(system domain, admin:impersonate) error = %v, want %s", err, rolesSystemDomainForbiddenCode)
 	}
 	if canImpersonate() {
@@ -253,7 +254,7 @@ func TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate(t *testin
 	}); err != nil {
 		t.Fatalf("seed a staff-carved system-domain role: %v", err)
 	}
-	if err := roles.AssignRole(ctx, string(rbac.SystemDomain), caller, "staff-carved-impersonator", ""); !isCode(err, rolesSystemDomainForbiddenCode) {
+	if err := roles.AssignRole(ctx, string(rbac.SystemDomain), caller, "staff-carved-impersonator", ""); !apperr.HasCode(err, rolesSystemDomainForbiddenCode) {
 		t.Fatalf("AssignRole(system domain) error = %v, want %s", err, rolesSystemDomainForbiddenCode)
 	}
 	if canImpersonate() {
@@ -264,13 +265,13 @@ func TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate(t *testin
 	// same internal domain and refused the same way: a surface any
 	// admin:roles_manage holder can reach must not touch the system
 	// domain's bindings at all -- not only refrain from adding to them.
-	if err := roles.RevokeRole(ctx, string(rbac.SystemDomain), caller, "seed-role-manager", ""); !isCode(err, rolesSystemDomainForbiddenCode) {
+	if err := roles.RevokeRole(ctx, string(rbac.SystemDomain), caller, "seed-role-manager", ""); !apperr.HasCode(err, rolesSystemDomainForbiddenCode) {
 		t.Fatalf("RevokeRole(system domain) error = %v, want %s", err, rolesSystemDomainForbiddenCode)
 	}
-	if err := roles.RestoreRole(ctx, string(rbac.SystemDomain), caller, "seed-role-manager", ""); !isCode(err, rolesSystemDomainForbiddenCode) {
+	if err := roles.RestoreRole(ctx, string(rbac.SystemDomain), caller, "seed-role-manager", ""); !apperr.HasCode(err, rolesSystemDomainForbiddenCode) {
 		t.Fatalf("RestoreRole(system domain) error = %v, want %s", err, rolesSystemDomainForbiddenCode)
 	}
-	if err := roles.EnsureBuiltinRoles(ctx, string(rbac.SystemDomain)); !isCode(err, rolesSystemDomainForbiddenCode) {
+	if err := roles.EnsureBuiltinRoles(ctx, string(rbac.SystemDomain)); !apperr.HasCode(err, rolesSystemDomainForbiddenCode) {
 		t.Fatalf("EnsureBuiltinRoles(system domain) error = %v, want %s", err, rolesSystemDomainForbiddenCode)
 	}
 }

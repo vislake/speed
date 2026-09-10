@@ -16,6 +16,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // This file holds the deterministic PostgreSQL proofs behind
@@ -555,7 +556,7 @@ func TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMem
 		wg.Wait()
 
 		if deleteErr != nil {
-			if !hasCode(deleteErr, org.ErrNodeHasMembers.Code) {
+			if !apperr.HasCode(deleteErr, org.ErrNodeHasMembers.Code) {
 				t.Fatalf("%s: Delete = %v, want the coded org.node_has_members refusal once the guard sees the committed membership", label, deleteErr)
 			}
 			// The tree must still be intact: the refusal rolled everything back.

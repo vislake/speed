@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // notifyNowString renders the current time in Alipay's own notify_time
@@ -145,7 +146,7 @@ func TestGateway_VerifyWebhook_InvalidSignature(t *testing.T) {
 	})
 
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid", err)
 	}
 }
@@ -163,7 +164,7 @@ func TestGateway_VerifyWebhook_MissingPassback(t *testing.T) {
 	})
 
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -213,7 +214,7 @@ func TestGateway_VerifyWebhook_PartialRefundNotify_IsRefusedNotMistakenForThePay
 	})
 
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized (a partial-refund notification must never normalize into an event byte-identical to the payment, which the dedup ledger would swallow)", err)
 	}
 }
@@ -323,7 +324,7 @@ func TestGateway_VerifyWebhook_UnrecognizedTradeStatus(t *testing.T) {
 	})
 
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -356,7 +357,7 @@ func TestGateway_VerifyWebhook_StaleNotification_Refused(t *testing.T) {
 	})
 
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid (a signature that verified must not let a stale delivery be replayed as live)", err)
 	}
 }
@@ -385,7 +386,7 @@ func TestGateway_VerifyWebhook_MissingNotifyTime_Refused(t *testing.T) {
 	})
 
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid (a delivery without notify_time has nothing to bound)", err)
 	}
 }

@@ -52,7 +52,7 @@ func TestPlanStore_CreateAndGetPlatformPlan(t *testing.T) {
 func TestPlanStore_Create_EmptyKey_Refused(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	err := store.Create(context.Background(), &Plan{Name: "No key"})
-	if !hasCode(err, ErrPlanKeyRequired.Code) {
+	if !apperr.HasCode(err, ErrPlanKeyRequired.Code) {
 		t.Errorf("Create with empty key: err = %v, want %s", err, ErrPlanKeyRequired.Code)
 	}
 }
@@ -65,7 +65,7 @@ func TestPlanStore_Create_DuplicateTenantKey_Refused(t *testing.T) {
 		t.Fatalf("first Create: %v", err)
 	}
 	err := store.Create(ctx, &Plan{Key: "pro", Name: "Pro again"})
-	if !hasCode(err, ErrDuplicatePlanKey.Code) {
+	if !apperr.HasCode(err, ErrDuplicatePlanKey.Code) {
 		t.Errorf("duplicate Create: err = %v, want %s", err, ErrDuplicatePlanKey.Code)
 	}
 }
@@ -94,7 +94,7 @@ func TestPlanStore_Resolve_TenantCustomOverridesPlatformWide(t *testing.T) {
 
 	t.Run("neither exists", func(t *testing.T) {
 		_, err := store.Resolve(ctx, tenant, "pro")
-		if !hasCode(err, ErrPlanNotFound.Code) {
+		if !apperr.HasCode(err, ErrPlanNotFound.Code) {
 			t.Errorf("Resolve with nothing created: err = %v, want %s", err, ErrPlanNotFound.Code)
 		}
 	})
@@ -223,10 +223,10 @@ func TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted(t *testing.T) {
 	}
 
 	err := store.Update(ctx, scope, ghost) // ghost.ID is empty: names no row
-	if !hasCode(err, ErrPlanNotFound.Code) {
+	if !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Fatalf("Update with empty ID: err = %v, want %s (never a silent insert)", err, ErrPlanNotFound.Code)
 	}
-	if _, err := store.Get(ctx, scope, ""); !hasCode(err, ErrPlanNotFound.Code) {
+	if _, err := store.Get(ctx, scope, ""); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Get(scope, \"\") after the empty-ID Update: err = %v, want %s (the update must not have created a row with id \"\")", err, ErrPlanNotFound.Code)
 	}
 }
@@ -264,10 +264,10 @@ func TestPlanStore_ScopedGet_OwnRowsOnly(t *testing.T) {
 		t.Errorf("Get(tenant-a) = plan %q, want tenant-a's own %q", got.ID, aPlan.ID)
 	}
 	// ...and never B's, never the platform's.
-	if _, err = store.Get(ctx, a, bPlan.ID); !hasCode(err, ErrPlanNotFound.Code) {
+	if _, err = store.Get(ctx, a, bPlan.ID); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Get(tenant-a, tenant-b's plan): err = %v, want %s -- the tenant scope must not read another tenant's custom plan (pre-fix: the unscoped Get returned it)", err, ErrPlanNotFound.Code)
 	}
-	if _, err = store.Get(ctx, a, platform.ID); !hasCode(err, ErrPlanNotFound.Code) {
+	if _, err = store.Get(ctx, a, platform.ID); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Get(tenant-a, platform plan): err = %v, want %s -- a platform-wide row is not in any tenant's own scope", err, ErrPlanNotFound.Code)
 	}
 
@@ -280,10 +280,10 @@ func TestPlanStore_ScopedGet_OwnRowsOnly(t *testing.T) {
 	if gotPlatform.ID != platform.ID {
 		t.Errorf("GetPlatformPlan = plan %q, want the platform plan %q", gotPlatform.ID, platform.ID)
 	}
-	if _, err = store.GetPlatformPlan(ctx, aPlan.ID); !hasCode(err, ErrPlanNotFound.Code) {
+	if _, err = store.GetPlatformPlan(ctx, aPlan.ID); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("GetPlatformPlan(tenant-a's custom id): err = %v, want %s -- the platform read must refuse a tenant-custom row", err, ErrPlanNotFound.Code)
 	}
-	if _, err = store.GetPlatformPlan(ctx, bPlan.ID); !hasCode(err, ErrPlanNotFound.Code) {
+	if _, err = store.GetPlatformPlan(ctx, bPlan.ID); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("GetPlatformPlan(tenant-b's custom id): err = %v, want %s", err, ErrPlanNotFound.Code)
 	}
 }
@@ -312,7 +312,7 @@ func TestPlanStore_ScopedUpdate_OwnRowsOnly(t *testing.T) {
 	// A cross-scope update of B's row: refused, row untouched.
 	mutB := *bPlan
 	mutB.SetPrice(Money{Cents: 9999, Currency: "USD"})
-	if err := store.Update(ctx, a, &mutB); !hasCode(err, ErrPlanNotFound.Code) {
+	if err := store.Update(ctx, a, &mutB); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Update(tenant-a, tenant-b's plan): err = %v, want %s (pre-fix: the unscoped Update wrote it)", err, ErrPlanNotFound.Code)
 	}
 	got, err := store.Get(ctx, b, bPlan.ID)
@@ -328,7 +328,7 @@ func TestPlanStore_ScopedUpdate_OwnRowsOnly(t *testing.T) {
 	mutDrift := *aPlan
 	mutDrift.TenantID = string(b)
 	mutDrift.SetPrice(Money{Cents: 1111, Currency: "USD"})
-	if err = store.Update(ctx, a, &mutDrift); !hasCode(err, ErrPlanNotFound.Code) {
+	if err = store.Update(ctx, a, &mutDrift); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Update(tenant-a, own row drifted to tenant-b's scope): err = %v, want %s -- an update must not move a row across scopes", err, ErrPlanNotFound.Code)
 	}
 	got, err = store.Get(ctx, a, aPlan.ID)
@@ -388,7 +388,7 @@ func TestPlanStore_ScopedUpdate_PlatformScope(t *testing.T) {
 
 	mutB := *bPlan
 	mutB.SetPrice(Money{Cents: 9999, Currency: "USD"})
-	if err := store.Update(ctx, platform, &mutB); !hasCode(err, ErrPlanNotFound.Code) {
+	if err := store.Update(ctx, platform, &mutB); !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Update(platform scope, tenant-b's plan): err = %v, want %s", err, ErrPlanNotFound.Code)
 	}
 }
@@ -459,7 +459,7 @@ func TestErrPlanNotFound_Message_RendersTheLookedUpValue(t *testing.T) {
 			if !ok {
 				t.Fatalf("err = %v, want an *apperr.Error", tc.err)
 			}
-			if !hasCode(tc.err, ErrPlanNotFound.Code) {
+			if !apperr.HasCode(tc.err, ErrPlanNotFound.Code) {
 				t.Fatalf("err = %v, want %s", tc.err, ErrPlanNotFound.Code)
 			}
 			rendered, err := catalog.Lookup("en-US", appErr.Code, appErr.Params)

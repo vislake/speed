@@ -243,7 +243,7 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 		waitExecCount(t, execs, string(id1), 2, 3*time.Second)
 		t.Errorf("second StandaloneQueue.Start() error = nil while the first queue's dispatcher was blocked mid-handoff; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id1, execs.count(string(id1)))
 	} else {
-		if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+		if !apperr.HasCode(q2Err, ErrQueueWriterActive.Code) {
 			t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
 		}
 	}
@@ -374,7 +374,7 @@ dispatcherGone:
 		waitExecCount(t, execs, string(id1), 2, 3*time.Second)
 		t.Errorf("second StandaloneQueue.Start() error = nil during the first queue's Close drain; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id1, execs.count(string(id1)))
 	} else {
-		if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+		if !apperr.HasCode(q2Err, ErrQueueWriterActive.Code) {
 			t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
 		}
 	}
@@ -439,7 +439,7 @@ func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *te
 	})
 	if q2Err == nil {
 		t.Error("second StandaloneQueue.Start() error = nil for an idle first queue whose own liveness beats kept its registration fresh -- want ErrQueueWriterActive")
-	} else if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+	} else if !apperr.HasCode(q2Err, ErrQueueWriterActive.Code) {
 		t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
 	}
 }
@@ -579,7 +579,7 @@ func TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_Stil
 		waitExecCount(t, execs, string(id), 2, 3*time.Second)
 		t.Errorf("second StandaloneQueue.Start() error = nil while the incumbent's own heartbeats were still arriving on time; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id, execs.count(string(id)))
 	} else {
-		if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+		if !apperr.HasCode(q2Err, ErrQueueWriterActive.Code) {
 			t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
 		}
 	}

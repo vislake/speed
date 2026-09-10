@@ -99,7 +99,7 @@ func TestCheckStoredSize(t *testing.T) {
 		t.Fatalf("equal sizes rejected: %v", err)
 	}
 	err := checkStoredSize(99, 100)
-	if !hasCode(err, "storage.size_mismatch") {
+	if !apperr.HasCode(err, "storage.size_mismatch") {
 		t.Fatalf("mismatch code = %v, want storage.size_mismatch", err)
 	}
 	appErr, ok := apperr.As(err)
@@ -127,7 +127,7 @@ func TestCheckContentChecksum(t *testing.T) {
 	}
 	// A checksum of different bytes is a claim the stored bytes dishonour.
 	err := checkContentChecksum(raw, sha256HexDigest([]byte("different bytes")))
-	if !hasCode(err, "storage.checksum_mismatch") {
+	if !apperr.HasCode(err, "storage.checksum_mismatch") {
 		t.Fatalf("mismatch code = %v, want storage.checksum_mismatch", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestCheckAllowedMediaType(t *testing.T) {
 		t.Fatalf("allowlisted type refused: %v", err)
 	}
 	err := checkAllowedMediaType("image/gif", allowed)
-	if !hasCode(err, "storage.type_not_allowed") {
+	if !apperr.HasCode(err, "storage.type_not_allowed") {
 		t.Fatalf("refusal code = %v, want storage.type_not_allowed", err)
 	}
 	appErr, ok := apperr.As(err)
@@ -150,7 +150,7 @@ func TestCheckAllowedMediaType(t *testing.T) {
 	}
 	// An empty allowlist admits nothing; the service resolves a nil
 	// configuration to the module default before this check ever runs.
-	if err := checkAllowedMediaType("image/jpeg", nil); !hasCode(err, "storage.type_not_allowed") {
+	if err := checkAllowedMediaType("image/jpeg", nil); !apperr.HasCode(err, "storage.type_not_allowed") {
 		t.Fatalf("empty allowlist refused nothing: %v", err)
 	}
 }
@@ -172,7 +172,7 @@ func TestCheckDeclaredTypeMatches(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkDeclaredTypeMatches(tc.declared, tc.probed)
-			if tc.wantErr && !hasCode(err, "storage.type_mismatch") {
+			if tc.wantErr && !apperr.HasCode(err, "storage.type_mismatch") {
 				t.Fatalf("code = %v, want storage.type_mismatch", err)
 			}
 			if !tc.wantErr && err != nil {
@@ -203,7 +203,7 @@ func TestDecodeImageFacts(t *testing.T) {
 	})
 	t.Run("pixel ceiling", func(t *testing.T) {
 		_, _, err := decodeImageFacts(testutil.PNG(t, 100, 100), 5000)
-		if !hasCode(err, "storage.pixel_limit_exceeded") {
+		if !apperr.HasCode(err, "storage.pixel_limit_exceeded") {
 			t.Fatalf("code = %v, want storage.pixel_limit_exceeded", err)
 		}
 		appErr, _ := apperr.As(err)
@@ -218,7 +218,7 @@ func TestDecodeImageFacts(t *testing.T) {
 	})
 	t.Run("undecodable bytes", func(t *testing.T) {
 		_, _, err := decodeImageFacts([]byte("this is not an image at all"), 1<<30)
-		if !hasCode(err, "storage.image_unreadable") {
+		if !apperr.HasCode(err, "storage.image_unreadable") {
 			t.Fatalf("code = %v, want storage.image_unreadable", err)
 		}
 		// The decoder's own error rides along as the cause, kept out of any
@@ -266,7 +266,7 @@ func TestCheckAdmittedMediaType(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkAdmittedMediaType(tc.mt)
-			if !hasCode(err, ErrAllowedTypeUnsupported.Code) {
+			if !apperr.HasCode(err, ErrAllowedTypeUnsupported.Code) {
 				t.Fatalf("checkAdmittedMediaType(%q) error = %v, want storage.allowed_type_unsupported", tc.mt, err)
 			}
 			appErr, _ := apperr.As(err)

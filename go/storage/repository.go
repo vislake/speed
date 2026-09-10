@@ -107,7 +107,7 @@ func (r *ObjectRepository) listPageState(ctx context.Context, state string, limi
 		return query.Find(&objects).Error
 	})
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, err
 		}
 		return nil, ErrInternal.WithCause(err)
@@ -182,7 +182,7 @@ func (r *ObjectRepository) markDeleting(ctx context.Context, objectID string) (*
 		return nil
 	})
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, err
 		}
 		return nil, ErrInternal.WithCause(err)

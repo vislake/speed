@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // billingSubscriptionsTable names the shared billing_subscriptions table.
@@ -198,7 +199,7 @@ func (s *SubscriptionService) Create(ctx context.Context, in CreateInput) (*Subs
 	}
 
 	_, err = s.plans.Get(ctx, tenant, in.PlanID)
-	if hasCode(err, ErrPlanNotFound.Code) {
+	if apperr.HasCode(err, ErrPlanNotFound.Code) {
 		// Not this tenant's own custom Plan -- the id may name the
 		// platform-wide Plan the subscription should be created against
 		// (a platform-wide row is not in any tenant's own scope; see
@@ -352,10 +353,11 @@ func (s *SubscriptionService) publishStatusChanged(ctx context.Context, sub *Sub
 
 // isDBKitNotFound reports whether err is dbkit's ErrRecordNotFound, the
 // sentinel dbkit.Repository[T].FindByID/Update/Delete return for "no row
-// for this id under this tenant". Matched by Code through hasCode, not
+// for this id under this tenant". Matched by Code through
+// dbkit.IsRecordNotFound, not
 // errors.Is or == against the sentinel var, since WithParam/WithCause
 // derive a new *apperr.Error rather than mutating the receiver -- see
 // errors.go's own doc comment.
 func isDBKitNotFound(err error) bool {
-	return hasCode(err, dbkit.ErrRecordNotFound.Code)
+	return dbkit.IsRecordNotFound(err)
 }

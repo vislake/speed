@@ -415,7 +415,7 @@ func TestService_AccessPublic_Password(t *testing.T) {
 	}
 
 	wrong := "wrong"
-	if _, err := svc.AccessPublic(context.Background(), created.Token, AccessParams{Password: &wrong}); !hasCode(err, ErrNotAccessible.Code) {
+	if _, err := svc.AccessPublic(context.Background(), created.Token, AccessParams{Password: &wrong}); !apperr.HasCode(err, ErrNotAccessible.Code) {
 		t.Errorf("AccessPublic(wrong password) error = %v, want ErrNotAccessible", err)
 	}
 
@@ -574,7 +574,7 @@ func TestService_Access_EveryRefusalReasonIsOutwardlyIdentical(t *testing.T) {
 			reference = got
 			continue
 		}
-		if got.Code != reference.Code {
+		if !apperr.HasCode(err, reference.Code) {
 			t.Errorf("%s: Code = %q, want %q (identical to every other refusal reason)", name, got.Code, reference.Code)
 		}
 		if got.Status != reference.Status {
@@ -1284,7 +1284,7 @@ func assertCode(t *testing.T, err error, want string) {
 	if !ok {
 		t.Fatalf("error %v does not decode as *apperr.Error (want code %q)", err, want)
 	}
-	if got.Code != want {
+	if !apperr.HasCode(err, want) {
 		t.Errorf("error code = %q, want %q", got.Code, want)
 	}
 }
@@ -1692,7 +1692,7 @@ func TestService_AccessPublic_UnknownTokenRefusalIsCheap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(password-protected): %v", err)
 	}
-	if _, err := svc.AccessPublic(context.Background(), "no-such-token", AccessParams{}); !hasCode(err, ErrNotAccessible.Code) {
+	if _, err := svc.AccessPublic(context.Background(), "no-such-token", AccessParams{}); !apperr.HasCode(err, ErrNotAccessible.Code) {
 		t.Fatalf("AccessPublic(unknown token) error = %v, want ErrNotAccessible", err)
 	}
 

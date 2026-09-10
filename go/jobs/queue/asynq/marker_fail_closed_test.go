@@ -58,7 +58,7 @@ func TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker(t *testing.
 
 	// A readable "not cancelled" answer proceeds into the attempt path.
 	err = q.dispatchAfterMarkerRead(context.Background(), task, "job-1", log, nil, nil)
-	if appErr, ok := apperr.As(err); !ok || appErr.Code != jobs.ErrHandlerNotRegistered.Code {
+	if !apperr.HasCode(err, jobs.ErrHandlerNotRegistered.Code) {
 		t.Fatalf("dispatchAfterMarkerRead(readable, not cancelled) error = %v, want it to proceed into the attempt (ErrHandlerNotRegistered from the bare queue)", err)
 	}
 }

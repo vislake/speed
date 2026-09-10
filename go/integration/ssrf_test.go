@@ -60,10 +60,10 @@ func TestValidateWebhookURL_PrivateIPLiteral_Blocked(t *testing.T) {
 // standard system (hosts file, no network), so this needs no resolver seam.
 func TestValidateWebhookURL_ResolvedBlockedHost_RefusalDoesNotDiscloseResolvedIP(t *testing.T) {
 	err := ValidateWebhookURL(context.Background(), "http://localhost:8080/hook")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrWebhookURLBlocked.Code {
+	if !apperr.HasCode(err, ErrWebhookURLBlocked.Code) {
 		t.Fatalf("ValidateWebhookURL(localhost) = %v, want ErrWebhookURLBlocked", err)
 	}
+	found, _ := apperr.As(err)
 	if ip, present := found.Params["ip"]; present {
 		t.Fatalf("the resolution path's refusal carries the resolved address %v in its params -- an internal-DNS oracle for the caller; want no ip param", ip)
 	}
@@ -87,10 +87,10 @@ func TestValidateWebhookURL_BlockedLiteralIP_RefusalCarriesTheLiteralIP(t *testi
 	for _, tt := range cases {
 		t.Run(tt.url, func(t *testing.T) {
 			err := ValidateWebhookURL(context.Background(), tt.url)
-			found, ok := apperr.As(err)
-			if !ok || found.Code != ErrWebhookURLBlocked.Code {
+			if !apperr.HasCode(err, ErrWebhookURLBlocked.Code) {
 				t.Fatalf("error = %v, want ErrWebhookURLBlocked", err)
 			}
+			found, _ := apperr.As(err)
 			if got := found.Params["ip"]; got != tt.wantIP {
 				t.Fatalf("ip param = %v, want the literal address %q the caller typed", got, tt.wantIP)
 			}
@@ -127,10 +127,10 @@ func TestValidateWebhookURL_NoHost_Refused(t *testing.T) {
 
 func TestValidateWebhookURL_UnresolvableHost_Refused(t *testing.T) {
 	err := ValidateWebhookURL(context.Background(), "https://this-host-should-not-exist.invalid/hook")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrWebhookURLUnresolvable.Code {
+	if !apperr.HasCode(err, ErrWebhookURLUnresolvable.Code) {
 		t.Fatalf("error = %v, want ErrWebhookURLUnresolvable", err)
 	}
+	found, _ := apperr.As(err)
 	// The host param echoes the caller's own hostname -- zero disclosure --
 	// and stays on the answer unchanged.
 	if got := found.Params["host"]; got != "this-host-should-not-exist.invalid" {

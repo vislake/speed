@@ -12,15 +12,6 @@ import (
 // *apperr.Error, so never compare a once-returned error against a var here
 // with == or errors.Is.
 
-// hasCode reports whether err is, or wraps, an *apperr.Error with the given
-// code. Codes are compared rather than pointers because WithParam and
-// WithCause derive a new *apperr.Error every time; image_job_store.go's get
-// uses it to recognize dbkit.ErrRecordNotFound.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
-}
-
 var (
 	// ErrEmptyModel reports a ChatRequest whose Model (the logical model
 	// key) is empty.

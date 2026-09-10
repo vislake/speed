@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // fakeUsageReader answers a fixed count for every RealtimeCount call,
@@ -218,7 +219,7 @@ func TestEntitlementsService_Check_NilUsageReader_FailsClosed(t *testing.T) {
 	svc.usage = nil // the wiring gap: NewEntitlementsService was handed no UsageReader
 
 	_, err := svc.Check(ctx, "api_calls", 1)
-	if !hasCode(err, ErrUsageReaderUnconfigured.Code) {
+	if !apperr.HasCode(err, ErrUsageReaderUnconfigured.Code) {
 		t.Fatalf("Check with nil UsageReader: err = %v, want %s (fail closed, never a panic, never an allowance)", err, ErrUsageReaderUnconfigured.Code)
 	}
 }

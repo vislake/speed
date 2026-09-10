@@ -12,7 +12,6 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/ratelimit"
 )
@@ -673,7 +672,7 @@ type VerifyCodeInput struct {
 func (s *ContactService) VerifyCode(ctx context.Context, in VerifyCodeInput) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, in.ContactID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrContactNotFound
 		}
 		return nil, errInternal(err)
@@ -808,7 +807,7 @@ type ResendCodeInput struct {
 func (s *ContactService) ResendCode(ctx context.Context, in ResendCodeInput) error {
 	contact, err := s.repo.FindByID(ctx, in.ContactID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return ErrContactNotFound
 		}
 		return errInternal(err)
@@ -939,7 +938,7 @@ type UnsubscribeInput struct {
 func (s *ContactService) Unsubscribe(ctx context.Context, in UnsubscribeInput) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, in.ContactID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrContactNotFound
 		}
 		return nil, errInternal(err)
@@ -1008,7 +1007,7 @@ func (s *ContactService) markUnsubscribed(ctx context.Context, id string) (bool,
 func (s *ContactService) MarkBounced(ctx context.Context, contactID string) error {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return ErrContactNotFound
 		}
 		return errInternal(err)
@@ -1095,7 +1094,7 @@ func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string
 func (s *ContactService) ensureDeliverable(ctx context.Context, contactID, typeKey string) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrContactNotFound
 		}
 		return nil, errInternal(err)
@@ -1380,18 +1379,4 @@ func (s *ContactService) emit(ctx context.Context, action string, c *VerifiedCon
 // internal error, carrying the cause.
 func errInternal(err error) error {
 	return ErrInternal.WithCause(err)
-}
-
-// isRecordNotFound reports whether err is dbkit's absent-row answer: the
-// *apperr.Error carrying dbkit.ErrRecordNotFound's code that
-// dbkit.Repository.FindByID returns when no row matches (never gorm's own
-// sentinel, which dbkit translates before it escapes the repository -- see
-// go/dbkit/repository.go's ErrRecordNotFound). Service code therefore
-// classifies the apperr code rather than testing errors.Is against the gorm
-// sentinel; the one place this module does test the gorm sentinel directly
-// is VerifiedContactRepository.ByChannelAndAddressIndex, whose own query
-// runs raw through gorm and sees the untranslated error.
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }

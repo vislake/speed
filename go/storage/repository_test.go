@@ -814,7 +814,7 @@ func TestObjectRepository_FinalizeUpload_RefusesWhenNotAnUploadingRowHere(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			row, err := repo.FindByID(tc.ctx, tc.id)
 			if err != nil {
-				if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+				if dbkit.IsRecordNotFound(err) {
 					// The never-existed shape has no row to read; a bare id
 					// is all the finalize needs.
 					row = &Object{ID: tc.id}
@@ -884,7 +884,7 @@ func TestObjectRepository_DeleteObjectRows_RemovesTheRows(t *testing.T) {
 		t.Errorf("deleteObjectRows removed = false on an existing row, want true")
 	}
 
-	if _, findErr := objects.FindByID(ctx, "obj-1"); !hasCode(findErr, dbkit.ErrRecordNotFound.Code) {
+	if _, findErr := objects.FindByID(ctx, "obj-1"); !dbkit.IsRecordNotFound(findErr) {
 		t.Errorf("FindByID after deleteObjectRows = %v, want %v", findErr, dbkit.ErrRecordNotFound.Code)
 	}
 	rows, err := derivatives.listByObject(ctx, "obj-1")

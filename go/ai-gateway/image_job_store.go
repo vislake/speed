@@ -272,10 +272,10 @@ func (r *imageJobRepository) get(ctx context.Context, jobID string) (*imageJobRo
 	if err != nil {
 		// dbkit.ErrRecordNotFound is derived fresh by WithParam on every
 		// return (its own doc comment), so it can never be recognized with
-		// errors.Is or == -- compare its Code through hasCode instead, the
+		// errors.Is or == -- compare its Code through apperr.HasCode instead, the
 		// same convention this module's own errors.go documents for this
 		// exact sentinel.
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, nil
 		}
 		return nil, err

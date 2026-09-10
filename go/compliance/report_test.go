@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // mustMarshalChanges JSON-marshals v and returns it as a datatypes.JSON
@@ -389,7 +390,7 @@ func TestRenderAuditReport_CSV_EmptyEvents_RendersHeaderOnly(t *testing.T) {
 
 func TestRenderAuditReport_UnsupportedFormat_ReturnsError(t *testing.T) {
 	_, err := RenderAuditReport(sampleAuditEventsForReport(t), ReportFormat("xml"))
-	if !hasCode(err, ErrUnsupportedReportFormat.Code) {
+	if !apperr.HasCode(err, ErrUnsupportedReportFormat.Code) {
 		t.Fatalf("RenderAuditReport(unsupported format) error = %v, want %s", err, ErrUnsupportedReportFormat.Code)
 	}
 }

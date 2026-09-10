@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // DefaultPropagationWindow is how long a newly staged SigningKeyStatusPending
@@ -133,7 +134,7 @@ func (s *Service) PromoteDuePending(ctx context.Context, propagationWindow time.
 		previousActiveID := ""
 		if active, err := s.signingKeys.FindActiveByPurpose(ctx, key.Purpose); err == nil {
 			previousActiveID = active.ID
-		} else if !isNoActiveKey(err) {
+		} else if !apperr.HasCode(err, ErrNoActiveKey.Code) {
 			return promoted, err
 		}
 
@@ -218,7 +219,7 @@ func (s *Service) PromoteNow(ctx context.Context, purpose string, propagationWin
 	previousActiveID := ""
 	if active, err := s.signingKeys.FindActiveByPurpose(ctx, purpose); err == nil {
 		previousActiveID = active.ID
-	} else if !isNoActiveKey(err) {
+	} else if !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		return "", err
 	}
 

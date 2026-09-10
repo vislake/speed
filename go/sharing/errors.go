@@ -115,12 +115,3 @@ var (
 	// resource behind it did not.
 	ErrResourceUnavailable = &apperr.Error{Code: "sharing.resource_unavailable", Status: http.StatusBadGateway}
 )
-
-// hasCode reports whether err is, or wraps, an *apperr.Error with the given
-// code. Codes are compared rather than pointers because WithParam and
-// WithCause derive a new *apperr.Error every time -- the same helper
-// go/storage's errors.go and go/org's own error-translation call sites use.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
-}

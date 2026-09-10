@@ -131,7 +131,7 @@ func (h *Handler) OrgListNodes(w http.ResponseWriter, r *http.Request, params ap
 	default:
 		root, err := h.tree.Root(ctx)
 		switch {
-		case hasCode(err, ErrNodeNotFound.Code):
+		case apperr.HasCode(err, ErrNodeNotFound.Code):
 			nodes = nil
 		case err != nil:
 			writeError(w, err)
@@ -275,7 +275,7 @@ func (h *Handler) OrgListMembers(w http.ResponseWriter, r *http.Request, params 
 	if nodeID == "" {
 		root, err := h.tree.Root(ctx)
 		switch {
-		case hasCode(err, ErrNodeNotFound.Code):
+		case apperr.HasCode(err, ErrNodeNotFound.Code):
 			writeJSON(w, http.StatusOK, api.OrgListMembersResponse{Members: &[]api.OrgMembership{}})
 			return
 		case err != nil:

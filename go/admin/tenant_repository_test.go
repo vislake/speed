@@ -19,7 +19,7 @@ func TestTenantRepository_Create_DuplicateTenantID_ReportsAlreadyExists(t *testi
 		t.Fatalf("Create() error = %v", err)
 	}
 	err := repo.Create(ctx, &Tenant{TenantID: "tenant-a"})
-	if !isCode(err, ErrTenantAlreadyExists.Code) {
+	if !apperr.HasCode(err, ErrTenantAlreadyExists.Code) {
 		t.Fatalf("Create() error = %v, want ErrTenantAlreadyExists", err)
 	}
 }
@@ -29,7 +29,7 @@ func TestTenantRepository_Create_EmptyTenantID_ReportsIDRequired(t *testing.T) {
 	repo := NewTenantRepository(db)
 
 	err := repo.Create(context.Background(), &Tenant{})
-	if !isCode(err, ErrTenantIDRequired.Code) {
+	if !apperr.HasCode(err, ErrTenantIDRequired.Code) {
 		t.Fatalf("Create() error = %v, want ErrTenantIDRequired", err)
 	}
 }
@@ -99,7 +99,7 @@ func TestTenantRepository_Get_Missing_ReportsNotFound(t *testing.T) {
 	repo := NewTenantRepository(db)
 
 	_, err := repo.Get(context.Background(), "does-not-exist")
-	if !isCode(err, ErrTenantNotFound.Code) {
+	if !apperr.HasCode(err, ErrTenantNotFound.Code) {
 		t.Fatalf("Get() error = %v, want ErrTenantNotFound", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestTenantRepository_Update_Missing_ReportsNotFound(t *testing.T) {
 	repo := NewTenantRepository(db)
 
 	_, err := repo.Update(context.Background(), "does-not-exist", TenantPatch{})
-	if !isCode(err, ErrTenantNotFound.Code) {
+	if !apperr.HasCode(err, ErrTenantNotFound.Code) {
 		t.Fatalf("Update() error = %v, want ErrTenantNotFound", err)
 	}
 }
@@ -223,7 +223,7 @@ func TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused(t *t
 		switch {
 		case err == nil:
 			succeeded++
-		case isCode(err, ErrTenantConcurrentUpdate.Code):
+		case apperr.HasCode(err, ErrTenantConcurrentUpdate.Code):
 			refused++
 		default:
 			t.Fatalf("unexpected error: %v", err)
@@ -249,13 +249,4 @@ func TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused(t *t
 	if final.Status != winner.Status || final.DisplayName != winner.DisplayName {
 		t.Fatalf("persisted row = %+v, want exactly the winner's own write %+v", final, winner)
 	}
-}
-
-// isCode reports whether err is an *apperr.Error with the given Code --
-// the classify-by-Code convention this whole codebase uses (apperr's
-// WithParam/WithCause derive new values, so exported sentinels are
-// templates, never singletons == or errors.Is could match).
-func isCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }

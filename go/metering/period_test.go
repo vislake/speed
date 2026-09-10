@@ -81,8 +81,7 @@ func TestPeriodBounds_NonUTCInputIsNormalized(t *testing.T) {
 
 func TestPeriodBounds_InvalidBucket(t *testing.T) {
 	_, _, err := periodBounds(time.Now(), "weekly")
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrInvalidPeriodBucket.Code {
+	if !apperr.HasCode(err, ErrInvalidPeriodBucket.Code) {
 		t.Fatalf("periodBounds with an invalid bucket = %v, want %s", err, ErrInvalidPeriodBucket.Code)
 	}
 }

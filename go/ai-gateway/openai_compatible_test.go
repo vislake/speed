@@ -140,10 +140,10 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_EnvelopeFieldsOnlyInLog(t *te
 		Model:    "gpt-4o-mini",
 		Messages: []ChatMessage{{Role: RoleUser, Content: "hi " + echoedFragment}},
 	})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
+	if !apperr.HasCode(err, ErrProviderRequestFailed.Code) {
 		t.Fatalf("Chat err = %v, want ErrProviderRequestFailed", err)
 	}
+	appErr, _ := apperr.As(err)
 	if got, present := appErr.Params["body"]; present {
 		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
 	}
@@ -182,10 +182,10 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_NonJSONBodyNotLogged(t *testi
 		Model:    "gpt-4o-mini",
 		Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
 	})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
+	if !apperr.HasCode(err, ErrProviderRequestFailed.Code) {
 		t.Fatalf("Chat err = %v, want ErrProviderRequestFailed", err)
 	}
+	appErr, _ := apperr.As(err)
 	if got, present := appErr.Params["body"]; present {
 		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
 	}

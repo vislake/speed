@@ -151,10 +151,10 @@ func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_EnvelopeFieldsOnl
 
 	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
 	_, err := p.TextToImage(ctx, TextToImageRequest{Model: "dall-e-3", Prompt: "a portrait of " + echoedFragment})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
+	if !apperr.HasCode(err, ErrProviderRequestFailed.Code) {
 		t.Fatalf("TextToImage err = %v, want ErrProviderRequestFailed", err)
 	}
+	appErr, _ := apperr.As(err)
 	if got, present := appErr.Params["body"]; present {
 		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
 	}

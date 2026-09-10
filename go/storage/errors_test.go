@@ -160,7 +160,7 @@ func TestErrorCatalog_WithParamDerivesRatherThanMutates(t *testing.T) {
 	if got := decorated.Params["id"]; got != "obj-1" {
 		t.Errorf("decorated.Params[id] = %v, want %q", got, "obj-1")
 	}
-	if !hasCode(decorated, ErrObjectNotFound.Code) {
+	if !apperr.HasCode(decorated, ErrObjectNotFound.Code) {
 		t.Errorf("decorated error lost its code %q", ErrObjectNotFound.Code)
 	}
 }
@@ -174,7 +174,7 @@ func assertCode(t *testing.T, err error, want string) {
 	if !ok {
 		t.Fatalf("error %v is not an *apperr.Error, want code %s", err, want)
 	}
-	if appErr.Code != want {
+	if !apperr.HasCode(err, want) {
 		t.Fatalf("error code = %s, want %s", appErr.Code, want)
 	}
 }

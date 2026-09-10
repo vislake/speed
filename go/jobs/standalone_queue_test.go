@@ -174,8 +174,7 @@ func TestRegisterHandler_DuplicateType_Errors(t *testing.T) {
 		t.Fatalf("first RegisterHandler() error = %v", err)
 	}
 	err := q.RegisterHandler(h)
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrDuplicateHandlerType.Code {
+	if !apperr.HasCode(err, ErrDuplicateHandlerType.Code) {
 		t.Fatalf("second RegisterHandler() error = %v, want ErrDuplicateHandlerType", err)
 	}
 }
@@ -183,8 +182,7 @@ func TestRegisterHandler_DuplicateType_Errors(t *testing.T) {
 func TestEnqueue_InvalidTask_ReturnsError(t *testing.T) {
 	q := newTestQueue(t)
 	_, err := q.Enqueue(context.Background(), Task{})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrInvalidTask.Code {
+	if !apperr.HasCode(err, ErrInvalidTask.Code) {
 		t.Fatalf("Enqueue(Task{}) error = %v, want ErrInvalidTask", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/org/api"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
@@ -259,10 +260,10 @@ func TestHandler_OrgDeleteNode_Cascade_Returns204(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
 	}
-	if _, err := m.tree.Get(ctx, left.ID); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.tree.Get(ctx, left.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("the deleted node still resolves: err = %v", err)
 	}
-	if _, err := m.tree.Get(ctx, grandchild.ID); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.tree.Get(ctx, grandchild.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("the cascaded grandchild still resolves: err = %v", err)
 	}
 	if _, err := m.tree.Get(ctx, right.ID); err != nil {

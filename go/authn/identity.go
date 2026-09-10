@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	obs "github.com/vislake/speed/go/observability"
 )
@@ -553,7 +554,7 @@ func (s *Service) resolveSocialAccount(
 			// other failed sign-in, not only in the log line above.
 			s.recordRequiresBinding(ctx, MethodSocial, existing.ID, email, ip, userAgent)
 			return nil, false, ErrIdentityRequiresBinding
-		case !errors.Is(err, ErrNotFound) && !hasCode(err, ErrInvalidEmail.Code):
+		case !errors.Is(err, ErrNotFound) && !apperr.HasCode(err, ErrInvalidEmail.Code):
 			return nil, false, err
 		}
 	}

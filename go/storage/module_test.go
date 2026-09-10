@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
 )
@@ -211,7 +212,7 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 	_, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), NewModule(nil))
-	if !hasCode(err, ErrQueueRequired.Code) {
+	if !apperr.HasCode(err, ErrQueueRequired.Code) {
 		t.Fatalf("Bootstrap without a queue error = %v, want storage.queue_required", err)
 	}
 }
@@ -239,7 +240,7 @@ func TestModule_Register_RefusesAnUnadmittableAllowedType(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := pkgcore.NewKernel().
 				Bootstrap(context.Background(), newWiredModule(t, nil, WithAllowedTypes(tc.types...)))
-			if !hasCode(err, ErrAllowedTypeUnsupported.Code) {
+			if !apperr.HasCode(err, ErrAllowedTypeUnsupported.Code) {
 				t.Fatalf("Bootstrap with allowed types %v error = %v, want storage.allowed_type_unsupported", tc.types, err)
 			}
 		})

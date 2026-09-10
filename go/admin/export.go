@@ -225,7 +225,7 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	}
 
 	result, err := s.export.Export(ctx, job.TenantID)
-	if err != nil && !isExportPartialFailure(err) {
+	if err != nil && !apperr.HasCode(err, compliance.ErrExportPartialFailure.Code) {
 		return jobs.Result{}, err
 	}
 
@@ -251,16 +251,6 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 		return jobs.Result{}, marshalErr
 	}
 	return jobs.Result{Data: encoded}, nil
-}
-
-// isExportPartialFailure reports whether err is compliance's
-// ErrExportPartialFailure -- the one error Export returns only after the
-// export's work itself completed (the manifest gathered minus the failing
-// participants, stored and delivered through go/sharing). Every other
-// error Export can return precedes or aborts that work.
-func isExportPartialFailure(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == compliance.ErrExportPartialFailure.Code
 }
 
 // auditExportFailureReason renders the failure-reason text admin's own

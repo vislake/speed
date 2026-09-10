@@ -1110,7 +1110,7 @@ func TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError(t *testing
 	if !ok {
 		t.Fatalf("RealtimeCount error = %v, want an *apperr.Error", err)
 	}
-	if appErr.Code != "metering.usage_summaries_unconfigured" {
+	if !apperr.HasCode(err, "metering.usage_summaries_unconfigured") {
 		t.Errorf("RealtimeCount error code = %q, want %q (aligned with billing's usage_reader_unconfigured vocabulary)", appErr.Code, "metering.usage_summaries_unconfigured")
 	}
 }
@@ -1162,7 +1162,7 @@ func assertNilSummariesRefusal(t *testing.T, path string, err error) {
 	if !ok {
 		t.Fatalf("%s over a nil-summaries Aggregator error = %v, want an *apperr.Error", path, err)
 	}
-	if appErr.Code != "metering.usage_summaries_unconfigured" {
+	if !apperr.HasCode(err, "metering.usage_summaries_unconfigured") {
 		t.Errorf("%s over a nil-summaries Aggregator error code = %q, want %q", path, appErr.Code, "metering.usage_summaries_unconfigured")
 	}
 }

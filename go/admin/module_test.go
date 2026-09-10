@@ -24,6 +24,7 @@ import (
 	notificationmigrations "github.com/vislake/speed/go/notification/migrations"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
 	"github.com/vislake/speed/go/sharing"
@@ -379,7 +380,7 @@ func TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf(t *testing
 
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-pref-mandatory"))
 	err := env.Notification.Preferences().Set(ctx, "user-mandatory-check", NotificationTypeImpersonationStarted, []string{})
-	if !isCode(err, notification.ErrPreferenceOptoutNotAllowed.Code) {
+	if !apperr.HasCode(err, notification.ErrPreferenceOptoutNotAllowed.Code) {
 		t.Fatalf("Set(empty selection) error = %v, want %s (the mandatory notification must refuse a full opt-out)",
 			err, notification.ErrPreferenceOptoutNotAllowed.Code)
 	}
@@ -393,7 +394,7 @@ func TestModule_Register_OrgNodeCreatedSubscriptionFires(t *testing.T) {
 	env := buildTestAdminModule(t)
 	adminModule, orgModule := env.Admin, env.Org
 
-	if _, err := adminModule.Tenants().Get(context.Background(), "tenant-wired"); !isCode(err, ErrTenantNotFound.Code) {
+	if _, err := adminModule.Tenants().Get(context.Background(), "tenant-wired"); !apperr.HasCode(err, ErrTenantNotFound.Code) {
 		t.Fatalf("Get() before any org node exists = %v, want ErrTenantNotFound", err)
 	}
 
@@ -480,7 +481,7 @@ func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewModule(env.DB, tc.opts...)
-			if err := m.Register(reg); !isCode(err, tc.want) {
+			if err := m.Register(reg); !apperr.HasCode(err, tc.want) {
 				t.Fatalf("Register() error = %v, want %s", err, tc.want)
 			}
 		})

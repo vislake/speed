@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // testPermissions is what the host's OTHER modules declare in these tests.
@@ -393,7 +394,7 @@ func TestService_PublishFailure_IsReportedAndTheCacheIsStillInvalidated(t *testi
 	ctx := tenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err == nil {
 		t.Fatal("DefineRole reported success although the bus rejected the announcement")
-	} else if !hasCode(err, ErrStorage.Code) {
+	} else if !apperr.HasCode(err, ErrStorage.Code) {
 		t.Fatalf("DefineRole error = %v, want %s", err, ErrStorage.Code)
 	}
 

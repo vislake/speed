@@ -548,8 +548,7 @@ func TestSendRecordRepository_ListByFilter_NoTenant_Refused(t *testing.T) {
 	repo := NewSendRecordRepository(db)
 
 	_, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{Limit: 50})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrSendRecordTenantRequired.Code {
+	if !apperr.HasCode(err, ErrSendRecordTenantRequired.Code) {
 		t.Fatalf("ListByFilter with no TenantID error = %v, want %s", err, ErrSendRecordTenantRequired.Code)
 	}
 }

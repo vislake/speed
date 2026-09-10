@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func TestService_Can_NoBindings_DeniesWithoutError(t *testing.T) {
@@ -150,7 +152,7 @@ func TestService_Can_IncompleteSubject_IsAnError(t *testing.T) {
 		if ok {
 			t.Fatalf("Can(%+v) = true", sub)
 		}
-		if !hasCode(err, ErrSubjectRequired.Code) {
+		if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 			t.Fatalf("Can(%+v) error = %v, want %s", sub, err, ErrSubjectRequired.Code)
 		}
 	}
@@ -306,7 +308,7 @@ func TestService_DataScope_ResolverError_Propagates(t *testing.T) {
 	if err == nil {
 		t.Fatal("DataScope succeeded although the resolver failed")
 	}
-	if !hasCode(err, ErrSubtreeUnresolved.Code) {
+	if !apperr.HasCode(err, ErrSubtreeUnresolved.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubtreeUnresolved.Code)
 	}
 	if !errors.Is(err, boom) {
@@ -380,7 +382,7 @@ func TestService_DataScope_PermissionNotHeld_IsDenied(t *testing.T) {
 func TestService_DataScope_IncompleteSubject_IsADeniedScopeAndAnError(t *testing.T) {
 	svc := newTestService(t)
 	scope, err := svc.DataScope(context.Background(), Subject{}, "read", "notes")
-	if !hasCode(err, ErrSubjectRequired.Code) {
+	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
 	if !scope.Denied {

@@ -2,10 +2,10 @@ package org
 
 import (
 	"context"
-	"encoding/json"
 
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
@@ -353,7 +353,7 @@ func (m *Module) ensureRoot(ctx context.Context) (*OrgNode, error) {
 	switch root, err := m.tree.Root(ctx); {
 	case err == nil:
 		return root, nil
-	case !hasCode(err, ErrNodeNotFound.Code):
+	case !apperr.HasCode(err, ErrNodeNotFound.Code):
 		return nil, err
 	}
 
@@ -361,7 +361,7 @@ func (m *Module) ensureRoot(ctx context.Context) (*OrgNode, error) {
 	if err == nil {
 		return root, nil
 	}
-	if hasCode(err, ErrRootAlreadyExists.Code) || hasCode(err, ErrDuplicateSiblingName.Code) {
+	if apperr.HasCode(err, ErrRootAlreadyExists.Code) || apperr.HasCode(err, ErrDuplicateSiblingName.Code) {
 		return m.tree.Root(ctx)
 	}
 	return nil, err
@@ -422,34 +422,14 @@ func (m *Module) defaultWorkspaceName(ctx context.Context) string {
 var userCreatedUserIDKeys = []string{"user_id", "userId", "UserID", "userID"}
 
 // userIDFromPayload extracts the user id from an authn.user.created payload
-// of any shape, by round-tripping it through JSON into a map and probing the
-// accepted key spellings.
+// of any shape, probing the accepted key spellings through
+// pkgcore.EventPayloadString.
 //
 // It never type-asserts the publisher's concrete type -- doing so would
 // require importing it, which is the one thing this module may not do -- and
-// it returns ok=false rather than an error for every unusable shape, because
-// the caller's contract is to log and continue, not to fail the publisher.
+// it reports false rather than an error for every unusable shape, because
+// the caller's contract is to log and continue, not to fail the publisher
+// (see EventPayloadString's own doc comment for the tolerant-read contract).
 func userIDFromPayload(payload any) (string, bool) {
-	if payload == nil {
-		return "", false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", false
-	}
-	for _, key := range userCreatedUserIDKeys {
-		value, ok := fields[key]
-		if !ok {
-			continue
-		}
-		id, ok := value.(string)
-		if ok && id != "" {
-			return id, true
-		}
-	}
-	return "", false
+	return pkgcore.EventPayloadString(payload, userCreatedUserIDKeys...)
 }

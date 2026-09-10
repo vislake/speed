@@ -88,10 +88,10 @@ func TestGateway_Chat_RateLimited_RefusesWithErrRateLimited(t *testing.T) {
 	g.limiter = scriptedLimiter{allowed: false, resetAfter: 42 * time.Second}
 
 	_, err := g.Chat(pkgcore.WithTenant(context.Background(), "tenant-acme"), chatReq())
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrRateLimited.Code {
+	if !apperr.HasCode(err, ErrRateLimited.Code) {
 		t.Fatalf("Chat() error = %v, want ErrRateLimited", err)
 	}
+	appErr, _ := apperr.As(err)
 	if got := appErr.Params["retry_after_seconds"]; got != 42 {
 		t.Errorf("retry_after_seconds param = %v, want 42", got)
 	}
@@ -128,8 +128,7 @@ func TestGateway_ChatStream_RateLimited_RefusesBeforeCallingTheProvider(t *testi
 	g.limiter = scriptedLimiter{allowed: false, resetAfter: 7 * time.Second}
 
 	_, err := g.ChatStream(pkgcore.WithTenant(context.Background(), "tenant-acme"), chatReq())
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrRateLimited.Code {
+	if !apperr.HasCode(err, ErrRateLimited.Code) {
 		t.Fatalf("ChatStream() error = %v, want ErrRateLimited", err)
 	}
 	if provider.streamCalls != 0 {
@@ -149,8 +148,7 @@ func TestGateway_GenerateImage_RateLimited_RefusesBeforeEnqueuing(t *testing.T) 
 
 	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 	_, err := g.GenerateImage(tenantCtx, imageReq())
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrRateLimited.Code {
+	if !apperr.HasCode(err, ErrRateLimited.Code) {
 		t.Fatalf("GenerateImage() error = %v, want ErrRateLimited", err)
 	}
 	if queue.calls != 0 {
@@ -169,8 +167,7 @@ func TestGateway_RateLimiter_UnderlyingStoreError_WrapsAsInternal(t *testing.T) 
 	g.limiter = scriptedLimiter{err: errors.New("kv store unavailable")}
 
 	_, err := g.Chat(pkgcore.WithTenant(context.Background(), "tenant-acme"), chatReq())
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrRateLimitCheckFailed.Code {
+	if !apperr.HasCode(err, ErrRateLimitCheckFailed.Code) {
 		t.Fatalf("Chat() error = %v, want ErrRateLimitCheckFailed", err)
 	}
 	if provider.chatCalls != 0 {
@@ -307,10 +304,10 @@ func TestGateway_Chat_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.T) {
 // denial carrying the given retry_after_seconds value.
 func assertChatRetryAfter(t *testing.T, err error, want int) {
 	t.Helper()
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrRateLimited.Code {
+	if !apperr.HasCode(err, ErrRateLimited.Code) {
 		t.Fatalf("error = %v, want ErrRateLimited", err)
 	}
+	appErr, _ := apperr.As(err)
 	if got := appErr.Params["retry_after_seconds"]; got != want {
 		t.Errorf("retry_after_seconds param = %v, want %d", got, want)
 	}

@@ -330,7 +330,7 @@ func TestDelivery_Dispatch_RefusesAMalformedShape(t *testing.T) {
 			if !ok {
 				t.Fatalf("error %v is not an *apperr.Error, want code %s", err, ErrDispatchInvalid.Code)
 			}
-			if appErr.Code != ErrDispatchInvalid.Code {
+			if !apperr.HasCode(err, ErrDispatchInvalid.Code) {
 				t.Fatalf("error code = %s, want %s", appErr.Code, ErrDispatchInvalid.Code)
 			}
 			if got := appErr.Params["field"]; got != tc.field {
@@ -2214,10 +2214,10 @@ func TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration(t *te
 	d.Params["reason"] = "investigating suspected fraud on this account"
 	d.Params["admin_user_id"] = "admin-1"
 	_, err := env.svc.Dispatch(ctx, d)
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrDispatchParamsNotAllowed.Code {
+	if !apperr.HasCode(err, ErrDispatchParamsNotAllowed.Code) {
 		t.Fatalf("Dispatch() error = %v, want %s", err, ErrDispatchParamsNotAllowed.Code)
 	}
+	appErr, _ := apperr.As(err)
 	if got := appErr.Params["type_key"]; got != fixtureTypeAppointment {
 		t.Errorf("refusal type_key = %v, want %q", got, fixtureTypeAppointment)
 	}
@@ -2346,10 +2346,10 @@ func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
 	d.Params = maps.Clone(renderTestParams)
 	d.Params["internal_marker"] = "occurrence-42"
 	_, err := env.svc.Dispatch(ctx, d)
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrDispatchParamsUnreferenced.Code {
+	if !apperr.HasCode(err, ErrDispatchParamsUnreferenced.Code) {
 		t.Fatalf("Dispatch() error = %v, want %s", err, ErrDispatchParamsUnreferenced.Code)
 	}
+	appErr, _ := apperr.As(err)
 	if got := appErr.Params["type_key"]; got != fixtureTypeAppointment {
 		t.Errorf("refusal type_key = %v, want %q", got, fixtureTypeAppointment)
 	}
@@ -2375,10 +2375,10 @@ func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
 	dd.Params = maps.Clone(renderTestParams)
 	dd.Params["internal_marker"] = "occurrence-42"
 	_, derr := declared.svc.Dispatch(ctx, dd)
-	dappErr, dok := apperr.As(derr)
-	if !dok || dappErr.Code != ErrDispatchParamsUnreferenced.Code {
+	if !apperr.HasCode(derr, ErrDispatchParamsUnreferenced.Code) {
 		t.Fatalf("Dispatch() over a declaration that lists the unreferenced parameter = %v, want %s -- the copy gate must not defer to the declaration", derr, ErrDispatchParamsUnreferenced.Code)
 	}
+	dappErr, _ := apperr.As(derr)
 	if got := dappErr.Params["params"]; got != "internal_marker" {
 		t.Errorf("refusal params = %v, want the offending key %q", got, "internal_marker")
 	}

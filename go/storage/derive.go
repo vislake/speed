@@ -59,6 +59,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // thumbnailJPEGQuality is the fixed JPEG quality every JPEG thumbnail is
@@ -138,7 +139,7 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 	// queue must not re-run a task whose object is gone into a dead letter.
 	row, err := findObjectByID(ctx, s.objects, objectID)
 	if err != nil {
-		if hasCode(err, ErrObjectNotFound.Code) {
+		if apperr.HasCode(err, ErrObjectNotFound.Code) {
 			observability.FromContext(ctx).Info("thumbnail derive skipped",
 				"object_id", objectID, "reason", "object not found")
 			return nil
@@ -227,7 +228,7 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 					"reason", "object deleted while its bytes were being read")
 				return nil
 			}
-			if hasCode(rerr, ErrObjectNotFound.Code) {
+			if apperr.HasCode(rerr, ErrObjectNotFound.Code) {
 				observability.FromContext(ctx).Info("thumbnail derive skipped",
 					"object_id", objectID,
 					"reason", "object deleted while its bytes were being read")

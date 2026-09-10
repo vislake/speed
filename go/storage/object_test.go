@@ -624,7 +624,7 @@ func TestObjectService_StateAndWindowGates(t *testing.T) {
 		err := svc.Upload(ctx, row.ID, nil, bytes.NewReader([]byte("late bytes")))
 		assertCode(t, err, ErrObjectNotUploading.Code)
 		assertParam(t, err, "id", row.ID)
-		if _, err := svc.Complete(ctx, row.ID); !hasCode(err, ErrObjectNotUploading.Code) {
+		if _, err := svc.Complete(ctx, row.ID); !apperr.HasCode(err, ErrObjectNotUploading.Code) {
 			t.Fatalf("second Complete error = %v, want %s", err, ErrObjectNotUploading.Code)
 		}
 	})
@@ -635,10 +635,10 @@ func TestObjectService_StateAndWindowGates(t *testing.T) {
 		deleting := newCompleted("obj-deleting", "tenant-a", time.Now())
 		deleting.State = ObjectStateDeleting
 		seedObject(t, svc.objects, ctx, deleting)
-		if err := svc.Upload(ctx, "obj-deleting", nil, nil); !hasCode(err, ErrObjectNotUploading.Code) {
+		if err := svc.Upload(ctx, "obj-deleting", nil, nil); !apperr.HasCode(err, ErrObjectNotUploading.Code) {
 			t.Fatalf("Upload error = %v, want %s", err, ErrObjectNotUploading.Code)
 		}
-		if _, err := svc.Complete(ctx, "obj-deleting"); !hasCode(err, ErrObjectNotUploading.Code) {
+		if _, err := svc.Complete(ctx, "obj-deleting"); !apperr.HasCode(err, ErrObjectNotUploading.Code) {
 			t.Fatalf("Complete error = %v, want %s", err, ErrObjectNotUploading.Code)
 		}
 	})
@@ -652,10 +652,10 @@ func TestObjectService_StateAndWindowGates(t *testing.T) {
 		// governs, and the refusal fires before any store write -- the
 		// pre-placed bytes must still be there afterwards.
 		store.objects[expired.Key] = []byte("content that outlived its window")
-		if err := svc.Upload(ctx, "obj-expired", nil, bytes.NewReader([]byte("late"))); !hasCode(err, ErrContentMissing.Code) {
+		if err := svc.Upload(ctx, "obj-expired", nil, bytes.NewReader([]byte("late"))); !apperr.HasCode(err, ErrContentMissing.Code) {
 			t.Fatalf("Upload error = %v, want %s", err, ErrContentMissing.Code)
 		}
-		if _, err := svc.Complete(ctx, "obj-expired"); !hasCode(err, ErrContentMissing.Code) {
+		if _, err := svc.Complete(ctx, "obj-expired"); !apperr.HasCode(err, ErrContentMissing.Code) {
 			t.Fatalf("Complete error = %v, want %s", err, ErrContentMissing.Code)
 		}
 		if _, ok := store.bytes(expired.Key); !ok {
@@ -1831,7 +1831,7 @@ func TestObjectService_Complete_SecondUploadCannotReplaceTheFinalizedBytes(t *te
 	if uploadFinished && secondUploadErr != nil {
 		t.Fatalf("second Upload finished early with %v, want nil (the pre-fix shape) or the lock to hold it", secondUploadErr)
 	}
-	if !uploadFinished && !hasCode(secondUploadErr, ErrObjectNotUploading.Code) {
+	if !uploadFinished && !apperr.HasCode(secondUploadErr, ErrObjectNotUploading.Code) {
 		t.Fatalf("second Upload after the serialized Complete = %v, want %s: a completed row refuses another upload", secondUploadErr, ErrObjectNotUploading.Code)
 	}
 

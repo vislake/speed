@@ -235,7 +235,7 @@ type UnsubscribeTypeInput struct {
 func (s *ContactService) UnsubscribeType(ctx context.Context, in UnsubscribeTypeInput) error {
 	contact, err := s.repo.FindByID(ctx, in.ContactID)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return ErrContactNotFound
 		}
 		return errInternal(err)

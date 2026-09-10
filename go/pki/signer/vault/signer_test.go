@@ -53,21 +53,10 @@ func (f *fakeTransitClient) DeleteWithContext(ctx context.Context, path string) 
 // compile-time check that *fakeTransitClient satisfies transitClient.
 var _ transitClient = (*fakeTransitClient)(nil)
 
-// isKeyNotFound reports whether err is (a decorated instance of)
-// pki.ErrKeyNotFound, matching on Code the way every *apperr.Error sentinel
-// in this codebase must be compared (see go/pki/errors.go's own doc
-// comment) -- WithParam/WithCause always derive a new pointer, so a plain
-// errors.Is against the package-level sentinel is not the right check here.
-func isKeyNotFound(err error) bool {
-	found, ok := apperr.As(err)
-	return ok && found.Code == pki.ErrKeyNotFound.Code
-}
-
 func TestSigner_GenerateKey_RejectsUnsupportedAlgorithm(t *testing.T) {
 	s := &signer{logical: &fakeTransitClient{}, mountPath: "transit", mode: ModeDirectSign}
 	_, _, err := s.GenerateKey(context.Background(), "ecdsa-p256")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != pki.ErrAlgorithmUnsupportedBySigner.Code {
+	if !apperr.HasCode(err, pki.ErrAlgorithmUnsupportedBySigner.Code) {
 		t.Fatalf("GenerateKey(unsupported) error = %v, want ErrAlgorithmUnsupportedBySigner", err)
 	}
 }
@@ -260,7 +249,7 @@ func TestSigner_DirectMode_Sign_UnknownKeyRef(t *testing.T) {
 	}
 	s := &signer{logical: fake, mountPath: "transit", mode: ModeDirectSign}
 	_, err := s.Sign(context.Background(), "does-not-exist", []byte("x"))
-	if !isKeyNotFound(err) {
+	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
 		t.Errorf("Sign(unknown keyRef) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -447,7 +436,7 @@ func TestSigner_EnvelopeMode_Sign_InvalidKeyRef(t *testing.T) {
 	}
 	s := &signer{logical: fake, mountPath: "transit", mode: ModeEnvelope, wrappingKeyName: "wrap-key"}
 	_, err := s.Sign(context.Background(), "not-a-real-ciphertext", []byte("x"))
-	if !isKeyNotFound(err) {
+	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
 		t.Errorf("Sign(invalid keyRef) error = %v, want ErrKeyNotFound", err)
 	}
 }

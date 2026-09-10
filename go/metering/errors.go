@@ -101,13 +101,3 @@ var (
 	// input error.
 	ErrUsageSummariesUnconfigured = apperr.Internal("metering.usage_summaries_unconfigured")
 )
-
-// hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain
-// walk) an *apperr.Error whose Code equals code. This is the standard way
-// this codebase compares against a dbkit or apperr sentinel once it may
-// have been decorated with WithParam/WithCause -- see go/org/tree.go's
-// identical helper.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
-}

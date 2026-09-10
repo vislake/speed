@@ -188,7 +188,7 @@ func assertCode(t *testing.T, err error, want string) {
 	if !ok {
 		t.Fatalf("error %v is not an *apperr.Error, want code %s", err, want)
 	}
-	if appErr.Code != want {
+	if !apperr.HasCode(err, want) {
 		t.Fatalf("error code = %s, want %s", appErr.Code, want)
 	}
 }

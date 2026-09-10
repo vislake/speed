@@ -16,7 +16,7 @@ import (
 // assertErrorCode fails unless err is an *apperr.Error with the given code.
 //
 // Matching on the code rather than with errors.Is against a sentinel is
-// required here for the reason service.go's hasCode documents: apperr's
+// required here for the reason apperr.HasCode documents: apperr's
 // builders derive a new value instead of mutating the receiver, so a
 // decorated error is never identical to the sentinel it came from.
 func assertErrorCode(t *testing.T, err error, wantCode string) {
@@ -28,7 +28,7 @@ func assertErrorCode(t *testing.T, err error, wantCode string) {
 	if !ok {
 		t.Fatalf("error = %v (%T), want an *apperr.Error with code %s", err, err, wantCode)
 	}
-	if appErr.Code != wantCode {
+	if !apperr.HasCode(err, wantCode) {
 		t.Fatalf("error code = %s, want %s", appErr.Code, wantCode)
 	}
 }

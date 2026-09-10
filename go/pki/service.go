@@ -336,7 +336,7 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 			return revokeErr
 		}
 		// Fall through: the active slot is free, create a fresh key below.
-	} else if !isNoActiveKey(err) {
+	} else if !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		return err
 	}
 
@@ -539,12 +539,6 @@ func (s *Service) keySet(ctx context.Context, purpose string) (keySetEntry, erro
 	entry := keySetEntry{active: active, verifiable: rows, loadedAt: now}
 	s.cache.put(purpose, active, rows, now)
 	return entry, nil
-}
-
-// isNoActiveKey reports whether err is (a decorated) ErrNoActiveKey.
-func isNoActiveKey(err error) bool {
-	found, ok := apperr.As(err)
-	return ok && found.Code == ErrNoActiveKey.Code
 }
 
 // keySourceShape mirrors, field for field and in the same order, go/authn's

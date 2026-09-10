@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // UsageReader is the real-time quota-counter read this package needs --
@@ -93,11 +94,11 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 	// is treated exactly like "no subscription", since there is nothing
 	// left to grant against.
 	plan, err := s.plans.Get(ctx, tenant, sub.PlanID)
-	if hasCode(err, ErrPlanNotFound.Code) {
+	if apperr.HasCode(err, ErrPlanNotFound.Code) {
 		plan, err = s.plans.GetPlatformPlan(ctx, sub.PlanID)
 	}
 	if err != nil {
-		if hasCode(err, ErrPlanNotFound.Code) {
+		if apperr.HasCode(err, ErrPlanNotFound.Code) {
 			return Decision{Allowed: false, Reason: DecisionReasonNoSubscription}, nil
 		}
 		return Decision{}, err

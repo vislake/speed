@@ -660,7 +660,7 @@ func TestProcessTaskUncancelled_MissingTenantHeader_RefusedBeforeAnyWrite(t *tes
 	if err == nil {
 		t.Fatalf("processTaskUncancelled() error = nil, want the coded missing-tenant refusal")
 	}
-	if e, ok := apperr.As(err); !ok || e.Code != errTaskMissingTenant.Code {
+	if !apperr.HasCode(err, errTaskMissingTenant.Code) {
 		t.Errorf("processTaskUncancelled() error = %v, want code %q", err, errTaskMissingTenant.Code)
 	}
 }

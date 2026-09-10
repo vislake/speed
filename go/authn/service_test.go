@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 const (
@@ -487,7 +488,7 @@ func TestService_Register_Validation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := f.svc.Register(t.Context(), tc.in)
-			if !hasCode(err, tc.wantCode) {
+			if !apperr.HasCode(err, tc.wantCode) {
 				t.Fatalf("Register() error = %v, want code %q", err, tc.wantCode)
 			}
 		})
@@ -502,7 +503,7 @@ func TestService_Register_DuplicatePhoneIsRejected(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 	_, err := f.svc.Register(t.Context(), RegisterInput{Phone: "+86 138 0000 0000", Password: testPassword})
-	if !hasCode(err, ErrPhoneAlreadyRegistered.Code) {
+	if !apperr.HasCode(err, ErrPhoneAlreadyRegistered.Code) {
 		t.Fatalf("Register(same number, different formatting) error = %v, want code %q", err, ErrPhoneAlreadyRegistered.Code)
 	}
 }
@@ -546,13 +547,13 @@ func TestService_Login_FailsClosedWithoutAMembershipReader(t *testing.T) {
 	// the collapsed credential answer, never the distinguishable 403 a
 	// memberless-correct-password would draw from this nil-reader wiring.
 	_, err = unwired.Login(t.Context(), LoginInput{Identifier: "closed@example.com", Password: testPassword})
-	if !hasCode(err, ErrInvalidCredentials.Code) {
+	if !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 		t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 
 	// The authenticated path keeps the distinguishable fail-closed answer.
 	_, err = unwired.SwitchTenant(t.Context(), pair.Principal, testTenantA)
-	if !hasCode(err, ErrTenantMembershipUnavailable.Code) {
+	if !apperr.HasCode(err, ErrTenantMembershipUnavailable.Code) {
 		t.Fatalf("SwitchTenant() error = %v, want code %q", err, ErrTenantMembershipUnavailable.Code)
 	}
 }
@@ -572,7 +573,7 @@ func TestService_Login_FailsClosedWhenMembershipCannotBeRead(t *testing.T) {
 	f.members.FailWith(errors.New("the membership store is down"))
 
 	_, err := f.svc.Login(t.Context(), LoginInput{Identifier: "broken@example.com", Password: testPassword})
-	if !hasCode(err, ErrInvalidCredentials.Code) {
+	if !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 		t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 }
@@ -613,7 +614,7 @@ func TestService_Login_TenantSelection(t *testing.T) {
 		// membership errors tenant switching gives an authenticated caller:
 		// this refusal happens only after the password verified, so a
 		// distinguishable answer would certify it (see Login's doc comment).
-		if !hasCode(err, ErrInvalidCredentials.Code) {
+		if !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 			t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 		}
 	})
@@ -621,7 +622,7 @@ func TestService_Login_TenantSelection(t *testing.T) {
 	t.Run("a user with no membership at all cannot sign in", func(t *testing.T) {
 		f.registerUser(t, "orphan@example.com")
 		_, err := f.svc.Login(t.Context(), LoginInput{Identifier: "orphan@example.com", Password: testPassword})
-		if !hasCode(err, ErrInvalidCredentials.Code) {
+		if !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 			t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 		}
 	})
@@ -704,7 +705,7 @@ func TestService_SwitchTenant_RefusesATenantTheUserDoesNotBelongTo(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := f.svc.SwitchTenant(t.Context(), pair.Principal, tc.target); !hasCode(err, tc.wantCode) {
+			if _, err := f.svc.SwitchTenant(t.Context(), pair.Principal, tc.target); !apperr.HasCode(err, tc.wantCode) {
 				t.Fatalf("SwitchTenant() error = %v, want code %q", err, tc.wantCode)
 			}
 		})
@@ -713,13 +714,13 @@ func TestService_SwitchTenant_RefusesATenantTheUserDoesNotBelongTo(t *testing.T)
 	t.Run("a session belonging to another user", func(t *testing.T) {
 		other := f.registerUser(t, "other@example.com", testTenantA)
 		forged := Principal{UserID: other.ID, SessionID: pair.Principal.SessionID, TenantID: testTenantA}
-		if _, err := f.svc.SwitchTenant(t.Context(), forged, testTenantA); !hasCode(err, ErrTokenInvalid.Code) {
+		if _, err := f.svc.SwitchTenant(t.Context(), forged, testTenantA); !apperr.HasCode(err, ErrTokenInvalid.Code) {
 			t.Fatalf("SwitchTenant() error = %v, want code %q", err, ErrTokenInvalid.Code)
 		}
 	})
 
 	t.Run("an unauthenticated principal", func(t *testing.T) {
-		if _, err := f.svc.SwitchTenant(t.Context(), Principal{}, testTenantA); !hasCode(err, ErrAuthenticationRequired.Code) {
+		if _, err := f.svc.SwitchTenant(t.Context(), Principal{}, testTenantA); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 			t.Fatalf("SwitchTenant() error = %v, want code %q", err, ErrAuthenticationRequired.Code)
 		}
 	})
@@ -744,7 +745,7 @@ func TestService_SwitchTenant_RefusesAnExpiredSession(t *testing.T) {
 
 	testutil.ExpireSession(t, f.db, pair.Principal.SessionID, f.clock.Now().Add(-time.Hour))
 
-	if _, err := f.svc.SwitchTenant(t.Context(), pair.Principal, testTenantB); !hasCode(err, ErrSessionRevoked.Code) {
+	if _, err := f.svc.SwitchTenant(t.Context(), pair.Principal, testTenantB); !apperr.HasCode(err, ErrSessionRevoked.Code) {
 		t.Fatalf("SwitchTenant(expired session) error = %v, want code %q", err, ErrSessionRevoked.Code)
 	}
 }
@@ -852,7 +853,7 @@ func TestService_SwitchTenant_ConcurrentRevoke_IsRefused(t *testing.T) {
 	close(wedge.release)
 
 	raceErr := <-switched
-	if !hasCode(raceErr, ErrSessionRevoked.Code) {
+	if !apperr.HasCode(raceErr, ErrSessionRevoked.Code) {
 		t.Fatalf("SwitchTenant() racing a revoke error = %v, want code %q (a revoked session must not mint tokens)", raceErr, ErrSessionRevoked.Code)
 	}
 	if n := f.events.Count(EventTenantSwitched); n != 0 {
@@ -891,7 +892,7 @@ func TestService_Refresh_ReverifiesMembership(t *testing.T) {
 	f.members.Remove(user.ID, testTenantA)
 
 	f.clock.Advance(time.Minute)
-	if _, err := f.svc.Refresh(t.Context(), refreshed.RefreshToken); !hasCode(err, ErrTenantMembershipRequired.Code) {
+	if _, err := f.svc.Refresh(t.Context(), refreshed.RefreshToken); !apperr.HasCode(err, ErrTenantMembershipRequired.Code) {
 		t.Fatalf("Refresh() after removal error = %v, want code %q", err, ErrTenantMembershipRequired.Code)
 	}
 }
@@ -917,7 +918,7 @@ func TestService_Refresh_RefusesASuspendedAccount(t *testing.T) {
 	}
 
 	f.clock.Advance(time.Minute)
-	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(err, ErrInvalidCredentials.Code) {
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 		t.Fatalf("Refresh() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 }
@@ -948,7 +949,7 @@ func TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken(t *tes
 	f.members.FailWith(errors.New("membership store timeout"))
 	f.clock.Advance(time.Minute)
 
-	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(err, ErrTenantMembershipUnavailable.Code) {
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !apperr.HasCode(err, ErrTenantMembershipUnavailable.Code) {
 		t.Fatalf("Refresh() during a membership outage error = %v, want code %q", err, ErrTenantMembershipUnavailable.Code)
 	}
 
@@ -999,7 +1000,7 @@ func TestService_Refresh_ActualReplayStillRevokesTheFamily(t *testing.T) {
 	// Present the SAME, now-already-rotated token again: a genuine replay,
 	// not a retry after a server-side failure.
 	f.clock.Advance(time.Minute)
-	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(err, ErrRefreshTokenReused.Code) {
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !apperr.HasCode(err, ErrRefreshTokenReused.Code) {
 		t.Fatalf("replayed Refresh() error = %v, want code %q", err, ErrRefreshTokenReused.Code)
 	}
 
@@ -1074,7 +1075,7 @@ func TestService_Refresh_ActualReplay_LeavesADurableAuditRecord(t *testing.T) {
 	if _, refreshErr := svc.Refresh(t.Context(), pair.RefreshToken); refreshErr != nil {
 		t.Fatalf("first Refresh() error = %v", refreshErr)
 	}
-	if _, replayErr := svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(replayErr, ErrRefreshTokenReused.Code) {
+	if _, replayErr := svc.Refresh(t.Context(), pair.RefreshToken); !apperr.HasCode(replayErr, ErrRefreshTokenReused.Code) {
 		t.Fatalf("replayed Refresh() error = %v, want code %q", replayErr, ErrRefreshTokenReused.Code)
 	}
 
@@ -1139,7 +1140,7 @@ func TestService_Logout_EndsTheSession(t *testing.T) {
 		t.Fatal("the refresh token still works after sign-out")
 	}
 
-	if err := f.svc.Logout(t.Context(), ""); !hasCode(err, ErrAuthenticationRequired.Code) {
+	if err := f.svc.Logout(t.Context(), ""); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 		t.Errorf("Logout(no session) error = %v, want code %q", err, ErrAuthenticationRequired.Code)
 	}
 }
@@ -1555,7 +1556,7 @@ func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.
 				switch {
 				case err == nil:
 					successes++
-				case hasCode(err, ErrEmailAlreadyRegistered.Code):
+				case apperr.HasCode(err, ErrEmailAlreadyRegistered.Code):
 					// The expected answer for every loser: the sequential
 					// duplicate's coded conflict.
 				default:
@@ -1713,7 +1714,7 @@ func TestService_SwitchTenant_RefusesWhenTheSessionIsUnknown(t *testing.T) {
 	user := f.registerUser(t, "switch-unknown-session@example.com", testTenantA)
 
 	_, err := f.svc.SwitchTenant(t.Context(), Principal{UserID: user.ID, SessionID: "no-such-session"}, testTenantB)
-	if !hasCode(err, ErrSessionRevoked.Code) {
+	if !apperr.HasCode(err, ErrSessionRevoked.Code) {
 		t.Fatalf("SwitchTenant(unknown session) error = %v, want code %q", err, ErrSessionRevoked.Code)
 	}
 }
@@ -1753,7 +1754,7 @@ func TestService_SwitchTenant_RefusesASuspendedAccount(t *testing.T) {
 		t.Fatalf("suspend user: %v", err)
 	}
 	_, err := f.svc.SwitchTenant(t.Context(), principal, testTenantA)
-	if !hasCode(err, ErrInvalidCredentials.Code) {
+	if !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 		t.Fatalf("SwitchTenant() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 }
@@ -1829,7 +1830,7 @@ func TestService_Register_ConcurrentDuplicatePhoneAnswersTheCodedConflict(t *tes
 				switch {
 				case err == nil:
 					successes++
-				case hasCode(err, ErrPhoneAlreadyRegistered.Code):
+				case apperr.HasCode(err, ErrPhoneAlreadyRegistered.Code):
 					// The expected answer for every loser: the sequential
 					// duplicate's coded conflict.
 				default:

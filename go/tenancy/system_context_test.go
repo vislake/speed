@@ -217,7 +217,7 @@ func TestWithSystemContext_PublishFails_FailsClosedWithoutElevatingContext(t *te
 	if !ok {
 		t.Fatalf("WithSystemContext error = %v (%T), want an *apperr.Error", err, err)
 	}
-	if appErr.Code != ErrAuditPublishFailed.Code {
+	if !apperr.HasCode(err, ErrAuditPublishFailed.Code) {
 		t.Errorf("error code = %q, want %q", appErr.Code, ErrAuditPublishFailed.Code)
 	}
 	// The underlying subscriber failure must still be reachable, for logs and
@@ -414,7 +414,7 @@ func TestSystemContext_DoesNotWidenRepositoryVisibilityBeyondTheContextTenant(t 
 		t.Errorf("List(system-context-elevated tenant A) = %+v, want exactly tenant A's own single row (%q); a system reason must not widen Repository[T] visibility to other tenants", rows, recA.ID)
 	}
 
-	if got, err := repo.FindByID(elevatedA, recB.ID); !isSysCtxRecordNotFound(err) {
+	if got, err := repo.FindByID(elevatedA, recB.ID); !dbkit.IsRecordNotFound(err) {
 		t.Errorf("FindByID(system-context-elevated tenant A, tenant B's id) = (%v, %v), want (nil, dbkit.ErrRecordNotFound); a system reason granted while scoped to tenant A must not unlock tenant B's row", got, err)
 	}
 }
@@ -453,13 +453,4 @@ func TestSystemContext_WithoutTenant_StillFailsClosedOnRepository(t *testing.T) 
 	if err := repo.Create(elevatedNoTenant, rec); !errors.Is(err, pkgcore.ErrNoTenant) {
 		t.Errorf("Create(system-context-elevated, no tenant) error = %v, want errors.Is(err, pkgcore.ErrNoTenant)", err)
 	}
-}
-
-// isSysCtxRecordNotFound mirrors tenancytest's own isRecordNotFound: dbkit's
-// ErrRecordNotFound must be matched by Code, never by identity, since
-// apperr's WithParam/WithCause always derive a new *apperr.Error rather than
-// mutate the receiver.
-func isSysCtxRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/metering"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // TestUsageService_NeitherModuleWired_Refused pins the one boot-shaped
@@ -33,7 +34,7 @@ func TestUsageService_NeitherModuleWired_Refused(t *testing.T) {
 	svc.attach(newTestRegistry().EventBus())
 
 	_, err := svc.Summary(context.Background(), "operator-1")
-	if !isCode(err, ErrUsageModulesNotWired.Code) {
+	if !apperr.HasCode(err, ErrUsageModulesNotWired.Code) {
 		t.Fatalf("Summary() with neither module wired error = %v, want %s", err, ErrUsageModulesNotWired.Code)
 	}
 }

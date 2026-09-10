@@ -435,7 +435,7 @@ func (s *ImpersonationService) Lookup(ctx context.Context, id string) (*Imperson
 	}
 	grant, err := s.repo.Get(ctx, id)
 	if err != nil {
-		if !isGrantNotFound(err) {
+		if !apperr.HasCode(err, ErrGrantNotFound.Code) {
 			obs.FromContext(ctx).Warn("admin could not look up an impersonation grant; treating it as absent",
 				"grant_id", id, "error", err)
 		}
@@ -445,25 +445,6 @@ func (s *ImpersonationService) Lookup(ctx context.Context, id string) (*Imperson
 		return nil, false
 	}
 	return grant, true
-}
-
-// isGrantNotFound reports whether err is ErrGrantNotFound, classifying by
-// Code through apperr.As rather than by pointer identity -- every WithParam
-// call on an *apperr.Error derives a new value, so the exported sentinels
-// are templates, never singletons that == or errors.Is could match.
-func isGrantNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrGrantNotFound.Code
-}
-
-// isImpersonationGrantEnded is isGrantNotFound's sibling for
-// ErrImpersonationGrantEnded, used by endIfNoLongerPermitted to tell an
-// ordinary "already ended" outcome (nothing to warn about -- a concurrent
-// End, or this same reconciliation racing an earlier delivery of the
-// identical event, already did the job) apart from a genuine failure.
-func isImpersonationGrantEnded(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrImpersonationGrantEnded.Code
 }
 
 // recordAudit emits an admin.impersonation.* audit event with the
@@ -560,7 +541,7 @@ func (s *ImpersonationService) validateTargetMembership(ctx context.Context, in 
 		return nil
 	}
 	if _, err := s.members.Get(ctx, in.TargetUserID); err != nil {
-		if isMembershipNotFound(err) {
+		if apperr.HasCode(err, org.ErrMembershipNotFound.Code) {
 			return ErrImpersonationTargetNotMember.
 				WithParam("target_user_id", in.TargetUserID).
 				WithParam("target_tenant_id", string(in.TargetTenantID))
@@ -825,8 +806,9 @@ func (s *ImpersonationService) reviewAllLiveGrants(ctx context.Context) {
 // administrator no longer holds it. Ending through endGrant's own
 // SaveGuarded path means a concurrent End (an operator's own DELETE, or
 // this same reconciliation racing an earlier delivery of the identical
-// event) is a benign, silently-dropped no-op here -- isImpersonationGrantEnded
-// -- never a Warn-logged failure.
+// event) is a benign, silently-dropped no-op here -- the
+// apperr.HasCode(err, ErrImpersonationGrantEnded.Code) skip -- never a
+// Warn-logged failure.
 func (s *ImpersonationService) endIfNoLongerPermitted(ctx context.Context, grant *ImpersonationGrant) {
 	sub := rbac.Subject{TenantID: rbac.SystemDomain, UserID: grant.AdminUserID}
 	allowed, err := s.rbacSvc.Can(ctx, sub, impersonatePermissionAction, impersonatePermissionResource)
@@ -839,7 +821,7 @@ func (s *ImpersonationService) endIfNoLongerPermitted(ctx context.Context, grant
 		return
 	}
 	if _, err := s.endGrant(ctx, grant, systemEndedByReason, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: systemEndedByReason}); err != nil {
-		if !isImpersonationGrantEnded(err) {
+		if !apperr.HasCode(err, ErrImpersonationGrantEnded.Code) {
 			obs.FromContext(ctx).Warn("admin could not automatically end an impersonation grant after its administrator's permission was revoked",
 				"grant_id", grant.ID, "admin_user_id", grant.AdminUserID, "error", err)
 		}
@@ -855,7 +837,7 @@ func (s *ImpersonationService) endIfNoLongerPermitted(ctx context.Context, grant
 // review by.
 func decodeRoleBindingChangedPayload(payload any) (rbac.RoleBindingChangedEvent, bool) {
 	var evt rbac.RoleBindingChangedEvent
-	if err := decodeEventPayload(payload, &evt); err != nil {
+	if err := pkgcore.DecodeEventPayload(payload, &evt); err != nil {
 		return rbac.RoleBindingChangedEvent{}, false
 	}
 	if evt.TenantID == "" || evt.UserID == "" {
@@ -869,7 +851,7 @@ func decodeRoleBindingChangedPayload(payload any) (rbac.RoleBindingChangedEvent,
 // no single subject (rbac.RoleChangedEvent's own doc comment).
 func decodeRoleChangedPayload(payload any) (rbac.RoleChangedEvent, bool) {
 	var evt rbac.RoleChangedEvent
-	if err := decodeEventPayload(payload, &evt); err != nil {
+	if err := pkgcore.DecodeEventPayload(payload, &evt); err != nil {
 		return rbac.RoleChangedEvent{}, false
 	}
 	if evt.TenantID == "" {

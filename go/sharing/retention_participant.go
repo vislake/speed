@@ -57,7 +57,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // AccessLogRetentionParticipantName is the pkgcore.RetentionParticipant
@@ -138,7 +137,7 @@ func sweepAccessLog(ctx context.Context, repo *AccessLogRepository, tenant pkgco
 		}
 		for _, row := range rows {
 			err := repo.HardDelete(ctx, row.ID)
-			if hardDeleteSaysGone(err) {
+			if dbkit.IsRecordNotFound(err) {
 				// Already removed between the listing above and this delete --
 				// convergence, never a partial failure.
 				continue
@@ -154,20 +153,4 @@ func sweepAccessLog(ctx context.Context, repo *AccessLogRepository, tenant pkgco
 			return reaped, nil
 		}
 	}
-}
-
-// hardDeleteSaysGone reports whether err is the "the row is already gone"
-// answer a Repository.HardDelete gives when its physical DELETE matched no
-// row -- whether because the row never existed under ctx's tenant, or
-// because a concurrent removal (a re-run of this sweep, another
-// orchestrator) got there between this callback's candidate list and its
-// own delete. It is matched by Code rather than by identity
-// (apperr.WithParam always derives a new *apperr.Error), the same way the
-// notes participant's own hardDeleteSaysGone helper matches.
-func hardDeleteSaysGone(err error) bool {
-	if err == nil {
-		return false
-	}
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }

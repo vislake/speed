@@ -168,7 +168,7 @@ func (s *Service) ReclaimRetired(ctx context.Context) (ReclaimReport, error) {
 		}
 
 		if err := s.signer.Destroy(ctx, key.KeyRef); err != nil {
-			if isKeyNotFound(err) {
+			if apperr.HasCode(err, ErrKeyNotFound.Code) {
 				observability.FromContext(ctx).Info("pki retired signing key already reclaimed",
 					"kid", key.ID,
 					"purpose", key.Purpose,
@@ -195,10 +195,4 @@ func (s *Service) ReclaimRetired(ctx context.Context) (ReclaimReport, error) {
 		report.Destroyed = append(report.Destroyed, key.ID)
 	}
 	return report, nil
-}
-
-// isKeyNotFound reports whether err is (a decorated) ErrKeyNotFound.
-func isKeyNotFound(err error) bool {
-	found, ok := apperr.As(err)
-	return ok && found.Code == ErrKeyNotFound.Code
 }

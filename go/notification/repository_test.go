@@ -374,7 +374,7 @@ func TestRepository_FindByID_OtherTenant_ReportsRecordNotFound(t *testing.T) {
 	if !ok {
 		t.Fatalf("FindByID error %v is not an *apperr.Error", err)
 	}
-	if appErr.Code != dbkit.ErrRecordNotFound.Code {
+	if !dbkit.IsRecordNotFound(err) {
 		t.Errorf("error code = %q, want %q", appErr.Code, dbkit.ErrRecordNotFound.Code)
 	}
 }
@@ -722,7 +722,7 @@ func TestRepository_MarkRead_UnknownForeignAndOtherTenant_OneRefusal(t *testing.
 		if !ok {
 			t.Fatalf("%s: error %v is not an *apperr.Error", name, err)
 		}
-		if appErr.Code != ErrMessageNotFound.Code {
+		if !apperr.HasCode(err, ErrMessageNotFound.Code) {
 			t.Errorf("%s: code = %q, want %q", name, appErr.Code, ErrMessageNotFound.Code)
 		}
 		if appErr.Params["message_id"] != id {

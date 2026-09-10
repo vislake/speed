@@ -332,7 +332,7 @@ func TestPasswordPolicy_Validate(t *testing.T) {
 				}
 				return
 			}
-			if !hasCode(err, tc.wantCode) {
+			if !apperr.HasCode(err, tc.wantCode) {
 				t.Fatalf("Validate() error = %v, want code %q", err, tc.wantCode)
 			}
 		})

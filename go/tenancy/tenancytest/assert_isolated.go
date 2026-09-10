@@ -11,7 +11,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // recordsPerTenant is how many records AssertIsolated creates for each of
@@ -233,7 +232,7 @@ func AssertIsolated[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repository[T
 		// denial's aftermath with itself.)
 		want := *victim
 
-		if updErr := repo.Update(ctxB, victim); !isRecordNotFound(updErr) {
+		if updErr := repo.Update(ctxB, victim); !dbkit.IsRecordNotFound(updErr) {
 			t.Errorf("Update(other tenant %q, %q) error = %v, want dbkit.ErrRecordNotFound", tenantB, id, updErr)
 		}
 
@@ -250,7 +249,7 @@ func AssertIsolated[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repository[T
 	t.Run("cross_tenant_delete_denied", func(t *testing.T) {
 		t.Helper()
 		id := aIDs[1]
-		if err := repo.Delete(ctxB, id); !isRecordNotFound(err) {
+		if err := repo.Delete(ctxB, id); !dbkit.IsRecordNotFound(err) {
 			t.Errorf("Delete(other tenant %q, %q) error = %v, want dbkit.ErrRecordNotFound", tenantB, id, err)
 		}
 		assertFindOwnedBy(t, repo, ctxA, tenantA, id)
@@ -378,19 +377,9 @@ func assertFindOwnedBy[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repositor
 func assertFindDenied[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repository[T], ctx context.Context, tenant pkgcore.TenantID, id string) {
 	t.Helper()
 	got, err := repo.FindByID(ctx, id)
-	if !isRecordNotFound(err) {
+	if !dbkit.IsRecordNotFound(err) {
 		t.Errorf("FindByID(tenant %q, %q) = (%v, %v), want (nil, dbkit.ErrRecordNotFound)", tenant, id, got, err)
 	}
-}
-
-// isRecordNotFound reports whether err is dbkit.ErrRecordNotFound, matched
-// by Code rather than identity: apperr's WithParam/WithCause always derive a
-// new *apperr.Error rather than mutate the receiver (see apperr's own doc
-// comment), so the pointer a Repository method returns is never the same
-// pointer as the package-level sentinel.
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }
 
 // idSet reads records' "ID" field (see idFieldName) into a set, for

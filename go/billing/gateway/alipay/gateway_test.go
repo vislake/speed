@@ -211,7 +211,7 @@ func TestGateway_QueryStatus_NotFound(t *testing.T) {
 	}
 
 	_, _, err = gw.QueryStatus(context.Background(), "ORD_MISSING")
-	if !hasCode(err, billing.ErrChannelReferenceNotFound.Code) {
+	if !apperr.HasCode(err, billing.ErrChannelReferenceNotFound.Code) {
 		t.Errorf("err = %v, want billing.ErrChannelReferenceNotFound", err)
 	}
 }
@@ -270,7 +270,7 @@ func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
 		Description:    "Pro plan",
 		IdempotencyKey: "idem-1",
 	})
-	if !hasCode(err, billing.ErrUnsupportedCurrency.Code) {
+	if !apperr.HasCode(err, billing.ErrUnsupportedCurrency.Code) {
 		t.Errorf("err = %v, want billing.ErrUnsupportedCurrency", err)
 	}
 }
@@ -629,7 +629,7 @@ func TestGateway_CreateCharge_RefusesNonPositiveAmount(t *testing.T) {
 			Description:    "Pro plan",
 			IdempotencyKey: "idem-1",
 		})
-		if !hasCode(err, billing.ErrInvalidAmount.Code) {
+		if !apperr.HasCode(err, billing.ErrInvalidAmount.Code) {
 			t.Errorf("CreateCharge with cents %d: err = %v, want billing.ErrInvalidAmount", cents, err)
 		}
 	}
@@ -695,10 +695,4 @@ func mustPublicFromPrivatePEM(t *testing.T, privPEM []byte) *rsa.PublicKey {
 		t.Fatalf("ParsePrivateKeyPEM: %v", err)
 	}
 	return &priv.PublicKey
-}
-
-// hasCode mirrors billing's own unexported hasCode helper (errors.go).
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }

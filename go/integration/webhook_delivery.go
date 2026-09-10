@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
@@ -360,7 +361,7 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 		// delivery whose only problem was a moment of bad luck and record a
 		// LastError that blames the subscription for it. Those errors are
 		// returned so jobs retries them, exactly like a failed HTTP attempt.
-		if !isWebhookRecordNotFound(err) {
+		if !dbkit.IsRecordNotFound(err) {
 			return jobs.Result{}, fmt.Errorf("integration: load webhook subscription %s: %w", delivery.SubscriptionID, err)
 		}
 		return jobs.Result{}, s.settleTerminal(ctx, delivery, "webhook subscription was deleted")
@@ -677,7 +678,7 @@ func redeliveryIdempotencyKey(deliveryID string, attempts int) string {
 // shape -- matching by Code, never by identity (see translateRepoErr's own
 // doc comment for why).
 func translateDeliveryRepoErr(err error) error {
-	if isWebhookRecordNotFound(err) {
+	if dbkit.IsRecordNotFound(err) {
 		return ErrWebhookDeliveryNotFound
 	}
 	return ErrInternal.WithCause(err)

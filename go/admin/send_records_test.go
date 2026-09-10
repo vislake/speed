@@ -85,7 +85,7 @@ func TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext(t *test
 	var entered []tenancy.SystemContextEnteredEvent
 	env.Registry.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
 		var e tenancy.SystemContextEnteredEvent
-		if err := decodeEventPayload(evt.Payload, &e); err != nil {
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &e); err != nil {
 			return err
 		}
 		entered = append(entered, e)

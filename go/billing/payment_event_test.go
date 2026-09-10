@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -87,7 +88,7 @@ func TestPaymentEventRepository_Get_NotFound(t *testing.T) {
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	_, err := repo.Get(ctx, "does-not-exist")
-	if !hasCode(err, ErrPaymentEventNotFound.Code) {
+	if !apperr.HasCode(err, ErrPaymentEventNotFound.Code) {
 		t.Errorf("err = %v, want ErrPaymentEventNotFound", err)
 	}
 }
@@ -253,7 +254,7 @@ func TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow(t *testing.T
 
 	// A mark naming a row that does not exist is refused, classified by the
 	// disambiguating re-read rather than silently swallowed as success.
-	if err := repo.markStatus(ctx, "does-not-exist", ChannelStatusSucceeded, resolved); !hasCode(err, ErrPaymentEventNotFound.Code) {
+	if err := repo.markStatus(ctx, "does-not-exist", ChannelStatusSucceeded, resolved); !apperr.HasCode(err, ErrPaymentEventNotFound.Code) {
 		t.Errorf("markStatus(missing id): err = %v, want %s", err, ErrPaymentEventNotFound.Code)
 	}
 }

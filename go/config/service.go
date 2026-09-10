@@ -485,7 +485,7 @@ func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string,
 			// down for every tenant while ops has not written the row yet.
 			// Any other resolve failure is genuine -- the store itself
 			// refusing the read -- and still fails the response.
-			if isErrItemUnset(err) {
+			if apperr.HasCode(err, ErrItemUnset.Code) {
 				continue
 			}
 			return nil, nil, err
@@ -821,12 +821,4 @@ func decorateKey(err error, key string) error {
 		return err
 	}
 	return appErr.WithParam("key", key)
-}
-
-// isErrItemUnset reports whether err carries ErrItemUnset's code. Decorated
-// errors must be matched on their Code (see errors.go's header comment), so
-// the check goes through apperr.As, never errors.Is or identity.
-func isErrItemUnset(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrItemUnset.Code
 }

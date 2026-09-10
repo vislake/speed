@@ -64,7 +64,7 @@ func TestService_RateLimiter_NoHostAttached_FailsClosed(t *testing.T) {
 	if _, err := svc.rateLimiter(); !errors.Is(err, errShareNoHostRegistry) {
 		t.Errorf("rateLimiter() error = %v, want errShareNoHostRegistry", err)
 	}
-	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"}); !hasCode(err, ErrInternal.Code) {
+	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"}); !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("Create() error = %v, want ErrInternal (rate limiter unavailable must fail closed, not silently allow)", err)
 	}
 }

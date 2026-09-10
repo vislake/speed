@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -180,7 +181,7 @@ func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.
 		TargetTenantID: tenant,
 		Reason:         "prove an unresolvable target is refused, not silently 201'd",
 	})
-	if !isCode(err, ErrImpersonationTargetNotFound.Code) {
+	if !apperr.HasCode(err, ErrImpersonationTargetNotFound.Code) {
 		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationTargetNotFound.Code)
 	}
 
@@ -223,7 +224,7 @@ func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testi
 		TargetTenantID: tenant,
 		Reason:         "prove a real but non-member target is refused, not silently 201'd",
 	})
-	if !isCode(err, ErrImpersonationTargetNotMember.Code) {
+	if !apperr.HasCode(err, ErrImpersonationTargetNotMember.Code) {
 		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationTargetNotMember.Code)
 	}
 

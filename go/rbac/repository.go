@@ -353,7 +353,7 @@ const (
 //
 // It reports dbkit.ErrRecordNotFound when no live row matches, the same
 // zero-rows-affected outcome dbkit's own Delete reports: a concurrent
-// revoke already withdrew the row, which the callers' hasCode
+// revoke already withdrew the row, which the callers' apperr.HasCode
 // classification (RevokeRole's concurrent-double-revoke branch,
 // revokeReapedBindings' concurrent-revoke skip) treats as success.
 func (r *RoleBindingRepository) Delete(ctx context.Context, id string, origin string) error {

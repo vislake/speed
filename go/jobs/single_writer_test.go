@@ -104,7 +104,7 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 	if q2Err == nil {
 		t.Error("second StandaloneQueue.Start() error = nil, want a refusal: two live writers on one jobs table double-execute every row the second one resets")
 	} else {
-		if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+		if !apperr.HasCode(q2Err, ErrQueueWriterActive.Code) {
 			t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
 		}
 	}

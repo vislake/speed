@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
@@ -171,7 +172,7 @@ func TestErasureService_Erase_EmptySubjectRefIsRefused(t *testing.T) {
 	}
 	for _, subject := range tests {
 		_, err := svc.Erase(context.Background(), subject, testErasureActor)
-		if !hasCode(err, ErrEmptySubjectRef.Code) {
+		if !apperr.HasCode(err, ErrEmptySubjectRef.Code) {
 			t.Errorf("Erase(%+v) error = %v, want %s", subject, err, ErrEmptySubjectRef.Code)
 		}
 	}
@@ -210,7 +211,7 @@ func TestErasureService_Erase_ParticipantErrorIsPartialFailureAndRetryConverges(
 	ctx := pkgcore.WithTenant(context.Background(), tenant)
 
 	first, err := svc.Erase(ctx, subject, testErasureActor)
-	if !hasCode(err, ErrErasurePartialFailure.Code) {
+	if !apperr.HasCode(err, ErrErasurePartialFailure.Code) {
 		t.Fatalf("first Erase error = %v, want %s", err, ErrErasurePartialFailure.Code)
 	}
 	if first.Erased["testutil.fake_note"] != 1 {
@@ -300,7 +301,7 @@ func TestErasureService_Erase_TenantMismatch_RefusedBeforeAnyParticipant(t *test
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	_, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: "tenant-b", SubjectID: "subject-shared"}, testErasureActor)
-	if !hasCode(err, ErrErasureTenantMismatch.Code) {
+	if !apperr.HasCode(err, ErrErasureTenantMismatch.Code) {
 		t.Fatalf("Erase error = %v, want %s", err, ErrErasureTenantMismatch.Code)
 	}
 	if calls != 0 {
@@ -375,7 +376,7 @@ func TestErasureService_Erase_ParticipantPartialCountSurvivesError(t *testing.T)
 	tenant := pkgcore.TenantID("tenant-a")
 
 	result, err := svc.Erase(pkgcore.WithTenant(context.Background(), tenant), pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
-	if !hasCode(err, ErrErasurePartialFailure.Code) {
+	if !apperr.HasCode(err, ErrErasurePartialFailure.Code) {
 		t.Fatalf("Erase error = %v, want %s", err, ErrErasurePartialFailure.Code)
 	}
 	if got := result.Erased["testutil.partial"]; got != 2 {
@@ -437,7 +438,7 @@ func TestErasureService_Erase_ChangesRecordClassificationNeverErrorText(t *testi
 	tenant := pkgcore.TenantID("tenant-a")
 
 	_, err := svc.Erase(pkgcore.WithTenant(context.Background(), tenant), pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
-	if !hasCode(err, ErrErasurePartialFailure.Code) {
+	if !apperr.HasCode(err, ErrErasurePartialFailure.Code) {
 		t.Fatalf("Erase error = %v, want %s", err, ErrErasurePartialFailure.Code)
 	}
 
@@ -484,7 +485,7 @@ func TestErasureService_Erase_SystemContextAuditPublishFailure_FailsClosed(t *te
 
 	ctx := pkgcore.WithTenant(context.Background(), tenant)
 	result, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
-	if !hasCode(err, tenancy.ErrAuditPublishFailed.Code) {
+	if !apperr.HasCode(err, tenancy.ErrAuditPublishFailed.Code) {
 		t.Fatalf("Erase error = %v, want %s", err, tenancy.ErrAuditPublishFailed.Code)
 	}
 	if result.Subject != (pkgcore.SubjectRef{}) || result.Erased != nil || result.Errors != nil {
@@ -512,7 +513,7 @@ func TestErasureService_Erase_AuditRecordFailure_SurfacesWithResult(t *testing.T
 
 	ctx := pkgcore.WithTenant(context.Background(), tenant)
 	result, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
-	if !hasCode(err, ErrAuditRecordFailed.Code) {
+	if !apperr.HasCode(err, ErrAuditRecordFailed.Code) {
 		t.Fatalf("Erase error = %v, want %s", err, ErrAuditRecordFailed.Code)
 	}
 	if result.Erased["testutil.fake_note"] != 1 {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
@@ -384,7 +385,7 @@ func TestExportManifestCleanup_SweepStoreFailuresReportedNotSkipped(t *testing.T
 			tc.script(store)
 
 			result, err := svc.SweepTenant(context.Background(), "tenant-a")
-			if !hasCode(err, ErrSweepPartialFailure.Code) {
+			if !apperr.HasCode(err, ErrSweepPartialFailure.Code) {
 				t.Fatalf("SweepTenant error = %v, want %s -- the store failure must be reported", err, ErrSweepPartialFailure.Code)
 			}
 			got := result.Errors[exportManifestsParticipantName]
@@ -421,7 +422,7 @@ func TestExportManifestCleanup_SweepListFailureReportedAsParticipantError(t *tes
 	}
 
 	result, err := svc.SweepTenant(context.Background(), "tenant-a")
-	if !hasCode(err, ErrSweepPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrSweepPartialFailure.Code) {
 		t.Fatalf("SweepTenant error = %v, want %s -- the unreadable audit trail must be reported", err, ErrSweepPartialFailure.Code)
 	}
 	if result.Errors[exportManifestsParticipantName] == nil {

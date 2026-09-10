@@ -168,7 +168,7 @@ func TestGateway_VerifyWebhook_RealHTTPDelivery_TamperedBodyRefused(t *testing.T
 			return
 		}
 		if _, verifyErr := gw.VerifyWebhook(r.Context(), r.Header, body); verifyErr != nil {
-			if !hasCode(verifyErr, billing.ErrWebhookSignatureInvalid.Code) {
+			if !apperr.HasCode(verifyErr, billing.ErrWebhookSignatureInvalid.Code) {
 				t.Errorf("verifyErr = %v, want billing.ErrWebhookSignatureInvalid", verifyErr)
 			}
 			w.WriteHeader(http.StatusBadRequest)
@@ -235,12 +235,4 @@ func checkoutSessionCompletedDelivery(t *testing.T, eventID, sessionID string) [
 		t.Fatalf("marshal fixture: %v", err)
 	}
 	return body
-}
-
-// hasCode mirrors the identical helper the stripe package's own unit tests
-// carry (gateway_test.go) -- this package cannot import an unexported
-// symbol, so it spells the same small comparison against apperr.As.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }

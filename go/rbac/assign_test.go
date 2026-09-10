@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // eventRecorder collects the events a Service publishes, so a test can
@@ -112,7 +113,7 @@ func TestService_DefineRole_UndeclaredPermission_IsRejected(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 
 	_, err := svc.DefineRole(ctx, RoleDefinition{Key: "typo", Permissions: []string{"notes:read", "notes:wirte"}})
-	if !hasCode(err, ErrUnknownPermission.Code) {
+	if !apperr.HasCode(err, ErrUnknownPermission.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrUnknownPermission.Code)
 	}
 	// Nothing was written: validation runs before the first insert, so a
@@ -130,7 +131,7 @@ func TestService_DefineRole_DuplicateKey_IsRejected(t *testing.T) {
 	if _, err := svc.DefineRole(ctx, def); err != nil {
 		t.Fatalf("first DefineRole: %v", err)
 	}
-	if _, err := svc.DefineRole(ctx, def); !hasCode(err, ErrDuplicateRole.Code) {
+	if _, err := svc.DefineRole(ctx, def); !apperr.HasCode(err, ErrDuplicateRole.Code) {
 		t.Fatalf("second DefineRole error = %v, want %s", err, ErrDuplicateRole.Code)
 	}
 }
@@ -165,7 +166,7 @@ func TestService_DefineRole_ConcurrentIdenticalDefine_LoserConvergesOnTheDocumen
 		}
 	}
 
-	if _, err := svc.DefineRole(ctx, def); !hasCode(err, ErrDuplicateRole.Code) {
+	if _, err := svc.DefineRole(ctx, def); !apperr.HasCode(err, ErrDuplicateRole.Code) {
 		t.Fatalf("DefineRole racing a concurrent identical define = %v, want %s (the documented duplicate-role answer, not a storage failure)", err, ErrDuplicateRole.Code)
 	}
 
@@ -362,7 +363,7 @@ func TestService_AssignRole_DifferentScopes_AreDifferentGrants(t *testing.T) {
 func TestService_AssignRole_UnknownRole_IsRejected(t *testing.T) {
 	svc := newTestService(t)
 	err := svc.AssignRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
-	if !hasCode(err, ErrRoleNotFound.Code) {
+	if !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
 	}
 }
@@ -377,7 +378,7 @@ func TestService_AssignRole_AnotherTenantsRole_IsNotFound(t *testing.T) {
 	}
 
 	err := svc.AssignRole(tenantCtx("tenant-b"), Subject{TenantID: "tenant-b", UserID: "user-1"}, "reader", Scope{})
-	if !hasCode(err, ErrRoleNotFound.Code) {
+	if !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
 	}
 }
@@ -385,7 +386,7 @@ func TestService_AssignRole_AnotherTenantsRole_IsNotFound(t *testing.T) {
 func TestService_AssignRole_IncompleteSubject_IsRejected(t *testing.T) {
 	svc := newTestService(t)
 	err := svc.AssignRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
-	if !hasCode(err, ErrSubjectRequired.Code) {
+	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
 }
@@ -426,7 +427,7 @@ func TestService_RevokeRole_NothingToRevoke_IsReported(t *testing.T) {
 		t.Fatalf("first RevokeRole: %v", err)
 	}
 	err := svc.RevokeRole(ctx, sub, "reader", Scope{})
-	if !hasCode(err, ErrBindingNotFound.Code) {
+	if !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("second RevokeRole error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 }
@@ -466,7 +467,7 @@ func TestService_RevokeRole_ConcurrentIdenticalRevoke_ReportsBindingNotFound(t *
 	}
 
 	revokeErr := svc.RevokeRole(ctx, sub, "reader", Scope{})
-	if !hasCode(revokeErr, ErrBindingNotFound.Code) {
+	if !apperr.HasCode(revokeErr, ErrBindingNotFound.Code) {
 		t.Fatalf("RevokeRole racing a concurrent identical revoke error = %v, want %s (not a generic storage error)", revokeErr, ErrBindingNotFound.Code)
 	}
 }
@@ -481,7 +482,7 @@ func TestService_RevokeRole_WrongScope_DoesNotSilentlySucceed(t *testing.T) {
 	grant(t, svc, sub, "region-reader", Scope{NodeID: "node-7"}, "notes:read")
 
 	err := svc.RevokeRole(ctx, sub, "region-reader", Scope{})
-	if !hasCode(err, ErrBindingNotFound.Code) {
+	if !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 
@@ -503,7 +504,7 @@ func TestService_RevokeRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 	}
 
 	inB := Subject{TenantID: "tenant-b", UserID: "user-1"}
-	if err := svc.RevokeRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !hasCode(err, ErrBindingNotFound.Code) {
+	if err := svc.RevokeRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 	// tenant-a's grant is untouched.
@@ -515,7 +516,7 @@ func TestService_RevokeRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 func TestService_RevokeRole_IncompleteSubject_IsRejected(t *testing.T) {
 	svc := newTestService(t)
 	err := svc.RevokeRole(tenantCtx("tenant-a"), Subject{UserID: "user-1"}, "reader", Scope{})
-	if !hasCode(err, ErrSubjectRequired.Code) {
+	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
 }
@@ -612,7 +613,7 @@ func TestService_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 	}
 
 	err := svc.RestoreRole(ctx, sub, "reader", Scope{})
-	if !hasCode(err, ErrBindingNotFound.Code) {
+	if !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 }
@@ -714,7 +715,7 @@ func TestService_RestoreRole_RestoresTheMostRecentRevoke(t *testing.T) {
 func TestService_RestoreRole_UnknownRole_IsRejected(t *testing.T) {
 	svc := newTestService(t)
 	err := svc.RestoreRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
-	if !hasCode(err, ErrRoleNotFound.Code) {
+	if !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
 	}
 }
@@ -724,7 +725,7 @@ func TestService_RestoreRole_UnknownRole_IsRejected(t *testing.T) {
 func TestService_RestoreRole_IncompleteSubject_IsRejected(t *testing.T) {
 	svc := newTestService(t)
 	err := svc.RestoreRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
-	if !hasCode(err, ErrSubjectRequired.Code) {
+	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
 }
@@ -748,7 +749,7 @@ func TestService_RestoreRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 	}
 
 	inB := Subject{TenantID: "tenant-b", UserID: "user-1"}
-	if err := svc.RestoreRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !hasCode(err, ErrBindingNotFound.Code) {
+	if err := svc.RestoreRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 }
@@ -788,7 +789,7 @@ func TestService_RestoreRole_ConcurrentAssignBeforeItsWrite_IsBindingNotFound(t 
 	}
 
 	restoreErr := svc.RestoreRole(ctx, sub, "reader", Scope{})
-	if !hasCode(restoreErr, ErrBindingNotFound.Code) {
+	if !apperr.HasCode(restoreErr, ErrBindingNotFound.Code) {
 		t.Fatalf("RestoreRole racing a concurrent assign error = %v, want %s (not a generic storage error)", restoreErr, ErrBindingNotFound.Code)
 	}
 

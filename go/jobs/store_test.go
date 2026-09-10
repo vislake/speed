@@ -247,7 +247,7 @@ func TestInsertRecord_And_FindByID_Roundtrip(t *testing.T) {
 func TestFindByID_NotFound_ReturnsErrJobNotFound(t *testing.T) {
 	db := newTestDB(t)
 	_, err := findByID(context.Background(), db, JobID("does-not-exist"))
-	if !isJobNotFound(err) {
+	if !apperr.HasCode(err, ErrJobNotFound.Code) {
 		t.Errorf("findByID() error = %v, want ErrJobNotFound", err)
 	}
 }
@@ -1196,7 +1196,7 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	if !errors.Is(err, ErrQueueWriterActive) {
 		t.Fatalf("second acquireWriterRegistration() error = %v, want ErrQueueWriterActive", err)
 	}
-	if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+	if !apperr.HasCode(err, ErrQueueWriterActive.Code) {
 		t.Fatalf("second acquireWriterRegistration() error = %v, want code %q", err, ErrQueueWriterActive.Code)
 	}
 

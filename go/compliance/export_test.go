@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/sharing"
 	sharingmigrations "github.com/vislake/speed/go/sharing/migrations"
 
@@ -207,7 +208,7 @@ func TestExportService_Export_ParticipantErrorIsPartialFailure(t *testing.T) {
 	}
 
 	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrExportPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrExportPartialFailure.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportPartialFailure.Code)
 	}
 	if _, ok := result.Manifest.Participants["testutil.fake_note"]; !ok {
@@ -358,7 +359,7 @@ func TestExportService_Export_ConfigReaderError_ReportsDeliveryFailed(t *testing
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	_, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrExportDeliveryFailed.Code) {
+	if !apperr.HasCode(err, ErrExportDeliveryFailed.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
 	}
 }
@@ -509,7 +510,7 @@ func TestExportService_Export_TenantMismatch_Refused(t *testing.T) {
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-b")
 	_, err := svc.Export(ctx, "tenant-a")
-	if !hasCode(err, ErrExportTenantMismatch.Code) {
+	if !apperr.HasCode(err, ErrExportTenantMismatch.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportTenantMismatch.Code)
 	}
 	if len(fakeSharing.calls) != 0 {
@@ -525,7 +526,7 @@ func TestExportService_Export_NoSharingWired_Refuses(t *testing.T) {
 	svc.sharing = nil
 
 	_, err := svc.Export(pkgcore.WithTenant(context.Background(), "tenant-a"), "tenant-a")
-	if !hasCode(err, ErrSharingRequired.Code) {
+	if !apperr.HasCode(err, ErrSharingRequired.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrSharingRequired.Code)
 	}
 }
@@ -548,7 +549,7 @@ func TestExportService_Export_DeliveryFailureIsReported(t *testing.T) {
 	var keys []string
 	for attempt := 1; attempt <= 3; attempt++ {
 		result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-		if !hasCode(err, ErrExportDeliveryFailed.Code) {
+		if !apperr.HasCode(err, ErrExportDeliveryFailed.Code) {
 			t.Fatalf("Export attempt %d error = %v, want %s", attempt, err, ErrExportDeliveryFailed.Code)
 		}
 		if result == nil {
@@ -720,7 +721,7 @@ func TestExportService_Export_ParticipantErrorClassifiedNeverRawText(t *testing.
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrExportPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrExportPartialFailure.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportPartialFailure.Code)
 	}
 	if got := result.Manifest.Errors["testutil.carving_export"]; got != participantErrorMarker {
@@ -784,7 +785,7 @@ func TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText(t *t
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	_, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrExportPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrExportPartialFailure.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportPartialFailure.Code)
 	}
 
@@ -844,7 +845,7 @@ func TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText(t *t
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	_, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrExportDeliveryFailed.Code) {
+	if !apperr.HasCode(err, ErrExportDeliveryFailed.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
 	}
 	if !errors.Is(err, transport) {
@@ -1009,7 +1010,7 @@ func TestExportService_Export_AuditRecordFailureAfterSuccessfulDeliverySurfaces(
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrAuditRecordFailed.Code) {
+	if !apperr.HasCode(err, ErrAuditRecordFailed.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrAuditRecordFailed.Code)
 	}
 	if result == nil {
@@ -1041,7 +1042,7 @@ func TestExportService_Export_DeliveryCleanupAndAuditFailuresSurface(t *testing.
 	fakeSharing.failWith = errors.New("sharing unavailable")
 
 	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrAuditRecordFailed.Code) {
+	if !apperr.HasCode(err, ErrAuditRecordFailed.Code) {
 		t.Fatalf("Export error = %v, want %s (the audit failure takes the returned error)", err, ErrAuditRecordFailed.Code)
 	}
 	if result == nil {

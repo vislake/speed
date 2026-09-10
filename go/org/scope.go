@@ -4,6 +4,7 @@ import (
 	"context"
 
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // Scope is the query-side, read-only view of a tenant's organization tree
@@ -111,7 +112,7 @@ func (s *ScopeService) DescendantIDs(ctx context.Context, nodeID string) ([]stri
 func (s *ScopeService) MemberNodeIDs(ctx context.Context, userID string) ([]string, error) {
 	membership, err := s.members.byUser(ctx, userID)
 	switch {
-	case hasCode(err, ErrMembershipNotFound.Code):
+	case apperr.HasCode(err, ErrMembershipNotFound.Code):
 		return []string{}, nil
 	case err != nil:
 		return nil, err
@@ -121,7 +122,7 @@ func (s *ScopeService) MemberNodeIDs(ctx context.Context, userID string) ([]stri
 	}
 
 	ids, err := s.DescendantIDs(ctx, membership.NodeID)
-	if hasCode(err, ErrNodeNotFound.Code) {
+	if apperr.HasCode(err, ErrNodeNotFound.Code) {
 		obs.FromContext(ctx).Warn("org membership points at a node that no longer exists",
 			"user_id", userID, "node_id", membership.NodeID)
 		return []string{}, nil

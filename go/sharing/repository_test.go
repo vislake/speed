@@ -1046,7 +1046,7 @@ func TestShareRepository_ListPage_UnknownCursor_ReportsRecordNotFound(t *testing
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := repo.listPage(ctxA, 10, tc.beforeID)
-			if !hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			if !dbkit.IsRecordNotFound(err) {
 				t.Fatalf("listPage(beforeID %q) error = %v, want dbkit's not-found code", tc.beforeID, err)
 			}
 		})

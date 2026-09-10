@@ -20,6 +20,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // newTestHandler builds a Handler over a fresh serviceFixture, so a test can
@@ -1848,7 +1849,7 @@ func TestHandler_ListSessions_TieredRevokeReasonExport(t *testing.T) {
 		t.Fatalf("Refresh() error = %v", err)
 	}
 	_, err = f.svc.Refresh(t.Context(), replayed.RefreshToken)
-	if !hasCode(err, ErrRefreshTokenReused.Code) {
+	if !apperr.HasCode(err, ErrRefreshTokenReused.Code) {
 		t.Fatalf("replayed Refresh() error = %v, want code %q", err, ErrRefreshTokenReused.Code)
 	}
 	// The tablet's owner signs it out from the device itself.

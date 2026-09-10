@@ -628,7 +628,7 @@ func (r *ShareRepository) listPage(ctx context.Context, limit int, beforeID stri
 		return query.Find(&out).Error
 	})
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, err
 		}
 		return nil, ErrInternal.WithCause(err)

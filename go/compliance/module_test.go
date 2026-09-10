@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
@@ -83,7 +84,7 @@ var _ jobs.Queue = (*recordingQueue)(nil)
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t))
 	_, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
-	if !hasCode(err, ErrQueueRequired.Code) {
+	if !apperr.HasCode(err, ErrQueueRequired.Code) {
 		t.Fatalf("Bootstrap without a queue error = %v, want %s", err, ErrQueueRequired.Code)
 	}
 }

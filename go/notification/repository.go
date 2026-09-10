@@ -176,7 +176,7 @@ func (r *Repository) MarkRead(ctx context.Context, recipientUserID, messageID st
 	now := time.Now().UTC()
 	msg.ReadAt = &now
 	if err := r.Update(ctx, &msg); err != nil {
-		if isRecordNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			// The row vanished between the fetch and the write; the message
 			// the caller named no longer exists, which is the same refusal
 			// the fetch above would have given it.

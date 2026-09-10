@@ -13,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
@@ -235,7 +236,7 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 	}
 
 	result, err := svc.SweepTenant(context.Background(), tenant)
-	if !hasCode(err, ErrSweepPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrSweepPartialFailure.Code) {
 		t.Fatalf("SweepTenant error = %v, want %s", err, ErrSweepPartialFailure.Code)
 	}
 	if result.TotalReaped() != 1 {
@@ -306,7 +307,7 @@ func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *te
 	seedFakeNote(t, repo, tenant, "expired-2", "subject-2", wellPastDefaultWindow())
 
 	result, err := svc.SweepTenant(context.Background(), tenant)
-	if !hasCode(err, ErrSweepPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrSweepPartialFailure.Code) {
 		t.Fatalf("SweepTenant error = %v, want %s", err, ErrSweepPartialFailure.Code)
 	}
 	if got := result.Reaped["testutil.partial"]; got != 2 {
@@ -393,7 +394,7 @@ func TestRetentionService_SweepAllTenants_IteratesEveryListedTenant(t *testing.T
 func TestRetentionService_SweepAllTenants_NoListerIsAnError(t *testing.T) {
 	svc, _ := newRetentionHarness(t)
 	_, err := svc.SweepAllTenants(context.Background())
-	if !hasCode(err, ErrTenantListerRequired.Code) {
+	if !apperr.HasCode(err, ErrTenantListerRequired.Code) {
 		t.Fatalf("SweepAllTenants without a lister error = %v, want %s", err, ErrTenantListerRequired.Code)
 	}
 }
@@ -446,7 +447,7 @@ func TestRetentionService_EnqueueRetentionSweep_NoTenantFails(t *testing.T) {
 func TestRetentionService_EnqueueRetentionSweep_NoQueueReturnsErrQueueRequired(t *testing.T) {
 	svc, _ := newRetentionHarness(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	if err := svc.EnqueueRetentionSweep(ctx); !hasCode(err, ErrQueueRequired.Code) {
+	if err := svc.EnqueueRetentionSweep(ctx); !apperr.HasCode(err, ErrQueueRequired.Code) {
 		t.Errorf("EnqueueRetentionSweep with no queue error = %v, want %s", err, ErrQueueRequired.Code)
 	}
 }
@@ -528,7 +529,7 @@ func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(
 	svc.actions = reg.AuditActions
 
 	result, err := svc.SweepTenant(context.Background(), "tenant-a")
-	if !hasCode(err, ErrSweepPartialFailure.Code) {
+	if !apperr.HasCode(err, ErrSweepPartialFailure.Code) {
 		t.Fatalf("SweepTenant error = %v, want %s", err, ErrSweepPartialFailure.Code)
 	}
 	// The raw error must still reach this call's own caller -- the
@@ -579,7 +580,7 @@ func TestRetentionService_SweepTenant_SystemContextAuditPublishFailure_FailsClos
 	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
 
 	result, err := svc.SweepTenant(context.Background(), tenant)
-	if !hasCode(err, tenancy.ErrAuditPublishFailed.Code) {
+	if !apperr.HasCode(err, tenancy.ErrAuditPublishFailed.Code) {
 		t.Fatalf("SweepTenant error = %v, want %s", err, tenancy.ErrAuditPublishFailed.Code)
 	}
 	if result.Tenant != "" || !result.Cutoff.IsZero() || result.Reaped != nil || result.Errors != nil {
@@ -604,7 +605,7 @@ func TestRetentionService_SweepTenant_SweepAuditRecordFailure_SurfacesWithResult
 	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
 
 	result, err := svc.SweepTenant(context.Background(), tenant)
-	if !hasCode(err, ErrAuditRecordFailed.Code) {
+	if !apperr.HasCode(err, ErrAuditRecordFailed.Code) {
 		t.Fatalf("SweepTenant error = %v, want %s", err, ErrAuditRecordFailed.Code)
 	}
 	if result.TotalReaped() != 1 {

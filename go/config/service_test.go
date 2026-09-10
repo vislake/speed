@@ -40,7 +40,7 @@ func assertCode(t *testing.T, err error, want *apperr.Error) {
 	if !ok {
 		t.Fatalf("want an *apperr.Error with code %q, got %T: %v", want.Code, err, err)
 	}
-	if got.Code != want.Code {
+	if !apperr.HasCode(err, want.Code) {
 		t.Fatalf("want error code %q, got %q: %v", want.Code, got.Code, err)
 	}
 }

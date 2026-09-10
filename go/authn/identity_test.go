@@ -12,6 +12,7 @@ import (
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -576,7 +577,7 @@ func TestUserIdentityRepository_DeleteUnlessLastLoginMethod_GuardIsAuthoritative
 	}
 
 	removed, err = f.svc.identities.DeleteUnlessLastLoginMethod(t.Context(), user.ID, identities[1].ID, f.svc.now())
-	if err == nil || !hasCode(err, ErrLastLoginMethod.Code) {
+	if err == nil || !apperr.HasCode(err, ErrLastLoginMethod.Code) {
 		t.Fatalf("second DeleteUnlessLastLoginMethod() = (%v, %v), want ErrLastLoginMethod: deleting the account's last method must be refused", removed, err)
 	}
 	remaining, err := f.svc.ListIdentities(t.Context(), user.ID)
@@ -657,7 +658,7 @@ func TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount(t *testing.
 					switch {
 					case err == nil:
 						success++
-					case hasCode(err, ErrLastLoginMethod.Code):
+					case apperr.HasCode(err, ErrLastLoginMethod.Code):
 						refused++
 					default:
 						unwanted = append(unwanted, err)
@@ -1035,7 +1036,7 @@ func TestService_SocialSignIn_AccountMintBoundsTheProviderReportedName(t *testin
 
 	if _, err := socialSignIn(t, f, provider, testTenantA); err == nil {
 		t.Fatal("socialSignIn() unexpectedly succeeded; a fresh account has no membership yet")
-	} else if !hasCode(err, ErrTenantMembershipRequired.Code) {
+	} else if !apperr.HasCode(err, ErrTenantMembershipRequired.Code) {
 		t.Fatalf("socialSignIn() error = %v, want the membership refusal that follows successful provisioning", err)
 	}
 

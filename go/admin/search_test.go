@@ -193,7 +193,7 @@ func TestSearchService_Users_SearchLeavesAuditedSystemContext(t *testing.T) {
 	var entered []tenancy.SystemContextEnteredEvent
 	reg.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
 		var e tenancy.SystemContextEnteredEvent
-		if err := decodeEventPayload(evt.Payload, &e); err != nil {
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &e); err != nil {
 			return err
 		}
 		entered = append(entered, e)

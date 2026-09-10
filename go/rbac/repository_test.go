@@ -292,7 +292,7 @@ func assertErrorCode(t *testing.T, err error, code string) {
 	if !ok {
 		t.Fatalf("error %v is not an *apperr.Error, want code %q", err, code)
 	}
-	if appErr.Code != code {
+	if !apperr.HasCode(err, code) {
 		t.Fatalf("error code = %q, want %q", appErr.Code, code)
 	}
 }

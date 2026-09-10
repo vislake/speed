@@ -42,8 +42,7 @@ func TestValidateBaseURL_PrivateIPLiteral_Blocked(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ValidateBaseURL(%q) = nil, want a refusal", u)
 			}
-			found, ok := apperr.As(err)
-			if !ok || found.Code != ErrBaseURLBlocked.Code {
+			if !apperr.HasCode(err, ErrBaseURLBlocked.Code) {
 				t.Fatalf("ValidateBaseURL(%q) error = %v, want ErrBaseURLBlocked", u, err)
 			}
 		})
@@ -63,10 +62,10 @@ func TestValidateBaseURL_PrivateIPLiteral_Blocked(t *testing.T) {
 // system (hosts file, no network), so this needs no resolver seam.
 func TestValidateBaseURL_ResolvedBlockedHost_RefusalDoesNotDiscloseResolvedIP(t *testing.T) {
 	err := ValidateBaseURL(context.Background(), "http://localhost:9000/v1")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLBlocked.Code {
+	if !apperr.HasCode(err, ErrBaseURLBlocked.Code) {
 		t.Fatalf("ValidateBaseURL(localhost) = %v, want ErrBaseURLBlocked", err)
 	}
+	found, _ := apperr.As(err)
 	if ip, present := found.Params["ip"]; present {
 		t.Fatalf("the resolution path's refusal carries the resolved address %v in its params -- an internal-DNS oracle for the caller; want no ip param", ip)
 	}
@@ -90,10 +89,10 @@ func TestValidateBaseURL_BlockedLiteralIP_RefusalCarriesTheLiteralIP(t *testing.
 	for _, tt := range cases {
 		t.Run(tt.url, func(t *testing.T) {
 			err := ValidateBaseURL(context.Background(), tt.url)
-			found, ok := apperr.As(err)
-			if !ok || found.Code != ErrBaseURLBlocked.Code {
+			if !apperr.HasCode(err, ErrBaseURLBlocked.Code) {
 				t.Fatalf("error = %v, want ErrBaseURLBlocked", err)
 			}
+			found, _ := apperr.As(err)
 			if got := found.Params["ip"]; got != tt.wantIP {
 				t.Fatalf("ip param = %v, want the literal address %q the caller typed", got, tt.wantIP)
 			}
@@ -113,10 +112,10 @@ func TestValidateBaseURL_PublicIPLiteral_Allowed(t *testing.T) {
 
 func TestValidateBaseURL_DisallowedScheme_Refused(t *testing.T) {
 	err := ValidateBaseURL(context.Background(), "ftp://example.com/v1")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLInvalid.Code {
+	if !apperr.HasCode(err, ErrBaseURLInvalid.Code) {
 		t.Fatalf("error = %v, want ErrBaseURLInvalid", err)
 	}
+	found, _ := apperr.As(err)
 	if got := found.Params["reason"]; got != "scheme" {
 		t.Fatalf("reason param = %v, want %q", got, "scheme")
 	}
@@ -124,26 +123,24 @@ func TestValidateBaseURL_DisallowedScheme_Refused(t *testing.T) {
 
 func TestValidateBaseURL_Malformed_Refused(t *testing.T) {
 	err := ValidateBaseURL(context.Background(), "://not a url")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLInvalid.Code {
+	if !apperr.HasCode(err, ErrBaseURLInvalid.Code) {
 		t.Fatalf("error = %v, want ErrBaseURLInvalid", err)
 	}
 }
 
 func TestValidateBaseURL_NoHost_Refused(t *testing.T) {
 	err := ValidateBaseURL(context.Background(), "https:///v1")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLInvalid.Code {
+	if !apperr.HasCode(err, ErrBaseURLInvalid.Code) {
 		t.Fatalf("error = %v, want ErrBaseURLInvalid", err)
 	}
 }
 
 func TestValidateBaseURL_UnresolvableHost_Refused(t *testing.T) {
 	err := ValidateBaseURL(context.Background(), "https://this-host-should-not-exist.invalid/v1")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != ErrBaseURLUnresolvable.Code {
+	if !apperr.HasCode(err, ErrBaseURLUnresolvable.Code) {
 		t.Fatalf("error = %v, want ErrBaseURLUnresolvable", err)
 	}
+	found, _ := apperr.As(err)
 	// The host param echoes the caller's own hostname -- zero disclosure --
 	// and stays on the answer unchanged.
 	if got := found.Params["host"]; got != "this-host-should-not-exist.invalid" {

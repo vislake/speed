@@ -289,8 +289,7 @@ func TestQueue_JobMetrics_UnregisteredHandler_ErrorSurvivesWrapAndRecords(t *tes
 	task := asynqlib.NewTaskWithHeaders("no-such-type", nil, map[string]string{headerTenantID: "tenant-a"})
 
 	err := q.processTaskUncancelled(context.Background(), task, "job-1", obs.FromContext(context.Background()))
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != jobs.ErrHandlerNotRegistered.Code {
+	if !apperr.HasCode(err, jobs.ErrHandlerNotRegistered.Code) {
 		t.Fatalf("processTaskUncancelled() error = %v, want ErrHandlerNotRegistered (code %q) through the duration wrapper", err, jobs.ErrHandlerNotRegistered.Code)
 	}
 

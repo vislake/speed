@@ -217,7 +217,7 @@ func (s *LifecycleService) Delete(ctx context.Context, objectID string) error {
 	// converges on "already gone".
 	row, err := s.objects.markDeleting(ctx, objectID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil
 		}
 		return err

@@ -162,7 +162,7 @@ func TestInvitationRepository_CreatePending_WritesTheTokenIndexRow(t *testing.T)
 		t.Errorf("tenant = %q, want tenant-a", tenant)
 	}
 
-	if _, lookupErr := repo.tenantForTokenHash(context.Background(), hashInvitationToken("never-issued")); !hasCode(lookupErr, ErrInvitationNotFound.Code) {
+	if _, lookupErr := repo.tenantForTokenHash(context.Background(), hashInvitationToken("never-issued")); !apperr.HasCode(lookupErr, ErrInvitationNotFound.Code) {
 		t.Errorf("tenantForTokenHash(unknown) error = %v, want org.invitation_not_found", lookupErr)
 	}
 
@@ -256,7 +256,7 @@ func TestValidateInviteEmail(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := validateInviteEmail(tc.input)
 			if tc.want == "" {
-				if !hasCode(err, ErrInvalidEmail.Code) {
+				if !apperr.HasCode(err, ErrInvalidEmail.Code) {
 					t.Fatalf("validateInviteEmail(%q) error = %v, want org.invalid_email", tc.input, err)
 				}
 				return
@@ -272,7 +272,7 @@ func TestValidateInviteEmail(t *testing.T) {
 
 	t.Run("longer than the RFC 5321 forward-path limit", func(t *testing.T) {
 		long := strings.Repeat("a", maxEmailLen) + "@example.test"
-		if _, err := validateInviteEmail(long); !hasCode(err, ErrInvalidEmail.Code) {
+		if _, err := validateInviteEmail(long); !apperr.HasCode(err, ErrInvalidEmail.Code) {
 			t.Errorf("validateInviteEmail(overlong) error = %v, want org.invalid_email", err)
 		}
 	})
@@ -371,13 +371,13 @@ func TestInvitationRepository_byTokenHash(t *testing.T) {
 		t.Errorf("byTokenHash returned %q", got.ID)
 	}
 
-	if _, err := repo.byTokenHash(ctxA, hashInvitationToken("wrong")); !hasCode(err, ErrInvitationNotFound.Code) {
+	if _, err := repo.byTokenHash(ctxA, hashInvitationToken("wrong")); !apperr.HasCode(err, ErrInvitationNotFound.Code) {
 		t.Errorf("byTokenHash(wrong token) error = %v, want org.invitation_not_found", err)
 	}
 
 	// The correct token, from the wrong tenant: this is the property that
 	// makes it safe for the token never to name its tenant.
-	if _, err := repo.byTokenHash(ctxB, hashInvitationToken("secret-token")); !hasCode(err, ErrInvitationNotFound.Code) {
+	if _, err := repo.byTokenHash(ctxB, hashInvitationToken("secret-token")); !apperr.HasCode(err, ErrInvitationNotFound.Code) {
 		t.Errorf("byTokenHash(other tenant) error = %v, want org.invitation_not_found", err)
 	}
 }
@@ -427,7 +427,7 @@ func TestInvitationRepository_pendingByEmail(t *testing.T) {
 
 	// An input with no canonical form -- blank, in the normalizer's terms --
 	// is refused before any SQL runs.
-	if _, err := repo.pendingByEmail(ctx, indexer, "   "); !hasCode(err, ErrInvalidEmail.Code) {
+	if _, err := repo.pendingByEmail(ctx, indexer, "   "); !apperr.HasCode(err, ErrInvalidEmail.Code) {
 		t.Errorf("pendingByEmail(blank address) error = %v, want org.invalid_email", err)
 	}
 }

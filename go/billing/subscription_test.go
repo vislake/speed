@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -96,7 +97,7 @@ func TestSubscriptionService_Transition_IllegalMove_Refused(t *testing.T) {
 
 	// Canceled is terminal: nothing may transition out of it.
 	_, err = svc.Activate(ctx, sub.ID)
-	if !hasCode(err, ErrInvalidSubscriptionTransition.Code) {
+	if !apperr.HasCode(err, ErrInvalidSubscriptionTransition.Code) {
 		t.Errorf("Activate a canceled subscription: err = %v, want %s", err, ErrInvalidSubscriptionTransition.Code)
 	}
 
@@ -106,7 +107,7 @@ func TestSubscriptionService_Transition_IllegalMove_Refused(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	_, err = svc.MarkPastDue(ctx, sub2.ID)
-	if !hasCode(err, ErrInvalidSubscriptionTransition.Code) {
+	if !apperr.HasCode(err, ErrInvalidSubscriptionTransition.Code) {
 		t.Errorf("MarkPastDue a Created subscription: err = %v, want %s", err, ErrInvalidSubscriptionTransition.Code)
 	}
 }
@@ -147,7 +148,7 @@ func TestSubscriptionService_Get_NotFound(t *testing.T) {
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	_, err := svc.Get(ctx, "does-not-exist")
-	if !hasCode(err, ErrSubscriptionNotFound.Code) {
+	if !apperr.HasCode(err, ErrSubscriptionNotFound.Code) {
 		t.Errorf("Get(missing): err = %v, want %s", err, ErrSubscriptionNotFound.Code)
 	}
 }
@@ -209,7 +210,7 @@ func TestSubscriptionService_Create_RejectsAnotherTenantsCustomPlan(t *testing.T
 	attackerCtx := pkgcore.WithTenant(context.Background(), "tenant-attacker")
 
 	_, err := svc.Create(attackerCtx, CreateInput{PlanID: victimsPlan.ID})
-	if !hasCode(err, ErrPlanNotFound.Code) {
+	if !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Fatalf("Create with another tenant's custom PlanID: err = %v, want %s (never allowed, never a distinguishing error)", err, ErrPlanNotFound.Code)
 	}
 }
@@ -246,7 +247,7 @@ func TestSubscriptionService_Create_UnknownPlanID_Refused(t *testing.T) {
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	_, err := svc.Create(ctx, CreateInput{PlanID: "does-not-exist"})
-	if !hasCode(err, ErrPlanNotFound.Code) {
+	if !apperr.HasCode(err, ErrPlanNotFound.Code) {
 		t.Errorf("Create with an unknown PlanID: err = %v, want %s", err, ErrPlanNotFound.Code)
 	}
 }

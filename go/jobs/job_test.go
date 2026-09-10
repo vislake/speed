@@ -2,22 +2,7 @@ package jobs
 
 import (
 	"testing"
-
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
-
-// isJobNotFound reports whether err is, or wraps, ErrJobNotFound, matched
-// by Code rather than identity -- the same discipline dbkit's own
-// isRecordNotFound test helpers use for ErrRecordNotFound, so a decoration
-// of ErrJobNotFound with WithParam/WithCause (which derives a new
-// *apperr.Error instance, per apperr's own doc comment) does not silently
-// break every test asserting this error across the package's test files --
-// store_test.go and standalone_queue_test.go both use this, which is why it
-// lives here rather than duplicated in each.
-func isJobNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrJobNotFound.Code
-}
 
 func TestStatus_Terminal(t *testing.T) {
 	tests := []struct {

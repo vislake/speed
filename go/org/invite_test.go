@@ -209,7 +209,7 @@ func TestInviteService_Invite_RateLimited_PerEmail(t *testing.T) {
 	_, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
 		Email: address, NodeID: f.left.ID, InviterUserID: "u-inviter",
 	})
-	if !hasCode(err, ErrInvitationRateLimited.Code) {
+	if !apperr.HasCode(err, ErrInvitationRateLimited.Code) {
 		t.Fatalf("invite %d error = %v, want org.invitation_rate_limited", invitesPerEmailRate+1, err)
 	}
 	if got := errParam(t, err, "dimension"); got != "email" {
@@ -255,7 +255,7 @@ func TestInviteService_Invite_RateLimitKeyIsTheBlindIndexNotTheAddress(t *testin
 	_, err = f.m.Invitations().Invite(f.ctx, InviteRequest{
 		Email: address, NodeID: f.left.ID, InviterUserID: "u-inviter",
 	})
-	if !hasCode(err, ErrInvitationRateLimited.Code) {
+	if !apperr.HasCode(err, ErrInvitationRateLimited.Code) {
 		t.Fatalf("Invite error = %v, want org.invitation_rate_limited under the blind-index key", err)
 	}
 }
@@ -277,7 +277,7 @@ func TestInviteService_Invite_RateLimited_PerTenant(t *testing.T) {
 	_, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
 		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
 	})
-	if !hasCode(err, ErrInvitationRateLimited.Code) {
+	if !apperr.HasCode(err, ErrInvitationRateLimited.Code) {
 		t.Fatalf("Invite error = %v, want org.invitation_rate_limited", err)
 	}
 	if got := errParam(t, err, "dimension"); got != "tenant" {
@@ -308,7 +308,7 @@ func TestInviteService_Invite_NoRateLimitBudgetIsSpentWhenTheFeatureIsOff(t *tes
 	for range invitesPerEmailRate + 1 {
 		if _, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
 			Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
-		}); !hasCode(err, ErrInvitationsDisabled.Code) {
+		}); !apperr.HasCode(err, ErrInvitationsDisabled.Code) {
 			t.Fatalf("Invite error = %v, want org.invitations_disabled", err)
 		}
 	}
@@ -328,7 +328,7 @@ func TestInviteService_Invite_GateFailure_IsNotSilentlyEnabled(t *testing.T) {
 	_, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
 		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
 	})
-	if !hasCode(err, ErrInternal.Code) {
+	if !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("Invite with a failing gate error = %v, want org.internal_error", err)
 	}
 	if len(f.host.mailer.messages()) != 0 {
@@ -356,7 +356,7 @@ func TestInviteService_Invite_RejectedInputs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := f.m.Invitations().Invite(f.ctx, tc.req); !hasCode(err, tc.code) {
+			if _, err := f.m.Invitations().Invite(f.ctx, tc.req); !apperr.HasCode(err, tc.code) {
 				t.Errorf("Invite error = %v, want %s", err, tc.code)
 			}
 		})
@@ -381,7 +381,7 @@ func TestInviteService_Invite_SupersedesTheEarlierPendingInvitation(t *testing.T
 	if stored.Status != InvitationStatusRevoked {
 		t.Errorf("the superseded invitation is %q, want %q", stored.Status, InvitationStatusRevoked)
 	}
-	if _, err := f.m.Invitations().Accept(f.ctx, first.Token, "u-new"); !hasCode(err, ErrInvitationRevoked.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, first.Token, "u-new"); !apperr.HasCode(err, ErrInvitationRevoked.Code) {
 		t.Errorf("accepting the superseded token error = %v, want org.invitation_revoked", err)
 	}
 	if _, err := f.m.Invitations().Accept(f.ctx, second.Token, "u-new"); err != nil {
@@ -535,7 +535,7 @@ func TestInviteService_Accept_NoTenantInContext_ReplayStillReportsAlreadyAccepte
 	if _, err := f.m.Invitations().Accept(tenantless, result.Token, "u-ada"); err != nil {
 		t.Fatalf("first Accept: %v", err)
 	}
-	if _, err := f.m.Invitations().Accept(tenantless, result.Token, "u-ada"); !hasCode(err, ErrInvitationAlreadyAccepted.Code) {
+	if _, err := f.m.Invitations().Accept(tenantless, result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationAlreadyAccepted.Code) {
 		t.Errorf("second tenantless Accept error = %v, want org.invitation_already_accepted", err)
 	}
 }
@@ -553,7 +553,7 @@ func TestInviteService_Accept_NoTenantInContext_TerminalStatesStillReported(t *t
 		if err := f.m.Invitations().Revoke(f.ctx, result.Invitation.ID); err != nil {
 			t.Fatalf("Revoke: %v", err)
 		}
-		if _, err := f.m.Invitations().Accept(context.Background(), result.Token, "u-ada"); !hasCode(err, ErrInvitationRevoked.Code) {
+		if _, err := f.m.Invitations().Accept(context.Background(), result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationRevoked.Code) {
 			t.Errorf("tenantless Accept(revoked) error = %v, want org.invitation_revoked", err)
 		}
 	})
@@ -561,7 +561,7 @@ func TestInviteService_Accept_NoTenantInContext_TerminalStatesStillReported(t *t
 		f := newInviteFixture(t)
 		result := f.invite(t, "ada@example.test")
 		f.m.invites.now = func() time.Time { return result.Invitation.ExpiresAt.Add(time.Second) }
-		if _, err := f.m.Invitations().Accept(context.Background(), result.Token, "u-ada"); !hasCode(err, ErrInvitationExpired.Code) {
+		if _, err := f.m.Invitations().Accept(context.Background(), result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationExpired.Code) {
 			t.Errorf("tenantless Accept(expired) error = %v, want org.invitation_expired", err)
 		}
 	})
@@ -575,7 +575,7 @@ func TestInviteService_Accept_NoTenantInContext_UnknownToken_IsNotFound(t *testi
 	f := newInviteFixture(t)
 	f.invite(t, "ada@example.test")
 
-	if _, err := f.m.Invitations().Accept(context.Background(), "a-token-nobody-issued", "u-ada"); !hasCode(err, ErrInvitationNotFound.Code) {
+	if _, err := f.m.Invitations().Accept(context.Background(), "a-token-nobody-issued", "u-ada"); !apperr.HasCode(err, ErrInvitationNotFound.Code) {
 		t.Errorf("tenantless Accept(unknown token) error = %v, want org.invitation_not_found", err)
 	}
 }
@@ -588,7 +588,7 @@ func TestInviteService_Accept_NoTenantInContext_EmptyUserIsRefused(t *testing.T)
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test")
 
-	if _, err := f.m.Invitations().Accept(context.Background(), result.Token, ""); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := f.m.Invitations().Accept(context.Background(), result.Token, ""); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("tenantless Accept with no user error = %v, want org.membership_not_found", err)
 	}
 }
@@ -609,11 +609,11 @@ func TestInviteService_Accept_CrossTenantToken_ReturnsInvitationNotFound(t *test
 	if _, err := f.m.Tree().CreateRoot(other, "their group", "group"); err != nil {
 		t.Fatalf("CreateRoot(tenant-b): %v", err)
 	}
-	if _, err := f.m.Invitations().Accept(other, result.Token, "u-ada"); !hasCode(err, ErrInvitationNotFound.Code) {
+	if _, err := f.m.Invitations().Accept(other, result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationNotFound.Code) {
 		t.Fatalf("Accept from another tenant error = %v, want org.invitation_not_found", err)
 	}
 	// And nothing leaked into that tenant.
-	if _, err := f.m.Members().Get(other, "u-ada"); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := f.m.Members().Get(other, "u-ada"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("a membership appeared in the wrong tenant: %v", err)
 	}
 }
@@ -625,7 +625,7 @@ func TestInviteService_Accept_Twice_ReturnsAlreadyAccepted(t *testing.T) {
 	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); err != nil {
 		t.Fatalf("first Accept: %v", err)
 	}
-	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(err, ErrInvitationAlreadyAccepted.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationAlreadyAccepted.Code) {
 		t.Errorf("second Accept error = %v, want org.invitation_already_accepted", err)
 	}
 	// The replay created no second membership.
@@ -644,7 +644,7 @@ func TestInviteService_Accept_Expired(t *testing.T) {
 
 	// Move the service clock past the expiry rather than sleeping.
 	f.m.invites.now = func() time.Time { return result.Invitation.ExpiresAt.Add(time.Second) }
-	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(err, ErrInvitationExpired.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationExpired.Code) {
 		t.Errorf("Accept(expired) error = %v, want org.invitation_expired", err)
 	}
 }
@@ -656,7 +656,7 @@ func TestInviteService_Accept_Revoked(t *testing.T) {
 	if err := f.m.Invitations().Revoke(f.ctx, result.Invitation.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(err, ErrInvitationRevoked.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !apperr.HasCode(err, ErrInvitationRevoked.Code) {
 		t.Errorf("Accept(revoked) error = %v, want org.invitation_revoked", err)
 	}
 }
@@ -665,7 +665,7 @@ func TestInviteService_Accept_UnknownToken(t *testing.T) {
 	f := newInviteFixture(t)
 	f.invite(t, "ada@example.test")
 
-	if _, err := f.m.Invitations().Accept(f.ctx, "a-token-nobody-issued", "u-ada"); !hasCode(err, ErrInvitationNotFound.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, "a-token-nobody-issued", "u-ada"); !apperr.HasCode(err, ErrInvitationNotFound.Code) {
 		t.Errorf("Accept(unknown token) error = %v, want org.invitation_not_found", err)
 	}
 }
@@ -674,7 +674,7 @@ func TestInviteService_Accept_EmptyUser(t *testing.T) {
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test")
 
-	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, ""); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, ""); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("Accept with no user error = %v, want org.membership_not_found", err)
 	}
 }
@@ -749,7 +749,7 @@ func TestInviteService_Accept_ConcurrentAcceptsBySeparateUsers_ExactlyOneWins(t 
 				switch {
 				case err == nil:
 					successes++
-				case hasCode(err, ErrInvitationAlreadyAccepted.Code):
+				case apperr.HasCode(err, ErrInvitationAlreadyAccepted.Code):
 					membershipErrors++
 				default:
 					otherErrors = append(otherErrors, err)
@@ -785,7 +785,7 @@ func (f inviteFixture) userHasMembership(t *testing.T, userID string) bool {
 	switch {
 	case err == nil:
 		return true
-	case hasCode(err, ErrMembershipNotFound.Code):
+	case apperr.HasCode(err, ErrMembershipNotFound.Code):
 		return false
 	default:
 		t.Fatalf("Members().Get(%s): %v", userID, err)
@@ -805,7 +805,7 @@ func TestInviteService_Revoke(t *testing.T) {
 	if err := f.m.Invitations().Revoke(f.ctx, result.Invitation.ID); err != nil {
 		t.Errorf("second Revoke: %v", err)
 	}
-	if err := f.m.Invitations().Revoke(f.ctx, "30000000-0000-4000-8000-000000000099"); !hasCode(err, ErrInvitationNotFound.Code) {
+	if err := f.m.Invitations().Revoke(f.ctx, "30000000-0000-4000-8000-000000000099"); !apperr.HasCode(err, ErrInvitationNotFound.Code) {
 		t.Errorf("Revoke(unknown) error = %v, want org.invitation_not_found", err)
 	}
 }
@@ -819,7 +819,7 @@ func TestInviteService_Revoke_Accepted_IsRefused(t *testing.T) {
 		t.Fatalf("Accept: %v", err)
 	}
 
-	if err := f.m.Invitations().Revoke(f.ctx, result.Invitation.ID); !hasCode(err, ErrInvitationAlreadyAccepted.Code) {
+	if err := f.m.Invitations().Revoke(f.ctx, result.Invitation.ID); !apperr.HasCode(err, ErrInvitationAlreadyAccepted.Code) {
 		t.Errorf("Revoke(accepted) error = %v, want org.invitation_already_accepted", err)
 	}
 	if _, err := f.m.Members().Get(f.ctx, "u-ada"); err != nil {
@@ -893,7 +893,7 @@ func TestInviteService_NoIndexer_RefusesToInvite(t *testing.T) {
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	_, err := m.Invitations().Invite(ctx, InviteRequest{Email: "ada@example.test", NodeID: root.ID})
-	if !hasCode(err, ErrEmailIndexerRequired.Code) {
+	if !apperr.HasCode(err, ErrEmailIndexerRequired.Code) {
 		t.Errorf("Invite without an indexer error = %v, want org.email_indexer_required", err)
 	}
 	if len(host.mailer.messages()) != 0 {
@@ -999,7 +999,7 @@ func TestInviteService_Invite_ConcurrentSameAddress_ExactlyOneLiveToken(t *testi
 				switch {
 				case err == nil:
 					successes++
-				case hasCode(err, ErrInvitationAlreadyPending.Code):
+				case apperr.HasCode(err, ErrInvitationAlreadyPending.Code):
 					coded++
 				default:
 					other = append(other, err)
@@ -1210,7 +1210,7 @@ func TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked(t *
 		t.Fatalf("Delete(the invited node): %v", err)
 	}
 
-	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Fatalf("Accept into a deleted node error = %v, want org.node_not_found", err)
 	}
 
@@ -1231,7 +1231,7 @@ func TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked(t *
 	// The token is unusable: a second accept of the same token answers
 	// revoked -- never a false already-accepted, never another doomed
 	// acceptance attempt.
-	if _, replayErr := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(replayErr, ErrInvitationRevoked.Code) {
+	if _, replayErr := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !apperr.HasCode(replayErr, ErrInvitationRevoked.Code) {
 		t.Fatalf("second Accept error = %v, want org.invitation_revoked -- the token stayed live after the failed accept", replayErr)
 	}
 
@@ -1282,7 +1282,7 @@ func TestInviteService_Invite_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.
 	_, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
 		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
 	})
-	if !hasCode(err, ErrInvitationRateLimited.Code) {
+	if !apperr.HasCode(err, ErrInvitationRateLimited.Code) {
 		t.Fatalf("Invite error = %v, want org.invitation_rate_limited", err)
 	}
 	if got := errParam(t, err, "retry_after_seconds"); got != 1 {
@@ -1293,7 +1293,7 @@ func TestInviteService_Invite_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.
 	_, err = f.m.Invitations().Invite(f.ctx, InviteRequest{
 		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
 	})
-	if !hasCode(err, ErrInvitationRateLimited.Code) {
+	if !apperr.HasCode(err, ErrInvitationRateLimited.Code) {
 		t.Fatalf("Invite error = %v, want org.invitation_rate_limited", err)
 	}
 	if got := errParam(t, err, "retry_after_seconds"); got != 0 {

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // scriptedFeatureGate is the FeatureGate test double: a fixed value per
@@ -87,7 +88,7 @@ func TestService_Login_PasswordChannelDisabled_Refuses(t *testing.T) {
 	_, err := f.svc.Login(t.Context(), LoginInput{
 		Identifier: "password-disabled@example.com", Password: testPassword,
 	})
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("Login() with the password channel disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 
@@ -129,14 +130,14 @@ func TestService_SMSLoginChannelDisabled_Refuses(t *testing.T) {
 	f := newServiceFixture(t, WithFeatureGate(gate))
 
 	err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: "+15550001234", IP: "203.0.113.10"})
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("RequestSMSCode() with the SMS channel disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 
 	_, err = f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
 		Phone: "+15550001234", Code: "123456", IP: "203.0.113.10",
 	})
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("LoginWithSMSCode() with the SMS channel disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 }
@@ -165,14 +166,14 @@ func TestService_SocialChannelDisabled_Refuses(t *testing.T) {
 		Provider:    ProviderGitHub,
 		RedirectURI: testRedirectURI,
 	})
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("SocialAuthorizeURL() with the channel disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 
 	_, err = f.svc.SocialCallback(t.Context(), SocialCallbackInput{
 		Provider: ProviderGitHub, Code: "code", State: "state",
 	})
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("SocialCallback() with the channel disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 
@@ -200,14 +201,14 @@ func TestService_EnterpriseSSO_FlagDisabled_Refuses(t *testing.T) {
 	f := newServiceFixture(t, WithFeatureGate(gate))
 
 	_, err := f.svc.SSO().AuthorizeURL(t.Context(), "https://app.example.com/callback", "binding")
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("SSO AuthorizeURL() with the flag disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 
 	_, err = f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
 		TenantID: pkgcore.TenantID("tenant-sso"), Code: "code", State: "state",
 	})
-	if !hasCode(err, ErrChannelDisabled.Code) {
+	if !apperr.HasCode(err, ErrChannelDisabled.Code) {
 		t.Fatalf("SSO Callback() with the flag disabled error = %v, want code %q", err, ErrChannelDisabled.Code)
 	}
 }
@@ -226,7 +227,7 @@ func TestService_ChannelGateFailure_FailsClosed(t *testing.T) {
 	_, err := f.svc.Login(t.Context(), LoginInput{
 		Identifier: "gate-down@example.com", Password: testPassword,
 	})
-	if !hasCode(err, ErrInternal.Code) {
+	if !apperr.HasCode(err, ErrInternal.Code) {
 		t.Fatalf("Login() with an unreadable gate error = %v, want code %q (fail closed)", err, ErrInternal.Code)
 	}
 }

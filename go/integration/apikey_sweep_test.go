@@ -9,7 +9,6 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // seedAPIKey inserts one API key row (with its hash-index row, exactly like
@@ -46,8 +45,7 @@ func keyExists(t *testing.T, svc *Service, tenant pkgcore.TenantID, id string) b
 	if err == nil {
 		return true
 	}
-	found, ok := apperr.As(err)
-	if ok && found.Code == dbkit.ErrRecordNotFound.Code {
+	if dbkit.IsRecordNotFound(err) {
 		return false
 	}
 	t.Fatalf("FindByID(%s): %v", id, err)

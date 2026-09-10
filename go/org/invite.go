@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/ratelimit"
 )
@@ -455,7 +456,7 @@ func (s *InviteService) reportLostAcceptRace(ctx context.Context, token string) 
 // writer's outcome must not be overwritten), is logged and left alone.
 func (s *InviteService) settleFailedAccept(ctx context.Context, invitation *Invitation, cause error) {
 	status := InvitationStatusPending
-	if hasCode(cause, ErrNodeNotFound.Code) {
+	if apperr.HasCode(cause, ErrNodeNotFound.Code) {
 		status = InvitationStatusRevoked
 	}
 	won, err := s.repo.settleClaim(ctx, invitation.ID, status)
@@ -503,7 +504,7 @@ func (s *InviteService) settleFailedAccept(ctx context.Context, invitation *Invi
 func (s *InviteService) Revoke(ctx context.Context, invitationID string) error {
 	invitation, err := s.repo.FindByID(ctx, invitationID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return ErrInvitationNotFound.WithParam("invitation_id", invitationID)
 		}
 		return err

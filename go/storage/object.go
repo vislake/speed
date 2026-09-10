@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // This file is the module's transfer runtime. The ObjectService below
@@ -439,7 +440,7 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 	// completion racing the same reclaim would.
 	current, err := s.findByID(ctx, objectID)
 	if err != nil {
-		if !hasCode(err, ErrObjectNotFound.Code) {
+		if !apperr.HasCode(err, ErrObjectNotFound.Code) {
 			return err
 		}
 		if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
@@ -702,7 +703,7 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 			// while the row is gone or doomed leaves the writeback under a
 			// key nothing will revisit -- the class the known limitations
 			// record, alongside the take-back's own failure residue.
-			if !hasCode(err, ErrObjectNotFound.Code) {
+			if !apperr.HasCode(err, ErrObjectNotFound.Code) {
 				return Object{}, err
 			}
 			if changed {
@@ -857,7 +858,7 @@ func (s *ObjectService) List(ctx context.Context, limit int, beforeID string) ([
 	}
 	rows, err := s.objects.listPageState(ctx, ObjectStateCompleted, limit, beforeID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrObjectNotFound.WithParam("id", beforeID)
 		}
 		return nil, err
@@ -877,7 +878,7 @@ func (s *ObjectService) List(ctx context.Context, limit int, beforeID string) ([
 func findObjectByID(ctx context.Context, objects *ObjectRepository, objectID string) (*Object, error) {
 	row, err := objects.FindByID(ctx, objectID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrObjectNotFound.WithParam("id", objectID)
 		}
 		return nil, ErrInternal.WithCause(err)

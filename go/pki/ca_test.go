@@ -407,8 +407,8 @@ func TestCAService_CreateIntermediateCA_RevokedRootAncestor_Refused(t *testing.T
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
-	ae, ok := apperr.As(err)
-	if !ok || ae.Code != ErrAuthorityRevoked.Code {
+	ae, _ := apperr.As(err)
+	if !apperr.HasCode(err, ErrAuthorityRevoked.Code) {
 		t.Errorf("CreateIntermediateCA(active intermediate under revoked root) error = %v, want ErrAuthorityRevoked", err)
 		return
 	}
@@ -433,8 +433,8 @@ func TestCAService_IssueCertificate_RevokedRootAncestor_Refused(t *testing.T) {
 		Subject:  pkix.Name{CommonName: "tenant leaf"},
 		NotAfter: time.Now().Add(time.Hour),
 	})
-	ae, ok := apperr.As(err)
-	if !ok || ae.Code != ErrAuthorityRevoked.Code {
+	ae, _ := apperr.As(err)
+	if !apperr.HasCode(err, ErrAuthorityRevoked.Code) {
 		t.Errorf("IssueCertificate(active intermediate under revoked root) error = %v, want ErrAuthorityRevoked", err)
 		return
 	}

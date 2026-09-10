@@ -114,7 +114,7 @@ func (s *SearchService) MembershipsOf(ctx context.Context, userID, actorUserID s
 
 		_, err = s.members.Get(tenantCtx, userID)
 		if err != nil {
-			if isMembershipNotFound(err) {
+			if apperr.HasCode(err, org.ErrMembershipNotFound.Code) {
 				continue
 			}
 			return nil, err
@@ -122,12 +122,4 @@ func (s *SearchService) MembershipsOf(ctx context.Context, userID, actorUserID s
 		found = append(found, tenantID)
 	}
 	return found, nil
-}
-
-// isMembershipNotFound reports whether err is org.ErrMembershipNotFound,
-// classifying by Code through apperr.As rather than by pointer identity,
-// for the same reason isGrantNotFound does (impersonation_service.go).
-func isMembershipNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == org.ErrMembershipNotFound.Code
 }

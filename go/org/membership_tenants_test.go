@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // systemPurposeTenantsOfTest is the purpose TenantsOf's own tests grant
@@ -124,7 +125,7 @@ func TestMemberService_TenantsOf_SystemContextGate(t *testing.T) {
 	// tenant the user genuinely belongs to: org.membership_not_found-style
 	// per-tenant facts are Get's business, and the cross-tenant enumeration
 	// needs the system grant.
-	if _, err := svc.TenantsOf(tenantCtx("tenant-acme"), "u-any"); !hasCode(err, ErrSystemContextRequired.Code) {
+	if _, err := svc.TenantsOf(tenantCtx("tenant-acme"), "u-any"); !apperr.HasCode(err, ErrSystemContextRequired.Code) {
 		t.Errorf("TenantsOf under a tenant context error = %v, want org.system_context_required", err)
 	}
 

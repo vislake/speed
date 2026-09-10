@@ -210,7 +210,7 @@ func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testin
 		switch err := <-results; {
 		case err == nil:
 			successes++
-		case hasCode(err, ErrRootAlreadyExists.Code):
+		case apperr.HasCode(err, ErrRootAlreadyExists.Code):
 			alreadyExists++
 		default:
 			t.Fatalf("racing CreateRoot failed with %v, want success or org.root_already_exists", err)
@@ -1274,7 +1274,7 @@ func TestTreeService_Delete_WithMembers_ReturnsNodeHasMembers(t *testing.T) {
 	// The member sits BELOW the node being deleted, so a check that only
 	// looked at the node itself would miss them.
 	for _, cascade := range []bool{false, true} {
-		if err := m.Tree().Delete(ctx, left.ID, cascade); !hasCode(err, ErrNodeHasMembers.Code) {
+		if err := m.Tree().Delete(ctx, left.ID, cascade); !apperr.HasCode(err, ErrNodeHasMembers.Code) {
 			t.Errorf("Delete(cascade=%t) error = %v, want org.node_has_members", cascade, err)
 		}
 	}
@@ -1353,7 +1353,7 @@ func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
 		t.Fatalf("CreateChild at depth 1: %v", err)
 	}
 	_, err = shallow.Tree().CreateChild(ctx, child.ID, "chair", "room")
-	if !hasCode(err, ErrMaxDepthExceeded.Code) {
+	if !apperr.HasCode(err, ErrMaxDepthExceeded.Code) {
 		t.Fatalf("CreateChild at depth 2 error = %v, want org.max_depth_exceeded", err)
 	}
 	if got := errParam(t, err, "max_depth"); got != 1 {
@@ -1405,7 +1405,7 @@ func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds(t *testing.
 		t.Errorf("Get(recreated): %v", err)
 	}
 	_, err = tree.CreateChild(ctx, root.ID, "North Region", "region")
-	if !hasCode(err, ErrDuplicateSiblingName.Code) {
+	if !apperr.HasCode(err, ErrDuplicateSiblingName.Code) {
 		t.Errorf("a second live sibling with the same name error = %v, want org.duplicate_sibling_name", err)
 	}
 }
@@ -1418,7 +1418,7 @@ func TestTreeService_Restore_UnknownID_ReturnsNodeNotFound(t *testing.T) {
 	mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 	_, err := tree.Restore(ctx, "nope")
-	if !hasCode(err, ErrNodeNotFound.Code) {
+	if !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Restore(unknown id) error = %v, want org.node_not_found", err)
 	}
 }
@@ -1432,7 +1432,7 @@ func TestTreeService_Restore_LiveNode_ReturnsNodeNotFound(t *testing.T) {
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 	_, err := tree.Restore(ctx, root.ID)
-	if !hasCode(err, ErrNodeNotFound.Code) {
+	if !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Restore(live node) error = %v, want org.node_not_found", err)
 	}
 }
@@ -1494,7 +1494,7 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 	}
 
 	_, err := tree.Restore(ctx, store.ID)
-	if !hasCode(err, ErrRestoreParentNotLive.Code) {
+	if !apperr.HasCode(err, ErrRestoreParentNotLive.Code) {
 		t.Fatalf("Restore(store) with north still dead error = %v, want org.restore_parent_not_live", err)
 	}
 
@@ -1641,7 +1641,7 @@ func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 	// Restoring the leaf would re-express it at depth 9 under its now-depth-8
 	// parent: refuse, exactly as CreateChild under that same parent would.
 	_, err := tree.Restore(ctx, leaf.ID)
-	if !hasCode(err, ErrMaxDepthExceeded.Code) {
+	if !apperr.HasCode(err, ErrMaxDepthExceeded.Code) {
 		t.Fatalf("Restore(leaf) error = %v, want org.max_depth_exceeded", err)
 	}
 	// The refusal must be a pure read: leaf stays exactly as dead as it was.
@@ -2595,7 +2595,7 @@ func TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName(t
 
 	// Restoring the original row would put two live same-name siblings under
 	// the same parent: the database refuses, and the service must translate.
-	if _, err := tree.Restore(ctx, original.ID); !hasCode(err, ErrDuplicateSiblingName.Code) {
+	if _, err := tree.Restore(ctx, original.ID); !apperr.HasCode(err, ErrDuplicateSiblingName.Code) {
 		t.Fatalf("Restore of a deleted node whose sibling-name slot was reused = %v, want the coded org.duplicate_sibling_name, not a bare database error", err)
 	}
 
@@ -2636,7 +2636,7 @@ func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
 	if err := tree.Repository().Delete(ctx, original.ID); err != nil {
 		t.Fatalf("soft-delete the root through the repository: %v", err)
 	}
-	if _, err := tree.Root(ctx); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := tree.Root(ctx); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Fatalf("Root() after the soft-delete = %v, want org.node_not_found (the mark-deleted root is hidden)", err)
 	}
 
@@ -2661,7 +2661,7 @@ func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
 	// The narrowed index still enforces the invariant among LIVE rows: a
 	// second live root for the same tenant is refused, however it is
 	// attempted.
-	if _, secondRootErr := tree.CreateRoot(ctx, "Another Root", "group"); !hasCode(secondRootErr, ErrRootAlreadyExists.Code) {
+	if _, secondRootErr := tree.CreateRoot(ctx, "Another Root", "group"); !apperr.HasCode(secondRootErr, ErrRootAlreadyExists.Code) {
 		t.Errorf("a second live root error = %v, want org.root_already_exists", secondRootErr)
 	}
 
@@ -2669,7 +2669,7 @@ func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
 	// the database, and must answer the coded slot-taken error rather than a
 	// bare database error -- the reuse of the freed root slot Restore's own
 	// doc comment promises once the narrowed index is in place.
-	if _, restoreErr := tree.Restore(ctx, original.ID); !hasCode(restoreErr, ErrDuplicateSiblingName.Code) {
+	if _, restoreErr := tree.Restore(ctx, original.ID); !apperr.HasCode(restoreErr, ErrDuplicateSiblingName.Code) {
 		t.Errorf("Restore of the original root whose root slot was re-taken = %v, want the coded org.duplicate_sibling_name", restoreErr)
 	}
 	// The row the refused restore raced stays the tenant's live one.

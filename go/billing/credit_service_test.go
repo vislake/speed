@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func newCreditService(t *testing.T) *CreditService {
@@ -126,10 +127,10 @@ func TestCreditService_Grant_NonPositiveAmount_Refused(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
-	if _, err := svc.Grant(ctx, GrantInput{Amount: 0}); !hasCode(err, ErrInvalidAmount.Code) {
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 0}); !apperr.HasCode(err, ErrInvalidAmount.Code) {
 		t.Errorf("Grant(0): err = %v, want %s", err, ErrInvalidAmount.Code)
 	}
-	if _, err := svc.Grant(ctx, GrantInput{Amount: -1}); !hasCode(err, ErrInvalidAmount.Code) {
+	if _, err := svc.Grant(ctx, GrantInput{Amount: -1}); !apperr.HasCode(err, ErrInvalidAmount.Code) {
 		t.Errorf("Grant(-1): err = %v, want %s", err, ErrInvalidAmount.Code)
 	}
 }
@@ -175,7 +176,7 @@ func TestCreditService_PreDeduct_InsufficientBalance_WritesNothing(t *testing.T)
 	}
 
 	_, err := svc.PreDeduct(ctx, PreDeductInput{Amount: 50, IdempotencyKey: "job-1"})
-	if !hasCode(err, ErrInsufficientCredits.Code) {
+	if !apperr.HasCode(err, ErrInsufficientCredits.Code) {
 		t.Fatalf("PreDeduct: err = %v, want %s", err, ErrInsufficientCredits.Code)
 	}
 
@@ -229,10 +230,10 @@ func TestCreditService_PreDeduct_Validation(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
-	if _, err := svc.PreDeduct(ctx, PreDeductInput{Amount: 0, IdempotencyKey: "k"}); !hasCode(err, ErrInvalidAmount.Code) {
+	if _, err := svc.PreDeduct(ctx, PreDeductInput{Amount: 0, IdempotencyKey: "k"}); !apperr.HasCode(err, ErrInvalidAmount.Code) {
 		t.Errorf("Amount=0: err = %v, want %s", err, ErrInvalidAmount.Code)
 	}
-	if _, err := svc.PreDeduct(ctx, PreDeductInput{Amount: 1, IdempotencyKey: ""}); !hasCode(err, ErrIdempotencyKeyRequired.Code) {
+	if _, err := svc.PreDeduct(ctx, PreDeductInput{Amount: 1, IdempotencyKey: ""}); !apperr.HasCode(err, ErrIdempotencyKeyRequired.Code) {
 		t.Errorf("empty IdempotencyKey: err = %v, want %s", err, ErrIdempotencyKeyRequired.Code)
 	}
 }
@@ -334,7 +335,7 @@ func TestCreditService_ConfirmThenRefund_IsRefused(t *testing.T) {
 	}
 
 	_, err := svc.Refund(ctx, "job-1")
-	if !hasCode(err, ErrCreditTransactionAlreadyResolved.Code) {
+	if !apperr.HasCode(err, ErrCreditTransactionAlreadyResolved.Code) {
 		t.Errorf("Refund after Confirm: err = %v, want %s", err, ErrCreditTransactionAlreadyResolved.Code)
 	}
 }
@@ -344,7 +345,7 @@ func TestCreditService_Confirm_UnknownIdempotencyKey_NotFound(t *testing.T) {
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	_, err := svc.Confirm(ctx, "never-reserved")
-	if !hasCode(err, ErrCreditTransactionNotFound.Code) {
+	if !apperr.HasCode(err, ErrCreditTransactionNotFound.Code) {
 		t.Errorf("Confirm(unknown key): err = %v, want %s", err, ErrCreditTransactionNotFound.Code)
 	}
 }
@@ -381,7 +382,7 @@ func TestCreditService_Expire_MoreThanAvailable_Refused(t *testing.T) {
 		t.Fatalf("Grant: %v", err)
 	}
 	_, err := svc.Expire(ctx, ExpireInput{Amount: 50})
-	if !hasCode(err, ErrInsufficientCredits.Code) {
+	if !apperr.HasCode(err, ErrInsufficientCredits.Code) {
 		t.Errorf("Expire(50) over Available=10: err = %v, want %s", err, ErrInsufficientCredits.Code)
 	}
 }
@@ -538,7 +539,7 @@ func TestCreditService_Expire_KeyCollidingWithAnotherKind_Refused(t *testing.T) 
 	}
 
 	_, err = svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: grantTx.ID})
-	if !hasCode(err, ErrIdempotencyKeyCollision.Code) {
+	if !apperr.HasCode(err, ErrIdempotencyKeyCollision.Code) {
 		t.Errorf("keyed Expire reusing a grant row's id: err = %v, want %s", err, ErrIdempotencyKeyCollision.Code)
 	}
 
@@ -574,7 +575,7 @@ func TestCreditService_Expire_KeyedRefusedAttempt_BurnsNoKey(t *testing.T) {
 	}
 
 	const key = "expiry:2026-09-policy:window-1"
-	if _, err := svc.Expire(ctx, ExpireInput{Amount: 50, IdempotencyKey: key}); !hasCode(err, ErrInsufficientCredits.Code) {
+	if _, err := svc.Expire(ctx, ExpireInput{Amount: 50, IdempotencyKey: key}); !apperr.HasCode(err, ErrInsufficientCredits.Code) {
 		t.Fatalf("Expire(50) over Available=10: err = %v, want %s", err, ErrInsufficientCredits.Code)
 	}
 
@@ -706,7 +707,7 @@ func TestCreditService_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds(t *testin
 	for _, err := range results {
 		if err == nil {
 			succeeded++
-		} else if !hasCode(err, ErrInsufficientCredits.Code) {
+		} else if !apperr.HasCode(err, ErrInsufficientCredits.Code) {
 			t.Errorf("unexpected error from a concurrent PreDeduct: %v", err)
 		}
 	}
@@ -1193,7 +1194,7 @@ func TestCreditService_Reason_NonPhraseRefused(t *testing.T) {
 	}
 	for _, tc := range calls {
 		for _, reason := range refused {
-			if err := tc.call(reason); !hasCode(err, ErrInvalidReason.Code) {
+			if err := tc.call(reason); !apperr.HasCode(err, ErrInvalidReason.Code) {
 				t.Errorf("%s(Reason=%q): err = %v, want %s", tc.name, reason, err, ErrInvalidReason.Code)
 			}
 		}

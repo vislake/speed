@@ -254,8 +254,8 @@ func TestCAService_ExportAuthorityChainJWKS_RevokedAuthorityInChain_Refused(t *t
 	}
 
 	_, err := ca.ExportAuthorityChainJWKS(ctx, authority.ID)
-	ae, ok := apperr.As(err)
-	if !ok || ae.Code != ErrCertificateRevoked.Code {
+	ae, _ := apperr.As(err)
+	if !apperr.HasCode(err, ErrCertificateRevoked.Code) {
 		t.Errorf("ExportAuthorityChainJWKS(revoked authority) error = %v, want ErrCertificateRevoked (the revoked public key must never be exported)", err)
 		return
 	}
@@ -282,8 +282,8 @@ func TestCAService_ExportAuthorityChainJWKS_RevokedRootAncestor_Refused(t *testi
 	}
 
 	_, err := ca.ExportAuthorityChainJWKS(ctx, intermediate.ID)
-	ae, ok := apperr.As(err)
-	if !ok || ae.Code != ErrCertificateRevoked.Code {
+	ae, _ := apperr.As(err)
+	if !apperr.HasCode(err, ErrCertificateRevoked.Code) {
 		t.Errorf("ExportAuthorityChainJWKS(active intermediate under revoked root) error = %v, want ErrCertificateRevoked naming the revoked root", err)
 		return
 	}

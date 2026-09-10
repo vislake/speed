@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // RoleDefinition describes a role to create: its tenant-unique key, the
@@ -249,7 +250,7 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 	// RoleBindingRepository.Delete's origin-aware mark-delete, which
 	// shadows dbkit's two-column one; see its doc comment.
 	if err := s.bindings.Delete(writeCtx, binding.ID, revokeOriginDeliberate); err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			// Find above and this Delete are not atomic either: two
 			// concurrent RevokeRole calls for the same binding can both
 			// pass Find, and the loser's Delete then finds zero rows
@@ -373,7 +374,7 @@ func (s *Service) RestoreRole(ctx context.Context, sub Subject, role string, sco
 	}
 
 	if err := s.bindings.Restore(writeCtx, binding.ID); err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) || errors.Is(err, gorm.ErrDuplicatedKey) {
+		if dbkit.IsRecordNotFound(err) || errors.Is(err, gorm.ErrDuplicatedKey) {
 			// Lost a race: something else -- a concurrent RestoreRole for
 			// the identical tuple, or a fresh AssignRole that landed
 			// between the lookup above and this write -- changed the row's
@@ -506,9 +507,9 @@ func (s *Service) publishRoleChanged(ctx context.Context, tenant pkgcore.TenantI
 // ByKey and Find decorate their sentinels with parameters, which produces
 // a new error value, so errors.Is against the bare sentinel would not
 // match.
-func isRoleNotFound(err error) bool { return hasCode(err, ErrRoleNotFound.Code) }
+func isRoleNotFound(err error) bool { return apperr.HasCode(err, ErrRoleNotFound.Code) }
 
-func isBindingNotFound(err error) bool { return hasCode(err, ErrBindingNotFound.Code) }
+func isBindingNotFound(err error) bool { return apperr.HasCode(err, ErrBindingNotFound.Code) }
 
 // isDuplicateRole classifies defineRole's "a role with this key already
 // exists" answer by code like its two siblings above. DefineRole itself
@@ -516,4 +517,4 @@ func isBindingNotFound(err error) bool { return hasCode(err, ErrBindingNotFound.
 // EnsureBuiltinRoles does when its seed loses the check-then-create race
 // to a concurrent one -- see that method for how the duplicate is
 // absorbed there.
-func isDuplicateRole(err error) bool { return hasCode(err, ErrDuplicateRole.Code) }
+func isDuplicateRole(err error) bool { return apperr.HasCode(err, ErrDuplicateRole.Code) }

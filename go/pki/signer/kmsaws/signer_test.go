@@ -78,8 +78,7 @@ var _ kmsClient = (*fakeKMSClient)(nil)
 func TestSigner_GenerateKey_RejectsUnsupportedAlgorithm(t *testing.T) {
 	s := &signer{client: &fakeKMSClient{}, mode: ModeDirectSign}
 	_, _, err := s.GenerateKey(context.Background(), "ecdsa-p256")
-	found, ok := apperr.As(err)
-	if !ok || found.Code != pki.ErrAlgorithmUnsupportedBySigner.Code {
+	if !apperr.HasCode(err, pki.ErrAlgorithmUnsupportedBySigner.Code) {
 		t.Fatalf("GenerateKey(unsupported) error = %v, want ErrAlgorithmUnsupportedBySigner", err)
 	}
 }
@@ -198,8 +197,7 @@ func TestSigner_DirectMode_Sign_NilResponse_FailsClosed(t *testing.T) {
 	}
 	s := &signer{client: fake, mode: ModeDirectSign}
 	_, err := s.Sign(context.Background(), "key-1234", []byte("x"))
-	found, ok := apperr.As(err)
-	if !ok || found.Code != pki.ErrKeyNotFound.Code {
+	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
 		t.Errorf("Sign(nil response) error = %v, want ErrKeyNotFound (the vault twin's coded answer for the same empty response)", err)
 	}
 }
@@ -220,8 +218,7 @@ func TestSigner_DirectMode_Sign_EmptySignature_FailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Sign(empty signature) = (%v, nil), want a coded error -- an empty signature must never be reported as success", sig)
 	}
-	found, ok := apperr.As(err)
-	if !ok || found.Code != pki.ErrSignerUnavailable.Code {
+	if !apperr.HasCode(err, pki.ErrSignerUnavailable.Code) {
 		t.Errorf("Sign(empty signature) error = %v, want ErrSignerUnavailable (the signing backend did not actually sign)", err)
 	}
 }
@@ -335,8 +332,7 @@ func TestSigner_EnvelopeMode_Destroy_ValidatesThenNoOps(t *testing.T) {
 func TestSigner_EnvelopeMode_Sign_InvalidKeyRef(t *testing.T) {
 	s := &signer{client: &fakeKMSClient{}, mode: ModeEnvelope, wrappingKeyID: "wrap-key"}
 	_, err := s.Sign(context.Background(), "not-valid-base64!!", []byte("x"))
-	found, ok := apperr.As(err)
-	if !ok || found.Code != pki.ErrKeyNotFound.Code {
+	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
 		t.Errorf("Sign(invalid keyRef) error = %v, want ErrKeyNotFound", err)
 	}
 }

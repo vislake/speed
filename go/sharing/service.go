@@ -13,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
 )
 
@@ -657,7 +658,7 @@ func (s *Service) accessPublicPrelude(ctx context.Context, token string, p Acces
 		// the internal error, never the outward 404 a genuine refusal
 		// answers with -- the same classification Access's own
 		// byTokenHash error path applies.
-		if !hasCode(err, ErrNotAccessible.Code) {
+		if !apperr.HasCode(err, ErrNotAccessible.Code) {
 			observability.FromContext(ctx).Error("sharing tenant-for-token lookup failed", "error", err)
 			return "", err
 		}
@@ -784,7 +785,7 @@ func (s *Service) authorizeAttempt(ctx context.Context, token string, p AccessPa
 		// A store failure is not a refusal reason: log it and surface
 		// the internal error, never the outward 404 a genuine refusal
 		// answers with (see Access's own doc comment).
-		if !hasCode(err, ErrNotAccessible.Code) {
+		if !apperr.HasCode(err, ErrNotAccessible.Code) {
 			observability.FromContext(ctx).Error("sharing access token lookup failed", "error", err)
 			return nil, err
 		}
@@ -1322,7 +1323,7 @@ func (s *Service) Revoke(ctx context.Context, shareID string) error {
 	}
 	share, err := s.shares.FindByID(ctx, shareID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return ErrShareNotFound.WithParam("id", shareID)
 		}
 		return err
@@ -1356,7 +1357,7 @@ func (s *Service) Revoke(ctx context.Context, shareID string) error {
 func (s *Service) Get(ctx context.Context, shareID string) (*Share, error) {
 	share, err := s.shares.FindByID(ctx, shareID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrShareNotFound.WithParam("id", shareID)
 		}
 		return nil, err
@@ -1393,7 +1394,7 @@ func (s *Service) List(ctx context.Context, limit int, beforeID string) ([]Share
 	}
 	rows, err := s.shares.listPage(ctx, limit, beforeID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrShareNotFound.WithParam("id", beforeID)
 		}
 		return nil, err

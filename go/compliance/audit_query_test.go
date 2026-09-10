@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // insertAuditEvent inserts one AuditEvent directly through repo, for
@@ -261,7 +262,7 @@ func TestAuditQuery_QueryAcrossTenants_RequiresSystemContext(t *testing.T) {
 	repo := audit.NewRepository(newTestAuditDB(t))
 	q := NewAuditQuery(repo)
 	_, err := q.QueryAcrossTenants(context.Background(), []string{"tenant-a", "tenant-b"}, QueryFilter{})
-	if !hasCode(err, ErrAuditQueryRequiresSystemContext.Code) {
+	if !apperr.HasCode(err, ErrAuditQueryRequiresSystemContext.Code) {
 		t.Fatalf("QueryAcrossTenants without a system context error = %v, want %s", err, ErrAuditQueryRequiresSystemContext.Code)
 	}
 }

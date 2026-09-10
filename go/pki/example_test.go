@@ -263,7 +263,7 @@ func ExampleCAService_GenerateCRL() {
 
 	_, verifyErr := ca.VerifyCertificate(tenantCtx, cert.ID)
 	refused := false
-	if coded, ok := apperr.As(verifyErr); ok && coded.Code == pki.ErrCertificateRevoked.Code {
+	if apperr.HasCode(verifyErr, pki.ErrCertificateRevoked.Code) {
 		refused = true
 	}
 	fmt.Println("verify refuses the revoked certificate with ErrCertificateRevoked:", refused)
@@ -364,7 +364,7 @@ func ExampleCAService_SignCertificate() {
 	}
 	_, signErr := ca.SignCertificate(tenantCtx, cert.ID, message)
 	refused := false
-	if coded, ok := apperr.As(signErr); ok && coded.Code == pki.ErrCertificateRevoked.Code {
+	if apperr.HasCode(signErr, pki.ErrCertificateRevoked.Code) {
 		refused = true
 	}
 	fmt.Println("sign refuses a revoked certificate with ErrCertificateRevoked:", refused)

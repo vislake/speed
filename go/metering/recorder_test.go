@@ -95,7 +95,7 @@ func TestUsageEvent_Validate(t *testing.T) {
 			if !ok {
 				t.Fatalf("validate() = %v, want an *apperr.Error", err)
 			}
-			if appErr.Code != tc.wantCode {
+			if !apperr.HasCode(err, tc.wantCode) {
 				t.Errorf("validate() code = %q, want %q", appErr.Code, tc.wantCode)
 			}
 		})

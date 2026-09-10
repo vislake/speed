@@ -69,8 +69,7 @@ func TestPostgres_Enqueue_OverlongField_RefusedBeforeAnyWrite(t *testing.T) {
 				if _, enqErr := metering.Enqueue(ctx, tx, tc.event("idem-pg-overlong-"+tc.field)); enqErr == nil {
 					return errors.New("Enqueue(overlong field) = nil error, want metering.field_too_long refused before any write")
 				} else {
-					appErr, ok := apperr.As(enqErr)
-					if !ok || appErr.Code != metering.ErrFieldTooLong.Code {
+					if !apperr.HasCode(enqErr, metering.ErrFieldTooLong.Code) {
 						return fmt.Errorf("Enqueue(overlong field) = %v, want %s (on PostgreSQL the pre-fix code let the INSERT run and failed with a raw 22001, poisoning this transaction)", enqErr, metering.ErrFieldTooLong.Code)
 					}
 				}

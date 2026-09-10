@@ -167,7 +167,7 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 	switch _, err := s.repo.findRoot(ctx); {
 	case err == nil:
 		return nil, ErrRootAlreadyExists
-	case !hasCode(err, ErrNodeNotFound.Code):
+	case !apperr.HasCode(err, ErrNodeNotFound.Code):
 		return nil, err
 	}
 
@@ -1209,7 +1209,7 @@ func (s *TreeService) Subtree(ctx context.Context, nodeID string) ([]OrgNode, er
 // error the caller asked for, leaving every other error (a missing tenant
 // context above all) untouched so it keeps its own meaning.
 func mapFindError(err error, notFound *apperr.Error, id string) error {
-	if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+	if dbkit.IsRecordNotFound(err) {
 		return notFound.WithParam("node_id", id)
 	}
 	return err
@@ -1223,16 +1223,8 @@ func mapWriteError(err error) error {
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		return ErrDuplicateSiblingName.WithCause(err)
 	}
-	if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+	if dbkit.IsRecordNotFound(err) {
 		return ErrNodeNotFound.WithCause(err)
 	}
 	return err
-}
-
-// hasCode reports whether err is, or wraps, an *apperr.Error with the given
-// code. Codes are compared rather than pointers because WithParam and
-// WithCause derive a new *apperr.Error every time.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -107,13 +108,13 @@ func TestMembershipRepository_byUser(t *testing.T) {
 		t.Errorf("byUser returned %+v, want membership m-1 at n-1", got)
 	}
 
-	if _, err := repo.byUser(ctxA, "u-missing"); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := repo.byUser(ctxA, "u-missing"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("byUser(unknown user) error = %v, want org.membership_not_found", err)
 	}
 
 	// The same user id in another tenant is invisible: this is the isolation
 	// property that makes a roster private.
-	if _, err := repo.byUser(ctxB, "u-1"); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := repo.byUser(ctxB, "u-1"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("byUser(other tenant) error = %v, want org.membership_not_found", err)
 	}
 }
@@ -191,7 +192,7 @@ func TestMemberService_Add(t *testing.T) {
 	}
 
 	// One seat per person per tenant, whichever node the second attempt names.
-	if _, err := m.Members().Add(ctx, "u-1", root.ID); !hasCode(err, ErrMembershipExists.Code) {
+	if _, err := m.Members().Add(ctx, "u-1", root.ID); !apperr.HasCode(err, ErrMembershipExists.Code) {
 		t.Errorf("second Add error = %v, want org.membership_exists", err)
 	}
 }
@@ -201,7 +202,7 @@ func TestMemberService_Add_UnknownNode(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
-	if _, err := m.Members().Add(ctx, "u-1", "00000000-0000-4000-8000-000000000000"); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.Members().Add(ctx, "u-1", "00000000-0000-4000-8000-000000000000"); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Add(unknown node) error = %v, want org.node_not_found", err)
 	}
 }
@@ -217,7 +218,7 @@ func TestMemberService_Add_CrossTenantNode_ReportsNodeNotFound(t *testing.T) {
 
 	ctxA := tenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctxA)
-	if _, err := m.Members().Add(ctxA, "u-1", foreign.ID); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.Members().Add(ctxA, "u-1", foreign.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Add(another tenant's node) error = %v, want org.node_not_found", err)
 	}
 }
@@ -227,7 +228,7 @@ func TestMemberService_Add_EmptyUserID(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
-	if _, err := m.Members().Add(ctx, "", root.ID); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := m.Members().Add(ctx, "", root.ID); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("Add(empty user) error = %v, want org.membership_not_found", err)
 	}
 }
@@ -309,7 +310,7 @@ func TestMemberService_List_UnknownNode(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
-	if _, err := m.Members().List(ctx, "00000000-0000-4000-8000-000000000000"); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.Members().List(ctx, "00000000-0000-4000-8000-000000000000"); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("List(unknown node) error = %v, want org.node_not_found", err)
 	}
 }
@@ -330,7 +331,7 @@ func TestMemberService_Remove_PublishesTheEvent(t *testing.T) {
 	if err := m.Members().Remove(ctx, "u-leaving"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if _, err := m.Members().Get(ctx, "u-leaving"); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := m.Members().Get(ctx, "u-leaving"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("Get after Remove error = %v, want org.membership_not_found", err)
 	}
 
@@ -361,7 +362,7 @@ func TestMemberService_Remove_LastActiveMember_IsRefused(t *testing.T) {
 	if _, err := m.Members().Add(ctx, "u-only", root.ID); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := m.Members().Remove(ctx, "u-only"); !hasCode(err, ErrMemberNotRemovable.Code) {
+	if err := m.Members().Remove(ctx, "u-only"); !apperr.HasCode(err, ErrMemberNotRemovable.Code) {
 		t.Errorf("Remove(last member) error = %v, want org.member_not_removable", err)
 	}
 	if _, err := m.Members().Get(ctx, "u-only"); err != nil {
@@ -396,7 +397,7 @@ func TestMemberService_Remove_UnknownUser(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
-	if err := m.Members().Remove(ctx, "u-nobody"); !hasCode(err, ErrMembershipNotFound.Code) {
+	if err := m.Members().Remove(ctx, "u-nobody"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("Remove(unknown user) error = %v, want org.membership_not_found", err)
 	}
 }
@@ -461,7 +462,7 @@ func TestMemberService_Remove_ThenAdd_SameUser_Succeeds(t *testing.T) {
 
 	// The seat is still exclusive among LIVE rows: a second Add for the same
 	// user is still refused.
-	if _, err := m.Members().Add(ctx, "u-returning", left.ID); !hasCode(err, ErrMembershipExists.Code) {
+	if _, err := m.Members().Add(ctx, "u-returning", left.ID); !apperr.HasCode(err, ErrMembershipExists.Code) {
 		t.Errorf("second live Add error = %v, want org.membership_exists", err)
 	}
 }
@@ -474,7 +475,7 @@ func TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound(t *testing.T)
 	seedTree(t, m.Tree(), ctx)
 
 	_, err := m.Members().Restore(ctx, "nope")
-	if !hasCode(err, ErrMembershipNotFound.Code) {
+	if !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("Restore(unknown id) error = %v, want org.membership_not_found", err)
 	}
 }
@@ -492,7 +493,7 @@ func TestMemberService_Restore_LiveMembership_ReturnsMembershipNotFound(t *testi
 	}
 
 	_, err = m.Members().Restore(ctx, live.ID)
-	if !hasCode(err, ErrMembershipNotFound.Code) {
+	if !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("Restore(live membership) error = %v, want org.membership_not_found", err)
 	}
 }
@@ -515,7 +516,7 @@ func TestMemberService_Restore_RoundTrip(t *testing.T) {
 	if err = m.Members().Remove(ctx, "u-leaving"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if _, err = m.Members().Get(ctx, "u-leaving"); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err = m.Members().Get(ctx, "u-leaving"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Fatalf("Get after Remove error = %v, want org.membership_not_found", err)
 	}
 
@@ -571,7 +572,7 @@ func TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound(t *test
 	if _, err := m.Members().Restore(ctx, original.ID); err != nil {
 		t.Fatalf("first Restore: %v", err)
 	}
-	if _, err := m.Members().Restore(ctx, original.ID); !hasCode(err, ErrMembershipNotFound.Code) {
+	if _, err := m.Members().Restore(ctx, original.ID); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("second Restore error = %v, want org.membership_not_found", err)
 	}
 }
@@ -635,7 +636,7 @@ func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
 			switch {
 			case err == nil:
 				succeeded++
-			case hasCode(err, ErrMemberNotRemovable.Code):
+			case apperr.HasCode(err, ErrMemberNotRemovable.Code):
 				refused++
 			default:
 				t.Fatalf("attempt %d: Remove(%s) error = %v, want nil or org.member_not_removable",
@@ -737,7 +738,7 @@ func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) 
 
 	// Restoring the original row would put two live memberships on one
 	// (tenant, user): the database refuses, and the service must translate.
-	if _, restoreErr := m.Members().Restore(ctx, original.ID); !hasCode(restoreErr, ErrMembershipExists.Code) {
+	if _, restoreErr := m.Members().Restore(ctx, original.ID); !apperr.HasCode(restoreErr, ErrMembershipExists.Code) {
 		t.Fatalf("Restore of a removed membership whose seat was re-taken = %v, want the coded org.membership_exists, not a bare database error", restoreErr)
 	}
 

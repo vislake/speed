@@ -711,7 +711,7 @@ func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 
 	user, err := s.findByIdentifier(ctx, identifier)
 	if err != nil {
-		if hasCode(err, ErrInvalidEmail.Code, ErrInvalidPhone.Code) {
+		if apperr.HasCode(err, ErrInvalidEmail.Code) || apperr.HasCode(err, ErrInvalidPhone.Code) {
 			// An identifier with no canonical form cannot belong to
 			// any account, and saying so would answer the same
 			// question the generic error refuses to answer. It is
@@ -1314,21 +1314,4 @@ func (s *Service) publishOn(ctx context.Context, evt pkgcore.Event, inheritTenan
 	if err := s.bus.Publish(ctx, evt); err != nil {
 		obs.FromContext(ctx).Warn("domain event publish failed", "event_type", evt.Type, "error", err)
 	}
-}
-
-// hasCode reports whether err is, or wraps, an *apperr.Error whose Code is
-// one of codes.
-//
-// Matching on the code rather than with errors.Is against a sentinel is
-// required, not stylistic: apperr's builders (WithParam, WithCause) DERIVE a
-// new value instead of mutating the receiver, precisely so a shared sentinel
-// is safe to decorate per request -- which means a decorated error is never
-// identical to the sentinel it came from, and errors.Is against that sentinel
-// is always false.
-func hasCode(err error, codes ...string) bool {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		return false
-	}
-	return slices.Contains(codes, appErr.Code)
 }

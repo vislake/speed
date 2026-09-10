@@ -259,7 +259,7 @@ func TestObjectLifecycle_RoundTripsThroughS3(t *testing.T) {
 	assertS3Missing(t, client, bucket, objectKey)
 	if _, err := svc.Get(tctx, created.ID); err == nil {
 		t.Fatalf("Get after Delete succeeded, want code %q", storage.ErrObjectNotFound.Code)
-	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != storage.ErrObjectNotFound.Code {
+	} else if !apperr.HasCode(err, storage.ErrObjectNotFound.Code) {
 		t.Errorf("Get after Delete = %v, want code %q", err, storage.ErrObjectNotFound.Code)
 	}
 }

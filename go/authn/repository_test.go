@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // newTestUserRepository builds a UserRepository over db with the test
@@ -164,7 +165,7 @@ func TestUserRepository_FindByPhone_IsFormattingInsensitive(t *testing.T) {
 	// A bare national number has no E.164 canonical form -- dbkit's
 	// normalizer refuses to guess a country -- so it is reported as an
 	// invalid phone rather than silently indexed under a wrong country.
-	if _, err := repo.FindByPhone(ctx, "13800000000"); !hasCode(err, ErrInvalidPhone.Code) {
+	if _, err := repo.FindByPhone(ctx, "13800000000"); !apperr.HasCode(err, ErrInvalidPhone.Code) {
 		t.Errorf("FindByPhone(national form) error = %v, want code %q", err, ErrInvalidPhone.Code)
 	}
 }
@@ -248,10 +249,10 @@ func TestUserRepository_RejectsAnUnusableIdentifier(t *testing.T) {
 	repo := newTestUserRepository(t, db)
 	ctx := t.Context()
 
-	if err := repo.Create(ctx, &User{Email: "   ", PasswordHash: "hash"}); !hasCode(err, ErrInvalidEmail.Code) {
+	if err := repo.Create(ctx, &User{Email: "   ", PasswordHash: "hash"}); !apperr.HasCode(err, ErrInvalidEmail.Code) {
 		t.Errorf("Create(blank email) error = %v, want code %q", err, ErrInvalidEmail.Code)
 	}
-	if err := repo.Create(ctx, &User{Phone: "not a number", PasswordHash: "hash"}); !hasCode(err, ErrInvalidPhone.Code) {
+	if err := repo.Create(ctx, &User{Phone: "not a number", PasswordHash: "hash"}); !apperr.HasCode(err, ErrInvalidPhone.Code) {
 		t.Errorf("Create(unusable phone) error = %v, want code %q", err, ErrInvalidPhone.Code)
 	}
 }

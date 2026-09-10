@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // sessionFixture is everything a session test needs, assembled once.
@@ -154,7 +155,7 @@ func TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession(t *testing.T)
 	// The victim's client rotated normally. Now the thief presents the
 	// copy of the token that was already consumed.
 	_, _, replayErr := f.manager.Rotate(t.Context(), first.Secret)
-	if !hasCode(replayErr, ErrRefreshTokenReused.Code) {
+	if !apperr.HasCode(replayErr, ErrRefreshTokenReused.Code) {
 		t.Fatalf("Rotate(consumed token) error = %v, want code %q", replayErr, ErrRefreshTokenReused.Code)
 	}
 
@@ -242,7 +243,7 @@ func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *test
 			switch {
 			case err == nil:
 				winners++
-			case hasCode(err, ErrRefreshTokenReused.Code), hasCode(err, ErrSessionRevoked.Code):
+			case apperr.HasCode(err, ErrRefreshTokenReused.Code), apperr.HasCode(err, ErrSessionRevoked.Code):
 				refused++
 			default:
 				unexpected = append(unexpected, err)
@@ -332,7 +333,7 @@ func TestSessionManager_Rotate_RejectsUnusableTokens(t *testing.T) {
 			f := newSessionFixture(t, RevocationModeNatural)
 			presented := tc.setup(t, f)
 			_, _, err := f.manager.Rotate(t.Context(), presented)
-			if !hasCode(err, tc.wantCode) {
+			if !apperr.HasCode(err, tc.wantCode) {
 				t.Fatalf("Rotate() error = %v, want code %q", err, tc.wantCode)
 			}
 		})

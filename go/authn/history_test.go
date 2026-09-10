@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // loginAt signs userEmail in once, using device as the client label, and
@@ -69,7 +70,7 @@ func TestService_ListSessions_RequiresAUser(t *testing.T) {
 	t.Parallel()
 
 	f := newServiceFixture(t)
-	if _, err := f.svc.ListSessions(t.Context(), ""); !hasCode(err, ErrAuthenticationRequired.Code) {
+	if _, err := f.svc.ListSessions(t.Context(), ""); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 		t.Errorf("ListSessions(\"\") error = %v, want %s", err, ErrAuthenticationRequired.Code)
 	}
 }
@@ -89,7 +90,7 @@ func TestService_RevokeSession_OwnDevice_Succeeds(t *testing.T) {
 		t.Fatalf("RevokeSession() error = %v", err)
 	}
 
-	if _, err := f.svc.Refresh(t.Context(), target.RefreshToken); !hasCode(err, ErrRefreshTokenInvalid.Code, ErrSessionRevoked.Code) {
+	if _, err := f.svc.Refresh(t.Context(), target.RefreshToken); !apperr.HasCode(err, ErrRefreshTokenInvalid.Code) && !apperr.HasCode(err, ErrSessionRevoked.Code) {
 		t.Errorf("Refresh() on the revoked device's token error = %v, want it to fail", err)
 	}
 	if _, err := f.svc.Refresh(t.Context(), kept.RefreshToken); err != nil {
@@ -118,10 +119,10 @@ func TestService_RevokeSession_SomebodyElsesSession_ReturnsSessionNotFound(t *te
 	errUnknown := f.svc.RevokeSession(t.Context(), attacker.ID, "no-such-session-id")
 	errSomeoneElses := f.svc.RevokeSession(t.Context(), attacker.ID, victimSession.Principal.SessionID)
 
-	if !hasCode(errUnknown, ErrSessionNotFound.Code) {
+	if !apperr.HasCode(errUnknown, ErrSessionNotFound.Code) {
 		t.Errorf("RevokeSession(unknown id) error = %v, want %s", errUnknown, ErrSessionNotFound.Code)
 	}
-	if !hasCode(errSomeoneElses, ErrSessionNotFound.Code) {
+	if !apperr.HasCode(errSomeoneElses, ErrSessionNotFound.Code) {
 		t.Errorf("RevokeSession(victim's id) error = %v, want %s", errSomeoneElses, ErrSessionNotFound.Code)
 	}
 

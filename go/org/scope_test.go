@@ -4,6 +4,8 @@ import (
 	"context"
 	"slices"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // rbacShapedScope is a LOCAL restatement of the Scope interface, declared
@@ -61,12 +63,12 @@ func TestScopeService_Path(t *testing.T) {
 		}
 	}
 
-	if _, err := m.scope.Path(ctx, "00000000-0000-4000-8000-000000000000"); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.scope.Path(ctx, "00000000-0000-4000-8000-000000000000"); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Path(unknown) error = %v, want org.node_not_found", err)
 	}
 
 	// Another tenant's node is indistinguishable from a missing one.
-	if _, err := m.scope.Path(tenantCtx("tenant-b"), root.ID); !hasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.scope.Path(tenantCtx("tenant-b"), root.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Path(other tenant's node) error = %v, want org.node_not_found", err)
 	}
 }

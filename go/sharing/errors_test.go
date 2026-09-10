@@ -9,14 +9,14 @@ import (
 
 func TestHasCode(t *testing.T) {
 	err := ErrShareNotFound.WithParam("id", "x").WithCause(errors.New("boom"))
-	if !hasCode(err, ErrShareNotFound.Code) {
-		t.Errorf("hasCode(decorated ErrShareNotFound) = false, want true")
+	if !apperr.HasCode(err, ErrShareNotFound.Code) {
+		t.Errorf("apperr.HasCode(decorated ErrShareNotFound) = false, want true")
 	}
-	if hasCode(err, ErrNotAccessible.Code) {
-		t.Errorf("hasCode(decorated ErrShareNotFound, ErrNotAccessible.Code) = true, want false")
+	if apperr.HasCode(err, ErrNotAccessible.Code) {
+		t.Errorf("apperr.HasCode(decorated ErrShareNotFound, ErrNotAccessible.Code) = true, want false")
 	}
-	if hasCode(errors.New("plain error"), ErrShareNotFound.Code) {
-		t.Errorf("hasCode(a plain error) = true, want false")
+	if apperr.HasCode(errors.New("plain error"), ErrShareNotFound.Code) {
+		t.Errorf("apperr.HasCode(a plain error) = true, want false")
 	}
 }
 

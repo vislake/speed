@@ -12,8 +12,7 @@ import (
 func TestAnalyticsRecorder_Record_InvalidEvent_ReturnsValidationError(t *testing.T) {
 	r := NewAnalyticsRecorder(newTestAggregator(t))
 	err := r.Record(context.Background(), UsageEvent{})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrMissingTenantID.Code {
+	if !apperr.HasCode(err, ErrMissingTenantID.Code) {
 		t.Fatalf("Record(invalid event) = %v, want %s", err, ErrMissingTenantID.Code)
 	}
 }

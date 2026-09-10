@@ -279,8 +279,7 @@ func TestSocialSignIn_MintOverWidthDisplayName_Postgres(t *testing.T) {
 	if err == nil {
 		t.Fatal("social sign-in unexpectedly succeeded; a fresh account has no membership yet")
 	}
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != authn.ErrTenantMembershipRequired.Code {
+	if !apperr.HasCode(err, authn.ErrTenantMembershipRequired.Code) {
 		t.Fatalf("social sign-in error = %v, want the membership refusal that follows successful provisioning", err)
 	}
 

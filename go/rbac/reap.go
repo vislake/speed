@@ -2,7 +2,6 @@ package rbac
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -168,39 +167,17 @@ const eventMemberRestored = "org.member.restored"
 var memberUserIDKeys = []string{"user_id", "userId", "UserID", "userID"}
 
 // memberUserIDFromPayload extracts the member's user id from an
-// org.member.removed or org.member.restored payload of any shape, by
-// round-tripping it through JSON into a map and probing the accepted key
-// spellings.
+// org.member.removed or org.member.restored payload of any shape, probing
+// the accepted key spellings through pkgcore.EventPayloadString.
 //
 // It never type-asserts the publisher's concrete type -- doing so would
 // require importing org, the one thing this module may not do -- and it
-// returns ok=false rather than an error for every unusable shape, because
-// the caller's contract is to log and continue, not to fail the publisher.
-// The payload itself is never logged: it belongs to another module and may
-// carry a name or an address.
+// reports false rather than an error for every unusable shape, because the
+// caller's contract is to log and continue, not to fail the publisher. The
+// payload itself is never logged: it belongs to another module and may carry
+// a name or an address.
 func memberUserIDFromPayload(payload any) (string, bool) {
-	if payload == nil {
-		return "", false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", false
-	}
-	for _, key := range memberUserIDKeys {
-		value, ok := fields[key]
-		if !ok {
-			continue
-		}
-		id, ok := value.(string)
-		if ok && id != "" {
-			return id, true
-		}
-	}
-	return "", false
+	return pkgcore.EventPayloadString(payload, memberUserIDKeys...)
 }
 
 // membershipIDKeys are the field spellings rbac accepts for the membership
@@ -212,33 +189,12 @@ func memberUserIDFromPayload(payload any) (string, bool) {
 var membershipIDKeys = []string{"membership_id", "membershipId", "MembershipID"}
 
 // membershipIDFromPayload extracts the membership id from an
-// org.member.removed payload of any shape, by the identical JSON
-// round-trip probe memberUserIDFromPayload performs. It reports ok=false
-// for every unusable shape; the caller (onMemberRemoved) treats an absent
-// id as a key fallback to the user id, never as an error.
+// org.member.removed payload of any shape, through the identical
+// pkgcore.EventPayloadString probe memberUserIDFromPayload performs. It
+// reports false for every unusable shape; the caller (onMemberRemoved)
+// treats an absent id as a key fallback to the user id, never as an error.
 func membershipIDFromPayload(payload any) (string, bool) {
-	if payload == nil {
-		return "", false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", false
-	}
-	for _, key := range membershipIDKeys {
-		value, ok := fields[key]
-		if !ok {
-			continue
-		}
-		id, ok := value.(string)
-		if ok && id != "" {
-			return id, true
-		}
-	}
-	return "", false
+	return pkgcore.EventPayloadString(payload, membershipIDKeys...)
 }
 
 // onMemberRemoved is the subscriber Attach installs for org's
@@ -438,25 +394,18 @@ const eventNodeDeleted = "org.node.deleted"
 var nodeDeletedIDsKeys = []string{"deleted_node_ids", "deletedNodeIds", "DeletedNodeIds"}
 
 // nodeDeletedIDsFromPayload extracts the deleted node id set from an
-// org.node.deleted payload of any shape, by round-tripping it through
-// JSON into a map and probing the accepted key spellings.
+// org.node.deleted payload of any shape, reading the field map through
+// pkgcore.EventPayloadFields and probing the accepted key spellings.
 //
 // It never type-asserts the publisher's concrete type -- doing so would
 // require importing org, the one thing this module may not do -- and it
-// returns ok=false rather than an error for every unusable shape or an
+// reports false rather than an error for every unusable shape or an
 // empty id list, because the caller's contract is to log and continue,
 // not to fail the publisher. The payload itself is never logged: it
 // belongs to another module.
 func nodeDeletedIDsFromPayload(payload any) ([]string, bool) {
-	if payload == nil {
-		return nil, false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil, false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
+	fields, ok := pkgcore.EventPayloadFields(payload)
+	if !ok {
 		return nil, false
 	}
 	for _, key := range nodeDeletedIDsKeys {
@@ -660,7 +609,7 @@ func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, b
 		}
 
 		if err := s.bindings.Delete(ctx, binding.ID, origin); err != nil {
-			if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			if dbkit.IsRecordNotFound(err) {
 				continue
 			}
 			log.Warn("rbac could not revoke a reaped role binding",
@@ -848,38 +797,17 @@ const eventNodeRestored = "org.node.restored"
 var nodeRestoredNodeIDKeys = []string{"node_id", "nodeId", "NodeID"}
 
 // nodeRestoredNodeIDFromPayload extracts the restored node's id from an
-// org.node.restored payload of any shape, by round-tripping it through
-// JSON into a map and probing the accepted key spellings.
+// org.node.restored payload of any shape, probing the accepted key
+// spellings through pkgcore.EventPayloadString.
 //
 // It never type-asserts the publisher's concrete type -- doing so would
 // require importing org, the one thing this module may not do -- and it
-// returns ok=false rather than an error for every unusable shape or an
+// reports false rather than an error for every unusable shape or an
 // empty id, because the caller's contract is to log and continue, not to
 // fail the publisher. The payload itself is never logged: it belongs to
 // another module.
 func nodeRestoredNodeIDFromPayload(payload any) (string, bool) {
-	if payload == nil {
-		return "", false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", false
-	}
-	for _, key := range nodeRestoredNodeIDKeys {
-		value, ok := fields[key]
-		if !ok {
-			continue
-		}
-		id, ok := value.(string)
-		if ok && id != "" {
-			return id, true
-		}
-	}
-	return "", false
+	return pkgcore.EventPayloadString(payload, nodeRestoredNodeIDKeys...)
 }
 
 // onNodeRestored is the subscriber Attach installs for org's
@@ -1064,7 +992,7 @@ func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event
 		}
 
 		if err := s.bindings.Restore(ctx, binding.ID); err != nil {
-			if hasCode(err, dbkit.ErrRecordNotFound.Code) || errors.Is(err, gorm.ErrDuplicatedKey) {
+			if dbkit.IsRecordNotFound(err) || errors.Is(err, gorm.ErrDuplicatedKey) {
 				continue
 			}
 			log.Warn("rbac could not restore a reinstated role binding",

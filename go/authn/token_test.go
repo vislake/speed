@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // compile-time check that testutil.KeySource satisfies this package's own
@@ -120,7 +121,7 @@ func TestVerify_ExpiredTokenIsRejected(t *testing.T) {
 
 	clock.Advance(2 * time.Minute)
 	_, err = verifier.Verify(ctx, token)
-	if !hasCode(err, ErrTokenExpired.Code) {
+	if !apperr.HasCode(err, ErrTokenExpired.Code) {
 		t.Fatalf("Verify() error = %v, want code %q", err, ErrTokenExpired.Code)
 	}
 }
@@ -152,7 +153,7 @@ func TestVerify_RejectsAlgNone(t *testing.T) {
 		t.Fatalf("build the alg=none token: %v", err)
 	}
 
-	if _, err := verifier.Verify(ctx, unsigned); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, unsigned); !apperr.HasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() error = %v, want code %q: an unsigned token must be refused", err, ErrTokenInvalid.Code)
 	}
 }
@@ -195,7 +196,7 @@ func TestVerify_RejectsHMACSignedWithThePublicKey(t *testing.T) {
 		t.Fatalf("build the HMAC-forged token: %v", err)
 	}
 
-	if _, err := verifier.Verify(ctx, forged); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, forged); !apperr.HasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() error = %v, want code %q: an HMAC token signed with the public verification key must be refused", err, ErrTokenInvalid.Code)
 	}
 }
@@ -214,7 +215,7 @@ func TestVerify_RejectsUnknownAndMissingKid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	if _, foreignErr := verifier.Verify(ctx, foreign); !hasCode(foreignErr, ErrTokenInvalid.Code) {
+	if _, foreignErr := verifier.Verify(ctx, foreign); !apperr.HasCode(foreignErr, ErrTokenInvalid.Code) {
 		t.Errorf("Verify(unknown kid) error = %v, want code %q", foreignErr, ErrTokenInvalid.Code)
 	}
 
@@ -234,7 +235,7 @@ func TestVerify_RejectsUnknownAndMissingKid(t *testing.T) {
 		t.Fatalf("build the kid-less token's signing string: %v", err)
 	}
 	signed := sstr + "." + unkeyed.EncodeSegment(other.SignRaw([]byte(sstr)))
-	if _, err := verifier.Verify(ctx, signed); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, signed); !apperr.HasCode(err, ErrTokenInvalid.Code) {
 		t.Errorf("Verify(no kid) error = %v, want code %q", err, ErrTokenInvalid.Code)
 	}
 }
@@ -317,7 +318,7 @@ func TestVerify_RejectsAForeignIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	if _, err := verifier.Verify(ctx, token); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, token); !apperr.HasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() error = %v, want code %q", err, ErrTokenInvalid.Code)
 	}
 }
@@ -370,7 +371,7 @@ func TestVerify_RejectsAlgorithmMismatch(t *testing.T) {
 	// KeySource's own record of what algorithm "kid-active" is changes.
 	keys.SetAlgorithm("kid-active", "some-other-algorithm")
 
-	if _, err := verifier.Verify(ctx, token); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, token); !apperr.HasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() with a mismatched declared algorithm error = %v, want code %q", err, ErrTokenInvalid.Code)
 	}
 }
@@ -495,7 +496,7 @@ func TestVerify_VerificationKeysFailureIsACannotAnswerNotARejectedToken(t *testi
 	keys.VerificationErr = fmt.Errorf("key store unavailable")
 	_, verifyErr := verifier.Verify(ctx, token)
 	assertErrorCode(t, verifyErr, ErrTokenVerificationFailed.Code)
-	if hasCode(verifyErr, ErrTokenInvalid.Code) {
+	if apperr.HasCode(verifyErr, ErrTokenInvalid.Code) {
 		t.Fatal("Verify() answered token_invalid for an unloadable key store; the cannot-answer must not masquerade as a rejected token")
 	}
 

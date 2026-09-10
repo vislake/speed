@@ -24,7 +24,7 @@ func assertSSOErrorCode(t *testing.T, err error, wantCode string) {
 	if !ok {
 		t.Fatalf("error = %v (%T), want an *apperr.Error with code %s", err, err, wantCode)
 	}
-	if appErr.Code != wantCode {
+	if !apperr.HasCode(err, wantCode) {
 		t.Fatalf("error code = %s, want %s", appErr.Code, wantCode)
 	}
 }

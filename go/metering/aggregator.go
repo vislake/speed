@@ -408,7 +408,7 @@ func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature s
 		return entry, nil
 	}
 	existing, err := a.summaries.FindByID(tenantCtx, summaryID(feature, start))
-	if err != nil && !hasCode(err, dbkit.ErrRecordNotFound.Code) {
+	if err != nil && !dbkit.IsRecordNotFound(err) {
 		return nil, err
 	}
 	if err == nil {

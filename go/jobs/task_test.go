@@ -52,7 +52,7 @@ func TestTask_Validate(t *testing.T) {
 			if !ok {
 				t.Fatalf("Validate() error = %v, want an *apperr.Error", err)
 			}
-			if appErr.Code != ErrInvalidTask.Code {
+			if !apperr.HasCode(err, ErrInvalidTask.Code) {
 				t.Errorf("Validate() code = %q, want %q", appErr.Code, ErrInvalidTask.Code)
 			}
 			if got := appErr.Params["field"]; got != tt.wantField {

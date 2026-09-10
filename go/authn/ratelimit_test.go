@@ -31,7 +31,7 @@ func TestRateGuard_CheckLogin_EachDimensionLimitsIndependently(t *testing.T) {
 	for i := 0; i < limitLoginByIP.Rate+1; i++ {
 		lastErr = guard.CheckLogin(ctx, "account-shared-ip-test", "203.0.113.50")
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckLogin() after saturating the IP dimension error = %v, want ErrRateLimited", lastErr)
 	}
 
@@ -57,7 +57,7 @@ func TestRateGuard_CheckLogin_AccountDimensionSaturates(t *testing.T) {
 		// the one that eventually refuses.
 		lastErr = guard.CheckLogin(ctx, "account-saturate-test", ipForIndex(i))
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckLogin() after saturating the account dimension error = %v, want ErrRateLimited", lastErr)
 	}
 }
@@ -172,7 +172,7 @@ func TestRateGuard_CheckRegister_LimitsByIPAlone(t *testing.T) {
 	for i := 0; i < limitRegisterByIP.Rate+1; i++ {
 		lastErr = guard.CheckRegister(ctx, "203.0.113.80")
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckRegister() after saturating error = %v, want ErrRateLimited", lastErr)
 	}
 
@@ -194,7 +194,7 @@ func TestRateGuard_CheckSMSSend_EachDimensionLimitsIndependently(t *testing.T) {
 	for i := 0; i < limitSMSSendByTarget.Rate+1; i++ {
 		lastErr = guard.CheckSMSSend(ctx, "target-send-test", ipForIndex(i))
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckSMSSend() after saturating the target dimension error = %v, want ErrRateLimited", lastErr)
 	}
 
@@ -218,7 +218,7 @@ func TestRateGuard_CheckSMSVerifyWrongGuess_TargetDimensionSaturates(t *testing.
 	for i := 0; i < limitSMSVerifyByTarget.Rate+1; i++ {
 		lastErr = guard.CheckSMSVerifyWrongGuess(ctx, "target-verify-test")
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckSMSVerifyWrongGuess() after saturating the target dimension error = %v, want ErrRateLimited", lastErr)
 	}
 
@@ -240,7 +240,7 @@ func TestRateGuard_CheckSMSVerifyIP_LimitsIndependently(t *testing.T) {
 	for i := 0; i < limitSMSVerifyByIP.Rate+1; i++ {
 		lastErr = guard.CheckSMSVerifyIP(ctx, "203.0.113.222")
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckSMSVerifyIP() after saturating the IP dimension error = %v, want ErrRateLimited", lastErr)
 	}
 
@@ -261,7 +261,7 @@ func TestRateGuard_CheckStepUp_EachDimensionLimitsIndependently(t *testing.T) {
 	for i := 0; i < limitStepUpByAccount.Rate+1; i++ {
 		lastErr = guard.CheckStepUp(ctx, "user-stepup-test", ipForIndex(i))
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("CheckStepUp() after saturating the account dimension error = %v, want ErrRateLimited", lastErr)
 	}
 }
@@ -287,7 +287,7 @@ func TestService_Login_RateLimited_ReturnsErrRateLimited(t *testing.T) {
 			Identifier: "ratelimited@example.com", Password: "definitely wrong", IP: ipForIndex(i),
 		})
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) && !hasCode(lastErr, ErrAccountLocked.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) && !apperr.HasCode(lastErr, ErrAccountLocked.Code) {
 		t.Fatalf("Login() after repeated failures error = %v, want ErrRateLimited or ErrAccountLocked", lastErr)
 	}
 }
@@ -305,7 +305,7 @@ func TestService_Register_RateLimited_ReturnsErrRateLimited(t *testing.T) {
 			Email: "register-flood-" + ipForIndex(i) + "@example.com", Password: testPassword, IP: "203.0.113.99",
 		})
 	}
-	if !hasCode(lastErr, ErrRateLimited.Code) {
+	if !apperr.HasCode(lastErr, ErrRateLimited.Code) {
 		t.Fatalf("Register() after saturating the IP dimension error = %v, want ErrRateLimited", lastErr)
 	}
 }
@@ -459,7 +459,7 @@ func TestRateGuard_Allow_SubSecondResetAfter_RetryAfterRoundsUp(t *testing.T) {
 		kv:      pkgcore.NewMemoryKVStore(),
 	}
 	err := guard.allow(t.Context(), "authn:test:subsecond-window", limitLoginByAccount)
-	if !hasCode(err, ErrRateLimited.Code) {
+	if !apperr.HasCode(err, ErrRateLimited.Code) {
 		t.Fatalf("allow() error = %v, want ErrRateLimited", err)
 	}
 	appErr, ok := apperr.As(err)
@@ -494,7 +494,7 @@ func TestRateGuard_CheckLogin_LockoutTail_RetryAfterRoundsUp(t *testing.T) {
 	}
 
 	err := guard.CheckLogin(t.Context(), account, "203.0.113.77")
-	if !hasCode(err, ErrAccountLocked.Code) {
+	if !apperr.HasCode(err, ErrAccountLocked.Code) {
 		t.Fatalf("CheckLogin() inside a seeded lockout error = %v, want ErrAccountLocked", err)
 	}
 	appErr, ok := apperr.As(err)
@@ -523,7 +523,7 @@ func TestRateGuard_Allow_NegativeResetAfter_RetryAfterFloorsAtZero(t *testing.T)
 		kv:      pkgcore.NewMemoryKVStore(),
 	}
 	err := guard.allow(t.Context(), "authn:test:negative-window", limitLoginByAccount)
-	if !hasCode(err, ErrRateLimited.Code) {
+	if !apperr.HasCode(err, ErrRateLimited.Code) {
 		t.Fatalf("allow() error = %v, want ErrRateLimited", err)
 	}
 	appErr, ok := apperr.As(err)

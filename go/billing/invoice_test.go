@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -69,7 +70,7 @@ func TestInvoiceRepository_MarkPaid_NotFound(t *testing.T) {
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	_, err := repo.MarkPaid(ctx, "does-not-exist")
-	if !hasCode(err, ErrInvoiceNotFound.Code) {
+	if !apperr.HasCode(err, ErrInvoiceNotFound.Code) {
 		t.Errorf("MarkPaid(missing): err = %v, want %s", err, ErrInvoiceNotFound.Code)
 	}
 }
@@ -96,7 +97,7 @@ func TestInvoiceRepository_VoidOnPaidInvoice_Refused(t *testing.T) {
 	}
 
 	_, err = repo.Void(ctx, inv.ID)
-	if !hasCode(err, "billing.invalid_invoice_transition") {
+	if !apperr.HasCode(err, "billing.invalid_invoice_transition") {
 		t.Errorf("Void on a Paid invoice: err = %v, want %s", err, "billing.invalid_invoice_transition")
 	}
 
@@ -119,7 +120,7 @@ func TestInvoiceRepository_VoidOnPaidInvoice_Refused(t *testing.T) {
 		t.Fatalf("Void: %v", voidErr)
 	}
 	_, err = repo.MarkPaid(ctx, inv2.ID)
-	if !hasCode(err, "billing.invalid_invoice_transition") {
+	if !apperr.HasCode(err, "billing.invalid_invoice_transition") {
 		t.Errorf("MarkPaid on a Voided invoice: err = %v, want %s", err, "billing.invalid_invoice_transition")
 	}
 }
@@ -176,10 +177,10 @@ func TestInvoiceRepository_MarkPaidAndVoid_RacingTransitions_ExactlyOneCommits(t
 		if paidErr == nil && voidErr == nil {
 			t.Fatalf("trial %d: MarkPaid and Void BOTH reported success racing one open invoice -- a terminal state was rewritten by the loser's unguarded write", trial)
 		}
-		if paidErr != nil && !hasCode(paidErr, ErrInvalidInvoiceTransition.Code) {
+		if paidErr != nil && !apperr.HasCode(paidErr, ErrInvalidInvoiceTransition.Code) {
 			t.Fatalf("trial %d: losing MarkPaid error = %v, want %s", trial, paidErr, ErrInvalidInvoiceTransition.Code)
 		}
-		if voidErr != nil && !hasCode(voidErr, ErrInvalidInvoiceTransition.Code) {
+		if voidErr != nil && !apperr.HasCode(voidErr, ErrInvalidInvoiceTransition.Code) {
 			t.Fatalf("trial %d: losing Void error = %v, want %s", trial, voidErr, ErrInvalidInvoiceTransition.Code)
 		}
 

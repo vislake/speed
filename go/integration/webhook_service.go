@@ -8,7 +8,6 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // This file holds Service's webhook-subscription-management surface -- the
@@ -517,26 +516,13 @@ func (s *Service) emitWebhookAudit(ctx context.Context, action string, row *Webh
 	return nil
 }
 
-// isWebhookRecordNotFound reports whether err is dbkit's not-found error
-// (by Code, never by identity -- see translateRepoErr's own doc comment for
-// why). It is the classifier webhook_delivery.go's handleDeliveryJob uses to
-// tell the one FindByID failure that means "the subscription is gone" from
-// every other FindByID failure a delivery attempt can hit (a transient store
-// error, a secret that no longer decrypts) -- only the former settles the
-// delivery terminal; the latter must retry (see handleDeliveryJob's own doc
-// comment).
-func isWebhookRecordNotFound(err error) bool {
-	found, ok := apperr.As(err)
-	return ok && found.Code == dbkit.ErrRecordNotFound.Code
-}
-
 // translateWebhookRepoErr is webhook_service.go's counterpart of
 // service.go's translateRepoErr, mapping a dbkit not-found onto
 // ErrWebhookSubscriptionNotFound instead of ErrKeyNotFound. See
 // translateRepoErr's own doc comment for why matching is by Code, never by
 // identity.
 func translateWebhookRepoErr(err error) error {
-	if isWebhookRecordNotFound(err) {
+	if dbkit.IsRecordNotFound(err) {
 		return ErrWebhookSubscriptionNotFound
 	}
 	return ErrInternal.WithCause(err)

@@ -321,7 +321,7 @@ func TestGateway_QueryStatus_NotFound(t *testing.T) {
 	gw := newGatewayWithBackend(backend, testConfig())
 
 	_, _, err := gw.QueryStatus(context.Background(), "cs_missing")
-	if !hasCode(err, billing.ErrChannelReferenceNotFound.Code) {
+	if !apperr.HasCode(err, billing.ErrChannelReferenceNotFound.Code) {
 		t.Errorf("err = %v, want billing.ErrChannelReferenceNotFound", err)
 	}
 }
@@ -469,7 +469,7 @@ func TestGateway_VerifyWebhook_InvalidSignature(t *testing.T) {
 	_, err := gw.VerifyWebhook(context.Background(), map[string][]string{
 		"Stripe-Signature": {signed.Header},
 	}, tampered)
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid", err)
 	}
 }
@@ -477,7 +477,7 @@ func TestGateway_VerifyWebhook_InvalidSignature(t *testing.T) {
 func TestGateway_VerifyWebhook_MissingSignatureHeader(t *testing.T) {
 	gw := newGatewayWithBackend(&fakeBackend{}, testConfig())
 	_, err := gw.VerifyWebhook(context.Background(), map[string][]string{}, []byte(`{}`))
-	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid", err)
 	}
 }
@@ -494,7 +494,7 @@ func TestGateway_VerifyWebhook_UnrecognizedEventType(t *testing.T) {
 	_, err := gw.VerifyWebhook(context.Background(), map[string][]string{
 		"Stripe-Signature": {signed.Header},
 	}, signed.Payload)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -511,7 +511,7 @@ func TestGateway_VerifyWebhook_MissingMetadata(t *testing.T) {
 	_, err := gw.VerifyWebhook(context.Background(), map[string][]string{
 		"Stripe-Signature": {signed.Header},
 	}, signed.Payload)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }
@@ -545,7 +545,7 @@ func TestGateway_VerifyWebhook_EventWithoutData_RefusedNotCrashed(t *testing.T) 
 	_, err = gw.VerifyWebhook(context.Background(), map[string][]string{
 		"Stripe-Signature": {signed.Header},
 	}, signed.Payload)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized (a Data-less event must be refused cleanly, never crash)", err)
 	}
 }
@@ -601,14 +601,6 @@ func checkoutSessionPayload(t *testing.T, eventID, sessionID, tenantID, subID, i
 		t.Fatalf("marshal fixture: %v", err)
 	}
 	return body
-}
-
-// hasCode mirrors billing's own unexported hasCode helper (errors.go) --
-// this package cannot import an unexported symbol, so it carries the
-// identical, small comparison against apperr.As.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }
 
 // invoiceEventPayload builds a minimal, realistic invoice.paid or
@@ -814,7 +806,7 @@ func TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed(t *
 func TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized(t *testing.T) {
 	payload := invoiceEventPayloadWithInvoiceLevelMetadata(t, "evt_inv_invmeta_1", "in_3", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	_, err := signAndVerify(t, payload)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized (invoice-level metadata is not where real deliveries carry the identifiers)", err)
 	}
 }
@@ -853,7 +845,7 @@ func TestGateway_VerifyWebhook_SubscriptionUpdatedCanceled_RecognizedAsSubscript
 func TestGateway_VerifyWebhook_SubscriptionUpdatedActive_StillUnrecognized(t *testing.T) {
 	payload := subscriptionUpdatedPayload(t, "evt_sub_active_1", "sub_stripe_2", "tenant-a", "sub-1", "inv-1", "active")
 	_, err := signAndVerify(t, payload)
-	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+	if !apperr.HasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -162,7 +163,7 @@ func TestImpersonationService_Start_BeforeAttachRBAC_Refused(t *testing.T) {
 		Reason:         "support ticket #42",
 		Locale:         "zh-CN",
 	})
-	if !isCode(err, ErrRBACServiceRequired.Code) {
+	if !apperr.HasCode(err, ErrRBACServiceRequired.Code) {
 		t.Fatalf("Start() error = %v, want %s (a grant must not be born while the automatic permission-revocation end cannot run)",
 			err, ErrRBACServiceRequired.Code)
 	}
@@ -232,7 +233,7 @@ func TestImpersonationService_RoleRevokedBeforeAttachRBAC_Warns(t *testing.T) {
 func TestImpersonationService_Start_EmptyReason_Refused(t *testing.T) {
 	svc, _ := newTestImpersonationService(t, nil)
 	_, err := svc.Start(context.Background(), StartInput{AdminUserID: "admin-1", TargetUserID: "user-1", TargetTenantID: "tenant-1"})
-	if !isCode(err, ErrImpersonationReasonRequired.Code) {
+	if !apperr.HasCode(err, ErrImpersonationReasonRequired.Code) {
 		t.Fatalf("Start() error = %v, want ErrImpersonationReasonRequired", err)
 	}
 }
@@ -240,7 +241,7 @@ func TestImpersonationService_Start_EmptyReason_Refused(t *testing.T) {
 func TestImpersonationService_Start_MissingTarget_Refused(t *testing.T) {
 	svc, _ := newTestImpersonationService(t, nil)
 	_, err := svc.Start(context.Background(), StartInput{AdminUserID: "admin-1", Reason: "x"})
-	if !isCode(err, ErrImpersonationTargetRequired.Code) {
+	if !apperr.HasCode(err, ErrImpersonationTargetRequired.Code) {
 		t.Fatalf("Start() error = %v, want ErrImpersonationTargetRequired", err)
 	}
 }
@@ -250,7 +251,7 @@ func TestImpersonationService_Start_SelfTarget_Refused(t *testing.T) {
 	_, err := svc.Start(context.Background(), StartInput{
 		AdminUserID: "admin-1", TargetUserID: "admin-1", TargetTenantID: "tenant-1", Reason: "x",
 	})
-	if !isCode(err, ErrImpersonationSelfNotAllowed.Code) {
+	if !apperr.HasCode(err, ErrImpersonationSelfNotAllowed.Code) {
 		t.Fatalf("Start() error = %v, want ErrImpersonationSelfNotAllowed", err)
 	}
 }
@@ -271,7 +272,7 @@ func TestImpersonationService_Start_SystemDomainTarget_Refused(t *testing.T) {
 		TargetTenantID: "system", // rbac.SystemDomain's literal value
 		Reason:         "x",
 	})
-	if !isCode(err, ErrImpersonationTargetForbidden.Code) {
+	if !apperr.HasCode(err, ErrImpersonationTargetForbidden.Code) {
 		t.Fatalf("Start() error = %v, want ErrImpersonationTargetForbidden", err)
 	}
 
@@ -505,7 +506,7 @@ func TestImpersonationService_Start_NotifierFailure_RefusesStart(t *testing.T) {
 		AdminUserID: "admin-1", TargetUserID: "user-1", TargetTenantID: "tenant-1",
 		Reason: "support ticket #42", Locale: "zh-CN",
 	})
-	if !isCode(err, ErrImpersonationNotificationUnavailable.Code) {
+	if !apperr.HasCode(err, ErrImpersonationNotificationUnavailable.Code) {
 		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationNotificationUnavailable.Code)
 	}
 
@@ -594,7 +595,7 @@ func TestImpersonationService_End_AlreadyEnded_Refused(t *testing.T) {
 		t.Fatalf("first End() error = %v", err)
 	}
 	_, err := svc.End(context.Background(), grant.ID, "admin-1")
-	if !isCode(err, ErrImpersonationGrantEnded.Code) {
+	if !apperr.HasCode(err, ErrImpersonationGrantEnded.Code) {
 		t.Fatalf("second End() error = %v, want ErrImpersonationGrantEnded", err)
 	}
 }
@@ -602,7 +603,7 @@ func TestImpersonationService_End_AlreadyEnded_Refused(t *testing.T) {
 func TestImpersonationService_End_UnknownID_ReportsNotFound(t *testing.T) {
 	svc, _ := newTestImpersonationService(t, nil)
 	_, err := svc.End(context.Background(), "does-not-exist", "admin-1")
-	if !isCode(err, ErrGrantNotFound.Code) {
+	if !apperr.HasCode(err, ErrGrantNotFound.Code) {
 		t.Fatalf("End() error = %v, want ErrGrantNotFound", err)
 	}
 }
@@ -657,7 +658,7 @@ func TestImpersonationService_End_ConcurrentEnd_OnlyOneSucceeds(t *testing.T) {
 		switch {
 		case err == nil:
 			succeeded++
-		case isCode(err, ErrImpersonationGrantEnded.Code):
+		case apperr.HasCode(err, ErrImpersonationGrantEnded.Code):
 			refused++
 		default:
 			t.Fatalf("unexpected error: %v", err)
@@ -746,7 +747,7 @@ func TestImpersonationService_Start_UnwiredService_Refused(t *testing.T) {
 		TargetTenantID: "tenant-1",
 		Reason:         "support ticket #42",
 	})
-	if !isCode(err, ErrImpersonationNotWired.Code) {
+	if !apperr.HasCode(err, ErrImpersonationNotWired.Code) {
 		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationNotWired.Code)
 	}
 	active, listErr := svc.ListActive(context.Background())
@@ -766,7 +767,7 @@ func TestImpersonationService_Start_UnwiredService_Refused(t *testing.T) {
 		TargetTenantID: "tenant-1",
 		Reason:         "support ticket #42",
 	})
-	if !isCode(err, ErrImpersonationNotWired.Code) {
+	if !apperr.HasCode(err, ErrImpersonationNotWired.Code) {
 		t.Fatalf("Start() on a bare constructor error = %v, want %s", err, ErrImpersonationNotWired.Code)
 	}
 }

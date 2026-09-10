@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func TestModule_Identity(t *testing.T) {
@@ -497,7 +498,7 @@ func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
 func TestModule_Register_RefusesAnIndexerlessBoot(t *testing.T) {
 	_, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), NewModule(nil))
-	if !hasCode(err, ErrEmailIndexerRequired.Code) {
+	if !apperr.HasCode(err, ErrEmailIndexerRequired.Code) {
 		t.Fatalf("Bootstrap without an email indexer error = %v, want org.email_indexer_required", err)
 	}
 }
@@ -520,7 +521,7 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 			opts := append([]Option{WithEmailIndexer(newTestEmailIndexer(t))}, tc.opts...)
 			_, err := pkgcore.NewKernel().
 				Bootstrap(context.Background(), NewModule(nil, opts...))
-			if !hasCode(err, ErrInvitationMailRequired.Code) {
+			if !apperr.HasCode(err, ErrInvitationMailRequired.Code) {
 				t.Fatalf("Bootstrap error = %v, want org.invitation_mail_required", err)
 			}
 		})

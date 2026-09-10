@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // This file holds the deterministic PostgreSQL proof behind
@@ -132,7 +133,7 @@ func TestMemberService_ConcurrentAddSameUser_LoserAnswersMembershipExists_Postgr
 			switch {
 			case err == nil:
 				creators++
-			case hasCode(err, org.ErrMembershipExists.Code):
+			case apperr.HasCode(err, org.ErrMembershipExists.Code):
 				codedExists++
 			default:
 				t.Fatalf("%s: concurrent Add %d = %v, want success or the coded org.membership_exists, never an internal error",

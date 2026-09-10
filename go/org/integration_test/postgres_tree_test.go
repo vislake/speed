@@ -170,7 +170,7 @@ func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree_Postgres(t *testi
 		t.Fatalf("Delete(cascade): %v", err)
 	}
 
-	if _, err := tree.Get(ctx, branch.ID); !hasCode(err, org.ErrNodeNotFound.Code) {
+	if _, err := tree.Get(ctx, branch.ID); !apperr.HasCode(err, org.ErrNodeNotFound.Code) {
 		t.Errorf("Get(branch) after cascade delete: err = %v, want org.node_not_found", err)
 	}
 	if remaining, err := tree.Children(ctx, root.ID); err != nil || len(remaining) != 1 || remaining[0].ID != sibling.ID {
@@ -201,15 +201,7 @@ func TestTreeService_MaxDepth_Postgres(t *testing.T) {
 			t.Fatalf("CreateChild at depth %d: %v", i+1, err)
 		}
 	}
-	if _, err := tree.CreateChild(ctx, node.ID, "too-deep", "group"); !hasCode(err, org.ErrMaxDepthExceeded.Code) {
+	if _, err := tree.CreateChild(ctx, node.ID, "too-deep", "group"); !apperr.HasCode(err, org.ErrMaxDepthExceeded.Code) {
 		t.Fatalf("CreateChild past the bound: err = %v, want org.max_depth_exceeded", err)
 	}
-}
-
-// hasCode reports whether err is, or wraps, an *apperr.Error with the given
-// code -- the org_test package's own copy of org's unexported helper of the
-// same name (errors.go), since this package cannot import it.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }

@@ -176,14 +176,14 @@ func TestPostgres_CreditLifecycle_ReserveConfirmRefundAndRetries(t *testing.T) {
 
 	// Confirm-then-refund of the same reservation is refused -- reversing
 	// an already-confirmed spend would double-release credits.
-	if _, err := svc.Refund(ctx, "lifecycle-1"); !hasCode(err, billing.ErrCreditTransactionAlreadyResolved.Code) {
+	if _, err := svc.Refund(ctx, "lifecycle-1"); !apperr.HasCode(err, billing.ErrCreditTransactionAlreadyResolved.Code) {
 		t.Errorf("Refund of the confirmed reservation: err = %v, want %s", err, billing.ErrCreditTransactionAlreadyResolved.Code)
 	}
-	if _, err := svc.Confirm(ctx, "lifecycle-2"); !hasCode(err, billing.ErrCreditTransactionAlreadyResolved.Code) {
+	if _, err := svc.Confirm(ctx, "lifecycle-2"); !apperr.HasCode(err, billing.ErrCreditTransactionAlreadyResolved.Code) {
 		t.Errorf("Confirm of the refunded reservation: err = %v, want %s", err, billing.ErrCreditTransactionAlreadyResolved.Code)
 	}
 	// And an unknown key is NotFound on both legs.
-	if _, err := svc.Confirm(ctx, "no-such-reservation"); !hasCode(err, billing.ErrCreditTransactionNotFound.Code) {
+	if _, err := svc.Confirm(ctx, "no-such-reservation"); !apperr.HasCode(err, billing.ErrCreditTransactionNotFound.Code) {
 		t.Errorf("Confirm of an unknown key: err = %v, want %s", err, billing.ErrCreditTransactionNotFound.Code)
 	}
 }
@@ -222,7 +222,7 @@ func TestPostgres_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds(t *testing.T) 
 	for _, err := range results {
 		if err == nil {
 			succeeded++
-		} else if !hasCode(err, billing.ErrInsufficientCredits.Code) {
+		} else if !apperr.HasCode(err, billing.ErrInsufficientCredits.Code) {
 			t.Errorf("unexpected error from a concurrent PreDeduct: %v", err)
 		}
 	}
@@ -237,14 +237,6 @@ func TestPostgres_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds(t *testing.T) 
 	if bal.Available != balance-deductEach || bal.Reserved != deductEach {
 		t.Errorf("balance after the race = %+v, want Available=%d Reserved=%d (exactly one reservation applied)", bal, balance-deductEach, deductEach)
 	}
-}
-
-// hasCode mirrors billing's own unexported hasCode helper (errors.go) --
-// this external test package cannot import an unexported symbol, so it
-// repeats the same apperr.As comparison against the shared apperr package.
-func hasCode(err error, code string) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == code
 }
 
 // TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply is the PostgreSQL leg

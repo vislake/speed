@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // tableMemberships is the memberships table name, shared by the model's
@@ -524,7 +525,7 @@ func (s *MemberService) ensure(ctx context.Context, userID, nodeID string) (*Mem
 	switch existing, err := s.repo.byUser(ctx, userID); {
 	case err == nil:
 		return existing, false, nil
-	case !hasCode(err, ErrMembershipNotFound.Code):
+	case !apperr.HasCode(err, ErrMembershipNotFound.Code):
 		return nil, false, err
 	}
 
@@ -584,7 +585,7 @@ func (s *MemberService) ensure(ctx context.Context, userID, nodeID string) (*Mem
 		switch existing, readErr := s.repo.byUser(ctx, userID); {
 		case readErr == nil:
 			return existing, false, nil
-		case !hasCode(readErr, ErrMembershipNotFound.Code):
+		case !apperr.HasCode(readErr, ErrMembershipNotFound.Code):
 			return nil, false, readErr
 		}
 		// The colliding row is already gone -- a concurrent Remove
@@ -699,7 +700,7 @@ func (s *MemberService) Remove(ctx context.Context, userID string) error {
 // call only.
 func (s *MemberService) Restore(ctx context.Context, membershipID string) (*Membership, error) {
 	if err := s.repo.Restore(ctx, membershipID); err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrMembershipNotFound.WithParam("membership_id", membershipID)
 		}
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
@@ -712,7 +713,7 @@ func (s *MemberService) Restore(ctx context.Context, membershipID string) (*Memb
 	}
 	m, err := s.repo.FindByID(ctx, membershipID)
 	if err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrMembershipNotFound.WithParam("membership_id", membershipID)
 		}
 		return nil, err

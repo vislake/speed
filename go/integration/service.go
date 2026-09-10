@@ -12,7 +12,6 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // Service is go/integration's runtime entry point: the four API key
@@ -533,7 +532,7 @@ func (s *Service) emit(ctx context.Context, action string, row *APIKey, result a
 // declares no Is method) the package-level sentinel -- the same convention
 // this module's own errors.go doc comment documents for its own sentinels.
 func translateRepoErr(err error) error {
-	if found, ok := apperr.As(err); ok && found.Code == dbkit.ErrRecordNotFound.Code {
+	if dbkit.IsRecordNotFound(err) {
 		return ErrKeyNotFound
 	}
 	return ErrInternal.WithCause(err)

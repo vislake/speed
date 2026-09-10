@@ -53,8 +53,7 @@ func TestEnqueue_WritesAPendingRow(t *testing.T) {
 func TestEnqueue_InvalidEvent_ReturnsValidationError(t *testing.T) {
 	db := newTestDB(t)
 	_, err := Enqueue(context.Background(), db, UsageEvent{})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrMissingTenantID.Code {
+	if !apperr.HasCode(err, ErrMissingTenantID.Code) {
 		t.Fatalf("Enqueue(empty event) = %v, want %s", err, ErrMissingTenantID.Code)
 	}
 }

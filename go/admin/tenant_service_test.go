@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -81,7 +82,7 @@ func TestTenantService_HandleOrgNodeCreated_ChildNode_DoesNotRegister(t *testing
 	}
 
 	_, err := svc.Get(context.Background(), "tenant-child-1")
-	if !isCode(err, ErrTenantNotFound.Code) {
+	if !apperr.HasCode(err, ErrTenantNotFound.Code) {
 		t.Fatalf("Get() error = %v, want ErrTenantNotFound (no row should have been created)", err)
 	}
 }

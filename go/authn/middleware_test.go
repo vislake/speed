@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -344,7 +345,7 @@ func TestPrincipalResolver_Resolve(t *testing.T) {
 			tenant, err := resolver.Resolve(req)
 
 			if tc.wantCode != "" {
-				if !hasCode(err, tc.wantCode) {
+				if !apperr.HasCode(err, tc.wantCode) {
 					t.Fatalf("Resolve() error = %v, want code %q", err, tc.wantCode)
 				}
 				if tenant != "" {

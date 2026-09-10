@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/authn/internal/totp"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -71,7 +72,7 @@ func TestEnrollTOTP_ReplacesAnyExistingFactor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("totp.Code() error = %v", err)
 	}
-	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, staleCode); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, staleCode); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("ConfirmTOTP(stale secret's code) error = %v, want ErrMFAInvalidCode", err)
 	}
 }
@@ -91,7 +92,7 @@ func TestEnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 
 	// A bare session -- no completed step-up in its AMR, the shape a
 	// stolen access token would have -- must be refused.
-	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID}); !hasCode(err, ErrStepUpRequired.Code) {
+	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID}); !apperr.HasCode(err, ErrStepUpRequired.Code) {
 		t.Fatalf("EnrollTOTP(no step-up, active factor exists) error = %v, want ErrStepUpRequired", err)
 	}
 
@@ -215,13 +216,13 @@ func TestConfirmTOTP_Replacement_RetiresOldFactorAndCodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("totp.Code() error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, oldCode, "203.0.113.21"); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, oldCode, "203.0.113.21"); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("VerifyStepUp(old secret after confirmed replacement) error = %v, want ErrMFAInvalidCode", err)
 	}
 
 	// The OLD recovery codes must no longer work either -- the confirmed
 	// replacement's own regenerateRecoveryCodesLocked call discarded them.
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, originalCodes[0], "203.0.113.21"); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, originalCodes[0], "203.0.113.21"); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("VerifyStepUp(old recovery code after confirmed replacement) error = %v, want ErrMFAInvalidCode", err)
 	}
 
@@ -250,7 +251,7 @@ func TestConfirmTOTP_WrongCode_Refused(t *testing.T) {
 	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID}); err != nil {
 		t.Fatalf("EnrollTOTP() error = %v", err)
 	}
-	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, "000000"); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, "000000"); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("ConfirmTOTP(wrong code) error = %v, want ErrMFAInvalidCode", err)
 	}
 }
@@ -263,7 +264,7 @@ func TestConfirmTOTP_WithoutEnrolling_Refused(t *testing.T) {
 	f := newServiceFixture(t)
 	user := f.registerUser(t, "mfa-none@example.com", testTenantA)
 
-	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, "123456"); !hasCode(err, ErrMFANotEnrolled.Code) {
+	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, "123456"); !apperr.HasCode(err, ErrMFANotEnrolled.Code) {
 		t.Errorf("ConfirmTOTP(nothing enrolled) error = %v, want ErrMFANotEnrolled", err)
 	}
 }
@@ -281,7 +282,7 @@ func TestConfirmTOTP_AlreadyActive_Refused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("totp.Code() error = %v", err)
 	}
-	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, code); !hasCode(err, ErrMFAAlreadyEnrolled.Code) {
+	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, code); !apperr.HasCode(err, ErrMFAAlreadyEnrolled.Code) {
 		t.Errorf("ConfirmTOTP(already active) error = %v, want ErrMFAAlreadyEnrolled", err)
 	}
 }
@@ -347,7 +348,7 @@ func TestRecoveryCode_ConsumedCode_AnswersUsedNotInvalid(t *testing.T) {
 	if _, err := f.svc.VerifyStepUp(t.Context(), principal, codes[0], "203.0.113.10"); err != nil {
 		t.Fatalf("first VerifyStepUp(recovery code) error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, codes[0], "203.0.113.10"); !hasCode(err, "authn.mfa_code_used") {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, codes[0], "203.0.113.10"); !apperr.HasCode(err, "authn.mfa_code_used") {
 		t.Errorf("second VerifyStepUp(same recovery code) error = %v, want code authn.mfa_code_used (refused, but honestly: consumed, not invalid)", err)
 	}
 }
@@ -420,7 +421,7 @@ func TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid(t *testing.T) {
 	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.12"); err != nil {
 		t.Fatalf("first VerifyStepUp() error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.12"); !hasCode(err, "authn.mfa_code_used") {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.12"); !apperr.HasCode(err, "authn.mfa_code_used") {
 		t.Errorf("second VerifyStepUp(same code) error = %v, want code authn.mfa_code_used (refused, but honestly: consumed, not invalid)", err)
 	}
 }
@@ -438,7 +439,7 @@ func TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode(t *testing.T) {
 	enrollAndConfirmTOTP(t, f, user.ID)
 	principal := loginPrincipal(t, f, user, testTenantA)
 
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, "000000", "203.0.113.12"); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, "000000", "203.0.113.12"); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("VerifyStepUp(wrong code) error = %v, want ErrMFAInvalidCode", err)
 	}
 }
@@ -457,7 +458,7 @@ func TestVerifyStepUp_AnotherUsersRecoveryCode_AnswersInvalidCode(t *testing.T) 
 	_, otherCodes := enrollAndConfirmTOTP(t, f, other.ID)
 	principal := loginPrincipal(t, f, user, testTenantA)
 
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, otherCodes[0], "203.0.113.12"); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, otherCodes[0], "203.0.113.12"); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("VerifyStepUp(another user's recovery code) error = %v, want ErrMFAInvalidCode", err)
 	}
 }
@@ -483,7 +484,7 @@ func TestVerifyStepUp_RefusesAnExpiredSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("totp.Code() error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.13"); !hasCode(err, ErrSessionRevoked.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.13"); !apperr.HasCode(err, ErrSessionRevoked.Code) {
 		t.Fatalf("VerifyStepUp(expired session) error = %v, want code %q", err, ErrSessionRevoked.Code)
 	}
 }
@@ -517,7 +518,7 @@ func TestVerifyStepUp_RefusesWithoutMFAEnrolled(t *testing.T) {
 	user := f.registerUser(t, "mfa-absent@example.com", testTenantA)
 	principal := loginPrincipal(t, f, user, testTenantA)
 
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, "123456", "203.0.113.13"); !hasCode(err, ErrMFANotEnrolled.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, "123456", "203.0.113.13"); !apperr.HasCode(err, ErrMFANotEnrolled.Code) {
 		t.Errorf("VerifyStepUp(no factor enrolled) error = %v, want ErrMFANotEnrolled", err)
 	}
 }
@@ -611,7 +612,7 @@ func TestRegenerateRecoveryCodes_InvalidatesPreviousBatch(t *testing.T) {
 	}
 
 	principal := loginPrincipal(t, f, user, testTenantA)
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, oldCodes[0], "203.0.113.14"); !hasCode(err, ErrMFAInvalidCode.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, oldCodes[0], "203.0.113.14"); !apperr.HasCode(err, ErrMFAInvalidCode.Code) {
 		t.Errorf("VerifyStepUp(pre-regeneration code) error = %v, want ErrMFAInvalidCode", err)
 	}
 	if n := f.events.Count(EventMFARecoveryCodesRegenerated); n != 1 {
@@ -627,7 +628,7 @@ func TestRegenerateRecoveryCodes_WithoutActiveFactor_Refused(t *testing.T) {
 	f := newServiceFixture(t)
 	user := f.registerUser(t, "mfa-regen-none@example.com", testTenantA)
 
-	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), user.ID); !hasCode(err, ErrMFANotEnrolled.Code) {
+	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), user.ID); !apperr.HasCode(err, ErrMFANotEnrolled.Code) {
 		t.Errorf("RegenerateRecoveryCodes(nothing enrolled) error = %v, want ErrMFANotEnrolled", err)
 	}
 }
@@ -814,7 +815,7 @@ func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testi
 					switch {
 					case err == nil:
 						success++
-					case hasCode(err, ErrMFAAlreadyEnrolled.Code), hasCode(err, ErrMFANotEnrolled.Code):
+					case apperr.HasCode(err, ErrMFAAlreadyEnrolled.Code), apperr.HasCode(err, ErrMFANotEnrolled.Code):
 						refused++
 					default:
 						unwanted = append(unwanted, err)
@@ -1139,16 +1140,16 @@ func TestMFA_EmptyOrUnknownIdentityRefusals(t *testing.T) {
 
 	f := newServiceFixture(t)
 
-	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{}); !hasCode(err, ErrAuthenticationRequired.Code) {
+	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{}); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 		t.Errorf("EnrollTOTP(empty principal) error = %v, want ErrAuthenticationRequired", err)
 	}
-	if _, err := f.svc.ConfirmTOTP(t.Context(), "", "000000"); !hasCode(err, ErrAuthenticationRequired.Code) {
+	if _, err := f.svc.ConfirmTOTP(t.Context(), "", "000000"); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 		t.Errorf("ConfirmTOTP(empty user id) error = %v, want ErrAuthenticationRequired", err)
 	}
-	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), ""); !hasCode(err, ErrAuthenticationRequired.Code) {
+	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), ""); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 		t.Errorf("RegenerateRecoveryCodes(empty user id) error = %v, want ErrAuthenticationRequired", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), Principal{}, "000000", "203.0.113.10"); !hasCode(err, ErrAuthenticationRequired.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), Principal{}, "000000", "203.0.113.10"); !apperr.HasCode(err, ErrAuthenticationRequired.Code) {
 		t.Errorf("VerifyStepUp(empty principal) error = %v, want ErrAuthenticationRequired", err)
 	}
 
@@ -1169,7 +1170,7 @@ func TestVerifyStepUp_RefusesWhenTheSessionIsUnknown(t *testing.T) {
 	user := f.registerUser(t, "stepup-unknown-session@example.com", testTenantA)
 
 	_, err := f.svc.VerifyStepUp(t.Context(), Principal{UserID: user.ID, SessionID: "no-such-session"}, "000000", "203.0.113.10")
-	if !hasCode(err, ErrSessionRevoked.Code) {
+	if !apperr.HasCode(err, ErrSessionRevoked.Code) {
 		t.Fatalf("VerifyStepUp(unknown session) error = %v, want code %q", err, ErrSessionRevoked.Code)
 	}
 }
@@ -1189,7 +1190,7 @@ func TestVerifyStepUp_RefusesWhenTheSessionBelongsToAnotherUser(t *testing.T) {
 
 	_, err := f.svc.VerifyStepUp(t.Context(),
 		Principal{UserID: user.ID, SessionID: otherPrincipal.SessionID}, "000000", "203.0.113.10")
-	if !hasCode(err, ErrTokenInvalid.Code) {
+	if !apperr.HasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("VerifyStepUp(mismatched user and session) error = %v, want code %q", err, ErrTokenInvalid.Code)
 	}
 }
@@ -1214,7 +1215,7 @@ func TestVerifyStepUp_RefusesASuspendedAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("totp.Code() error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.10"); !hasCode(err, ErrInvalidCredentials.Code) {
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.10"); !apperr.HasCode(err, ErrInvalidCredentials.Code) {
 		t.Fatalf("VerifyStepUp(suspended account) error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 }

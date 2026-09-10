@@ -157,7 +157,7 @@ func TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor(t *testing.T) {
 	var bindingActors []string
 	env.Registry.EventBus().Subscribe(rbac.EventRoleBindingAssigned, func(_ context.Context, evt pkgcore.Event) error {
 		var p rbac.RoleBindingChangedEvent
-		if err := decodeEventPayload(evt.Payload, &p); err != nil {
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &p); err != nil {
 			return err
 		}
 		bindingActors = append(bindingActors, p.ActorUserID)
@@ -166,7 +166,7 @@ func TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor(t *testing.T) {
 	var roleActors []string
 	env.Registry.EventBus().Subscribe(rbac.EventRoleChanged, func(_ context.Context, evt pkgcore.Event) error {
 		var p rbac.RoleChangedEvent
-		if err := decodeEventPayload(evt.Payload, &p); err != nil {
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &p); err != nil {
 			return err
 		}
 		roleActors = append(roleActors, p.ActorUserID)
@@ -225,7 +225,7 @@ func TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator(t *testing.T)
 	var entered []tenancy.SystemContextEnteredEvent
 	env.Registry.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
 		var e tenancy.SystemContextEnteredEvent
-		if err := decodeEventPayload(evt.Payload, &e); err != nil {
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &e); err != nil {
 			return err
 		}
 		entered = append(entered, e)

@@ -10,6 +10,7 @@ import (
 
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
@@ -94,14 +95,14 @@ func TestRenderInvitationMail_MissingKey_IsAnErrorNotABlankBody(t *testing.T) {
 	if err == nil {
 		t.Fatalf("renderInvitationMail with an incomplete catalog succeeded, producing %+v", mail)
 	}
-	if !hasCode(err, ErrInternal.Code) {
+	if !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("error = %v, want org.internal_error", err)
 	}
 }
 
 func TestRenderInvitationMail_NoCatalog(t *testing.T) {
 	_, err := renderInvitationMail(nil, testMailFrom, testMailData(i18n.LocaleENUS))
-	if !hasCode(err, ErrInternal.Code) {
+	if !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("error = %v, want org.internal_error", err)
 	}
 }
@@ -157,12 +158,12 @@ func TestNegotiateLocale(t *testing.T) {
 func TestSendMail_WithoutATransport(t *testing.T) {
 	mail := pkgcore.Mail{From: testMailFrom, To: []string{"ada@example.test"}, Text: "hello"}
 
-	if err := sendMail(context.Background(), nil, mail); !hasCode(err, ErrInternal.Code) {
+	if err := sendMail(context.Background(), nil, mail); !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("sendMail with no host error = %v, want org.internal_error", err)
 	}
 	host := newTestHost(t)
 	host.mailer = nil
-	if err := sendMail(context.Background(), host, mail); !hasCode(err, ErrInternal.Code) {
+	if err := sendMail(context.Background(), host, mail); !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("sendMail with no mailer error = %v, want org.internal_error", err)
 	}
 }
