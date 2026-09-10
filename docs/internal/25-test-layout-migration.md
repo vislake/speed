@@ -26,6 +26,8 @@
 
 对 55 个测试文件做注释/字符串剥离后的引用矩阵,流测试实际触达的**非测试文件**未导出符号分族如下(括注引用文件数):
 
+> **本表是历史记录(批次 2b 执行前的时点侦察快照),不改**:表中符号名与引用文件数均为当时 `cmd/server` 包内形态的实测;装配迁入 `internal/app`、demo 层再移入 `internal/app/demo` 之后的现状见"批次 2b 处置记录"。
+
 | 族 | 符号 | 说明 |
 |---|---|---|
 | 装配与配置 | `buildServer`(25 文件直引,其余经基座)、`serverConfig` 及其字段(22)、`configFromEnv`、`mountModuleRoutes`、`openConfiguredAuthnChannels`、`demoHostTenants`、`orgFeatureGate`、`socialChannelFlagKey`、`signInMemberships`/`newSignInMemberships`、`healthzHandler`/`metricsHandler`、`defaultPort`/`defaultSQLitePath` | 流的公共根:39 个起动服务器的测试文件全部经 `buildTestServer` 族 → `buildServer`;`serverConfig` 是变异回调(`func(*serverConfig)`)与读回(cfg.SQLitePath、cfg.Memberships)的载体 |
