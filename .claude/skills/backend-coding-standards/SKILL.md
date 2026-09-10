@@ -212,6 +212,22 @@ func (h *ImageGenHandler) Handle(ctx context.Context, job *jobs.Job, progress jo
 - **DO NOT** put business compensation inside the queue layer. The queue provides an `OnFailure` hook; refunding credits and similar compensation belongs to the business module.
 - An idempotency key is mandatory and must be derived from the business operation, never random.
 
+### Host-composed provisioning chains
+
+A chain that provisions a tenant of its own across several modules on one upstream fact (a registration) is **host assembly**, never a platform capability: the platform ships the per-hop ensure APIs and the retry machinery; what the tenant is called, which plan it starts on and how many credits it gets is product policy. The recipe, in order:
+
+1. **The trigger event fires once.** Nothing redelivers `authn.user.created`, so the triggering request must not fail on a provisioning failure — log the Error and recover through your own machinery.
+2. **Recover through a host-owned queue job.** Subscribe on the host bus, always return `nil` from the handler, and on failure enqueue a retry job with a generous budget; the job row is the durable record and survives a restart. The dead-letter plus the `OnFailure` hook is the terminal operator signal: name the account and the incomplete tenant, and **DO NOT** name a specific consequence — what is missing depends on the hop that failed, which the cause error names.
+3. **Make every hop an ensure, or the retry cannot converge.** Each hop must:
+   - **derive** the tenant id from the trigger fact (same account, same tenant) — never mint one, never depend on a prior bookkeeping row;
+   - call an **ensure-shaped module API** (`org`'s `TreeService.EnsureRoot` / `MemberService.EnsureRootSeat`, `billing`'s `SubscriptionService.EnsureActive` are the landed templates) — **DO NOT** hand-roll read-then-create, and no hop may assume an earlier hop was created by this attempt;
+   - **rebuild the tenant context explicitly** (see above);
+   - keep **dependency order** (a role before the grant naming it) and, for independent hops, the order the other path provisioning the same shape uses, so both paths land identical rows;
+   - **return the error** on failure — **DO NOT** swallow a hop failure;
+   - claim **no atomicity**: the chain converges, or it dead-letters and names the account; per-hop idempotence is the compensation, never a cross-module rollback.
+
+`examples/reference-app/internal/app/self_service.go` is the worked example of all of the above.
+
 ## 8. Events and Notifications
 
 - Business modules **do not depend on `notification`**. They publish domain events; notification subscribes and decides what to send. The only exception is synchronous verification-code delivery.
