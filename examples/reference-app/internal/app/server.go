@@ -1505,16 +1505,16 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// standaloneQueue is this app's one job queue, shared by every module
 	// whose asynchronous work runs on the jobs mechanism: a
 	// jobs.StandaloneQueue over this app's own database connection, the
-	// standalone mode's SQLite-backed worker pool whose task table its
-	// own Start creates below (no migration of this host's is involved).
+	// standalone mode's SQLite-backed worker pool whose task table
+	// jobs.Wire creates below (no migration of this host's is involved).
 	// It is constructed here, ahead of pkiModule just below -- the first
 	// module whose NewModule options need the queue -- and ahead of the
 	// storage, integration, notification, ai-gateway, compliance and
 	// admin modules that take it as well. Its lifecycle is bound to this
-	// host's: the drain loop below moves every registry-declared task
-	// handler onto it and Start launches the pool, both after Bootstrap
-	// (only then do Register's declarations exist), and cleanup's Close
-	// stops the pool before the shared database closes.
+	// host's: jobs.Wire below moves every registry-declared task handler
+	// onto it and creates its tables, and Start launches the pool, both
+	// after Bootstrap (only then do Register's declarations exist), and
+	// cleanup's Close stops the pool before the shared database closes.
 	standaloneQueue = jobs.NewStandaloneQueue(db)
 
 	// pki owns authn's signing-key lifecycle: LocalSigner (its own
@@ -2547,36 +2547,29 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		}
 	}
 
-	// Drain the registry's job handlers onto the standalone queue and
-	// start the pool. Only now -- after Bootstrap -- can the handlers be
-	// moved: the modules' Register calls declared them on the registry
-	// (each handler's backing service attached its seams in the same
-	// call), and reg.Jobs.Handlers() is the map those declarations
-	// filled. Each entry must actually be a jobs.Handler; anything else
-	// is a wiring bug between a module and the queue contract, refused
-	// here rather than mis-typed into a worker at job-claim time. Start
-	// is non-blocking -- it launches the dispatcher and worker goroutines
-	// and returns -- so the first enqueued job (a completed object's
-	// thumbnail derivation) waits only as long as a poll of the queue's
-	// own task table.
-	for jobType, handler := range reg.Jobs.Handlers() {
-		jobsHandler, ok := handler.(jobs.Handler)
-		if !ok {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: registry job handler %q is not a jobs.Handler", jobType)
-		}
-		if err := standaloneQueue.RegisterHandler(jobsHandler); err != nil {
-			_ = cleanup()
-			return nil, nil, nil, fmt.Errorf("reference-app: register job handler %q: %w", jobType, err)
-		}
+	// Wire the queue to the registry's declarations and start the pool.
+	// Only now -- after Bootstrap -- can the wiring run: the modules'
+	// Register calls declared the handlers on the registry (each handler's
+	// backing service attached its seams in the same call), and jobs.Wire
+	// drains that map onto standaloneQueue, refusing an entry that is not
+	// a jobs.Handler rather than mis-typing it into a worker at job-claim
+	// time, and creating the queue's own tables (no migration of this
+	// host's is involved) so an Enqueue needs no Start first. Start is
+	// non-blocking -- it launches the dispatcher and worker goroutines and
+	// returns -- so the first enqueued job (a completed object's thumbnail
+	// derivation) waits only as long as a poll of the queue's own task
+	// table.
+	if err := jobs.Wire(ctx, standaloneQueue, reg.Jobs); err != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: wire the job queue: %w", err)
 	}
 	// cfg.DisableQueueWorker skips Start entirely rather than merely
-	// declining to enqueue: RegisterHandler above still runs (so a stray
-	// Enqueue call from another module's wiring is never refused with
-	// jobs.ErrHandlerNotRegistered), but with no dispatcher and no worker
-	// goroutines launched, this replica can never claim or execute a Job of
-	// any type -- see the DisableQueueWorker field's own doc comment
-	// (bootstrap.go) for why.
+	// declining to enqueue: jobs.Wire above still runs (so the queue's
+	// tables exist and a stray Enqueue call from another module's wiring is
+	// never refused with jobs.ErrHandlerNotRegistered), but with no
+	// dispatcher and no worker goroutines launched, this replica can never
+	// claim or execute a Job of any type -- see the DisableQueueWorker
+	// field's own doc comment (bootstrap.go) for why.
 	if !cfg.DisableQueueWorker {
 		if err := standaloneQueue.Start(ctx); err != nil {
 			_ = cleanup()
