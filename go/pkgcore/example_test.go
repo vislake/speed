@@ -276,6 +276,57 @@ func (exampleBillingModule) Register(reg *pkgcore.Registry) error {
 	return nil
 }
 
+// ExampleBootstrapRegistrar shows the process-start declaration seat: a module
+// states the keys it consumes while registering and never resolves them
+// itself, so one declaration is documentation, validation and the generated
+// configuration reference's source at once. The host reads the declarations
+// back to build the loader target it resolves the values into.
+func ExampleBootstrapRegistrar() {
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+
+	// A declaration states the contract for the key, never its value: the
+	// authoritative default is whatever the host's loader target struct
+	// carries, so Default is an operator-facing statement of the fallback
+	// behaviour instead of a second runnable default.
+	err := reg.Bootstrap.Add(pkgcore.BootstrapKey{
+		Key:         "example.pii_cipher_key",
+		Format:      "hexkey",
+		Default:     "documented non-secret development default",
+		Sensitive:   true,
+		Description: "Encrypts stored contact details; rotate only through a migration.",
+		Group:       "example",
+	})
+	fmt.Println("add:", err)
+
+	// The host reads the keys back in registration order, as a copy.
+	for _, key := range reg.Bootstrap.Keys() {
+		fmt.Println(key.Key, key.Format, key.Sensitive)
+	}
+
+	// A Sensitive key with no Description is refused: its value never appears
+	// in an output, so the contract text is all an operator has to work from.
+	err = reg.Bootstrap.Add(pkgcore.BootstrapKey{Key: "example.api_token", Format: "string", Sensitive: true})
+	fmt.Println("undocumented secret:", errors.Is(err, pkgcore.ErrInvalidBootstrapKey))
+
+	// Two owners of one key is a bug rather than a merge: there is one process
+	// environment, and no registration order makes two readings of it
+	// coherent. Neither failed call registered anything, so this collides with
+	// the first declaration.
+	err = reg.Bootstrap.Add(pkgcore.BootstrapKey{
+		Key:         "example.pii_cipher_key",
+		Format:      "hexkey",
+		Sensitive:   true,
+		Description: "A second module claiming the same key.",
+	})
+	fmt.Println("duplicate:", errors.Is(err, pkgcore.ErrDuplicateBootstrapKey))
+
+	// Output:
+	// add: <nil>
+	// example.pii_cipher_key hexkey true
+	// undocumented secret: true
+	// duplicate: true
+}
+
 // ExampleKernel_Bootstrap shows the host side of module wiring: hand the
 // kernel every module, get one Registry back with everything they contributed.
 func ExampleKernel_Bootstrap() {
