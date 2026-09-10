@@ -1,23 +1,60 @@
 name: docker-image-ci
-# Manual proof that the reusable Docker build (reusable-docker-build.yml)
+# Automatic proof that the reusable Docker build (reusable-docker-build.yml)
 # genuinely works, over the reference app's real Dockerfile
-# (examples/reference-app/Dockerfile). workflow_dispatch-only: e2e,
-# release and nightly -- the reusable workflow's eventual real callers --
-# are not live yet (each stays a gated stub in its own right), so this
-# file is the one live caller of the reusable build.
+# (examples/reference-app/Dockerfile) -- the same Dockerfile the deploy
+# path builds (fly.toml's [build] section), so a Dockerfile that cannot
+# build here cannot deploy.
+#
+# TRIGGERS: every push to main that touches the image build's input shape
+# (the path set below), plus workflow_dispatch for a manual run. Main
+# allows direct pushes -- the normal landing path here -- and a merged PR
+# produces the same push, so the push leg sees every landing path, on
+# exactly the tree that will deploy.
+#
+# PATH SET -- the files whose change can alter what the build consumes:
+#   * examples/reference-app/Dockerfile      the build recipe itself
+#   * go.work, go.work.sum                   the Go workspace membership
+#                                            authority (root CLAUDE.md)
+#                                            and its checksums; the
+#                                            builder stage COPYs every
+#                                            `use` entry, so an entry
+#                                            added or moved without the
+#                                            Dockerfile following is
+#                                            exactly how the two drift
+#                                            apart
+#   * web/pnpm-workspace.yaml                the frontend workspace
+#                                            membership authority (the
+#                                            frontend stage builds the
+#                                            app's web bundle)
+#   * .dockerignore                          decides what enters the
+#                                            build context at all
+#   * .github/workflows/docker-image-ci.yml  this workflow itself -- a
+#                                            push that repairs a path
+#                                            re-runs the repaired
+#                                            workflow on its own change
+#   * .github/workflows/reusable-docker-build.yml   the build machinery
+#
+# Content changes inside go/**, tools/**, examples/reference-app/** or
+# web/** stay outside the filter: each of those trees is COPYed whole, so
+# its content cannot break the build's input shape, and compile/build
+# breakage there is already gated by fast-check and full-check. An
+# unfiltered run would pay a two-architecture build on every merge for no
+# additional information.
 #
 # The reusable workflow builds linux/amd64 and linux/arm64 on two
 # parallel native builder jobs (amd64 on ubuntu-latest, arm64 on GitHub's
 # hosted ubuntu-24.04-arm runner) and combines their independently-pushed
 # images into one multi-arch manifest via `docker buildx imagetools
-# create`; both architectures are always built on every dispatch, and no
+# create`; both architectures are always built on every run, and no
 # `platforms` input exists. The push target is this repository's own
 # GHCR namespace under the workflow's built-in GITHUB_TOKEN (see
 # reusable-docker-build.yml's own header for why that is not a new
-# credential). A dispatch leaves behind three real, architecture- and
+# credential). Each run leaves behind three real, architecture- and
 # run-scoped CI proof tags (`<tag>-amd64`, `<tag>-arm64`, the plain
 # `<tag>` manifest list) in this repository's GHCR packages, not a
-# release artifact.
+# release artifact. e2e, release and nightly -- the reusable workflow's
+# eventual real callers -- remain gated stubs in their own right; this
+# file is the one live caller of the reusable build.
 #
 # Flat under .github/workflows/, never a subdirectory: GitHub Actions
 # discovers workflows only directly under .github/workflows/.
@@ -26,10 +63,27 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Tag to build the image as (defaults to this run's own id, so repeated dispatches never collide).
+        description: Tag to build the image as (defaults to this run's own id, so repeated runs never collide).
         required: false
         type: string
         default: ""
+  # Direct pushes to main are the normal landing path here and carry no
+  # PR to filter against, so this leg is what keeps a merge that breaks
+  # the image build from being discovered by a deploy instead of by CI.
+  push:
+    branches: [main]
+    paths:
+      - examples/reference-app/Dockerfile
+      - go.work
+      - go.work.sum
+      - web/pnpm-workspace.yaml
+      - .dockerignore
+      - .github/workflows/docker-image-ci.yml
+      - .github/workflows/reusable-docker-build.yml
+
+concurrency:
+  group: docker-image-ci-${{ github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
