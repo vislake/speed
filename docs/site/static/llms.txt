@@ -41,8 +41,8 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
   parameter, schema and error (interactive).
 - [Configuration reference](https://speed.vislake.com/docs/user-guide/configuration/): every configuration value a
   speed-based application resolves — the process-start bootstrap keys platform modules
-  declare and the variables the reference app reads, plus the dynamic configuration
-  items and feature flags an operator edits per tenant.
+  declare, the loader mechanism a host drives to resolve them, plus the dynamic
+  configuration items and feature flags an operator edits per tenant.
 - [Error code index](https://speed.vislake.com/docs/user-guide/error-codes/): every structured error code a speed-based API
   can answer with — HTTP status, locale message, triggering condition and source,
   grouped by module.

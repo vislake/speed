@@ -26,20 +26,21 @@
 # to database.dsn. Field names map to keys lowercased and dotted, so the
 # target struct field Database.DSN is the key "database.dsn".
 #
-# IMPORTANT: this file is the FILE FORMAT'S example, not a file any process
-# in this repository currently reads. The hosts that boot here (the reference
-# app, the projects `saasctl new` generates) read their environment directly
-# with os.Getenv -- they do not drive the loader -- so copying this file next
-# to them changes nothing. A host that adopts the loader declares its own
-# target struct and points WithConfigFile at a file shaped like this one;
+# IMPORTANT: this file is the FILE FORMAT'S example, not a file any process in
+# this repository reads: nothing here points WithConfigFile at it (an absent
+# file is skipped silently, which is how every boot in this repository runs).
+# The mechanism it demonstrates is real and exercised all the same: the
+# reference app drives this same loader for its whole bootstrap surface (its
+# target struct pins its own APP_-prefixed variables), and a host that wants
+# the file source declares its own target struct and points WithConfigFile at
+# a file shaped like this one;
 # examples/reference-app/cmd/configrefgen's config_example.go carries the
 # struct this exact file loads against, and its unit test loads this file
 # through the real loader, so the format demonstrated here is load-verified,
 # never aspirational.
 #
-# The keys below mirror the reference app's own bootstrap item set
-# (docs/config-reference.md's bootstrap table), spelled the way a loader
-# target struct would declare them.
+# The keys below are a demonstration set, spelled the way a loader target
+# struct would declare them in the loader's own SPEED_ family.
 
 # Deployment topology the process runs as. Required: no source may leave it
 # unset. Equivalent writings:

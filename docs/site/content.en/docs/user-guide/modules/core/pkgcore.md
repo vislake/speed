@@ -70,7 +70,17 @@ A host booting it — the module set is your own composition (`pkgcore`
 ships no application):
 
 ```go
-mode, err := pkgcore.ParseDeploymentMode(os.Getenv("APP_DEPLOYMENT_MODE"))
+// The host's bootstrap target: one field per process-start key it
+// resolves. go/pkgcore/config's loader fills it from flags, the
+// environment, an optional config file and the struct's own defaults,
+// and a field may pin its exact variable name with config:"env=...".
+var boot struct {
+    DeploymentMode string
+}
+if err := config.New().Load(&boot); err != nil {
+    return err // the loader names the key and every source it consulted
+}
+mode, err := pkgcore.ParseDeploymentMode(boot.DeploymentMode)
 if err != nil {
     return err
 }

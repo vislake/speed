@@ -83,8 +83,8 @@ name: docs-check
 #     examples/reference-app/ (the step below runs it after the pinned
 #     Go install, sharing that toolchain with the markdown-example
 #     check). The reference -- docs/config-reference.md, its
-#     machine-readable twin docs/config-reference.json, the root
-#     .env.example, the derived config.example.json and the docs
+#     machine-readable twin docs/config-reference.json, the derived
+#     config.example.json and the docs
 #     site's copy of the reference page -- is generated from the live
 #     configuration schema and the modules' own declarations: the
 #     generator composes a schema-only host (the platform modules that
@@ -92,18 +92,19 @@ name: docs-check
 #     plus go/config, on a throwaway in-memory database), freezes the
 #     schema with
 #     config.Module.Attach, and renders `config.Service.Describe`'s
-#     snapshot, the `reg.Bootstrap` declarations and the reference
-#     app's walked-out environment-variable inventory. A stale
+#     snapshot and the `reg.Bootstrap` declarations. The reference
+#     documents that platform surface only: a host's own bootstrap
+#     variables belong to the host and are documented where it lives.
+#     A stale
 #     committed reference (a module that added, removed or changed an
-#     item, a flag or a bootstrap key; an environment variable the app
-#     source started reading; a declaration and its host-side row
-#     drifting apart; a hand-edit of a generated file) fails this step.
+#     item, a flag or a bootstrap key; a hand-edit of a generated
+#     file) fails this step.
 #     The generator's own unit suite (cmd/configrefgen/*_test.go, run
 #     by full-check's reference-app job) pins the load-verification of
-#     config.example.yaml and its JSON twin, the bootstrap
-#     inventory/table coverage gate, the declaration reconciliation and
+#     config.example.yaml and its JSON twin, the rendered-keys-vs-
+#     census correspondence in both directions, and
 #     byte-determinism;
-#     the PATH SET below adds the declaration sites so an item or env
+#     the PATH SET below adds the declaration sites so an item or key
 #     change re-runs this gate on its own PR, the api-contract
 #     pattern. Needs the pinned Go toolchain, no Docker.
 #   * markdown Go example compile/parse check: python3 tools/
@@ -190,10 +191,6 @@ name: docs-check
 #                                generator command (self-test on change;
 #                                its unit suite runs under full-check's
 #                                reference-app job too)
-#   examples/reference-app/internal/app/**  the bootstrap environment
-#                                surface the reference walks -- an env
-#                                variable the app source starts or stops
-#                                reading changes the reference
 #   go/config/**                 the dynamic-config schema machinery
 #                                (item canonicalization and descriptor
 #                                semantics) the reference renders
@@ -242,7 +239,6 @@ on:
       - tools/check_error_code_index_coverage.py
       - tools/test_check_error_code_index_coverage.py
       - examples/reference-app/cmd/configrefgen/**
-      - examples/reference-app/internal/app/**
       - go/config/**
       - go/authn/module.go
       - go/metering/module.go

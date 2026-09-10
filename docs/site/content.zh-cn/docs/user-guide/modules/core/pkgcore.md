@@ -63,7 +63,16 @@ func (m *BillingModule) Register(reg *pkgcore.Registry) error {
 宿主引导它——模块集是你自己的组装(`pkgcore` 不附带任何应用):
 
 ```go
-mode, err := pkgcore.ParseDeploymentMode(os.Getenv("APP_DEPLOYMENT_MODE"))
+// 宿主的引导目标结构体:每个进程启动键一个字段。
+// go/pkgcore/config 的 loader 依次从旗标、环境变量、可选配置文件与
+// 结构体自身默认值填充它;字段可用 config:"env=..." 钉住确切的变量名。
+var boot struct {
+    DeploymentMode string
+}
+if err := config.New().Load(&boot); err != nil {
+    return err // loader 会点名该键以及它查过的每个来源
+}
+mode, err := pkgcore.ParseDeploymentMode(boot.DeploymentMode)
 if err != nil {
     return err
 }
