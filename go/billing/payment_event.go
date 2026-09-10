@@ -158,7 +158,7 @@ func NewPaymentEventRepository(db *gorm.DB) *PaymentEventRepository {
 func (r *PaymentEventRepository) Get(ctx context.Context, id string) (*PaymentEvent, error) {
 	evt, err := r.FindByID(ctx, id)
 	if err != nil {
-		if isDBKitNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrPaymentEventNotFound.WithParam("id", id)
 		}
 		return nil, err

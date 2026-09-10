@@ -83,7 +83,7 @@ func (s *Service) defineRole(ctx context.Context, def RoleDefinition, builtin bo
 	switch _, err := s.roles.ByKey(ctx, def.Key); {
 	case err == nil:
 		return nil, ErrDuplicateRole.WithParam("key", def.Key)
-	case !isRoleNotFound(err):
+	case !apperr.HasCode(err, ErrRoleNotFound.Code):
 		return nil, err
 	}
 
@@ -170,7 +170,7 @@ func (s *Service) AssignRole(ctx context.Context, sub Subject, role string, scop
 	switch _, err := s.bindings.Find(writeCtx, sub.UserID, def.ID, scope.NodeID); {
 	case err == nil:
 		return nil
-	case !isBindingNotFound(err):
+	case !apperr.HasCode(err, ErrBindingNotFound.Code):
 		return err
 	}
 
@@ -360,7 +360,7 @@ func (s *Service) RestoreRole(ctx context.Context, sub Subject, role string, sco
 		// holds, achieved by some other route since the revoke. See the
 		// method doc comment for why this is a no-op rather than an error.
 		return nil
-	case !isBindingNotFound(findErr):
+	case !apperr.HasCode(findErr, ErrBindingNotFound.Code):
 		return findErr
 	}
 
@@ -501,20 +501,3 @@ func (s *Service) publishRoleChanged(ctx context.Context, tenant pkgcore.TenantI
 	}
 	return nil
 }
-
-// isRoleNotFound and isBindingNotFound classify the two "absent" answers
-// the repositories give, by error CODE rather than by pointer identity:
-// ByKey and Find decorate their sentinels with parameters, which produces
-// a new error value, so errors.Is against the bare sentinel would not
-// match.
-func isRoleNotFound(err error) bool { return apperr.HasCode(err, ErrRoleNotFound.Code) }
-
-func isBindingNotFound(err error) bool { return apperr.HasCode(err, ErrBindingNotFound.Code) }
-
-// isDuplicateRole classifies defineRole's "a role with this key already
-// exists" answer by code like its two siblings above. DefineRole itself
-// never sees this error (its pre-check returns it before any write), but
-// EnsureBuiltinRoles does when its seed loses the check-then-create race
-// to a concurrent one -- see that method for how the duplicate is
-// absorbed there.
-func isDuplicateRole(err error) bool { return apperr.HasCode(err, ErrDuplicateRole.Code) }

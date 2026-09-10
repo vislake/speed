@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // The built-in role keys every tenant gets. They are constants rather than
@@ -124,12 +125,12 @@ func (s *Service) EnsureBuiltinRoles(ctx context.Context) error {
 
 		role, err := s.roles.ByKey(ctx, definition.key)
 		switch {
-		case isRoleNotFound(err):
+		case apperr.HasCode(err, ErrRoleNotFound.Code):
 			if _, defineErr := s.defineRole(ctx, RoleDefinition{
 				Key:            definition.key,
 				DescriptionKey: definition.descriptionKey,
 				Permissions:    want,
-			}, true); defineErr != nil && !isDuplicateRole(defineErr) {
+			}, true); defineErr != nil && !apperr.HasCode(defineErr, ErrDuplicateRole.Code) {
 				return defineErr
 			}
 			// defineRole succeeded, or lost a race with a concurrent

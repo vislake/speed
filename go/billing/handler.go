@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -293,7 +294,7 @@ func (h *Handler) BillingGetInvoice(w http.ResponseWriter, r *http.Request, id s
 
 	inv, err := h.invoices.FindByID(r.Context(), id)
 	if err != nil {
-		if isDBKitNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			writeError(w, ErrInvoiceNotFound.WithParam("id", id))
 			return
 		}

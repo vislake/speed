@@ -199,7 +199,7 @@ func (r *InvoiceRepository) setStatus(ctx context.Context, id string, status Inv
 	for attempt := 1; attempt <= maxTransitionAttempts; attempt++ {
 		inv, err := r.FindByID(ctx, id)
 		if err != nil {
-			if isDBKitNotFound(err) {
+			if dbkit.IsRecordNotFound(err) {
 				return nil, ErrInvoiceNotFound.WithParam("id", id)
 			}
 			return nil, err

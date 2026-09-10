@@ -118,7 +118,7 @@ func TestService_DefineRole_UndeclaredPermission_IsRejected(t *testing.T) {
 	}
 	// Nothing was written: validation runs before the first insert, so a
 	// rejected definition leaves no half-created role behind.
-	if _, err := svc.roles.ByKey(ctx, "typo"); !isRoleNotFound(err) {
+	if _, err := svc.roles.ByKey(ctx, "typo"); !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("ByKey after a rejected definition = %v, want role_not_found", err)
 	}
 }

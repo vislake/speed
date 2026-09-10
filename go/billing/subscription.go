@@ -227,7 +227,7 @@ func (s *SubscriptionService) Create(ctx context.Context, in CreateInput) (*Subs
 func (s *SubscriptionService) Get(ctx context.Context, id string) (*Subscription, error) {
 	sub, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		if isDBKitNotFound(err) {
+		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrSubscriptionNotFound.WithParam("id", id)
 		}
 		return nil, err
@@ -349,15 +349,4 @@ func (s *SubscriptionService) publishStatusChanged(ctx context.Context, sub *Sub
 			ToStatus:       string(to),
 		},
 	})
-}
-
-// isDBKitNotFound reports whether err is dbkit's ErrRecordNotFound, the
-// sentinel dbkit.Repository[T].FindByID/Update/Delete return for "no row
-// for this id under this tenant". Matched by Code through
-// dbkit.IsRecordNotFound, not
-// errors.Is or == against the sentinel var, since WithParam/WithCause
-// derive a new *apperr.Error rather than mutating the receiver -- see
-// errors.go's own doc comment.
-func isDBKitNotFound(err error) bool {
-	return dbkit.IsRecordNotFound(err)
 }

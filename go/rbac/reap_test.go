@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // removedMember is the shape org's own MemberRemoved payload takes on the
@@ -1610,7 +1611,7 @@ func roleBindingLiveAt(ctx context.Context, svc *Service, sub Subject, roleKey s
 			return false, restoreErr
 		}
 		return true, nil
-	case isBindingNotFound(err):
+	case apperr.HasCode(err, ErrBindingNotFound.Code):
 		return false, nil
 	default:
 		return false, err
