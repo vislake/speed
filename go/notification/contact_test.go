@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -693,6 +694,44 @@ func TestContact_VerifyCode_ReturnsVerifiedSnapshot(t *testing.T) {
 	}
 	if verified.ConsentAt == nil || verified.VerifiedAt == nil {
 		t.Errorf("returned contact consent_at / verified_at not both set: %+v", verified)
+	}
+}
+
+// TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams pins the
+// identity the verification-code send hands the SMS seam: the message id
+// the code copy renders from, the platform default locale (the requester is
+// not the recipient; see sendCode's construction), and exactly the two
+// parameters the copy interpolates -- the code itself and the lifetime --
+// as strings, matching the rendered body's own values.
+func TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams(t *testing.T) {
+	env := newContactEnv(t)
+	rec := &recordingSMSSender{}
+	env.svc.sms = rec
+	ctx := tenantCtx("tenant-acme")
+
+	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone}); err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+
+	msgs := rec.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("SMS sender sent %d messages, want the one verification code", len(msgs))
+	}
+	sms := msgs[0]
+	if sms.MessageID != contactCodeSMSID {
+		t.Errorf("SMS MessageID = %q, want the code copy's own id %q", sms.MessageID, contactCodeSMSID)
+	}
+	if sms.Locale != platformDefaultLocale {
+		t.Errorf("SMS Locale = %q, want the platform default %q", sms.Locale, platformDefaultLocale)
+	}
+	if len(sms.Params) != 2 {
+		t.Fatalf("SMS Params = %v, want exactly code and minutes", sms.Params)
+	}
+	if code := lastCode(t, sms.Text); sms.Params["code"] != code {
+		t.Errorf("SMS Params[code] = %q, want the code the rendered body carries (%q)", sms.Params["code"], code)
+	}
+	if sms.Params["minutes"] != strconv.Itoa(contactCodeMinutes) {
+		t.Errorf("SMS Params[minutes] = %q, want %q (the same constant the render interpolates)", sms.Params["minutes"], strconv.Itoa(contactCodeMinutes))
 	}
 }
 

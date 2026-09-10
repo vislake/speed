@@ -426,6 +426,15 @@ func TestDelivery_OneAttemptDeliversEveryResolvedChannelAndWritesAgreeingRows(t 
 	if sms[0].Text != "王芳 您好，您预约的 2026-09-10 09:30 快到了。" {
 		t.Errorf("SMS text = %q, want the zh-CN SMS copy rendered with params interpolated", sms[0].Text)
 	}
+	if sms[0].MessageID != fixtureTypeAppointment+".sms.text" {
+		t.Errorf("SMS MessageID = %q, want the id the copy rendered from", sms[0].MessageID)
+	}
+	if sms[0].Locale != "zh-CN" {
+		t.Errorf("SMS Locale = %q, want the locale the copy rendered in", sms[0].Locale)
+	}
+	if !maps.Equal(sms[0].Params, map[string]string{"patient_name": "王芳", "appointment_time": "2026-09-10 09:30"}) {
+		t.Errorf("SMS Params = %v, want the delivery's parameters stringified", sms[0].Params)
+	}
 
 	// Each channel settled its own succeeded record under its own derived
 	// key -- the same key derivation the job's replay probe uses.
@@ -1414,6 +1423,242 @@ func TestDelivery_MissingTemplateCopyStopsTheAttempt(t *testing.T) {
 	}
 	if row := env.inboxRowByChannel(t, ctx, d); row != nil {
 		t.Error("a render-failed delivery wrote an inbox row")
+	}
+}
+
+// narrowSMSType and narrowSMSCopyFS are the narrowing fixture: one type
+// whose in-app and email copy reference three parameters while its sms text
+// references only two -- the asymmetry deliverUserChannel's per-channel
+// narrowing exists for.
+const narrowSMSType = "clinic.sms_narrow"
+
+var narrowSMSCopyFS = fstest.MapFS{
+	"zh-CN.toml": &fstest.MapFile{Data: []byte(`
+"clinic.sms_narrow.in_app.title" = "提醒"
+"clinic.sms_narrow.in_app.body" = "{{.patient_name}} 您好，{{.appointment_time}} 有提醒（{{.clinic_note}}）。"
+"clinic.sms_narrow.email.subject" = "提醒"
+"clinic.sms_narrow.email.body_text" = "{{.patient_name}} 您好，{{.appointment_time}} 有提醒（{{.clinic_note}}）。"
+"clinic.sms_narrow.sms.text" = "{{.patient_name}} 您好，{{.appointment_time}} 快到了。"
+`)},
+	"en-US.toml": &fstest.MapFile{Data: []byte(`
+"clinic.sms_narrow.in_app.title" = "Reminder"
+"clinic.sms_narrow.in_app.body" = "Hi {{.patient_name}}, a reminder for {{.appointment_time}} ({{.clinic_note}})."
+"clinic.sms_narrow.email.subject" = "Reminder"
+"clinic.sms_narrow.email.body_text" = "Hi {{.patient_name}}, a reminder for {{.appointment_time}} ({{.clinic_note}})."
+"clinic.sms_narrow.sms.text" = "Hi {{.patient_name}}, {{.appointment_time}} is coming up."
+`)},
+}
+
+// narrowSMSEnv builds a delivery env whose catalog and taxonomy are the
+// narrowing fixture: the sms channel alone is delivered, over a copy that
+// references two of the three dispatched parameters.
+func narrowSMSEnv(t *testing.T) *deliveryEnv {
+	t.Helper()
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+
+	builder := i18n.NewBuilder()
+	if err := builder.AddModule("clinic", narrowSMSCopyFS); err != nil {
+		t.Fatalf("AddModule(clinic, narrowing fixture): %v", err)
+	}
+	env.host.catalog = builder.Build()
+	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{
+		{Key: narrowSMSType, Group: "appointments", DefaultChannels: []string{ChannelSMS}, Unsubscribable: false},
+	}})
+
+	return env
+}
+
+// narrowSMSDispatch is the narrowing fixture's dispatch: the sms channel's
+// copy references patient_name and appointment_time, while clinic_note is
+// referenced by the in-app and email copy alone.
+func narrowSMSDispatch() Dispatch {
+	return Dispatch{
+		TypeKey: narrowSMSType,
+		Recipient: DispatchRecipient{
+			Class:  RecipientClassUser,
+			UserID: deliveryUser,
+		},
+		Locale: "zh-CN",
+		Params: map[string]any{
+			"patient_name":     "王芳",
+			"appointment_time": "2026-09-10 09:30",
+			"clinic_note":      "请提前 10 分钟到",
+		},
+	}
+}
+
+// TestDeliverUserSMS_CarriesIdentityAndNarrowedParams pins what the user
+// path hands the SMS seam: the render's identity (the id the copy rendered
+// from and the locale it rendered in) plus the parameters narrowed to what
+// the SMS copy itself references -- clinic_note is dispatched and rendered
+// by the other channels' copy, but no sms copy references it, so the seam
+// message must not carry it.
+func TestDeliverUserSMS_CarriesIdentityAndNarrowedParams(t *testing.T) {
+	env := narrowSMSEnv(t)
+
+	if err := env.dispatchAndAttempt(t, narrowSMSDispatch()); err != nil {
+		t.Fatalf("delivery attempt: %v", err)
+	}
+
+	msgs := env.sms.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("SMS sender sent %d messages, want the one SMS delivery", len(msgs))
+	}
+	sms := msgs[0]
+	if sms.MessageID != narrowSMSType+".sms.text" {
+		t.Errorf("SMS MessageID = %q, want the sms copy's own id", sms.MessageID)
+	}
+	if sms.Locale != "zh-CN" {
+		t.Errorf("SMS Locale = %q, want the dispatch locale the copy rendered in", sms.Locale)
+	}
+	if sms.Text != "王芳 您好，2026-09-10 09:30 快到了。" {
+		t.Errorf("SMS text = %q, want the zh-CN sms copy rendered", sms.Text)
+	}
+	want := map[string]string{"patient_name": "王芳", "appointment_time": "2026-09-10 09:30"}
+	if !maps.Equal(sms.Params, want) {
+		t.Errorf("SMS Params = %v, want exactly the narrowed set %v (clinic_note is referenced by no sms copy)", sms.Params, want)
+	}
+}
+
+// TestDeliverContactSMS_MapsThroughThePlatformDefaultLocale pins the contact
+// path's documented asymmetry: the dispatch carries a captured requester
+// locale, the sms copy renders in it, and the seam message still names the
+// PLATFORM DEFAULT locale -- the captured language belongs to the requester,
+// not to the external recipient, so a template-typed carrier adapter maps a
+// contact's message through the platform default language's template.
+func TestDeliverContactSMS_MapsThroughThePlatformDefaultLocale(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	// A verified contact, business-attested (ConsentRef) so the
+	// verification code never sends and the recorder holds exactly the one
+	// delivery under test.
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelSMS,
+		Address:    "+8613800138123",
+		ConsentRef: "consent-ref-locale",
+	})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("delivery attempt: %v", err)
+	}
+
+	msgs := env.sms.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("SMS sender sent %d messages, want the one contact SMS delivery", len(msgs))
+	}
+	if msgs[0].Locale != platformDefaultLocale {
+		t.Errorf("SMS Locale = %q, want the platform default %q regardless of the dispatch's captured locale", msgs[0].Locale, platformDefaultLocale)
+	}
+	if msgs[0].MessageID != fixtureTypeAppointment+".sms.text" {
+		t.Errorf("SMS MessageID = %q, want the sms copy's own id", msgs[0].MessageID)
+	}
+}
+
+// TestDeliverUserSMS_UnstringifiableParamStopsAsRenderFailure pins the
+// stringifier's failure as a terminal, recorded stop: a parameter value with
+// no honest string rendering (here a decoded JSON array -- what a payload
+// carrying structured data looks like after the queue round trip) renders
+// into the copy (text/template prints any value) but cannot cross the seam,
+// so the delivery fails before any transport call, classified like the
+// render failure it effectively is, because the payload will not heal on
+// retry.
+func TestDeliverUserSMS_UnstringifiableParamStopsAsRenderFailure(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+
+	// appointment_time is referenced by the fixture sms copy, so the
+	// structured value survives narrowing and reaches the stringifier.
+	// (Params is cloned first: deliveryDispatch hands out the shared
+	// renderTestParams map, and mutating it in place would leak into every
+	// other test.)
+	d := deliveryDispatch()
+	d.Params = maps.Clone(d.Params)
+	d.Params["appointment_time"] = []any{"structured", "value"}
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("attempt with an unstringifiable parameter returned %v, want nil (stop, not retry)", err)
+	}
+
+	if got := len(env.sms.messages()); got != 0 {
+		t.Errorf("SMS sender sent %d messages for an unstringifiable parameter, want none", got)
+	}
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelSMS)
+	if rec == nil || rec.Status != SendRecordStatusFailed {
+		t.Fatalf("record after the stringify failure = %+v, want failed", rec)
+	}
+	if rec.Error != failureReasonRenderFailed {
+		t.Errorf("record error = %q, want the bounded render-failure classification %q", rec.Error, failureReasonRenderFailed)
+	}
+}
+
+// testStringer is a fmt.Stringer the smsParams type-table test feeds in: the
+// conversion is documented to take one at its word.
+type testStringer struct{ rendered string }
+
+func (s testStringer) String() string { return s.rendered }
+
+// TestSMSParams_StringifiesTheScalarTypesAndRefusesTheRest pins the seam
+// conversion's type table directly: every scalar a dispatch realistically
+// carries has a rendering, a fmt.Stringer is taken at its word, and a
+// value with no rendering -- nil above all, which fmt.Sprint would turn
+// into the literal "<nil>" on someone's phone -- is an error.
+func TestSMSParams_StringifiesTheScalarTypesAndRefusesTheRest(t *testing.T) {
+	t.Parallel()
+
+	got, err := smsParams(map[string]any{
+		"text":    "王芳",
+		"count":   7,
+		"big":     int64(9007199254740993),
+		"ratio":   2.5,
+		"whole":   float64(5),
+		"enabled": true,
+		"custom":  testStringer{rendered: "rendered by the value itself"},
+	})
+	if err != nil {
+		t.Fatalf("smsParams(scalars) error = %v", err)
+	}
+	want := map[string]string{
+		"text":    "王芳",
+		"count":   "7",
+		"big":     "9007199254740993",
+		"ratio":   "2.5",
+		"whole":   "5",
+		"enabled": "true",
+		"custom":  "rendered by the value itself",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("smsParams(scalars) = %v, want %v", got, want)
+	}
+
+	if got, err := smsParams(nil); err != nil || got != nil {
+		t.Errorf("smsParams(nil) = (%v, %v), want (nil, nil) for an empty payload", got, err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{name: "nil value", value: nil},
+		{name: "array", value: []any{"a"}},
+		{name: "object", value: map[string]any{"k": "v"}},
+	} {
+		if _, err := smsParams(map[string]any{"p": tc.value}); err == nil {
+			t.Errorf("smsParams(%s) error = nil, want a refusal for a value with no string rendering", tc.name)
+		}
 	}
 }
 

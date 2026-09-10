@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -963,7 +964,13 @@ func (s *DeliveryService) deliverUserEmail(ctx context.Context, tenantID string,
 
 // deliverUserSMS is the SMS channel's user delivery path: the twin of
 // deliverUserEmail over the module's SMS sender, rendering the type's SMS
-// copy (a single text).
+// copy (a single text). The message it hands the seam carries the render's
+// identity too -- MessageID is the id the copy rendered from, Locale is the
+// locale it rendered in -- so a template-typed carrier adapter can route the
+// message to the account template the operator mapped for that (locale,
+// message-id) pair. Params is d.Params as narrowed by
+// deliverUserChannel/copyParamsForChannel: exactly the parameters the SMS
+// copy itself references.
 func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d Dispatch, rec *SendRecord) error {
 	if s.resolver == nil {
 		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonResolverMissing, ErrUserAddressResolverRequired))
@@ -980,9 +987,22 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 	if err != nil {
 		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
+	params, err := smsParams(d.Params)
+	if err != nil {
+		// A parameter value the stringifier cannot render is a data defect
+		// the payload will not heal on retry, so it is terminal, classified
+		// like the render failure it effectively is.
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
+	}
 
 	start := time.Now()
-	err = s.sendSMS(ctx, parts, addrs.Phone)
+	err = s.sendSMS(ctx, pkgcore.SMS{
+		To:        addrs.Phone,
+		Text:      parts["text"],
+		MessageID: copyID(d.TypeKey, ChannelSMS, "text"),
+		Locale:    d.Locale,
+		Params:    params,
+	})
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
 		cause := classifyTransportCause(err)
@@ -1177,14 +1197,36 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 
 // deliverContactSMS is the SMS channel's contact delivery path, the twin of
 // deliverContactEmail over the module's SMS sender.
+//
+// Its seam message differs from the user path's in two documented ways,
+// because an external contact is not the requester. Locale is the platform
+// default, never deliveryLocale(d): the dispatch's captured locale belongs
+// to the request that created it (the requester), not to the recipient, so
+// a template-typed carrier adapter maps a contact's message through the
+// platform default language's template rather than through a language
+// nobody chose for the recipient. Params is d.Params as dispatched, not
+// narrowed by copyParamsForChannel -- this path renders and sends in one
+// step and never narrows -- so it can carry parameters the SMS copy does not
+// reference; the mapped carrier template's own declared variable list is
+// what bounds what actually reaches the wire.
 func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
 	parts, err := renderContent(s.catalog(), deliveryLocale(d), d.TypeKey, ChannelSMS, d.Params)
 	if err != nil {
 		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
+	params, err := smsParams(d.Params)
+	if err != nil {
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
+	}
 
 	start := time.Now()
-	err = s.sendSMS(ctx, parts, contact.Address)
+	err = s.sendSMS(ctx, pkgcore.SMS{
+		To:        contact.Address,
+		Text:      parts["text"],
+		MessageID: copyID(d.TypeKey, ChannelSMS, "text"),
+		Locale:    platformDefaultLocale,
+		Params:    params,
+	})
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
 		cause := classifyTransportCause(err)
@@ -1220,12 +1262,48 @@ func (s *DeliveryService) sendMail(ctx context.Context, parts map[string]string,
 	})
 }
 
-// sendSMS sends one rendered text message through the module's SMS sender.
-func (s *DeliveryService) sendSMS(ctx context.Context, parts map[string]string, to string) error {
+// sendSMS sends one already-composed SMS through the module's SMS sender.
+// The callers build the message themselves, because the two delivery paths
+// disagree on the identity it carries (deliverUserSMS and
+// deliverContactSMS each document their own construction).
+func (s *DeliveryService) sendSMS(ctx context.Context, sms pkgcore.SMS) error {
 	if s.sms == nil {
 		return errors.New("notification: delivery has no SMS sender")
 	}
-	return s.sms.Send(ctx, pkgcore.SMS{To: to, Text: parts["text"]})
+	return s.sms.Send(ctx, sms)
+}
+
+// smsParams stringifies a dispatch payload's parameter values for the SMS
+// seam's map[string]string. The conversion is an explicit type switch, never
+// fmt.Sprint: a value with no honest SMS rendering (nil above all, which
+// fmt.Sprint would turn into the literal "<nil>" on someone's phone) must
+// fail the delivery as a data error, not ride the wire as nonsense. A
+// fmt.Stringer is taken at its word. The returned map is nil for an empty
+// payload, so a message with no parameters carries none.
+func smsParams(params map[string]any) (map[string]string, error) {
+	if len(params) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(params))
+	for name, value := range params {
+		switch v := value.(type) {
+		case string:
+			out[name] = v
+		case int:
+			out[name] = strconv.Itoa(v)
+		case int64:
+			out[name] = strconv.FormatInt(v, 10)
+		case float64:
+			out[name] = strconv.FormatFloat(v, 'f', -1, 64)
+		case bool:
+			out[name] = strconv.FormatBool(v)
+		case fmt.Stringer:
+			out[name] = v.String()
+		default:
+			return nil, fmt.Errorf("notification: sms parameter %q has no string rendering (type %T)", name, value)
+		}
+	}
+	return out, nil
 }
 
 // The bounded outcome text a send record's Error column carries. The column

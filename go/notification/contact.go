@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -943,7 +944,22 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact,
 	// wraps.
 	switch contact.Channel {
 	case ChannelSMS:
-		if err := s.sms.Send(ctx, pkgcore.SMS{To: contact.Address, Text: body}); err != nil {
+		if err := s.sms.Send(ctx, pkgcore.SMS{
+			To:        contact.Address,
+			Text:      body,
+			MessageID: contactCodeSMSID,
+			// The platform default locale, not the requester's negotiated
+			// one: the requester is not the recipient, and the recipient is
+			// an external contact whose own language nobody captured -- so
+			// a template-typed carrier adapter maps this message through
+			// the platform default language's template (see
+			// deliverContactSMS's identical construction).
+			Locale: platformDefaultLocale,
+			Params: map[string]string{
+				"code":    code,
+				"minutes": strconv.Itoa(contactCodeMinutes),
+			},
+		}); err != nil {
 			return ErrContactCodeDeliveryFailed.WithCause(classifyTransportCause(err))
 		}
 	case ChannelEmail:
@@ -1193,6 +1209,12 @@ func (s *ContactService) ensureDeliverable(ctx context.Context, contactID, typeK
 	}
 }
 
+// contactCodeSMSID is the locale message id the contact verification code's
+// SMS body renders from, and the message identity the send carries on the
+// SMS seam -- named once so the render and the seam's MessageID cannot
+// drift.
+const contactCodeSMSID = "notification.contact.verify_code.sms"
+
 // renderContactCode renders the verification-code message for one channel
 // in locale, from the host's merged catalog.
 //
@@ -1225,7 +1247,7 @@ func renderContactCode(catalog *i18n.Catalog, channel, locale, code string) (sub
 	}
 	switch channel {
 	case ChannelSMS:
-		body, err = catalog.Lookup(locale, "notification.contact.verify_code.sms", params)
+		body, err = catalog.Lookup(locale, contactCodeSMSID, params)
 		if err != nil {
 			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code sms: %w", err))
 		}

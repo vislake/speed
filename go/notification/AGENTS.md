@@ -123,7 +123,11 @@ module must import.
   `pkgcore.SMS` values through the host-wired `pkgcore.SMSSender`
   (`WithSMSSender`), with `pkgcore.NewConsoleSMSSender` as the
   zero-external-dependency implementation that doubles as the module's
-  test double (see "The SMS seam is pkgcore's").
+  test double (see "The SMS seam is pkgcore's"). Each send carries the
+  render's identity alongside the text -- the copy's locale message id,
+  the locale the copy rendered in, and the stringified interpolation
+  values -- so a template-typed carrier adapter can select the account
+  template mapped for that (locale, message id) pair.
 - `render.go` -- the template-render seam: per-channel part shapes and the
   `<type_key>.<channel>.<part>` id convention.
 - `staticaddr/` -- the subpackage implementing `UserAddressResolver` over
@@ -648,6 +652,38 @@ consumer keeps its own wiring-time requirement on the sender. This module's
 requirement is the strictest of the two: `Register` refuses to boot without
 a wired sender (`ErrSMSSenderRequired`), where authn's refusal applies only
 under the distributed deployment mode.
+
+Every SMS this module sends carries the render's identity on the seam:
+the locale message id the body rendered from (the user path's
+`<type_key>.sms.text`, built through render.go's `copyID`; the contact
+code's `contactCodeSMSID`), the locale the copy rendered in, and the
+interpolation values stringified (`smsParams`). The two template-typed
+carrier adapters -- `pkgcore/sms/aliyun` and `pkgcore/sms/tencent`, which
+have no free-text send -- are driven entirely by that identity: their
+`Config.Templates` maps `"<locale>/<message-id>"` to one approved account
+template plus the variables it declares, so a host wiring one MUST
+register, for every (locale, message-id) pair its deliveries can produce,
+a carrier template whose declared variable names are the parameters that
+message's sms copy references (for the contact code, `code` and `minutes`).
+A pair with no mapped template, or a mapped template whose declared
+variable the message carries no value for, is refused by the adapter
+before any request; inside this module's pipeline that surfaces as a
+transport-classified failure, so it retries and then dead-letters rather
+than failing on the first attempt. Free-text transports (the console
+sender, the operator HTTP gateway, `pkgcore/sms/twilio`) ignore the
+identity fields and deliver `SMS.Text` as before.
+
+The two paths' identity differs deliberately. The user path maps by the
+recipient's own locale (`d.Locale`) and carries `d.Params` as narrowed by
+the sms copy itself. The contact paths (deliverContactSMS, and the
+verification code's send in contact.go) map through
+`platformDefaultLocale`: the dispatch's captured locale belongs to the
+requester, not to the external recipient, and a carrier template's fixed
+text is what the recipient actually reads -- so contact-facing templates
+are keyed under the platform default language. The contact delivery path
+also does not narrow params (it renders and sends in one step); the
+mapped carrier template's own declared variable list is what bounds the
+wire there.
 
 ### The copy language comes from the recipient's chain, never a guess
 

@@ -76,7 +76,7 @@ func renderContent(catalog *i18n.Catalog, locale, typeKey, channel string, param
 
 	out := make(map[string]string, len(parts))
 	for _, part := range parts {
-		id := typeKey + "." + channel + "." + part
+		id := copyID(typeKey, channel, part)
 		text, err := catalog.Lookup(locale, id, params)
 		if err != nil {
 			return nil, ErrInternal.WithCause(fmt.Errorf("notification: render %s for %s: %w", id, typeKey, err))
@@ -84,6 +84,15 @@ func renderContent(catalog *i18n.Catalog, locale, typeKey, channel string, param
 		out[part] = text
 	}
 	return out, nil
+}
+
+// copyID spells one rendered part's locale message id under the
+// <type_key>.<channel>.<part> convention renderContent's doc comment
+// describes -- the single place the spelling exists, so a render and a
+// message identity that must name the same id (the SMS seam's MessageID,
+// built from the same three pieces) cannot drift apart.
+func copyID(typeKey, channel, part string) string {
+	return typeKey + "." + channel + "." + part
 }
 
 // copyParamsForChannel returns the subset of params the copy of typeKey on
