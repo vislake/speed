@@ -62,11 +62,11 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 | 文件 | 档 | 依据 |
 |---|---|---|
 | main_test.go | 留包 | run/observabilityOptions/runHealthcheck 进程胶水白盒直测;单元层 |
-| internal/app/demo/demo_subject_test.go | 留包 | 解析器/守卫族纯逻辑直测 |
-| internal/app/demo/demo_admin_test.go | 留包 | demo_admin 胶水直测(经 seeded server 取 demo staff) |
-| internal/app/demo/demo_notification_test.go | 留包 | payload 提取器纯函数直测 |
-| internal/app/demo/demo_users_test.go | 留包 | seed/查重逻辑直测(registerDemoUser 直呼) |
-| internal/app/demo/demo_user_header_kill_switch_test.go | (iii) 候选 | 解析器族直测 + HTTP 双路径混合;若整体外移需拆出白盒半 |
+| cmd/server/demo_subject_test.go | 留包 | 解析器/守卫族纯逻辑直测 |
+| cmd/server/demo_admin_test.go | 留包 | demo_admin 胶水直测(经 seeded server 取 demo staff) |
+| cmd/server/demo_notification_test.go | 留包 | payload 提取器纯函数直测 |
+| cmd/server/demo_users_test.go | 留包 | seed/查重逻辑直测(registerDemoUser 直呼) |
+| cmd/server/demo_user_header_kill_switch_test.go | (iii) 候选 | 解析器族直测 + HTTP 双路径混合;若整体外移需拆出白盒半 |
 | clinic_name_test.go | 留包 | clinic-name 服务级直测(writeClinicNameError 等) |
 | fragment_wire_paths_test.go | 随流迁 | 无 Test 函数的夹具文件(片段线路径常量);流套件的 wire 锚点 |
 | frontend_test.go | (ii) | 需 cfg.WebDistDir 装配选项与夹具 dist 目录 |
@@ -211,9 +211,9 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 2b-i 把被测代码移入内部 app 后,侦察表"留包/白盒"栏的原始前提(与 package main 同包直测未导出符号)已不成立——cmd/server 已无未导出生产代码可测,8 个文件现都只经内部 app 的导出面工作。按侦察表处置保留,理由按现状登记:
 
 - `main_test.go`:唯一真正的命令包单元测试(run/runHealthcheck/observabilityOptions/healthcheckArg 直测),留包前提完好。
-- `internal/app/demo/demo_subject_test.go`、`internal/app/demo/demo_notification_test.go`、`clinic_name_test.go`:纯单元钉(解析器/守卫族、payload 提取器、诊所名 handler 与错误辅助),各自无跨包辅助依赖;被测对象现居内部 app,后续批次可把它们移到被测代码旁(内部 app 的 `*_test.go`)。
-- `internal/app/demo/demo_admin_test.go`、`internal/app/demo/demo_users_test.go`:(iii) 之外按侦察表留包的消费证明套件,仍经种子装配跑组合 HTTP;留包意味着 `cmd/server` 仍有少量装配流测试,与验收线"除 (iii) 登记外不再出现"的出入按本表登记。
-- `self_service_test.go`、`internal/app/demo/demo_user_header_kill_switch_test.go`:(iii) 白盒例外按侦察表保留;复核确认其"直测未导出"前提已随 2b-i 消失(全部经导出面),现为纯逻辑单元钉与组合 HTTP 旅程的混合,留包理由按现状更新,待后续批次重新裁定。
+- `cmd/server/demo_subject_test.go`、`cmd/server/demo_notification_test.go`、`clinic_name_test.go`:纯单元钉(解析器/守卫族、payload 提取器、诊所名 handler 与错误辅助),各自无跨包辅助依赖;被测对象现居内部 app,后续批次可把它们移到被测代码旁(内部 app 的 `*_test.go`)。
+- `cmd/server/demo_admin_test.go`、`cmd/server/demo_users_test.go`:(iii) 之外按侦察表留包的消费证明套件,仍经种子装配跑组合 HTTP;留包意味着 `cmd/server` 仍有少量装配流测试,与验收线"除 (iii) 登记外不再出现"的出入按本表登记。
+- `self_service_test.go`、`cmd/server/demo_user_header_kill_switch_test.go`:(iii) 白盒例外按侦察表保留;复核确认其"直测未导出"前提已随 2b-i 消失(全部经导出面),现为纯逻辑单元钉与组合 HTTP 旅程的混合,留包理由按现状更新,待后续批次重新裁定。
 - 与 2b-i 的 doc.go 表述衔接:`internal/app/doc.go` 现述 flowtests 为装配流套件的目录。
 
 ### 跨包辅助镜像(Go 测试辅助不可跨包导入的代价)
@@ -240,7 +240,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 
 - **形态随句子原有路径保留**:原 `examples/reference-app/cmd/server/X_test.go` 改为 `examples/reference-app/flowtests/X_test.go`,原短式 `cmd/server/X_test.go` 改为 `flowtests/X_test.go`;裸文件名引用(前文已点名 reference-app 的句子)补 `flowtests/` 前缀。
 - **按行为重定向拆分文件**:引用 `server_test.go` 时若所指行为随机械拆分到了 `server_config_test.go`(ConfigFromEnv/根密钥/特征开关族)或 `server_guards_test.go`(healthz/metrics allowlist、分布式装配拒绝族),则指向分片所在文件;web 侧对 `server_test.go:443-445`(notes 写门 403 钉)等行号引用同步到新家 `flowtests/server_test.go:438-440` 的实际行。`periodic_scheduler_flow_test.go` 的两 boot 过期清扫/保留腿仍在同名文件,引用保持不变式地指向 `flowtests/` 同名文件。
-- **留包文件的引用不动**:`main_test.go`、demo_* 与 clinic_name/self_service/kill-switch 套件仍居 `cmd/server`,指向它们的引用(如 internal/app/demo/demo_users_test.go 的行号钉)原样保留;两镜像 `test_support_test.go` 各自头部已述镜像关系。
+- **留包文件的引用不动**:`main_test.go`、demo_* 与 clinic_name/self_service/kill-switch 套件仍居 `cmd/server`,指向它们的引用(如 cmd/server/demo_users_test.go 的行号钉)原样保留;两镜像 `test_support_test.go` 各自头部已述镜像关系。
 - **error-codes.md 随源再生成**:索引文档内嵌错误常量处注释,其中两处仍述旧路径;同时该生成产物在装配代码迁入 internal/app(导出改名)后即已漂移,本次一并 `tools/gen_error_code_index.py` 再生成归位。
 
 验证:全仓库对 47 个迁走文件名的 `cmd/server/<文件>` 形式引用零命中;裸文件名引用除 flowtests/cmd-server 目录内互引与本文档自身的迁移清单外全部带 `flowtests/` 前缀;reference-app `go build ./...` 通过。根 CLAUDE.md 普查句此前部分改写的宣告(随 2b 提交消息)按本记录修正:当时只重定向了少数文件,残余引用由本记录闭合。
@@ -389,9 +389,9 @@ Go 包规则的推演:测试文件移到另一个目录就成为不同包,只能
 
 | 文件 | 路由 | 编辑要求 |
 |---|---|---|
-| internal/app/demo/demo_subject_test.go、internal/app/demo/demo_notification_test.go | internal/app/(package app_test) | package 子句 main→app_test;引用已 `app.` 限定、保留;文件内自足辅助随迁 |
-| clinic_name_test.go、internal/app/demo/demo_user_header_kill_switch_test.go | 拆分:纯逻辑腿→internal/app(app_test);经 buildTestServer 的 HTTP 腿→flowtests | 拆分边界按各 Test 是否驱动组合服务器定,执行批次定并回填本表 |
-| internal/app/demo/demo_admin_test.go、internal/app/demo/demo_users_test.go、self_service_test.go | flowtests(旅程/装配类) | package→flowtests;所需 demo 身份/种子/自服务辅助 flowtests/test_support_test.go 镜像已含,按编译补缺 |
+| cmd/server/demo_subject_test.go、cmd/server/demo_notification_test.go | internal/app/(package app_test) | package 子句 main→app_test;引用已 `app.` 限定、保留;文件内自足辅助随迁 |
+| clinic_name_test.go、cmd/server/demo_user_header_kill_switch_test.go | 拆分:纯逻辑腿→internal/app(app_test);经 buildTestServer 的 HTTP 腿→flowtests | 拆分边界按各 Test 是否驱动组合服务器定,执行批次定并回填本表 |
+| cmd/server/demo_admin_test.go、cmd/server/demo_users_test.go、self_service_test.go | flowtests(旅程/装配类) | package→flowtests;所需 demo 身份/种子/自服务辅助 flowtests/test_support_test.go 镜像已含,按编译补缺 |
 | test_support_test.go | 随消费方清退 | 消费方全部离场后 cmd/server 无使用者(2b 镜像对侧 flowtests/server_test.go 与 flowtests/test_support_test.go 已含等值辅助);删除并在对侧头注同步镜像关系 |
 | (留) main_test.go | cmd/server | 有 target(main.go),不动 |
 

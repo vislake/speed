@@ -29,7 +29,7 @@
  * (DEMO_READER_IDENTIFIER, the web mirror of the demo-reader@example.com
  * seed): its sign-in answers a principal of its own user and session,
  * the notes list serves it like any member's (the Go suite pins the
- * seeded reader's list as served in internal/app/demo/demo_users_test.go's
+ * seeded reader's list as served in cmd/server/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal),
  * and a note create from that principal answers the 403 the write
  * gate gives a caller without notes:write (rbac.permission_denied,
@@ -67,7 +67,7 @@
  * unified 401 authn.invalid_credentials answer a wrong password also
  * gets, its no-membership reason surviving in the login history, never
  * the response (the acme-only account asking for tenant-globex, in
- * internal/app/demo/demo_users_test.go's
+ * cmd/server/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal) -- a
  * refusal no journey drives, since the switch and sign-in surfaces a
  * browser reaches never ask for a tenant it was not granted.
@@ -209,7 +209,7 @@
  * stays on notes, the exact surface where the seed's grant asymmetry
  * lives: the list served like any member's, a create refused with
  * the rbac write gate's 403 -- the answers the Go suite pins for the
- * read-only member (its list served in internal/app/demo/demo_users_test.go's
+ * read-only member (its list served in cmd/server/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal; its
  * create refused in flowtests/server_test.go's
  * TestBuildServer_PermissionGate_EnforcesTheNotesPermissions). The read-denied

@@ -45,7 +45,7 @@
  * other account shapes: the reader day (the rig's reader option --
  * its list served like any member's, its create refused with the
  * rbac write gate's 403 and the draft kept, the answer the Go suite
- * pins in internal/app/demo/demo_users_test.go's
+ * pins in cmd/server/demo_users_test.go's
  * TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal and
  * flowtests/server_test.go's
  * TestBuildServer_PermissionGate_EnforcesTheNotesPermissions) and the
