@@ -82,6 +82,12 @@ The `asynq-only-in-jobs` and `redis-only-in-pkgcore-and-jobs` depguard rules in 
 | `func (*StandaloneQueue) Enqueue/Get/Cancel` | Implements `Queue` — see `queue.go`'s and `job.go`'s own entries above |
 | `func (*StandaloneQueue) DeadLetterJobs(ctx) ([]*Job, error)` | Every `StatusDeadLetter` `Job` `ctx` may access. Not part of `Queue`: an operational convenience specific to this implementation |
 
+### `wire.go`
+
+| Signature | Purpose |
+|---|---|
+| `func Wire(ctx context.Context, q *StandaloneQueue, reg pkgcore.JobHandlerRegistrar) error` | The one call a host makes after `Kernel.Bootstrap` (and before serving): it drains `reg`'s declared handlers onto `q` — every entry must be a `jobs.Handler`, refused by job type otherwise, before any schema work — and creates the queue's tables (`ensureJobsSchema`, the same DDL `Start` itself runs). `Start` stays the host's own, deployment-mode-gated step: a worker-disabled replica still calls `Wire`, so `Enqueue` finds its table and a module-declared handler is never refused with `ErrHandlerNotRegistered`, but it never claims or executes a `Job`. A queue is wired once — a second `Wire` over the same queue refuses with `ErrDuplicateHandlerType` (a fresh queue per assembly, as the reference app's `BuildServer` builds). See it in use in the reference app's `internal/app/server.go` and in `example_test.go`'s `ExampleWire` |
+
 ### `queue/asynq/queue.go`
 
 | Signature | Purpose |

@@ -164,6 +164,74 @@ func ExampleNewHandlerFunc() {
 	// result: ping
 }
 
+// ExampleWire demonstrates the host-side wiring call, the shape every
+// host's assembly uses after Kernel.Bootstrap: the modules have declared
+// their handlers on the registry (the single Handle call stands in for a
+// module's Register walking its own declarations), the host hands the whole
+// registry to Wire, and Start remains the host's own step -- a
+// worker-disabled replica stops after Wire and still serves Enqueue. See
+// examples/reference-app's BuildServer for the same call against the real
+// module set.
+func ExampleWire() {
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:jobs_example_wire?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	err = reg.Jobs.Handle("greet", exampleGreeter{})
+	if err != nil {
+		fmt.Println("declare handler:", err)
+		return
+	}
+
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	err = jobs.Wire(ctx, queue, reg.Jobs)
+	if err != nil {
+		fmt.Println("wire:", err)
+		return
+	}
+	err = queue.Start(ctx)
+	if err != nil {
+		fmt.Println("start:", err)
+		return
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = queue.Close(shutdownCtx)
+	}()
+
+	id, err := queue.Enqueue(ctx, jobs.Task{
+		Type:     "greet",
+		TenantID: pkgcore.TenantID("acme"),
+		Payload:  []byte("wire"),
+	})
+	if err != nil {
+		fmt.Println("enqueue:", err)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "acme")
+	job, err := waitForTerminal(tenantCtx, queue, id, time.Now().Add(2*time.Second))
+	if err != nil {
+		fmt.Println("get:", err)
+		return
+	}
+
+	fmt.Println("status:", job.Status)
+	fmt.Println("result:", string(job.Result.Data))
+
+	// Output:
+	// status: succeeded
+	// result: Hello, wire!
+}
+
 // The distributed deployment mode's own Queue implementation lives in its
 // own subpackage, go/jobs/queue/asynq, precisely so a consumer that only
 // ever runs jobs.StandaloneQueue (the standalone deployment mode) never
