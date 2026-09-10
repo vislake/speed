@@ -2,6 +2,7 @@ package s3
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -64,6 +65,105 @@ func TestObjectStoreFromConfig_MissingFieldReturnsErrMissingSeamConfig(t *testin
 			}
 		})
 	}
+}
+
+// TestParseBucketLookup pins the "bucket_lookup" key's string grammar: the
+// two spellings of the default (unset and "auto", case and whitespace
+// ignored) select BucketLookupAuto, the two other legal values select their
+// enum members, and anything else comes back as an error naming the allowed
+// set rather than a zero value.
+func TestParseBucketLookup(t *testing.T) {
+	ok := []struct {
+		raw  string
+		want BucketLookupType
+	}{
+		{"", BucketLookupAuto},
+		{"auto", BucketLookupAuto},
+		{" Auto ", BucketLookupAuto},
+		{"path", BucketLookupPath},
+		{"PATH", BucketLookupPath},
+		{"virtual_host", BucketLookupVirtualHost},
+	}
+	for _, tt := range ok {
+		got, err := parseBucketLookup(tt.raw)
+		if err != nil {
+			t.Errorf("parseBucketLookup(%q) error = %v, want nil", tt.raw, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseBucketLookup(%q) = %d, want %d", tt.raw, got, tt.want)
+		}
+	}
+
+	for _, bad := range []string{"virtual-host", "virtualhost", "path_style", "dns", "true"} {
+		got, err := parseBucketLookup(bad)
+		if err == nil {
+			t.Errorf("parseBucketLookup(%q) = %d, want an error", bad, got)
+			continue
+		}
+		for _, want := range []string{`"auto"`, `"path"`, `"virtual_host"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("parseBucketLookup(%q) error = %q, want it to name %s", bad, err, want)
+			}
+		}
+	}
+}
+
+// TestObjectStoreFromConfig_BucketLookup drives the key through the seam
+// the way a host does: with the key set to each legal value, and with the
+// key absent, Build resolves a store; with the key naming something else,
+// Build returns an error naming the allowed values -- never a panic, the
+// failure mode a Build call documented to return an error must not have.
+func TestObjectStoreFromConfig_BucketLookup(t *testing.T) {
+	base := func() pkgcore.Config {
+		return pkgcore.Config{
+			"endpoint":   "s3.example.com:9000",
+			"bucket":     "objects",
+			"access_key": "ak",
+			"secret_key": "sk",
+		}
+	}
+
+	for _, raw := range []string{"", "auto", "path", "virtual_host"} {
+		t.Run("legal value "+raw, func(t *testing.T) {
+			cfg := base()
+			if raw != "" {
+				cfg["bucket_lookup"] = raw
+			}
+			impl, _, err := pkgcore.ObjectStoreRegistry.Build("objectstore.s3", cfg)
+			if err != nil {
+				t.Fatalf("Build(%q) with bucket_lookup %q error = %v, want nil", "objectstore.s3", raw, err)
+			}
+			if impl == nil {
+				t.Errorf("Build(%q) with bucket_lookup %q returned a nil ObjectStore", "objectstore.s3", raw)
+			}
+		})
+	}
+
+	t.Run("an unknown value is an error, not a panic", func(t *testing.T) {
+		cfg := base()
+		cfg["bucket_lookup"] = "path_style"
+
+		var impl pkgcore.ObjectStore
+		var err error
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Errorf("Build panicked on an unknown bucket_lookup (%v), want an error back", recovered)
+				}
+			}()
+			impl, _, err = pkgcore.ObjectStoreRegistry.Build("objectstore.s3", cfg)
+		}()
+		if err == nil {
+			t.Fatalf("Build with bucket_lookup %q error = nil, want an error", "path_style")
+		}
+		if !strings.Contains(err.Error(), "bucket_lookup") {
+			t.Errorf("Build error = %q, want it to name the key", err)
+		}
+		if impl != nil {
+			t.Errorf("Build returned %v alongside the error, want nil", impl)
+		}
+	})
 }
 
 // TestRegistration_WrapsTheHostAssembledConfig pins the factory contract a

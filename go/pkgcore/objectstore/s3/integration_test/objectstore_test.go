@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/pkgcore/objectstoretest"
 )
 
@@ -54,7 +55,7 @@ func readObject(t *testing.T, store pkgcore.ObjectStore, ctx context.Context, ke
 
 func TestObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store := startRustfsObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupAuto)
 
 	// A key that has never been stored reads as missing: the service's own
 	// NoSuchKey must surface as the interface's ErrObjectNotFound, and the
@@ -116,7 +117,7 @@ func TestObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
 
 func TestObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
 	ctx := context.Background()
-	store := startRustfsObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupAuto)
 
 	// Every unknown-length put goes through minio-go's multipart machinery,
 	// whose memory use is bounded by its part buffer, never by the stream's
@@ -135,7 +136,7 @@ func TestObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
 
 func TestObjectStore_CancelledMidUpload_LeavesNoObjectBehind(t *testing.T) {
 	ctx := context.Background()
-	store := startRustfsObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupAuto)
 
 	// minio-go streams the source on the calling goroutine, so a reader that
 	// parks after its first bytes makes the cancellation deterministic: the
@@ -183,7 +184,7 @@ func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) 
 	// request began: a Read issued once that context is done fails up front
 	// with the context's error, without touching the service again.
 	ctx := context.Background()
-	store := startRustfsObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupAuto)
 
 	const key = "exports/streaming/cancel-this-read.bin"
 	payload := strings.Repeat("0123456789abcdef", 256) // 4 KiB, far from exhausted by the reads below
@@ -260,7 +261,7 @@ func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyLeavesTheLongerKeyIntact
 	// each backend happens to do with the overlap, and the interface's
 	// contract asks for neither.
 	ctx := context.Background()
-	store := startRustfsObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupAuto)
 
 	const (
 		parentKey = "exports/orders/2024-09-02"
@@ -328,7 +329,23 @@ func (r *abortingReader) Read(p []byte) (int, error) {
 // so concurrent subtests never collide on an object key.
 func TestObjectStore_ConformsToObjectStoreContract(t *testing.T) {
 	ctx := context.Background()
-	store := startRustfsObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupAuto)
+
+	objectstoretest.AssertConforms(t, func() pkgcore.ObjectStore {
+		return store
+	})
+}
+
+// TestObjectStore_PathLookupConformsToObjectStoreContract runs the same
+// shared contract against a store pinned to the path addressing style --
+// the style a service addressed by a bare host and port accepts without
+// wildcard DNS, which is the shape this fixture's endpoint has, and the
+// style the auto default derives here. Pinning it explicitly proves the
+// configured style produces the same conforming behavior, not merely the
+// same first request URL the unit tier inspects.
+func TestObjectStore_PathLookupConformsToObjectStoreContract(t *testing.T) {
+	ctx := context.Background()
+	store := startRustfsObjectStore(t, ctx, s3.BucketLookupPath)
 
 	objectstoretest.AssertConforms(t, func() pkgcore.ObjectStore {
 		return store

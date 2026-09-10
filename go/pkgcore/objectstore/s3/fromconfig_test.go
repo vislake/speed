@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -74,6 +75,37 @@ func TestFromConfig_MissingFieldReturnsError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFromConfig_UnknownBucketLookupReturnsError pins the other unusable
+// shape as an error: a BucketLookup outside the enum. NewObjectStore panics
+// on the same configuration -- its documented unrecoverable-wiring
+// convention -- while this constructor hands the judgment back as a value,
+// naming the field so a caller can see what to fix.
+func TestFromConfig_UnknownBucketLookupReturnsError(t *testing.T) {
+	cfg := configForTests()
+	cfg.BucketLookup = BucketLookupType(99)
+
+	store, caps, err := FromConfig(cfg)
+	if err == nil {
+		t.Fatal("FromConfig() with an unknown BucketLookup error = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "BucketLookup") {
+		t.Errorf("FromConfig() error = %q, want it to name the field", err)
+	}
+	if store != nil {
+		t.Errorf("FromConfig() store = %v, want nil on the failure path", store)
+	}
+	if caps != 0 {
+		t.Errorf("FromConfig() capabilities = %v, want 0 on the failure path", caps)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("NewObjectStore did not panic on the configuration FromConfig rejects, want its documented panic preserved")
+		}
+	}()
+	NewObjectStore(cfg)
 }
 
 // TestFromConfig_EndpointMinioRejectsReturnsError pins the second unusable

@@ -52,17 +52,18 @@ const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 
 // startRustfsObjectStore starts a disposable RustFS container, creates a
 // fresh bucket on it, and returns an S3-backed ObjectStore pointed at that
-// bucket, the client and the container already cleaned up via t.Cleanup on
-// test completion (pass or fail), so nothing leaks past its owning test.
-// Every integration test calls this for its own container, keeping tests
-// isolated from one another at the cost of a few seconds of startup each.
-// The bucket is created here rather than by the store: provisioning a
-// bucket is a hosting operation, and s3.NewObjectStore deliberately never
-// provisions its own. RustFS's own documented default root credential
-// value, rustfsadmin/rustfsadmin (docs.rustfs.com's Docker installation
-// page), is set explicitly below via RUSTFS_ACCESS_KEY/RUSTFS_SECRET_KEY
-// rather than relied on as a default.
-func startRustfsObjectStore(t *testing.T, ctx context.Context) pkgcore.ObjectStore {
+// bucket, addressing it in the lookup style the caller names, the client
+// and the container already cleaned up via t.Cleanup on test completion
+// (pass or fail), so nothing leaks past its owning test. Every integration
+// test calls this for its own container, keeping tests isolated from one
+// another at the cost of a few seconds of startup each. The bucket is
+// created here rather than by the store: provisioning a bucket is a hosting
+// operation, and s3.NewObjectStore deliberately never provisions its own.
+// RustFS's own documented default root credential value,
+// rustfsadmin/rustfsadmin (docs.rustfs.com's Docker installation page), is
+// set explicitly below via RUSTFS_ACCESS_KEY/RUSTFS_SECRET_KEY rather than
+// relied on as a default.
+func startRustfsObjectStore(t *testing.T, ctx context.Context, lookup s3.BucketLookupType) pkgcore.ObjectStore {
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
@@ -119,10 +120,11 @@ func startRustfsObjectStore(t *testing.T, ctx context.Context) pkgcore.ObjectSto
 	}
 
 	return s3.NewObjectStore(s3.Config{
-		Endpoint:  endpoint,
-		Bucket:    bucket,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
+		Endpoint:     endpoint,
+		Bucket:       bucket,
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		BucketLookup: lookup,
 	})
 }
 

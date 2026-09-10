@@ -2,8 +2,10 @@ package s3
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -46,6 +48,7 @@ func TestNewObjectStore_PanicsOnAnUnusableConfiguration(t *testing.T) {
 		{"an empty bucket", build(func(cfg *Config) { cfg.Bucket = "" })},
 		{"an empty access key", build(func(cfg *Config) { cfg.AccessKey = "" })},
 		{"an empty secret key", build(func(cfg *Config) { cfg.SecretKey = "" })},
+		{"an unknown bucket lookup", build(func(cfg *Config) { cfg.BucketLookup = BucketLookupType(99) })},
 	}
 
 	for _, tt := range tests {
@@ -56,6 +59,137 @@ func TestNewObjectStore_PanicsOnAnUnusableConfiguration(t *testing.T) {
 				}
 			}()
 			tt.panics()
+		})
+	}
+}
+
+// TestMinioBucketLookup_MapsEveryEnumValue pins the enum-to-minio mapping
+// newObjectStore addresses buckets through: auto and path keep their
+// meaning, virtual host maps onto minio-go's DNS constant (that client's
+// name for the virtual-hosted style), and a value outside the enum reports
+// not-ok rather than silently selecting a style. The zero-value check is
+// the compatibility half: a Config that never sets the field keeps the
+// endpoint-derived behavior.
+func TestMinioBucketLookup_MapsEveryEnumValue(t *testing.T) {
+	if got := (Config{}).BucketLookup; got != BucketLookupAuto {
+		t.Errorf("the zero Config.BucketLookup = %d, want BucketLookupAuto", got)
+	}
+
+	tests := []struct {
+		in     BucketLookupType
+		want   minio.BucketLookupType
+		wantOK bool
+	}{
+		{BucketLookupAuto, minio.BucketLookupAuto, true},
+		{BucketLookupPath, minio.BucketLookupPath, true},
+		{BucketLookupVirtualHost, minio.BucketLookupDNS, true},
+		{BucketLookupType(-1), minio.BucketLookupAuto, false},
+		{BucketLookupType(99), minio.BucketLookupAuto, false},
+	}
+	for _, tt := range tests {
+		got, ok := minioBucketLookup(tt.in)
+		if got != tt.want || ok != tt.wantOK {
+			t.Errorf("minioBucketLookup(%d) = (%d, %t), want (%d, %t)", tt.in, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}
+
+// captureTransport is the stand-in http.RoundTripper the bucket-lookup
+// line-shape test injects through newObjectStore's transport seam: it
+// records the URL of every request it is handed and then aborts the request
+// with abortRequest, so no dial is ever attempted.
+type captureTransport struct {
+	urls []string
+}
+
+func (tr *captureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	tr.urls = append(tr.urls, req.URL.String())
+	return nil, abortRequest
+}
+
+// abortRequest is the sentinel captureTransport returns: deliberately an
+// x509.UnknownAuthorityError, the one transport error minio-go classifies
+// as non-retryable (retry.go's isRequestErrorRetryable checks this type),
+// so an operation issues exactly one request -- the URL under test --
+// instead of the ten with back-off a generic error draws.
+var abortRequest = x509.UnknownAuthorityError{}
+
+// TestObjectStore_AddressesTheBucketInTheConfiguredLookupStyle pins the
+// wire shape each BucketLookup mode produces, as the URL of the request the
+// store actually issues: a path segment under BucketLookupAuto and
+// BucketLookupPath (host/bucket/key), the host's first label under
+// BucketLookupVirtualHost (bucket.host/key). The endpoint is a
+// self-hosted shape no service-specific detection recognizes, which is what
+// makes auto's path-style outcome assertable, and the dotted-bucket-on-HTTPS
+// row pins the other half of the auto rule. GetObject issues its request
+// eagerly, so one call is one captured URL -- asserted to be exactly one, so
+// a retry classification change cannot quietly turn this into a
+// ten-request, back-off-slowed test.
+func TestObjectStore_AddressesTheBucketInTheConfiguredLookupStyle(t *testing.T) {
+	tests := []struct {
+		name    string
+		lookup  BucketLookupType
+		useSSL  bool
+		bucket  string
+		wantURL string
+	}{
+		{
+			name:    "auto on a self-hosted endpoint is path style",
+			lookup:  BucketLookupAuto,
+			bucket:  "objects",
+			wantURL: "http://s3.example.com:9000/objects/some/key",
+		},
+		{
+			name:    "auto is path style for a dotted bucket on HTTPS",
+			lookup:  BucketLookupAuto,
+			useSSL:  true,
+			bucket:  "objects.data",
+			wantURL: "https://s3.example.com:9000/objects.data/some/key",
+		},
+		{
+			name:    "path addresses the bucket as a path segment",
+			lookup:  BucketLookupPath,
+			bucket:  "objects",
+			wantURL: "http://s3.example.com:9000/objects/some/key",
+		},
+		{
+			name:    "virtual host addresses the bucket as the host's first label",
+			lookup:  BucketLookupVirtualHost,
+			bucket:  "objects",
+			wantURL: "http://objects.s3.example.com:9000/some/key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := configForTests()
+			cfg.Endpoint = "s3.example.com:9000"
+			cfg.Bucket = tt.bucket
+			cfg.UseSSL = tt.useSSL
+			cfg.BucketLookup = tt.lookup
+			// A region-pinned client skips minio-go's bucket-location probe,
+			// so the one request the operation issues is the object request
+			// whose URL is under test rather than a location query before it.
+			cfg.Region = "us-east-1"
+
+			transport := &captureTransport{}
+			store, err := newObjectStore(cfg, transport)
+			if err != nil {
+				t.Fatalf("newObjectStore(%+v) error = %v, want nil", cfg, err)
+			}
+
+			// The abort error is the expected outcome: reaching the transport
+			// with the URL under test is the point, and the store reporting
+			// the failure eagerly is the behavior its own tests pin.
+			if _, err := store.GetObject(context.Background(), "some/key"); err == nil {
+				t.Fatal("GetObject() error = nil, want the transport's abort error")
+			}
+			if len(transport.urls) != 1 {
+				t.Fatalf("one GetObject issued %d requests %v, want exactly 1", len(transport.urls), transport.urls)
+			}
+			if got := transport.urls[0]; got != tt.wantURL {
+				t.Errorf("request URL = %q, want %q", got, tt.wantURL)
+			}
 		})
 	}
 }

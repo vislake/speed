@@ -16,19 +16,24 @@ import (
 // ExampleNewObjectStore shows the distributed deployment mode's object
 // store: an S3-compatible service (MinIO, Aliyun OSS or AWS S3) reached
 // through the bucket and credentials in s3.Config, the counterpart of
-// pkgcore.NewLocalObjectStore. Nothing is dialed at construction -- the
-// service is contacted on the first operation -- so a host can wire the
-// store at startup whether or not the service is reachable, and an unusable
-// configuration (an empty endpoint, bucket or credential) panics there
+// pkgcore.NewLocalObjectStore. BucketLookup pins how the store addresses
+// the bucket; here the service's wildcard bucket hosts do not resolve
+// under its own name, so the path style is named explicitly --
+// s3.BucketLookupAuto, the zero value, derives the style from the endpoint
+// instead. Nothing is dialed at construction -- the service is contacted on
+// the first operation -- so a host can wire the store at startup whether or
+// not the service is reachable, and an unusable configuration (an empty
+// endpoint, bucket or credential, an unknown BucketLookup) panics there
 // instead, where the wiring error is visible.
 func ExampleNewObjectStore() {
 	store := s3.NewObjectStore(s3.Config{
-		Endpoint:  "s3.example.com:9000",
-		Bucket:    "objects",
-		AccessKey: "access-key",
-		SecretKey: "secret-key",
-		Region:    "us-east-1",
-		UseSSL:    true, // HTTPS: the setting for anything beyond a local MinIO
+		Endpoint:     "s3.example.com:9000",
+		Bucket:       "objects",
+		AccessKey:    "access-key",
+		SecretKey:    "secret-key",
+		Region:       "us-east-1",
+		UseSSL:       true, // HTTPS: the setting for anything beyond a local MinIO
+		BucketLookup: s3.BucketLookupPath,
 	})
 	//nolint:staticcheck // QF1011: the assertion doubles as written doc that
 	// this constructor satisfies the ObjectStore interface -- the local-store
