@@ -247,7 +247,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// byte-for-byte unaffected, and a configured one injects a real
 	// implementation declaring the capability bits that implementation
 	// genuinely carries. One Redis client backs both "eventbus" and "kv" --
-	// see redisAddrEnv's own doc comment in config.go for why wiring only
+	// see config.go's RedisAddr field doc comment for why wiring only
 	// one of the two can never let a distributed composition pass
 	// Bootstrap.
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}

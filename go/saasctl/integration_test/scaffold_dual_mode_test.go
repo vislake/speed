@@ -21,11 +21,11 @@
 // infrastructure-seam wiring in cmd/server/config.go and the per-selection
 // kernelOptions block in each server.go) that is IDENTICAL prose across
 // every selection, copied deliberately so the bootstrap contract never
-// changes with the selection (config.go's own orgIndexKeyEnv doc comment
+// changes with the selection (config.go's own OrgIndexKey field doc comment
 // states this precedent already). This file proves it once, against
 // authn+org+rbac -- the richest selection, the one whose server.go also
 // exercises authn's "SMS sender" seam's three-way conditional-injection
-// switch (config.go's smsGatewayURLEnv doc comment) that a selection with
+// switch (config.go's SMSGatewayURL field doc comment) that a selection with
 // no authn module cannot touch at all. The other four selections'
 // materialization is pinned byte-for-byte on every PR by this SAME
 // module's offline unit suite (internal/new's golden byte-identity tests

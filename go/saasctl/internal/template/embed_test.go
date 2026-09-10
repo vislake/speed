@@ -774,7 +774,7 @@ func TestReadmeGoVersionMatchesGoModTxt(t *testing.T) {
 
 // envVarBacktickPattern matches a backtick-quoted, all-uppercase (with
 // digits and underscores) token in the README -- the exact shape every one
-// of the twenty bootstrap environment variable names takes when the
+// of the twenty-one bootstrap environment variable names takes when the
 // README refers to it (e.g. APP_S3_ENDPOINT or PORT, each wrapped in a
 // pair of backticks).
 var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")

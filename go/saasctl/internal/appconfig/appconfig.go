@@ -61,7 +61,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The twenty environment variable names of a generated project's
+// The twenty-one environment variable names of a generated project's
 // bootstrap surface, exported because the command groups that render
 // provenance and the tests that pin template parity all name the same
 // variables.
@@ -180,7 +180,7 @@ const configKeyHexLength = 64
 // environment variable is unset: the documented development defaults of a
 // generated project, byte-for-byte the template's -- devConfigKey the
 // ascending 0x00..0x1f sequence, devOrgIndexKey the descending 0xff..0xe0
-// sequence chosen to be visibly a DIFFERENT 32 bytes (orgIndexKeyEnv's doc
+// sequence chosen to be visibly a DIFFERENT 32 bytes (OrgIndexKey's doc
 // comment explains why the two must never be the same secret). Like the
 // template's own copies, they are honest placeholders, never secrets a
 // real deployment should keep.

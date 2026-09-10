@@ -14,7 +14,7 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the full twenty variables appconfig resolves,
+// bootstrap reads -- the full twenty-one variables appconfig resolves,
 // exported for the tests and examples that must clear or restore them all.
 // The list mirrors the one internal/db's migrate tests carry, each
 // package's copy sitting next to the code that uses it.
@@ -28,6 +28,7 @@ var bootstrapEnvKeys = []string{
 	appconfig.AuthnPIICipherKeyEnv,
 	appconfig.PKILocalKeyCipherKeyEnv,
 	appconfig.RedisAddrEnv,
+	appconfig.OTLPEndpointEnv,
 	appconfig.S3EndpointEnv,
 	appconfig.S3BucketEnv,
 	appconfig.S3AccessKeyEnv,
