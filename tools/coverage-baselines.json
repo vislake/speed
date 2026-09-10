@@ -8,7 +8,7 @@
     "go/compliance": 96.336207,
     "go/config": 93.719008,
     "go/dbkit": 84.748557,
-    "go/integration": 85.537583,
+    "go/integration": 85.384615,
     "go/jobs": 83.841463,
     "go/metering": 92.137097,
     "go/notification": 84.963504,
@@ -21,7 +21,7 @@
     "go/saasctl": 91.458027,
     "go/sharing": 86.701434,
     "go/storage": 88.844622,
-    "go/tenancy": 84.555985
+    "go/tenancy": 84.313725
   },
   "toolchain": "go1.26.8"
 }
