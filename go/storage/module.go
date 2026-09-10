@@ -361,10 +361,11 @@ func (m *Module) DeriveService() *DeriveService { return m.derive }
 
 // LifecycleService returns the module's deletion and expiry runtime: the
 // service hosts delete objects through, Register's registered expiry-sweep
-// handler is backed by, and whose EnqueueExpirySweep a host with workers
-// calls on its own schedule -- the module runs no timer of its own. Like
-// the other two services it is safe to call after NewModule and inert
-// until Register attaches the registry.
+// handler is backed by, and whose expiry sweep Register declares on the
+// registry's Schedules seat -- a host that runs a jobs.Scheduler sweeps
+// every tenant through it, and EnqueueExpirySweep remains the manual entry
+// point. Like the other two services it is safe to call after NewModule
+// and inert until Register attaches the registry.
 func (m *Module) LifecycleService() *LifecycleService { return m.life }
 
 // Derivatives returns the module's derivative-metadata repository.

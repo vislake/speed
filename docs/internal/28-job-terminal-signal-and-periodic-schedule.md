@@ -164,7 +164,7 @@
 
 - **声明迁移**:七处各自在 `Register` 里声明(1/2/5/6/7 为 `PerTenant`,3/4 为 `Platform`);`Enqueue*` 方法与各自的键前缀保留。
 - **参考应用**:`periodic_scheduler.go` 的 ticker 循环删除;`periodicTenantUniverse` 改造成宿主的 `TenantLister` 实现(configured ∪ D3 台账的逻辑原样保留);启动门(`cfg.DisableQueueWorker`)原样保留,成为"是否 `Start` 调度器"。`flowtests/periodic_scheduler_flow_test.go` 的两段 two-boot 证明继续作为端到端验收(证明的对象从"宿主 ticker"换成"调度器",断言不变)。
-- **CRL 重生成(4)**:保持默认不调度——参考应用记录的理由成立(没有等待它的读者);变化在于,"何时有了读者"不再需要新写一只 ticker,一条声明即可。
+- **CRL 重生成(4)**:声明即排产——`pki` 在 `Register` 里把该任务声明在座席上,凡启动 `jobs.Scheduler` 的宿主(参考应用在内)都按声明窗口(默认一小时)对它排产;参考应用的校验侧读的是行状态与证书链而非 CRL,所以"没有等待它的读者"这一事实不变,变化只在:将来有了读者也无需新写 ticker,座席上的这条声明原本就生效。
 - **5/6/7 的新增效果**:这三处今天有实现、无调用方(§1.4);声明制落地即获得各自的默认排产点——billing 的支付轮询、sharing 的分享过期清扫、integration 的密钥过期清扫首次真正跑起来,这是该席位对"模块内调度点"缺口的直接闭合(24 号文档普查行 4 的挂账随本轮出清)。
 
 ### 4.3 有意不动的部分

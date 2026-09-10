@@ -142,11 +142,15 @@ const platformScanTenantID = pkgcore.TenantID("_pki_platform_scan")
 // second run simply finds nothing left to do for whatever the first run
 // already advanced.
 //
-// A host is expected to call this on its own schedule (a cron trigger, a
-// periodic goroutine): this module drives the state machine but never
-// schedules its own execution; scheduling when a scan runs is host wiring,
-// the same division EnqueueExpirySweep's own doc comment draws for
-// storage.
+// The scan's default schedule is the module's own: whenever a queue is
+// wired, Register declares the task on the pkgcore.Registry.Schedules seat
+// (Service.expiryScanSchedule, a platform-scope declaration at the
+// service's configured window), so a host that runs a jobs.Scheduler over
+// the finished registry runs the scan without writing a schedule point of
+// its own. A host that runs no scheduler can still call this directly on a
+// cadence of its own -- go/pki itself never enqueues anything -- and a
+// manual trigger off that cadence is always legal, deduping onto the
+// scheduler's job through the window-scoped key above.
 //
 // A nil queue (Module constructed without WithQueue) makes this report a
 // plain error, the same "no queue wired" answer

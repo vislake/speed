@@ -57,11 +57,12 @@ package storage
 //
 // EnqueueExpirySweep is the host-facing enqueue for one tenant's sweep, and
 // expirySweepHandler is the jobs.Handler claiming the task on the queue.
-// The task is tenant-scoped because every query the sweep runs is: a host
-// with many tenants schedules one task per tenant (a platform loop is the
-// ordinary shape, exactly the caller jobs.Task's TenantID doc names), and
-// the tenant rides in the task's TenantID field, rebuilt into context by
-// the worker before Handle runs, never inherited from the enqueuing side.
+// The task is tenant-scoped because every query the sweep runs is: one task
+// exists per tenant -- the registered declaration expands through the
+// host's TenantLister, and a manual EnqueueExpirySweep call names its own
+// tenant -- and the tenant rides in the task's TenantID field, rebuilt
+// into context by the worker before Handle runs, never inherited from the
+// enqueuing side.
 // LifecycleService sits at the same tier as ObjectService and DeriveService:
 // inert until Module.Register attaches the registry, failing closed with
 // ErrStoreUnavailable on any seam it needs before then.
@@ -430,14 +431,17 @@ func (s *LifecycleService) reclaimUpload(ctx context.Context, row Object) error 
 }
 
 // EnqueueExpirySweep enqueues the expiry-sweep task for the tenant ctx
-// carries. It is the host-facing schedule point: a host with workers runs
-// it on its own timer per tenant, and the task's window-scoped idempotency
-// key (expirySweepIdempotencyKey) collapses the enqueues of one
-// expirySweepWindowSize window -- a scheduler with two replicas ticking
-// in the same window, a manual re-run -- into one job, so a tenant is
-// never swept by two workers at once. An enqueue whose clock has moved
-// into a later window (expirySweepWindowStart) is a new job and runs
-// again: this is what makes the sweep periodic on queues whose idempotency
+// carries. The sweep's default schedule is the module's own: Register
+// declares it on the pkgcore.Registry.Schedules seat (expirySweepSchedule,
+// a per-tenant task at the sweep's own window), so a host that runs a
+// jobs.Scheduler sweeps every tenant without writing a schedule point of
+// its own; this method remains the manual entry point. The task's
+// window-scoped idempotency key (expirySweepIdempotencyKey) collapses the
+// enqueues of one expirySweepWindowSize window -- a scheduler with two
+// replicas ticking in the same window, a manual re-run -- into one job, so
+// a tenant is never swept by two workers at once. An enqueue whose clock
+// has moved into a later window (expirySweepWindowStart) is a new job and
+// runs again: this is what makes the sweep periodic on queues whose idempotency
 // is unconditional, and what keeps one dead-lettered sweep from poisoning
 // its tenant forever -- see expirySweepIdempotencyKey's doc comment for
 // the full window semantics. The task carries no payload: the sweep reads

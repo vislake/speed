@@ -221,12 +221,15 @@ func (m *Module) Service() *Service { return m.svc }
 func (m *Module) Handler() *Handler { return m.handler }
 
 // EnqueueExpirySweep enqueues the expiry-sweep task for the tenant ctx
-// carries (see cleanup.go's Service.Sweep for what the task does). It is
-// the host-facing schedule point: a host with workers runs it on its own
-// timer per tenant, and the task's window-scoped idempotency key
-// (expirySweepIdempotencyKey) collapses the enqueues of one
-// expirySweepWindowSize window -- a scheduler with two replicas ticking in
-// the same window, a manual re-run -- into one job, so a tenant is never
+// carries (see cleanup.go's Service.Sweep for what the task does). The
+// sweep's default schedule is the module's own: Register declares it on
+// the pkgcore.Registry.Schedules seat (expirySweepSchedule, a per-tenant
+// task at the sweep's own window), so a host that runs a jobs.Scheduler
+// sweeps every tenant without writing a schedule point of its own; this
+// method remains the manual entry point. The task's window-scoped
+// idempotency key (expirySweepIdempotencyKey) collapses the enqueues of
+// one expirySweepWindowSize window -- a scheduler with two replicas ticking
+// in the same window, a manual re-run -- into one job, so a tenant is never
 // swept by two workers at once. An enqueue whose clock has moved into a
 // later window (expirySweepWindowStart) is a new job and runs again: this
 // is what makes the sweep periodic on queues whose idempotency is
