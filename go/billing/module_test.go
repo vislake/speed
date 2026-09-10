@@ -291,6 +291,42 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 	}
 }
 
+// TestModule_Register_DeclaresThePollSchedule pins the module's periodic
+// declaration: a queue-wired Register puts exactly the payment-poll
+// schedule on the registry's Schedules seat -- declaring means scheduled,
+// so a host running a jobs.Scheduler over the finished registry polls
+// every tenant at the module's own window cadence. A queue-less module
+// declares nothing, the same gate its handler registration uses: no
+// declaration may outlive its executor.
+func TestModule_Register_DeclaresThePollSchedule(t *testing.T) {
+	reg := pkgcore.NewRegistry(
+		pkgcore.NewMemoryEventBus(),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewConsoleMailer(),
+	)
+	m := NewModule(newTestDB(t), stubUsage{}, WithQueue(&fakeQueue{}))
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	decls := reg.Schedules.Declarations()
+	if len(decls) != 1 || decls[0] != pollSchedule {
+		t.Errorf("Register declared %+v, want exactly the poll schedule %+v", decls, pollSchedule)
+	}
+
+	queueless := pkgcore.NewRegistry(
+		pkgcore.NewMemoryEventBus(),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewConsoleMailer(),
+	)
+	if err := NewModule(newTestDB(t), stubUsage{}).Register(queueless); err != nil {
+		t.Fatalf("Register without a queue: %v", err)
+	}
+	if decls := queueless.Schedules.Declarations(); len(decls) != 0 {
+		t.Errorf("a queue-less Register declared %+v, want none -- no declaration may outlive its executor", decls)
+	}
+}
+
 // assertContainsAll fails the test for every want element missing from
 // got.
 func assertContainsAll(t *testing.T, got []string, want []string) {

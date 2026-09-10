@@ -282,6 +282,16 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		if err := reg.Jobs.Handle(taskTypePoll, pollHandler{svc: m.polling}); err != nil {
 			return err
 		}
+		// Declare the poll's periodic schedule alongside its handler:
+		// declaring means scheduled, so a host that runs a jobs.Scheduler
+		// over the registry's declarations polls every tenant at the
+		// module's own window cadence without writing a schedule point of
+		// its own. Only a queue-wired billing declares -- a composition
+		// with no queue registers no handler, and a declaration must
+		// never outlive its executor.
+		if err := reg.Schedules.Add(pollSchedule); err != nil {
+			return err
+		}
 	}
 	// Build and mount the module's HTTP surface -- see this method's own
 	// doc comment for why the handler is built here rather than in

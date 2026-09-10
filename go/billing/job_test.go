@@ -374,6 +374,43 @@ func TestPollingService_EnqueuePoll_EnqueuesWithWindowScopedIdempotencyKey(t *te
 	}
 }
 
+// TestPollKeyMatchesTheSchedulerDerivation pins the schedule migration's
+// key identity: the same (task type, tenant, window) must resolve one
+// idempotency key through the module's own schedule point and through the
+// jobs.Scheduler's derivation over the module's declaration, or a
+// scheduler tick and a manual enqueue landing in one window would run the
+// poll twice. The key literal below is the pinned string.
+func TestPollKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	events := NewPaymentEventRepository(newTestDB(t))
+	q := &fakeQueue{}
+	svc := newPollingService(events, nil, q)
+
+	enqueuedAt := time.Date(2026, 9, 7, 10, 15, 0, 0, time.UTC)
+	svc.now = func() time.Time { return enqueuedAt }
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	if err := svc.EnqueuePoll(ctx); err != nil {
+		t.Fatalf("EnqueuePoll: %v", err)
+	}
+	if len(q.tasks) != 1 {
+		t.Fatalf("tasks enqueued = %d, want 1", len(q.tasks))
+	}
+	manual := q.tasks[0].IdempotencyKey
+	if want := "billing.poll:tenant-a:2026-09-07T10:15:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	decl := pollSchedule
+	if decl.Type != taskTypePoll || decl.Every != pollIdempotencyWindowSize {
+		t.Errorf("declaration = %+v, want the site's own type %q and window %s", decl, taskTypePoll, pollIdempotencyWindowSize)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePerTenant {
+		t.Errorf("declaration scope = %q, want %q", decl.Scope, pkgcore.PeriodicScopePerTenant)
+	}
+	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, pkgcore.TenantID("tenant-a"), pollWindowStart(enqueuedAt)); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
+	}
+}
+
 func TestPollHandler_Handle_DrivesPoll(t *testing.T) {
 	events := NewPaymentEventRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

@@ -79,8 +79,27 @@ func pollWindowStart(now time.Time) time.Time {
 // and the poll runs again -- a stuck PaymentEvent is actively polled as
 // long as a host keeps scheduling EnqueuePoll, instead of once per tenant
 // lifetime.
+// pollKeyPrefix is the prefix of every payment-poll idempotency key. It is
+// a named constant because two derivations must agree on it byte for byte:
+// pollIdempotencyKey above, and the declaration (pollSchedule) a
+// jobs.Scheduler composes keys from with its own window derivation -- one
+// window must resolve one key through both paths.
+const pollKeyPrefix = "billing.poll:"
+
 func pollIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return "billing.poll:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+	return pollKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+}
+
+// pollSchedule is the module's declaration of the payment-poll fallback on
+// the pkgcore.Registry.Schedules seat: a per-tenant task at the poll's own
+// window, keyed with the same prefix and window function the manual
+// EnqueuePoll path uses, so a scheduler tick and a manual enqueue landing
+// in one window resolve one key and dedupe onto one job.
+var pollSchedule = pkgcore.PeriodicTask{
+	Type:      taskTypePoll,
+	Every:     pollIdempotencyWindowSize,
+	Scope:     pkgcore.PeriodicScopePerTenant,
+	KeyPrefix: pollKeyPrefix,
 }
 
 // DefaultPollStuckAfter is how long a PaymentEvent may sit at
