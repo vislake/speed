@@ -52,6 +52,7 @@
 | [20 质量与安全工程](20-quality-and-security.md) | 测试分层、质量门槛、供应链与安全测试 |
 | [25 测试布局迁移](25-test-layout-migration.md) | 非单元测试类入专有目录的迁移:cmd/server 流测试导出面侦察与逐文件分档 |
 | [26 bootstrap 键声明与参考应用 loader 迁移](26-bootstrap-keys-loader-migration.md) | 模块级 bootstrap 键声明席位、loader 前缀选项与 env 钉、启动/运行时双层边界、reference-app 迁移与两阶段落地 |
+| [27 注册触发供给链与两个平台缝](27-provisioning-chain-and-two-seams.md) | 注册供给链的归属裁定与链契约(顺序、前向收敛与终局语义)、notification 静态地址解析器与 billing 订阅 EnsureActive 两缝的形状、reference-app 迁移计划 |
 | [16 验证方式](16-verification.md) | 各能力的验收标准与 CI 强制项 |
 | [17 风险登记](17-risks.md) | 已识别风险与缓解措施 |
 
