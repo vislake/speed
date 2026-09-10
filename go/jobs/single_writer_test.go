@@ -30,11 +30,15 @@ import (
 // would run Handle twice -- on the money path, a double charge. With the
 // gate, the second Start must refuse (ErrQueueWriterActive, coded) because
 // the first queue's writer registration is live, and Handle must run
-// exactly once. Deterministic orchestration: the first queue's single
-// worker is blocked inside Handle (entered/release channels) for the whole
-// second Start, so the second queue's refusal -- or the claim of the
-// mid-Handle row a gated-less second Start would attempt -- happens while
-// the row is provably mid-Handle.
+// exactly once.
+//
+// The window is anchored on the database state the queue itself persists:
+// the test waits for the Job's row to reach StatusRunning -- the claim the
+// dispatcher wrote, exactly the mid-Handle row a gate-less second Start
+// would reset -- rather than on a scheduling-dependent milestone inside the
+// worker. The attempt cannot finish inside that window however late the
+// worker runs: Handle blocks on release until after the second Start has
+// been attempted.
 func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
@@ -42,14 +46,9 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 	}
 
 	var handles atomic.Int32
-	entered := make(chan struct{}, 8)
 	release := make(chan struct{})
 	handler := NewHandlerFunc("double-run", func(context.Context, *Job, ProgressFn) (Result, error) {
 		handles.Add(1)
-		select {
-		case entered <- struct{}{}:
-		default:
-		}
 		<-release
 		return Result{}, nil
 	})
@@ -77,7 +76,7 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	waitSignal(t, entered, "q1's worker to enter Handle -- the mid-Handle window never opened")
+	waitRowStatus(t, db, id, StatusRunning, signalWaitTimeout)
 
 	// The second queue over the SAME database: without the gate this would
 	// Start cleanly, reset q1's mid-Handle row and run Handle a second
