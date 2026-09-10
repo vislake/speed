@@ -256,4 +256,4 @@ CREATE UNIQUE INDEX uq_billing_subscriptions_one_active
 2. **轮二(notification)**:`staticaddr` 子包 + 示例/单测 + AGENTS;reference-app 与模块 Example 切换。
 3. **轮三(reference-app 链收尾)**:org `EnsureRootSeat` 采纳、`ensureClinicRoot` 删除、终局文案修正、注释对齐(org events.go 的 `CreateTenantRoot`);配方短节(Q3 落点裁定后)。
 
-每轮独立小提交、ff-only;轮一与轮二无依赖,可并行。
+每轮独立小提交、ff-only;轮一与轮二无依赖,可并行。**并行约束:轮一与轮三都改 `self_service.go`(轮一切订阅跳的调用点,轮三改 1、2 跳与该链的注释、终局文案),两者不得并行——按"轮一 → 轮三"先后执行,或把两轮对 `self_service.go` 的编辑合并进同一轮。**
