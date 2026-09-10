@@ -2,6 +2,14 @@ module github.com/vislake/speed/go/saasctl
 
 go 1.26.0
 
+// The route-mounting rule (pkgcore.MountRoutes and pkgcore.MountedRoute,
+// consumed by the test that materializes the generated host and exercises
+// its route wiring) is not in a released pkgcore version yet, so this module
+// resolves pkgcore from the sibling checkout. A replace directive in a
+// dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 // The requires below are the db migrate command's real module graph,
 // maintained by go mod tidy: the four migration-shipping modules whose
 // migrations the command applies (authn, config, org, rbac -- direct,

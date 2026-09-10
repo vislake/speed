@@ -2,6 +2,13 @@ module github.com/vislake/speed/go/integration
 
 go 1.26.0
 
+// The per-tenant window idempotency key (jobs.ScheduleIdempotencyKey,
+// consumed by this module's scheduler-key-derivation test) is not in a
+// released jobs version yet, so this module resolves jobs from the sibling
+// checkout. A replace directive in a dependency is ignored by consumers, so
+// this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 // apperr.HasCode (and, where the module decodes event payloads,
 // pkgcore's payload helpers) is not in a released pkgcore version yet, so
 // this module resolves pkgcore from the sibling checkout. A replace

@@ -2,6 +2,14 @@ module github.com/vislake/speed/go/pki
 
 go 1.26.0
 
+// The platform-scope window idempotency key
+// (jobs.SchedulePlatformIdempotencyKey, consumed by this module's
+// scheduler-key-derivation tests) is not in a released jobs version yet, so
+// this module resolves jobs from the sibling checkout. A replace directive
+// in a dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 // dbtest.Migration (and the migration-accepting NewSQLite/NewPostgres) is
 // not in a released dbkit version yet, so this module resolves dbkit from
 // the sibling checkout. A replace directive in a dependency is ignored by

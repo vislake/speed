@@ -2,6 +2,13 @@ module github.com/vislake/speed/go/compliance
 
 go 1.26.0
 
+// The per-tenant window idempotency key (jobs.ScheduleIdempotencyKey,
+// consumed by this module's scheduler-key-derivation test) is not in a
+// released jobs version yet, so this module resolves jobs from the sibling
+// checkout. A replace directive in a dependency is ignored by consumers, so
+// this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 // The lazy read handle (config.Handle, read through its TenantDuration read)
 // is not in a released config version yet, so this module resolves config from
 // the sibling checkout. A replace directive in a dependency is ignored by

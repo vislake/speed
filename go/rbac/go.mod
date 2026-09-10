@@ -2,6 +2,14 @@ module github.com/vislake/speed/go/rbac
 
 go 1.26.0
 
+// The queue wiring step (jobs.Wire, which drains the registry's job handlers
+// onto the standalone queue and creates the queue's tables, consumed by this
+// module's tests) is not in a released jobs version yet, so this module
+// resolves jobs from the sibling checkout. A replace directive in a
+// dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 // apperr.HasCode (and, where the module decodes event payloads,
 // pkgcore's payload helpers) is not in a released pkgcore version yet, so
 // this module resolves pkgcore from the sibling checkout. A replace

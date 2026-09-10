@@ -2,6 +2,12 @@ module github.com/vislake/speed/go/ratelimit
 
 go 1.26.0
 
+// apperr.HasCode (the error-code probe this module's test asserts on) is not
+// in a released pkgcore version yet, so this module resolves pkgcore from
+// the sibling checkout. A replace directive in a dependency is ignored by
+// consumers, so this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 require github.com/vislake/speed/go/pkgcore v0.0.1
 
 require (
