@@ -31,6 +31,7 @@
       "@speed/tenancy-ui": ["../tenancy-ui/src/index.ts"],
       "@speed/i18n": ["../i18n/src/index.ts"],
       "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
+      "@speed/i18n/platform-errors": ["../i18n/src/platform-errors.ts"],
       "@speed/tokens": ["../tokens/src/index.ts"],
       "@speed/ui-kit": ["../ui-kit/src/index.ts"],
       "@speed/api-client": ["../api-client/src/index.ts"],

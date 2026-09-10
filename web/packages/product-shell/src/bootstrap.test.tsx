@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ReactElement } from 'react'
 import { AUTH_UI_NAMESPACE } from '@speed/auth-ui'
 import { switchLanguage, useTranslation } from '@speed/i18n'
+import { PLATFORM_ERRORS_NAMESPACE } from '@speed/i18n/platform-errors'
 import { LAYOUT_KIT_NAMESPACE } from '@speed/layout-kit'
 import { UI_KIT_NAMESPACE } from '@speed/ui-kit'
 import { PRODUCT_SHELL_NAMESPACE } from './resources.js'
@@ -228,6 +229,30 @@ describe('bootstrapSpeedApp', () => {
     })
     container.remove()
     expect(container.innerHTML).toBe('')
+  })
+
+  it('registers the platform error bundle as the fallback namespace', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const boot = await mountApp(container, { view: <div /> })
+
+    // A backend error code no package namespace covers resolves to the
+    // platform bundle's own text -- the same string a direct lookup of
+    // the bundle returns -- instead of rendering as the raw key.
+    const code = 'admin.impersonation_reason_required'
+    expect(boot.i18n.hasResourceBundle('zh-CN', PLATFORM_ERRORS_NAMESPACE)).toBe(
+      true,
+    )
+    const throughFallback = boot.i18n.t(`ui-kit:errors.${code}`)
+    expect(throughFallback).not.toBe(`errors.${code}`)
+    expect(throughFallback).toBe(
+      boot.i18n.t(`platform-errors:errors.${code}`),
+    )
+
+    await act(async () => {
+      boot.root.unmount()
+    })
+    container.remove()
   })
 
   it('announces the i18n instance language on every request, and a switch moves it', async () => {

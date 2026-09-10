@@ -24,10 +24,14 @@
  *     composes register automatically -- ui-kit, layout-kit, auth-ui
  *     and product-shell's own -- because the stack it renders always
  *     includes them; a host can no longer forget one and read raw keys.
- *     The definition's `namespaces` carry the app's own additions: the
- *     slot packages its views compose (tenancy-ui, account-ui, ...)
- *     and its own bundle. Registration happens before render; double
- *     registration throws, so each namespace appears exactly once.
+ *     The platform error-copy bundle registers with them and is named as
+ *     the instance's fallback namespace, so a backend error code no
+ *     package namespace covers resolves to the module catalog's own
+ *     words instead of the raw key. The definition's `namespaces` carry
+ *     the app's own additions: the slot packages its views compose
+ *     (tenancy-ui, account-ui, ...) and its own bundle. Registration
+ *     happens before render; double registration throws, so each
+ *     namespace appears exactly once.
  *
  *  2. The session -- a memory access-token store (the credential never
  *     touches storage) feeding the auth-core session state machine over
@@ -74,6 +78,10 @@ import type { AuthSession } from '@speed/auth-core'
 import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
 import { createI18n, I18nextProvider, registerNamespace } from '@speed/i18n'
 import type { I18nInstance, ResourceBundle } from '@speed/i18n'
+import {
+  PLATFORM_ERRORS_NAMESPACE,
+  registerPlatformErrors,
+} from '@speed/i18n/platform-errors'
 import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
 import {
   AppThemeProvider,
@@ -272,11 +280,12 @@ export function bootstrapSpeedApp(
   container: Element,
   definition: SpeedAppDefinition,
 ): SpeedAppBootstrap {
-  const i18n = createI18n()
+  const i18n = createI18n({ fallbackNamespaces: [PLATFORM_ERRORS_NAMESPACE] })
   registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
   registerNamespace(i18n, LAYOUT_KIT_NAMESPACE, layoutKitResources)
   registerNamespace(i18n, AUTH_UI_NAMESPACE, authUiResources)
   registerNamespace(i18n, PRODUCT_SHELL_NAMESPACE, productShellResources)
+  registerPlatformErrors(i18n)
   for (const { namespace, resources } of definition.namespaces ?? []) {
     registerNamespace(i18n, namespace, resources)
   }
