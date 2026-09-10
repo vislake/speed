@@ -835,10 +835,20 @@ joins the tree.
 
 CI workflows mount the checkers directly, from the repository root, and
 fail the build on a nonzero exit: `python3 tools/scan_cjk.py`,
-`python3 tools/check_toolchain.py`, `python3 tools/check_repo_isolation.py`
-and the semgrep ruleset step (catalogued above) run in fast-check's
-repo-checks job (every pull request and every push to main,
-`.github/workflows/fast-check.yml`);
+`python3 tools/check_toolchain.py`, `python3 tools/check_repo_isolation.py`,
+the coverage-baseline checker's unit suite and file self-check
+(`python3 tools/test_check_coverage_baseline.py` then
+`python3 tools/check_coverage_baseline.py --selfcheck`),
+`python3 tools/check_spec_request_tenant_id.py`,
+`python3 tools/check_migration_cross_module_fks.py`, the migration-parity
+suite and gate (`python3 tools/test_check_migration_parity.py` then
+`python3 tools/check_migration_parity.py`), the host-core-parity suite and
+gate (`python3 tools/test_check_host_core_parity.py` then
+`python3 tools/check_host_core_parity.py`), the env-example suite and gate
+(`python3 tools/test_check_env_example_consistency.py` then
+`python3 tools/check_env_example_consistency.py`) and the semgrep ruleset
+step (catalogued above) run in fast-check's repo-checks job (every pull
+request and every push to main, `.github/workflows/fast-check.yml`);
 `python3 tools/check_i18n_keys.py` plus `python3 tools/check_docs_site.py`
 plus `python3 tools/check_markdown_examples.py` (after a pinned Go
 install, `./.github/actions/setup-go-env`) run in the docs-check pipeline
