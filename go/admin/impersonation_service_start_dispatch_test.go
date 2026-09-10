@@ -481,14 +481,26 @@ func TestImpersonationService_ResolveNotificationLocale_Chain(t *testing.T) {
 		in   StartInput
 		want string
 	}{
-		{"an explicit locale wins over everything",
-			StartInput{TargetUserID: neverChose, Locale: "zh-CN", RequesterLanguage: "en-US"}, "zh-CN"},
-		{"the target's stored locale outranks the requester language",
-			StartInput{TargetUserID: choseEnglish, RequesterLanguage: "zh-CN"}, "en-US"},
-		{"the requester language answers a target with none",
-			StartInput{TargetUserID: neverChose, RequesterLanguage: "zh-CN"}, "zh-CN"},
-		{"nothing resolves to the platform default",
-			StartInput{TargetUserID: neverChose}, authn.DefaultLocale},
+		{
+			"an explicit locale wins over everything",
+			StartInput{TargetUserID: neverChose, Locale: "zh-CN", RequesterLanguage: "en-US"},
+			"zh-CN",
+		},
+		{
+			"the target's stored locale outranks the requester language",
+			StartInput{TargetUserID: choseEnglish, RequesterLanguage: "zh-CN"},
+			"en-US",
+		},
+		{
+			"the requester language answers a target with none",
+			StartInput{TargetUserID: neverChose, RequesterLanguage: "zh-CN"},
+			"zh-CN",
+		},
+		{
+			"nothing resolves to the platform default",
+			StartInput{TargetUserID: neverChose},
+			authn.DefaultLocale,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := svc.resolveNotificationLocale(context.Background(), tc.in)
