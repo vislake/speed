@@ -137,14 +137,12 @@ func (emptyAddressResolver) Resolve(context.Context, string) (notification.UserA
 }
 
 // hostSnapshot is what the composed schema-only host hands back: the frozen
-// schema snapshot (the dynamic layer's source), every bootstrap key the
+// schema snapshot (the dynamic layer's source) and every bootstrap key the
 // composed modules declared on the registry's Bootstrap seat (the platform
-// bootstrap keys' source), and the names of the modules composed, so the
-// reference can state which of them declared no bootstrap key at all.
+// bootstrap keys' source).
 type hostSnapshot struct {
-	service         *config.Service
-	declaredKeys    []pkgcore.BootstrapKey
-	composedModules []string
+	service      *config.Service
+	declaredKeys []pkgcore.BootstrapKey
 }
 
 // schemaHost composes the schema-only host and freezes its configuration
@@ -255,9 +253,5 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(modules))
-	for _, module := range modules {
-		names = append(names, module.Name())
-	}
-	return &hostSnapshot{service: svc, declaredKeys: reg.Bootstrap.Keys(), composedModules: names}, nil
+	return &hostSnapshot{service: svc, declaredKeys: reg.Bootstrap.Keys()}, nil
 }

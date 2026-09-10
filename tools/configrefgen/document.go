@@ -17,6 +17,12 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
+	// loader is go/pkgcore/config, the bootstrap loader this reference's Env
+	// column names variables after: the cell must print the name the loader
+	// itself would read, so it calls the loader's own derivation rather than
+	// re-deriving the rule (the import alias keeps the unqualified name
+	// config for go/config, the module this package mostly speaks to).
+	loader "github.com/vislake/speed/go/pkgcore/config"
 )
 
 // sitePagePath is the documentation site's copy of the reference, in the
@@ -79,20 +85,22 @@ type referenceItem struct {
 }
 
 // declaredBootstrapKey is one bootstrap key a platform module declared, as the
-// reference renders it: the declaration's own facts.
+// reference renders it: the declaration's own facts plus the environment
+// variable name the loader's default rule derives from the key path.
 type declaredBootstrapKey struct {
 	// Key is the dotted key path the module declared.
 	Key string `json:"key"`
-	// Module is the declaring module (the key's own prefix, by convention).
-	Module string `json:"module"`
+	// Env is the environment variable name the loader derives from Key under
+	// its default prefix (loader.EnvName(loader.EnvPrefix, Key)) -- the
+	// derivation an unpinned host field reads. A host may pin a different
+	// name for its own field; that choice is the host's, not this reference's.
+	Env string `json:"env"`
 	// Format is the declared value shape.
 	Format string `json:"format"`
 	// Default is the declared fallback statement.
 	Default string `json:"default"`
 	// Sensitive marks declared key material.
 	Sensitive bool `json:"sensitive"`
-	// Example is the declared suggested value, empty when none is recommended.
-	Example string `json:"example,omitempty"`
 	// Description is the declared contract text.
 	Description string `json:"description"`
 }
@@ -112,22 +120,19 @@ type document struct {
 	// DeclaredModules lists the platform module declarations, in module
 	// order.
 	DeclaredModules []declaredModule
-	// SilentModules names the composed modules that declared no bootstrap key
-	// at all: an honest state, never a gap to fill.
-	SilentModules []string
 }
 
 // buildDocument assembles the reference from the schema snapshot and the module
 // declarations: the bootstrap keys first (what a process resolves before
 // anything else), then the dynamic items sorted by key (the ordering Describe
 // itself guarantees, stable across runs).
-func buildDocument(descriptors []config.ConfigItemDescriptor, declared []pkgcore.BootstrapKey, composedModules []string) (*document, error) {
+func buildDocument(descriptors []config.ConfigItemDescriptor, declared []pkgcore.BootstrapKey) (*document, error) {
 	if overlaps := overlappingKeys(descriptors, declared); len(overlaps) > 0 {
 		return nil, fmt.Errorf("keys declared on both configuration layers (each key belongs to exactly one):\n  %s", strings.Join(overlaps, "\n  "))
 	}
 
 	doc := &document{}
-	doc.DeclaredModules, doc.SilentModules = declaredKeys(declared, composedModules)
+	doc.DeclaredModules = declaredKeys(declared)
 
 	for _, d := range descriptors {
 		module := d.Key
@@ -162,20 +167,18 @@ func buildDocument(descriptors []config.ConfigItemDescriptor, declared []pkgcore
 	return doc, nil
 }
 
-// declaredKeys folds the registry's declarations into per-module groups and
-// reports which composed modules declared nothing. Both come out of the census
-// itself: a module is silent because the declarations do not mention it, never
-// because a list says so.
-func declaredKeys(declared []pkgcore.BootstrapKey, composedModules []string) ([]declaredModule, []string) {
+// declaredKeys folds the registry's declarations into per-module groups, in
+// module order with each module's keys ordered by key path, and fills every
+// row's Env cell from the loader's own derivation.
+func declaredKeys(declared []pkgcore.BootstrapKey) []declaredModule {
 	byModule := make(map[string][]declaredBootstrapKey)
 	for _, key := range declared {
 		byModule[key.Group] = append(byModule[key.Group], declaredBootstrapKey{
 			Key:         key.Key,
-			Module:      key.Group,
+			Env:         loader.EnvName(loader.EnvPrefix, key.Key),
 			Format:      key.Format,
 			Default:     key.Default,
 			Sensitive:   key.Sensitive,
-			Example:     key.Example,
 			Description: key.Description,
 		})
 	}
@@ -186,31 +189,21 @@ func declaredKeys(declared []pkgcore.BootstrapKey, composedModules []string) ([]
 		modules = append(modules, declaredModule{Name: name, Keys: keys})
 	}
 	sort.Slice(modules, func(i, j int) bool { return modules[i].Name < modules[j].Name })
-
-	declaring := make(map[string]struct{}, len(byModule))
-	for name := range byModule {
-		declaring[name] = struct{}{}
-	}
-	var silent []string
-	for _, name := range composedModules {
-		if _, ok := declaring[name]; !ok {
-			silent = append(silent, name)
-		}
-	}
-	sort.Strings(silent)
-	return modules, silent
+	return modules
 }
 
-// marshalJSON renders the machine-readable twin: the dynamic item list the
-// Markdown table renders, plus the module declarations, deterministic (the
-// lists are already ordered; json.MarshalIndent preserves slice order and
-// sorts map keys).
+// marshalJSON renders the machine-readable twin: the bootstrap
+// declarations the reference's first section renders, plus the dynamic item
+// list its second section renders. The top level is a struct, not a map, so
+// the two sections keep the document's own order (slice order inside each is
+// already deterministic) rather than a map's key order.
 func (d *document) marshalJSON() string {
-	payload := map[string]any{
-		"generated_by":            "tools/configrefgen (go run .)",
-		"items":                   d.Items,
-		"declared_bootstrap_keys": d.DeclaredModules,
-		"modules_declaring_none":  d.SilentModules,
+	payload := struct {
+		BootstrapKeys []declaredModule `json:"bootstrap_keys"`
+		DynamicItems  []referenceItem  `json:"dynamic_items"`
+	}{
+		BootstrapKeys: d.DeclaredModules,
+		DynamicItems:  d.Items,
 	}
 	out, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -299,29 +292,20 @@ const bootstrapIntro = "The bootstrap layer is the process-start input a speed-b
 const bootstrapSecretsNote = "Secret materials (Sensitive above) must come from a secret store in a real deployment, never from a committed file. The Unset fallback column states what an unset key resolves to; for key materials that is a documented, recognizable, NON-SECRET development default a real deployment must override, and each declaration's own text says what its key protects and how it is isolated from every other key.\n\n" +
 	"A deployment that would rather manage one secret than one per key can derive a declared key's material from a single 32-byte root key with `config.DeriveBootstrapKeyMaterial(rootKey, keyPath)`: the material is HKDF-SHA256 over a purpose string that embeds the declared key path verbatim -- `speed.config.master_key.v1` for `config.master_key`, `speed.authn.blind_index_key.v1` and `speed.authn.pii_cipher_key.v1` for authn's two, and `speed.notification.contact_index_key.v1`, `speed.org.invitation_email_index_key.v1` and `speed.pki.local_key_cipher_key.v1` for the remaining three. Which variable carries the root key, and which carries a single key's own override, is the host's choice: the names belong to the host, and the platform only receives the bytes. Precedence is the host's to apply, and the supported shape is \"explicit beats derived\" -- an individually configured key always wins over the value derived for it. Because a purpose embeds the declared key path, renaming a declared key path is a rotation of that key's material, and must ship as one."
 
-// renderDeclaredModules renders the per-module bootstrap-key declarations, and
-// the modules that declared none.
+// renderDeclaredModules renders the per-module bootstrap-key declarations.
 func (d *document) renderDeclaredModules() string {
 	var b strings.Builder
 	b.WriteString("### Bootstrap keys declared by platform modules\n\n")
-	b.WriteString("Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The tables below are rendered from `reg.Bootstrap` itself.\n\n")
+	b.WriteString("Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The tables below are rendered from `reg.Bootstrap` itself. The Env variable column is the name the loader derives from the key path under its default prefix, which is what an unpinned host field reads; a host that pins a different name for its own field is exercising its own naming choice.\n\n")
 	for _, module := range d.DeclaredModules {
 		b.WriteString("**" + module.Name + "**\n\n")
-		b.WriteString("| Key | Format | Sensitive | Unset fallback | What the key protects |\n")
-		b.WriteString("|---|---|---|---|---|\n")
+		b.WriteString("| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |\n")
+		b.WriteString("|---|---|---|---|---|---|\n")
 		for _, key := range module.Keys {
 			sensitive := strconv.FormatBool(key.Sensitive)
-			b.WriteString("| `" + key.Key + "` | " + key.Format + " | " + sensitive + " | " + escapeCell(key.Default) + " | " + escapeCell(key.Description) + " |\n")
+			b.WriteString("| `" + key.Key + "` | `" + key.Env + "` | " + key.Format + " | " + sensitive + " | " + escapeCell(key.Default) + " | " + escapeCell(key.Description) + " |\n")
 		}
 		b.WriteString("\n")
-	}
-	if len(d.SilentModules) > 0 {
-		quoted := make([]string, len(d.SilentModules))
-		for i, name := range d.SilentModules {
-			quoted[i] = "`" + name + "`"
-		}
-		b.WriteString("Every other module in this reference's composition declares no bootstrap keys: " + strings.Join(quoted, ", ") +
-			". That is an honest state rather than a gap -- a module that consumes no process-start input declares nothing, and nothing asks it for a placeholder.\n\n")
 	}
 	b.WriteString("A key belongs to exactly one configuration layer. A bootstrap key is process-start input, resolved once and fixed for the process's lifetime; a runtime item (the next section) is a per-tenant value an operator edits while the process runs. Declaring the same dotted key on both layers is refused at startup and in this generator, because one identifier cannot carry two meanings, two defaults and two edit surfaces.\n")
 	return b.String()

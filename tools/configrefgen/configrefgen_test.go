@@ -12,6 +12,10 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
+	// loader is go/pkgcore/config: the package whose own EnvName rule the
+	// rendered env column must reproduce, so the test compares the artifacts
+	// against the loader rather than against a second copy of the rule.
+	loader "github.com/vislake/speed/go/pkgcore/config"
 )
 
 // repoRootFromTest locates the repository root above the package directory
@@ -169,8 +173,8 @@ func TestSitePageTargetsTheUserGuideArea(t *testing.T) {
 // passes. (The committed bytes' freshness is --check's separate job; this gate
 // is about the correspondence, which no byte comparison can see.)
 func TestRenderedDeclaredKeysMatchTheCensus(t *testing.T) {
-	svc, declared, composed := composeHost(t)
-	doc, err := buildDocument(svc.Describe(), declared, composed)
+	svc, declared := composeHost(t)
+	doc, err := buildDocument(svc.Describe(), declared)
 	if err != nil {
 		t.Fatalf("buildDocument: %v", err)
 	}
@@ -197,17 +201,17 @@ func TestRenderedDeclaredKeysMatchTheCensus(t *testing.T) {
 	}
 
 	var payload struct {
-		Declared []struct {
+		BootstrapKeys []struct {
 			Keys []struct {
 				Key string `json:"key"`
 			} `json:"keys"`
-		} `json:"declared_bootstrap_keys"`
+		} `json:"bootstrap_keys"`
 	}
 	if err := json.Unmarshal([]byte(doc.marshalJSON()), &payload); err != nil {
 		t.Fatalf("unmarshal the JSON twin: %v", err)
 	}
 	got := make(map[string]bool)
-	for _, module := range payload.Declared {
+	for _, module := range payload.BootstrapKeys {
 		for _, key := range module.Keys {
 			if got[key.Key] {
 				t.Errorf("docs/config-reference.json carries %s more than once", key.Key)
@@ -220,10 +224,68 @@ func TestRenderedDeclaredKeysMatchTheCensus(t *testing.T) {
 	}
 }
 
-// bootstrapSectionKeys collects the key-path tokens of the bootstrap section's
-// rendered table rows: the first backticked cell of every "| `…` |" line
-// between the section heading and the dynamic section's heading.
-func bootstrapSectionKeys(rendered string) map[string]bool {
+// TestRenderedEnvNamesMatchTheLoaderRule pins the Env variable column's
+// content in every rendering against the loader's own derivation rule: each
+// row's cell -- the Markdown table's own column, the site page's copy of it,
+// and the JSON twin's env field -- must be exactly
+// loader.EnvName(loader.EnvPrefix, the row's key path). The column tells an
+// operator which variable a stock loader reads for a declared key; a
+// re-derived spelling here would print a name the loader never reads, which
+// is the drift this test exists to catch.
+func TestRenderedEnvNamesMatchTheLoaderRule(t *testing.T) {
+	svc, declared := composeHost(t)
+	doc, err := buildDocument(svc.Describe(), declared)
+	if err != nil {
+		t.Fatalf("buildDocument: %v", err)
+	}
+
+	want := make(map[string]string, len(declared))
+	for _, key := range declared {
+		want[key.Key] = loader.EnvName(loader.EnvPrefix, key.Key)
+	}
+	if len(want) == 0 {
+		t.Fatal("the composed host declared no bootstrap keys; the loader rule is this gate's other side")
+	}
+
+	for _, rendered := range []struct {
+		name string
+		text string
+	}{
+		{"docs/config-reference.md", doc.renderMarkdown()},
+		{sitePagePath, doc.sitePage()},
+	} {
+		got := bootstrapSectionEnvCells(rendered.text)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s renders the env names %v, want the loader rule's %v", rendered.name, got, want)
+		}
+	}
+
+	var payload struct {
+		BootstrapKeys []struct {
+			Keys []struct {
+				Key string `json:"key"`
+				Env string `json:"env"`
+			} `json:"keys"`
+		} `json:"bootstrap_keys"`
+	}
+	if err := json.Unmarshal([]byte(doc.marshalJSON()), &payload); err != nil {
+		t.Fatalf("unmarshal the JSON twin: %v", err)
+	}
+	got := make(map[string]string, len(declared))
+	for _, module := range payload.BootstrapKeys {
+		for _, key := range module.Keys {
+			got[key.Key] = key.Env
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the JSON twin carries the env names %v, want the loader rule's %v", got, want)
+	}
+}
+
+// bootstrapSection narrows a rendered page to its bootstrap section: from the
+// bootstrap heading (inclusive) to the dynamic heading (exclusive), the region
+// both bootstrap-section collectors read.
+func bootstrapSection(rendered string) string {
 	section := rendered
 	if i := strings.Index(section, "## Bootstrap configuration"); i >= 0 {
 		section = section[i:]
@@ -231,8 +293,14 @@ func bootstrapSectionKeys(rendered string) map[string]bool {
 	if i := strings.Index(section, "## Dynamic configuration"); i >= 0 {
 		section = section[:i]
 	}
+	return section
+}
+
+// bootstrapSectionKeys collects the key-path tokens of the bootstrap section's
+// rendered table rows: the first backticked cell of every "| `…` |" line.
+func bootstrapSectionKeys(rendered string) map[string]bool {
 	keys := map[string]bool{}
-	for _, line := range strings.Split(section, "\n") {
+	for _, line := range strings.Split(bootstrapSection(rendered), "\n") {
 		if !strings.HasPrefix(line, "| `") {
 			continue
 		}
@@ -241,6 +309,26 @@ func bootstrapSectionKeys(rendered string) map[string]bool {
 		}
 	}
 	return keys
+}
+
+// bootstrapSectionEnvCells collects the first two backticked cells of every
+// bootstrap-section table row -- the key path and the env name -- so the
+// rendered column can be compared with the loader rule cell by cell.
+func bootstrapSectionEnvCells(rendered string) map[string]string {
+	cells := map[string]string{}
+	for _, line := range strings.Split(bootstrapSection(rendered), "\n") {
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		key, rest, ok := strings.Cut(strings.TrimPrefix(line, "| `"), "`")
+		if !ok || key == "" {
+			continue
+		}
+		if env, _, ok := strings.Cut(strings.TrimPrefix(rest, " | `"), "`"); ok {
+			cells[key] = env
+		}
+	}
+	return cells
 }
 
 func sortedKeys(keys map[string]bool) []string {
@@ -258,8 +346,8 @@ func sortedKeys(keys map[string]bool) []string {
 func TestOutputsAreDeterministic(t *testing.T) {
 	root := repoRootFromTest(t)
 
-	svc, declared, composed := composeHost(t)
-	doc, err := buildDocument(svc.Describe(), declared, composed)
+	svc, declared := composeHost(t)
+	doc, err := buildDocument(svc.Describe(), declared)
 	if err != nil {
 		t.Fatalf("buildDocument: %v", err)
 	}
@@ -268,8 +356,8 @@ func TestOutputsAreDeterministic(t *testing.T) {
 		t.Fatalf("renderOutputs: %v", err)
 	}
 
-	svc2, declared2, composed2 := composeHost(t)
-	doc2, err := buildDocument(svc2.Describe(), declared2, composed2)
+	svc2, declared2 := composeHost(t)
+	doc2, err := buildDocument(svc2.Describe(), declared2)
 	if err != nil {
 		t.Fatalf("second buildDocument: %v", err)
 	}
@@ -295,8 +383,8 @@ func TestOutputsAreDeterministic(t *testing.T) {
 // the generated page: Hugo front matter as the first bytes, and the tables the
 // reference renders, so the page is the reference rather than a pointer to it.
 func TestSitePageCarriesFrontMatter(t *testing.T) {
-	svc, declared, composed := composeHost(t)
-	doc, err := buildDocument(svc.Describe(), declared, composed)
+	svc, declared := composeHost(t)
+	doc, err := buildDocument(svc.Describe(), declared)
 	if err != nil {
 		t.Fatalf("buildDocument: %v", err)
 	}
@@ -319,19 +407,15 @@ func TestSitePageCarriesFrontMatter(t *testing.T) {
 
 // TestDeclaredModulesCoverTheCensus pins the per-module rendering against the
 // declarations themselves: every declared key appears exactly once, under the
-// module its key names, and the modules that declared nothing are reported
-// rather than omitted.
+// module whose prefix its key path carries.
 func TestDeclaredModulesCoverTheCensus(t *testing.T) {
-	declared, composed := composeDeclarations(t)
+	declared := composeDeclarations(t)
 
-	modules, silent := declaredKeys(declared, composed)
+	modules := declaredKeys(declared)
 	seen := 0
 	for _, module := range modules {
 		for _, key := range module.Keys {
 			seen++
-			if module.Name != key.Module {
-				t.Errorf("key %s is grouped under %s, want its own module %s", key.Key, module.Name, key.Module)
-			}
 			if !strings.HasPrefix(key.Key, module.Name+".") {
 				t.Errorf("key %s is grouped under %s, but does not carry that module's prefix", key.Key, module.Name)
 			}
@@ -340,33 +424,117 @@ func TestDeclaredModulesCoverTheCensus(t *testing.T) {
 	if seen != len(declared) {
 		t.Errorf("the rendering covers %d declared keys, the census has %d", seen, len(declared))
 	}
-	if len(silent) == 0 {
-		t.Error("no module was reported as declaring no bootstrap keys; the composed set always has some")
+}
+
+// TestJSONTwinShapeIsPinned pins the restructure the JSON twin carries: the
+// top level holds exactly the two sections, and every bootstrap row holds
+// exactly the six declared fields. DisallowUnknownFields is the regression
+// latch for the fields this shape retired (a row's own module, a dangling
+// example), and the key-set comparison is the other direction -- a dropped
+// field fails as loudly as an unexpected one.
+func TestJSONTwinShapeIsPinned(t *testing.T) {
+	svc, declared := composeHost(t)
+	doc, err := buildDocument(svc.Describe(), declared)
+	if err != nil {
+		t.Fatalf("buildDocument: %v", err)
 	}
-	for _, name := range silent {
-		for _, module := range modules {
-			if module.Name == name {
-				t.Errorf("module %s is reported as silent and as declaring keys", name)
+	raw := doc.marshalJSON()
+
+	var topLevel map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &topLevel); err != nil {
+		t.Fatalf("unmarshal the JSON twin's top level: %v", err)
+	}
+	if len(topLevel) != 2 {
+		t.Fatalf("the JSON twin's top level carries %d keys (%v), want exactly the two sections", len(topLevel), sortedRawKeys(topLevel))
+	}
+	for _, section := range []string{"bootstrap_keys", "dynamic_items"} {
+		if _, ok := topLevel[section]; !ok {
+			t.Fatalf("the JSON twin's top level is missing %q (carries %v)", section, sortedRawKeys(topLevel))
+		}
+	}
+
+	// The strict decode: any unknown field anywhere in the structures below
+	// (a top-level map key, a bootstrap group key, a bootstrap row key) fails.
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var payload struct {
+		BootstrapKeys []struct {
+			Module string `json:"module"`
+			Keys   []struct {
+				Key         string `json:"key"`
+				Env         string `json:"env"`
+				Format      string `json:"format"`
+				Default     string `json:"default"`
+				Sensitive   bool   `json:"sensitive"`
+				Description string `json:"description"`
+			} `json:"keys"`
+		} `json:"bootstrap_keys"`
+		DynamicItems []json.RawMessage `json:"dynamic_items"`
+	}
+	if err := dec.Decode(&payload); err != nil {
+		t.Fatalf("strict decode of the JSON twin (an unknown field means a retired one crept back): %v", err)
+	}
+	totalRows := 0
+	for _, group := range payload.BootstrapKeys {
+		totalRows += len(group.Keys)
+	}
+	if totalRows != len(declared) {
+		t.Fatalf("the JSON twin renders %d bootstrap rows, the census declares %d", totalRows, len(declared))
+	}
+
+	// The exact field set per row, from the raw bytes.
+	var grouped struct {
+		BootstrapKeys []struct {
+			Keys []map[string]json.RawMessage `json:"keys"`
+		} `json:"bootstrap_keys"`
+	}
+	if err := json.Unmarshal([]byte(raw), &grouped); err != nil {
+		t.Fatalf("unmarshal the bootstrap groups: %v", err)
+	}
+	wantFields := map[string]bool{"key": true, "env": true, "format": true, "default": true, "sensitive": true, "description": true}
+	rows := 0
+	for _, module := range grouped.BootstrapKeys {
+		for _, row := range module.Keys {
+			rows++
+			if len(row) != len(wantFields) {
+				t.Fatalf("bootstrap row %v carries %d fields, want exactly %d (%v)", sortedRawKeys(row), len(row), len(wantFields), sortedRawKeys(wantFields))
+			}
+			for field := range wantFields {
+				if _, ok := row[field]; !ok {
+					t.Fatalf("bootstrap row %v is missing field %q", sortedRawKeys(row), field)
+				}
 			}
 		}
 	}
+	if rows != len(declared) {
+		t.Fatalf("the row walk covered %d bootstrap rows, the census declares %d", rows, len(declared))
+	}
+}
+
+func sortedRawKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // composeHost boots the composed schema host and returns the snapshot's parts,
 // failing the test on any error.
-func composeHost(t *testing.T) (*config.Service, []pkgcore.BootstrapKey, []string) {
+func composeHost(t *testing.T) (*config.Service, []pkgcore.BootstrapKey) {
 	t.Helper()
 	snapshot, err := schemaHost(context.Background())
 	if err != nil {
 		t.Fatalf("schemaHost: %v", err)
 	}
-	return snapshot.service, snapshot.declaredKeys, snapshot.composedModules
+	return snapshot.service, snapshot.declaredKeys
 }
 
 // composeDeclarations boots the composed host and returns only the bootstrap
 // census the reconciliation tests need.
-func composeDeclarations(t *testing.T) ([]pkgcore.BootstrapKey, []string) {
+func composeDeclarations(t *testing.T) []pkgcore.BootstrapKey {
 	t.Helper()
-	_, declared, composed := composeHost(t)
-	return declared, composed
+	_, declared := composeHost(t)
+	return declared
 }

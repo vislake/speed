@@ -19,40 +19,38 @@ A deployment that would rather manage one secret than one per key can derive a d
 
 ### Bootstrap keys declared by platform modules
 
-Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The tables below are rendered from `reg.Bootstrap` itself.
+Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The tables below are rendered from `reg.Bootstrap` itself. The Env variable column is the name the loader derives from the key path under its default prefix, which is what an unpinned host field reads; a host that pins a different name for its own field is exercising its own naming choice.
 
 **authn**
 
-| Key | Format | Sensitive | Unset fallback | What the key protects |
-|---|---|---|---|---|
-| `authn.blind_index_key` | hexkey | true | documented non-secret development default | HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key. |
-| `authn.pii_cipher_key` | hexkey | true | documented non-secret development default | AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below. |
+| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|---|
+| `authn.blind_index_key` | `SPEED_AUTHN__BLIND_INDEX_KEY` | hexkey | true | documented non-secret development default | HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key. |
+| `authn.pii_cipher_key` | `SPEED_AUTHN__PII_CIPHER_KEY` | hexkey | true | documented non-secret development default | AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below. |
 
 **config**
 
-| Key | Format | Sensitive | Unset fallback | What the key protects |
-|---|---|---|---|---|
-| `config.master_key` | hexkey | true | documented non-secret development default | Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input. |
+| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|---|
+| `config.master_key` | `SPEED_CONFIG__MASTER_KEY` | hexkey | true | documented non-secret development default | Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input. |
 
 **notification**
 
-| Key | Format | Sensitive | Unset fallback | What the key protects |
-|---|---|---|---|---|
-| `notification.contact_index_key` | hexkey | true | documented non-secret development default | HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key. |
+| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|---|
+| `notification.contact_index_key` | `SPEED_NOTIFICATION__CONTACT_INDEX_KEY` | hexkey | true | documented non-secret development default | HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key. |
 
 **org**
 
-| Key | Format | Sensitive | Unset fallback | What the key protects |
-|---|---|---|---|---|
-| `org.invitation_email_index_key` | hexkey | true | documented non-secret development default | HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key. |
+| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|---|
+| `org.invitation_email_index_key` | `SPEED_ORG__INVITATION_EMAIL_INDEX_KEY` | hexkey | true | documented non-secret development default | HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key. |
 
 **pki**
 
-| Key | Format | Sensitive | Unset fallback | What the key protects |
-|---|---|---|---|---|
-| `pki.local_key_cipher_key` | hexkey | true | documented non-secret development default | AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one. |
-
-Every other module in this reference's composition declares no bootstrap keys: `compliance`, `metering`, `sharing`. That is an honest state rather than a gap -- a module that consumes no process-start input declares nothing, and nothing asks it for a placeholder.
+| Key | Env variable | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|---|
+| `pki.local_key_cipher_key` | `SPEED_PKI__LOCAL_KEY_CIPHER_KEY` | hexkey | true | documented non-secret development default | AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one. |
 
 A key belongs to exactly one configuration layer. A bootstrap key is process-start input, resolved once and fixed for the process's lifetime; a runtime item (the next section) is a per-tenant value an operator edits while the process runs. Declaring the same dotted key on both layers is refused at startup and in this generator, because one identifier cannot carry two meanings, two defaults and two edit surfaces.
 

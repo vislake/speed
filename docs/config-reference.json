@@ -1,11 +1,11 @@
 {
-  "declared_bootstrap_keys": [
+  "bootstrap_keys": [
     {
       "module": "authn",
       "keys": [
         {
           "key": "authn.blind_index_key",
-          "module": "authn",
+          "env": "SPEED_AUTHN__BLIND_INDEX_KEY",
           "format": "hexkey",
           "default": "documented non-secret development default",
           "sensitive": true,
@@ -13,7 +13,7 @@
         },
         {
           "key": "authn.pii_cipher_key",
-          "module": "authn",
+          "env": "SPEED_AUTHN__PII_CIPHER_KEY",
           "format": "hexkey",
           "default": "documented non-secret development default",
           "sensitive": true,
@@ -26,7 +26,7 @@
       "keys": [
         {
           "key": "config.master_key",
-          "module": "config",
+          "env": "SPEED_CONFIG__MASTER_KEY",
           "format": "hexkey",
           "default": "documented non-secret development default",
           "sensitive": true,
@@ -39,7 +39,7 @@
       "keys": [
         {
           "key": "notification.contact_index_key",
-          "module": "notification",
+          "env": "SPEED_NOTIFICATION__CONTACT_INDEX_KEY",
           "format": "hexkey",
           "default": "documented non-secret development default",
           "sensitive": true,
@@ -52,7 +52,7 @@
       "keys": [
         {
           "key": "org.invitation_email_index_key",
-          "module": "org",
+          "env": "SPEED_ORG__INVITATION_EMAIL_INDEX_KEY",
           "format": "hexkey",
           "default": "documented non-secret development default",
           "sensitive": true,
@@ -65,7 +65,7 @@
       "keys": [
         {
           "key": "pki.local_key_cipher_key",
-          "module": "pki",
+          "env": "SPEED_PKI__LOCAL_KEY_CIPHER_KEY",
           "format": "hexkey",
           "default": "documented non-secret development default",
           "sensitive": true,
@@ -74,8 +74,7 @@
       ]
     }
   ],
-  "generated_by": "tools/configrefgen (go run .)",
-  "items": [
+  "dynamic_items": [
     {
       "key": "authn.access_token_ttl",
       "module": "authn",
@@ -771,10 +770,5 @@
       "consumers": "sharing (the owning module reads the value at runtime)",
       "description": "Default share-link expiry applied when a caller does not specify one."
     }
-  ],
-  "modules_declaring_none": [
-    "compliance",
-    "metering",
-    "sharing"
   ]
 }

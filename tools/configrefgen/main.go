@@ -32,11 +32,12 @@
 //     module that consumes process-start input declares it on the registry's
 //     bootstrap seat (pkgcore.BootstrapKey, reg.Bootstrap.Add), and this
 //     command renders those declarations -- what the key protects, its
-//     format, whether it is secret material, the fallback an operator should
+//     format, whether it is secret material, the environment variable name
+//     the loader derives from the key path, the fallback an operator should
 //     expect -- straight from the census the same composition produced, never
 //     from a hand-kept copy. A module that consumes no process-start input
-//     declares no keys; the reference says so, rather than filling the gap
-//     with a placeholder. The host side stays out of this reference on
+//     declares no keys, an honest state the reference fills with no
+//     placeholder. The host side stays out of this reference on
 //     purpose: the variables an assembling application reads are that host's
 //     own surface, documented where that host lives, while this
 //     repository-wide reference is the platform surface -- the declared keys
@@ -108,7 +109,7 @@ func run(args []string) int {
 		return 1
 	}
 
-	doc, err := buildDocument(snapshot.service.Describe(), snapshot.declaredKeys, snapshot.composedModules)
+	doc, err := buildDocument(snapshot.service.Describe(), snapshot.declaredKeys)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "configrefgen:", err)
 		return 1
