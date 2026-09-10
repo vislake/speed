@@ -62,7 +62,16 @@ TESTDATA_REL = os.path.join(RULES_REL, "testdata")
 SCAN_ROOTS = ("go", "examples", "tools")
 
 _CONST_SINGLE_RE = re.compile(r'\bconst\s+([A-Za-z_]\w*)\s*=\s*"([^"]*)"')
-_CONST_BLOCK_RE = re.compile(r"\bconst\s*\((.*?)\)", re.S)
+# A gofmt'd const block ends with a line holding its closing paren, so the
+# multi-line form is matched up to that line: a paren inside a comment or a
+# string in the block must not end the block early (it used to, which hid
+# every entry below such a paren from the const map).
+_CONST_BLOCK_RE = re.compile(r"\bconst\s*\((.*?)\n\s*\)", re.S)
+# A block written on one line has no line to anchor to; it is matched by the
+# inline form instead. Both forms run over the same text -- a truncated
+# inline match can only add the entries it did capture, never a wrong value
+# for a name the multi-line form already resolved.
+_CONST_BLOCK_INLINE_RE = re.compile(r"\bconst\s*\(([^)]*)\)")
 _CONST_BLOCK_ENTRY_RE = re.compile(r'([A-Za-z_]\w*)\s*=\s*"([^"]*)"')
 _ENV_READ_RE = re.compile(r"\bos\.(?:Getenv|LookupEnv)\(\s*([^)]*?)\s*\)")
 
@@ -77,7 +86,7 @@ def env_literals_read(text):
     values = {}
     for name, value in _CONST_SINGLE_RE.findall(text):
         values[name] = value
-    for block in _CONST_BLOCK_RE.findall(text):
+    for block in _CONST_BLOCK_RE.findall(text) + _CONST_BLOCK_INLINE_RE.findall(text):
         for name, value in _CONST_BLOCK_ENTRY_RE.findall(block):
             values[name] = value
     for arg in _ENV_READ_RE.findall(text):
