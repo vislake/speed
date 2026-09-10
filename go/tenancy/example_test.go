@@ -200,6 +200,43 @@ func ExampleWithAllowlist() {
 	// status: 403
 }
 
+// ExampleAllowlistGETAndHEAD shows the two-method exemption a liveness
+// route set needs. net/http's ServeMux serves HEAD from a registered
+// "GET "+path pattern (Go's GET-implies-HEAD convenience), but
+// Middleware matches (method, path) exactly, so allowlisting GET alone
+// would leave HEAD refused the moment a probe or scraper fetches the
+// route with HEAD -- which is exactly what uptime monitors do.
+func ExampleAllowlistGETAndHEAD() {
+	resolver := exampleTokenResolver{"good-token": "acme"}
+
+	protected := tenancy.Middleware(resolver, tenancy.AllowlistGETAndHEAD("/healthz", "/metrics"))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tenant, ok := pkgcore.TenantFromContext(r.Context())
+			fmt.Printf("%s %s: tenant=%q ok=%t\n", r.Method, r.URL.Path, tenant, ok)
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	for _, probe := range []struct{ method, path string }{
+		{http.MethodGet, "/healthz"},
+		{http.MethodHead, "/metrics"},
+		{http.MethodPost, "/healthz"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(probe.method, probe.path, nil)
+		protected.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			// Only the methods outside the exempted pair get refused.
+			fmt.Printf("%s %s: status %d\n", probe.method, probe.path, rec.Code)
+		}
+	}
+
+	// Output:
+	// GET /healthz: tenant="" ok=false
+	// HEAD /metrics: tenant="" ok=false
+	// POST /healthz: status 403
+}
+
 // ExampleWithSystemContext demonstrates the audited wrapper business code
 // should call instead of pkgcore.WithSystemContext directly -- see
 // system_context.go's own doc comment for which code sits below tenancy in

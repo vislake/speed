@@ -112,11 +112,39 @@ type middlewareConfig struct {
 // there is no prefix, wildcard, case-folding or trailing-slash
 // normalization for either. In particular Middleware does not apply
 // net/http's GET-implies-HEAD convenience -- allowlist http.MethodHead
-// explicitly if a health check needs it too.
+// explicitly if a health check needs it too, or use AllowlistGETAndHEAD
+// for the whole GET+HEAD pair at once.
 func WithAllowlist(method string, paths ...string) MiddlewareOption {
 	return func(c *middlewareConfig) {
 		for _, p := range paths {
 			c.allowlist[allowlistKey{method: method, path: p}] = struct{}{}
+		}
+	}
+}
+
+// AllowlistGETAndHEAD exempts every path in paths under BOTH the GET and
+// the HEAD method -- the pair a route that must work before a tenant can
+// be known usually needs, and the pair net/http's ServeMux serves from a
+// single registered "GET "+path pattern (Go's long-standing
+// GET-implies-HEAD convenience, which WithAllowlist deliberately does not
+// extend, since it matches (method, path) exactly).
+//
+// It is WithAllowlist(http.MethodGet, paths...) plus
+// WithAllowlist(http.MethodHead, paths...) in one call. Liveness routes a
+// probe or a scraper may fetch with either method (healthz, metrics, a
+// pre-auth configuration or feature-flag read) belong here: allowlisting
+// GET alone would leave HEAD one middleware change away from a 403 the
+// moment anything probes it with HEAD instead of GET.
+//
+// A route that genuinely serves one method only -- a token-addressed
+// public read, a POST-only acceptance endpoint -- keeps using WithAllowlist
+// directly: mirroring its exemption onto a method it does not serve would
+// widen the exempt surface for nothing.
+func AllowlistGETAndHEAD(paths ...string) MiddlewareOption {
+	return func(c *middlewareConfig) {
+		for _, p := range paths {
+			c.allowlist[allowlistKey{method: http.MethodGet, path: p}] = struct{}{}
+			c.allowlist[allowlistKey{method: http.MethodHead, path: p}] = struct{}{}
 		}
 	}
 }

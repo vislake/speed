@@ -222,6 +222,85 @@ func TestMiddleware_AllowlistScopedToMethod(t *testing.T) {
 	}
 }
 
+// TestAllowlistGETAndHEAD_ExemptsBothMethodsOnEveryGivenPath pins the
+// helper's whole contract: GET and HEAD on each named path proceed with no
+// tenant in context despite a failing resolution, while every other method
+// on those same paths -- and both methods on paths not named -- still fail
+// closed with ErrTenantUnresolved.
+func TestAllowlistGETAndHEAD_ExemptsBothMethodsOnEveryGivenPath(t *testing.T) {
+	resolveErr := errors.New("resolver deliberately failed")
+	paths := []string{"/healthz", "/api/v1/config/public"}
+	mw := Middleware(stubResolver{err: resolveErr}, AllowlistGETAndHEAD(paths...))
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		for _, path := range paths {
+			t.Run(method+" "+path, func(t *testing.T) {
+				handler := &recordingHandler{}
+				req := httptest.NewRequest(method, path, nil)
+				mw(handler).ServeHTTP(httptest.NewRecorder(), req)
+				if !handler.called {
+					t.Fatalf("%s %s reached no handler; AllowlistGETAndHEAD names it in both methods", method, path)
+				}
+				if handler.sawTenantOK {
+					t.Fatalf("%s %s proceeded with a tenant in context; an exempted route carries none", method, path)
+				}
+			})
+		}
+	}
+
+	// Every method outside the pair fails closed on the very same paths.
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		t.Run(method+" is not exempted", func(t *testing.T) {
+			handler := &recordingHandler{}
+			req := httptest.NewRequest(method, paths[0], nil)
+			rec := httptest.NewRecorder()
+			mw(handler).ServeHTTP(rec, req)
+			if handler.called {
+				t.Fatalf("%s %s reached the handler; the helper exempts GET and HEAD only", method, paths[0])
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s %s status = %d, want %d", method, paths[0], rec.Code, http.StatusForbidden)
+			}
+		})
+	}
+
+	// A path the helper was not given is not exempted in either method.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method+" unnamed path", func(t *testing.T) {
+			handler := &recordingHandler{}
+			req := httptest.NewRequest(method, "/api/v1/notes", nil)
+			rec := httptest.NewRecorder()
+			mw(handler).ServeHTTP(rec, req)
+			if handler.called {
+				t.Fatalf("%s on an unnamed path reached the handler", method)
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s on an unnamed path status = %d, want %d", method, rec.Code, http.StatusForbidden)
+			}
+		})
+	}
+}
+
+// TestAllowlistGETAndHEAD_NoPaths_ExemptsNothing pins the degenerate call:
+// an empty path list must behave exactly like no allowlist at all, never
+// like a wildcard.
+func TestAllowlistGETAndHEAD_NoPaths_ExemptsNothing(t *testing.T) {
+	resolveErr := errors.New("resolver deliberately failed")
+	mw := Middleware(stubResolver{err: resolveErr}, AllowlistGETAndHEAD())
+
+	handler := &recordingHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	mw(handler).ServeHTTP(rec, req)
+
+	if handler.called {
+		t.Fatal("an empty path list reached the handler; it must exempt nothing")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
 func TestMiddleware_ResolverReturnsEmptyTenantWithNilError_TreatsAsResolutionFailure(t *testing.T) {
 	// A Resolver is never supposed to report success with a zero-value
 	// tenant, but Middleware must not trust it if one does: propagating an

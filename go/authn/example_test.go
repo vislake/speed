@@ -568,3 +568,30 @@ func ExampleFeatureGateFunc() {
 	// password_login: true
 	// social.google: false
 }
+
+// ExampleExemptSubtree splits authn's own HTTP subtree out of a mounted
+// route set -- the step a host's router performs so this module's surface
+// sits behind authn.Middleware alone: never behind tenancy.Middleware,
+// whose fail-closed tenant resolution would refuse the very sign-in flows
+// authn exists to serve (the enterprise-SSO login start's dynamic
+// "oidc:<tenant>" path is not even expressible as an allowlist entry).
+func ExampleExemptSubtree() {
+	mounted := []pkgcore.MountedRoute{
+		{Path: "/api/v1/notes", Handler: http.NotFoundHandler()},
+		{Path: "/api/v1/authn", Handler: http.NotFoundHandler()},
+		{Path: "/api/v1/org", Handler: http.NotFoundHandler()},
+	}
+
+	subtree, rest := authn.ExemptSubtree(mounted)
+	for _, route := range subtree {
+		fmt.Println("own branch:", route.Path)
+	}
+	for _, route := range rest {
+		fmt.Println("ordinary chain:", route.Path)
+	}
+
+	// Output:
+	// own branch: /api/v1/authn
+	// ordinary chain: /api/v1/notes
+	// ordinary chain: /api/v1/org
+}
