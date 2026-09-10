@@ -2,6 +2,13 @@ module github.com/vislake/speed/go/authn
 
 go 1.26.0
 
+// The bootstrap-key declaration seat (pkgcore.BootstrapKey and
+// pkgcore.Registry.Bootstrap) is not in a released pkgcore version yet, so this
+// module resolves pkgcore from the sibling checkout. A replace directive in a
+// dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/coreos/go-oidc/v3 v3.16.0

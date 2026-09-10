@@ -2,6 +2,13 @@ module github.com/vislake/speed/go/config
 
 go 1.26.0
 
+// The bootstrap-key declaration seat (pkgcore.BootstrapKey and
+// pkgcore.Registry.Bootstrap) is not in a released pkgcore version yet, so this
+// module resolves pkgcore from the sibling checkout. A replace directive in a
+// dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 require (
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/testcontainers/testcontainers-go v0.44.0
