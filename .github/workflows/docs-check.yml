@@ -83,21 +83,26 @@ name: docs-check
 #     examples/reference-app/ (the step below runs it after the pinned
 #     Go install, sharing that toolchain with the markdown-example
 #     check). The reference -- docs/config-reference.md, its
-#     machine-readable twin docs/config-reference.json, and the root
-#     .env.example -- is generated from the live configuration schema:
-#     the generator composes a schema-only host (the six platform
-#     modules that declare configuration items or feature flags plus
-#     go/config, on a throwaway in-memory database), freezes the schema
-#     with
+#     machine-readable twin docs/config-reference.json, the root
+#     .env.example, the derived config.example.json and the docs
+#     site's copy of the reference page -- is generated from the live
+#     configuration schema and the modules' own declarations: the
+#     generator composes a schema-only host (the platform modules that
+#     declare configuration items, feature flags or bootstrap keys,
+#     plus go/config, on a throwaway in-memory database), freezes the
+#     schema with
 #     config.Module.Attach, and renders `config.Service.Describe`'s
-#     snapshot plus the reference app's walked-out environment-variable
-#     inventory. A stale committed reference (a module that added,
-#     removed or changed an item or flag; an environment variable the
-#     app source started reading; a hand-edit of a generated file)
-#     fails this step. The generator's own unit suite
-#     (cmd/configrefgen/*_test.go, run by full-check's reference-app
-#     job) pins the load-verification of config.example.yaml, the
-#     bootstrap inventory/table coverage gate and byte-determinism;
+#     snapshot, the `reg.Bootstrap` declarations and the reference
+#     app's walked-out environment-variable inventory. A stale
+#     committed reference (a module that added, removed or changed an
+#     item, a flag or a bootstrap key; an environment variable the app
+#     source started reading; a declaration and its host-side row
+#     drifting apart; a hand-edit of a generated file) fails this step.
+#     The generator's own unit suite (cmd/configrefgen/*_test.go, run
+#     by full-check's reference-app job) pins the load-verification of
+#     config.example.yaml and its JSON twin, the bootstrap
+#     inventory/table coverage gate, the declaration reconciliation and
+#     byte-determinism;
 #     the PATH SET below adds the declaration sites so an item or env
 #     change re-runs this gate on its own PR, the api-contract
 #     pattern. Needs the pinned Go toolchain, no Docker.
@@ -194,12 +199,17 @@ name: docs-check
 #                                semantics) the reference renders
 #   go/authn/module.go           the six ConfigItem/FeatureFlag
 #   go/metering/module.go          declaration sites the composed schema
-#   go/compliance/module.go        snapshot folds -- an item or flag
-#   go/sharing/module.go           added, changed or removed here changes
-#   go/pki/module.go               the reference, so the gate runs on the
+#   go/compliance/module.go        snapshot folds -- an item or flag added,
+#   go/sharing/module.go           changed or removed here changes the
+#   go/pki/module.go               reference, so the gate runs on the
 #   go/org/module.go               declaring side, the api-contract pattern
+#   go/notification/module.go      the same for a module that declares no
+#                                schema but does declare a bootstrap key
 #   config.example.yaml          the load-verified bootstrap file-format
 #                                example (self-test on change)
+#   config.example.json          its derived JSON counterpart, which the
+#                                same gate checks for drift (self-test on
+#                                change)
 #   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
 #                                needs (self-test on change)
 #   .github/actions/setup-go-env/**    the pinned Go install the markdown-
@@ -240,7 +250,9 @@ on:
       - go/sharing/module.go
       - go/pki/module.go
       - go/org/module.go
+      - go/notification/module.go
       - config.example.yaml
+      - config.example.json
       - .github/actions/setup-hugo-env/**
       - .github/actions/setup-go-env/**
       - .github/workflows/docs-check.yml

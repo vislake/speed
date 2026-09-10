@@ -1,4 +1,85 @@
 {
+  "declared_bootstrap_keys": [
+    {
+      "module": "authn",
+      "keys": [
+        {
+          "key": "authn.blind_index_key",
+          "env": "APP_AUTHN_BLIND_INDEX_KEY",
+          "module": "authn",
+          "format": "hexkey",
+          "default": "documented non-secret development default",
+          "sensitive": true,
+          "description": "HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key."
+        },
+        {
+          "key": "authn.pii_cipher_key",
+          "env": "APP_AUTHN_PII_CIPHER_KEY",
+          "module": "authn",
+          "format": "hexkey",
+          "default": "documented non-secret development default",
+          "sensitive": true,
+          "description": "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below."
+        }
+      ]
+    },
+    {
+      "module": "config",
+      "keys": [
+        {
+          "key": "config.master_key",
+          "env": "APP_CONFIG_KEY",
+          "module": "config",
+          "format": "hexkey",
+          "default": "documented non-secret development default",
+          "sensitive": true,
+          "description": "Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input."
+        }
+      ]
+    },
+    {
+      "module": "notification",
+      "keys": [
+        {
+          "key": "notification.contact_index_key",
+          "env": "APP_NOTIFICATION_INDEX_KEY",
+          "module": "notification",
+          "format": "hexkey",
+          "default": "documented non-secret development default",
+          "sensitive": true,
+          "description": "HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key."
+        }
+      ]
+    },
+    {
+      "module": "org",
+      "keys": [
+        {
+          "key": "org.invitation_email_index_key",
+          "env": "APP_ORG_INDEX_KEY",
+          "module": "org",
+          "format": "hexkey",
+          "default": "documented non-secret development default",
+          "sensitive": true,
+          "description": "HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key."
+        }
+      ]
+    },
+    {
+      "module": "pki",
+      "keys": [
+        {
+          "key": "pki.local_key_cipher_key",
+          "env": "APP_PKI_LOCAL_KEY_CIPHER_KEY",
+          "module": "pki",
+          "format": "hexkey",
+          "default": "documented non-secret development default",
+          "sensitive": true,
+          "description": "AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one."
+        }
+      ]
+    }
+  ],
   "generated_by": "examples/reference-app/cmd/configrefgen (go run ./cmd/configrefgen)",
   "items": [
     {
@@ -1228,5 +1309,10 @@
       "consumers": "sharing (the owning module reads the value at runtime)",
       "description": "Default share-link expiry applied when a caller does not specify one."
     }
+  ],
+  "modules_declaring_none": [
+    "compliance",
+    "metering",
+    "sharing"
   ]
 }

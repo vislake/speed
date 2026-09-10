@@ -1,9 +1,9 @@
 package main
 
-// outputs.go owns the write and --check paths of the three committed
-// outputs. The drift gate compares the committed bytes against a fresh
-// rendering -- never a git diff, so an output that is missing entirely fails
-// the same as one that is stale.
+// outputs.go owns the write and --check paths of the committed outputs. The
+// drift gate compares the committed bytes against a fresh rendering -- never a
+// git diff, so an output that is missing entirely fails the same as one that
+// is stale.
 
 import (
 	"fmt"
@@ -19,27 +19,37 @@ type outputFile struct {
 	content string
 }
 
-// renderOutputs assembles the three committed artifacts.
-func renderOutputs(root string, doc *document, bootRows []bootstrapVar) []outputFile {
-	markdown := doc.renderMarkdown()
-	envExample := renderEnvExample(bootRows)
-	jsonOut := doc.marshalJSON()
-	return []outputFile{
-		{path: "docs/config-reference.md", content: markdown},
-		{path: "docs/config-reference.json", content: jsonOut},
-		{path: ".env.example", content: envExample},
+// renderOutputs assembles the committed artifacts: the reference in both
+// spellings, the environment carrier, the JSON counterpart of the config-file
+// example, and the documentation site's copy of the reference.
+func renderOutputs(root string, doc *document, bootRows []bootstrapVar) ([]outputFile, error) {
+	jsonExample, err := deriveConfigExampleJSON(root)
+	if err != nil {
+		return nil, err
 	}
+	return []outputFile{
+		{path: "docs/config-reference.md", content: doc.renderMarkdown()},
+		{path: "docs/config-reference.json", content: doc.marshalJSON()},
+		{path: ".env.example", content: renderEnvExample(bootRows)},
+		{path: "config.example.json", content: jsonExample},
+		{path: sitePagePath, content: doc.sitePage()},
+	}, nil
 }
 
-// writeOutputs writes the three artifacts and reports what was written.
+// writeOutputs writes the artifacts and reports what was written.
 func writeOutputs(root string, doc *document, bootRows []bootstrapVar) int {
-	for _, out := range renderOutputs(root, doc, bootRows) {
+	outputs, err := renderOutputs(root, doc, bootRows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configrefgen: %v\n", err)
+		return 1
+	}
+	for _, out := range outputs {
 		abs := filepath.Join(root, out.path)
-		// #nosec G301 -- the generator writes committed documentation
-		// (docs/config-reference.* and .env.example) that every repository
-		// reader must be able to read; 0755 is the repository's own
-		// committed directory mode, and the path is the fixed artifact
-		// location below the repository root, never caller input.
+		// #nosec G301 -- the generator writes committed documentation that
+		// every repository reader must be able to read; 0755 is the
+		// repository's own committed directory mode, and the path is the
+		// fixed artifact location below the repository root, never caller
+		// input.
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "configrefgen: %v\n", err)
 			return 1
@@ -59,8 +69,13 @@ func writeOutputs(root string, doc *document, bootRows []bootstrapVar) int {
 // exits nonzero when any differs or is missing, printing the first
 // difference.
 func checkOutputs(root string, doc *document, bootRows []bootstrapVar) int {
+	outputs, err := renderOutputs(root, doc, bootRows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configrefgen: %v\n", err)
+		return 1
+	}
 	stale := false
-	for _, out := range renderOutputs(root, doc, bootRows) {
+	for _, out := range outputs {
 		abs := filepath.Join(root, out.path)
 		// #nosec G304 -- reading the committed artifact back is the drift
 		// gate's whole job; the path is one of the fixed artifact names
@@ -79,26 +94,8 @@ func checkOutputs(root string, doc *document, bootRows []bootstrapVar) int {
 	if stale {
 		return 1
 	}
-	fmt.Printf("docs/config-reference.md, docs/config-reference.json and .env.example are up to date (%d dynamic item(s), %d bootstrap variable(s)).\n", dynamicCount(doc), bootstrapCount(doc))
+	c := doc.counts()
+	fmt.Printf("all %d committed artifacts are up to date (%d bootstrap variable(s), %d declared key(s), %d dynamic item(s)).\n",
+		len(outputs), c.bootstrap, c.declared, c.dynamic)
 	return 0
-}
-
-func dynamicCount(doc *document) int {
-	n := 0
-	for _, it := range doc.Items {
-		if it.Layer == "dynamic" {
-			n++
-		}
-	}
-	return n
-}
-
-func bootstrapCount(doc *document) int {
-	n := 0
-	for _, it := range doc.Items {
-		if it.Layer == "bootstrap" {
-			n++
-		}
-	}
-	return n
 }

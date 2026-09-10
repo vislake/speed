@@ -66,13 +66,15 @@ from pathlib import Path
 # zh-cn: docs/site/public/zh-cn/<page>) -- one entry per page the site
 # ships, matching hugo.toml's BookSection='docs' layout: the home page
 # outside docs/, the two section branches user-guide/ and
-# developer-docs/ (each with its landing page; the error-codes page is
-# the generated one), and the two site-level leaves under docs/.
-# Content pages beyond these are covered by the full-link scan.
+# developer-docs/ (each with its landing page; the configuration and
+# error-codes pages are the generated ones), and the two site-level
+# leaves under docs/. Content pages beyond these are covered by the
+# full-link scan.
 REQUIRED_PAGES_PER_LANGUAGE = [
     "index.html",
     "docs/index.html",
     "docs/user-guide/index.html",
+    "docs/user-guide/configuration/index.html",
     "docs/user-guide/error-codes/index.html",
     "docs/developer-docs/index.html",
     "docs/ai-agents/index.html",

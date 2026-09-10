@@ -1,0 +1,14 @@
+{
+  "dbpath": "reference-app.db",
+  "deploymentmode": "standalone",
+  "port": "8080",
+  "redis": {
+    "addr": ""
+  },
+  "smtp": {
+    "host": "",
+    "password": "",
+    "port": 0,
+    "username": ""
+  }
+}

@@ -40,15 +40,23 @@ func fakeRepoRoot(t *testing.T) string {
 
 // TestRunWritesAndChecksTheOutputsEndToEnd drives run() through the
 // generator's full lifecycle against one fake root: a write pass must
-// exit 0 with all three artifacts present and non-empty at their
-// documented root-relative paths; a --check pass over those fresh
-// outputs must exit 0 (nothing is stale); and once an artifact is
-// deleted and another tampered with, a further --check pass must exit 1
-// -- the drift gate's whole job is refusing a tree whose committed
-// bytes do not match a fresh rendering, and this is that refusal
-// executing against a real schema host and the real app source.
+// exit 0 with every artifact present and non-empty at its documented
+// root-relative path; a --check pass over those fresh outputs must exit 0
+// (nothing is stale); and once an artifact is deleted and another tampered
+// with, a further --check pass must exit 1 -- the drift gate's whole job is
+// refusing a tree whose committed bytes do not match a fresh rendering, and
+// this is that refusal executing against a real schema host and the real app
+// source.
 func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 	root := fakeRepoRoot(t)
+
+	// The JSON example is derived from config.example.yaml, which lives at the
+	// real repository root rather than in the throwaway one: the fake root
+	// carries only the generated artifacts and the source symlink, so the
+	// derivation source is linked in too.
+	if err := os.Symlink(filepath.Join(repoRootFromTest(t), configExampleYAMLPath), filepath.Join(root, configExampleYAMLPath)); err != nil {
+		t.Fatalf("symlink %s: %v", configExampleYAMLPath, err)
+	}
 
 	if code := run([]string{"--repo-root", root}); code != 0 {
 		t.Fatalf("run (write pass) = %d, want 0", code)
@@ -57,6 +65,8 @@ func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 		"docs/config-reference.md",
 		"docs/config-reference.json",
 		".env.example",
+		configExampleJSONPath,
+		sitePagePath,
 	} {
 		info, err := os.Stat(filepath.Join(root, artifact))
 		if err != nil {

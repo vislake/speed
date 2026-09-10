@@ -27,5 +27,8 @@ npm 包的团队。
 
 - [API 参考](api-reference/)——平台完整 HTTP API,由合并 OpenAPI
   契约渲染:每个操作、参数、schema 与错误,按模块分组。
+- [配置参考](configuration/)——speed 系应用解析的每个启动键与运行时
+  配置项:平台模块声明的进程启动键、参考应用自身的变量,以及运维按
+  租户编辑的动态项。
 - [错误码索引](error-codes/)——speed 系 API 可能应答的每个结构化
   错误码,含状态、locale 消息、触发条件与出处。

@@ -1,6 +1,10 @@
 # config.example.yaml -- the optional config-file source of go/pkgcore/config's
 # bootstrap loader, in its official file format (YAML or JSON; the loader's
-# package doc and ExampleWithConfigFile show both).
+# package doc and ExampleWithConfigFile show both). config.example.json beside
+# this file is the same example in the other format: it is DERIVED from this
+# file by examples/reference-app/cmd/configrefgen, never hand-written, so the
+# pair cannot disagree about a key or a value, and its unit test loads both
+# through the real loader.
 #
 # The loader resolves every bootstrap key from four sources, highest priority
 # first:

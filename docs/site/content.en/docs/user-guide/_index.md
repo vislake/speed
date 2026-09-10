@@ -32,6 +32,10 @@ then identity and organization, then the capability modules on top.
 - [API reference](api-reference/) — the complete platform HTTP API,
   rendered from the merged OpenAPI contract: every operation,
   parameter, schema and error, grouped by module.
+- [Configuration reference](configuration/) — every bootstrap key and
+  runtime configuration item a speed-based application resolves: the
+  process-start keys platform modules declare, the reference app's own
+  variables, and the dynamic items an operator edits per tenant.
 - [Error code index](error-codes/) — every structured error code a
   speed-based API can answer with, with status, locale message,
   triggering condition and source.

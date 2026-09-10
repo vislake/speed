@@ -27,6 +27,13 @@ package main
 // declaration site is the source of the deep doc comment; the app's own
 // DEPLOY.md and examples/reference-app/.env.example carry the operator text
 // this table condenses).
+//
+// The table's key-material rows coexist, for now, with the same keys declared
+// by the platform modules that own them (reg.Bootstrap, rendered as the
+// per-module lists): the app still reads those variables directly, so the
+// variable list is still this table's to render, while the module declarations
+// are the contract side. platformEnvNames bridges the two spellings and
+// reconcileDeclarations fails the generator the moment they disagree.
 
 import (
 	"fmt"
@@ -37,6 +44,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // bootstrapVar is one curated row of the bootstrap layer.
@@ -214,6 +224,98 @@ var bootstrapTable = map[string]bootstrapVar{
 		summary: "Test-and-e2e-only failure injection: a positive N fails the first N self-service provisioning attempts of each account; anything that is not a non-negative whole number refuses boot.",
 		example: "0",
 	},
+}
+
+// platformEnvNames bridges each module-declared bootstrap key to the
+// environment variable the reference app reads it from today.
+//
+// It exists for the transition, and it is the only place the two names meet:
+// the declaration side (reg.Bootstrap.Keys(), rendered as the per-module key
+// lists) spells keys as dotted paths, the host side (the table above, rendered
+// as the variable list) spells them as the app's own variable names, and the
+// two spellings have no derivation between them -- the app's names are flat and
+// single-underscored, while a loader derives APP_AUTHN__PII_CIPHER_KEY from the
+// same key. When the reference app's loader-shaped struct pins each variable
+// with an env tag, the pin becomes the mapping and this table retires with the
+// table rows it reconciles. Until then reconcileDeclarations holds the two
+// sides together: a key declared without a variable (or the other way around),
+// or a pair whose facts disagree, fails the generator instead of shipping a
+// reference that contradicts itself.
+var platformEnvNames = map[string]string{
+	"authn.pii_cipher_key":           "APP_AUTHN_PII_CIPHER_KEY",
+	"authn.blind_index_key":          "APP_AUTHN_BLIND_INDEX_KEY",
+	"org.invitation_email_index_key": "APP_ORG_INDEX_KEY",
+	"notification.contact_index_key": "APP_NOTIFICATION_INDEX_KEY",
+	"pki.local_key_cipher_key":       "APP_PKI_LOCAL_KEY_CIPHER_KEY",
+	"config.master_key":              "APP_CONFIG_KEY",
+}
+
+// reconcileDeclarations checks the module declarations against the host's
+// curated rows for the same keys, returning a problem per disagreement. The
+// gate is two-sided, so neither source can quietly outgrow the other: every
+// declared key must be bridged to exactly one curated row, every bridged row
+// must have exactly one declaration, and the pair must agree on the facts both
+// sides state -- format, sensitivity, fallback and suggested value -- with the
+// declaration's group being the key's own module prefix.
+func reconcileDeclarations(declared []pkgcore.BootstrapKey) []string {
+	var problems []string
+	declaredByKey := make(map[string]pkgcore.BootstrapKey, len(declared))
+	for _, key := range declared {
+		declaredByKey[key.Key] = key
+	}
+	for _, key := range declared {
+		if _, bridged := platformEnvNames[key.Key]; !bridged {
+			problems = append(problems, fmt.Sprintf("module declares the bootstrap key %s but no environment variable is bridged to it; add the pair to platformEnvNames", key.Key))
+		}
+	}
+	for key, env := range platformEnvNames {
+		declaration, isDeclared := declaredByKey[key]
+		if !isDeclared {
+			problems = append(problems, fmt.Sprintf("platformEnvNames bridges %s to %s but no module declares it; drop the pair or declare the key", key, env))
+			continue
+		}
+		row, isCurated := bootstrapTable[env]
+		if !isCurated {
+			problems = append(problems, fmt.Sprintf("platformEnvNames bridges %s to %s but the bootstrap table has no row for it; add one", key, env))
+			continue
+		}
+		if declaration.Format != row.kind {
+			problems = append(problems, fmt.Sprintf("%s: module declares format %q, the bootstrap table says %q", key, declaration.Format, row.kind))
+		}
+		if declaration.Sensitive != row.secret {
+			problems = append(problems, fmt.Sprintf("%s: module Sensitive=%t, the bootstrap table secret=%t", key, declaration.Sensitive, row.secret))
+		}
+		if declaration.Default != row.fallback {
+			problems = append(problems, fmt.Sprintf("%s: module fallback %q, the bootstrap table says %q", key, declaration.Default, row.fallback))
+		}
+		if declaration.Example != row.example {
+			problems = append(problems, fmt.Sprintf("%s: module example %q, the bootstrap table says %q", key, declaration.Example, row.example))
+		}
+		if module := key[:strings.IndexByte(key, '.')]; declaration.Group != module {
+			problems = append(problems, fmt.Sprintf("%s: declaration group is %q, want the key's own module %q", key, declaration.Group, module))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// overlappingKeys reports every key declared on both configuration layers:
+// as a module's bootstrap key and as a runtime configuration item in the
+// schema the reference renders. One dotted key cannot mean both, so a reference
+// that would print the same identifier twice, once per layer, fails instead.
+func overlappingKeys(descriptors []config.ConfigItemDescriptor, declared []pkgcore.BootstrapKey) []string {
+	runtime := make(map[string]struct{}, len(descriptors))
+	for _, d := range descriptors {
+		runtime[d.Key] = struct{}{}
+	}
+	var overlaps []string
+	for _, key := range declared {
+		if _, both := runtime[key.Key]; both {
+			overlaps = append(overlaps, key.Key)
+		}
+	}
+	sort.Strings(overlaps)
+	return overlaps
 }
 
 // extractEnvInventory walks the reference app's non-test Go source and

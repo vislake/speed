@@ -14,7 +14,46 @@ package main
 // Keys map to env variables as SPEED_<UPPERCASED KEY WITH __ FOR DOTS> and
 // to flags as --key.
 
-import "github.com/vislake/speed/go/pkgcore/config"
+import (
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
+
+	"github.com/vislake/speed/go/pkgcore/config"
+)
+
+// configExampleYAMLPath is the hand-written YAML example the JSON counterpart
+// is derived from; configExampleJSONPath is the derived artifact, committed
+// next to it.
+const (
+	configExampleYAMLPath = "config.example.yaml"
+	configExampleJSONPath = "config.example.json"
+)
+
+// deriveConfigExampleJSON renders the JSON counterpart of the repository-root
+// config.example.yaml: the loader accepts YAML or JSON for the same key set, so
+// the two committed examples demonstrate one format each, and deriving the JSON
+// from the YAML means the pair cannot disagree about a key or a value -- a
+// hand-written twin could, and nothing would catch it. The derivation runs the
+// same YAML parser the loader's file source runs, so what it reads is what the
+// loader reads; koanf's own JSON marshalling sorts the keys, keeping the output
+// byte-identical across runs.
+func deriveConfigExampleJSON(root string) (string, error) {
+	path := filepath.Join(root, configExampleYAMLPath)
+	k := koanf.New(".")
+	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+		return "", fmt.Errorf("derive %s from %s: %w", configExampleJSONPath, configExampleYAMLPath, err)
+	}
+	out, err := json.MarshalIndent(k.Raw(), "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal %s: %w", configExampleJSONPath, err)
+	}
+	return string(out) + "\n", nil
+}
 
 // exampleBootstrapConfig is the loader target config.example.yaml is
 // verified against.

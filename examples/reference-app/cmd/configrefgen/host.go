@@ -16,16 +16,23 @@ package main
 // freezes the schema with Attach, and hands the resulting *config.Service
 // to the caller for Describe.
 //
-// The composition deliberately stops at the six schema-declaring platform
-// modules. The reference app's own notes module registers its own app-owned
-// items (brand.site_name and support.reply_email plus its two feature
-// flags); a config reference committed at the repository's docs/ root
-// documents the PLATFORM configuration surface a speed-based application
-// receives from the modules it imports, not one example app's demo items,
-// so notes stays out of the composition and its items out of the reference.
-// A host that wants its own complete reference (own items included) runs
-// the same two calls against its own composition -- go/config's
-// RenderMarkdown doc comment shows the shape.
+// The composition also registers notification, which declares no schema of
+// its own but does declare a process-start key: the bootstrap side of the
+// reference is enumerated from the same boot (reg.Bootstrap.Keys()), so the
+// composed set is every platform module whose declarations this reference
+// renders, on either layer, and no module's declaration can reach the
+// reference without being composed here.
+//
+// The composition deliberately stops at the platform modules. The reference
+// app's own notes module registers its own app-owned items (brand.site_name
+// and support.reply_email plus its two feature flags); a config reference
+// committed at the repository's docs/ root documents the PLATFORM
+// configuration surface a speed-based application receives from the modules
+// it imports, not one example app's demo items, so notes stays out of the
+// composition and its items out of the reference. A host that wants its own
+// complete reference (own items included) runs the same two calls against
+// its own composition -- go/config's RenderMarkdown doc comment shows the
+// shape.
 //
 // The database is a throwaway in-memory SQLite: every module's Register
 // performs no I/O by contract, config's Attach only wires its Service (the
@@ -42,6 +49,7 @@ import (
 	"context"
 	"crypto"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/vislake/speed/go/authn"
@@ -52,6 +60,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
+	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pki"
@@ -118,10 +127,31 @@ func (neverQueue) Cancel(context.Context, jobs.JobID) error {
 	panic("configrefgen: the schema snapshot never cancels a job")
 }
 
+// emptyAddressResolver is a notification.UserAddressResolver that knows no
+// addresses. Register only requires the seam to exist -- a delivery's
+// addresses are resolved at send time, and this host never sends -- so every
+// user resolving to no addresses is the honest answer here.
+type emptyAddressResolver struct{}
+
+// Resolve implements notification.UserAddressResolver.
+func (emptyAddressResolver) Resolve(context.Context, string) (notification.UserAddresses, error) {
+	return notification.UserAddresses{}, nil
+}
+
+// hostSnapshot is what the composed schema-only host hands back: the frozen
+// schema snapshot (the dynamic layer's source), every bootstrap key the
+// composed modules declared on the registry's Bootstrap seat (the platform
+// bootstrap keys' source), and the names of the modules composed, so the
+// reference can state which of them declared no bootstrap key at all.
+type hostSnapshot struct {
+	service         *config.Service
+	declaredKeys    []pkgcore.BootstrapKey
+	composedModules []string
+}
+
 // schemaHost composes the schema-only host and freezes its configuration
-// schema, returning the attached config Service whose Describe is the
-// reference's dynamic-layer source.
-func schemaHost(ctx context.Context) (*config.Service, error) {
+// schema.
+func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	db, err := dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,
 		DSN:     "file:configrefgen?mode=memory&cache=shared",
@@ -166,9 +196,34 @@ func schemaHost(ctx context.Context) (*config.Service, error) {
 		}),
 	)
 
+	// notification is here for its bootstrap-key declaration, not for a
+	// schema: its Register declares no items and no flags, so it changes
+	// nothing the dynamic layer renders. Its constructor and Register demand
+	// the five seams below; each is a value this snapshot never exercises --
+	// a console SMS sender writing to io.Discard, the same two blind indexers
+	// a real host builds from one key, the never-called queue, and a resolver
+	// that knows no addresses.
+	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, snapshotKey, dbkit.NormalizeEmail)
+	if err != nil {
+		return nil, err
+	}
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, snapshotKey, dbkit.NormalizePhoneE164)
+	if err != nil {
+		return nil, err
+	}
+	notificationModule := notification.NewModule(db,
+		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(io.Discard)),
+		notification.WithMailFrom("notifications@configrefgen.invalid"),
+		notification.WithContactEmailIndexer(contactEmailIndexer),
+		notification.WithContactPhoneIndexer(contactPhoneIndexer),
+		notification.WithDeliveryQueue(neverQueue{}),
+		notification.WithUserAddressResolver(emptyAddressResolver{}),
+	)
+
 	modules := []pkgcore.Module{
 		authnModule,
 		orgModule,
+		notificationModule,
 		pki.NewModule(db),
 		metering.NewModule(db),
 		sharing.NewModule(db),
@@ -202,5 +257,9 @@ func schemaHost(ctx context.Context) (*config.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return svc, nil
+	names := make([]string, 0, len(modules))
+	for _, module := range modules {
+		names = append(names, module.Name())
+	}
+	return &hostSnapshot{service: svc, declaredKeys: reg.Bootstrap.Keys(), composedModules: names}, nil
 }
