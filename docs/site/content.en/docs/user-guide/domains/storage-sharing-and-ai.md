@@ -82,9 +82,9 @@ are optional structural seams your host can wire to `metering` and
 
 A clinic uploads a patient's smile-simulation result (a PNG) to
 `storage`; once the three-step transfer protocol completes, `storage`
-enqueues the thumbnail-derive task and the queue's worker (drained from
-`reg.Jobs.Handlers()` exactly as the reference app assembles it) writes
-the derivative row. The clinic then mints a share link over the
+enqueues the thumbnail-derive task and the queue's worker (wired from
+`reg.Jobs` through `jobs.Wire`, exactly as the reference app assembles
+it) writes the derivative row. The clinic then mints a share link over the
 completed object for the patient, the patient opens it without any
 authentication, and a later revocation refuses the very next access.
 The walk runs all of it in one process over an in-memory SQLite
@@ -127,8 +127,8 @@ func uploadDeriveAndShare() {
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:media-walk?mode=memory&cache=shared"})
 	must(err)
 
-	// storage completes onto this queue; the host drains reg.Jobs's
-	// handlers onto it so a real worker derives the thumbnail.
+	// storage completes onto this queue; jobs.Wire hands it every handler
+	// the modules declared so a real worker derives the thumbnail.
 	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
 	media := storage.NewModule(db, storage.WithQueue(queue))
 	links := sharing.NewModule(db)
@@ -141,9 +141,7 @@ func uploadDeriveAndShare() {
 	// at call time — the same path a host takes.
 	reg, err := pkgcore.NewKernel().Bootstrap(ctx, media, links)
 	must(err)
-	for _, handler := range reg.Jobs.Handlers() {
-		must(queue.RegisterHandler(handler.(jobs.Handler)))
-	}
+	must(jobs.Wire(ctx, queue, reg.Jobs))
 	must(queue.Start(ctx))
 	// An 8x8 PNG stands in for the simulation result image.
 	var buf bytes.Buffer

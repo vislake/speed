@@ -67,7 +67,7 @@ base URL 在拨号时受 SSRF 防护。用量记录与权益检查是可选的
 
 诊所把患者的微笑模拟结果图(一张 PNG)传上 `storage`;三步上传协议完
 成后,`storage` 把「生成缩略图」任务入队,队列 worker(按参考应用的
-组装,从 `reg.Jobs.Handlers()` 倒进队列)写出派生行。诊所随后为这张
+组装,以 `jobs.Wire` 从 `reg.Jobs` 接入队列)写出派生行。诊所随后为这张
 已完成的图给患者铸一条分享链接,患者在无任何认证的情况下打开它,
 之后一次撤销让紧接着的下一次访问立即被拒。演练在单进程里、用内存
 SQLite 数据库和真实内核 Bootstrap 跑完全部流程——独立部署模式的寻
@@ -108,8 +108,8 @@ func uploadDeriveAndShare() {
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:media-walk?mode=memory&cache=shared"})
 	must(err)
 
-	// storage completes onto this queue; the host drains reg.Jobs's
-	// handlers onto it so a real worker derives the thumbnail.
+	// storage completes onto this queue; jobs.Wire hands it every handler
+	// the modules declared so a real worker derives the thumbnail.
 	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
 	media := storage.NewModule(db, storage.WithQueue(queue))
 	links := sharing.NewModule(db)
@@ -122,9 +122,7 @@ func uploadDeriveAndShare() {
 	// at call time — the same path a host takes.
 	reg, err := pkgcore.NewKernel().Bootstrap(ctx, media, links)
 	must(err)
-	for _, handler := range reg.Jobs.Handlers() {
-		must(queue.RegisterHandler(handler.(jobs.Handler)))
-	}
+	must(jobs.Wire(ctx, queue, reg.Jobs))
 	must(queue.Start(ctx))
 	// An 8x8 PNG stands in for the simulation result image.
 	var buf bytes.Buffer
