@@ -2,6 +2,13 @@ module github.com/vislake/speed/go/compliance
 
 go 1.26.0
 
+// The periodic-task declaration seat (pkgcore.PeriodicTask and
+// pkgcore.Registry.Schedules) is not in a released pkgcore version yet, so this
+// module resolves pkgcore from the sibling checkout. A replace directive in a
+// dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/config v0.0.1
