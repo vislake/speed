@@ -69,7 +69,7 @@ name: fast-check
 #         coverage rule (every released module: an 80% floor measured
 #         excluding .gen.go statements, plus no decline against the
 #         recorded baseline): every row in tools/coverage-baselines.json
-#         must name one of the 22 gated modules (the 21 go/ modules with
+#         must name one of the 23 gated modules (the 22 go/ modules with
 #         a go.mod plus examples/reference-app) with a real go.mod, and
 #         every gated module must have a row -- so a stale or missing
 #         row cannot silently exempt a module from the comparisons the
@@ -103,13 +103,15 @@ name: fast-check
 #         tools/migration_parity_exceptions.json. Its planted-drift
 #         suite (tools/test_check_migration_parity.py) runs in the same
 #         step pair below.
-#       - tools/check_host_core_parity.py -- the shared-host-kernel gate:
-#         package hostcore exists as one file carried byte-identically by
-#         the reference app and the saasctl template (the copy
-#         materialized into every generated project), and neither host
-#         may re-declare its symbols or re-grow its statements (the serve
-#         loop, the liveness/authn path literals) outside that copy. Its
-#         planted-drift suite (tools/test_check_host_core_parity.py)
+#       - tools/check_host_composition.py -- the shared-composition fork
+#         gate: the host-neutral kernel (authn's mount path, the serve
+#         timeouts, the pre-auth allowlist set, the mounted-route label
+#         seed, the serve/shutdown lifecycle) lives once, in the platform
+#         module go/app, imported by both the reference app and the
+#         saasctl template -- so neither host tree may re-declare its
+#         symbols or re-grow its statements (the serve loop, the
+#         liveness/authn path literals) in its own code. Its
+#         planted-drift suite (tools/test_check_host_composition.py)
 #         runs in the same step pair below.
 #       - tools/check_env_example_consistency.py -- the reference app's
 #         .env.example drift gate: the env variables the host's loader
@@ -239,6 +241,7 @@ jobs:
           - go/jobs
           - go/ratelimit
           - go/rbac
+          - go/app
           - go/org
           - go/authn
           - go/saasctl
@@ -319,7 +322,7 @@ jobs:
       - name: Coverage-baseline checker's unit suite (tools/test_check_coverage_baseline.py)
         run: python3 tools/test_check_coverage_baseline.py
       # Coverage-baseline file health: every row must name a gated
-      # module (docs/internal/20's released set: the 21 go/ modules with
+      # module (docs/internal/20's released set: the 22 go/ modules with
       # a go.mod plus examples/reference-app) with a real go.mod, and
       # every gated module must have a row -- the baselines the
       # go-module-ci coverage leg compares against must themselves be
@@ -357,16 +360,15 @@ jobs:
         run: python3 tools/test_check_migration_parity.py
       - name: Dual-dialect migration parity check
         run: python3 tools/check_migration_parity.py
-      # Shared host kernel: package hostcore exists as one file carried
-      # byte-identically by the reference app and the saasctl template
-      # (the copy `saasctl new` materializes into generated projects), and
-      # neither host may re-declare its symbols or re-grow its statements
-      # outside that copy. The planted-drift suite runs first; then the
-      # gate over the real tree. Pure python, like the checks above.
-      - name: Host-core parity checker's planted-drift suite (tools/test_check_host_core_parity.py)
-        run: python3 tools/test_check_host_core_parity.py
-      - name: Shared host-kernel parity check (internal/hostcore copies)
-        run: python3 tools/check_host_core_parity.py
+      # Shared host composition: the host-neutral kernel lives once, in
+      # the platform module go/app, and neither host tree may re-declare
+      # its symbols or re-grow its statements. The planted-drift suite
+      # runs first; then the gate over the real tree. Pure python, like
+      # the checks above.
+      - name: Host-composition checker's planted-drift suite (tools/test_check_host_composition.py)
+        run: python3 tools/test_check_host_composition.py
+      - name: Shared host-composition fork check
+        run: python3 tools/check_host_composition.py
       # Reference-app env-example consistency: the env variables the
       # host's loader target declares (internal/app/bootstrap.go's
       # config:"env=NAME" pins, the derive option included, plus the

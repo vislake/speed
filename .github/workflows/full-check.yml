@@ -213,6 +213,7 @@ jobs:
           - go/jobs
           - go/ratelimit
           - go/rbac
+          - go/app
           - go/org
           - go/authn
           - go/saasctl

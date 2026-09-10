@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Coverage gate for every released module.
 
-Every released Go module -- the 22 go.work entries: the 21 go/* modules
+Every released Go module -- the 23 go.work entries: the 22 go/* modules
 plus the reference app -- must hold its unit-suite statement coverage
 at or above an 80% floor and must not let it decline against a recorded
 baseline. This script is the mechanism behind that rule: collect (run
@@ -192,6 +192,7 @@ GATED_MODULES = [
     "examples/reference-app",
     "go/admin",
     "go/ai-gateway",
+    "go/app",
     "go/authn",
     "go/billing",
     "go/compliance",
