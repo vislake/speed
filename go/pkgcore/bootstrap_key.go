@@ -90,6 +90,11 @@ type BootstrapKey struct {
 // BootstrapRegistrar collects the bootstrap keys modules declare, mirroring
 // ConfigSchemaRegistrar for the process-start layer. A module declares the
 // keys it consumes during Register and never resolves them itself.
+//
+// One dotted key belongs to exactly one layer: a key registered here is
+// process-start input, resolved once and fixed for the process's lifetime,
+// while an item registered on ConfigSchemaRegistrar is a per-tenant value an
+// operator edits at runtime. Kernel.Bootstrap refuses a key declared on both.
 type BootstrapRegistrar interface {
 	// Add registers bootstrap keys, validating every declaration first. A
 	// declaration with an empty Key, an unknown Format, or Sensitive set
