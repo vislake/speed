@@ -646,8 +646,9 @@ func TestDelivery_UserWithNoAddressesSkipsEveryOutboundChannel(t *testing.T) {
 // recipient path end to end: a business-attested email contact (created
 // verified without a code, per contact.go's ContactCreateInput contract) is
 // delivered to through the real consent gate, the copy renders in the
-// platform default locale, and the settled record names the external
-// recipient class and the contact id -- never a user id.
+// dispatch's own Locale -- the producer-captured requester language -- and
+// the settled record names the external recipient class and the contact id
+// -- never a user id.
 func TestDelivery_ExternalContactReceivesTheRenderedEmail(t *testing.T) {
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
@@ -685,7 +686,7 @@ func TestDelivery_ExternalContactReceivesTheRenderedEmail(t *testing.T) {
 		t.Errorf("mail To = %v, want the verified contact's address", mails[0].To)
 	}
 	if mails[0].Subject != "预约提醒" {
-		t.Errorf("mail subject = %q, want the zh-CN copy (the platform default locale)", mails[0].Subject)
+		t.Errorf("mail subject = %q, want the dispatch locale's zh-CN copy", mails[0].Subject)
 	}
 	if mails[0].Text != "王芳 您好，您预约的 2026-09-10 09:30 快到了。详情请登录查看。" {
 		t.Errorf("mail text = %q, want the zh-CN body rendered with params interpolated", mails[0].Text)
@@ -709,6 +710,79 @@ func TestDelivery_ExternalContactReceivesTheRenderedEmail(t *testing.T) {
 	}
 	if announced := env.host.bus.events(EventInboxCreated); len(announced) != 0 {
 		t.Errorf("bus carries %d inbox-created events for a contact delivery, want none", len(announced))
+	}
+}
+
+// TestDelivery_ExternalContactLocaleChain pins the external contact's
+// copy-language chain and its key consequences: the dispatch's own Locale
+// (the producer-captured requester language) renders the copy, an empty
+// Locale falls to the platform default, and -- because the key is derived
+// from the rendered locale (deliveryLocale) -- an unset Locale and an
+// explicit platform-default Locale are ONE delivery, so a producer that
+// starts capturing the requester language does not double-send against a
+// dispatch that never set the field.
+func TestDelivery_ExternalContactLocaleChain(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "locale-chain@external.example.com",
+		ConsentRef: "consent-ref-locale-chain",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+
+	base := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Params: renderTestParams,
+	}
+
+	t.Run("an unset locale renders the platform default", func(t *testing.T) {
+		d := base
+		if err := env.dispatchAndAttempt(t, d); err != nil {
+			t.Fatalf("delivery attempt: %v", err)
+		}
+		mails := env.host.mailer.messages()
+		if len(mails) != 1 {
+			t.Fatalf("mailer sent %d messages, want the one contact email", len(mails))
+		}
+		if mails[0].Subject != "Appointment reminder" {
+			t.Errorf("mail subject = %q, want the platform default's en-US copy", mails[0].Subject)
+		}
+	})
+
+	// The key equality is the no-double-send property: the same dispatch
+	// spelled with an explicit platform-default locale must derive the same
+	// key as the unset spelling, or the retry/replay convergence would see
+	// two deliveries where one copy was rendered.
+	unsetKey, err := deriveDeliveryKey(deliveryTenant, base, ChannelEmail)
+	if err != nil {
+		t.Fatalf("deriveDeliveryKey(unset): %v", err)
+	}
+	explicit := base
+	explicit.Locale = platformDefaultLocale
+	explicitKey, err := deriveDeliveryKey(deliveryTenant, explicit, ChannelEmail)
+	if err != nil {
+		t.Fatalf("deriveDeliveryKey(explicit default): %v", err)
+	}
+	if unsetKey != explicitKey {
+		t.Errorf("unset-locale key %s != explicit-default key %s, want one delivery for the same rendered copy", unsetKey, explicitKey)
+	}
+
+	other := base
+	other.Locale = "zh-CN"
+	otherKey, err := deriveDeliveryKey(deliveryTenant, other, ChannelEmail)
+	if err != nil {
+		t.Fatalf("deriveDeliveryKey(zh-CN): %v", err)
+	}
+	if otherKey == unsetKey {
+		t.Error("a different rendered locale derived the same key, want a distinct delivery")
 	}
 }
 

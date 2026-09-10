@@ -23,9 +23,11 @@
 //     with the creating user's id; the subscription dispatches the same
 //     type's notification to that creator (RecipientClassUser), whose
 //     channels the notification module resolves against the creator's
-//     preference matrix at send time. Demo users carry no profile, so the
-//     locale is the fixed zh-CN default authn itself uses; a real host
-//     would negotiate the recipient's locale from its own profile store.
+//     preference matrix at send time. The copy's language is the
+//     recipient's stored locale through the AuthnUserLocales adapter
+//     below (the header-only demo identities have no profile row, so for
+//     them the chain lands on the platform default); a real host resolves
+//     the same value from its own profile store.
 //
 //   - the demo patient-message route is the module's external-recipient
 //     leg, a hand-written POST /api/v1/demo/patient-message route that
@@ -34,7 +36,11 @@
 //     tenant. It exists outside the OpenAPI machinery on purpose: it is
 //     host application code, not a module surface, and its trigger is a
 //     scheduling decision (an appointment approaching) that belongs to the
-//     host, never to the notification module.
+//     host, never to the notification module. The route demonstrates the
+//     external-recipient language rule: the requesting staff member's own
+//     language (the request's Accept-Language, negotiated against the
+//     merged catalog) is captured here and dispatched as the copy's
+//     language, because the contact row itself carries none.
 //
 // None of the glue makes the module depend on the host or the host's other
 // modules: every seam below is a structurally-typed implementation of an
@@ -46,16 +52,59 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
+
+// AuthnUserLocales adapts authn's user store to notification's
+// UserLocaleResolver seam: the type directory's fallback tier asks it for
+// the caller's stored locale when the request's Accept-Language matched
+// nothing, and the demo glue's note-created subscription asks it for the
+// note creator's stored language. It is the same two-modules-touching
+// adapter shape the app wires everywhere else -- the host implements, the
+// modules consume, neither module imports the other -- and it holds the
+// authn MODULE rather than a service because this wiring runs before
+// Bootstrap: Service() is nil until authn's Register has run, and a
+// request can only reach the seam after that.
+type AuthnUserLocales struct {
+	authn *authn.Module
+}
+
+// UserLocale implements notification.UserLocaleResolver. A user the store
+// cannot resolve (the header-only demo identities among them) and a user
+// who never chose a language both answer ok=false: "nothing to confirm",
+// not an error -- the same contract the seam's own doc comment states.
+func (a AuthnUserLocales) UserLocale(ctx context.Context, userID string) (string, bool, error) {
+	if a.authn == nil {
+		return "", false, nil
+	}
+	svc := a.authn.Service()
+	if svc == nil {
+		return "", false, nil
+	}
+	user, err := svc.Users().FindByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, authn.ErrNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if user.Locale == "" {
+		return "", false, nil
+	}
+	return user.Locale, true, nil
+}
+
+var _ notification.UserLocaleResolver = AuthnUserLocales{}
 
 // DemoUserAddresses maps the demo user ids this app's flows act as (see
 // demo_subject.go's demo user constants and DemoNotesCreatorUserID) to the
@@ -223,7 +272,7 @@ func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJo
 //
 // The call cannot fail: subscribing to a bus returns no error, and mounting
 // a route on a *http.ServeMux cannot fail for a well-formed pattern.
-func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module) {
+func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module, reg *pkgcore.Registry, userLocales AuthnUserLocales) {
 	// The note-created subscription: notes publishes notes.note.created as
 	// a fact (see internal/notes/handler.go's publishNoteCreated) whenever
 	// a note is created; this subscription dispatches the type of the same
@@ -278,19 +327,29 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 		// pkgcore.WithTenant makes the enqueued job -- and every record it
 		// writes -- belong to the note's tenant.
 		dispatchCtx := pkgcore.WithTenant(context.WithoutCancel(ctx), evt.TenantID)
-		// The creator's locale is fixed to the zh-CN default for the same
-		// reason the address resolver is a static table: demo users have no
-		// profile to negotiate from, and authn's own default locale is
-		// zh-CN. A real host dispatches the locale its profile store
-		// negotiated for the recipient -- and the notification module
-		// renders in exactly that locale, never a fallback.
+		// The creator's language comes from the same authn adapter the type
+		// directory consults: the recipient's stored locale when the profile
+		// store confirms one, the platform default when it does not (the
+		// header-only demo identities have no profile, exactly as they have
+		// no address outside the static table). This is the recipient-tier
+		// half of the delivery chain -- the recipient is known and is not
+		// the requester, so nothing about the publishing request's own
+		// language participates.
+		locale, ok, localeErr := userLocales.UserLocale(dispatchCtx, creatorUserID)
+		if localeErr != nil {
+			logger.Warn("demo notification glue could not read the note creator's locale; dispatching in the platform default",
+				"user_id", creatorUserID, "error", localeErr)
+		}
+		if !ok {
+			locale = i18n.LocaleENUS
+		}
 		_, err := module.Deliveries().Dispatch(dispatchCtx, notification.Dispatch{
 			TypeKey: notes.EventNoteCreated,
 			Recipient: notification.DispatchRecipient{
 				Class:  notification.RecipientClassUser,
 				UserID: creatorUserID,
 			},
-			Locale: i18n.LocaleZHCN,
+			Locale: locale,
 			Params: map[string]any{"note_id": noteID},
 		})
 		if err != nil {
@@ -333,18 +392,27 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 			http.Error(w, "demo patient-message: contact_id is required", http.StatusBadRequest)
 			return
 		}
+		// The requester's own language, captured from this request and
+		// dispatched as the copy's language: an external contact carries no
+		// locale of its own, and the requesting staff member's language is
+		// the contact's first available signal (the producer-captured
+		// requester tier of the dispatch chain). A request naming no
+		// language this deployment's catalog ships dispatches an empty
+		// Locale, and the module renders the platform default.
+		locale := ""
+		if catalog := reg.Locales(); catalog != nil {
+			locale, _ = i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
+		}
 		if _, err := module.Deliveries().Dispatch(r.Context(), notification.Dispatch{
 			TypeKey: demo.TypeKeyPatientReminder,
 			Recipient: notification.DispatchRecipient{
 				Class:     notification.RecipientClassExternal,
 				ContactID: body.ContactID,
 			},
+			Locale: locale,
 			// The demo reminder type's templates take no parameters (see
 			// internal/demo/locales); the copy is a fixed appointment
-			// reminder. An external contact's Locale is ignored by the
-			// module by contract -- its copy renders in the platform
-			// default locale -- so the field stays empty here, exactly as
-			// Dispatch.validate requires for the external class.
+			// reminder.
 			Params: map[string]any{},
 		}); err != nil {
 			http.Error(w, "demo patient-message: dispatch refused: "+err.Error(), http.StatusInternalServerError)
@@ -413,13 +481,24 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 		// and was settled as a duplicate of the first. The note-created
 		// subscription above makes the identical choice for its note_id
 		// parameter.
+		// The recipient's language, resolved from the authn adapter exactly
+		// as the note-created subscription above resolves its creator's:
+		// the recipient's stored locale, else the platform default.
+		locale, ok, localeErr := userLocales.UserLocale(dispatchCtx, recipientUserID)
+		if localeErr != nil {
+			logger.Warn("demo notification glue could not read the simulation recipient's locale; dispatching in the platform default",
+				"user_id", recipientUserID, "error", localeErr)
+		}
+		if !ok {
+			locale = i18n.LocaleENUS
+		}
 		if _, err := module.Deliveries().Dispatch(dispatchCtx, notification.Dispatch{
 			TypeKey: demo.TypeKeySimulationReady,
 			Recipient: notification.DispatchRecipient{
 				Class:  notification.RecipientClassUser,
 				UserID: recipientUserID,
 			},
-			Locale: i18n.LocaleZHCN,
+			Locale: locale,
 			Params: map[string]any{"simulation_job_id": imageJobID},
 		}); err != nil {
 			logger.Warn("demo notification glue could not dispatch the simulation-completed delivery",

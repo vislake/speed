@@ -135,6 +135,15 @@ type Module struct {
 	// Preferences) until the seam arrives.
 	subject SubjectResolver
 
+	// userLocale answers the caller's stored profile locale for the type
+	// directory's fallback tier (WithUserLocaleResolver) -- the second
+	// host seam this module's HTTP surface consumes, consulted only when
+	// the request's Accept-Language matched nothing. Nil is a legal
+	// wiring: the tier is skipped and the chain's platform default
+	// answers, exactly as it does when a wired resolver has no locale to
+	// confirm.
+	userLocale UserLocaleResolver
+
 	// handler serves notification's HTTP surface. Built by Register, once
 	// every Option has already run -- see Register's own doc comment for why
 	// this cannot happen in NewModule.
@@ -224,6 +233,19 @@ func WithUserAddressResolver(resolver UserAddressResolver) Option {
 // its Go service faces (Deliveries, Contacts, Preferences).
 func WithSubjectResolver(resolver SubjectResolver) Option {
 	return func(m *Module) { m.subject = resolver }
+}
+
+// WithUserLocaleResolver injects the seam the type directory consults for
+// the caller's stored profile locale when the request's Accept-Language
+// matched nothing (see UserLocaleResolver's own doc comment in handler.go,
+// and directoryLocale for the chain it participates in). It is OPTIONAL:
+// the tier is a fallback behind the request header, and a host with no
+// profile store -- or one not yet wired -- keeps the chain terminating at
+// the platform default, exactly as a wired resolver with no stored locale
+// does. The reference app wires its authn adapter here, the same shape the
+// registration chains observe from the other side.
+func WithUserLocaleResolver(resolver UserLocaleResolver) Option {
+	return func(m *Module) { m.userLocale = resolver }
 }
 
 // NewModule returns a Module whose tables live in db. Constructing a Module
@@ -433,7 +455,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// attached under the same rule delivery.go's attachHost documents: read
 	// from the registry at call time, never captured here, when
 	// reg.Locales() is still nil.
-	m.handler = NewHandler(m.inbox, m.prefs, m.contacts, m.hub, m.subject)
+	m.handler = NewHandler(m.inbox, m.prefs, m.contacts, m.hub, m.subject, m.userLocale)
 	m.handler.attachHost(reg)
 	reg.Routes.Mount(apiPath, m.handler)
 	return reg.Bootstrap.Add(bootstrapKeyDecl)

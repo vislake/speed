@@ -586,6 +586,14 @@ type ContactCreateInput struct {
 	// event-driven messaging, rate limited on two dimensions (see
 	// contactRateLimits).
 	ConsentRef string
+
+	// Locale is the language the verification-code message renders in:
+	// the requester's own language, which the caller captures from the
+	// creating request (the requester is not the recipient, and a contact
+	// row carries no locale, so this is the contact's first available
+	// signal). Empty means "none available" and the platform default
+	// applies -- see renderContactCode.
+	Locale string
 }
 
 // CreateContact registers one external contact and returns it.
@@ -666,7 +674,7 @@ func (s *ContactService) CreateContact(ctx context.Context, in ContactCreateInpu
 	if err := s.repo.Create(ctx, contact); err != nil {
 		return nil, errInternal(err)
 	}
-	if err := s.sendCode(ctx, contact); err != nil {
+	if err := s.sendCode(ctx, contact, in.Locale); err != nil {
 		// The code never reached the patient; a pending row without a
 		// deliverable code must not survive.
 		if derr := s.repo.Delete(ctx, contact.ID); derr != nil {
@@ -840,6 +848,12 @@ func (s *ContactService) consumePendingCode(ctx context.Context, id, wantHash st
 // ResendCodeInput names the contact whose code should be re-issued.
 type ResendCodeInput struct {
 	ContactID string
+
+	// Locale is the language the resent verification-code message renders
+	// in, captured from the resend request exactly as ContactCreateInput's
+	// own field is captured from the create request; empty falls to the
+	// platform default (see renderContactCode).
+	Locale string
 }
 
 // ResendCode issues a fresh code to a still-pending contact.
@@ -884,7 +898,7 @@ func (s *ContactService) ResendCode(ctx context.Context, in ResendCodeInput) err
 	if err := s.checkCodeSendLimit(ctx, contact.AddressIndex); err != nil {
 		return err
 	}
-	if err := s.sendCode(ctx, contact); err != nil {
+	if err := s.sendCode(ctx, contact, in.Locale); err != nil {
 		return err
 	}
 	return nil
@@ -892,12 +906,11 @@ func (s *ContactService) ResendCode(ctx context.Context, in ResendCodeInput) err
 
 // sendCode stamps a fresh code on contact and sends it over the contact's
 // channel, synchronously. The stamp happens first; the code is rendered at
-// send time in the platform default locale (see renderContactCode -- the
-// contact row carries no locale, so the recipient's language cannot be
-// negotiated); a send that fails
-// leaves the fresh hash on the row as the doc comment of ResendCode
-// explains.
-func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact) error {
+// send time in locale -- the requester-captured language of the operation
+// that triggered the send (see renderContactCode for the chain) -- and a
+// send that fails leaves the fresh hash on the row as the doc comment of
+// ResendCode explains.
+func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact, locale string) error {
 	code, err := generateContactCode()
 	if err != nil {
 		return errInternal(err)
@@ -907,7 +920,7 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact)
 		return errInternal(err)
 	}
 
-	subject, body, err := renderContactCode(s.host.Locales(), contact.Channel, code)
+	subject, body, err := renderContactCode(s.host.Locales(), contact.Channel, locale, code)
 	if err != nil {
 		return err
 	}
@@ -1179,7 +1192,7 @@ func (s *ContactService) ensureDeliverable(ctx context.Context, contactID, typeK
 }
 
 // renderContactCode renders the verification-code message for one channel
-// in the platform default locale, from the host's merged catalog.
+// in locale, from the host's merged catalog.
 //
 // The code travels inside the message as {{.code}}, its lifetime as
 // {{.minutes}} (contactCodeMinutes), so the template text and the
@@ -1189,13 +1202,20 @@ func (s *ContactService) ensureDeliverable(ctx context.Context, contactID, typeK
 // type's copy, so it does not follow render.go's <type_key>.<part>
 // convention for declared types.
 //
-// The locale is fixed at the platform default: the contact row carries no
-// locale, so the recipient's language cannot be negotiated. Every failure
-// -- a nil catalog, an unknown locale, a missing id -- is
+// Locale is the requester-captured language of the operation that
+// triggered the send -- the requester is not the recipient, a contact row
+// carries no locale, and the synchronous create/resend request is the one
+// place the requester is present to speak for itself. An empty locale
+// falls to the platform default; the caller (the HTTP layer) is
+// responsible for having negotiated a supported value, and every failure
+// -- a nil catalog, an unsupported locale, a missing id -- is
 // ErrInternal.WithCause, never a fallback to another language.
-func renderContactCode(catalog *i18n.Catalog, channel, code string) (subject, body string, err error) {
+func renderContactCode(catalog *i18n.Catalog, channel, locale, code string) (subject, body string, err error) {
 	if catalog == nil {
 		return "", "", ErrInternal.WithCause(errors.New("notification: render contact code called with no catalog"))
+	}
+	if locale == "" {
+		locale = platformDefaultLocale
 	}
 	params := map[string]any{
 		"code":    code,
@@ -1203,17 +1223,17 @@ func renderContactCode(catalog *i18n.Catalog, channel, code string) (subject, bo
 	}
 	switch channel {
 	case ChannelSMS:
-		body, err = catalog.Lookup(platformDefaultLocale, "notification.contact.verify_code.sms", params)
+		body, err = catalog.Lookup(locale, "notification.contact.verify_code.sms", params)
 		if err != nil {
 			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code sms: %w", err))
 		}
 		return "", body, nil
 	case ChannelEmail:
-		subject, err = catalog.Lookup(platformDefaultLocale, "notification.contact.verify_code.email.subject", params)
+		subject, err = catalog.Lookup(locale, "notification.contact.verify_code.email.subject", params)
 		if err != nil {
 			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code email subject: %w", err))
 		}
-		body, err = catalog.Lookup(platformDefaultLocale, "notification.contact.verify_code.email.body", params)
+		body, err = catalog.Lookup(locale, "notification.contact.verify_code.email.body", params)
 		if err != nil {
 			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code email body: %w", err))
 		}
@@ -1223,10 +1243,10 @@ func renderContactCode(catalog *i18n.Catalog, channel, code string) (subject, bo
 	}
 }
 
-// platformDefaultLocale is the locale verification-code messages render in
-// when the recipient's own language is unknown -- the platform default, the
-// same zh-CN default the web side's createI18n falls back to last.
-const platformDefaultLocale = "zh-CN"
+// platformDefaultLocale is the platform default language: the tier every
+// locale chain in this module terminates at when nothing else resolves, and
+// the same en-US default the web side's createI18n falls back to last.
+const platformDefaultLocale = "en-US"
 
 // contactRateLimits is the module's rate-limit table, mirroring org's
 // package-constant pattern. Every entry is one dimension of a

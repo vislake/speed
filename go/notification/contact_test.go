@@ -578,6 +578,63 @@ func TestContact_CreateDoubleOptIn_Email_RendersAndStoresHash(t *testing.T) {
 	}
 }
 
+// TestContact_CreateDoubleOptIn_CodeLanguageChain pins the verification
+// code's language chain: ContactCreateInput.Locale -- the requester's own
+// language, which the HTTP layer captures from the creating request -- is
+// the language the message renders in, and an empty Locale falls to the
+// platform default (a contact row carries no locale of its own, so an
+// empty capture is a real state, not an error).
+func TestContact_CreateDoubleOptIn_CodeLanguageChain(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "zh-code@example.com", Locale: "zh-CN"}); err != nil {
+		t.Fatalf("CreateContact(zh-CN): %v", err)
+	}
+	mails := env.host.mailer.messages()
+	if len(mails) != 1 {
+		t.Fatalf("mails = %d, want exactly 1", len(mails))
+	}
+	if mails[0].Subject != "您的验证码" {
+		t.Errorf("subject = %q, want the requester-captured zh-CN copy", mails[0].Subject)
+	}
+
+	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "default-code@example.com"}); err != nil {
+		t.Fatalf("CreateContact(no locale): %v", err)
+	}
+	mails = env.host.mailer.messages()
+	if len(mails) != 2 {
+		t.Fatalf("mails = %d, want 2", len(mails))
+	}
+	if mails[1].Subject != "Your verification code" {
+		t.Errorf("subject with no captured locale = %q, want the platform default's en-US copy", mails[1].Subject)
+	}
+}
+
+// TestContact_ResendCode_CodeLanguageChain pins the resend leg: the
+// language travels with each send the same way it does on create, so a
+// resend made from a differently-handed request renders differently
+// without any stored state changing.
+func TestContact_ResendCode_CodeLanguageChain(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "resend-locale@example.com"})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+	if err := env.svc.ResendCode(ctx, ResendCodeInput{ContactID: contact.ID, Locale: "zh-CN"}); err != nil {
+		t.Fatalf("ResendCode: %v", err)
+	}
+	mails := env.host.mailer.messages()
+	if len(mails) != 2 {
+		t.Fatalf("mails = %d, want the create and the resend", len(mails))
+	}
+	if mails[1].Subject != "您的验证码" {
+		t.Errorf("resend subject = %q, want the resend-captured zh-CN copy", mails[1].Subject)
+	}
+}
+
 // TestContact_VerifyCode_WrongCodeRefusedThenCorrectWorks pins the wrong /
 // right code ladder: a wrong code fails with the code_invalid refusal, and
 // the correct code still works afterwards (a wrong guess consumes nothing

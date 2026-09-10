@@ -1744,6 +1744,13 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// own doc comment on why the two wirings differ) -- the module
 	// resolves identity per operation and never reads it from the request
 	// otherwise.
+	// authnUserLocales adapts authn's user store to notification's
+	// UserLocaleResolver seam (the type directory's fallback tier, and the
+	// demo deliveries' recipient-language resolution -- see that type's own
+	// doc comment). It is built here, before either module registers, and
+	// reads the authn service lazily so the wiring order is not a hazard.
+	authnUserLocales := AuthnUserLocales{authn: authnModule}
+
 	notificationModule := notification.NewModule(db,
 		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)),
 		notification.WithMailFrom("notifications@reference-app.example"),
@@ -1751,6 +1758,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),
 		notification.WithDeliveryQueue(standaloneQueue),
 		notification.WithUserAddressResolver(staticaddr.New(DemoUserAddresses)),
+		notification.WithUserLocaleResolver(authnUserLocales),
 		notification.WithSubjectResolver(notification.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, false))),
 	)
 
@@ -2580,7 +2588,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// its HTTP handler drives (see demo_notification.go for the seam
 	// contracts, and flowtests/notification_flow_test.go for the end-to-end legs).
 	// The call cannot fail: nothing it does returns an error.
-	wireDemoNotification(mux, reg.EventBus(), notificationModule)
+	wireDemoNotification(mux, reg.EventBus(), notificationModule, reg, authnUserLocales)
 
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
 	// (consult.go): consultService shares notesModule's own

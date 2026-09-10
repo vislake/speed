@@ -1,13 +1,13 @@
 package notification
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/vislake/speed/go/notification/api"
 	obs "github.com/vislake/speed/go/observability"
@@ -138,6 +138,14 @@ type Handler struct {
 	// Handler being constructed without it.
 	subject SubjectResolver
 
+	// userLocale answers the caller's stored profile locale, the type
+	// directory's fallback tier (see UserLocaleResolver and
+	// directoryLocale). Nil is a legal wiring -- a host with no profile
+	// store -- and skips the tier, exactly as a failing resolver does:
+	// the chain's terminal platform default serves the request either
+	// way.
+	userLocale UserLocaleResolver
+
 	// host is the host registry's slice this handler reads at request time:
 	// the merged message catalog, for the type directory's description
 	// rendering. It is bound by Module.Register through attachHost after the
@@ -159,15 +167,17 @@ type Handler struct {
 
 // NewHandler returns a Handler over the module's own services. inbox,
 // prefs, contacts and hub are Module's instances (a Module constructs them
-// at NewModule time); subject is the host's seam, nil when the host has
-// none. NewHandler performs no I/O and reads nothing from the registry.
-func NewHandler(inbox *Repository, prefs *PreferenceService, contacts *ContactService, hub *Hub, subject SubjectResolver) *Handler {
+// at NewModule time); subject and userLocale are the host's seams, nil
+// when the host has none. NewHandler performs no I/O and reads nothing
+// from the registry.
+func NewHandler(inbox *Repository, prefs *PreferenceService, contacts *ContactService, hub *Hub, subject SubjectResolver, userLocale UserLocaleResolver) *Handler {
 	h := &Handler{
-		inbox:    inbox,
-		prefs:    prefs,
-		contacts: contacts,
-		hub:      hub,
-		subject:  subject,
+		inbox:      inbox,
+		prefs:      prefs,
+		contacts:   contacts,
+		hub:        hub,
+		subject:    subject,
+		userLocale: userLocale,
 	}
 	h.mux = http.NewServeMux()
 	// The fragment's eleven paths, registered by the generated code as
@@ -265,6 +275,11 @@ func (h *Handler) NotificationCreateContact(w http.ResponseWriter, r *http.Reque
 	contact, err := h.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel: string(body.Channel),
 		Address: body.Address,
+		// The verification code goes to the new contact in the requester's
+		// own language (a contact row carries no locale; this request is
+		// the one place the requester can speak for it), captured here
+		// from the frontend chain's transported value.
+		Locale: h.requestLocale(r),
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -315,7 +330,7 @@ func (h *Handler) NotificationResendContactCode(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if err := h.contacts.ResendCode(ctx, ResendCodeInput{ContactID: contactID}); err != nil {
+	if err := h.contacts.ResendCode(ctx, ResendCodeInput{ContactID: contactID, Locale: h.requestLocale(r)}); err != nil {
 		h.writeError(w, err)
 		return
 	}
@@ -472,11 +487,13 @@ func (h *Handler) NotificationMarkMessageRead(w http.ResponseWriter, r *http.Req
 // NotificationListTypes serves GET /api/v1/notifications/types: the type
 // directory -- every notification type this deployment's modules declared,
 // in declaration order, each carrying its copy (Description) rendered from
-// the declaring module's own locale bundle in the language the request
-// negotiates. The directory is how a client renders a message's richer
-// copy: each inbox row carries its type key and the params that produced
-// its title and body, and this operation supplies the description those
-// params interpolate into.
+// the declaring module's own locale bundle in the language the caller's
+// chain resolves (directoryLocale: the request's Accept-Language, then the
+// caller's stored profile locale, then the platform default). The
+// directory is how a client renders a message's richer copy: each inbox
+// row carries its type key and the params that produced its title and
+// body, and this operation supplies the description those params
+// interpolate into.
 //
 // The description convention lives in render.go next to the send-time
 // template convention: for a type key <module>.<entity>.<action>, the
@@ -489,12 +506,18 @@ func (h *Handler) NotificationListTypes(w http.ResponseWriter, r *http.Request) 
 	if _, ok := h.mustTenant(w, r); !ok {
 		return
 	}
-	if _, ok := h.resolveSubject(w, r); !ok {
+	subject, ok := h.resolveSubject(w, r)
+	if !ok {
 		return
 	}
 
+	// The response's copy depends on the request's language, so shared
+	// caches must key on it: without this header a cache could serve one
+	// caller's language to the next.
+	w.Header().Set("Vary", "Accept-Language")
+
 	types := h.prefs.NotificationTypes()
-	locale := negotiateLocale(h.catalog(), r.Header.Get("Accept-Language"))
+	locale := h.directoryLocale(r.Context(), r, subject)
 	items := make([]api.NotificationType, 0, len(types))
 	for _, typ := range types {
 		description, err := renderTypeDescription(h.catalog(), locale, typ.Key)
@@ -885,89 +908,94 @@ func toTypeResponse(t pkgcore.NotificationType, description string) api.Notifica
 	}
 }
 
-// negotiateLocale picks the language a request's type-directory copy (and
-// any other locale-sensitive rendering the surface adds) is served in: the
-// first Accept-Language tag the merged catalog supports, where a header tag
-// matches a supported locale exactly or as its language prefix ("en"
-// matches "en-US"), and zh-CN -- the module's default language -- when
-// nothing matches, the header is empty, or no catalog is attached yet.
+// UserLocaleResolver is the seam that answers "which language has this
+// user chosen" -- the type directory's middle tier (see directoryLocale).
+// It is declared here, beside SubjectResolver, for the same reason: it is
+// the HTTP layer's whole knowledge of the caller's profile, the signature
+// is built from stdlib types only (so a host adapter over any profile
+// store satisfies it, and a host that satisfies org's or authn's own
+// user-locale seam satisfies this one with the same type), and the module
+// imports no authenticating module's types.
 //
-// Matching is case-insensitive, per RFC 4647's "language-range matching is
-// case-insensitive" rule: a client's "EN-US" or "zh-cn" answers its
-// language exactly as the canonical spellings do, because language tags
-// are case-insensitive identifiers and a caseful comparison would refuse a
-// perfectly usable copy over letter case.
+// The tier is a FALLBACK, not the primary signal: the request's own
+// Accept-Language -- what the frontend's language chain resolved for the
+// person currently looking at the screen -- is consulted first, and this
+// seam answers only when the header matched nothing the catalog supports.
+// That order keeps a user who switched the UI language without (yet)
+// having their profile updated reading the surface in the language they
+// are actually looking at.
 //
-// The header's relative q-values are deliberately ignored beyond the zero
-// weight: a part whose q parameter says the language is not acceptable --
-// a weight of zero in any spelling the qvalue grammar allows ("q=0",
-// "q=0.0", "Q=0", "q=0.00") -- is skipped, and the remaining parts answer
-// in header order, which is exactly the latitude RFC 7231's section 5.3.1
-// gives a server ("the most specific reference has precedence"; order of
-// preference is expressed by the header's own ordering). The fallback
-// never crosses languages: a request that accepts nothing the catalog
-// supports gets the default language, never a half-rendered or silently
-// substituted one.
-func negotiateLocale(catalog *i18n.Catalog, header string) string {
-	if catalog == nil {
-		return i18n.LocaleZHCN
-	}
-	supported := catalog.Locales()
-	if len(supported) == 0 || strings.TrimSpace(header) == "" {
-		return i18n.LocaleZHCN
-	}
-	for _, part := range strings.Split(header, ",") {
-		tag := strings.TrimSpace(part)
-		if tag == "" || tag == "*" {
-			continue
-		}
-		if params := strings.Split(tag, ";"); len(params) > 1 {
-			if !partAccepted(params[1:]) {
-				// The part's q parameter weights it 0: not acceptable.
-				continue
-			}
-			tag = strings.TrimSpace(params[0])
-		}
-		if tag == "" {
-			continue
-		}
-		lowerTag := strings.ToLower(tag)
-		for _, have := range supported {
-			if strings.EqualFold(have, tag) ||
-				strings.HasPrefix(strings.ToLower(have), lowerTag+"-") {
-				return have
-			}
-		}
-	}
-	return i18n.LocaleZHCN
+// A resolver that is nil, errors, or answers a locale outside the merged
+// catalog is NOT a request failure: the tier is skipped -- with a Warn
+// line for the error and mismatch cases -- and the chain falls through to
+// the platform default, the same non-fail-closed shape the registration
+// timezone seam observes. A display preference must never fail a read.
+type UserLocaleResolver interface {
+	// UserLocale returns the stored locale for userID, and whether the
+	// store could confirm one. ok=false means "no stored locale to use"
+	// -- an unknown user, or one who never chose -- and the caller's
+	// chain moves on; a non-nil error reports an infrastructure failure,
+	// which is also skipped (and logged) rather than surfaced.
+	UserLocale(ctx context.Context, userID string) (locale string, ok bool, err error)
 }
 
-// partAccepted reports whether one Accept-Language part's parameters still
-// leave the part acceptable. The only parameter this negotiation reads is
-// the q weighting, whose parameter name is case-insensitive (RFC 7230
-// section 3.2.6): a weight of zero -- in any spelling the qvalue grammar
-// produces, so "q=0", "q=0.0", "Q=0" and their padded variants -- marks
-// the part not acceptable, and any parseable non-zero weight leaves it
-// acceptable. An unparseable q value is not a zero weight and leaves the
-// part standing at its default weight; where several q parameters appear,
-// the last one governs. Relative ordering between non-zero weights is the
-// caller's (header-order) business.
-func partAccepted(params []string) bool {
-	weight := 1.0
-	weighted := false
-	for _, p := range params {
-		name, value, ok := strings.Cut(strings.TrimSpace(p), "=")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "q") {
-			continue
-		}
-		w, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		if err != nil {
-			continue
-		}
-		weight = w
-		weighted = true
+// directoryLocale resolves the type directory's language chain -- the
+// "requester is recipient" shape: the person reading the directory is the
+// person the descriptions address. Tiers, high to low:
+//
+//   - the request's Accept-Language, the transport channel the frontend's
+//     own language chain sends its resolved value through, answered by the
+//     shared pkgcore/i18n negotiation against the merged catalog's
+//     languages;
+//   - the caller's stored profile locale, through the UserLocaleResolver
+//     seam -- consulted only when the header matched nothing, and only
+//     when the resolver confirmed a locale the catalog actually ships;
+//   - the platform default (en-US), the terminal tier every chain has.
+//
+// A missing catalog short-circuits the whole chain to the platform
+// default: no supported set exists to negotiate or validate against, and
+// the render that follows fails closed with the same coded error it would
+// have produced before this chain existed.
+func (h *Handler) directoryLocale(ctx context.Context, r *http.Request, subject string) string {
+	catalog := h.catalog()
+	if catalog == nil {
+		return platformDefaultLocale
 	}
-	return !weighted || weight > 0
+	supported := catalog.Locales()
+	if locale, ok := i18n.Negotiate(r.Header.Get("Accept-Language"), supported); ok {
+		return locale
+	}
+	if h.userLocale != nil {
+		locale, ok, err := h.userLocale.UserLocale(ctx, subject)
+		switch {
+		case err != nil:
+			obs.FromContext(ctx).Warn("user locale lookup failed; serving the platform default language",
+				"user_id", subject, "error", err)
+		case ok && slices.Contains(supported, locale):
+			return locale
+		case ok:
+			obs.FromContext(ctx).Warn("user locale resolver answered a locale the catalog does not ship; serving the platform default language",
+				"user_id", subject, "locale", locale)
+		}
+	}
+	return platformDefaultLocale
+}
+
+// requestLocale answers the request's Accept-Language against the merged
+// catalog's languages and returns the match, or "" when nothing matches
+// (or no catalog is attached yet): the requester's own language, for the
+// synchronous contact-code sends whose copy is produced for someone other
+// than the requester (see ContactCreateInput.Locale). The empty answer is
+// meaningful -- it is how "the requester expressed no usable preference"
+// travels to renderContactCode's platform-default tier -- so callers pass
+// the value through rather than defaulting here.
+func (h *Handler) requestLocale(r *http.Request) string {
+	catalog := h.catalog()
+	if catalog == nil {
+		return ""
+	}
+	locale, _ := i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
+	return locale
 }
 
 // SubjectResolver is the seam that answers "who is the HTTP caller" for

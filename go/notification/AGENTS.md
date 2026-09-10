@@ -295,7 +295,12 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
 The host also supplies structural, no-import seams the module consumes as
 interfaces it declares -- never as imported packages: `SubjectResolver` (the
 HTTP caller's identity, per operation, with `SubjectResolverFunc` as its
-func-to-interface adapter so a host wires a closure), `UserAddressResolver`
+func-to-interface adapter so a host wires a closure), `UserLocaleResolver`
+(OPTIONAL, via `WithUserLocaleResolver`: the caller's stored locale, the
+type directory's fallback tier behind the request's Accept-Language -- a
+nil or failing resolver skips the tier with the platform default behind
+it, never a request failure; the reference app wires its authn adapter),
+`UserAddressResolver`
 (above), the encrypted-address serializer registration (the module's own
 `RegisterContactAddressSerializer(cipher)` binds the exported
 `ContactAddressSerializerName` before any contact row is read or written,
@@ -637,17 +642,42 @@ requirement is the strictest of the two: `Register` refuses to boot without
 a wired sender (`ErrSMSSenderRequired`), where authn's refusal applies only
 under the distributed deployment mode.
 
-### External contacts render in the platform default locale
+### The copy language comes from the recipient's chain, never a guess
 
-A `Dispatch` carries the recipient's negotiated locale, which the caller
-knows and the module never guesses. For a user recipient the locale is
-REQUIRED (validate refuses an empty one: a delivery in the wrong language is
-worse than a failed one, and the module's copy rule forbids silent
-fallback). For an external contact the locale field is ignored: a contact
-row carries no locale column, and the contact's copy renders in the
-platform default locale (see `renderContactCode`). Per-contact locale
-negotiation and its reconciliation with already-rendered copy are not
-implemented (see below).
+Every rendered copy resolves its language through one of two chains, and
+the platform default (`en-US`, `platformDefaultLocale`) is always the
+terminal tier:
+
+- Recipient is a user: the `Dispatch`'s `Locale` -- the recipient's stored
+  language, which the caller (the host's profile store) knows -- is
+  REQUIRED (validate refuses an empty one: a delivery in the wrong language
+  is worse than a failed one, and the module's copy rule forbids silent
+  fallback).
+- Recipient is an external contact: a contact row carries no locale, so
+  the `Dispatch`'s `Locale` is the language of the REQUEST that created
+  the dispatch -- the producer captures the requester's language at
+  creation time and passes it through, because the requester is present
+  and the contact cannot speak for itself. An empty value (a producer with
+  no request behind the dispatch: a scheduled batch, an internal job)
+  renders the platform default.
+- The verification code's synchronous sends (create, resend) apply the
+  same requester rule at their call sites: the HTTP layer captures the
+  request's negotiated language into `ContactCreateInput.Locale` /
+  `ResendCodeInput.Locale`, and an empty capture renders the platform
+  default (`renderContactCode`).
+- The type directory (requester is recipient) runs header → stored
+  profile (`UserLocaleResolver`) → platform default -- see
+  `directoryLocale`.
+
+The delivery dedupe key keys on `deliveryLocale(d)` -- the locale the copy
+actually renders in -- so a language change between two otherwise
+identical dispatches is the distinct delivery it is, and an unset locale
+and an explicit platform-default locale are ONE delivery (both render the
+same copy, both derive the same key: no migration, no double-send).
+
+Per-contact locale negotiation beyond the captured requester language
+(the contact choosing its own language, and the reconciliation of
+already-rendered copy) is not implemented (see below).
 
 ### Separate index keys from the cipher key
 
@@ -679,9 +709,10 @@ is NOT listed is not absent: if it is not in this section and not in
   record's `reason` vocabulary (`complaint`, `hard_bounce`) is shipped so
   the schema does not move when the writers land.
 - **Per-contact locale negotiation.** External contacts render in the
-  platform default locale (see Adjudications); a contact has no negotiated
-  locale of its own -- no `locale` column, no negotiation path, and no
-  reconciliation of copy already rendered under the default.
+  language captured from the dispatching request (see Adjudications); a
+  contact has no negotiated locale of its own -- no `locale` column, no
+  negotiation path -- and no reconciliation exists for copy already
+  rendered in an earlier language.
 - **The platform-staff push consumer.** No platform-staff push consumer
   exists for the hub's per-connection `Subscribe` connections (such a
   consumer would subscribe unscoped and do its own recipient routing,
@@ -751,6 +782,17 @@ Rules specific to this module, on top of the codebase-wide discipline:
   never a type's channel templates. A missing template id or a locale the
   catalog does not know is `ErrInternal.WithCause` -- never a
   fallback to another language, never a half-rendered message.
+- **The language of a rendered copy is decided by the recipient's chain,
+  never guessed, and the platform default is its last tier.** The two
+  chains (user recipient: the dispatch's required `Locale`; external
+  contact: the producer-captured requester language, empty meaning the
+  platform default) are stated in Adjudications; what the rule adds is
+  what a future surface must NOT do: invent a locale, read one from a
+  header for a recipient who is not the requester, or skip the terminal
+  default. The type directory's chain is header → stored profile → default,
+  and its response carries `Vary: Accept-Language` so shared caches key on
+  the request language; any future response whose copy varies by request
+  language must carry the same header.
 - **Addresses stay encrypted, indexed, and out of every sink.** The
   plaintext contact address never appears in a WHERE clause, a response
   body, an audit record, a log line, or a rate-limit key -- the blind index

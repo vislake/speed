@@ -74,13 +74,22 @@ type Dispatch struct {
 	// RecipientClassExternal, with the matching id field set.
 	Recipient DispatchRecipient `json:"recipient"`
 
-	// Locale is the language the message copy is rendered in -- the
-	// recipient's negotiated locale, which the caller knows and the module
-	// never guesses. It is REQUIRED for a user recipient (a delivery in a
-	// wrong language is worse than a failed one, and the module's copy
-	// rule forbids silent fallback), and ignored for an external contact,
-	// whose copy renders in the platform default locale: a contact row
-	// carries no locale (see contact.go's renderContactCode).
+	// Locale is the language the message copy is rendered in, and for both
+	// recipient classes it is a value the caller captures -- the module
+	// never guesses one.
+	//
+	// For a user recipient it is REQUIRED: the recipient's own locale,
+	// which the caller (the host's profile store) knows. For an external
+	// contact it is the language the DISPATCHING REQUEST was in -- the
+	// producer captures the requester's language at creation time (the
+	// requester is not the recipient, so the recipient's own choice cannot
+	// be asked: a contact row carries no locale), and it is optional,
+	// because a producer with no request behind the dispatch (a scheduled
+	// batch, an internal job) genuinely has none; an empty value renders
+	// in the platform default. Either way the value the copy renders in is
+	// what the delivery key keys on (deliveryLocale), so a language change
+	// between two otherwise identical dispatches is the distinct delivery
+	// it is.
 	Locale string `json:"locale"`
 
 	// Params supplies the interpolation values the type's templates
@@ -1131,11 +1140,11 @@ func (s *DeliveryService) settleContactRefusal(ctx context.Context, tenantID str
 }
 
 // deliverContactEmail is the email channel's contact delivery path: render
-// the type's copy in the platform default locale (a contact row carries no
-// locale -- see contact.go's renderContactCode) and send to the contact's
-// own address.
+// the type's copy in the dispatch's own locale -- the producer-captured
+// language of the request that created it, the contact's first available
+// signal (see Dispatch.Locale) -- and send to the contact's own address.
 func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
-	parts, err := renderContent(s.catalog(), platformDefaultLocale, d.TypeKey, ChannelEmail, d.Params)
+	parts, err := renderContent(s.catalog(), deliveryLocale(d), d.TypeKey, ChannelEmail, d.Params)
 	if err != nil {
 		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
@@ -1167,7 +1176,7 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 // deliverContactSMS is the SMS channel's contact delivery path, the twin of
 // deliverContactEmail over the module's SMS sender.
 func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
-	parts, err := renderContent(s.catalog(), platformDefaultLocale, d.TypeKey, ChannelSMS, d.Params)
+	parts, err := renderContent(s.catalog(), deliveryLocale(d), d.TypeKey, ChannelSMS, d.Params)
 	if err != nil {
 		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
@@ -1380,15 +1389,22 @@ func deriveDeliveryKey(tenantID string, d Dispatch, channel string) (string, err
 
 // deliveryLocale returns the locale the copy of d is actually rendered in
 // -- the value the delivery key must key on, since a different rendered
-// copy is a different delivery. A user recipient renders in the dispatch's
-// own Locale; an external contact's copy renders in the platform default
-// locale whatever the dispatch's Locale field says (that field is
-// contractually ignored for the external class -- see Dispatch.Locale), so
-// the key uses the rendered default rather than an ignored field whose
-// variation between two otherwise identical dispatches would invent a
-// delivery that renders the same copy twice.
+// copy is a different delivery -- and the single source both the render
+// call sites and deriveDeliveryKey read, so the key can never disagree
+// with what was rendered.
+//
+// A user recipient renders in the dispatch's own Locale, which validate
+// guarantees non-empty. An external contact's copy renders in the
+// dispatch's Locale too -- the producer-captured language of the request
+// that created the dispatch (see Dispatch.Locale) -- with the platform
+// default standing in when the producer captured none. For a payload whose
+// Locale was left empty the derived key is byte-identical to what the
+// previous ignore-the-field semantics derived (both name the platform
+// default), so no stored key needs migrating; a payload that SET the field
+// for an external contact keys on it from now on, which is the intended
+// contract change, not drift.
 func deliveryLocale(d Dispatch) string {
-	if d.Recipient.Class == RecipientClassExternal {
+	if d.Recipient.Class == RecipientClassExternal && d.Locale == "" {
 		return platformDefaultLocale
 	}
 	return d.Locale

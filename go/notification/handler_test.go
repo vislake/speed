@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,14 +102,29 @@ var handlerRoutes = []handlerRoute{
 // answers handlerUser. Each test starts empty: no inbox rows, no contact
 // ledger rows, no rate-limit budget spent.
 type handlerEnv struct {
-	host     *testHost
-	smsBuf   *bytes.Buffer
-	inbox    *Repository
-	prefs    *PreferenceService
-	contacts *ContactService
-	hub      *Hub
-	h        *Handler
+	host       *testHost
+	smsBuf     *bytes.Buffer
+	inbox      *Repository
+	prefs      *PreferenceService
+	contacts   *ContactService
+	hub        *Hub
+	userLocale UserLocaleResolver
+	h          *Handler
 }
+
+// fixedUserLocale is the test double for the UserLocaleResolver seam: a
+// fixed answer, or a fixed error, for every lookup.
+type fixedUserLocale struct {
+	locale string
+	ok     bool
+	err    error
+}
+
+func (f fixedUserLocale) UserLocale(context.Context, string) (string, bool, error) {
+	return f.locale, f.ok, f.err
+}
+
+var _ UserLocaleResolver = fixedUserLocale{}
 
 // newHandlerEnv builds a handlerEnv (see the struct comment for the shape).
 func newHandlerEnv(t *testing.T) *handlerEnv {
@@ -134,7 +150,7 @@ func newHandlerEnv(t *testing.T) *handlerEnv {
 	env.contacts.phoneIndexer = testPhoneIndexer(t)
 	env.contacts.host = env.host
 	env.contacts.audit = reg.AuditActions
-	env.h = NewHandler(env.inbox, env.prefs, env.contacts, env.hub, fixedSubject{userID: handlerUser, ok: true})
+	env.h = NewHandler(env.inbox, env.prefs, env.contacts, env.hub, fixedSubject{userID: handlerUser, ok: true}, env.userLocale)
 	env.h.host = env.host
 	return env
 }
@@ -774,12 +790,13 @@ func TestHandler_UpdatePreference_MalformedBody_Refused(t *testing.T) {
 // declaration order, its opt-out permissiveness -- and its description
 // rendered from the declaring module's locale bundle (here the fixture
 // clinic bundle, standing in for the host's merged catalog) in the
-// request's negotiated language, zh-CN when the request names none.
+// language the request's Accept-Language resolves (zh-CN here, named
+// explicitly so the copy assertions below are exact).
 func TestHandler_ListTypes_DirectoryInDeclarationOrder(t *testing.T) {
 	env := newHandlerEnv(t)
 	env.host.catalog = testClinicCatalog(t)
 
-	rec := env.do(t, http.MethodGet, apiPath+"/types", nil)
+	rec := env.doCtx(t, tenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, map[string]string{"Accept-Language": "zh-CN"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -821,12 +838,13 @@ func TestHandler_ListTypes_DirectoryInDeclarationOrder(t *testing.T) {
 }
 
 // TestHandler_ListTypes_NegotiatesTheDescriptionLanguage drives the
-// directory's language negotiation the way a browser would: the request's
-// Accept-Language header picks the description language, a language the
-// catalog does not ship falls back to the platform default zh-CN (the
-// catalog's own no-cross-language rule: the fallback is the declared
-// default, never "any other language"), and a quality-0 preference is
-// skipped, not honoured.
+// directory's language chain the way a browser would: the request's
+// Accept-Language header picks the description language (RFC 4647 lookup
+// semantics through the shared pkgcore/i18n primitive -- exact and
+// prefix matches, case-insensitive, quality-0 parts skipped), and a
+// request whose header matches nothing falls through this env's unwired
+// profile tier to the platform default en-US (never "any other
+// language" -- the no-cross-language rule).
 func TestHandler_ListTypes_NegotiatesTheDescriptionLanguage(t *testing.T) {
 	env := newHandlerEnv(t)
 	env.host.catalog = testClinicCatalog(t)
@@ -838,20 +856,72 @@ func TestHandler_ListTypes_NegotiatesTheDescriptionLanguage(t *testing.T) {
 		header string
 		want   string
 	}{
-		{"no header", "", zh},
+		{"no header lands on the platform default", "", en},
 		{"exact en-US", "en-US", en},
 		{"bare en prefix", "en", en},
 		{"zh-CN explicit", "zh-CN", zh},
-		{"unsupported language", "fr-FR", zh},
-		{"quality-zero preference skipped", "en;q=0, fr-FR", zh},
+		{"unsupported language lands on the platform default", "fr-FR", en},
+		{"quality-zero preference skipped", "en;q=0, fr-FR", en},
 		{"preferred list", "fr-FR, en;q=0.8", en},
 		{"uppercase tag matches case-insensitively", "EN-US", en},
 		{"lowercase tag matches case-insensitively", "zh-cn", zh},
 		{"uppercase prefix matches case-insensitively", "EN", en},
-		{"uppercase zero weight skipped", "en;Q=0, fr-FR", zh},
-		{"decimal zero weight skipped", "en;q=0.0, fr-FR", zh},
+		{"uppercase zero weight skipped", "en;Q=0, fr-FR", en},
+		{"decimal zero weight skipped", "en;q=0.0, fr-FR", en},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var header map[string]string
+			if tc.header != "" {
+				header = map[string]string{"Accept-Language": tc.header}
+			}
+			rec := env.doCtx(t, tenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, header)
+			resp := decodeJSONBody[api.NotificationListTypesResponse](t, rec)
+			if len(resp.Items) == 0 || resp.Items[0].Description != tc.want {
+				t.Errorf("description = %q, want %q", resp.Items[0].Description, tc.want)
+			}
+			// The copy depends on the request's language, so shared caches
+			// must key on the header: a missing or wrong Vary could serve
+			// one caller's language to the next.
+			if got := rec.Header().Get("Vary"); got != "Accept-Language" {
+				t.Errorf("Vary = %q, want %q", got, "Accept-Language")
+			}
+		})
+	}
+}
+
+// TestHandler_ListTypes_ProfileTierAnswersWhenTheHeaderDoesNot pins the
+// chain's middle tier: with a UserLocaleResolver wired, a request whose
+// Accept-Language matches nothing is answered by the caller's stored
+// locale -- but only when the resolver confirms one the catalog actually
+// ships. The header still outranks it (the person looking at the screen
+// switched the UI language), an unshipped answer and a resolver error both
+// land on the platform default, and no resolver at all is the same as a
+// resolver with nothing to confirm.
+func TestHandler_ListTypes_ProfileTierAnswersWhenTheHeaderDoesNot(t *testing.T) {
+	const zh = "在您的预约时间临近时发送的就诊提醒。"
+	const en = "An appointment reminder sent as your visit approaches."
+
+	for _, tc := range []struct {
+		name     string
+		resolver UserLocaleResolver
+		header   string
+		want     string
+	}{
+		{"stored locale answers a headerless request", fixedUserLocale{locale: "zh-CN", ok: true}, "", zh},
+		{"stored locale answers a request the catalog cannot match", fixedUserLocale{locale: "zh-CN", ok: true}, "fr-FR", zh},
+		{"the header outranks the stored locale", fixedUserLocale{locale: "zh-CN", ok: true}, "en-US", en},
+		{"an unshipped stored locale lands on the platform default", fixedUserLocale{locale: "de-DE", ok: true}, "", en},
+		{"a resolver error lands on the platform default", fixedUserLocale{err: errLookupFailed}, "", en},
+		{"nothing stored lands on the platform default", fixedUserLocale{ok: false}, "", en},
+		{"no resolver wired lands on the platform default", nil, "", en},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newHandlerEnv(t)
+			env.host.catalog = testClinicCatalog(t)
+			env.userLocale = tc.resolver
+			env.h = NewHandler(env.inbox, env.prefs, env.contacts, env.hub, fixedSubject{userID: handlerUser, ok: true}, env.userLocale)
+			env.h.host = env.host
+
 			var header map[string]string
 			if tc.header != "" {
 				header = map[string]string{"Accept-Language": tc.header}
@@ -864,6 +934,11 @@ func TestHandler_ListTypes_NegotiatesTheDescriptionLanguage(t *testing.T) {
 		})
 	}
 }
+
+// errLookupFailed is the canned profile-store failure the resolver double
+// above answers, standing in for any infrastructure error a real host's
+// store could produce.
+var errLookupFailed = errors.New("handler_test: profile store lookup failed")
 
 // TestHandler_ListTypes_MissingDescription_FailsTheWholeListing pins the
 // directory's strict convention: a declared type whose bundle ships no
@@ -1582,41 +1657,6 @@ func TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter(t *testing.T)
 			return false
 		}
 	})
-}
-
-// TestNegotiateLocale_ZeroWeightsAndCaseInsensitiveTags drives the language
-// negotiation rules negotiateLocale's doc comment promises, on the inputs
-// the HTTP-level table above exercises through the route plus the weight
-// spellings only a direct call can cover cheaply: a zero weight must be
-// recognized in every form the qvalue grammar allows -- "q=0", "q=0.0",
-// "Q=0", spaces around the parameter -- and language-tag matching is
-// case-insensitive per RFC 4647, so "EN-US" and "zh-cn" answer their
-// languages exactly as their canonical spellings do.
-func TestNegotiateLocale_ZeroWeightsAndCaseInsensitiveTags(t *testing.T) {
-	catalog := testClinicCatalog(t)
-	for _, tc := range []struct {
-		name   string
-		header string
-		want   string
-	}{
-		{"uppercase exact tag", "EN-US", "en-US"},
-		{"lowercase exact tag", "zh-cn", "zh-CN"},
-		{"uppercase prefix", "EN", "en-US"},
-		{"lowercase tag with weight", "en-us;q=0.9", "en-US"},
-		{"decimal zero weight skipped", "en;q=0.0, fr-FR", "zh-CN"},
-		{"uppercase zero weight skipped", "en;Q=0, fr-FR", "zh-CN"},
-		{"trailing decimal zero on the only match", "en-US;q=0.0", "zh-CN"},
-		{"zero weight then a weighted match", "fr-FR;q=0.9, en-US;q=0.0, zh-CN;q=0.5", "zh-CN"},
-		{"spaces around the weight", "en-US; q = 0.0", "zh-CN"},
-		{"non-zero weights keep header order", "en-US;q=0.7, zh-CN;q=1", "en-US"},
-		{"default when nothing is acceptable", "en;q=0, fr-FR;q=0.0", "zh-CN"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := negotiateLocale(catalog, tc.header); got != tc.want {
-				t.Errorf("negotiateLocale(%q) = %q, want %q", tc.header, got, tc.want)
-			}
-		})
-	}
 }
 
 // gatedFlushWriter wraps a flushRecorder with a gate that can stop Flush
