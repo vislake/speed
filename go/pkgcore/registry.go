@@ -1308,6 +1308,40 @@ func warnIfNotDurable(res seamResolution) {
 // bootstrap fails after that seam was resolved (a misconfigured composition
 // must not leak the connections it already dialed on the way to failing). An
 // injected seam is the host's to close, never this Bootstrap's.
+//
+// # Post-Bootstrap module steps
+//
+// Some module work can only complete after every module's Register has run,
+// because what it folds together is the finished Registry -- a schema
+// snapshot, a permission catalog. Such a module exposes that step as a
+// method on its own concrete type, never by widening the Module interface:
+// config, rbac and integration each expose Attach(reg) (*Service, error),
+// returning that module's runtime Service, and admin exposes
+// AttachRBAC(*rbac.Service). Each method's own doc comment carries its
+// precise contract -- the exactly-once rule and its ErrAlreadyAttached
+// guard, and what the module's routes do before the call has run.
+//
+// The host performs these steps exactly once, after this Bootstrap has
+// returned and before serving, and captures each returned Service. Routes
+// mounted during Register resolve their module's Service lazily, so a
+// Service no Attach ever produced fails closed when something reaches it
+// (config's and rbac's ErrServiceNotAttached, the name those doc comments
+// give the host wiring bug; integration's handler refuses the call
+// likewise). The host owns the order of the steps. The steps themselves
+// impose none -- each reads only the finished Registry, never another
+// step's return value -- so the constraint that binds is to attach a
+// module before the first host step that consumes its Service.
+//
+// These steps deliberately have no batched form in this package: each
+// Attach returns its own module's Service type, and Go interface
+// satisfaction requires one exact method signature, so no single interface
+// is satisfied by all of them -- not even a generic one, which fixes one
+// type parameter per call and so cannot sequence steps of different types.
+// A batched call would mean either widening each module's Attach into a
+// second, type-erasing signature (a breaking change to every consumer) or
+// handing the host []any values it would have to assert back at runtime;
+// each host instead wires its own sequence in its own composition, which
+// is also where its order is stated.
 func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (reg *Registry, retErr error) {
 	if !k.deploymentMode.Valid() {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)

@@ -301,22 +301,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("__APP_NAME__: bootstrap kernel: %w", err)
 	}
 
-	// Attach runs strictly after Bootstrap, exactly once: what it freezes
-	// is the schema snapshot of every config item and feature flag the
-	// modules declared during Register (config's own Attach doc comment).
-	configService, err = configModule.Attach(reg)
+	// The post-Bootstrap attach sequence, both steps in the one place this
+	// selection states their order -- see attachModules' own doc comment
+	// for the steps' contract; the kernel-level contract is
+	// pkgcore.Kernel.Bootstrap's "Post-Bootstrap module steps" section.
+	configService, rbacService, err = attachModules(reg, configModule, rbacModule)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: attach the config module: %w", err)
-	}
-	// rbac's Attach freezes the snapshot of every permission every module
-	// declared -- taken any earlier it would be missing whatever registered
-	// after it, and a permission missing from the catalog cannot be granted
-	// at all.
-	rbacService, err = rbacModule.Attach(reg)
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: attach the rbac module: %w", err)
+		return nil, nil, fmt.Errorf("__APP_NAME__: %w", err)
 	}
 
 	// Route mounting: every route reg's modules mounted goes to one of
@@ -359,6 +351,33 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	topMux.Handle("/", tenancy.Middleware(authn.NewPrincipalResolver(), hostcore.PreAuthAllowlist()...)(moduleMux))
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
 	return handler, cleanup, nil
+}
+
+// attachModules performs this selection's post-Bootstrap attach sequence:
+// both steps, in order, returning the first error and the Services already
+// attached, so buildServer's cleanup closes exactly what exists.
+//
+// Both calls run strictly after Bootstrap, exactly once (pkgcore.Kernel.
+// Bootstrap's "Post-Bootstrap module steps" section states the contract).
+// configModule.Attach freezes the schema snapshot of every config item and
+// feature flag the modules declared during Register; rbacModule.Attach
+// freezes the snapshot of every permission every module declared -- taken
+// any earlier it would be missing whatever registered after it, and a
+// permission missing from the catalog cannot be granted at all. Neither
+// step reads the other's Service, so the config-then-rbac order here is
+// this project's own choice, not a dependency between the two; what binds
+// is only that a module is attached before the first host step that
+// consumes its Service.
+func attachModules(reg *pkgcore.Registry, configModule *config.Module, rbacModule *rbac.Module) (*config.Service, *rbac.Service, error) {
+	configService, err := configModule.Attach(reg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attach the config module: %w", err)
+	}
+	rbacService, err := rbacModule.Attach(reg)
+	if err != nil {
+		return configService, nil, fmt.Errorf("attach the rbac module: %w", err)
+	}
+	return configService, rbacService, nil
 }
 
 // mountModuleRoutes copies every route reg's modules mounted onto one of

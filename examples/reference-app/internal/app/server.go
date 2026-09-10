@@ -2250,6 +2250,15 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// below.
 	pkgcore.RegisterSystemPurpose(signInTenantEnumerationPurpose)
 	memberships.attach(orgModule.Members(), reg.EventBus())
+	// The Attach calls below are the post-Bootstrap attach contract
+	// pkgcore.Kernel.Bootstrap's "Post-Bootstrap module steps" section
+	// states: each exactly once, after Bootstrap has returned, and each
+	// before the first host step that consumes its Service. This app's own
+	// sequence interleaves host steps between the attaches (the channel
+	// flags, the seeds, the rbac hand-off below), which is why it is
+	// written out step by step rather than gathered into one call; each
+	// step's own comment below carries its ordering rationale.
+	//
 	// integrationModule's Attach must run after Bootstrap for the same
 	// reason config's and rbac's do just below: its Service reads
 	// reg.Events.Bus() and reg.AuditActions, which Bootstrap only finishes

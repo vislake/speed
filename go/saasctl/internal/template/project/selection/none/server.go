@@ -212,9 +212,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("__APP_NAME__: bootstrap kernel: %w", err)
 	}
 
-	// Attach runs strictly after Bootstrap, exactly once: what it freezes
-	// is the schema snapshot of every config item and feature flag the
-	// modules declared during Register (config's own Attach doc comment).
+	// Attach runs strictly after Bootstrap, exactly once -- the contract
+	// pkgcore.Kernel.Bootstrap's "Post-Bootstrap module steps" section
+	// states: what it freezes is the schema snapshot of every config item
+	// and feature flag the modules declared during Register (config's own
+	// Attach doc comment).
 	configService, err = configModule.Attach(reg)
 	if err != nil {
 		_ = cleanup()
