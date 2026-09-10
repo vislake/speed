@@ -629,3 +629,22 @@ func ExampleRepository_HardDelete() {
 	// hard delete on tenant ctx: dbkit.hard_delete_requires_system_context
 	// erased: record not found
 }
+
+// ExampleIsRecordNotFound shows the predicate a caller uses to classify the
+// Repository's absent-row answer. The value a Repository method returns is
+// the sentinel decorated with the id it looked up -- a derived instance --
+// so classification goes through the code chain; the gorm-level error a raw
+// lookup sees is deliberately not matched, because translating it is the
+// Repository layer's job.
+func ExampleIsRecordNotFound() {
+	// The answer dbkit.Repository[T].FindByID returns for an absent row.
+	err := dbkit.ErrRecordNotFound.WithParam("id", "sub_42")
+	fmt.Println(dbkit.IsRecordNotFound(err))
+	fmt.Println(dbkit.IsRecordNotFound(nil))
+	fmt.Println(dbkit.IsRecordNotFound(apperr.Invalid("billing.invalid_request")))
+
+	// Output:
+	// true
+	// false
+	// false
+}
