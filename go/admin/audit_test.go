@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,19 +16,9 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	auditmigrations "github.com/vislake/speed/go/dbkit/audit/migrations"
+	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
 )
-
-// auditMigrationModule mirrors orgMigrationModule for dbkit/audit's own
-// migration files.
-type auditMigrationModule struct{}
-
-func (auditMigrationModule) Name() string                     { return "audit" }
-func (auditMigrationModule) DependsOn() []string              { return nil }
-func (auditMigrationModule) Migrations() embed.FS             { return auditmigrations.FS }
-func (auditMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (auditMigrationModule) OpenAPISpec() []byte              { return nil }
-func (auditMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // newTestAuditService returns an AuditService over a real audit.Repository
 // and a real TenantService, both sharing one fresh database.
@@ -38,13 +27,7 @@ func newTestAuditService(t *testing.T) (*AuditService, *audit.Repository, *Tenan
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 
 	db := testutil.NewDB(t)
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(auditMigrationModule{}); err != nil {
-		t.Fatalf("register audit's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply audit's migrations: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "audit", FS: auditmigrations.FS})
 
 	auditRepo := audit.NewRepository(db)
 	tenantRepo := NewTenantRepository(db)

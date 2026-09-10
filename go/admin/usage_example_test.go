@@ -21,10 +21,11 @@ import (
 )
 
 // adminMigrationModule is the minimal pkgcore.Module the example below
-// feeds to dbkit.MigrationRegistry, carrying admin's real migration files
-// -- the same shape admin/internal/testutil's own migrationModule uses.
-// The registry works in terms of modules, and the real admin.Module cannot
-// carry its own files here: its DependsOn() names "authn", so a registry
+// feeds to dbkit.MigrationRegistry, carrying admin's real migration files.
+// The package's test files apply admin's set through dbtest.Migrate
+// instead; a godoc example has no *testing.T to hand it, so this example
+// keeps the equivalent as its own type. The real admin.Module cannot carry
+// the files here either way: its DependsOn() names "authn", so a registry
 // holding only admin would trip dbkit.MigrationRegistry.Apply's
 // missing-dependency check over a database that has no authn tables.
 type adminMigrationModule struct{}

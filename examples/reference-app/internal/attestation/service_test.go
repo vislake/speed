@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509/pkix"
-	"embed"
 	"errors"
 	"fmt"
 	"io"
@@ -57,31 +56,15 @@ func registerTestPKISerializer() {
 	})
 }
 
-// pkiMigrationModule adapts pki's embedded migration files to
-// dbkit.MigrationRegistry's pkgcore.Module input -- the minimal stand-in
-// for the real pki module, which this test binary cannot bootstrap.
-type pkiMigrationModule struct{}
-
-func (pkiMigrationModule) Name() string                       { return "pki" }
-func (pkiMigrationModule) DependsOn() []string                { return nil }
-func (pkiMigrationModule) Migrations() embed.FS               { return migrations.FS }
-func (pkiMigrationModule) Locales() embed.FS                  { return embed.FS{} }
-func (pkiMigrationModule) OpenAPISpec() []byte                { return nil }
-func (pkiMigrationModule) Register(_ *pkgcore.Registry) error { return nil }
-
 // applyPKIMigrations applies pki's sqlite/*.sql files to db from zero
-// through dbkit.MigrationRegistry -- the same files Kernel.Bootstrap
-// applies at the app's every boot, so the tables these tests read and
-// write are the real ones.
+// through dbkit.MigrationRegistry (dbtest.Migrate) -- the same files
+// Kernel.Bootstrap applies at the app's every boot, so the tables these
+// tests read and write are the real ones. The real pki module cannot carry
+// its own files here: this test binary cannot bootstrap it, which is the
+// case dbtest.Migration exists for.
 func applyPKIMigrations(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(pkiMigrationModule{}); err != nil {
-		t.Fatalf("register pki migrations: %v", err)
-	}
-	if err := registry.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply pki sqlite migrations: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "pki", FS: migrations.FS})
 }
 
 // newTestService returns a Service wired the way internal/app's

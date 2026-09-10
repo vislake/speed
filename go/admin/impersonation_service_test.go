@@ -15,12 +15,14 @@ import (
 	"github.com/vislake/speed/go/admin/internal/testutil"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
+	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
 )
 
 // fakeNotifier records every Dispatch call it receives, standing in for a
@@ -93,13 +95,7 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 // none of admin's declared permissions -- is sufficient.
 func newAttachedRBAC(t *testing.T, db *gorm.DB) *rbac.Service {
 	t.Helper()
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(rbacMigrationModule{}); err != nil {
-		t.Fatalf("register rbac's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply rbac's migrations: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "rbac", FS: rbacmigrations.FS})
 	rbacModule := rbac.NewModule(db)
 	reg, err := pkgcore.NewKernel().Bootstrap(t.Context(), rbacModule)
 	if err != nil {

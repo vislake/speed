@@ -3,7 +3,6 @@ package admin
 import (
 	"bytes"
 	"context"
-	"embed"
 	"errors"
 	"io/fs"
 	"testing"
@@ -17,12 +16,15 @@ import (
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	auditmigrations "github.com/vislake/speed/go/dbkit/audit/migrations"
+	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
 	meteringmigrations "github.com/vislake/speed/go/metering/migrations"
 	"github.com/vislake/speed/go/notification"
 	notificationmigrations "github.com/vislake/speed/go/notification/migrations"
 	"github.com/vislake/speed/go/org"
+	orgmigrations "github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
@@ -40,64 +42,6 @@ type fakeUserAddressResolver struct{}
 func (fakeUserAddressResolver) Resolve(context.Context, string) (notification.UserAddresses, error) {
 	return notification.UserAddresses{}, nil
 }
-
-// notificationMigrationModule mirrors orgMigrationModule for notification's
-// own migration files.
-type notificationMigrationModule struct{}
-
-func (notificationMigrationModule) Name() string                     { return "notification" }
-func (notificationMigrationModule) DependsOn() []string              { return nil }
-func (notificationMigrationModule) Migrations() embed.FS             { return notificationmigrations.FS }
-func (notificationMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (notificationMigrationModule) OpenAPISpec() []byte              { return nil }
-func (notificationMigrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// rbacMigrationModule mirrors orgMigrationModule for rbac's own migration
-// files -- the role-management tests need a real, migrated rbac.Module to
-// Attach.
-type rbacMigrationModule struct{}
-
-func (rbacMigrationModule) Name() string                     { return "rbac" }
-func (rbacMigrationModule) DependsOn() []string              { return nil }
-func (rbacMigrationModule) Migrations() embed.FS             { return rbacmigrations.FS }
-func (rbacMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (rbacMigrationModule) OpenAPISpec() []byte              { return nil }
-func (rbacMigrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// sharingMigrationModule mirrors orgMigrationModule for sharing's own
-// migration files -- the export-leg tests need a real sharing.Module for
-// compliance.WithSharing to deliver through.
-type sharingMigrationModule struct{}
-
-func (sharingMigrationModule) Name() string                     { return "sharing" }
-func (sharingMigrationModule) DependsOn() []string              { return nil }
-func (sharingMigrationModule) Migrations() embed.FS             { return sharingmigrations.FS }
-func (sharingMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (sharingMigrationModule) OpenAPISpec() []byte              { return nil }
-func (sharingMigrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// meteringMigrationModule mirrors orgMigrationModule for metering's own
-// migration files -- the usage-dashboard tests need a real
-// metering.Module.
-type meteringMigrationModule struct{}
-
-func (meteringMigrationModule) Name() string                     { return "metering" }
-func (meteringMigrationModule) DependsOn() []string              { return nil }
-func (meteringMigrationModule) Migrations() embed.FS             { return meteringmigrations.FS }
-func (meteringMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (meteringMigrationModule) OpenAPISpec() []byte              { return nil }
-func (meteringMigrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// billingMigrationModule mirrors orgMigrationModule for billing's own
-// migration files -- the usage-dashboard tests need a real billing.Module.
-type billingMigrationModule struct{}
-
-func (billingMigrationModule) Name() string                     { return "billing" }
-func (billingMigrationModule) DependsOn() []string              { return nil }
-func (billingMigrationModule) Migrations() embed.FS             { return billingmigrations.FS }
-func (billingMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (billingMigrationModule) OpenAPISpec() []byte              { return nil }
-func (billingMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // testAdminEnv is buildTestAdminModule's full return value: every handle
 // a test might need alongside the registry/admin/org/queue tuple,
@@ -173,23 +117,21 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 
 	db := authnTestDB(t) // already carries admin's own migrations too (testutil.NewDB is layered underneath).
 
-	registry := dbkit.NewMigrationRegistry()
-	for _, m := range []pkgcore.Module{
-		orgMigrationModule{},
-		auditMigrationModule{},
-		notificationMigrationModule{},
-		rbacMigrationModule{},
-		sharingMigrationModule{},
-		meteringMigrationModule{},
-		billingMigrationModule{},
-	} {
-		if err := registry.Register(m); err != nil {
-			t.Fatalf("register %s migrations: %v", m.Name(), err)
-		}
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply migrations: %v", err)
-	}
+	// The rest of the graph's tables. Each is applied as a dependency-free
+	// migration set, not through the real module: every real module here
+	// declares DependsOn entries (org on dbkit/audit, notification on
+	// authn, ...) that this partial graph never registers, so a registry
+	// holding the real modules would fail Apply's missing-dependency check
+	// over tables the sets themselves create.
+	dbtest.Migrate(t, db, dbkit.DialectSQLite,
+		dbtest.Migration{Module: "org", FS: orgmigrations.FS},
+		dbtest.Migration{Module: "audit", FS: auditmigrations.FS},
+		dbtest.Migration{Module: "notification", FS: notificationmigrations.FS},
+		dbtest.Migration{Module: "rbac", FS: rbacmigrations.FS},
+		dbtest.Migration{Module: "sharing", FS: sharingmigrations.FS},
+		dbtest.Migration{Module: "metering", FS: meteringmigrations.FS},
+		dbtest.Migration{Module: "billing", FS: billingmigrations.FS},
+	)
 
 	authnModule, err := authn.NewModule(db,
 		authn.WithBlindIndexKey(testBlindIndexKey),

@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"crypto"
-	"embed"
 	"errors"
 	"testing"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/authn"
 	authnmigrations "github.com/vislake/speed/go/authn/migrations"
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/org"
 	orgmigrations "github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
@@ -48,31 +48,6 @@ func (noopKeySource) VerificationKeys(context.Context, string) ([]struct {
 	return nil, errors.New("noopKeySource: unexpectedly called")
 }
 
-// orgMigrationModule is the minimal pkgcore.Module these tests feed to
-// dbkit.MigrationRegistry to apply org's real migrations, mirroring
-// go/authn/internal/testutil's identical migrationModule idiom -- building
-// a real org.Module here would not itself apply migrations (that is
-// always the host's job, per every module's own Register doc comment).
-type orgMigrationModule struct{}
-
-func (orgMigrationModule) Name() string                     { return "org" }
-func (orgMigrationModule) DependsOn() []string              { return nil }
-func (orgMigrationModule) Migrations() embed.FS             { return orgmigrations.FS }
-func (orgMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (orgMigrationModule) OpenAPISpec() []byte              { return nil }
-func (orgMigrationModule) Register(*pkgcore.Registry) error { return nil }
-
-// authnMigrationModule mirrors orgMigrationModule for authn's own
-// migration files.
-type authnMigrationModule struct{}
-
-func (authnMigrationModule) Name() string                     { return "authn" }
-func (authnMigrationModule) DependsOn() []string              { return nil }
-func (authnMigrationModule) Migrations() embed.FS             { return authnmigrations.FS }
-func (authnMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (authnMigrationModule) OpenAPISpec() []byte              { return nil }
-func (authnMigrationModule) Register(*pkgcore.Registry) error { return nil }
-
 // authnPIICipherOnce registers authn's PII serializer exactly once per test
 // binary: dbkit's serializer registry is process-global, and GORM resolves
 // a model's serializer while parsing its schema, so this must run before
@@ -93,13 +68,7 @@ func authnTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("register authn's PII serializer: %v", authnPIICipherOnce)
 	}
 	db := testutil.NewDB(t)
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(authnMigrationModule{}); err != nil {
-		t.Fatalf("register authn's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply authn's migrations: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "authn", FS: authnmigrations.FS})
 	return db
 }
 
@@ -109,13 +78,7 @@ func authnTestDB(t *testing.T) *gorm.DB {
 func newTestOrgModule(t *testing.T) *org.Module {
 	t.Helper()
 	db := testutil.NewDB(t) // admin's own migrations -- irrelevant here, but a valid dbkit.Open-shaped *gorm.DB works for any dialect-agnostic schema; org needs its OWN tables too.
-	registry := dbkit.NewMigrationRegistry()
-	if err := registry.Register(orgMigrationModule{}); err != nil {
-		t.Fatalf("register org's migrations: %v", err)
-	}
-	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply org's migrations: %v", err)
-	}
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "org", FS: orgmigrations.FS})
 	return org.NewModule(db)
 }
 
