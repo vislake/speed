@@ -6,16 +6,22 @@
 
 **这是必须从一开始就位的横切能力，不能后补。** 多个 UI 包一旦硬编码文案发布出去，回头补 i18n 是全量返工，且业务方已经基于硬编码文案做了定制，改动会破坏他们的项目。
 
-**语言协商链**（优先级从高到低）：URL 参数 / 用户手动切换（存 localStorage）→ 用户 profile 的 `locale` 字段 → 浏览器语言偏好 → 默认 `zh-CN`。前后端使用同一套解析结果，避免出现"界面中文、邮件英文"。
+**语言解析链按内容类型分档**（每档优先级从高到低，平台默认 `en-US` 恒为各链终档）：
 
-**实施精确化（`@speed/i18n` `createI18n`）**：第三级读的是客户端 `navigator.languages` 这个浏览器 API，不是 `Accept-Language` HTTP 请求头——两者在同源请求下通常一致，但这是纯前端解析，后端从未读取过这个请求头来做语言协商；上面"前后端使用同一套解析结果"说的是协商优先级顺序一致，不是同一段代码跑在两侧。
+- **第三方内容**（收件人 ≠ 请求者：邀请、外部联系人）：显式指定 → 收件人 profile（可确认时）→ 请求者语言 → `en-US`；
+- **系统级发起**（无前端请求：后台任务、内部调用）：显式指定 → 收件人 profile（可确认时）→ `en-US`（不存在请求者档）；
+- **请求者即收件人**（类型目录文案、登录验证码）：请求头 `Accept-Language`（api-client 传递的前端协商链解析结果）→ 调用者 profile → `en-US`。
+
+交互式 API 响应不协商：返回结构化码 + 参数，由前端翻译。前端界面语言协商链独立于上述后端链（URL 参数 / 手动槽 → profile → `navigator.languages` → `en-US`）。
+
+**实施精确化（`@speed/i18n` `createI18n`）**：前端链第三级读的是客户端 `navigator.languages` 这个浏览器 API，是纯前端解析；`Accept-Language` 是前后端之间的传递通道——api-client 把该链的当前解析结果作为请求头发出（`ClientOptions.languageProvider`，每次 attempt 读取）。后端唯一的请求头协商实现是 `pkgcore/i18n.Negotiate`（RFC 4647 语义：精确 + 语言前缀匹配、大小写不敏感、`q=0` 跳过；由 notification 的私有 `negotiateLocale` 迁移而来），它同时服务"请求者即收件人"与"回落请求者语言"两档（类型目录、org 邀请、authn SMS 复用同一原语）。收件人可确认时一律用收件人存储值；`Negotiate` 自身不持有默认——各调用方在自己的链上决定下一档，任何链的终档都是平台默认。
 
 **后端**
 - 新增 `pkgcore/i18n` 子包，选 `nicksnyder/go-i18n`（支持复数形式与嵌套消息，生态成熟）。
 - **API 响应默认不返回翻译后的文案，而是返回结构化错误码 + 参数**（如 `{"code":"billing.quota_exceeded","params":{"limit":1000}}`），由前端翻译。这样同一个后端能同时服务不同语言的客户端，也便于业务方覆盖文案。
 - **后端自己生成的内容必须后端翻译**：邮件（邀请、密码重置、超额提醒）、导出的账单/发票、Webhook 通知文本、运营后台的审计日志描述。这类内容用收件人的 `locale` 而非请求方的语言渲染——给英文用户发的邀请邮件不能因为操作者是中文界面就变成中文。
 - 每个 Go module 在自己目录维护 `locales/{zh-CN,en-US}.toml` 并 `embed.FS` 暴露，由 Kernel 装配时合并注册（与 migrations 的聚合机制一致）。
-- 时区同样按用户偏好处理：数据库统一存 UTC，展示层转换。
+- 时区链：profile `users.timezone`（`GET/PATCH /api/v1/authn/me/preferences` 读写，空 = 未选）→ 设备时区 → **UTC 终值**（渲染器始终显式传 `timeZone`，不走 `Intl` 的进程本地隐式默认）；billing 发票固定 UTC（既有豁免，保留）。数据库统一存 UTC，展示层转换。后端今天没有按收件人时区渲染的内容（各模块 locales 目录不含任何日期格式化参数），tzdata 嵌入当前只服务偏好校验；默认语言 `en-US`、默认时区 `UTC`。**缺口**：第三方渲染点不携带请求者设备时区（本期不引入时区请求头）；将来服务端按请求者时区渲染的链 = 收件人 tz → 请求者档（仅前端请求存在时）→ UTC 兜底。
 
 **前端**
 - 新增 `@speed/i18n` 包（位于 `api-client` 同层），封装 `react-i18next` 实例创建、语言检测、懒加载与 MUI locale 联动（切到英文时 MUI 组件的内置文案也要跟着变，`@mui/material/locale` 的 `zhCN`/`enUS`）。

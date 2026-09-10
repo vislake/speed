@@ -342,20 +342,20 @@
 | 144 | ROADMAP | `go/authn/AGENTS.md` | 企业 SSO 登录无审计行且 SSO 配置无 HTTP 面 | 待排期:SSO 控制面(配置写操作+Callback 漏斗;spec 20 操作无之) |
 | 146 | ROADMAP | `go/observability/redact.go` | PII/完整提示的声明机制未实现 | 待排期:PII/完整提示声明机制(apperr 半边已落地;日志侧消费面未建) |
 | 151 | ROADMAP | `go/billing/AGENTS.md` | audit.Emit 丢失写无补偿恢复 | 待排期:audit.Emit 补偿投递("log, never return" 契约已记录;异步审计耐久性) |
-| 155 | ROADMAP | `web/packages/i18n/src/create.ts` | platform user-profile locale feature | 待排期:profile-language 槽位(host 解析;profile 步骤未落地,create.ts 扩展点已留) |
 | 157 | ROADMAP | `web/packages/auth-ui/README.md` | 登录渠道发现端点不存在 | 待排期:登录渠道发现端点+家族采纳(现 channels 由 host 以 props 声明) |
 | 169 | ROADMAP | `docs/internal/07-platform-services.md` | integration 到期提醒轮换与手动重投未实现 | 待排期:integration 到期提醒+手动重投(字段齐备无需新迁移;手动重投半另见可立即实现清单) |
 | 177 | ROADMAP | `CLAUDE.md` | 双部署模式 x 双方言的组合 CI 运行 | 待排期:M0 出口条件残余:双部署模式×双方言组合矩阵(app 硬编码 SQLite 方言,需参数化) |
 | 180 | ROADMAP | `Taskfile.yml` | dev 任务(热重载开发回路)未实现 | 待排期:task dev 热重载 runner(计划命令 19;runner 选型未定) |
 | 194 | ROADMAP | `web/packages/ui-kit/src/internal/validation-error.ts` | validation from generated types + code-to-text resolver | 待排期:统一 code-to-text resolver+generated-types 校验(现各面自建白名单为权宜) |
-| 197 | ROADMAP | `web/packages/account-ui/README.md` | 家族无改密面与 profile 字段(原属 profile round) | 待排期:change-password 操作+账户字段编辑(需 spec 新 op+UI 轮;profile 面) |
+| 197 | ROADMAP | `web/packages/account-ui/README.md` | 家族无改密面与 profile 字段(原属 profile round) | 待排期:change-password 操作(需 spec 新 op+UI 轮);账户字段编辑半已闭:偏好设置面(语言/时区)随 `GET/PATCH /api/v1/authn/me/preferences` 落地(97ffc345、3c8a8605) |
 | 198 | ROADMAP | `go/admin/export.go` | 审计导出的一次性下载令牌无同步中继通道 | 待排期:审计导出一次性令牌的同步中继通道+送达通知(运维面设计,未命名归属轮) |
 | 202 | ROADMAP | `docs/internal/21-api-contract.md` | saasctl openapi generate 未实现 | 待排期:saasctl openapi generate(不在 v0.1 范围);参考实现已在库内以 reference-app 应用自有生成流落地为种子(task api:gen:app:应用自有合并文档+SDK+全检 porcelain 门禁,21 记录)——产品化时按生成项目形状复刻并重定接缝决策 |
 | — | 待排期(轮内设计讨论) | `go/pkgcore/AGENTS.md` | EventBus 发布方载荷形状未规范化 | 待排期:事件契约规范化——发布方统一载荷形状(例如统一经 pkgcore 的编码路径发布),使订阅侧的结构化探测(`EventPayloadString`/`EventPayloadFields` 一族的拼写探测)最终可退役为类型化解码。现状:同进程投递发布方结构体、代理总线投递 JSON 解码后的 map,订阅方因此按字段拼写探测;探测助手已收拢于 pkgcore(见其 AGENTS.md 的载荷解码条目),规范化是后续独立项 |
+| — | 待排期(轮内设计讨论) | `docs/internal/11-cross-cutting.md` | 后端按请求者时区渲染的载体未定 | 待排期:第三方渲染点(收件人≠请求者、系统级发起)不携带请求者设备时区——本期不引入时区请求头,后端渲染链的请求者档没有载体;将来若引入,链 = 收件人 tz → 请求者档(仅前端请求存在时)→ UTC 兜底。现状:时区链止于 profile → 设备 → UTC,且后端生成内容目前不含需按日期渲染的文案(各模块 locales 无日期格式化参数) |
 
 ## 9. 闭于 main 的普查行(记录时点 2026-09-09)
 
-以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地;2026-09-10 另闭 2 行(127、212,真实发布类)随 v0.0.1 发布机制落地,另闭 1 行(4,周期调度席位)随 R2 落地。
+以下行在普查(2026-09-08)之后由落地轮闭合,普查判定已过期,此处记闭态(不留在上表充当开放行):前 5 行闭于记录时点之前,后 6 行随模块驱动合并策略落地;2026-09-10 另闭 2 行(127、212,真实发布类)随 v0.0.1 发布机制落地,另闭 1 行(4,周期调度席位)随 R2 落地,另闭 1 行(155,profile-language 槽位)随时区/语言偏好闭环落地。
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
@@ -377,8 +377,9 @@
 | 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | 闭:5cb0ce68 pre-auth 端点先 secured/versioned——移入 `/api/v1/config/...` 版本化前缀、两路径共享每地址限流预算、成功答案一分钟公开缓存 + `Vary: Host`(行内记录的前置条件达成);片段随 ba3ddb76 落地——`go/config/api/openapi.yaml` 声明 config_getPublicConfig/config_getSystemFeatures 两个操作,`*Module` 以编译期断言实现生成 `api.ServerInterface` 并经生成 wrapper 挂载 |
 | 154 | ROADMAP | `web/packages/api-client/src/config-fetcher.ts` | OpenAPI fragment for go/config pre-auth endpoints | 闭:ba3ddb76 go/config 片段落地并进合并文档与 `@speed/api-sdk`;前端手写面与之同步——config-fetcher 保持 per-key 映射层、路径常量与片段一致,片段生成的 hook(useConfigGetPublicConfig/useConfigGetSystemFeatures)为前端的主调用面;前置 secured/versioned 由 5cb0ce68 达成 |
 | 4 | ROADMAP | `go/compliance/AGENTS.md` | retention sweep 无模块内置调度点 | 闭:周期调度席位 R2 落地——`pkgcore.Registry.Schedules` 座席(声明即排产)随 `4e7535cb`,`jobs.Scheduler` + `TenantLister` seam + 统一窗口键派生随 `88b169f8`;七处声明随 `e784bd46`/`504ac66e`/`68fbd307`/`9ea05043`/`6f0cf229`/`fa9fed84`(storage/compliance/pki 两处/billing/sharing/integration;站点前缀与调度器派生的逐字节同键由各模块窗口测试钉住),参考应用宿主 ticker 删除与 `periodicTenantUniverse` 转 `TenantLister` 实现随 `9b61449f`。compliance AGENTS 该 bullet 已改写为现文(声明制:模块拥有自己的默认排产,宿主的总开关是启不启动调度器) |
+| 155 | ROADMAP | `web/packages/i18n/src/create.ts` | platform user-profile locale feature | 闭:97ffc345 profile-locale 槽位落地——`users.locale` 已有,读写在 `GET/PATCH /api/v1/authn/me/preferences`(PATCH 部分更新,空串清空);前端消费面两处——account-ui 偏好设置面(3c8a8605,PATCH 优先后持久化语言)与 reference-app 的 ProfilePreferenceSync(f6339249,登录后把 profile 语言非持久化应用到实例,URL/手动槽位已决时不覆盖);宿主的"已支持语言"解析由 `@speed/i18n` 的 `readSupportedLanguages` 导出供给(create.ts 留的扩展点在消费侧以该导出兑现,create.ts 本身保持单例创建职责) |
 
-**部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)。
+**部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)、197(账户字段编辑半已闭——language/timezone 偏好面与 PATCH 端点随 97ffc345、3c8a8605 落地;change-password 半仍开)。
 
 **维护规则**:任何行落地(实现、裁决、文本改述)后,把该行移入本章并记 sha 与闭因;本章行只增不减,直至调度记录使命结束。新 deferral 由审查产出直接补入对应类别表。
 
