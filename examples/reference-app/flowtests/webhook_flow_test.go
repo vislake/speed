@@ -15,7 +15,7 @@ package flowtests
 // the integration_createWebhookSubscription operation -- the POST
 // internal/app/webhooks.go's createWebhookSubscription helper issues, mounted through
 // the same generic mountModuleRoutes loop every other module's fragment
-// uses, gated by internal/app/demo_subject.go's guardIntegrationRoute. The whole CRUD
+// uses, gated by the integration entry of internal/app/demo_subject.go's DemoRouteRules. The whole CRUD
 // + recent-deliveries surface, driven end to end, lives in
 // webhook_crud_flow_test.go; this file's job is the DELIVERY side, which
 // no CRUD surface exercises.
@@ -218,9 +218,9 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 // createWebhookSubscription drives the spec surface's create operation
 // (POST /api/v1/integration/webhooks, webhookBasePath) as DemoOwnerUserID
 // -- whose built-in owner role carries integration.PermissionWebhookManage,
-// the permission internal/app/demo_subject.go's guardIntegrationRoute dispatches a
-// non-GET request under /webhooks to (the router-level gate
-// extended from method-only dispatch to sub-path dispatch precisely so the
+// the permission internal/app/demo_subject.go's integrationPermissionFor maps a
+// non-GET request under /webhooks to (the integration table entry's selector,
+// which extends method-only dispatch with sub-path dispatch precisely so the
 // API-key and webhook permission pairs each gate their own half of the
 // shared /api/v1/integration mount). The X-Demo-User-Id header names
 // DemoNotesCreatorUserID, this app's one shared creator-attribution

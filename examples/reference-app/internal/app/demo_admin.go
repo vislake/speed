@@ -30,7 +30,7 @@ const DemoPlatformStaffEmail = "demo-platform-staff@example.com"
 
 // adminRoutePath mirrors notesRoutePath's own situation: admin keeps its
 // mount-point constant unexported, so this app names it again here to
-// keep demoRouteGuards and GuardModuleRoute in step with it.
+// keep DemoRouteRules in step with it.
 const adminRoutePath = "/api/v1/admin"
 
 // The admin sub-paths adminPermissionFor tells apart. admin mounts
@@ -104,7 +104,8 @@ func adminPermissionFor(r *http.Request) string {
 }
 
 // adminSubjectResolver is admin's OWN subject resolver -- deliberately NOT
-// DemoSubjectResolver: every admin:* permission is evaluated in
+// DemoSubjectResolver, and named on the admin entry of DemoRouteRules
+// (demo_subject.go): every admin:* permission is evaluated in
 // rbac.SystemDomain, because admin's own route does NOT go through
 // ordinary tenancy.Middleware tenant resolution, so TenantID here is
 // HARD-CODED to rbac.SystemDomain rather than read from
@@ -143,18 +144,6 @@ func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 		return rbac.Subject{}, false
 	}
 	return sub, true
-}
-
-// guardAdminRoute wraps admin's mounted subtree in rbac's permission gate,
-// keyed by adminPermissionFor rather than a single resource -- the one
-// mounted path this app gates differently from every other module's route,
-// per adminPermissionFor's own doc comment. It uses adminSubjectResolver,
-// never DemoSubjectResolver -- see that resolver's own doc comment for
-// why sharing the generic one was a privilege-escalation bug.
-func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
-	return rbac.RequirePermissionFunc(az, adminPermissionFor,
-		rbac.WithSubjectResolver(adminSubjectResolver),
-	)(handler)
 }
 
 // seedDemoPlatformStaff registers DemoPlatformStaffEmail through the

@@ -29,8 +29,16 @@ import (
 
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
+	"github.com/vislake/speed/go/rbac"
 )
+
+// integrationErrInternal is the stable internal code this route's own
+// refusals carry: the whoami handler answers it through
+// rbac.WriteAuthzError for the one invariant it could ever fail on (see
+// that handler's own comment).
+var integrationErrInternal = apperr.Internal("integration.internal_error")
 
 // IntegrationWhoamiRateLimitWindow is the sliding window the demo route's
 // authentication-attempt budget uses -- a single window kept this route's
@@ -135,7 +143,7 @@ func wireIntegrationAuthenticated(mux *http.ServeMux, m *integration.Module, kv 
 			// Unreachable in practice -- AuthMiddleware never calls next
 			// without one -- but answered rather than panicking on a nil
 			// dereference if that invariant is ever broken.
-			writeIntegrationError(w, integrationErrInternal)
+			rbac.WriteAuthzError(w, integrationErrInternal)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -8,8 +8,8 @@ package flowtests
 // go/integration/api/openapi.yaml's six operations under
 // /api/v1/integration/webhooks, mounted through internal/app/server.go's integrationModule
 // wiring and the same generic mountModuleRoutes loop every other module's
-// fragment uses, gated by internal/app/demo_subject.go's guardIntegrationRoute with its
-// sub-path dispatch choosing integration:webhook:read for reads and
+// fragment uses, gated by the integration entry of internal/app/demo_subject.go's
+// DemoRouteRules, whose sub-path selector chooses integration:webhook:read for reads and
 // integration:webhook:manage for everything else -- through the composed
 // HTTP stack: create (capturing the raw signing secret, shown exactly once),
 // list (secret-free, verified at the raw-JSON level), update (a partial
@@ -254,7 +254,7 @@ func decodeWebhookDeliveries(t *testing.T, resp *http.Response, wantStatus int, 
 // this surface's mirror of apikey_flow_test.go's own permission-gate test:
 // the read-only demo user holds notes:read and nothing else -- deliberately
 // no integration:webhook:* permission at all -- so both the read and manage
-// directions of guardIntegrationRoute's sub-path dispatch must refuse it,
+// directions of the integration entry's sub-path dispatch must refuse it,
 // across every operation class of the fragment: list and the deliveries
 // listing (dispatched to integration:webhook:read) and create, update,
 // delete and restore (dispatched to integration:webhook:manage). This is

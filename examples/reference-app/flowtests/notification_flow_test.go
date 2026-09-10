@@ -3,7 +3,7 @@ package flowtests
 // notification_flow_test.go drives go/notification end to end through the
 // composed HTTP stack: the authn+tenancy middleware chain, the module's
 // real handler on its mounted route (internal/app/demo_subject.go's
-// demoRouteGuards names it routePublic -- the module resolves and requires
+// DemoRouteRules declares it public -- the module resolves and requires
 // its own caller identity per operation), a real temp-file SQLite database
 // and the real standalone queue. Three legs cover the module's acceptance
 // shape:
@@ -517,8 +517,8 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 
 	// The module's own identity gate: an authenticated caller without an
 	// acting subject (no X-Demo-User-Id) is refused 401 by the module's
-	// per-operation check -- the reason demoRouteGuards names this path
-	// routePublic rather than gating it at the router.
+	// per-operation check -- the reason DemoRouteRules declares this path
+	// public rather than gating it at the router.
 	env := notifError(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusUnauthorized)
 	if *env.Code != "notification.subject_unresolved" {
 		t.Errorf("subject-less message list code = %q, want notification.subject_unresolved", *env.Code)

@@ -488,12 +488,14 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 // grants every permission ANY module declared, with no domain
 // partitioning at all (go/rbac/builtin.go) -- so admin:* is among them --
 // and demo-owner@example.com holds exactly that role in every configured
-// tenant (seedDemoUsers' own demoSeedAccounts table). Before this fix,
-// admin's own router-level gate (guardAdminRoute) built its rbac.Subject
-// from DemoSubjectResolver, which reads TenantID from whatever tenant the
-// caller's OWN session happens to be scoped to -- so demo-owner's
-// perfectly ordinary tenant-acme session passed admin's gate purely
-// because "owner" happens to carry admin:*'s permission strings in the
+// tenant (seedDemoUsers' own demoSeedAccounts table). admin's own gate --
+// the admin entry of DemoRouteRules, whose adminSubjectResolver
+// (demo_admin.go) builds the Subject from the verified Principal under
+// rbac.SystemDomain -- must never fall back to DemoSubjectResolver, which
+// reads TenantID from whatever tenant the caller's OWN session happens to
+// be scoped to: demo-owner's perfectly ordinary tenant-acme session would
+// then pass admin's gate purely because "owner" happens to carry admin:*'s
+// permission strings in the
 // shared global catalog. admin's gate must evaluate ONLY
 // Subject{rbac.SystemDomain, callerID}, which demo-owner holds no grant
 // in at all, so every admin:* request from this account must be refused

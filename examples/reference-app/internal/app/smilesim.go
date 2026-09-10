@@ -21,7 +21,7 @@
 // why these routes are the app's own -- like consult.go's chat
 // route and the demo-notification route, they are mounted directly on
 // mux rather than through reg.Routes/mountModuleRoutes, so none needs
-// (and cannot silently skip) an entry in demoRouteGuards' table. consult's
+// (and cannot silently skip) an entry in DemoRouteRules' table. consult's
 // route remains hand-written (its chat surface has no web consumer to
 // render it); this file's routes are the app-owned surfaces that grow a
 // fragment.

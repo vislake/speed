@@ -64,7 +64,7 @@ import (
 // is the exact defect this route exists to fix.
 //
 // The gate mirrors the org module route the web's roster reads:
-// GET /api/v1/org/members answers org:read (guardOrgRoute,
+// GET /api/v1/org/members answers org:read (the org entry of DemoRouteRules,
 // demo_subject.go), so this answer requires the same permission through
 // the same rbac gate and the same demo subject resolver, and adds the
 // same tenant-wide narrowing that route applies to a node-less roster
@@ -166,8 +166,9 @@ type teamMembersDeps struct {
 	// accessor clinicRootNameFor reads through (self_service.go).
 	users *authn.UserRepository
 	// headerDisabled carries cfg.DisableDemoUserHeader into the subject
-	// resolver, exactly as GuardModuleRoute threads it (demo_subject.go):
-	// the demo header, when enabled, names who acts for the gate.
+	// resolver, exactly as the route table threads it (DemoRouteRules,
+	// demo_subject.go): the demo header, when enabled, names who acts for
+	// the gate.
 	headerDisabled bool
 }
 
@@ -258,21 +259,21 @@ func serveTeamMembers(w http.ResponseWriter, r *http.Request, deps teamMembersDe
 	// (enforceOrgNodeScope's own doc comment states the same contract).
 	sub, ok := rbac.SubjectFromContext(ctx)
 	if !ok {
-		writeRBACGateError(w, rbac.ErrPermissionDenied)
+		rbac.WriteAuthzError(w, rbac.ErrPermissionDenied)
 		return
 	}
-	resource, action, ok := SplitDemoPermission(org.PermissionRead)
+	resource, action, ok := rbac.SplitPermission(org.PermissionRead)
 	if !ok {
-		writeRBACGateError(w, rbac.ErrPermissionDenied.WithParam("permission", org.PermissionRead))
+		rbac.WriteAuthzError(w, rbac.ErrPermissionDenied.WithParam("permission", org.PermissionRead))
 		return
 	}
 	scope, err := deps.az.DataScope(ctx, sub, action, resource)
 	if err != nil {
-		writeRBACGateError(w, rbac.ErrStorage)
+		rbac.WriteAuthzError(w, rbac.ErrStorage)
 		return
 	}
 	if !scope.TenantWide {
-		writeRBACGateError(w, rbac.ErrPermissionDenied.WithParam("permission", org.PermissionRead))
+		rbac.WriteAuthzError(w, rbac.ErrPermissionDenied.WithParam("permission", org.PermissionRead))
 		return
 	}
 

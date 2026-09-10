@@ -2,7 +2,8 @@ package flowtests
 
 // pki_revoke_gate_flow_test.go drives go/pki's signing-key revoke HTTP
 // operation -- POST /api/v1/pki/signing-keys/{kid}/revoke under
-// PkiRoutePath, gated by guardPkiRoute (internal/app/demo_subject.go) -- through the
+// PkiRoutePath, gated by the pki entry of DemoRouteRules (internal/app/demo_subject.go,
+// pkiPermissionFor with pkiSubjectResolverFor's domain pin) -- through the
 // composed HTTP stack, and pins the platform-domain half of the
 // permission contract go/pki/module.go now records: revoking a row of
 // pki_signing_keys (platform data) is gated on pki.PermissionRevokeSigningKey

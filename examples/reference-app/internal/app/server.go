@@ -2823,7 +2823,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	//
 	// admin's OWN mounted route is deliberately excluded from that branch
 	// entirely -- topMux below dispatches it straight from
-	// authn.Middleware's own output, through guardAdminRoute's
+	// authn.Middleware's own output, through the admin entry's
 	// adminSubjectResolver (demo_admin.go) and nothing else -- what
 	// mountModuleRoutes' own doc comment explains: admin's five
 	// permissions are evaluated in rbac.SystemDomain against the CALLER'S
@@ -3102,7 +3102,7 @@ func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindInd
 //     business deciding authn's own per-operation pre-auth question --
 //     authn's Handler itself decides, operation by operation, whether a
 //     Principal is required (go/authn/handler.go's requirePrincipal), the
-//     same self-gating demoRouteGuards' routePublic entry for this path
+//     same self-gating the route table's public entry for this path
 //     already records. authn's allowlist entries are therefore gone from
 //     the tenancy chain below, and its handlers receive no tenant context
 //     from tenancy.Middleware -- they never read one (every authn
@@ -3121,29 +3121,29 @@ func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindInd
 // implementation is pkgcore.MountRoutes (see its doc comment), which is
 // what every plain route below mounts through.
 //
-// Every route also passes through GuardModuleRoute on the way out, which
-// is where rbac's permission gate is applied -- see demo_subject.go's
-// demoRouteGuards. GuardModuleRoute still runs for the two excepted paths
-// too (admin's dispatching to guardAdminRoute per its adminRouteSentinel
-// entry, authn's resolving routePublic per its own entry), so the table's
-// exhaustiveness check keeps covering both; only the DESTINATION of the
-// resulting handler differs. A path the table does not name fails the
-// build here rather than being served.
+// Every route is admitted through the route table on the way out: the
+// table is DemoRouteRules (demo_subject.go), applied by rbac.GuardRoutes,
+// which wraps each gated route in rbac's permission gate and refuses the
+// whole set -- failing the build here rather than serving the route -- when
+// a mounted path has no declared decision. The two excepted paths are
+// decided by the same table (admin gated, authn public) and keep being
+// covered by its exhaustiveness check; only the DESTINATION of the
+// resulting handler differs.
 func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnHandler http.Handler, err error) {
-	for _, route := range reg.Routes.Routes() {
-		handler, guardErr := GuardModuleRoute(az, route.Path, route.Handler, orgDeps, demoHeaderDisabled)
-		if guardErr != nil {
-			return nil, nil, guardErr
-		}
+	guarded, err := rbac.GuardRoutes(az, reg.Routes.Routes(), DemoRouteRules(az, orgDeps, demoHeaderDisabled))
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, route := range guarded {
 		if route.Path == adminRoutePath {
-			adminHandler = handler
+			adminHandler = route.Handler
 			continue
 		}
 		if route.Path == hostcore.AuthnAPIPath {
-			authnHandler = handler
+			authnHandler = route.Handler
 			continue
 		}
-		pkgcore.MountRoutes(mux, pkgcore.MountedRoute{Path: route.Path, Handler: handler})
+		pkgcore.MountRoutes(mux, route)
 	}
 	if adminHandler == nil {
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)

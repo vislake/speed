@@ -19,8 +19,8 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// TestBuildServer_PublicConfigEndpoints_StayUngated guards the routePublic
-// half of demoRouteGuards through the composed server: config's two
+// TestBuildServer_PublicConfigEndpoints_StayUngated guards the public
+// half of DemoRouteRules through the composed server: config's two
 // pre-auth endpoints must keep answering with no identity whatsoever, or a
 // login page could never render its own brand.
 func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {

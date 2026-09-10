@@ -18,11 +18,11 @@ import (
 )
 
 // This file proves org's router-level permission gate end to end: without
-// it, demoRouteGuards[orgRoutePath] being routePublic would let ANY
-// authenticated tenant member -- holding no org permission at all --
+// it, the org entry of DemoRouteRules declaring the path public would let
+// ANY authenticated tenant member -- holding no org permission at all --
 // create, move, rename and cascade-delete nodes and remove arbitrary
-// members. See internal/app/demo_subject.go's demoRouteGuards doc comment on org's
-// path for the fixed shape this file exercises.
+// members. See the org entry's doc comment in internal/app/demo_subject.go
+// for the fixed shape this file exercises.
 
 // orgErrorBody is the {code, ...} envelope every refusal from either layer
 // of org's gate (rbac.RequirePermissionFunc's coarse Can check, or
@@ -130,8 +130,8 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 // internal/app/demo_subject.go) and no org permission whatsoever, yet reaches org's
 // routes -- tenancy.Middleware and the fixed authn+tenancy chain never
 // distinguish org's operations from any other tenant member's ordinary
-// traffic, so the per-operation permission gate (internal/app/demo_subject.go's
-// guardOrgRoute) is the only layer that refuses this caller. Every case
+// traffic, so the per-operation permission gate (the org entry of
+// internal/app/demo_subject.go's DemoRouteRules) is the only layer that refuses this caller. Every case
 // below must fail: without the gate all of them would succeed (2xx) -- the
 // cascade-delete case would even delete the tree.
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
@@ -173,9 +173,9 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 		org.PermissionRead, org.PermissionManage,
 		org.PermissionInviteMember, org.PermissionRemoveMember,
 	} {
-		resource, action, ok := app.SplitDemoPermission(perm)
+		resource, action, ok := rbac.SplitPermission(perm)
 		if !ok {
-			t.Fatalf("SplitDemoPermission(%q): malformed", perm)
+			t.Fatalf("rbac.SplitPermission(%q): malformed", perm)
 		}
 		allowed, err := rbacService.Can(context.Background(), readerSub, action, resource)
 		if err != nil {

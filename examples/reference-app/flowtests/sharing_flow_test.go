@@ -5,7 +5,7 @@ package flowtests
 // unauthenticated access route and the owner-facing create/list/
 // get/revoke/access-log routes. Every operation drives the real composed
 // stack buildTestServer wires (internal/app/server.go's tenancy allowlist,
-// internal/app/demo_subject.go's routePublic gate for the access route and its
+// internal/app/demo_subject.go's public declaration for the access route and its
 // sharingPermissionFor gate for the owner-facing ones, sharing.Handler, a
 // real SQLite database), the same two-layer standard every other module's
 // own flow test in this file's package already meets.
@@ -272,7 +272,7 @@ func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
 // no sharing permission at all -- so sharing's owner-facing routes must
 // refuse it in all three directions (sharing:create for POST
 // sharing.PathShares, sharing:read for GET sharing.PathShares, and
-// sharing:revoke for POST the revoke sub-route), proving demoRouteGuards'
+// sharing:revoke for POST the revoke sub-route), proving DemoRouteRules'
 // entry for sharing.PathShares and sharingPermissionFor's own
 // GET/POST-create/POST-revoke split are all wired for real, never left
 // ungated the way the route is without this gate.

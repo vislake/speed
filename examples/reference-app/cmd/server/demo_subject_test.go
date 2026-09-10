@@ -161,32 +161,56 @@ func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
 	}
 }
 
-// TestGuardModuleRoute_UnknownPath_RefusesToMount is the fail-closed
-// default that makes demoRouteGuards worth having. A module that starts
-// mounting a new route must break the build here, loudly and by path,
-// rather than have that route served with no permission check.
-func TestGuardModuleRoute_UnknownPath_RefusesToMount(t *testing.T) {
+// rulesByPath indexes the app's route table for the tests below.
+func rulesByPath(t *testing.T) map[string]rbac.RouteRule {
+	t.Helper()
+	rules := app.DemoRouteRules(nil, app.OrgRouteGuardDeps{}, false)
+	byPath := make(map[string]rbac.RouteRule, len(rules))
+	for _, rule := range rules {
+		byPath[rule.Path] = rule
+	}
+	return byPath
+}
+
+// TestDemoRouteRules_MountedPathWithoutADecision_RefusesToServe is the
+// fail-closed default that makes the route table worth having. A module
+// that starts mounting a new route must break the server build, loudly and
+// by path, rather than have that route served with no permission check.
+func TestDemoRouteRules_MountedPathWithoutADecision_RefusesToServe(t *testing.T) {
 	const unlisted = "/api/v1/invoices"
 
-	handler, err := app.GuardModuleRoute(nil, unlisted, http.NotFoundHandler(), app.OrgRouteGuardDeps{}, false)
+	guarded, err := rbac.GuardRoutes(nil,
+		[]pkgcore.MountedRoute{{Path: unlisted, Handler: http.NotFoundHandler()}},
+		app.DemoRouteRules(nil, app.OrgRouteGuardDeps{}, false))
 	if err == nil {
 		t.Fatal("an unlisted mounted path was accepted; it must fail the server build")
 	}
-	if handler != nil {
-		t.Fatal("a handler was returned alongside the error")
+	if guarded != nil {
+		t.Fatal("routes were returned alongside the error")
 	}
 	if !strings.Contains(err.Error(), unlisted) {
 		t.Fatalf("the error does not name the offending path: %v", err)
 	}
 }
 
-// TestGuardModuleRoute_PublicPath_IsNotGated protects config's two
-// pre-auth endpoints from acquiring a permission check by accident. They
-// must serve with no subject at all -- a login page's brand has to render
-// before anyone has signed in.
-func TestGuardModuleRoute_PublicPath_IsNotGated(t *testing.T) {
+// TestDemoRouteRules_PublicPaths_AreDeclaredAndNotGated protects config's
+// two pre-auth endpoints from acquiring a permission check by accident.
+// They must serve with no subject at all -- a login page's brand has to
+// render before anyone has signed in -- and the table must say so as a
+// positive Public declaration rather than by omission.
+func TestDemoRouteRules_PublicPaths_AreDeclaredAndNotGated(t *testing.T) {
+	byPath := rulesByPath(t)
+
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
 		t.Run(path, func(t *testing.T) {
+			rule, declared := byPath[path]
+			if !declared {
+				t.Fatalf("DemoRouteRules does not name the mounted path %q", path)
+			}
+			if !rule.Access.Public || rule.Access.Permission != nil {
+				t.Fatalf("the %q entry declares %+v, want an explicit public decision", path, rule.Access)
+			}
+
 			served := false
 			inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				served = true
@@ -196,17 +220,46 @@ func TestGuardModuleRoute_PublicPath_IsNotGated(t *testing.T) {
 			// A nil Authorizer would make any gated route fail with
 			// rbac.service_not_attached, so reaching the handler proves no
 			// gate was applied rather than that a gate happened to allow.
-			handler, err := app.GuardModuleRoute(nil, path, inner, app.OrgRouteGuardDeps{}, false)
+			guarded, err := rbac.GuardRoutes(nil,
+				[]pkgcore.MountedRoute{{Path: path, Handler: inner}},
+				[]rbac.RouteRule{rule})
 			if err != nil {
-				t.Fatalf("GuardModuleRoute(%q): %v", path, err)
+				t.Fatalf("GuardRoutes(%q): %v", path, err)
 			}
 
 			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			guarded[0].Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 			if !served || rec.Code != http.StatusOK {
 				t.Fatalf("served %v status %d, want the handler reached with %d", served, rec.Code, http.StatusOK)
 			}
 		})
+	}
+}
+
+// TestDemoRouteRules_OrgEntry_ExemptsOnlyTheAcceptOperation pins the one
+// exemption in the table: the org entry names the accept-invitation
+// request alone, so every other org request stays permission-gated.
+func TestDemoRouteRules_OrgEntry_ExemptsOnlyTheAcceptOperation(t *testing.T) {
+	const orgPath = "/api/v1/org"
+
+	rule, declared := rulesByPath(t)[orgPath]
+	if !declared {
+		t.Fatalf("DemoRouteRules does not name the mounted path %q", orgPath)
+	}
+	if rule.Exempt == nil {
+		t.Fatal("the org entry declares no exemption; the accept-invitation operation would be permission-gated")
+	}
+	if !rule.Exempt(httptest.NewRequest(http.MethodPost, orgPath+"/invitations/accept", nil)) {
+		t.Fatal("the org entry's exemption does not cover POST /api/v1/org/invitations/accept")
+	}
+	for _, r := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, orgPath+"/invitations/accept", nil),
+		httptest.NewRequest(http.MethodPost, orgPath+"/invitations", nil),
+		httptest.NewRequest(http.MethodGet, orgPath+"/nodes", nil),
+	} {
+		if rule.Exempt(r) {
+			t.Fatalf("the org entry's exemption covers %s %s; only the accept POST may bypass the gate", r.Method, r.URL.Path)
+		}
 	}
 }
 
@@ -221,33 +274,6 @@ func TestNotesResource_MatchesTheModulesOwnPermissions(t *testing.T) {
 	}
 	if got := rbac.Permission(app.NotesResource, app.DemoActionWrite); got != notes.PermissionWrite {
 		t.Fatalf("write permission = %q, want %q", got, notes.PermissionWrite)
-	}
-}
-
-func TestSplitDemoPermission(t *testing.T) {
-	tests := []struct {
-		permission string
-		resource   string
-		action     string
-		ok         bool
-	}{
-		{permission: "notes:read", resource: "notes", action: "read", ok: true},
-		{permission: "notes", ok: false},
-		{permission: "notes:", ok: false},
-		{permission: ":read", ok: false},
-		{permission: "", ok: false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.permission, func(t *testing.T) {
-			resource, action, ok := app.SplitDemoPermission(tc.permission)
-			if ok != tc.ok {
-				t.Fatalf("SplitDemoPermission(%q) ok = %v, want %v", tc.permission, ok, tc.ok)
-			}
-			if ok && (resource != tc.resource || action != tc.action) {
-				t.Fatalf("SplitDemoPermission(%q) = (%q, %q), want (%q, %q)",
-					tc.permission, resource, action, tc.resource, tc.action)
-			}
-		})
 	}
 }
 

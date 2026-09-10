@@ -7,7 +7,7 @@
 // fragment for this route to live in -- it is mounted by hand, outside
 // the OpenAPI machinery, the same pattern demo_notification.go's own demo
 // patient-message route establishes in this app. Like that route,
-// it is deliberately outside demoRouteGuards' table too: it is mounted
+// it is deliberately outside DemoRouteRules' table too: it is mounted
 // directly on mux rather than through reg.Routes/mountModuleRoutes, so it
 // never needs (and cannot silently skip) an entry there.
 

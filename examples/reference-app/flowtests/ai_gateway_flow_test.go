@@ -2,7 +2,7 @@ package flowtests
 
 // ai_gateway_flow_test.go drives go/ai-gateway's credential-write HTTP
 // surface -- the module's own OpenAPI fragment mounted at
-// AiGatewayRoutePath, gated by demoRouteGuards[AiGatewayRoutePath] through
+// AiGatewayRoutePath, gated by the AiGatewayRoutePath entry of DemoRouteRules through
 // aiGatewayPermissionFor's three-permission selector -- end to end through
 // the composed HTTP stack: the real authn+tenancy middleware chain, a real
 // temp-file SQLite database carrying ai-gateway's real migrations, and the

@@ -35,7 +35,7 @@
 // photo-content routes need none. Like the smile-simulation surface,
 // these routes are mounted directly on mux rather than through
 // reg.Routes/mountModuleRoutes, so none needs (and cannot silently
-// skip) an entry in demoRouteGuards' table, the same structural
+// skip) an entry in DemoRouteRules' table, the same structural
 // argument smilesim.go's own header makes.
 
 package app

@@ -55,7 +55,7 @@ import (
 )
 
 // The billing fragment's two wire paths, composed from the same
-// BillingRoutePath constant demoRouteGuards' table entry names -- the
+// BillingRoutePath constant DemoRouteRules' table entry names -- the
 // flow tests' anchor on the wire, never a second copy of path truth.
 const (
 	billingBalancePath       = app.BillingRoutePath + "/credits/balance"

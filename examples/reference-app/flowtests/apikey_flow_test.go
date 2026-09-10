@@ -5,7 +5,7 @@ package flowtests
 // spec-generated HTTP surface --
 // internal/app/server.go's integrationModule wiring, mounted through the generic
 // mountModuleRoutes loop exactly like every other module's fragment, gated
-// by internal/app/demo_subject.go's guardIntegrationRoute -- through the composed
+// by the integration entry of internal/app/demo_subject.go's DemoRouteRules -- through the composed
 // HTTP stack: create (capturing the plaintext key, shown exactly once),
 // list (confirming it never reappears), rotate (confirming the predecessor
 // is revoked and the replacement works) and revoke.
@@ -287,8 +287,8 @@ func decodeListAPIKeys(t *testing.T, resp *http.Response, wantStatus int, what s
 // the read-only demo user holds notes:read and nothing else -- deliberately
 // no integration:apikey:* permission at all -- so both the read and manage
 // directions of this module's gate must refuse it, while the owner passes.
-// This is also the proof that guardIntegrationRoute
-// (internal/app/demo_subject.go) genuinely evaluates a real permission rather than the
+// This is also the proof that the integration entry's gate
+// (internal/app/demo_subject.go's integrationPermissionFor, under rbac.GuardRoutes) genuinely evaluates a real permission rather than the
 // generic gate silently passing everything through: a router bug that
 // let every request past would make this test the one that fails.
 func TestBuildServer_APIKeyPermissionGate_EnforcesTheAPIKeyPermissions(t *testing.T) {
