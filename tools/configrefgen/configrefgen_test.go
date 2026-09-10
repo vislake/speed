@@ -12,6 +12,7 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
+
 	// loader is go/pkgcore/config: the package whose own EnvName rule the
 	// rendered env column must reproduce, so the test compares the artifacts
 	// against the loader rather than against a second copy of the rule.

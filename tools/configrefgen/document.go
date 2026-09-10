@@ -17,6 +17,7 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
+
 	// loader is go/pkgcore/config, the bootstrap loader this reference's Env
 	// column names variables after: the cell must print the name the loader
 	// itself would read, so it calls the loader's own derivation rather than
