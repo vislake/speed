@@ -250,7 +250,16 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 Booting a host:
 
 ```go
-mode, err := pkgcore.ParseDeploymentMode(os.Getenv("APP_DEPLOYMENT_MODE"))
+// The host's bootstrap target: go/pkgcore/config's loader fills it from
+// flags, the environment, an optional config file and the struct's own
+// defaults (a field may pin its exact variable name with config:"env=...").
+var boot struct {
+	DeploymentMode string
+}
+if err := config.New().Load(&boot); err != nil {
+	return err
+}
+mode, err := pkgcore.ParseDeploymentMode(boot.DeploymentMode)
 
 // A bare NewKernel() -- no options -- is DeploymentModeStandalone composed
 // with PresetStandalone and needs nothing else. DeploymentModeDistributed

@@ -28,10 +28,14 @@
 #     RequiredCapabilities() dispatch (the one place library code consults
 #     the mode value, deciding which capabilities assembly must demand of
 #     the resolved implementations)
-#   * examples/reference-app/internal/app/server.go -- the assembly reads
-#     APP_DEPLOYMENT_MODE in ConfigFromEnv, parses it and passes the result
-#     to Kernel.Bootstrap via WithDeploymentMode in BuildServer (kernel
-#     assembly is the consumer binary's job, not a library module's)
+#   * examples/reference-app/internal/app/bootstrap.go -- the assembly
+#     resolves APP_DEPLOYMENT_MODE there (ConfigFromEnv's loader-driven
+#     bootstrap: the loader target pins the variable, the transform parses
+#     the value) and defaults it to standalone
+#   * examples/reference-app/internal/app/server.go -- the assembly passes
+#     the resolved mode to Kernel.Bootstrap via WithDeploymentMode in
+#     BuildServer (kernel assembly is the consumer binary's job, not a
+#     library module's)
 #   * go/authn/module.go -- the newOptions check refusing a distributed
 #     composition that wired no explicit WithSMSSender
 #     (ErrMissingDistributedSMSSender) instead of silently defaulting to
@@ -175,6 +179,7 @@ rules:
         - "**/integration_test/**"
         # Kernel-wiring allowlist (see header).
         - "**/go/pkgcore/deployment_mode.go"
+        - "**/examples/reference-app/internal/app/bootstrap.go"
         - "**/examples/reference-app/internal/app/server.go"
         - "**/go/authn/module.go"
         # Consumer-command-entry sites (see header).
