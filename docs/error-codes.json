@@ -2022,7 +2022,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 305,
+      "line": 311,
       "module": "jobs",
       "status": 400
     },
@@ -2031,7 +2031,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 290,
+      "line": 296,
       "module": "jobs",
       "status": 400
     },
@@ -2040,7 +2040,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 385,
+      "line": 425,
       "module": "jobs",
       "status": 400
     },
@@ -2050,6 +2050,15 @@
       "ident": "ErrDuplicateHandlerType",
       "kind": "declared",
       "line": 82,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.event_bus_nil",
+      "file": "go/jobs/queue/asynq/queue.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 381,
       "module": "jobs",
       "status": 400
     },
@@ -2085,7 +2094,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 273,
+      "line": 279,
       "module": "jobs",
       "status": 400
     },
@@ -2103,7 +2112,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 243,
+      "line": 249,
       "module": "jobs",
       "status": 400
     },
@@ -2112,7 +2121,7 @@
       "file": "go/jobs/store.go",
       "ident": "ErrQueueWriterActive",
       "kind": "declared",
-      "line": 259,
+      "line": 291,
       "module": "jobs",
       "status": 409
     },
@@ -2121,7 +2130,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 341,
+      "line": 347,
       "module": "jobs",
       "status": 400
     },
@@ -2148,7 +2157,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 362,
+      "line": 402,
       "module": "jobs",
       "status": 400
     },
@@ -2157,7 +2166,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 221,
+      "line": 227,
       "module": "jobs",
       "status": 400
     },
@@ -2166,7 +2175,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 317,
+      "line": 323,
       "module": "jobs",
       "status": 400
     },
@@ -2175,7 +2184,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 206,
+      "line": 212,
       "module": "jobs",
       "status": 400
     },
