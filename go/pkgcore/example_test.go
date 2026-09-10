@@ -1024,11 +1024,11 @@ func ExampleMountedRoute_access() {
 	}
 
 	fmt.Println(pkgcore.MountedRoute{}.Access.Public, pkgcore.MountedRoute{}.Access.Permission == nil)
-	fmt.Println(notes.Access.Public, notes.Access.Permission(httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)))
-	fmt.Println(public.Access.Public, public.Access.Permission == nil)
+	fmt.Println(notes.Path, notes.Handler != nil, notes.Access.Public, notes.Access.Permission(httptest.NewRequest(http.MethodGet, notes.Path, nil)))
+	fmt.Println(public.Path, public.Handler != nil, public.Access.Public, public.Access.Permission == nil)
 
 	// Output:
 	// false true
-	// false notes:read
-	// true true
+	// /api/v1/notes true false notes:read
+	// /api/v1/config/public true true true
 }
