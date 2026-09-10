@@ -271,6 +271,12 @@ type RouteRegistrar interface {
 }
 
 // ConfigSchemaRegistrar collects the configuration schema modules declare.
+//
+// The items registered here are values editable at runtime -- per-tenant rows
+// in the configs table, served and changed while the process runs. Keys a
+// process resolves once at startup belong to the separate Bootstrap seat
+// (BootstrapRegistrar); one dotted key belongs to exactly one of the two
+// layers, never both.
 type ConfigSchemaRegistrar interface {
 	// Add registers configuration items, validating every declaration
 	// first. An item whose fields contradict one another -- an unknown
@@ -524,8 +530,17 @@ type RetentionRegistrar interface {
 type Registry struct {
 	// Routes receives the HTTP handlers modules mount.
 	Routes RouteRegistrar
-	// Config receives the configuration schema modules declare.
+	// Config receives the configuration schema modules declare: values
+	// editable at runtime, in the configs table.
 	Config ConfigSchemaRegistrar
+	// Bootstrap receives the process-start configuration keys modules
+	// declare: input a host resolves once before the process is wired
+	// (go/pkgcore/config resolves it from flags, the environment, an
+	// optional config file and the defaults on the host's target struct).
+	// A module declares what it consumes and never reads the key itself.
+	// See BootstrapKey for the declaration's fields and the seam's own
+	// doc comment for the layer boundary against Config above.
+	Bootstrap BootstrapRegistrar
 	// Features receives the feature flags modules declare.
 	Features FeatureRegistrar
 	// Permissions receives the resource:action permissions modules define.
@@ -611,6 +626,7 @@ func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry {
 	return &Registry{
 		Routes:        &memoryRouteRegistrar{},
 		Config:        &memoryConfigRegistrar{keys: make(map[string]struct{})},
+		Bootstrap:     &memoryBootstrapRegistrar{keys: make(map[string]struct{})},
 		Features:      &memoryFeatureRegistrar{keys: make(map[string]struct{})},
 		Permissions:   &memoryPermissionRegistrar{perms: make(map[string]struct{})},
 		Jobs:          &memoryJobRegistrar{handlers: make(map[string]any)},
@@ -1277,8 +1293,10 @@ func warnIfNotDurable(res seamResolution) {
 // mode, on a seam whose resolved implementation does not satisfy the
 // deployment mode's required capability, on a dependency cycle, on a
 // dependency that is not part of modules, on a duplicate module name, on the
-// first Register error, and on an unresolved feature flag dependency. ctx
-// must be non-nil; cancelling it stops the bootstrap between modules.
+// first Register error, on a key declared on both the bootstrap and the
+// runtime configuration seats (validateBootstrapKeySeparation), and on an
+// unresolved feature flag dependency. ctx must be non-nil; cancelling it
+// stops the bootstrap between modules.
 //
 // # Seam resource lifecycle
 //
@@ -1400,6 +1418,15 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (reg *Registr
 		}
 	}
 	reg.locales = localesBuilder.Build()
+
+	// Both declaration seats are complete here, which is the first moment the
+	// two layers can be compared: registration visits modules one at a time,
+	// and a module may legitimately declare on either seat a key another
+	// module also declares on the other. A key on both layers would carry two
+	// meanings, two defaults and two edit surfaces.
+	if err := validateBootstrapKeySeparation(reg); err != nil {
+		return nil, err
+	}
 
 	if err := ValidateFeatureGraph(reg); err != nil {
 		return nil, err

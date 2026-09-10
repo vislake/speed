@@ -44,7 +44,7 @@ Four more subpackages, `eventbustest`, `kvstoretest`, `mailertest` and `objectst
 | Signature | Purpose |
 |---|---|
 | `type Module interface { Name() string; DependsOn() []string; Migrations() embed.FS; Locales() embed.FS; OpenAPISpec() []byte; Register(*Registry) error }` | The contract every module implements |
-| `type Registry struct { Routes; Config; Features; Permissions; Jobs; Notifications; Events; AuditActions }` | Everything a module can contribute, one field per mechanism |
+| `type Registry struct { Routes; Config; Bootstrap; Features; Permissions; Jobs; Notifications; Events; AuditActions; Retention }` | Everything a module can contribute, one field per mechanism |
 | `func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry` | A registry wired to the in-memory registrars, to `bus`, `kv` and `mailer`. A nil argument panics |
 | `func (*Registry) EventBus() EventBus` | The bus behind `Registry.Events`, so the host publishes into what modules subscribed to |
 | `func (*Registry) KVStore() KVStore` | The key-value store the registry was built with |
@@ -80,7 +80,7 @@ A tenth name, `kv.postgres`, is registered by `kv/postgres`'s own `init()` (see 
 
 `eventbus.nats` and `kv.nats`, registered by `eventbus/nats`'s and `kv/nats`'s own `init()`s respectively (see the file-location table above), are the `"eventbus"` seam's third implementation (after `eventbus.redis` and `eventbus.postgres`) and the `"kv"` seam's fourth distributed one (after `kv.redis`, `kv.postgres` and `kv.memcached`). Neither is named by `PresetStandalone` or `PresetDistributed` -- registering either only makes its name resolvable on the matching registry; a host names it in a `Preset` of its own or injects it directly with `WithEventBus`/`WithKVStore`. Both fall back to `nats.DefaultURL` ("nats://127.0.0.1:4222") when a host builds them through their own constructor without a connection already in hand, the same zero-configuration-default posture the two Redis-backed adapters take with `"localhost:6379"`.
 
-Registrar interfaces: `RouteRegistrar`, `ConfigSchemaRegistrar`, `FeatureRegistrar`, `PermissionRegistrar`, `JobHandlerRegistrar`, `NotificationRegistrar`, `EventRegistrar` (`Publishes` / `Published` / `Subscribe` / `Bus`), `AuditActionRegistrar`.
+Registrar interfaces: `RouteRegistrar`, `ConfigSchemaRegistrar`, `BootstrapRegistrar`, `FeatureRegistrar`, `PermissionRegistrar`, `JobHandlerRegistrar`, `NotificationRegistrar`, `EventRegistrar` (`Publishes` / `Published` / `Subscribe` / `Bus`), `AuditActionRegistrar`.
 
 Declaration types:
 
@@ -88,11 +88,18 @@ Declaration types:
 |---|---|
 | `MountedRoute` | `Path`, `Handler` |
 | `ConfigItem` | `Key`, `Type`, `Default`, `Sensitive`, `Description`, `Group`, `Public`, `Min`, `Max` |
+| `BootstrapKey` | `Key`, `Format`, `Default`, `Sensitive`, `Description`, `Group`, `Example` |
 | `FeatureFlag` | `Key`, `Default`, `Description`, `DependsOn` |
 | `NotificationType` | `Key`, `Group`, `DefaultChannels`, `RecipientVisibleParams`, `Unsubscribable` |
 | `EventDecl` | `Type`, `PayloadType`, `Description` |
 
 `ConfigItem` declarations are validated when registered: `Type` must be one of `string` / `int` / `bool` / `duration`; a non-nil `Default` must be a Go value of that kind (`string`, `int` or `int64`, `bool`, `time.Duration`; nil is legal and means "no value until one is set"); `Min`/`Max` are declarative ranges defined for `int` and `duration` items only, must satisfy `Min <= Max`, and a non-nil `Default` must fall inside them; `Sensitive` and `Public` are mutually exclusive. A contradictory declaration fails the whole `Add` call with an error wrapping `ErrInvalidConfigItem` -- see the error index below.
+
+`BootstrapKey` declarations (the `Registry.Bootstrap` seat) describe the process-start input a module consumes -- keys a host resolves once, before the process is wired, from command-line flags, the environment, an optional config file and the defaults on its loader target struct (`go/pkgcore/config`). A module declares what it consumes and never reads it: the host resolves the value and injects the result. `Format` is one of `string` / `int` / `bool` / `hexkey` (a 32-byte key's hexadecimal text); `Default` is an operator-facing statement of the fallback behaviour, never a second runnable default -- the authoritative default is whatever the host's target struct carries; a `Sensitive` declaration must carry a `Description`, and a contradictory or repeated key fails the whole `Add` call (`ErrInvalidBootstrapKey`, `ErrDuplicateBootstrapKey`) with nothing registered. By convention `Key`'s first segment is the owning module's name, so the generated reference can group declarations per module.
+
+**One key belongs to one layer.** A dotted key declared on the runtime configuration seat (`reg.Config`) and on the bootstrap seat (`reg.Bootstrap`) at once is refused by `Kernel.Bootstrap` (`validateBootstrapKeySeparation`), naming the key and both layers: the two seats are invisible to each other while modules register, and the two layers carry different meanings, defaults, scopes and edit surfaces for the same identifier. Sharing a module prefix is not a conflict -- `authn.password_min_length` (runtime) and `authn.pii_cipher_key` (bootstrap) coexist.
+
+Declaring zero bootstrap keys is an honest state, not a gap: a module that consumes no process-start input declares none, and nothing asks for a placeholder. The current census: `authn` declares two (`authn.pii_cipher_key`, `authn.blind_index_key`), `org` one (`org.invitation_email_index_key`), `notification` one (`notification.contact_index_key`), `pki` one (`pki.local_key_cipher_key`) and `config` one (`config.master_key`); every other platform module declares none.
 
 `NotificationType`'s own annotation: `RecipientVisibleParams` names the parameters a dispatch of the type may carry to its recipient -- the keys of the interpolation values the type's templates reference (see `go/notification`'s `Dispatch.Params`). Anything NOT named is delivery-internal context that must never reach the recipient, and `go/notification` enforces the declaration on the two boundaries it owns: `DeliveryService.Dispatch` refuses a dispatch carrying any parameter outside the list before anything is enqueued (`ErrDispatchParamsNotAllowed`, naming the type and the offending keys), and the delivery path narrows a payload that nevertheless reaches it -- a job enqueued before the declaration restricted its params -- down to the list before anything renders, derives into the delivery key or persists into the row. An EMPTY list is a real declaration: the type's copy is not parameterized, so its dispatches may carry no parameters at all. Nil means "no restriction declared": a type that does not declare the list keeps accepting any parameters, so no existing declaration's behaviour changes. pkgcore itself only carries the field -- the enforcement lives in `go/notification` (that module's `AGENTS.md` has the delivery-side detail); its first real declaration is `go/admin`'s `admin.impersonation_started`, which declares the empty list (that module's documentation records the leak the empty list closes).
 
@@ -354,6 +361,8 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 | `ErrDependencyCycle` | `DependsOn` forming a cycle | The error names the cycle; break it |
 | `ErrMissingDependency` | Depending on a module absent from the bootstrap set | Add the module, or drop the dependency |
 | `ErrInvalidConfigItem` | An item whose fields contradict one another: an unknown `Type`, a `Default`/`Min`/`Max` of the wrong Go type, `Min`/`Max` on a `string`/`bool` item, `Min` above `Max`, a `Default` outside its declared range, or `Sensitive` with `Public` | Fix the declaration; nothing was registered (the message never prints a sensitive item's value) |
+| `ErrInvalidBootstrapKey` | A bootstrap declaration with an empty `Key`, an unknown `Format`, or `Sensitive` set with no `Description` | Fix the declaration; nothing was registered |
+| `ErrDuplicateBootstrapKey` | The same bootstrap key registered twice (same call or across calls) | Two modules own one key; decide which does |
 | `ErrDuplicateConfigKey` / `ErrDuplicateFeatureFlag` / `ErrDuplicatePermission` / `ErrDuplicateJobType` / `ErrDuplicateNotificationType` / `ErrDuplicateEventType` / `ErrDuplicateAuditAction` | The same key registered twice | Two modules own one key; decide which does |
 | `ErrUnresolvedFeatureDependency` | A flag depending on a flag nobody registered | Register the flag, or drop the dependency |
 | `ErrCapabilityUnsatisfied` | `Bootstrap` resolving a seam (preset or injected) whose declared `Capability` does not satisfy `DeploymentMode.RequiredCapabilities()` | The error names the seam, the implementation and the missing capability; wire a qualifying implementation with `WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore`, or `WithPreset` a composition that already qualifies. There is no per-mode sentinel family: one error names the seam, implementation, missing capability and mode |
