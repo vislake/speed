@@ -2,7 +2,6 @@ package authn
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/tenancy"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -21,10 +21,6 @@ import (
 const (
 	authorizationHeader = "Authorization"
 	bearerPrefix        = "bearer "
-
-	// errorContentType is what the middleware writes its structured error
-	// bodies as.
-	errorContentType = "application/json; charset=utf-8"
 )
 
 // RevocationChecker reports whether a session has been signed out ahead of
@@ -240,16 +236,10 @@ func (*PrincipalResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 	return principal.TenantID, nil
 }
 
-// errorBody is the {code, params} envelope every structured error is written
-// as, matching the shape tenancy.Middleware already writes.
-type errorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// writeAppError writes err as its structured envelope with its suggested HTTP
-// status. Only the code and its parameters are written: an error's cause may
-// carry token-validation internals or a database message, and internal detail
+// writeAppError writes err as the coded error envelope (see
+// pkgcore/httpapi) under the error's suggested HTTP status. Only the code
+// and its parameters are written: an error's cause may carry
+// token-validation internals or a database message, and internal detail
 // must never reach a response body.
 //
 // A rate-limit or lockout error (ratelimit.go's ErrRateLimited,
@@ -259,18 +249,16 @@ type errorBody struct {
 // ratelimit.go's. handler.go's HTTP surface shares this one implementation
 // with Middleware and RequireAuthenticated above rather than writing its
 // own, so every authn endpoint's error body has exactly one shape and
-// exactly one place that decides what a Retry-After header is worth.
+// exactly one place that decides what a Retry-After header is worth. An
+// uncoded error is folded into ErrInternal carrying err as its cause,
+// which stays server-side.
 func writeAppError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrInternal.WithCause(errors.Join(err))
+	if appErr, ok := apperr.As(err); ok {
+		if seconds, ok := retryAfterSeconds(appErr); ok {
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		}
 	}
-	if seconds, ok := retryAfterSeconds(appErr); ok {
-		w.Header().Set("Retry-After", strconv.Itoa(seconds))
-	}
-	w.Header().Set("Content-Type", errorContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(errorBody{Code: appErr.Code, Params: appErr.Params})
+	httpapi.WriteError(w, err, ErrInternal.WithCause(errors.Join(err)))
 }
 
 // retryAfterSeconds extracts the "retry_after_seconds" parameter

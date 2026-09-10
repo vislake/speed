@@ -17,11 +17,11 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
-// jsonContentType is the Content-Type every response below writes, matching
-// go/tenancy/middleware.go's own tenantErrorContentType constant and this
-// module's own writeAppError in middleware.go.
+// jsonContentType is the Content-Type every response below writes, the
+// same JSON type the coded refusals carry (see pkgcore/httpapi).
 const jsonContentType = "application/json; charset=utf-8"
 
 // preAuthCookieName names the cookie a browser carries across an
@@ -115,35 +115,19 @@ func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (Prin
 	return principal, true
 }
 
-// maxRequestBodyBytes caps how many bytes decodeJSON will read from a
-// request body. Every operation's legitimate body is a handful of short
+// maxRequestBodyBytes bounds every body-reading operation's request body
+// BEFORE it is decoded (see pkgcore/httpapi's DecodeJSON, which each
+// operation calls with this bound): a body that exceeds the bound fails
+// with ErrInvalidRequestBody (errors.go) exactly like malformed JSON, as
+// soon as the read passes the limit rather than after the whole body has
+// been buffered. Every operation's legitimate body is a handful of short
 // fields whose longest single value this module's own rules bound at 128
 // runes (a password or a display name; the worst-case JSON escaping of one
 // rune is six bytes), so 64 KiB leaves an order of magnitude of headroom
 // while making sure an unauthenticated register or login endpoint never
-// buffers an attacker's arbitrarily large body -- and feeds an unbounded
-// json.Decoder -- before any validation has had a chance to refuse it.
+// buffers an attacker's arbitrarily large body before any validation has
+// had a chance to refuse it.
 const maxRequestBodyBytes = 1 << 16
-
-// decodeJSON decodes r's body into v, translating a decode failure into
-// ErrInvalidRequestBody (errors.go) -- the structured invalid-request-body
-// error every operation below reports it as, catalogued and bilingually
-// rendered like every other error this module returns (see
-// ErrInvalidRequestBody's own doc comment).
-//
-// The body is bounded by maxRequestBodyBytes BEFORE decoding: a body that
-// exceeds the bound fails with ErrInvalidRequestBody exactly like malformed
-// JSON, as soon as the read passes the limit rather than after the whole
-// body has been buffered. Passing w lets the net/http machinery ask the
-// server to close the connection after the oversized request, so the socket
-// is not kept for a client that already misbehaved.
-func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		return ErrInvalidRequestBody.WithCause(err)
-	}
-	return nil
-}
 
 // recordAudit emits an AuditEvent for one of the audit actions module.go's
 // Register declares, through audit.Emit -- the declarative collection
@@ -556,8 +540,7 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var req api.AuthnRegisterRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 
@@ -607,8 +590,7 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 
 	var req api.AuthnLoginWithPasswordRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 
@@ -641,8 +623,7 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 // AuthnRequestSMSCode implements api.ServerInterface.
 func (h *Handler) AuthnRequestSMSCode(w http.ResponseWriter, r *http.Request) {
 	var req api.AuthnRequestSMSCodeRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 
@@ -658,8 +639,7 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 
 	var req api.AuthnLoginWithSMSCodeRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 
@@ -691,8 +671,7 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 // AuthnRefreshToken implements api.ServerInterface.
 func (h *Handler) AuthnRefreshToken(w http.ResponseWriter, r *http.Request) {
 	var req api.AuthnRefreshTokenRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 
@@ -766,8 +745,7 @@ func (h *Handler) AuthnSocialCallback(w http.ResponseWriter, r *http.Request, pr
 	ctx := r.Context()
 
 	var req api.AuthnSocialCallbackRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 
@@ -895,8 +873,7 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AuthnConfirmTOTPRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 	// principalCtx: see AuthnUnbindIdentity's own call site comment.
@@ -946,8 +923,7 @@ func (h *Handler) AuthnVerifyStepUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AuthnVerifyStepUpRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 	pair, err := h.svc.VerifyStepUp(r.Context(), principal, req.Code, h.clientIP(r))
@@ -965,8 +941,7 @@ func (h *Handler) AuthnSwitchTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AuthnSwitchTenantRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAppError(w, err)
+	if !httpapi.DecodeJSON(w, r, maxRequestBodyBytes, &req, ErrInvalidRequestBody) {
 		return
 	}
 	ctx := r.Context()

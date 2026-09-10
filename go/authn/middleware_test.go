@@ -65,6 +65,14 @@ func observingHandler(out *observed) http.Handler {
 	})
 }
 
+// errorBody is the {code, params} refusal envelope these tests decode the
+// middleware's responses as: the machine-readable code is the API's
+// contract, and the client resolves its text against its own catalog.
+type errorBody struct {
+	Code   string         `json:"code"`
+	Params map[string]any `json:"params,omitempty"`
+}
+
 // decodeErrorBody reads the {code, params} envelope out of a response.
 func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
 	t.Helper()
