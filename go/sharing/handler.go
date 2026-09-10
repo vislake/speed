@@ -10,14 +10,13 @@ import (
 
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	"github.com/vislake/speed/go/sharing/api"
 )
 
-// jsonContentType is the Content-Type every structured-error response below
-// writes, matching notes', config's, org's and storage's own handler
-// constant of the same name.
+// jsonContentType is the Content-Type every response below writes, the
+// same JSON type the coded refusals carry (see pkgcore/httpapi).
 const jsonContentType = "application/json; charset=utf-8"
 
 // octetStreamContentType is the fallback Content-Type a granted access
@@ -342,15 +341,12 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 }
 
 // decodeJSON decodes r's body into dst, writing ErrInvalidRequest and
-// reporting false on any decode failure. Only sharing_createShare
+// reporting false on any decode failure (see pkgcore/httpapi's DecodeJSON;
+// the body carries no size bound). Only sharing_createShare
 // (SharingCreateShare, the one owner-facing operation with a request body)
-// calls it -- matching go/storage's identical decodeJSON helper.
+// calls it.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeError(w, ErrInvalidRequest.WithCause(err))
-		return false
-	}
-	return true
+	return httpapi.DecodeJSON(w, r, 0, dst, ErrInvalidRequest)
 }
 
 // The sharing_listShares page-size bound, the same 1-200 window
@@ -550,22 +546,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeError writes err to w as a JSON {code, params} body -- the
-// spec-generated api.SharingError, the same structured-error envelope
-// notes', config's, org's and storage's own writeError produce. An err
-// that is not an *apperr.Error -- meaning something below this handler did
-// not classify it -- is folded into ErrInternal so a caller never sees raw
-// Go error text.
+// writeError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else -- something below this handler did not classify it -- is
+// folded into ErrInternal so a caller never sees raw Go error text either
+// way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrInternal
-	}
-	envelope := api.SharingError{Code: appErr.Code}
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	writeJSON(w, appErr.Status, envelope)
+	httpapi.WriteError(w, err, ErrInternal)
 }
 
 // compile-time check that *Handler implements the api.ServerInterface
