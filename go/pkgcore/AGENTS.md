@@ -37,6 +37,8 @@ Four more subpackages, `eventbustest`, `kvstoretest`, `mailertest` and `objectst
 
 `safehttp` is the outbound-request guard those adapters (and go/authn's own federation client) dial through: it refuses any destination that is not public unicast at the moment of connection, so a DNS-rebinding answer cannot slip past. It moved from go/authn's `internal/` when the SMS transports made it shared -- its package doc records the destinations it fronts and the move.
 
+`httpapi` is the shared HTTP surface convention every module's request handlers answer refusals through: `WriteError` builds the coded error envelope (the `{"code", "params"}` body under the error's own suggested status, with a caller-supplied fallback for an error something below the handler did not classify), and `DecodeJSON` bounds and decodes a JSON request body, mapping every decode failure -- an oversized body included -- onto the calling module's coded invalid-request-body refusal. It is stdlib-and-`apperr`-only, carries its own unit tests and `example_test.go`, and is described under its own section in Public API below.
+
 **Out of scope.** Database access (`dbkit`), tenant enforcement in SQL (`tenancy`), logging and tracing (`observability`), runtime and tenant-overridable configuration (the `config` *module*, not this `config` package), job execution (`jobs`). pkgcore declares contracts; it does not implement business behaviour.
 
 ## Public API
@@ -190,6 +192,14 @@ Constructors and the status each suggests: `Invalid` 400, `Unauthorized` 401, `F
 `WithParam`, `WithSensitiveParam` and `WithCause` return a *derived* `*Error` and leave the receiver untouched, so a package-level error value can be shared and decorated per request.
 
 The contract on `WithParam`'s write side (its doc comment states it in full, and it must survive into consuming modules): a parameter recorded there is serialized VERBATIM into the HTTP response body and handed to an untrusted caller -- no transport filters or redacts this map, so two prohibitions rest on the caller. Content: never keys, secrets, tokens, personal data, internal hostnames or resolved addresses. Shape: `Params` is `map[string]any` and `WithParam` accepts `any`, so never pass a struct, slice or map whose fields would serialize wholesale -- a field safe today silently rides into every response carrying the error tomorrow. Keep to known-safe scalars. `WithSensitiveParam` is the declared alternative for everything a client must not see or that needs more than a scalar: its value lives in a separate map (`SensitiveParams()`, the only reader) that no transport serializes and that `Error()` never renders; it is for server-side diagnostics only, never a response field. The caller declares; the library never guesses.
+
+### `pkgcore/httpapi`
+
+`func WriteError(w http.ResponseWriter, err error, fallback *apperr.Error)` and `func DecodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any, invalid *apperr.Error) bool`.
+
+`WriteError` writes the coded error envelope every HTTP refusal is: the body `{"code": ..., "params": ...}` under the HTTP status the error's `apperr` constructor suggested, with `Content-Type: application/json; charset=utf-8` unless the caller set its own first (an endpoint whose contract pins a different content type sets it before the call). An err that is not, and does not wrap, an `*apperr.Error` is written as `fallback` instead, so raw Go error text never reaches a caller either way; the cause never crosses the wire, and a parameter-less error omits the `params` key rather than emitting `null`.
+
+`DecodeJSON` decodes r's JSON body into dst, reporting whether it did. A positive `maxBytes` bounds the body BEFORE decoding, so an over-limit body fails as soon as the read passes the limit rather than after it has been buffered in full (passing w lets net/http ask the server to close the connection after the oversized request); a non-positive `maxBytes` decodes without a bound, for the endpoints that set no body limit. On any decode failure -- malformed JSON, a value of the wrong shape, or a body past the bound -- it writes `invalid`, carrying the decode error as its cause, through `WriteError` and reports false: the oversize answer is the same coded refusal as malformed JSON.
 
 ### `pkgcore/config`
 
