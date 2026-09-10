@@ -131,7 +131,8 @@ scope 指明被改动的单元:Go module 或 npm 包名(`pkgcore`、`billing`、
 | `security.yml` | 每一个 PR,加每日定时 | 依赖审计、gitleaks 密钥扫描、CodeQL、许可证扫描 |
 | `scaffold-verify.yml` | 每日定时 | 生成、构建、迁移并启动一个起始项目,两种部署模式各一遍 |
 | `docs-site-deploy.yml` | 触碰 `docs/site/**` 的推送,手动触发 | 构建并部署本站 |
-| `release.yml`, `docker-image-ci.yml` | 仅手动触发 | 离线校验 lockstep 发布计划;构建容器镜像 |
+| `release.yml` | 手动触发 | 离线校验 lockstep 发布计划 |
+| `docker-image-ci.yml` | 触碰镜像构建输入路径的推送到 `main`,加手动触发 | 构建容器镜像 |
 
 `e2e.yml` 与 `nightly.yml` 是刻意门控的 stub,不会在任何 pull
 request 上触发。

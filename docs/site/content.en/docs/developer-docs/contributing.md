@@ -148,7 +148,8 @@ every claim can be checked against its origin.
 | `security.yml` | every PR, plus a daily schedule | dependency audits, gitleaks secret scan, CodeQL, license scan |
 | `scaffold-verify.yml` | daily schedule | materializes, builds, migrates and boots a starter project in both deployment modes |
 | `docs-site-deploy.yml` | pushes to `main` touching `docs/site/**`, manual dispatch | builds and deploys this site |
-| `release.yml`, `docker-image-ci.yml` | manual dispatch | offline lockstep release-plan verification; container image build |
+| `release.yml` | manual dispatch | offline lockstep release-plan verification |
+| `docker-image-ci.yml` | pushes to `main` touching the image build's input paths, plus manual dispatch | container image build |
 
 `e2e.yml` and `nightly.yml` are gated stubs, never triggering on pull
 requests.
