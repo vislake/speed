@@ -17,16 +17,32 @@
 //
 // # The template boundary
 //
-// Dysmsapi has no free-text send: every message is one approved template
-// (TemplateCode) substituted with a JSON TemplateParam object. This adapter
-// maps the seam's already-rendered message text onto the template's SINGLE
-// variable: TemplateParam is always {"<TemplateParamName>": "<message text>"},
-// where Config.TemplateParamName names that variable and defaults to
-// "content". A template with zero variables would drop the message and one
-// with several cannot be driven by a single text, so the registered template
-// must declare exactly one variable under this name. Config.TemplateParamName
-// exists because the variable name is data of the operator's Aliyun account,
-// not data this codebase could know.
+// Dysmsapi has no free-text send: every message instantiates one approved
+// template (TemplateCode) substituted with a JSON TemplateParam object.
+// Aliyun has one approved template per kind of message -- there is no
+// all-variable template, and a single variable is limited to 35 characters
+// by the template review rules -- so Config.Templates declares, per message
+// identity, which approved template serves it: the map is keyed
+// "<locale>/<message-id>" (the locale the message was rendered in and the
+// identity it was rendered from, both carried by pkgcore.SMS) and each entry
+// names the template code plus the variables that template declares. Send
+// selects the entry by (Locale, MessageID), forwards exactly the declared
+// variables from SMS.Params, and refuses -- before any request, so nothing
+// reaches Aliyun and nothing is billed -- a message with no mapped template
+// or a declared variable the message carries no value for. There is no
+// fallback template and no free-text path: which templates exist, and which
+// variables each declares, is data of the operator's Aliyun account that
+// this codebase cannot know, and guessing would be a send the operator
+// never approved. A message parameter the mapped template does not declare
+// is never sent; the operator may have baked that value into the template's
+// fixed text.
+//
+// The template's declared variables are forwarded as given, so choosing
+// values that satisfy Aliyun's own review rules -- the 35-character cap on a
+// single variable is the notable one -- is the operator's to observe on the
+// templates the account registers; this adapter deliberately checks no
+// length, because the cap differs by message class and a hard-coded check
+// would refuse sends Aliyun itself accepts.
 //
 // # Phone numbers
 //
@@ -55,22 +71,24 @@
 //
 // AccessKeySecret never leaves the Config/NewSender boundary except inside
 // the HMAC key derivation, and no error or log path in this package echoes a
-// credential. The whole request -- TemplateParam JSON included -- rides over
-// TLS; its parameters travel percent-encoded in the request line's query
-// string with an empty body, exactly the placement both official dysmsapi
-// SDK generations use, so the message text reaches Aliyun's gateway as it
-// reaches this package's own seam contract: content to deliver, over an
-// encrypted channel.
+// credential. The TemplateParam JSON carries the mapped template's variable
+// values, which may be a credential (a login verification code); an error
+// this package returns names a missing variable, never its value. The whole
+// request rides over TLS, its parameters percent-encoded in the request
+// line's query string with an empty body, exactly the placement both
+// official dysmsapi SDK generations use.
 //
 // # Offline proof and the live boundary
 //
 // The signing is deterministic given Timestamp and SignatureNonce, so the
 // unit tier pins both the RPC mechanism against Aliyun's own documented
 // worked example and a Send-shaped request (fixed clock and nonce injected
-// through unexported fields) against a signature precomputed by an
-// independent implementation. What no offline test can prove -- that a real
-// Aliyun account accepts this package's signature at the real gateway -- is
-// the env-gated leg in integration_test/, which self-skips with a recorded
-// note until ALIYUN_SMS_* credentials are present (the alipay sandbox-leg
-// precedent).
+// through unexported fields, a mapped template selected by (locale,
+// message-id)) against a signature precomputed by an independent
+// implementation; the same tier pins that an unmapped message and a missing
+// declared variable are refused before any request. What no offline test can
+// prove -- that a real Aliyun account accepts this package's signature at
+// the real gateway -- is the env-gated leg in integration_test/, which
+// self-skips with a recorded note until ALIYUN_SMS_* credentials are present
+// (the alipay sandbox-leg precedent).
 package aliyun

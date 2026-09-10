@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -30,19 +31,33 @@ const (
 	apiVersion = "2017-05-25"
 )
 
-// defaultTemplateParamName is what TemplateParamName defaults to when Config
-// leaves it empty (see Config.TemplateParamName).
-const defaultTemplateParamName = "content"
-
 // maxResponseBytes bounds how much of Aliyun's response body this adapter
 // reads, so a misbehaving or hostile gateway cannot hold a request goroutine
 // reading an unbounded body (the same bound pkgcore's own gateway sender
 // applies).
 const maxResponseBytes = 64 * 1024
 
-// Config is everything NewSender needs to sign and send one message through
-// Aliyun SMS. Every field except TemplateParamName is required; a missing one
-// is refused by NewSender with an error naming the field.
+// Template is one approved Aliyun message template and the variables it
+// declares.
+type Template struct {
+	// Code is the approved template code (TemplateCode), e.g.
+	// "SMS_0000001".
+	Code string
+	// Params lists the variable names the template declares, exactly as the
+	// operator's Aliyun account spells them. Send forwards exactly these
+	// names from pkgcore.SMS.Params; a declared variable the message
+	// carries no value for is refused before any request, because Aliyun
+	// refuses a declared-but-unassigned variable with
+	// isv.TEMPLATE_MISSING_PARAMETERS. A message parameter the list does
+	// not name is never sent: the operator may have baked that value into
+	// the template's fixed text.
+	Params []string
+}
+
+// Config is everything NewSender needs to sign and send messages through
+// Aliyun SMS. Every field is required; a missing or malformed one is refused
+// by NewSender with an error naming the field (or the offending Templates
+// key), never a field's value.
 type Config struct {
 	// AccessKeyID is the Aliyun access key this sender signs with.
 	AccessKeyID string
@@ -53,13 +68,15 @@ type Config struct {
 	// SignName is the approved SMS signature name the send is attributed
 	// to, e.g. "speed-test".
 	SignName string
-	// TemplateCode is the approved message template the send instantiates,
-	// e.g. "SMS_0000001".
-	TemplateCode string
-	// TemplateParamName names the template's single variable that receives
-	// the whole message text (see the package doc's "The template
-	// boundary"). Empty defaults to "content".
-	TemplateParamName string
+	// Templates maps a message identity to the approved template it is sent
+	// through, keyed "<locale>/<message-id>" -- the locale the message was
+	// rendered in and the message id it was rendered from, both carried by
+	// pkgcore.SMS ("zh-CN/authn.sms.verification_code"). Aliyun has one
+	// template per kind of message, so this map is where the operator
+	// declares which approved template serves which message in which
+	// language; a send whose (locale, message-id) has no entry fails before
+	// any request, with no fallback template and no free-text path.
+	Templates map[string]Template
 }
 
 // Option configures NewSender.
@@ -78,16 +95,23 @@ func WithClient(client *http.Client) Option {
 	}
 }
 
+// templateKey is a parsed Templates key: the message identity a send maps
+// through, split into its two halves once at construction so a Send looks up
+// a struct rather than re-splitting a string.
+type templateKey struct {
+	locale    string
+	messageID string
+}
+
 // sender is the aliyun SMSSender implementation: one POST to the fixed
 // gateway carrying the RPC-parameter form body, signed per Aliyun's RPC
 // mechanism (sign.go).
 type sender struct {
-	accessKeyID       string
-	accessKeySecret   string
-	signName          string
-	templateCode      string
-	templateParamName string
-	client            *http.Client
+	accessKeyID     string
+	accessKeySecret string
+	signName        string
+	templates       map[templateKey]Template
+	client          *http.Client
 
 	// now and newNonce are injectable so the unit tier can pin a whole
 	// request deterministically (Timestamp and SignatureNonce are the only
@@ -103,6 +127,9 @@ type sender struct {
 // Aliyun refuses a send with a business error envelope rather than an HTTP
 // error, so an adapter built with a typo'd configuration must fail before
 // the first send, not after a phone number already paid for the attempt.
+// Every Templates entry is validated here -- the key parses into two
+// non-empty halves, the template code is present, no declared variable name
+// is empty -- so a send never has to discover a broken map entry.
 func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.AccessKeyID == "" {
 		return nil, errors.New("aliyun: config: AccessKeyID is required")
@@ -113,23 +140,34 @@ func NewSender(cfg Config, opts ...Option) (pkgcore.SMSSender, error) {
 	if cfg.SignName == "" {
 		return nil, errors.New("aliyun: config: SignName is required")
 	}
-	if cfg.TemplateCode == "" {
-		return nil, errors.New("aliyun: config: TemplateCode is required")
+	if len(cfg.Templates) == 0 {
+		return nil, errors.New("aliyun: config: Templates is required")
 	}
-	paramName := cfg.TemplateParamName
-	if paramName == "" {
-		paramName = defaultTemplateParamName
+	templates := make(map[templateKey]Template, len(cfg.Templates))
+	for key, tpl := range cfg.Templates {
+		locale, messageID, ok := strings.Cut(key, "/")
+		if !ok || locale == "" || messageID == "" {
+			return nil, fmt.Errorf("aliyun: config: Templates key %q is not of the form \"<locale>/<message-id>\"", key)
+		}
+		if tpl.Code == "" {
+			return nil, fmt.Errorf("aliyun: config: Templates[%q].Code is required", key)
+		}
+		for _, name := range tpl.Params {
+			if name == "" {
+				return nil, fmt.Errorf("aliyun: config: Templates[%q].Params carries an empty variable name", key)
+			}
+		}
+		templates[templateKey{locale: locale, messageID: messageID}] = tpl
 	}
 
 	s := &sender{
-		accessKeyID:       cfg.AccessKeyID,
-		accessKeySecret:   cfg.AccessKeySecret,
-		signName:          cfg.SignName,
-		templateCode:      cfg.TemplateCode,
-		templateParamName: paramName,
-		client:            safehttp.NewGuard().Client(),
-		now:               time.Now,
-		newNonce:          randomNonce,
+		accessKeyID:     cfg.AccessKeyID,
+		accessKeySecret: cfg.AccessKeySecret,
+		signName:        cfg.SignName,
+		templates:       templates,
+		client:          safehttp.NewGuard().Client(),
+		now:             time.Now,
+		newNonce:        randomNonce,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -168,11 +206,14 @@ type dysmsapiResponse struct {
 }
 
 // Send implements pkgcore.SMSSender: a signed SendSms POST to the fixed
-// gateway. The whole parameter set -- common RPC parameters plus the
-// SendSms-specific ones -- travels percent-encoded with Aliyun's own RFC
-// 3986 rule in the REQUEST LINE's query string with an empty body, the exact
-// wire placement both official SDK generations use for dysmsapi's SendSms
-// (the legacy alibaba-cloud-sdk-go builds the same
+// gateway. The message is first mapped to its approved template by
+// (msg.Locale, msg.MessageID) and its declared variables are resolved from
+// msg.Params -- both before any request, and before the nonce is drawn so a
+// refused send costs nothing -- and the whole parameter set -- common RPC
+// parameters plus the SendSms-specific ones -- then travels percent-encoded
+// with Aliyun's own RFC 3986 rule in the REQUEST LINE's query string with an
+// empty body, the exact wire placement both official SDK generations use for
+// dysmsapi's SendSms (the legacy alibaba-cloud-sdk-go builds the same
 // dysmsapi.aliyuncs.com/?<sorted encoded params incl. Signature> URL; the
 // current dysmsapi Tea SDK sends the same set as RPC-style query
 // parameters). The signature is computed over the parameter set WITHOUT
@@ -180,13 +221,22 @@ type dysmsapiResponse struct {
 // request line could reach except over TLS, which every byte of the request
 // is.
 func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
-	nonce, err := s.newNonce()
+	tpl, ok := s.templates[templateKey{locale: msg.Locale, messageID: msg.MessageID}]
+	if !ok {
+		return fmt.Errorf("aliyun: send: no template for locale %q and message %q", msg.Locale, msg.MessageID)
+	}
+	templateValues, err := templateVariables(tpl, msg.Params)
 	if err != nil {
 		return err
 	}
-	templateParam, err := json.Marshal(map[string]string{s.templateParamName: msg.Text})
+	templateParam, err := json.Marshal(templateValues)
 	if err != nil {
 		return fmt.Errorf("aliyun: encode template param: %w", err)
+	}
+
+	nonce, err := s.newNonce()
+	if err != nil {
+		return err
 	}
 
 	params := map[string]string{
@@ -200,7 +250,7 @@ func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 		"Timestamp":        aliyunTimestamp(s.now()),
 		"PhoneNumbers":     msg.To,
 		"SignName":         s.signName,
-		"TemplateCode":     s.templateCode,
+		"TemplateCode":     tpl.Code,
 		"TemplateParam":    string(templateParam),
 	}
 	// The signature is computed over the canonicalized query string of the
@@ -238,6 +288,26 @@ func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 		return fmt.Errorf("aliyun sms: send refused: %s %s (request %s)", envelope.Code, envelope.Message, envelope.RequestID)
 	}
 	return nil
+}
+
+// templateVariables selects the values tpl's declared variables receive from
+// params, and only those: a name the message carries no value for is an
+// error naming the variable (never a value -- a Params value can be a
+// verification code), because Aliyun refuses a declared-but-unassigned
+// variable with isv.TEMPLATE_MISSING_PARAMETERS and refusing here saves the
+// send. A param the template does not declare is deliberately ignored. The
+// returned map is always non-nil, so a template that declares no variables
+// marshals to the empty JSON object Aliyun accepts, never to null.
+func templateVariables(tpl Template, params map[string]string) (map[string]string, error) {
+	values := make(map[string]string, len(tpl.Params))
+	for _, name := range tpl.Params {
+		value, ok := params[name]
+		if !ok {
+			return nil, fmt.Errorf("aliyun: send: template %s declares variable %q, which the message carries no value for", tpl.Code, name)
+		}
+		values[name] = value
+	}
+	return values, nil
 }
 
 // compile-time check that sender satisfies the seam.

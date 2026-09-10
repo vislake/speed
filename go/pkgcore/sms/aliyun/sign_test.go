@@ -40,12 +40,14 @@ func TestSign_RPCAliyunDocumentWorkedExample(t *testing.T) {
 }
 
 // TestSign_SendSmsShape_SignatureMatchesIndependentVector pins a
-// SendSms-shaped signature (the parameter set Send actually builds, with a
-// fixed clock and nonce) against a value precomputed by an INDEPENDENT
-// implementation (a python oracle re-deriving the specification by hand --
-// see the round's vector script) rather than by this package's own signing
-// code, so a bug shared between canonicalization and the test cannot cancel
-// out. The fixed inputs mirror aliyun_test.go's offline send.
+// SendSms-shaped signature (the parameter set Send actually builds for the
+// mapped template -- the template's own code, and a TemplateParam carrying
+// its declared variables, with a fixed clock and nonce) against a value
+// precomputed by an INDEPENDENT implementation (a python oracle re-deriving
+// the specification by hand: canonical query with quote(safe='~') and the
+// compact JSON object json.dumps produces) rather than by this package's own
+// signing code, so a bug shared between canonicalization and the test cannot
+// cancel out. The fixed inputs mirror aliyun_test.go's offline send.
 func TestSign_SendSmsShape_SignatureMatchesIndependentVector(t *testing.T) {
 	params := map[string]string{
 		"AccessKeyId":      "LTAI-test-id",
@@ -57,13 +59,13 @@ func TestSign_SendSmsShape_SignatureMatchesIndependentVector(t *testing.T) {
 		"SignatureVersion": "1.0",
 		"SignName":         "speed-test",
 		"TemplateCode":     "SMS_0000001",
-		"TemplateParam":    `{"content":"your code is 654321"}`,
+		"TemplateParam":    `{"code":"654321","minutes":"5"}`,
 		"Timestamp":        "2026-09-08T02:00:00Z",
 		"Version":          "2017-05-25",
 	}
 
-	if got := rpcSignature("LTAI-test-secret", http.MethodPost, canonicalQueryString(params)); got != "HN7tIYOlG1E+NEnu6FrtNne3vGY=" {
-		t.Errorf("rpcSignature() = %q, want the independently precomputed HN7tIYOlG1E+NEnu6FrtNne3vGY=", got)
+	if got := rpcSignature("LTAI-test-secret", http.MethodPost, canonicalQueryString(params)); got != "g1DBjm3d8FbyqTHtZ9qEnjp9Kpg=" {
+		t.Errorf("rpcSignature() = %q, want the independently precomputed g1DBjm3d8FbyqTHtZ9qEnjp9Kpg=", got)
 	}
 }
 
@@ -81,7 +83,7 @@ func TestRfc3986Encode(t *testing.T) {
 		{in: "a+b", want: "a%2Bb"},
 		{in: "a*b", want: "a%2Ab"},
 		{in: "2023-03-13T08:34:30Z", want: "2023-03-13T08%3A34%3A30Z"},
-		{in: `{"content":"` + string([]byte{0xE6, 0x82, 0xA8}), want: `%7B%22content%22%3A%22%E6%82%A8`}, // non-ASCII (U+60A8) encoded bytewise
+		{in: `{"code":"` + string([]byte{0xE6, 0x82, 0xA8}), want: `%7B%22code%22%3A%22%E6%82%A8`}, // non-ASCII (U+60A8) encoded bytewise
 	}
 	for _, tc := range tests {
 		if got := rfc3986Encode(tc.in); got != tc.want {
