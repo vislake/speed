@@ -30,7 +30,7 @@
 // capability of whichever mode a given cfg happened to choose, this package
 // registers the two modes as two separate, honestly-labelled names, exactly
 // mirroring how pkgcore's own MailerRegistry carries "mailer.console"
-// (Stateless) and "mailer.smtp" (MultiReplicaSafe|SurvivesRestart) as two
+// (Stateless) and "mailer.smtp" (MultiReplicaSafe|Stateless) as two
 // names rather than one name with a capability that depends on
 // configuration.
 //
