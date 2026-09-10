@@ -635,7 +635,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	}
 	// Negative control, as in the unit suite: an unrelated tenant's read
 	// must see none of acme's notes.note.create audit trail. tenant-globex
-	// is demo-seeded credits too (demoHostTenants lists it alongside
+	// is demo-seeded credits too (demo.DemoHostTenants lists it alongside
 	// tenant-acme), so it now carries its own boot-time
 	// "billing.credit.grant" AuditEvent -- the point is that none of it is
 	// acme's note.
