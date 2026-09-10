@@ -51,15 +51,12 @@
 #     other two sites make.
 #   * go/saasctl/internal/template/project/cmd/server/config.go -- the
 #     embedded generated app's own command entry reading
-#     APP_DEPLOYMENT_MODE (through its deploymentModeEnv const, resolved
-#     by the same-file literal-valued const matching the constant-
-#     propagation note below describes) at bootstrap, byte-for-byte the
-#     shape the reference-app server.go exemption covers. The file
-#     carries the
-#     template's //go:build ignore compile-containment marker and
-#     materializes into consumer projects outside this tree, where
-#     repo-checks does not scan it; the in-tree copy is the template, not
-#     library code.
+#     APP_DEPLOYMENT_MODE (through its hostConfig loader target's env
+#     pin, the same loader-tag shape the reference-app bootstrap.go
+#     exemption covers) at bootstrap. The file carries the template's
+#     //go:build ignore compile-containment marker and materializes into
+#     consumer projects outside this tree, where repo-checks does not
+#     scan it; the in-tree copy is the template, not library code.
 #   * go/saasctl/internal/template/project/selection/{authn,authn+org,
 #     authn+rbac,authn+org+rbac}/server.go -- the saasctl-distributed-mode
 #     round's port of the reference-app server.go's own authn "SMS sender"
@@ -88,7 +85,11 @@
 # What fires: string-literal and constant comparisons against the two mode
 # values (both operand orders, == and !=), case labels naming the mode
 # values (unqualified or through any qualifier), and reads of the
-# APP_DEPLOYMENT_MODE environment variable -- each is a mode decision.
+# APP_DEPLOYMENT_MODE environment variable -- each is a mode decision. The
+# env-read coverage spans the direct read (os.Getenv/os.LookupEnv) and the
+# pkgcore/config loader pin that names the variable in a struct tag
+# (`config:"env=APP_DEPLOYMENT_MODE"`, in either Go string spelling) --
+# the shape a loader target consumes the variable in.
 #
 # Out of scope: branching on a Capability -- caps.Has(MultiReplicaSafe), a
 # case label on a capability value. Capabilities are the retrofit's new
@@ -114,20 +115,24 @@
 # its lookup helper) is one such function-parameter indirection; it is
 # consumer-command-entry wiring -- the class the allowlisted command
 # entries above belong to -- never a business-module decision, and review
-# owns it.
+# owns it. A loader pin whose tag value carries another loader option
+# beside the variable (`config:"env=APP_DEPLOYMENT_MODE,required"` is a
+# different string literal) escapes the tag patterns the same way, and
+# review owns that spelling.
 rules:
   - id: deployment-mode-branch-outside-kernel-wiring
     message: >-
-      deployment-mode comparison or APP_DEPLOYMENT_MODE read outside the
-      kernel-wiring allowlist. The retrofit confined the mode to wiring:
-      the RequiredCapabilities() dispatch (go/pkgcore/deployment_mode.go)
-      and consumer command entries reading APP_DEPLOYMENT_MODE (the
-      reference-app internal/app/server.go and the saasctl CLI's embedded
+      deployment-mode comparison or APP_DEPLOYMENT_MODE read (direct env
+      access or a config:"env=APP_DEPLOYMENT_MODE" loader pin) outside
+      the kernel-wiring allowlist. The retrofit confined the mode to
+      wiring: the RequiredCapabilities() dispatch
+      (go/pkgcore/deployment_mode.go) and consumer command entries
+      reading APP_DEPLOYMENT_MODE (the reference app's internal/app
+      bootstrap + server wiring and the saasctl CLI's embedded
       generated-app config.go and authn-containing server.go files) are
-      the only allowlisted
-      sites; business code receives already-resolved,
-      capability-checked infrastructure and must never branch on the
-      mode. See the rule header for the exact allowlist.
+      the only allowlisted sites; business code receives
+      already-resolved, capability-checked infrastructure and must never
+      branch on the mode. See the rule header for the exact allowlist.
     languages:
       - go
     severity: WARNING
@@ -173,6 +178,13 @@ rules:
                   ...
               }
           - pattern: 'os.Getenv("APP_DEPLOYMENT_MODE")'
+          # The pkgcore/config loader pin: a struct field tagged with the
+          # variable's exact name -- the shape the loader targets (and the
+          # allowlisted bootstrap.go / config.go sites) consume it in. Go
+          # has two string spellings, so the tag is matched by literal in
+          # each (raw backtick form and interpreted form).
+          - pattern: '`config:"env=APP_DEPLOYMENT_MODE"`'
+          - pattern: '"config:\"env=APP_DEPLOYMENT_MODE\""'
     paths:
       exclude:
         - "**/*_test.go"

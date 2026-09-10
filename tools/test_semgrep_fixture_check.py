@@ -23,6 +23,11 @@ used to break:
     a read that goes through an entry declared after it.
   * test_non_literal_argument_is_not_a_read -- an argument that is
     neither a literal nor a same-file const contributes no name.
+  * test_loader_tag_pins_are_reads -- a `config:"env=NAME"` struct tag
+    counts as a read in either Go string spelling, with a loader option
+    after the name or without.
+  * test_non_config_tags_are_not_env_reads -- json tags and non-env
+    config tag options contribute no name.
 """
 
 import os
@@ -82,6 +87,31 @@ class EnvLiteralsReadTest(unittest.TestCase):
                 "func f(name string) string {\n"
                 "\tvalue := os.Getenv(name)\n"
                 "\treturn value\n"
+                "}\n"
+            ),
+            set(),
+        )
+
+    def test_loader_tag_pins_are_reads(self):
+        self.assertEqual(
+            semgrep_fixture_check.env_literals_read(
+                "package p\n\n"
+                "type hostConfig struct {\n"
+                '\tMode string `config:"env=APP_DEPLOYMENT_MODE"`\n'
+                '\tAlt string "config:\\"env=APP_ALT_MODE\\""\n'
+                '\tOpt string `config:"env=APP_OPT_MODE,derive"`\n'
+                "}\n"
+            ),
+            {"APP_DEPLOYMENT_MODE", "APP_ALT_MODE", "APP_OPT_MODE"},
+        )
+
+    def test_non_config_tags_are_not_env_reads(self):
+        self.assertEqual(
+            semgrep_fixture_check.env_literals_read(
+                "package p\n\n"
+                "type hostConfig struct {\n"
+                '\tA string `json:"env=APP_JSON"`\n'
+                '\tB string `config:"default=8080"`\n'
                 "}\n"
             ),
             set(),

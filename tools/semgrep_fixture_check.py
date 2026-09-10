@@ -23,9 +23,12 @@ closes that blind spot, without any semgrep run:
     examples/ tools/ -- a fixture naming an env variable no non-test file
     reads any more has aged away from the tree and proves nothing. A name
     counts as read when it appears as a direct os.Getenv/os.LookupEnv
-    string argument or as the value of a same-file literal const passed
-    to one (the two shapes semgrep's own matching sees, since it
-    constant-propagates same-file literal-valued consts). Test files,
+    string argument, as the value of a same-file literal const passed to
+    one (the two shapes semgrep's own matching sees, since it
+    constant-propagates same-file literal-valued consts), or as the env
+    pin of a pkgcore/config loader struct tag (`config:"env=NAME"`) --
+    the shape a loader target consumes a variable in, which the
+    deployment-mode rule's own tag patterns match. Test files,
     integration_test/ directories and the rules' own testdata subtree are
     excluded, the same exclusion shape the real-tree scan applies. A
     fixture whose positives exercise no env literal is unconstrained.
@@ -74,14 +77,24 @@ _CONST_BLOCK_RE = re.compile(r"\bconst\s*\((.*?)\n\s*\)", re.S)
 _CONST_BLOCK_INLINE_RE = re.compile(r"\bconst\s*\(([^)]*)\)")
 _CONST_BLOCK_ENTRY_RE = re.compile(r'([A-Za-z_]\w*)\s*=\s*"([^"]*)"')
 _ENV_READ_RE = re.compile(r"\bos\.(?:Getenv|LookupEnv)\(\s*([^)]*?)\s*\)")
+# A pkgcore/config loader env pin inside a struct tag: config:"env=NAME"
+# (loader options may follow the name after a comma). Either Go string
+# spelling appears in source -- the raw form the tree's loader targets use
+# (`config:"env=NAME"`) and the interpreted form (config:\"env=NAME\") --
+# so the backslash in front of the opening quote is optional.
+_ENV_TAG_RE = re.compile(r'config:\\?"env=([A-Za-z_][A-Za-z0-9_]*)')
 
 
 def env_literals_read(text):
     """The env-name string literals a Go source file READS: direct string
-    arguments of os.Getenv/os.LookupEnv calls plus the literal values of
-    same-file consts those calls receive as their argument. Semgrep
-    constant-propagates same-file literal-valued consts before matching,
-    so both shapes are what a rule's env-read pattern can see."""
+    arguments of os.Getenv/os.LookupEnv calls, the literal values of
+    same-file consts those calls receive as their argument, and the env
+    pins of pkgcore/config loader struct tags -- config:"env=NAME" in
+    either Go string spelling, any loader option after the name included.
+    Semgrep constant-propagates same-file literal-valued consts before
+    matching, so the first two shapes are what a rule's env-read pattern
+    can see; the tag pin is the shape the deployment-mode rule's tag
+    patterns see."""
     literals = set()
     values = {}
     for name, value in _CONST_SINGLE_RE.findall(text):
@@ -97,6 +110,7 @@ def env_literals_read(text):
                 literals.add(match.group(1))
         elif arg in values:
             literals.add(values[arg])
+    literals.update(_ENV_TAG_RE.findall(text))
     return literals
 
 

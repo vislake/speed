@@ -64,3 +64,11 @@ func constEscaper(mode string) string {
 	}
 	return os.Getenv(modeAliasEnv) // fires: const-propagated env read
 }
+
+// Loader env pins: the deployment-mode variable named by a struct tag --
+// the shape the loader targets consume it in -- planted in both Go string
+// spellings.
+type hostConfig struct {
+	DeploymentMode string `config:"env=APP_DEPLOYMENT_MODE"`   // fires: loader pin, raw spelling
+	Interpreted    string "config:\"env=APP_DEPLOYMENT_MODE\"" // fires: loader pin, interpreted spelling
+}
