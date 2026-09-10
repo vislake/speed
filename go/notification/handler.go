@@ -12,7 +12,7 @@ import (
 	"github.com/vislake/speed/go/notification/api"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
@@ -792,11 +792,7 @@ func (h *Handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bo
 		h.writeError(w, ErrInvalidRequestBody.WithCause(errors.New("notification: empty request body")))
 		return false
 	}
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		h.writeError(w, ErrInvalidRequestBody.WithCause(err))
-		return false
-	}
-	return true
+	return httpapi.DecodeJSON(w, r, 0, dst, ErrInvalidRequestBody)
 }
 
 // writeJSON writes body as the JSON response of status. The Content-Type
@@ -812,22 +808,13 @@ func (h *Handler) writeJSON(w http.ResponseWriter, status int, body any) {
 	}
 }
 
-// writeError writes err as the fragment's NotificationError envelope: an
-// error that is an *apperr.Error travels as its own code, params and
-// status; anything else is an internal failure with err as its cause. This
-// is the single place the envelope is built, so every refusal this handler
-// sends has the same shape.
+// writeError writes err as the coded error envelope (see pkgcore/httpapi):
+// an error that is an *apperr.Error travels as its own code, params and
+// status; anything else is an internal failure carrying err as its cause.
+// Every refusal this handler sends goes through here, so they all have the
+// same shape.
 func (h *Handler) writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrInternal.WithCause(err)
-	}
-	body := api.NotificationError{Code: &appErr.Code}
-	if appErr.Params != nil {
-		params := appErr.Params
-		body.Params = &params
-	}
-	h.writeJSON(w, appErr.Status, body)
+	httpapi.WriteError(w, err, ErrInternal.WithCause(err))
 }
 
 // toMessageResponse converts one inbox row to its API shape. Params -- the
