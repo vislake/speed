@@ -223,7 +223,10 @@ Consumers program against `Authorizer` (`Can`, `DataScope`,
 `ListPermissions` — the flat, sorted list authn's `/me` renders
 from), the grant lifecycle (`DefineRole`, `AssignRole`, `RevokeRole`,
 `RestoreRole`, `EnsureBuiltinRoles`), the `Subject`/`Scope` types,
-`RequirePermission` and its `*Func` variant, and the errors
+`RequirePermission` and its `*Func` variant, the route table
+(`GuardRoutes` with `RouteRule` -- a host's per-route decisions, with
+coverage enforced at startup), the gate's exported splitter and refusal
+writer (`SplitPermission` / `WriteAuthzError`), and the errors
 vocabulary. The built-in roles encode three product decisions: `owner` holds
 every declared permission, `admin` holds everything except
 `rbac:manage` (without that exclusion the two roles would be

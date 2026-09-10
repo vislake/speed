@@ -281,7 +281,7 @@ survive a restart — go to stderr before the stdout lines above.
 
 **See it in the reference app.** The reference app gates its own notes
 route exactly this way: [`internal/app/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_subject.go)
-holds the per-path gate table (`GuardModuleRoute`), the
+holds the route table (`DemoRouteRules`, applied by `rbac.GuardRoutes`), the
 Principal-to-Subject bridge (`DemoSubjectResolver`), and the
 `note-reader`-style role seeding (`seedDemoGrants`), and
 [`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)

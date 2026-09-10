@@ -89,7 +89,7 @@ flowchart TD
 
 ## 对外稳定面
 
-消费者对着 `Authorizer` 编程(`Can`、`DataScope`、`ListPermissions`——authn 的 `/me` 渲染的那份扁平排序清单)、授权生命周期(`DefineRole`、`AssignRole`、`RevokeRole`、`RestoreRole`、`EnsureBuiltinRoles`)、`Subject`/`Scope` 类型、`RequirePermission` 及其 `*Func` 变体。内置角色编码三个产品决定:`owner` 持全部已声明权限,`admin` 持除 `rbac:manage` 外的一切(没有这个排除,两个角色就完全相同),`member` 什么也不持——普通成员持什么是产品决定,默认拒绝同样适用于播种。内置权限集是冻结目录的函数,绝不是字面清单。
+消费者对着 `Authorizer` 编程(`Can`、`DataScope`、`ListPermissions`——authn 的 `/me` 渲染的那份扁平排序清单)、授权生命周期(`DefineRole`、`AssignRole`、`RevokeRole`、`RestoreRole`、`EnsureBuiltinRoles`)、`Subject`/`Scope` 类型、`RequirePermission` 及其 `*Func` 变体、路由授权表(`GuardRoutes` 与 `RouteRule`——宿主的逐路由决定,覆盖率在启动期强制),以及门导出的切分器与拒绝写入器(`SplitPermission`/`WriteAuthzError`)。内置角色编码三个产品决定:`owner` 持全部已声明权限,`admin` 持除 `rbac:manage` 外的一切(没有这个排除,两个角色就完全相同),`member` 什么也不持——普通成员持什么是产品决定,默认拒绝同样适用于播种。内置权限集是冻结目录的函数,绝不是字面清单。
 
 ## Source
 

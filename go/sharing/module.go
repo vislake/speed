@@ -18,8 +18,9 @@ import (
 // unauthenticated share-content route (handler.go's Handler) -- is mounted.
 // Exported, mirroring go/config's PathPublic/PathSystemFeatures precedent
 // exactly, so a host names this route in a tenancy.WithAllowlist call (and
-// in whatever gate table decides which mounted routes need no permission,
-// e.g. examples/reference-app's demoRouteGuards) without stringly
+// in the permission-gate table that decides which mounted routes need no
+// permission, e.g. examples/reference-app's DemoRouteRules entry declaring
+// it public) without stringly
 // duplicating the literal -- see Register's own doc comment for the
 // allowlisting obligation this constant exists to keep honest.
 const PathAccess = "/api/v1/sharing/access"
@@ -29,7 +30,7 @@ const PathAccess = "/api/v1/sharing/access"
 // sharing_createShare/sharing_listShares/sharing_getShare/
 // sharing_revokeShare/sharing_listShareAccessLog) are mounted. Exported for
 // the identical reason PathAccess is: a host names this path in its own
-// permission-gate table (e.g. examples/reference-app's demoRouteGuards)
+// permission-gate table (e.g. examples/reference-app's DemoRouteRules)
 // without stringly duplicating the literal.
 //
 // Unlike PathAccess, this path is an ORDINARY tenant-scoped surface: a host
@@ -327,8 +328,8 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Handler is ever reached, since the request carries no tenant claim by
 // design. Whichever gate table a host
 // layers on top of Routes.Routes() (examples/reference-app's
-// demoRouteGuards, for instance) must mark this same path as needing no
-// permission, for the identical reason: an unauthenticated visitor holds no
+// DemoRouteRules, for instance) must declare this same path public, for the
+// identical reason: an unauthenticated visitor holds no
 // Subject an authorization layer could evaluate a permission against either.
 //
 // PathShares is the OPPOSITE shape: an ordinary tenant-scoped surface, never

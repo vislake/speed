@@ -255,7 +255,7 @@ func main() {
 
 **在参考应用中看到它。** 参考应用正是这样门控自家 notes 路由的:
 [`internal/app/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo_subject.go)
-放着按路径分发的门控表(`GuardModuleRoute`)、Principal 到 Subject 的
+放着路由授权表(`DemoRouteRules`,经 `rbac.GuardRoutes` 施加)、Principal 到 Subject 的
 桥(`DemoSubjectResolver`)与 `note-reader` 式角色播种
 (`seedDemoGrants`);
 [`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)

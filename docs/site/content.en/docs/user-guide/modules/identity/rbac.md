@@ -99,6 +99,17 @@ authenticates differently reaches the gate through its
 `AssignRole(ctx, sub, role, scope)` is idempotent, `RevokeRole`
 strict, and an empty `Scope` is tenant-wide.
 
+Mounted routes declare their decisions once, in one table: `rbac.GuardRoutes`
+takes the routes a host's modules registered plus one `rbac.RouteRule` per
+route -- each either public or naming the permission it requires, with
+optional per-route subject resolver, exemption (a request the handler gates
+itself) and inside-gate layer -- and refuses to serve a route the table does
+not name, so a route added later cannot be served undecided.
+`rbac.SplitPermission` (the gate's own splitter, cutting at the last
+separator, so a three-segment `integration:apikey:read` works) and
+`rbac.WriteAuthzError` (the gate's refusal envelope) are exported for a host
+composing its own gate glue.
+
 ## Core concepts and API essentials
 
 - **Every method takes the `Subject` explicitly** — never from

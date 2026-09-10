@@ -78,6 +78,13 @@ mux.Handle("/api/v1/notes",
 调用:`AssignRole(ctx, sub, role, scope)` 幂等,`RevokeRole` 严格,空
 `Scope` 即租户全域。
 
+挂载的模块路由用一张表做一次性声明:`rbac.GuardRoutes` 接收宿主模块已挂载的
+路由,外加每条路由一条 `rbac.RouteRule`——要么公开,要么点名它要求的权限,并可选
+按路由指定 subject 解析器、豁免(处理器自行把关的请求)与门内层——表未点名的路由
+拒绝对外服务,后加的路由不可能无决定地上线。`rbac.SplitPermission`(门自己的切分
+器,在最后一个分隔符处切开,三段式 `integration:apikey:read` 因此可用)与
+`rbac.WriteAuthzError`(门的拒绝信封)已导出,供自行组门控胶水的宿主使用。
+
 ## 核心概念与 API 要点
 
 - **每个方法都显式收 `Subject`**——绝不从上下文取——读取用 subject
