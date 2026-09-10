@@ -550,6 +550,14 @@ describe('SessionsSection', () => {
     ).toHaveLength(1)
   })
 
+  // This test's cost is the double-confirm lockout window: the second
+  // click lands only after CONFIRM_ARM_LOCKOUT_MS of real time elapses
+  // (that real-time wait is the test's point -- the lockout's auto-clear
+  // must land inside act) -- plus the surrounding sign-in and revoke
+  // flow, ~1.1s on a quiet machine under the coverage gate. The explicit
+  // 20s budget (the same bound the usage-example journey carries for
+  // this package's render-heavy class) covers the loaded-runner cost
+  // with headroom; a genuinely stuck revoke still fails at this bound.
   it('revoke every other session only behind the danger double-confirm dialog and surface the revoked count', async () => {
     const user = userEvent.setup()
     let othersRevoked = false
@@ -625,8 +633,17 @@ describe('SessionsSection', () => {
     expect(rig.calls.at(-1)).toMatchObject({ method: 'GET', path: SESSIONS_PATH })
 
     await expectNoAxeViolations()
-  })
+  }, 20000)
 
+  // This test's cost is the double-confirm lockout window: the second
+  // click lands only after CONFIRM_ARM_LOCKOUT_MS of real time elapses
+  // (that real-time wait is the test's point -- the lockout's auto-clear
+  // must land inside act) -- plus the surrounding sign-in, revoke and
+  // live-region assertion flow, ~1.3s on a quiet machine under the
+  // coverage gate. The explicit 20s budget (the same bound the
+  // usage-example journey carries for this package's render-heavy class)
+  // covers the loaded-runner cost with headroom; a genuinely stuck
+  // revoke still fails at this bound.
   it('announce the revoke-others success into a live region that stood empty from the list phase (mount-with-text regression)', async () => {
     // The success notice's role="status" region stands mounted (empty,
     // visually silent) for the whole list phase, because a live region
@@ -719,7 +736,7 @@ describe('SessionsSection', () => {
     await waitFor(() => expect(screen.getByRole('status')).toBe(status))
 
     await expectNoAxeViolations()
-  })
+  }, 20000)
 
   it('close the revoke-others dialog on cancel without revoking anything', async () => {
     const user = userEvent.setup()
