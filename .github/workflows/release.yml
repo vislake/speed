@@ -8,12 +8,16 @@ name: release
 # (tools/release/lockstep-release.py) derives the publishable set at
 # runtime (go.work use entries under go/ for the Go half, web/packages/*
 # for the npm half) and exits 0 only when: the version has release-version
-# form; no tag for it exists; the go/ tree is complete against go.work;
-# web/ package versions are uniform and the web/.changeset fixed group
-# covers exactly the packages that exist. The job then runs the
-# coordinator's own self-tests. Job `publish` (needs: verify, and the
-# workflow's write permissions live there, not on `verify`) performs the
-# release the verified plan names.
+# form; the go/ tree is complete against go.work; web/ package versions
+# are uniform and the web/.changeset fixed group covers exactly the
+# packages that exist; and no module tag for the version exists -- an
+# existing same-version tag only warns ([warn] in the plan): it marks a
+# re-run of a partially completed release whose Go tags landed but whose
+# npm half did not, which job `publish` recovers by skipping the existing
+# tags and re-walking the npm half. The job then runs the coordinator's
+# own self-tests. Job `publish` (needs: verify, and the workflow's write
+# permissions live there, not on `verify`) performs the release the
+# verified plan names.
 #
 # THE v0.0.1 DISPOSITION (mechanism landed 2026-09-10; the dispatch is
 # the first real end-to-end run): the first real release uses both
@@ -54,7 +58,16 @@ name: release
 #      whatever commit the run checked out, never a commit it rewrites.
 #   2. Creates and pushes the module tags go/<module>/<version>, the
 #      module set derived from go.work with the coordinator's own
-#      parser, so the tag set cannot drift from the verified plan.
+#      parser, so the tag set cannot drift from the verified plan. The
+#      step is idempotent over a re-run: when the verify job's [warn]
+#      line appears (a partially completed release -- Go tags landed,
+#      npm half did not), each derived tag that already exists is
+#      skipped -- a released tag is never re-created or moved, module
+#      proxies cache it -- and only the new tags are pushed. When all of
+#      them exist the push is skipped entirely and the run re-walks the
+#      npm half; a full-success re-run of a used version still fails
+#      loudly at npm publish of an already-published version, the
+#      intended double-publish guard.
 #   3. Publishes the npm half: pinned pnpm install --frozen-lockfile and
 #      a filtered workspace build (the same toolchain and shape the
 #      npm-package-ci workflow uses), then one `npm publish --registry
@@ -223,13 +236,33 @@ jobs:
                   print(f"go/{entry[3:]}/{sys.argv[1]}")
           PYEOF
           mapfile -t tags < /tmp/module-tags.txt
-          echo "Tagging $(wc -l < /tmp/module-tags.txt) modules at the verified checkout:"
+          # Re-run recovery: when a partially completed release (Go tags
+          # landed, npm half did not) is re-dispatched, derived tags may
+          # already exist. A released tag is never re-created or moved
+          # (module proxies cache it), so skip each existing tag, tag and
+          # push only the new ones, and skip the push when all exist.
+          # The checkout carries the tags (fetch-depth: 0 above), so the
+          # existence check sees the same tag set the push would create.
+          new_tags=()
           for t in "${tags[@]}"; do
-            git tag "$t"
-            echo "  tag $t"
+            if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
+              echo "  tag $t already exists -- skipped (re-run recovery)"
+            else
+              new_tags+=("$t")
+            fi
           done
-          git push origin "${tags[@]/#/refs/tags/}"
-          echo "pushed $(wc -l < /tmp/module-tags.txt) module tags"
+          if [ "${#new_tags[@]}" -eq 0 ]; then
+            echo "no new tags: every module tag for this version already exists"
+            echo " -- the Go half was released before; this run re-walks the npm half"
+          else
+            echo "Tagging ${#new_tags[@]} new module(s) at the verified checkout:"
+            for t in "${new_tags[@]}"; do
+              git tag "$t"
+              echo "  tag $t"
+            done
+            git push origin "${new_tags[@]/#/refs/tags/}"
+            echo "pushed ${#new_tags[@]} module tags"
+          fi
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
         # The same reusable setup npm-package-ci uses: Node from
         # web/.nvmrc, pnpm from web/package.json's packageManager field.

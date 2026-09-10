@@ -29,7 +29,10 @@ What the suite proves (M0 exit-condition evidence):
     in line order; a consumer-shaped go.mod is left alone; an untidy or
     mismatched replace raises UncleanableReplaceError.
   * The CLI gates: usage errors exit 2, --apply without the escape hatch
-    exits 3 with the M4/v1.0 refusal, duplicate versions exit 1.
+    exits 3 with the M4/v1.0 refusal, and a version whose module tags
+    already exist passes with a [warn] line -- the recovery path a
+    re-dispatch of a partially completed release needs (the Go tags
+    landed, the npm half did not).
   * The sandbox end-to-end proof: a scratch git repository built from the
     live tree's module metadata (go.work, go/*/go.mod, web/packages/*
     package.json files, web/.changeset/config.json) produces, in default
@@ -756,17 +759,37 @@ class SandboxProofTest(unittest.TestCase):
             self.assertIn(dropped, err)
             self.assertIn("no go.work use entry", err)
 
-    def test_duplicate_version_gate_exits_1(self) -> None:
-        """An existing tag for the version fails the CLI with exit 1."""
+    def test_existing_version_tags_warn_and_pass(self) -> None:
+        """Same-version tags already present warn and the plan exits 0.
+
+        A release whose Go tags landed but whose npm half did not (a
+        publish failure or an interrupted run) must be recoverable by a
+        re-dispatch of the release workflow, and its default
+        verification mode accepts the used version again. Tag the
+        scratch repository with the full wanted set -- the released Go
+        half of this version -- and prove default mode exits 0 with a
+        [warn] line naming the existing tags.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             sb = self.build_sandbox(tmp)
-            modules, _ = rel.derive_go_modules(sb)
-            rel.run_git(sb, "tag", f"go/{modules[0]}/{SELFTEST_VERSION}")
+            expected = self.expected_sandbox_tags(sb)
+            for t in expected:
+                rel.run_git(sb, "tag", t)
             rc, out, err = run_cli(sb, SELFTEST_VERSION)
-            self.assertEqual(rc, 1)
-            self.assertEqual(out, "")
-            self.assertIn("already released", err)
-            self.assertIn(f"go/{modules[0]}/{SELFTEST_VERSION}", err)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(err, "")
+            self.assertIn("[warn]", out)
+            self.assertIn(expected[0], out)
+            # The plan still prints in full (this is a pass, not a
+            # refusal): the dry-run note and the closing aggregated line.
+            self.assertIn("Dry run:", out)
+            modules, _ = rel.derive_go_modules(sb)
+            npm_packages = rel.derive_npm_packages(sb)
+            self.assertIn(
+                f"{len(modules)} Go modules + {len(npm_packages)} packages "
+                f"-> {SELFTEST_VERSION}",
+                out,
+            )
 
 
 if __name__ == "__main__":

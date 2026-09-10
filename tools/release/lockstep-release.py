@@ -69,7 +69,7 @@ What this script does not do:
   * build artifacts (images, goreleaser binaries, speed.yaml, SBOMs) or
     run scaffold-verify.
 
-Preflight checks (all must pass for exit 0):
+Preflight checks (a failing check exits 1; a [warn] line passes):
 
   1. VERSION matches the release-version form
      ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$
@@ -79,7 +79,15 @@ Preflight checks (all must pass for exit 0):
      rather than at `git tag`. This is the exact contract the CI workflow
      enforces on its version input; the two executable copies must stay
      in step (both cite the regex).
-  2. No tag for this version already exists (git tag -l, per module tag).
+  2. No module tag for this version exists (git tag -l, per module
+     tag) -- existing same-version tags warn: they are the fingerprint
+     of a partially completed release (the Go tags landed, the npm half
+     did not), which a re-dispatch of the release workflow must be able
+     to walk past. Offline that half-success state is indistinguishable
+     from a fully completed release, so the double-publish protection
+     lives on the publish side (the tag step skips a tag that already
+     exists; npm publish of an already-published version fails loudly
+     on its own), not here.
   3. The go/ tree is complete against go.work in both directions.
   4. web/ package versions are uniform and the changesets fixed group
      covers exactly the packages that exist.
@@ -110,8 +118,9 @@ closing line reports the counts the current tree carries):
     0
 
 Exit codes: 0 = plan consistent (or self-tests passed, or local tags
-created); 1 = plan inconsistent (preflight failed, drift, duplicate
-version) or self-tests failed; 2 = usage or validation error; 3 = --apply
+created) -- existing same-version tags from a partially completed
+release warn, never fail; 1 = plan inconsistent (preflight failed or
+drift) or self-tests failed; 2 = usage or validation error; 3 = --apply
 refused (escape hatch not passed).
 
 Standard library only; requires Python >= 3.11 (shared floor with the
@@ -494,18 +503,40 @@ def load_changesets_fixed_group(repo_root: str) -> set[str]:
     return names
 
 
-def check_tag_collision(repo_root: str, version: str, go_modules: list[str]) -> None:
-    """Fail when any module tag for this version already exists."""
+def check_tag_collision(repo_root: str, version: str, go_modules: list[str]) -> list[str]:
+    """Return the preflight line(s) reporting the tag-collision check.
+
+    Existing same-version module tags do not fail the plan: they mark a
+    re-run of a partially completed release -- the Go tags landed, the
+    npm half did not -- and a re-dispatch of the release workflow must be
+    able to walk that state. Offline the half-success state is
+    indistinguishable from a fully completed release (both show the same
+    tags in the same checkout), so this check cannot tell a re-run from a
+    double-publish attempt and the protection lives on the publish side
+    instead, where each leg is safe on its own: the workflow's tag step
+    skips a tag that already exists (a released tag is never re-created
+    or moved -- module proxies cache it), and npm publish of an
+    already-published version fails loudly by itself. The result is one
+    [ok] line when no wanted tag exists, one [warn] line naming the
+    existing tags when a re-run is in progress; the caller prints both as
+    preflight results and exits 0 either way.
+    """
     tags = list_existing_tags(repo_root)
     wanted = [f"{GO_DIR_NAME}/{d}/{version}" for d in go_modules]
     existing = sorted(t for t in wanted if t in tags)
-    if existing:
-        raise ReleaseError(
-            f"version {version} is already released: the tag(s) "
-            + ", ".join(existing)
-            + " already exist -- pick a new version (lockstep release "
-            "versions are used exactly once)"
-        )
+    if not existing:
+        return [
+            f"[ok] no existing tag for version {version} (git tag -l over "
+            f"all {len(go_modules)} module tags)"
+        ]
+    return [
+        "[warn] version " + version + " is already partially released: "
+        + ", ".join(existing)
+        + " exist -- the Go half of this release landed but the npm half "
+        "did not; the publish job skips the existing tags and re-walks "
+        "the npm half, where an already-published version fails loudly "
+        "on its own"
+    ]
 
 
 def check_npm_uniform(npm_packages: list[dict[str, str]]) -> None:
@@ -554,7 +585,7 @@ def print_plan(
     go_modules: list[str],
     consumers: list[str],
     npm_packages: list[dict[str, str]],
-    ok_lines: list[str],
+    preflight_lines: list[str],
     applying: bool,
 ) -> None:
     """Print the full plan. Only called once every preflight check passed."""
@@ -585,7 +616,7 @@ def print_plan(
         print(f"  {p['name']}: {p['version']} -> {version[1:]}")
     print()
     print("Preflight checks:")
-    for line in ok_lines:
+    for line in preflight_lines:
         print(f"  {line}")
     print()
     if applying:
@@ -610,8 +641,9 @@ def create_local_tags(
     """Create one local lightweight tag per module (gated apply mode)."""
     for d in go_modules:
         tag = f"{GO_DIR_NAME}/{d}/{version}"
-        # Failure aborts the whole run: a tag that exists mid-way means the
-        # preflight collision check raced with something else.
+        # Failure aborts the whole run: the hatch applies exactly once to
+        # a scratch checkout, so a tag that exists mid-way means this
+        # checkout already holds this version's tags.
         run_git(repo_root, "tag", tag)
         print(f"  tag {tag}")
 
@@ -861,14 +893,14 @@ def main(argv: list[str] | None = None) -> int:
               "against a scratch checkout).", file=sys.stderr)
         return 3
 
-    ok_lines: list[str] = []
+    preflight_lines: list[str] = []
     try:
-        ok_lines.append(
+        preflight_lines.append(
             f"[ok] version {version} matches "
             + VERSION_PATTERN.pattern
         )
         go_modules, consumers = derive_go_modules(repo_root)
-        ok_lines.append(
+        preflight_lines.append(
             f"[ok] go/ module tree complete against go.work: "
             f"{_n(len(go_modules), 'publishable module')}"
             + (f" and {_n(len(consumers), 'consumer module')}"
@@ -879,22 +911,22 @@ def main(argv: list[str] | None = None) -> int:
         fixed_names = load_changesets_fixed_group(repo_root)
         check_changesets_coverage(fixed_names, npm_packages)
         current = npm_packages[0]["version"]
-        ok_lines.append(
+        preflight_lines.append(
             f"[ok] web/ package versions uniform ({current}) and the "
             f"web/.changeset fixed group covers exactly the "
             f"{_n(len(npm_packages), 'package')} found"
         )
-        check_tag_collision(repo_root, version, go_modules)
-        ok_lines.append(
-            f"[ok] no existing tag for version {version} (git tag -l over "
-            f"all {len(go_modules)} module tags)"
+        # [warn] when same-version tags exist (a partially completed
+        # release being re-run), [ok] when none do -- never a failure.
+        preflight_lines.extend(
+            check_tag_collision(repo_root, version, go_modules)
         )
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     print_plan(
-        version, go_modules, consumers, npm_packages, ok_lines,
+        version, go_modules, consumers, npm_packages, preflight_lines,
         applying=args.apply,
     )
     if args.apply:
