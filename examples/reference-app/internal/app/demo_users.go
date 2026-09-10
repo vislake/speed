@@ -167,13 +167,12 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 		}
 		seeded[tenantID] = struct{}{}
 
-		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
 		// The grant's audit Actor: this seed is boot-time automation, so
-		// the row names the seed (demoSeedActorID) as a system actor --
-		// rbac records every grant, and a host that hands it a bare
-		// tenant context would see every one of these land with a blank
+		// the row names the seed as a system actor (demoSeedCtx) -- rbac
+		// records every grant, and a host that handed it a bare tenant
+		// context would see every one of these land with a blank
 		// attribution.
-		seedCtx := pkgcore.WithActor(tenantCtx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: demoSeedActorID})
+		seedCtx := demoSeedCtx(pkgcore.WithTenant(ctx, tenantID))
 
 		if err := addDemoOrgMembership(seedCtx, orgModule, userID); err != nil {
 			return fmt.Errorf("reference-app: add demo account to org roster in %q: %w", tenantID, err)

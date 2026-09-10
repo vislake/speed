@@ -224,14 +224,12 @@ func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, membership
 
 	memberships.Grant(userID, rbac.SystemDomain)
 
-	systemCtx := pkgcore.WithTenant(ctx, rbac.SystemDomain)
 	// rbac emits an audit row for every role it defines or grants, and
 	// this seed is boot-time automation with no operator session behind
-	// it: the writes carry a system actor naming the seed, the same
-	// attribution shape the app's own boot-time ai-gateway credential
-	// write uses ("reference-app-boot" in server.go), so no role write of
-	// this host is ever recorded with a blank Actor.
-	seedCtx := pkgcore.WithActor(systemCtx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: demoSeedActorID})
+	// it: the writes carry the seed's own system actor (demoSeedCtx) in
+	// the system domain's tenant context, so no role write of this host is
+	// ever recorded with a blank Actor.
+	seedCtx := demoSeedCtx(pkgcore.WithTenant(ctx, rbac.SystemDomain))
 	if ensureErr := svc.EnsureBuiltinRoles(seedCtx); ensureErr != nil {
 		return "", ensureErr
 	}

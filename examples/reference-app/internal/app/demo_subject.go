@@ -1483,16 +1483,6 @@ func GuardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 // whose memberships and grants mirror this same model. A real deployment
 // does neither: roles are seeded when a tenant is created and grants are
 // made by an administrator through the admin console.
-// demoSeedActorID is the audit Actor id this host's demo and platform-
-// staff seeds attribute their rbac role writes to (pkgcore.ActorTypeSystem):
-// rbac emits an audit row for every role it defines or grants, and
-// boot-time seeding has no operator session behind it, so the row names
-// the seed itself -- the same "the write is a config-driven declaration
-// re-affirmed identically on every restart" attribution shape the app's
-// own boot-time ai-gateway credential write uses ("reference-app-boot" in
-// server.go).
-const demoSeedActorID = "reference-app-demo-seed"
-
 func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
@@ -1502,13 +1492,11 @@ func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]p
 		}
 		seeded[tenantID] = struct{}{}
 
-		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
 		// Every role this seed defines and grants is audited by rbac under
-		// the Actor this context carries: boot-time automation with no
-		// operator session, so the rows name the seed itself as a system
-		// actor (demoSeedActorID) rather than landing with a blank
-		// attribution.
-		seedCtx := pkgcore.WithActor(tenantCtx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: demoSeedActorID})
+		// the Actor this context carries -- the seed's own system actor
+		// (demoSeedCtx) -- so the rows name the seed itself rather than
+		// landing with a blank attribution.
+		seedCtx := demoSeedCtx(pkgcore.WithTenant(ctx, tenantID))
 		if err := svc.EnsureBuiltinRoles(seedCtx); err != nil {
 			return fmt.Errorf("reference-app: seed the built-in roles of %q: %w", tenantID, err)
 		}
