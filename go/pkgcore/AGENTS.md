@@ -98,7 +98,7 @@ Declaration types:
 
 | Type | Fields |
 |---|---|
-| `MountedRoute` | `Path`, `Handler` |
+| `MountedRoute` | `Path`, `Handler`, `Access` |
 | `ConfigItem` | `Key`, `Type`, `Default`, `Sensitive`, `Description`, `Group`, `Public`, `Min`, `Max` |
 | `BootstrapKey` | `Key`, `Format`, `Default`, `Sensitive`, `Description`, `Group`, `Example` |
 | `FeatureFlag` | `Key`, `Default`, `Description`, `DependsOn` |
@@ -106,6 +106,8 @@ Declaration types:
 | `EventDecl` | `Type`, `PayloadType`, `Description` |
 
 `pkgcore.MountRoutes(mux, routes...)` is the one implementation of the mounting rule every module route follows — each route's `Handler` registered at its own `Path` and, unless the path already ends in `/`, at `Path+"/"` as well, so the handler is reachable at the exact path AND below it without ServeMux's redirect-on-missing-slash behavior (a redirect does not preserve a POST's method or body). See its doc comment for the full reasoning; `examples/reference-app` and `go/saasctl`'s generated project are its two consumers, and `ExampleMountRoutes` is the runnable demonstration.
+
+`MountedRoute.Access` (`pkgcore.RouteAccess`) carries a route's authorization decision: `Public` declares it deliberately reachable without a permission check, and `Permission` (a `pkgcore.RoutePermission`, `func(*http.Request) string`) selects the permission each request must hold -- a function because the required permission routinely varies by the request's route (read on GET/HEAD, write otherwise). The zero value declares NOTHING: a module's own `Mount` records none, and the platform's route table (`rbac.GuardRoutes`, which a host wires over `reg.Routes.Routes()`) refuses to serve a mounted route whose decision the host's table does not state, marking public routes with the positive `Public` declaration rather than by omission. `rbac.SplitPermission` reads a three-segment `"<module>:<entity>:<verb>"` permission at its last separator, so the selector may return those as well as two-segment names. `ExampleMountedRoute_access` is the runnable demonstration.
 
 `ConfigItem` declarations are validated when registered: `Type` must be one of `string` / `int` / `bool` / `duration`; a non-nil `Default` must be a Go value of that kind (`string`, `int` or `int64`, `bool`, `time.Duration`; nil is legal and means "no value until one is set"); `Min`/`Max` are declarative ranges defined for `int` and `duration` items only, must satisfy `Min <= Max`, and a non-nil `Default` must fall inside them; `Sensitive` and `Public` are mutually exclusive. A contradictory declaration fails the whole `Add` call with an error wrapping `ErrInvalidConfigItem` -- see the error index below.
 

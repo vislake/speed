@@ -151,7 +151,63 @@ type MountedRoute struct {
 	Path string
 	// Handler serves every request below Path.
 	Handler http.Handler
+	// Access is the authorization decision recorded for the route: whether
+	// it is deliberately public, or which permission each request must
+	// hold. A module's own mount records none -- the decision belongs to
+	// the host that wires the authorization layer -- and the route table
+	// that enforces complete coverage (rbac.GuardRoutes) fills it on the
+	// routes it returns, so every served route carries the decision it was
+	// admitted under. See RouteAccess for the declaration's exact contract.
+	Access RouteAccess
 }
+
+// RouteAccess declares the authorization decision for one mounted route:
+// either the route is deliberately public, or every request to it must hold
+// the permission Permission selects.
+//
+// The zero value declares nothing, and a route built from zero is served
+// only by a path that does not enforce decisions. The route table a host
+// wires into rbac.GuardRoutes refuses it at startup rather than admitting
+// the route with no decision: an explicit Public declaration and an omitted
+// one must never look alike, because only the first is an answer.
+//
+// Exactly one of the two forms must be declared. A decision setting both is
+// contradictory -- no check could honor "public and permission-gated" at
+// once -- and is refused where the table is validated, as is a public
+// decision carrying a subject resolver or an exemption: both only take
+// effect inside a permission check the public form never performs.
+type RouteAccess struct {
+	// Public declares the route deliberately reachable without a permission
+	// check: an anonymous surface by design (a login page's public
+	// configuration, a share-link page), or a route whose handler carries
+	// its own per-operation identity check. It is a positive declaration,
+	// never a default -- the zero RouteAccess is refused, not treated as
+	// public.
+	Public bool
+
+	// Permission selects the permission string each request to the route
+	// must hold, in the canonical "<resource>:<action>" form
+	// (rbac.Permission composes it). A module with more than one gated
+	// entity declares three-segment names ("<module>:<entity>:<verb>", for
+	// example "integration:apikey:read"), which rbac.SplitPermission reads
+	// at the last separator: the resource half is everything before it
+	// ("integration:apikey"), the action the last segment.
+	//
+	// It is a function rather than one fixed string because a route's
+	// required permission routinely varies by the request's own shape: a
+	// whole-module mount serving reads and writes selects the read
+	// permission on GET/HEAD and the write permission otherwise. It must be
+	// a pure function of the request's ROUTE -- method and path -- never of
+	// a header, query parameter or body field, because a permission the
+	// caller controls is one the caller can choose. Returning anything that
+	// is not a well-formed permission denies the request. Nil when the
+	// route is public.
+	Permission RoutePermission
+}
+
+// RoutePermission selects the permission a request to a route must hold,
+// per RouteAccess.Permission's contract.
+type RoutePermission func(*http.Request) string
 
 // ConfigItem describes a single configuration key contributed by a module.
 // The admin console form and the generated configuration reference are both

@@ -1000,3 +1000,35 @@ func ExampleMountRoutes() {
 	// /api/v1/notes/42 200 notes
 	// /api/v1/authn/login 200 authn
 }
+
+// ExampleMountedRoute_access shows the two authorization decisions a route
+// can carry. A module's own mount records none -- the zero RouteAccess --
+// and the host's route table resolves it before anything serves: an
+// explicit Public declaration, or the permission each request must hold,
+// selected from the request's own route (a read on GET, a write otherwise).
+func ExampleMountedRoute_access() {
+	notes := pkgcore.MountedRoute{
+		Path:    "/api/v1/notes",
+		Handler: http.NotFoundHandler(),
+		Access: pkgcore.RouteAccess{Permission: func(r *http.Request) string {
+			if r.Method == http.MethodGet {
+				return "notes:read"
+			}
+			return "notes:write"
+		}},
+	}
+	public := pkgcore.MountedRoute{
+		Path:    "/api/v1/config/public",
+		Handler: http.NotFoundHandler(),
+		Access:  pkgcore.RouteAccess{Public: true},
+	}
+
+	fmt.Println(pkgcore.MountedRoute{}.Access.Public, pkgcore.MountedRoute{}.Access.Permission == nil)
+	fmt.Println(notes.Access.Public, notes.Access.Permission(httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)))
+	fmt.Println(public.Access.Public, public.Access.Permission == nil)
+
+	// Output:
+	// false true
+	// false notes:read
+	// true true
+}
