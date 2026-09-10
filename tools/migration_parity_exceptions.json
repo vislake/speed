@@ -1,0 +1,32 @@
+{
+    "dialect_only": [
+        {
+            "path": "go/integration/migrations/postgres/0005_fix_webhook_secret_column_type.sql",
+            "reason": "SQLite needs no change: its VARCHAR columns carry no fixed encoding, so the ciphertext a webhook secret stores (invalid UTF-8 almost by construction) is already accepted there, and PostgreSQL only needed the column converted to BYTEA."
+        }
+    ],
+    "dialect_only_set": [
+        {
+            "path": "go/pkgcore/eventbus/postgres/migrations",
+            "reason": "The set belongs to the PostgreSQL LISTEN/NOTIFY event-bus implementation itself; there is no SQLite sibling backend, so no other dialect has a schema to ship."
+        },
+        {
+            "path": "go/pkgcore/kv/postgres/migrations",
+            "reason": "The set belongs to the PostgreSQL-implementation KV store itself; there is no SQLite sibling backend, so no other dialect has a schema to ship."
+        }
+    ],
+    "divergent": [
+        {
+            "path": "go/dbkit/audit/migrations/0002_append_only_enforcement.sql",
+            "reason": "The append-only backstop is a language-level construct with no shared spelling: SQLite uses a BEFORE UPDATE/DELETE trigger whose body raises through RAISE(ABORT, ...), PostgreSQL a plpgsql function raising an exception plus three triggers (it also covers TRUNCATE, which SQLite's trigger syntax cannot)."
+        },
+        {
+            "path": "go/metering/migrations/0007_enforce_outbox_retry_after_not_null.sql",
+            "reason": "SQLite cannot ALTER a column's nullability, so making retry_after NOT NULL is a whole table rebuild there (recreate, copy, drop, rename, re-create both indexes); PostgreSQL is a single ALTER COLUMN SET NOT NULL. Both sides share the same idempotent backfill ahead of the enforcement and end schema-identical."
+        },
+        {
+            "path": "go/pki/migrations/0009_widen_key_ref_columns.sql",
+            "reason": "SQLite cannot ALTER a column type, so widening the three key_ref columns to VARCHAR(4096) rebuilds each table on that dialect; PostgreSQL is three ALTER COLUMN TYPE statements."
+        }
+    ]
+}

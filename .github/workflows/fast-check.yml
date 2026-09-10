@@ -89,6 +89,15 @@ name: fast-check
 #         files must belong to that module, measured by where the
 #         target is CREATEd. The tree ships no REFERENCES today; the
 #         rule's planted fixtures are its teeth.
+#       - tools/check_migration_parity.py -- the dual-dialect migration
+#         parity gate: every shipped migration's sqlite/ and postgres/
+#         copies must both exist and be identical modulo comments,
+#         whitespace and the declared column-type synonyms, with the
+#         deliberate departures (dialect-only files and sets,
+#         structurally divergent pairs) declared -- and kept live -- in
+#         tools/migration_parity_exceptions.json. Its planted-drift
+#         suite (tools/test_check_migration_parity.py) runs in the same
+#         step pair below.
 #       - tools/semgrep_rules/ -- the architecture-discipline semgrep
 #         ruleset: seven rules, each mapping to an 18-cicd discipline-table
 #         row (deployment-mode branching outside kernel wiring,
@@ -299,6 +308,20 @@ jobs:
       # REFERENCES today, so the planted fixtures are the teeth.
       - name: Cross-module foreign-key check (migration lint)
         run: python3 tools/check_migration_cross_module_fks.py
+      # Dual-dialect migration parity: every migrations/sqlite/<name>.sql
+      # needs its postgres/ sibling, the pair must be identical modulo
+      # comments, whitespace and the declared type synonyms, and the
+      # deliberate exceptions (dialect-only files/sets, structurally
+      # divergent pairs) must be declared with their reasons in
+      # tools/migration_parity_exceptions.json -- where a stale entry
+      # fails too, so the registry cannot accumulate dead entries. The
+      # planted-drift suite runs first (its fixtures are the rules'
+      # proof), then the gate over the real tree: pure python, like the
+      # checks above.
+      - name: Migration parity checker's planted-drift suite (tools/test_check_migration_parity.py)
+        run: python3 tools/test_check_migration_parity.py
+      - name: Dual-dialect migration parity check
+        run: python3 tools/check_migration_parity.py
       # Semgrep into a throwaway venv: the runner has no pinned semgrep
       # and this job's toolchain setup is the Go/Node actions only. The
       # pip install is the deliberately-unpinned piece -- see the COVERAGE

@@ -138,3 +138,14 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
    - **软删除只是隐藏，不是安全边界，更不是合规意义上的"已删除"**：软删除行仍是数据库里明文存在（加密字段除外）的一行，SQLite（standalone 模式默认方言）没有 RLS，隐藏能力完全靠 Go 层的 GORM scope 承担；不能把"用户在界面上删除了"等同于"数据已经不在了"。只有 `HardDelete` 之后，数据才算真正从库里消失——这正是合规场景要求彻底删除、软删除不能充数的原因。
 
 **边界**：本节只定义 `dbkit.Repository[T]` 这一层两条删除入口的职责边界；保留期的按租户可配置值、"被遗忘权"请求的受理与导出编排本身，是 `compliance` 模块的治理层职责（见上）。尚未落地的是 `go/compliance/AGENTS.md` 记录的"Known limitations"——哈希链、按分区归档——以及跨业务模块的媒体/派生资源级联清理各自由哪个业务模块自己负责这类编排细节，见 [10 合规与审计](10-compliance-and-audit.md)。
+
+## 迁移的双方言约定：配对规则与奇偶校验门
+
+每个模块的迁移集同时携带 `migrations/sqlite/<name>.sql` 与 `migrations/postgres/<name>.sql` 两份手写副本（`dbkit.MigrationRegistry.Apply` 按方言目录各自读取，本身不要求两侧配对）。两份副本分别维护时，漂移对其他任何门都是隐形的：只加在一侧的列在另一方言的部署上要到生产才暴露。`tools/check_migration_parity.py` 把配对规则与奇偶规则变成机器检查，例外集中登记在 `tools/migration_parity_exceptions.json`：
+
+- **配对**：一侧存在的文件必须在对侧有同名兄弟，除非在登记表里声明为 dialect-only（带理由）。
+- **结构奇偶**：配对文件在去注释、去大小写差异、折叠空白，并应用声明的类型同义词（BLOB/BYTEA、REAL/DOUBLE PRECISION、INTEGER/BIGINT）之后必须逐字相同；形状真正不同的对（SQLite 无 `ALTER COLUMN`，三对迁移在该侧是整表重建；append-only 触发器两种方言各有语言级写法）必须在登记表里声明 divergent（带理由）。
+- **登记表诚实性**：每条声明都必须仍然成立——兄弟出现了、或该对如今奇偶通过，都会变红，登记表不能悄悄积累失效条目去掩盖未来的真实漂移。
+- **集合结构**：迁移集必须同时有两个方言目录；只有一个的集合要么补上，要么整体声明为 dialect-only 集合（例如 `pkgcore` 的 PostgreSQL LISTEN/NOTIFY 事件总线，其实现只存在于一个方言）。
+
+**为什么是门而不是生成器**：已应用的迁移文件是冻结历史——`MigrationRegistry.Apply` 按 `(module, filename)` 记录并跳过已应用文件，改写已应用文件的 SQL 对任何已运行过的数据库都不会生效；而真实存在的方言差异是作者的意图而非机械变换（SQLite 无法改列类型/空约束，三对迁移因此在该侧是整表重建），生成器只能背上同一份逐对例外清单，还多出"重写一个永远不该变的文件"这一故障模式。因此工具侧拥有的机制是这道门加上它强制的写作规则：两侧一起写，除声明的同义词外保持逐字一致，其余一律在登记表里带理由声明。
