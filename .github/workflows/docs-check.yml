@@ -65,6 +65,22 @@ name: docs-check
 #     helper's body, and helper calls with non-literal arguments), so
 #     an extractor blind spot shows as a real diff instead of silent
 #     agreement. Plain python3, no setup step.
+#   * platform-error bundle drift: python3
+#     tools/gen_platform_error_bundle.py --check from the repository
+#     root, failing when the committed client bundle
+#     (web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json)
+#     is not what the generator renders -- the intersection of the
+#     apperr census (the Go codes, read through the index generator's
+#     own public functions) with the modules' locales/ catalogs, so the
+#     frontend's error text comes from the same source the backend
+#     renders. Its planted-drift suite (tools/
+#     test_gen_platform_error_bundle.py, run first in the step pair
+#     below -- the env-example precedent) pins the filter (including the
+#     red line that a catalog id with no apperr construction behind it --
+#     an invitation email, a notification template, an SMS body -- never
+#     enters the bundle), the interpolation and plural-table
+#     conversions, the refusal classes, and byte-determinism. Plain
+#     python3, no setup step.
 #   * docs-site build: python3 tools/check_docs_site.py from the
 #     repository root. docs/site/ is a real Hugo project (theme:
 #     hugo-book, pinned as a git submodule -- docs/site/README.md has
@@ -140,6 +156,15 @@ name: docs-check
 #     docs/-wide check.
 #   * per-version release directories for docs/site/ (the site versioned
 #     like the code it documents).
+#   * the platform-error bundle's Go-side edge: the bundle's census
+#     input is the Go tree, but a PR that only removes an apperr
+#     construction (leaving its catalog entry behind) never starts this
+#     pipeline -- code-only PRs belong to fast-check's module matrix by
+#     the trigger design above. The residue is deliberate: the next run
+#     on any listed path goes red, naming the stale bundle file, and the
+#     fix is the one-line regeneration the gate prints. Wiring go/**
+#     here to close it would fire this pipeline on every code-only PR,
+#     which is what the path set exists to avoid.
 #
 # PATH SET -- documentation or i18n/public-API changes only:
 #   docs/**                     the design docs this pipeline guards, and
@@ -188,6 +213,20 @@ name: docs-check
 #                                of the generator's drift gate)
 #   tools/test_check_error_code_index_coverage.py  and its own unit
 #                                test suite (self-test on change)
+#   tools/gen_platform_error_bundle.py      the platform-error bundle
+#                                generator -- it imports the index
+#                                generator's census functions rather
+#                                than reading its generated artifacts
+#   tools/test_gen_platform_error_bundle.py  and its own unit test suite
+#                                (self-test on change)
+#   web/packages/i18n/**         the bundle's consumer side: the
+#                                ./platform-errors entrypoint's key shape
+#                                and the generated locales/ bundle itself
+#                                (the **/locales/** line above matches
+#                                the JSON files; this entry keeps the
+#                                i18n contract package in the set, the
+#                                header's "i18n-contract changes must
+#                                never slip through" rule)
 #   tools/configrefgen/**        the config-reference generator tool
 #                                module (self-test on change; its unit
 #                                suite also runs under the
@@ -247,6 +286,9 @@ on:
       - tools/test_gen_error_code_index.py
       - tools/check_error_code_index_coverage.py
       - tools/test_check_error_code_index_coverage.py
+      - tools/gen_platform_error_bundle.py
+      - tools/test_gen_platform_error_bundle.py
+      - web/packages/i18n/**
       - tools/configrefgen/**
       - examples/reference-app/internal/**
       - go/config/**
@@ -292,6 +334,18 @@ jobs:
         run: python3 tools/gen_error_code_index.py --check
       - name: Error-code index coverage check
         run: python3 tools/check_error_code_index_coverage.py
+      - name: Platform-error bundle generator's planted-drift suite
+        # The suite runs first, then the gate over the real tree -- the
+        # env-example step pair's order. The red line it plants: a
+        # catalog id with no apperr construction behind it (an
+        # invitation email, a notification template, an SMS body) must
+        # never enter the client bundle.
+        run: python3 tools/test_gen_platform_error_bundle.py
+      - name: Platform-error bundle drift check
+        # Regenerates the client bundle from the apperr census and the
+        # modules' locales/ catalogs in memory and fails when either
+        # committed file is stale. Plain python3, no setup step.
+        run: python3 tools/gen_platform_error_bundle.py --check
       - name: Install pinned Hugo
         uses: ./.github/actions/setup-hugo-env
       - name: Docs-site build (check_docs_site)

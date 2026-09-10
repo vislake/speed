@@ -22,6 +22,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
 | `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in the committed index page `docs/site/content.en/docs/user-guide/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
+| `gen_platform_error_bundle.py` | Generator | Frontend error copy derives from the backend: `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` is the apperr census (read through `gen_error_code_index.py`'s own public functions, never its generated artifacts) intersected with the modules' `locales/` catalogs, structurally and with no name list -- a catalog id with no apperr construction behind it (an invitation email, a notification template, an SMS body, a default workspace name, demo copy) never enters the bundle. `{{.name}}` normalizes to i18next's `{{name}}`; plural tables become `key_<category>` leaves with cross-language union padding so both bundles register identical leaf sets; any other `{{...}}` shape, an empty translation, a duplicate id across catalogs and a zh-CN id gap refuse the run (exit 2). Sorted keys, deterministic bytes; `--check` compares against a fresh render. Planted-drift suite `tools/test_gen_platform_error_bundle.py` runs first in the same step pair in docs-check | 0 clean / 1 `--check` drift / 2 refusal or usage error |
 | `affected_go_modules.py` | Scope helper | Computes which Go modules a set of changes affects -- changed modules plus their downstream dependents, the dependency edges derived from each module go.mod's require lines (never a hand-maintained table) -- the computation behind the Taskfile `test` task's diff-aware scoping | 0 scope printed (one module dir per line, or the token ALL) / 1 git plumbing failed / 2 usage error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new speed Go module under `go/<name>` (go.mod + doc.go + AGENTS.md) with `--category go`, the canonical `@speed/<name>` package skeleton under `web/packages/<name>` (package.json, the tsconfig pair, a doc-comment index.ts plus its wiring test, README and AGENTS.md) with `--category npm`, or the application-side module skeleton at `<app-root>/internal/<name>` with `--category app` (the reference app's notes-module shape: doc.go, model.go, repository.go, handler.go with the generated-`api.ServerInterface` assertion, handler_test.go, the dual-dialect migration pair, the bilingual locale pair and the OpenAPI fragment with its oapi-codegen config; the app root must hold its go.mod, which the tool reads to derive the module's import paths, and the generated `api/<name>-server.gen.go` is left to the pinned oapi-codegen run the checklist names first); prints the category's registration checklist and never modifies shared repository files. The app category's locale pair templates are real files under `tools/new_module_locales/` (a zh-CN/en-US pair, so they sit under `tools/check_i18n_keys.py`'s own parity check; tools/ is an English-only source tree, so the Chinese template cannot live inline in the script) | 0 scaffolded / 2 refusal or validation error |
 | `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
@@ -571,6 +572,73 @@ Usage:
 python3 tools/check_error_code_index_coverage.py                # exit 1 on any missing/unindexable code
 python3 tools/check_error_code_index_coverage.py --roots go examples --index docs/site/content.en/docs/user-guide/error-codes.md
 ```
+
+## gen_platform_error_bundle.py — platform error-copy bundle generator
+
+Derives the client-side error-copy bundle from the backend's own
+catalogs, closing the gap between what the Go locale files promise and
+what the frontend ships: each backend module's
+`locales/{zh-CN,en-US}.toml` declares "this file is the module's
+contribution to the client i18n catalog" -- the TOML key IS the apperr
+code -- while the framework packages each hand-maintained a second,
+frontend-local copy of the same text, which drifted in wording and
+meaning. The generated bundle
+(`web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json`) is
+what a host registers as the `platform-errors` fallback namespace, so a
+code with no text in a package's own bundle resolves to the backend's
+own words instead of a raw key.
+
+The bundle is the intersection of two sets, computed structurally with
+no name list anywhere: the *census* -- every apperr code constructed in
+Go source under `--roots`, read through `tools/gen_error_code_index.py`'s
+own public functions (imported rather than re-implemented, and never
+read back from that tool's generated artifacts, which could be stale) --
+and the *catalog ids* the modules' `en-US.toml` files declare, with the
+zh-CN side required to cover every id that lands. A catalog id with no
+apperr construction behind it is backend-only content -- invitation
+emails, notification templates, SMS bodies, default workspace names,
+demo copy -- and stays out by construction, because there is no code for
+a client to look it up with; the frontend keeps its own fallbacks for
+what remains uncovered.
+
+Two asymmetries of that intersection are worth knowing when reading the
+bundle. It is not status-filtered: a 500-class internal refusal is in it
+exactly like a 400, because the bundle is a lookup table, not a curated
+user-facing catalog -- the resolver, not the generator, decides what a
+client shows. And the census is larger than the catalogs: codes with no
+locale entry at all (boot-time wiring refusals, request-time refusals
+the backend declares no copy for) get nothing from this bundle and keep
+resolving through the frontend's own fallbacks. `--roots` defaults to
+`go examples` (the index generator's own default), so the reference
+app's modules contribute their codes exactly as they do to the error
+index.
+
+Value conversion is exhaustive and refuses the rest: go-i18n's
+`{{.name}}` placeholder normalizes to i18next's `{{name}}`; a plural
+message table becomes `key_<category>` leaves, with every language's
+form set padded up to the union of the languages' forms from its own
+`other` (the CLDR catch-all) so the bundles register with identical leaf
+sets; and any other `{{...}}` shape, an empty translation, a duplicate
+id across catalogs, and an id the zh-CN side lacks all refuse the run
+with exit 2 naming the site -- a form the tool cannot translate
+mechanically is a decision for a human, never a rendered guess. Keys are
+sorted and bytes deterministic, so the committed artifacts are
+reproducible and `--check` compares them against a fresh render.
+
+Usage:
+
+```
+python3 tools/gen_platform_error_bundle.py            # writes web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json
+python3 tools/gen_platform_error_bundle.py --check    # exit 1 if either file is stale
+python3 tools/gen_platform_error_bundle.py --roots go examples --out-dir web/packages/i18n/src/platform-errors/locales
+```
+
+Its planted-drift suite `tools/test_gen_platform_error_bundle.py` pins
+the filter from both sides -- the red line that a content id never
+enters the bundle, and that the app modules' codes do -- plus the
+conversions, the refusal classes and byte-determinism; the suite runs
+first and the gate over the real tree second, both in the docs-check
+pipeline.
 
 ## new_module.py — Go module stub generator
 
