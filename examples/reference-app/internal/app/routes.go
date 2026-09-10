@@ -1,5 +1,6 @@
 // This file mounts the module set on the router: every route the registry holds is
 // admitted through the app's route-authorization table on the way out.
+
 package app
 
 import (

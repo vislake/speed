@@ -1,5 +1,6 @@
 // This file holds the zero-setup development keys the app falls back to when the
 // matching environment variable is unset.
+
 package app
 
 // DevConfigKey is the master key used when APP_CONFIG_KEY is unset. It is

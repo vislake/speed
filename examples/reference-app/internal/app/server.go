@@ -1,10 +1,10 @@
-// This file is the reference app's assembly core: ServerConfig's bootstrap
-// resolution (ConfigFromEnv), the full module composition (BuildServer) and
-// the host-side route guards and demo identity layer that wiring uses. It
-// sits in internal/app so the composed server is importable: cmd/server's
-// main.go boots it as the thin process shell, and the assembly-flow suites,
-// which live beside the command in cmd/server, exercise the package through
-// the command's tests. See doc.go for the package's design.
+// This file is the reference app's assembly core: ServerConfig, the host-side
+// seams the composition binds, and BuildServer's phase-by-phase module
+// composition. It sits in internal/app so the composed server is importable:
+// cmd/server's main.go boots it as the thin process shell, and the
+// assembly-flow suites, which live beside the command in cmd/server, exercise
+// the package through the command's tests. See doc.go for the package's
+// design.
 
 package app
 

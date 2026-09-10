@@ -1,13 +1,14 @@
 // Package app is the reference app's assembly library: the composition and
 // host wiring the application runs on. Everything importable lives here --
 // BuildServer and its route handlers, ServerConfig and ConfigFromEnv's
-// loader-driven bootstrap (bootstrap.go), the demo identity layer (demo
-// subject resolvers,
-// demo account/membership/grant seeding), the host-side route guards, the
+// loader-driven bootstrap (bootstrap.go), the host-side route guards, the
 // self-service provisioner, the path constants and write-error helpers the
-// HTTP surfaces share -- while cmd/server's main.go keeps only the process
-// glue a process needs: signal handling, http.Server start/stop, the
-// healthcheck re-invocation and observabilityOptions.
+// HTTP surfaces share, and the development key defaults (devkeys.go) --
+// while the demonstration layer (the fixed demo identities, the route
+// authorization table and the boot-time demo seeds) lives in the
+// internal/app/demo package beside it, and cmd/server's main.go keeps only
+// the process glue a process needs: signal handling, http.Server
+// start/stop, the healthcheck re-invocation and observabilityOptions.
 //
 // # Why the package exists
 //
