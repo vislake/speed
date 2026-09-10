@@ -244,9 +244,9 @@ tenantless calls explicitly.
 - Runnable documentation (`example_test.go`): `Example_generateImage` walks
   the whole async pipeline this section describes -- a real
   `jobs.StandaloneQueue`, a real `storage.ObjectService` (both required by
-  `WithImageGeneration`), `Gateway.GenerateImage`, draining
-  `reg.Jobs.Handlers()` onto the queue exactly as `examples/reference-app`'s
-  own `internal/app/server.go` does, and polling the enqueued job to
+  `WithImageGeneration`), `Gateway.GenerateImage`, wiring the queue to
+  `reg.Jobs` through `jobs.Wire` exactly as `examples/reference-app`'s own
+  `internal/app/server.go` does, and polling the enqueued job to
   completion against a fake OpenAI-compatible images endpoint -- alongside
   the chat-only `Example`; a new public API ships with a compilable godoc
   `Example`.

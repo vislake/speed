@@ -252,21 +252,14 @@ func Example_generateImage() {
 		return
 	}
 
-	// Drain every job handler Bootstrap's Register calls declared (the
-	// image-generate handler this module claims, plus storage's own
-	// thumbnail-derive and expiry-sweep handlers) onto the queue and start
-	// it -- the identical pattern examples/reference-app/internal/app/server.go's
-	// own wiring uses.
-	for jobType, handler := range reg.Jobs.Handlers() {
-		jobsHandler, ok := handler.(jobs.Handler)
-		if !ok {
-			fmt.Println("job handler is not a jobs.Handler:", jobType)
-			return
-		}
-		if err = queue.RegisterHandler(jobsHandler); err != nil {
-			fmt.Println("register handler:", err)
-			return
-		}
+	// Wire the queue to every job handler Bootstrap's Register calls
+	// declared (the image-generate handler this module claims, plus
+	// storage's own thumbnail-derive and expiry-sweep handlers) and start
+	// it -- the identical call examples/reference-app/internal/app/server.go's
+	// own wiring makes.
+	if err = jobs.Wire(ctx, queue, reg.Jobs); err != nil {
+		fmt.Println("wire queue:", err)
+		return
 	}
 	if err = queue.Start(ctx); err != nil {
 		fmt.Println("start queue:", err)
