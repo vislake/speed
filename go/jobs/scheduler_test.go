@@ -443,8 +443,9 @@ func TestScheduler_Lifecycle(t *testing.T) {
 	if err := s.Start(context.Background()); err == nil {
 		t.Fatal("Start after Stop = nil, want a refusal: the lifecycle is one Start and one Stop")
 	}
-	if err := s.Start(nil); err == nil {
-		t.Fatal("Start(nil) = nil, want a refusal")
+	var nilCtx context.Context
+	if err := s.Start(nilCtx); err == nil {
+		t.Fatal("Start with a nil context = nil, want a refusal")
 	}
 }
 

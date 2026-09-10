@@ -359,7 +359,7 @@ func ExampleScheduler() {
 	// scheduler over the seat runs exactly this declaration.
 	sweeps := &exampleSweepRuns{ran: make(chan string, 1)}
 	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
+	if err = reg.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
 		fmt.Println("declare handler:", err)
 		return
 	}

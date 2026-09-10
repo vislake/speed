@@ -46,7 +46,7 @@ type TenantLister interface {
 	ListTenants(ctx context.Context) ([]pkgcore.TenantID, error)
 }
 
-// SchedulerOptions configure a Scheduler before it starts.
+// SchedulerOption configures a Scheduler before it starts.
 type SchedulerOption func(*Scheduler)
 
 // WithSchedules wires the seat the Scheduler reads its declarations from --
