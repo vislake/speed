@@ -414,3 +414,266 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 		t.Fatalf("sibling B after the refused attempts = %+v, want its name unchanged", stillB)
 	}
 }
+
+// TestOrgRouteGuards_SubtreeGrant_MovesWithinItsSubtreeOnly proves the
+// node-scope gate's move handling: OrgMoveNode names TWO nodes at once --
+// the node being moved (the path parameter) and the parent it moves INTO
+// (the body's parentId), and enforceOrgNodeScope must hold BOTH inside a
+// subtree-scoped grant. Allowing only the source would let the holder move
+// a node they do not own into a subtree they do not own either; allowing
+// only the destination would let them move a node they DO own out into
+// unmanaged territory. Only a subtree-scoped subject reaches this branch
+// at all -- a tenant-wide grant answers enforceOrgNodeScope before any
+// target is computed (see that function's own doc comment).
+func TestOrgRouteGuards_SubtreeGrant_MovesWithinItsSubtreeOnly(t *testing.T) {
+	cfg := testConfig(t)
+	var rbacService *rbac.Service
+	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
+
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("BuildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	if rbacService == nil {
+		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
+	}
+
+	const tenant = pkgcore.TenantID("tenant-acme")
+	token := registerAndAuthenticate(t, srv, cfg, tenant, "subtree-move-owner")
+
+	// root -> {A -> {A1, A2}, B}, as demo-owner (tenant-wide, seeded at boot).
+	var root, nodeA, nodeB, nodeA1, nodeA2 orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Move Root", "kind": "group"}, &root)
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Move A", "kind": "store", "parentId": root.ID}, &nodeA)
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Move B", "kind": "store", "parentId": root.ID}, &nodeB)
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Move A1", "kind": "store", "parentId": nodeA.ID}, &nodeA1)
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Move A2", "kind": "team", "parentId": nodeA.ID}, &nodeA2)
+	if root.ID == "" || nodeA.ID == "" || nodeB.ID == "" || nodeA1.ID == "" || nodeA2.ID == "" {
+		t.Fatalf("built tree = root %+v, A %+v, B %+v, A1 %+v, A2 %+v, want five non-empty ids",
+			root, nodeA, nodeB, nodeA1, nodeA2)
+	}
+
+	// The same narrowly-scoped grant the sibling test defines: every org
+	// permission, assigned to a fresh identity scoped to node A alone.
+	const moverRoleKey = "org-subtree-mover"
+	const moverUserID = "demo-org-subtree-mover"
+	tenantCtx := pkgcore.WithTenant(context.Background(), tenant)
+	if _, defErr := rbacService.DefineRole(tenantCtx, rbac.RoleDefinition{
+		Key:            moverRoleKey,
+		DescriptionKey: "rbac.role.member",
+		Permissions: []string{
+			org.PermissionRead, org.PermissionManage,
+			org.PermissionInviteMember, org.PermissionRemoveMember,
+		},
+	}); defErr != nil {
+		t.Fatalf("DefineRole(%q): %v", moverRoleKey, defErr)
+	}
+	sub := rbac.Subject{TenantID: tenant, UserID: moverUserID}
+	if assignErr := rbacService.AssignRole(tenantCtx, sub, moverRoleKey, rbac.Scope{NodeID: nodeA.ID}); assignErr != nil {
+		t.Fatalf("AssignRole(%q, node %q): %v", moverRoleKey, nodeA.ID, assignErr)
+	}
+
+	// IN scope: moving A2 under its sibling A1 -- both ends inside A's
+	// subtree -- succeeds, and the response proves the move landed.
+	var moved orgNode
+	orgRequestAs(t, srv, http.MethodPost, "/api/v1/org/nodes/"+nodeA2.ID+"/move", token, moverUserID,
+		map[string]string{"parentId": nodeA1.ID}, &moved)
+	if moved.ParentID != nodeA1.ID {
+		t.Fatalf("moved A2 = %+v, want parentId %q", moved, nodeA1.ID)
+	}
+
+	// OUT of scope: moving A1 INTO the sibling subtree B is refused -- the
+	// destination is outside the grant even though the source is inside it.
+	status, body := orgRequestStatus(t, srv, http.MethodPost, "/api/v1/org/nodes/"+nodeA1.ID+"/move", token, moverUserID,
+		map[string]string{"parentId": nodeB.ID})
+	if status != http.StatusForbidden {
+		t.Fatalf("move A1 into sibling B as subtree admin: status = %d, want %d (body = %+v)", status, http.StatusForbidden, body)
+	}
+	if body.Code != rbac.ErrPermissionDenied.Code {
+		t.Fatalf("move A1 into sibling B as subtree admin: code = %q, want %q", body.Code, rbac.ErrPermissionDenied.Code)
+	}
+
+	// OUT of scope: moving the sibling B INTO A's subtree is refused too --
+	// the source is outside the grant even though the destination is inside.
+	status, body = orgRequestStatus(t, srv, http.MethodPost, "/api/v1/org/nodes/"+nodeB.ID+"/move", token, moverUserID,
+		map[string]string{"parentId": nodeA1.ID})
+	if status != http.StatusForbidden {
+		t.Fatalf("move sibling B into A as subtree admin: status = %d, want %d (body = %+v)", status, http.StatusForbidden, body)
+	}
+	if body.Code != rbac.ErrPermissionDenied.Code {
+		t.Fatalf("move sibling B into A as subtree admin: code = %q, want %q", body.Code, rbac.ErrPermissionDenied.Code)
+	}
+
+	// Neither refused move took effect: A1 and B still hang where they did.
+	var fetchedA1, fetchedB orgNode
+	orgRequest(t, srv, http.MethodGet, "/api/v1/org/nodes/"+nodeA1.ID, token, "", nil, &fetchedA1)
+	orgRequest(t, srv, http.MethodGet, "/api/v1/org/nodes/"+nodeB.ID, token, "", nil, &fetchedB)
+	if fetchedA1.ParentID != nodeA.ID {
+		t.Fatalf("A1 after the refused moves = %+v, want parentId %q", fetchedA1, nodeA.ID)
+	}
+	if fetchedB.ParentID != root.ID {
+		t.Fatalf("B after the refused moves = %+v, want parentId %q", fetchedB, root.ID)
+	}
+}
+
+// TestOrgRouteGuards_SubtreeGrant_InvitesAndRemovesItsOwnSubtreeMember
+// proves the gate's other two body/identity-shaped targets hold the same
+// subtree line: OrgCreateInvitation names its target node in the REQUEST
+// BODY (nodeId), and OrgRemoveMember names a USER in the path, whose node
+// enforceOrgNodeScope resolves through org's MemberService to the
+// membership the user actually holds. A grant scoped to node A must be
+// able to invite into A, must be refused when it names a node outside A,
+// must be able to remove a member bound to A, and must never be answered a
+// scope refusal invented for a user who has no membership at all -- that
+// latter case is the handler's own not-found to answer (see
+// enforceOrgNodeScope's own doc comment).
+func TestOrgRouteGuards_SubtreeGrant_InvitesAndRemovesItsOwnSubtreeMember(t *testing.T) {
+	cfg := testConfig(t)
+	mailer := &capturingMailer{}
+	cfg.Mailer = mailer
+	var rbacService *rbac.Service
+	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
+
+	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("BuildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	if rbacService == nil {
+		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
+	}
+
+	const tenant = pkgcore.TenantID("tenant-acme")
+	token := registerAndAuthenticate(t, srv, cfg, tenant, "subtree-invite-owner")
+
+	// root -> {A, B}, as demo-owner (tenant-wide, seeded at boot).
+	var root, nodeA, nodeB orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Invite Root", "kind": "group"}, &root)
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Invite A", "kind": "store", "parentId": root.ID}, &nodeA)
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Invite B", "kind": "store", "parentId": root.ID}, &nodeB)
+	if root.ID == "" || nodeA.ID == "" || nodeB.ID == "" {
+		t.Fatalf("built tree = root %+v, A %+v, B %+v, want three non-empty ids", root, nodeA, nodeB)
+	}
+
+	const inviterRoleKey = "org-subtree-inviter"
+	const inviterUserID = "demo-org-subtree-inviter"
+	tenantCtx := pkgcore.WithTenant(context.Background(), tenant)
+	if _, defErr := rbacService.DefineRole(tenantCtx, rbac.RoleDefinition{
+		Key:            inviterRoleKey,
+		DescriptionKey: "rbac.role.member",
+		Permissions: []string{
+			org.PermissionRead, org.PermissionManage,
+			org.PermissionInviteMember, org.PermissionRemoveMember,
+		},
+	}); defErr != nil {
+		t.Fatalf("DefineRole(%q): %v", inviterRoleKey, defErr)
+	}
+	sub := rbac.Subject{TenantID: tenant, UserID: inviterUserID}
+	if assignErr := rbacService.AssignRole(tenantCtx, sub, inviterRoleKey, rbac.Scope{NodeID: nodeA.ID}); assignErr != nil {
+		t.Fatalf("AssignRole(%q, node %q): %v", inviterRoleKey, nodeA.ID, assignErr)
+	}
+
+	// OUT of scope: inviting into the sibling subtree B is refused.
+	const inviteeEmail = "subtree-invitee@example.com"
+	status, body := orgRequestStatus(t, srv, http.MethodPost, "/api/v1/org/invitations", token, inviterUserID,
+		map[string]string{"email": inviteeEmail, "nodeId": nodeB.ID})
+	if status != http.StatusForbidden {
+		t.Fatalf("invite into sibling B as subtree admin: status = %d, want %d (body = %+v)", status, http.StatusForbidden, body)
+	}
+	if body.Code != rbac.ErrPermissionDenied.Code {
+		t.Fatalf("invite into sibling B as subtree admin: code = %q, want %q", body.Code, rbac.ErrPermissionDenied.Code)
+	}
+
+	// IN scope: the same invitation naming A succeeds, and the invitee
+	// accepts it through org's real accept route -- the token recovered
+	// from the mail org sent, exactly as org_flow_test.go's own invitation
+	// journey does.
+	var invitation struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		NodeID string `json:"nodeId"`
+	}
+	orgRequestAs(t, srv, http.MethodPost, "/api/v1/org/invitations", token, inviterUserID,
+		map[string]string{"email": inviteeEmail, "nodeId": nodeA.ID}, &invitation)
+	if invitation.Status != "pending" || invitation.NodeID != nodeA.ID {
+		t.Fatalf("invitation = %+v, want status \"pending\" on node %q", invitation, nodeA.ID)
+	}
+
+	inviteeUserID := registerFreshAccount(t, srv, inviteeEmail, testPassword)
+	acceptToken := tokenFromMail(t, mailer.last(t))
+	var membership orgMembership
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", "", inviteeUserID,
+		map[string]string{"token": acceptToken}, &membership)
+	if membership.UserID != inviteeUserID || membership.NodeID != nodeA.ID {
+		t.Fatalf("membership after accept = %+v, want userId %q bound to node %q", membership, inviteeUserID, nodeA.ID)
+	}
+
+	// A second member bound to A, so the removal below is not org's own
+	// last-active-member refusal (ErrMemberNotRemovable): the demo
+	// identities hold rbac grants but no membership rows, so the accepted
+	// invitee would otherwise be the tenant's only active member.
+	const secondInviteeEmail = "subtree-invitee-two@example.com"
+	var secondInvitation struct {
+		Status string `json:"status"`
+		NodeID string `json:"nodeId"`
+	}
+	orgRequestAs(t, srv, http.MethodPost, "/api/v1/org/invitations", token, inviterUserID,
+		map[string]string{"email": secondInviteeEmail, "nodeId": nodeA.ID}, &secondInvitation)
+	if secondInvitation.Status != "pending" || secondInvitation.NodeID != nodeA.ID {
+		t.Fatalf("second invitation = %+v, want status \"pending\" on node %q", secondInvitation, nodeA.ID)
+	}
+	secondInviteeUserID := registerFreshAccount(t, srv, secondInviteeEmail, testPassword)
+	secondAcceptToken := tokenFromMail(t, mailer.last(t))
+	var secondMembership orgMembership
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", "", secondInviteeUserID,
+		map[string]string{"token": secondAcceptToken}, &secondMembership)
+	if secondMembership.UserID != secondInviteeUserID || secondMembership.NodeID != nodeA.ID {
+		t.Fatalf("second membership after accept = %+v, want userId %q bound to node %q", secondMembership, secondInviteeUserID, nodeA.ID)
+	}
+
+	// An unknown user carries no membership to resolve, so the gate lets
+	// the request through to org's own lookup, which answers its own
+	// not-found -- deliberately NOT a 403 manufactured for a user who may
+	// not exist (see enforceOrgNodeScope's own doc comment).
+	status, body = orgRequestStatus(t, srv, http.MethodDelete, "/api/v1/org/members/never-a-member", token, inviterUserID, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("remove an unknown member as subtree admin: status = %d, want %d (body = %+v)", status, http.StatusNotFound, body)
+	}
+	if body.Code != org.ErrMembershipNotFound.Code {
+		t.Fatalf("remove an unknown member as subtree admin: code = %q, want %q", body.Code, org.ErrMembershipNotFound.Code)
+	}
+
+	// IN scope: removing the member bound to A succeeds, and a second
+	// attempt proves the first one actually landed.
+	orgRequestAs(t, srv, http.MethodDelete, "/api/v1/org/members/"+inviteeUserID, token, inviterUserID, nil, nil)
+	status, body = orgRequestStatus(t, srv, http.MethodDelete, "/api/v1/org/members/"+inviteeUserID, token, inviterUserID, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("remove the same member twice as subtree admin: second status = %d, want %d (body = %+v)", status, http.StatusNotFound, body)
+	}
+	if body.Code != org.ErrMembershipNotFound.Code {
+		t.Fatalf("remove the same member twice as subtree admin: second code = %q, want %q", body.Code, org.ErrMembershipNotFound.Code)
+	}
+}

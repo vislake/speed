@@ -203,6 +203,76 @@ func TestConsultSuggest_UnknownNoteID_Refused(t *testing.T) {
 	}
 }
 
+// TestConsultSuggest_MalformedBody_Refused proves a body the route cannot
+// decode as JSON is refused with consult.invalid_request_body before any
+// note lookup or vendor call happens: a body that cannot name a note must
+// answer the caller's own bad request, never a suggestion manufactured
+// from an empty prompt and never a 500.
+func TestConsultSuggest_MalformedBody_Refused(t *testing.T) {
+	aiServer := newFakeOpenAICompatibleServer(t, "unused")
+	srv, cfg := buildConsultTestServer(t, aiServer)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-malformed")
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+app.ConsultSuggestPath, bytes.NewReader([]byte("not json")))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", app.ConsultSuggestPath, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST %s with a malformed body status = %d, want %d", app.ConsultSuggestPath, resp.StatusCode, http.StatusBadRequest)
+	}
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Code != "consult.invalid_request_body" {
+		t.Fatalf("malformed-body code = %q, want %q", envelope.Code, "consult.invalid_request_body")
+	}
+	if aiServer.lastReqBody != nil {
+		t.Fatal("the fake OpenAI-compatible server received a request for a malformed body, want none")
+	}
+}
+
+// TestConsultSuggest_EmptyNoteID_Refused proves a well-formed body that
+// names no note ({"note_id": ""}) is refused with consult.note_id_required
+// rather than falling through to the service with an empty id.
+func TestConsultSuggest_EmptyNoteID_Refused(t *testing.T) {
+	aiServer := newFakeOpenAICompatibleServer(t, "unused")
+	srv, cfg := buildConsultTestServer(t, aiServer)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-empty")
+
+	resp := consultSuggestRequest(t, srv, token, "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST %s with an empty note_id status = %d, want %d", app.ConsultSuggestPath, resp.StatusCode, http.StatusBadRequest)
+	}
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Code != "consult.note_id_required" {
+		t.Fatalf("empty-note_id code = %q, want %q", envelope.Code, "consult.note_id_required")
+	}
+	if aiServer.lastReqBody != nil {
+		t.Fatal("the fake OpenAI-compatible server received a request for an empty note id, want none")
+	}
+}
+
 // TestConsultSuggest_NoteFromAnotherTenant_Refused proves a note created
 // under one tenant cannot be summarized through a different tenant's token
 // -- the same isolation notes' own HTTP surface (GET /api/v1/notes)
