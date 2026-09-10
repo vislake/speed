@@ -51,6 +51,7 @@
 | [19 开发工作流](19-dev-workflow.md) | 本地环境、分支与提交规范、PR checklist |
 | [20 质量与安全工程](20-quality-and-security.md) | 测试分层、质量门槛、供应链与安全测试 |
 | [25 测试布局迁移](25-test-layout-migration.md) | 非单元测试类入专有目录的迁移:cmd/server 流测试导出面侦察与逐文件分档 |
+| [26 bootstrap 键声明与参考应用 loader 迁移](26-bootstrap-keys-loader-migration.md) | 模块级 bootstrap 键声明席位、loader 前缀选项与 env 钉、启动/运行时双层边界、reference-app 迁移与两阶段落地 |
 | [16 验证方式](16-verification.md) | 各能力的验收标准与 CI 强制项 |
 | [17 风险登记](17-risks.md) | 已识别风险与缓解措施 |
 
