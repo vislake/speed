@@ -6,6 +6,12 @@
 # the package doc in fs.go). File contract: every entry is one flat
 # top-level message, the id is the whole quoted key prefixed with the module
 # name ("pkgcore."), and zh-CN.toml must carry exactly the same id set.
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 
 "pkgcore.seed.plain" = "A single-form seed message rendered by pkgcore's message catalog."
 

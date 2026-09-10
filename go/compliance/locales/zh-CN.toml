@@ -2,6 +2,10 @@
 #
 # 每条 go/compliance/errors.go 声明的错误码对应一条扁平的顶层条目,id 就是带引号的
 # 完整错误码。en-US.toml 必须携带完全相同的 id 集合。
+#
+# 与 apperr.Error.Code 对应的 id 同时是前端平台错误文案包的来源：该包由
+# tools/gen_platform_error_bundle.py 从各模块文案目录生成，客户端按错误码
+# 渲染的就是下面这段文案；没有对应错误码的 id 属于纯后端内容，不会进入该文案包。
 
 "compliance.queue_required" = "compliance 模块注册前必须先接入任务队列(WithQueue)。"
 

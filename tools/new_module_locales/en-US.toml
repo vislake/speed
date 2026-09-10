@@ -9,6 +9,12 @@
 # File contract (see go/pkgcore/i18n): every entry is one flat top-level
 # message -- no [errors]-style grouping sections -- and zh-CN.toml must
 # carry exactly the same id set.
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 
 "__NAME__.name_required" = "The name must not be empty."
 "__NAME__.name_too_long" = "The name must not exceed 200 characters."

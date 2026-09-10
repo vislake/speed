@@ -11,6 +11,12 @@
 # message -- no [errors]-style grouping sections, which go-i18n would fold
 # into the message ids -- and zh-CN.toml must carry exactly the same id set.
 # Builder.AddModule fails the bootstrap if the two sets differ.
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 
 "authn.invalid_credentials" = "The sign-in details are incorrect."
 "authn.identifier_required" = "Enter an email address or a phone number."

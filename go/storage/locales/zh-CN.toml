@@ -6,6 +6,10 @@
 # 插值名直接使用错误自身的 apperr 参数键,原样保留 snake_case
 # (是 "max_bytes" 而不是 "MaxBytes"):消息由 API 返回的结构化参数渲染,
 # 两边对不上就会渲染出一个空位而不是真实值。
+#
+# 与 apperr.Error.Code 对应的 id 同时是前端平台错误文案包的来源：该包由
+# tools/gen_platform_error_bundle.py 从各模块文案目录生成，客户端按错误码
+# 渲染的就是下面这段文案；没有对应错误码的 id 属于纯后端内容，不会进入该文案包。
 
 "storage.object_not_found" = "该文件不存在。"
 

@@ -27,6 +27,12 @@
 # File contract (see go/pkgcore/i18n): every message is one flat top-level
 # entry -- no grouped sections -- and zh-CN.toml and en-US.toml must carry
 # identical id sets.
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 
 "demo.patient_reminder.email.subject" = "Your check-up reminder"
 "demo.patient_reminder.email.body_text" = "This is Smile Studio's reminder that your smile check-up appointment is coming up. If the time no longer suits you, simply reply to this email to reschedule."

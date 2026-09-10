@@ -3,6 +3,12 @@
 # One flat top-level entry per error code go/compliance/errors.go
 # declares; the id is the whole quoted code. zh-CN.toml must carry exactly
 # the same id set.
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 
 "compliance.queue_required" = "A jobs queue must be wired (WithQueue) before the compliance module can register."
 

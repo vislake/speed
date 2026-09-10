@@ -7,6 +7,12 @@
 # ("admin.impersonation_started.<channel>.<part>", per
 # docs/internal/07-platform-services.md's id convention) plus its
 # directory description ("admin.impersonation_started.description").
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 "admin.tenant_not_found" = "No tenant ledger entry was found for this tenant id."
 "admin.tenant_already_exists" = "A tenant ledger entry already exists for this tenant id."
 "admin.tenant_id_required" = "A tenant id is required."

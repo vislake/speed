@@ -8,6 +8,12 @@
 # snake_case: the message is rendered from the structured parameters the API
 # returned, so a mismatch between the two would render an empty slot rather
 # than a value.
+#
+# The ids matching an apperr.Error.Code also feed the frontend's
+# platform error-copy bundle (tools/gen_platform_error_bundle.py
+# derives it from the module catalogs), so the text below is what a
+# client renders for that code; an id with no code behind it is
+# backend-only content and never enters that bundle.
 
 "integration.key_not_found" = "That API key does not exist."
 

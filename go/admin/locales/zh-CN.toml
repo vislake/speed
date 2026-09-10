@@ -6,6 +6,10 @@
 # （"admin.impersonation_started.<channel>.<part>"，遵循
 # docs/internal/07-platform-services.md 的 id 约定）及其目录描述
 # （"admin.impersonation_started.description"）。
+#
+# 与 apperr.Error.Code 对应的 id 同时是前端平台错误文案包的来源：该包由
+# tools/gen_platform_error_bundle.py 从各模块文案目录生成，客户端按错误码
+# 渲染的就是下面这段文案；没有对应错误码的 id 属于纯后端内容，不会进入该文案包。
 "admin.tenant_not_found" = "未找到该租户的台账记录。"
 "admin.tenant_already_exists" = "该租户已存在台账记录。"
 "admin.tenant_id_required" = "必须提供租户 ID。"
