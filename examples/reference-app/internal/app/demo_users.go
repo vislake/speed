@@ -16,35 +16,6 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 )
 
-// demoUsersPasswordEnv gates the boot-time demo-user seed. Unset -- the
-// default `go run ./cmd/server` ships with -- means no demo accounts are
-// registered and DemoUserHeader remains the only way to act as a demo
-// user. Setting it to a passphrase
-// registers the three demo accounts below on every boot, so a browser
-// visitor can sign in as any of them with a real account, a real
-// membership and a real rbac grant -- no header involved.
-//
-// The passphrase is not secret in the same sense as the config keys are,
-// but it is also not a hardcoded default: it exists to gate a DEMO
-// affordance behind an operator's deliberate choice, and the constant
-// shape (APP_*_PASSWORD) mirrors the config-key pair ConfigFromEnv
-// reads for the same reason -- an env var is visible, auditable and
-// per-deployment in a way a compiled-in default is not.
-//
-// This variable seeds EXACTLY the three accounts below, and nothing else:
-// the demo platform-staff account (demo_admin.go's
-// DemoPlatformStaffEmail, the rbac.SystemDomain platform administrator)
-// deliberately has its own APP_DEMO_PLATFORM_STAFF_PASSWORD variable and
-// is never seeded from this one -- see that constant's own doc comment for
-// why the two credential sources must stay apart.
-//
-// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
-// value: gosec's hardcoded-credential heuristic matches on the substring
-// "Password" in the identifier alone, the same false positive go/authn's
-// and go/sharing's own identically-shaped name constants are already
-// excepted from elsewhere in this codebase.
-const demoUsersPasswordEnv = "APP_DEMO_USERS_PASSWORD"
-
 // The three demo accounts seedDemoUsers registers when
 // APP_DEMO_USERS_PASSWORD is set. Each is the real-account twin of the
 // demo_subject.go actor id its grant model mirrors: demo-owner /

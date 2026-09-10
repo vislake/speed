@@ -80,14 +80,6 @@ import (
 	"strings"
 )
 
-// webDistEnv names the environment variable holding the path of the
-// directory this server serves the built frontend from (see this file's
-// package doc comment for the full serving design). Empty -- the default,
-// and what every caller of BuildServer without a frontend gets --
-// leaves the composed API handler serving no static files: no
-// interception, no extra wrapping.
-const webDistEnv = "APP_WEB_DIST"
-
 // indexFile is the SPA fallback target and the answer for "/" itself.
 // Hash-routed deep links never reach the server with a distinct path
 // (their route lives after the "#"), but the app's social-binding callback

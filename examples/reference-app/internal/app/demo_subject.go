@@ -60,7 +60,8 @@ import (
 // merely holds a low-privilege session can set this header to a
 // higher-privileged demo actor's id and the resolver hands rbac that
 // actor's Subject instead of the caller's own, no token forgery required.
-// disableDemoUserHeaderEnv (server.go) is the escape hatch -- an operator
+// the DisableDemoUserHeader bootstrap field (bootstrap.go) is the escape
+// hatch -- an operator
 // who deploys this reference app somewhere a real user might reach sets
 // APP_DISABLE_DEMO_USER_HEADER and every demo identity source is disabled
 // at once: DemoSubjectResolverFor makes every gated route resolve from the
@@ -1336,8 +1337,8 @@ func SplitDemoPermission(permission string) (resource, action string, ok bool) {
 // goes away together with the header itself (see DemoUserHeader).
 //
 // DemoUserHeader's own doc comment names the real kill switch for
-// exactly that precedence problem (disableDemoUserHeaderEnv,
-// APP_DISABLE_DEMO_USER_HEADER): this function keeps the unconditional
+// exactly that precedence problem (the DisableDemoUserHeader bootstrap
+// field, APP_DISABLE_DEMO_USER_HEADER): this function keeps the unconditional
 // header-first behavior -- cmd/server/demo_subject_test.go pins it -- while
 // production wiring goes through DemoSubjectResolverFor below, which is
 // what actually honors the switch.
@@ -1389,8 +1390,9 @@ func DemoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, boo
 // DemoSubjectResolverFor returns the rbac.SubjectResolver production wiring
 // (guardIntegrationRoute, guardOrgRoute, GuardModuleRoute's default branch)
 // plugs into rbac.WithSubjectResolver, chosen by headerDisabled -- the value
-// BuildServer threads from cfg.DisableDemoUserHeader, itself read from
-// disableDemoUserHeaderEnv (APP_DISABLE_DEMO_USER_HEADER, server.go).
+// BuildServer threads from cfg.DisableDemoUserHeader, itself resolved from
+// APP_DISABLE_DEMO_USER_HEADER (the DisableDemoUserHeader bootstrap field,
+// bootstrap.go).
 //
 // headerDisabled=false (the default) returns DemoSubjectResolver itself,
 // so every demo journey and test that depends on the header winning keeps

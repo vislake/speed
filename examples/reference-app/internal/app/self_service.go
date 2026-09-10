@@ -151,8 +151,8 @@ import (
 // (self-service-signup.spec.ts) never sees that window, because it signs
 // in after a registration whose synchronous attempt succeeded; a recovery
 // gate drives it on purpose through the env switch
-// (APP_FAIL_SELF_SERVICE_PROVISION=1, failSelfServiceProvisionEnv's doc
-// comment) -- register, retry convergence, one sign-in.
+// (APP_FAIL_SELF_SERVICE_PROVISION=1, the FailSelfServiceProvision bootstrap
+// field's doc comment) -- register, retry convergence, one sign-in.
 //
 // No host-side ledger stands behind any of this. A completed clinic is
 // the rows a previous boot left in the database -- the clinic's org
@@ -241,8 +241,8 @@ type SelfServiceProvisioner struct {
 }
 
 // newProvisionFailureInjector returns the failProvision hook ConfigFromEnv
-// arms from APP_FAIL_SELF_SERVICE_PROVISION's count (see
-// failSelfServiceProvisionEnv's doc comment in server.go): the first
+// arms from APP_FAIL_SELF_SERVICE_PROVISION's count (see the
+// FailSelfServiceProvision bootstrap field's doc comment): the first
 // count provisioning attempts OF EACH ACCOUNT fail -- counted per user
 // id, the hook's own argument, across the synchronous attempt and the
 // retry job's attempts alike, since every attempt consults the hook at

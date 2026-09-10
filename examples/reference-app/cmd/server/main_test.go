@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	obs "github.com/vislake/speed/go/observability"
 )
@@ -77,9 +78,10 @@ func TestRunHealthcheck_NothingListening_Fails(t *testing.T) {
 
 // TestRunHealthcheck_EmptyPort_UsesDefaultPort proves the empty-port
 // fallback runHealthcheck's own doc comment describes: an empty port
-// argument (the shape os.Getenv("PORT") returns when PORT is unset, exactly
-// ConfigFromEnv's own default-handling for the running server) falls back
-// to DefaultPort rather than probing an empty or malformed address.
+// argument (the shape an explicitly emptied PORT variable resolves to,
+// exactly ConfigFromEnv's own default-handling for the running server)
+// falls back to DefaultPort rather than probing an empty or malformed
+// address.
 func TestRunHealthcheck_EmptyPort_UsesDefaultPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:"+app.DefaultPort)
 	if err != nil {
@@ -106,8 +108,8 @@ func TestRunHealthcheck_EmptyPort_UsesDefaultPort(t *testing.T) {
 // unset) yields exactly the service-name option, so applying the returned
 // options to a fresh observability.Config leaves OTLPEndpoint empty --
 // obs.Init then stays on the local exporters, byte-identical to the
-// pre-APP_OTLP_ENDPOINT wiring (see otlpEndpointEnv's own doc comment in
-// internal/app/server.go).
+// pre-APP_OTLP_ENDPOINT wiring (see the OTLPEndpoint bootstrap field's
+// own doc comment in internal/app/bootstrap.go).
 func TestObservabilityOptions_EndpointAbsent_StaysOnLocalExporters(t *testing.T) {
 	opts := observabilityOptions(app.ServerConfig{})
 	var cfg obs.Config
@@ -176,50 +178,14 @@ func startLoopbackServer(t *testing.T, handler http.Handler) string {
 // server answers its own HealthzPath -- the same probe this example's
 // Dockerfile HEALTHCHECK runs -- and a cancelled base context takes it
 // down through the graceful-shutdown path, run returning nil. Every
-// configuration variable ConfigFromEnv reads is explicitly cleared (the
+// configuration variable the bootstrap reads is explicitly cleared (the
 // same discipline TestConfigFromEnv_Defaults documents), so the boot's
 // outcome never depends on the ambient environment; PORT and APP_DB_PATH
 // are then pinned to a free port and a fresh per-test database file, so
 // the boot cannot collide with a real developer database or a parallel
 // listener.
 func TestRun_BootsServesHealthzAndShutsDownCleanly(t *testing.T) {
-	for _, key := range []string{
-		"APP_DEPLOYMENT_MODE",
-		"APP_REDIS_ADDR",
-		"APP_OTLP_ENDPOINT",
-		"APP_DEMO_USERS_PASSWORD",
-		"APP_DEMO_PLATFORM_STAFF_PASSWORD",
-		"APP_OBJECT_STORE_ROOT",
-		"APP_DISABLE_DEMO_USER_HEADER",
-		"APP_DISABLE_QUEUE_WORKER",
-		"APP_TRUSTED_PROXIES",
-		"APP_READ_FLY_CLIENT_IP",
-		"APP_FAIL_SELF_SERVICE_PROVISION",
-		"APP_PUBLIC_ORIGIN",
-		"APP_WEB_DIST",
-		"APP_AI_GATEWAY_IMAGE_BASE_URL",
-		"APP_AI_GATEWAY_IMAGE_API_KEY",
-		"APP_ROOT_KEY",
-		"APP_CONFIG_KEY",
-		"APP_ORG_INDEX_KEY",
-		"APP_NOTIFICATION_INDEX_KEY",
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY",
-		"APP_AUTHN_BLIND_INDEX_KEY",
-		"APP_AUTHN_PII_CIPHER_KEY",
-		"APP_S3_ENDPOINT",
-		"APP_S3_BUCKET",
-		"APP_S3_ACCESS_KEY",
-		"APP_S3_SECRET_KEY",
-		"APP_S3_REGION",
-		"APP_S3_USE_SSL",
-		"APP_SMTP_HOST",
-		"APP_SMTP_PORT",
-		"APP_SMTP_USERNAME",
-		"APP_SMTP_PASSWORD",
-		"APP_SMS_GATEWAY_URL",
-	} {
-		t.Setenv(key, "")
-	}
+	testutil.ClearBootstrapEnv(t)
 
 	port := freeTCPPort(t)
 	t.Setenv("PORT", port)
@@ -270,20 +236,7 @@ func TestRun_BootsServesHealthzAndShutsDownCleanly(t *testing.T) {
 // process-lifecycle failure shape an operator sees when two instances
 // race for one port, distinct from a clean shutdown.
 func TestRun_PortAlreadyTaken_ReturnsTheServeError(t *testing.T) {
-	for _, key := range []string{
-		"APP_DEPLOYMENT_MODE", "PORT", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
-		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
-		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
-		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
-		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
-		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
-		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
-		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
-		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
-	} {
-		t.Setenv(key, "")
-	}
+	testutil.ClearBootstrapEnv(t)
 
 	// Hold the port on the wildcard address -- the exact address the boot's
 	// own ":port" listener binds -- so the second bind is genuinely

@@ -262,9 +262,9 @@ const CreditsPerSimulation int64 = 10
 // #nosec G101 -- this is a ledger annotation string, not a credential:
 // gosec's hardcoded-credential heuristic matches on the "cred" substring
 // inside "creditReasonSimulate" alone, the same class of false positive
-// internal/app/demo_users.go's own demoUsersPasswordEnv constant already
-// documents (there, the "Password" substring) for a differently-shaped
-// identifier.
+// the DemoUsersPassword bootstrap field's own #nosec comment
+// (internal/app/bootstrap.go) already documents (there, the "Password"
+// substring) for a differently-shaped identifier.
 const creditReasonSimulate = "smilesim:simulate"
 
 // EventSimulationCompleted is the domain event type Service publishes

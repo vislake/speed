@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -22,28 +23,18 @@ import (
 
 // TestConfigFromEnv_Defaults verifies ConfigFromEnv's zero-environment
 // defaults. Every other test in this file drives BuildServer directly
-// through testConfig(t), bypassing ConfigFromEnv (and its os.Getenv reads)
-// entirely, so ConfigFromEnv itself is covered.
+// through testConfig(t), bypassing ConfigFromEnv (and its loader-driven
+// bootstrap) entirely, so ConfigFromEnv itself is covered.
 //
-// Each variable ConfigFromEnv reads is explicitly set to "" via t.Setenv,
-// rather than left untouched, so this test's outcome does not depend on
-// the ambient environment ConfigFromEnv happens to run in -- PORT in
+// testutil.ClearBootstrapEnv clears every variable ConfigFromEnv reads,
+// rather than leaving them untouched, so this test's outcome does not depend
+// on the ambient environment ConfigFromEnv happens to run in -- PORT in
 // particular is commonly preset by hosting platforms, and an ambient value
 // would make this test spuriously fail (or, worse, spuriously pass for the
-// wrong reason) outside a clean shell. t.Setenv also restores the previous
-// value automatically once the test finishes.
+// wrong reason) outside a clean shell. Every cleared variable is restored
+// automatically once the test finishes.
 func TestConfigFromEnv_Defaults(t *testing.T) {
-	t.Setenv("APP_DEPLOYMENT_MODE", "")
-	t.Setenv("PORT", "")
-	t.Setenv("APP_DB_PATH", "")
-	t.Setenv("APP_REDIS_ADDR", "")
-	t.Setenv("APP_OTLP_ENDPOINT", "")
-	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
-	t.Setenv("APP_OBJECT_STORE_ROOT", "")
-	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "")
-	t.Setenv("APP_TRUSTED_PROXIES", "")
-	t.Setenv("APP_READ_FLY_CLIENT_IP", "")
-	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "")
+	testutil.ClearBootstrapEnv(t)
 
 	cfg, err := app.ConfigFromEnv()
 	if err != nil {
@@ -85,8 +76,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 }
 
 // TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics pins
-// APP_FAIL_SELF_SERVICE_PROVISION's parse contract (see
-// failSelfServiceProvisionEnv's own doc comment in internal/app/server.go):
+// APP_FAIL_SELF_SERVICE_PROVISION's parse contract (see the
+// FailSelfServiceProvision bootstrap field's own doc comment in
+// internal/app/bootstrap.go):
 // absent or "0" leaves the
 // self-service provisioning uninjected, a positive integer N arms an
 // injection whose first N provisioning attempts of each account fail and
@@ -239,7 +231,8 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 }
 
 // TestConfigFromEnv_ReadFlyClientIPWithoutTrustedProxies_ReturnsError pins
-// the declaration-pair rule readFlyClientIPEnv's own doc comment states:
+// the declaration-pair rule the ReadFlyClientIP bootstrap field's own doc
+// comment states:
 // reading Fly-Client-IP is authorized only for a deployment whose proxy is
 // declared, so 'true' with an empty APP_TRUSTED_PROXIES refuses boot --
 // the pair would never read the header and would silently keep recording
@@ -276,7 +269,8 @@ func TestConfigFromEnv_ReadFlyClientIPWithoutTrustedProxies_ReturnsError(t *test
 }
 
 // TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError proves the
-// "objectstore"-seam ambiguity rule ObjectStoreRootEnv's own doc comment
+// "objectstore"-seam ambiguity rule the ObjectStoreRoot bootstrap field's own
+// doc comment
 // states: a complete APP_S3_* composition and APP_OBJECT_STORE_ROOT both
 // name a store for the one seam, so ConfigFromEnv refuses the combination
 // loudly -- never by silently preferring one -- while each composition on
@@ -289,19 +283,19 @@ func TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
 
-	t.Setenv(app.S3EndpointEnv, "https://objects.example.test")
-	t.Setenv(app.S3BucketEnv, "bucket")
-	t.Setenv(app.S3AccessKeyEnv, "key")
-	t.Setenv(app.S3SecretKeyEnv, "secret")
+	t.Setenv("APP_S3_ENDPOINT", "https://objects.example.test")
+	t.Setenv("APP_S3_BUCKET", "bucket")
+	t.Setenv("APP_S3_ACCESS_KEY", "key")
+	t.Setenv("APP_S3_SECRET_KEY", "secret")
 
-	t.Setenv(app.ObjectStoreRootEnv, "/var/lib/reference-app/objects")
+	t.Setenv("APP_OBJECT_STORE_ROOT", "/var/lib/reference-app/objects")
 	if _, err := app.ConfigFromEnv(); err == nil {
 		t.Fatal("ConfigFromEnv with both APP_OBJECT_STORE_ROOT and a complete APP_S3_* composition: want error, got nil")
-	} else if !strings.Contains(err.Error(), app.ObjectStoreRootEnv) {
-		t.Fatalf("ConfigFromEnv error = %v, want it to name %s", err, app.ObjectStoreRootEnv)
+	} else if !strings.Contains(err.Error(), "APP_OBJECT_STORE_ROOT") {
+		t.Fatalf("ConfigFromEnv error = %v, want it to name %s", err, "APP_OBJECT_STORE_ROOT")
 	}
 
-	t.Setenv(app.ObjectStoreRootEnv, "")
+	t.Setenv("APP_OBJECT_STORE_ROOT", "")
 	if _, err := app.ConfigFromEnv(); err != nil {
 		t.Fatalf("ConfigFromEnv with the complete S3 composition alone: %v", err)
 	}
@@ -351,13 +345,14 @@ func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
 }
 
 // rootKeyEnvVars lists every environment variable an explicit individual
-// key can be set through, in the same order RootKeyEnv's own doc comment
+// key can be set through, in the same order the RootKey bootstrap field's own
+// doc comment
 // lists the six key materials. The root-key tests below clear all six
 // before setting APP_ROOT_KEY, so every key is proven to resolve through
 // the derivation path with nothing left over from the ambient environment.
 var rootKeyEnvVars = []string{
-	app.ConfigKeyEnv, app.OrgIndexKeyEnv, app.NotificationIndexKeyEnv,
-	app.PkiLocalKeyCipherKeyEnv, app.AuthnBlindIndexKeyEnv, app.AuthnPIICipherKeyEnv,
+	"APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
+	"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
 }
 
 // clearRootKeyOverrides sets every one of rootKeyEnvVars to "" via
@@ -373,7 +368,8 @@ func clearRootKeyOverrides(t *testing.T) {
 
 // TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
 // -- no individual key env var set -- derives every one of the six key
-// materials RootKeyEnv's own doc comment lists, and that ConfigFromEnv's
+// materials the RootKey bootstrap field's own doc comment lists, and that
+// ConfigFromEnv's
 // derivation matches dbkit.DeriveKey called directly with this file's own
 // rootKeyPurpose* constants: not merely "some non-default bytes landed in
 // cfg", but the exact key a caller who knew the root and the purpose
@@ -385,7 +381,7 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 	clearRootKeyOverrides(t)
 
 	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_DerivesAllSixKeys root secret"))
-	t.Setenv(app.RootKeyEnv, hex.EncodeToString(rootKey[:]))
+	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
 
 	cfg, err := app.ConfigFromEnv()
 	if err != nil {
@@ -435,7 +431,8 @@ func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
 }
 
 // TestConfigFromEnv_RootKey_IndividualOverrideWins proves the precedence
-// order RootKeyEnv's own doc comment states: with both APP_ROOT_KEY and
+// order the RootKey bootstrap field's own doc comment states: with both
+// APP_ROOT_KEY and
 // one individual key env var (APP_CONFIG_KEY) set, the explicit
 // individual value wins for that one key, while every other key still
 // resolves through the root-key derivation -- the "power users can still
@@ -447,10 +444,10 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 	clearRootKeyOverrides(t)
 
 	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins root secret"))
-	t.Setenv(app.RootKeyEnv, hex.EncodeToString(rootKey[:]))
+	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
 
 	explicitConfigKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins explicit APP_CONFIG_KEY"))
-	t.Setenv(app.ConfigKeyEnv, hex.EncodeToString(explicitConfigKey[:]))
+	t.Setenv("APP_CONFIG_KEY", hex.EncodeToString(explicitConfigKey[:]))
 
 	cfg, err := app.ConfigFromEnv()
 	if err != nil {
@@ -459,7 +456,7 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 
 	if !bytes.Equal(cfg.ConfigKey, explicitConfigKey[:]) {
 		t.Fatalf("cfg.ConfigKey = %x, want the explicit %s value %x (it must win over the APP_ROOT_KEY derivation)",
-			cfg.ConfigKey, app.ConfigKeyEnv, explicitConfigKey[:])
+			cfg.ConfigKey, "APP_CONFIG_KEY", explicitConfigKey[:])
 	}
 
 	wantOrgIndexKey, err := dbkit.DeriveKey(rootKey[:], app.RootKeyPurposeOrgIndex)
@@ -468,7 +465,7 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 	}
 	if !bytes.Equal(cfg.OrgIndexKey, wantOrgIndexKey) {
 		t.Fatalf("cfg.OrgIndexKey = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since %s was never set",
-			cfg.OrgIndexKey, wantOrgIndexKey, app.OrgIndexKeyEnv)
+			cfg.OrgIndexKey, wantOrgIndexKey, "APP_ORG_INDEX_KEY")
 	}
 }
 
@@ -510,7 +507,7 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	clearRootKeyOverrides(t)
 
 	rootKey := sha256.Sum256([]byte("TestBuildServer_RootKeyAlone root secret"))
-	t.Setenv(app.RootKeyEnv, hex.EncodeToString(rootKey[:]))
+	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
 
 	cfg, err := app.ConfigFromEnv()
 	if err != nil {
@@ -659,20 +656,7 @@ func TestOrgFeatureGate_NotAttachedYet_FailsClosed(t *testing.T) {
 // -- never a half-composed seam silently falling back to the in-process
 // default, which would hide the misconfiguration until first use.
 func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T) {
-	for _, key := range []string{
-		"APP_DEPLOYMENT_MODE", "PORT", "APP_DB_PATH", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
-		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
-		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
-		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
-		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
-		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
-		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
-		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
-		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
-	} {
-		t.Setenv(key, "")
-	}
+	testutil.ClearBootstrapEnv(t)
 
 	cases := []struct {
 		name   string
@@ -730,20 +714,7 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 // host and the credentials -- the composition the config's Mailer field
 // and MailerCapabilities hand to Kernel.Bootstrap.
 func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
-	for _, key := range []string{
-		"APP_DEPLOYMENT_MODE", "PORT", "APP_DB_PATH", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
-		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
-		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
-		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
-		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
-		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
-		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
-		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
-		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
-	} {
-		t.Setenv(key, "")
-	}
+	testutil.ClearBootstrapEnv(t)
 	t.Setenv("APP_SMTP_HOST", "smtp.example.com")
 	t.Setenv("APP_SMTP_PORT", "587")
 	t.Setenv("APP_SMTP_USERNAME", "mailer@example.com")
@@ -767,20 +738,7 @@ func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
 // already covers): a malformed individual variable must refuse boot
 // naming the variable, never fall through to the dev default silently.
 func TestConfigFromEnv_MalformedIndividualKeysAreRefused(t *testing.T) {
-	for _, key := range []string{
-		"APP_DEPLOYMENT_MODE", "PORT", "APP_DB_PATH", "APP_REDIS_ADDR", "APP_OTLP_ENDPOINT",
-		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD", "APP_OBJECT_STORE_ROOT",
-		"APP_DISABLE_DEMO_USER_HEADER", "APP_DISABLE_QUEUE_WORKER", "APP_TRUSTED_PROXIES",
-		"APP_READ_FLY_CLIENT_IP", "APP_FAIL_SELF_SERVICE_PROVISION", "APP_PUBLIC_ORIGIN",
-		"APP_WEB_DIST", "APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
-		"APP_ROOT_KEY", "APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
-		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
-		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_SMTP_HOST", "APP_SMTP_PORT",
-		"APP_SMTP_USERNAME", "APP_SMTP_PASSWORD", "APP_SMS_GATEWAY_URL",
-	} {
-		t.Setenv(key, "")
-	}
+	testutil.ClearBootstrapEnv(t)
 
 	for _, key := range []string{
 		"APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY", "APP_PKI_LOCAL_KEY_CIPHER_KEY",

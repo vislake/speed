@@ -38,7 +38,8 @@ const healthcheckTimeout = 3 * time.Second
 // observabilityOptions assembles the options run passes to obs.Init from
 // the bootstrap configuration ConfigFromEnv already resolved: the service
 // name always, plus obs.WithOTLPEndpoint exactly when cfg.OTLPEndpoint is
-// non-empty (see otlpEndpointEnv's own doc comment in internal/app/server.go for what
+// non-empty (see the OTLPEndpoint bootstrap field's own doc comment in
+// internal/app/bootstrap.go for what
 // the variable changes). The endpoint option is conditional rather than
 // unconditional because WithOTLPEndpoint("") and its absence are
 // deliberately different in meaning: supplying an explicitly empty option
@@ -70,7 +71,20 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == healthcheckArg {
 		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
 		defer cancel()
-		if err := runHealthcheck(ctx, os.Getenv("PORT")); err != nil {
+		// The probe resolves its port through the same loader-driven
+		// bootstrap the server itself boots from -- ConfigFromEnv, the call
+		// run makes below -- so the two can never disagree about which port
+		// this deployment listens on. The probe therefore also fails on a
+		// bootstrap configuration the server itself would refuse, which is
+		// the honest answer: a container whose configuration cannot load is
+		// not healthy. The one fact this probe requires is cfg.Port;
+		// runHealthcheck's own doc comment covers the rest.
+		cfg, err := app.ConfigFromEnv()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
+			os.Exit(1)
+		}
+		if err := runHealthcheck(ctx, cfg.Port); err != nil {
 			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
 			os.Exit(1)
 		}
@@ -258,12 +272,12 @@ func run(baseCtx context.Context) error {
 // comment for why this exists and who calls it (this example's Dockerfile's
 // HEALTHCHECK, exec-form, re-invoking this binary with that argument rather
 // than shelling out to a probe tool the distroless/static runtime image does
-// not have). port mirrors ConfigFromEnv's own PORT handling (empty falls
-// back to DefaultPort) rather than calling ConfigFromEnv itself, since a
-// healthcheck invocation must never pay for -- or fail on -- the full
-// configuration load (the master keys, the optional Redis/S3/SMTP
-// composition) BuildServer's own caller needs; the port is the one fact
-// this probe actually requires, and the running server already bound it.
+// not have). port is the resolved bootstrap Port: main.go's healthcheck
+// branch loads it through the very ConfigFromEnv call run boots from, so the
+// probe and the server agree on the port by construction. An empty port --
+// the shape a direct caller (or an explicitly emptied PORT variable) can
+// still hand this function -- falls back to DefaultPort, exactly as the
+// listener's own resolution does.
 func runHealthcheck(ctx context.Context, port string) error {
 	if port == "" {
 		port = app.DefaultPort
@@ -273,9 +287,9 @@ func runHealthcheck(ctx context.Context, port string) error {
 	// "127.0.0.1", never anything port (or any other input) can influence;
 	// port only ever widens which LOCAL port this same process's own
 	// listener is probed on. Its value comes from the PORT environment
-	// variable an operator (or this example's Dockerfile ENV) sets, exactly
-	// like ConfigFromEnv's own identical PORT handling for the listener
-	// itself, never from a request this binary serves.
+	// variable an operator (or this example's Dockerfile ENV) sets, resolved
+	// by the same bootstrap loader the listener's own port resolution uses,
+	// never from a request this binary serves.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+app.HealthzPath, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)

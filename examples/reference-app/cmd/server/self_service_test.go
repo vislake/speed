@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
@@ -479,21 +480,7 @@ const selfServiceEnvDrivenEmail = "env-driven-founder@example.com"
 // temp file and APP_FAIL_SELF_SERVICE_PROVISION set to failCount.
 func selfServiceJourneyConfigFromEnv(t *testing.T, failCount string) app.ServerConfig {
 	t.Helper()
-	for _, name := range [...]string{
-		"APP_DEPLOYMENT_MODE", "PORT", "APP_REDIS_ADDR", "APP_ROOT_KEY",
-		"APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
-		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
-		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_OBJECT_STORE_ROOT",
-		"APP_SMTP_HOST", "APP_SMTP_PORT", "APP_SMTP_USERNAME", "APP_SMTP_PASSWORD",
-		"APP_SMS_GATEWAY_URL", "APP_DISABLE_QUEUE_WORKER", "APP_DISABLE_DEMO_USER_HEADER",
-		"APP_TRUSTED_PROXIES", "APP_READ_FLY_CLIENT_IP", "APP_WEB_DIST", "APP_PUBLIC_ORIGIN",
-		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD",
-		"APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
-		"APP_FAIL_SELF_SERVICE_PROVISION",
-	} {
-		t.Setenv(name, "")
-	}
+	testutil.ClearBootstrapEnv(t)
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "self-service-env-driven.db"))
 	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", failCount)
 	cfg, err := app.ConfigFromEnv()

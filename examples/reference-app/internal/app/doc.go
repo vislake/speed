@@ -1,7 +1,8 @@
 // Package app is the reference app's assembly library: the composition and
 // host wiring the application runs on. Everything importable lives here --
 // BuildServer and its route handlers, ServerConfig and ConfigFromEnv's
-// environment parsing, the demo identity layer (demo subject resolvers,
+// loader-driven bootstrap (bootstrap.go), the demo identity layer (demo
+// subject resolvers,
 // demo account/membership/grant seeding), the host-side route guards, the
 // self-service provisioner, the path constants and write-error helpers the
 // HTTP surfaces share -- while cmd/server's main.go keeps only the process
