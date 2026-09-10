@@ -131,11 +131,11 @@ func TestHandle_ReadsAfterAttach_ResolveThroughTheService(t *testing.T) {
 		t.Fatal("IsEnabled(ai.smile_preview) = true before any row; want the declared default false")
 	}
 	// A key the schema does not carry passes the Service's own error through.
-	if _, err := handle.IsEnabled(ctx, "ai.no_such_flag"); err == nil {
+	_, unknownErr := handle.IsEnabled(ctx, "ai.no_such_flag")
+	if unknownErr == nil {
 		t.Fatal("IsEnabled(unknown key) = nil error; want the Service's own ErrUnknownFlag")
-	} else {
-		assertCode(t, err, ErrUnknownFlag)
 	}
+	assertCode(t, unknownErr, ErrUnknownFlag)
 
 	// The duration item's schema default resolves with ok = false -- the
 	// "this tenant has configured none" answer a tenant-configurable seam
@@ -149,8 +149,8 @@ func TestHandle_ReadsAfterAttach_ResolveThroughTheService(t *testing.T) {
 		t.Fatalf("TenantDuration at the schema default = (%v, ok=%v); want the unconfigured zero values", d, ok)
 	}
 	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
-	if err := svc.Set(tenantCtx, ScopeTenant, "brand.welcome_interval", Value{Data: 5 * time.Minute}, "alice"); err != nil {
-		t.Fatalf("Set: %v", err)
+	if setErr := svc.Set(tenantCtx, ScopeTenant, "brand.welcome_interval", Value{Data: 5 * time.Minute}, "alice"); setErr != nil {
+		t.Fatalf("Set: %v", setErr)
 	}
 	d, ok, err = handle.TenantDuration(ctx, "brand.welcome_interval", "tenant-a")
 	if err != nil {
