@@ -86,6 +86,20 @@ const (
 // Update's own doc comment.
 var ErrRecordNotFound = apperr.NotFound("dbkit.record_not_found")
 
+// IsRecordNotFound reports whether err is, or wraps, ErrRecordNotFound. It
+// is the predicate form of the matching rule ErrRecordNotFound's own doc
+// comment implies: the sentinel is returned decorated with the id parameter
+// (a derived instance, never the shared value), so classification compares
+// the code through apperr.HasCode rather than testing errors.Is or == against
+// the sentinel.
+//
+// It matches ErrRecordNotFound and nothing else: gorm's own
+// gorm.ErrRecordNotFound, the untranslated error a raw query through
+// dbkit.Open() sees before the Repository layer converts it, is not matched.
+func IsRecordNotFound(err error) bool {
+	return apperr.HasCode(err, ErrRecordNotFound.Code)
+}
+
 // ErrMissingID is returned by Update when the model it was given has an
 // empty id. Update saves the model's full state over an existing row
 // identified by that id, so an empty one is a caller error, not a

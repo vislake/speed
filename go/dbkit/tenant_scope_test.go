@@ -368,7 +368,7 @@ func TestTenantScopeBeforeUpdate_CannotChangeTenantID(t *testing.T) {
 			if !ok {
 				t.Fatalf("Updates() error = %v (%T), want an *apperr.Error", err, err)
 			}
-			if appErr.Code != ErrTenantIDImmutable.Code {
+			if !apperr.HasCode(err, ErrTenantIDImmutable.Code) {
 				t.Errorf("Updates() error code = %q, want %q", appErr.Code, ErrTenantIDImmutable.Code)
 			}
 

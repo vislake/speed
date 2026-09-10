@@ -17,7 +17,6 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // tenantA and tenantB are the two tenants used by this file's round-trip
@@ -51,16 +50,6 @@ func (p probe) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(p.Tenant
 func (probe) TableName() string { return "dbtest_probe" }
 
 var _ dbkit.TenantScoped = probe{}
-
-// isRecordNotFound reports whether err is dbkit.ErrRecordNotFound, matched
-// by Code rather than identity: apperr.WithParam always returns a new
-// *apperr.Error, so the pointer a Repository method returns is never the
-// same pointer as the package-level sentinel (see dbkit's own
-// repository_test.go and AGENTS.md's Rules section for the same pattern).
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
-}
 
 // createProbeTable adds probe's table via a plain Exec -- never
 // AutoMigrate, per the project-wide rule -- with a schema portable across
@@ -108,7 +97,7 @@ func assertRepositoryRoundTrip(t *testing.T, db *gorm.DB) {
 	}
 
 	otherTenantCtx := pkgcore.WithTenant(context.Background(), tenantB)
-	if _, err := repo.FindByID(otherTenantCtx, want.ID); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(otherTenantCtx, want.ID); !dbkit.IsRecordNotFound(err) {
 		t.Errorf("FindByID() from a different tenant error = %v, want ErrRecordNotFound (tenant isolation must be active on a dbtest-provided connection)", err)
 	}
 }

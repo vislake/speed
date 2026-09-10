@@ -261,7 +261,7 @@ func TestRepository_HardDelete_RLS_CrossTenant_SystemContextGetsNotFoundNoLeak(t
 	// error a never-created id would produce, so the attempt leaks nothing.
 	t.Run("Repository_SystemContextFromTenantB_GetsRecordNotFoundAndLeavesTheRow", func(t *testing.T) {
 		err := repo.HardDelete(hardDeleteRLSCtx(t, tenantB, "platform-admin"), wA.ID)
-		if !isRecordNotFound(err) {
+		if !dbkit.IsRecordNotFound(err) {
 			t.Fatalf("HardDelete() of tenant-a's row from a tenant-b system context error = %v, want ErrRecordNotFound", err)
 		}
 		found, deletedAt := adminSoftDeletableWidgetState(t, adminDB, ctx, wA.ID)

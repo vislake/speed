@@ -148,12 +148,12 @@ func TestRepository_PostgresRLS_SoftDeletedRowStillTenantFilteredCorrectly(t *te
 	// FindByID attempt is denied for the ordinary reason (ErrRecordNotFound,
 	// collapsed with "no such id" per Repository's own documented contract).
 	t.Run("Repository_OwningTenantFindByID_StillHiddenByTheGoSideAutoScope", func(t *testing.T) {
-		if _, err := repo.FindByID(ctxFor(tenantA), w.ID); !isRecordNotFound(err) {
+		if _, err := repo.FindByID(ctxFor(tenantA), w.ID); !dbkit.IsRecordNotFound(err) {
 			t.Errorf("FindByID(tenant-a, its own soft-deleted row) error = %v, want ErrRecordNotFound", err)
 		}
 	})
 	t.Run("Repository_CrossTenantFindByID_StillDenied", func(t *testing.T) {
-		if _, err := repo.FindByID(ctxFor(tenantB), w.ID); !isRecordNotFound(err) {
+		if _, err := repo.FindByID(ctxFor(tenantB), w.ID); !dbkit.IsRecordNotFound(err) {
 			t.Errorf("FindByID(tenant-b, tenant-a's soft-deleted row) error = %v, want ErrRecordNotFound", err)
 		}
 	})

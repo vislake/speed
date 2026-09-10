@@ -41,14 +41,80 @@ func ctxTenant(tenant string) context.Context {
 	return pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenant))
 }
 
-// isRecordNotFound reports whether err is ErrRecordNotFound, matched by Code
-// rather than by identity: apperr.WithParam always returns a new *apperr.Error,
-// so the pointer returned by a Repository method is never the same pointer as
-// the package-level ErrRecordNotFound sentinel (see apperr's own doc comment
-// on this pattern).
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrRecordNotFound.Code
+// TestIsRecordNotFound pins the predicate's matching rule: by Code through
+// the apperr chain, never by identity against the shared sentinel (a
+// Repository method returns the sentinel decorated with WithParam, a derived
+// instance). gorm's own ErrRecordNotFound is deliberately not a match -- the
+// Repository layer is what translates it, and a raw lookup through
+// dbkit.Open() sees it untranslated.
+func TestIsRecordNotFound(t *testing.T) {
+	decorated := ErrRecordNotFound.WithParam("id", "w-1")
+	nested := apperr.Internal("dbkit.other_error").WithCause(ErrRecordNotFound)
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "the sentinel itself",
+			err:  ErrRecordNotFound,
+			want: true,
+		},
+		{
+			name: "the decorated value a Repository method returns",
+			err:  decorated,
+			want: true,
+		},
+		{
+			name: "wrapped by a caller",
+			err:  fmt.Errorf("service layer: %w", decorated),
+			want: true,
+		},
+		{
+			name: "double wrapped",
+			err:  fmt.Errorf("handler: %w", fmt.Errorf("service layer: %w", ErrRecordNotFound)),
+			want: true,
+		},
+		{
+			name: "a different dbkit code",
+			err:  ErrMissingID,
+			want: false,
+		},
+		{
+			name: "a foreign module code",
+			err:  apperr.NotFound("org.node_not_found"),
+			want: false,
+		},
+		{
+			name: "gorm's own not-found error is not translated for the caller",
+			err:  gorm.ErrRecordNotFound,
+			want: false,
+		},
+		{
+			name: "plain error",
+			err:  errors.New("boom"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "an outer apperr hides the nested sentinel",
+			err:  nested,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsRecordNotFound(tt.err); got != tt.want {
+				t.Errorf("IsRecordNotFound(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
 }
 
 // idsOf returns the sorted ids of widgets, for order-independent comparison.
@@ -107,7 +173,7 @@ func TestRepository_FullCRUDLifecycle_SingleTenant(t *testing.T) {
 	}
 
 	got, err := repo.FindByID(ctx, widget.ID)
-	if !isRecordNotFound(err) {
+	if !IsRecordNotFound(err) {
 		t.Errorf("FindByID() after Delete = (%v, %v), want (nil, ErrRecordNotFound)", got, err)
 	}
 }
@@ -127,7 +193,7 @@ func TestRepository_FindByID_DifferentTenant_ReturnsNotFound(t *testing.T) {
 	if got != nil {
 		t.Errorf("FindByID() from a different tenant returned a row: %+v, want nil", got)
 	}
-	if !isRecordNotFound(err) {
+	if !IsRecordNotFound(err) {
 		t.Errorf("FindByID() from a different tenant error = %v, want ErrRecordNotFound (not the row, and not a different, more revealing error)", err)
 	}
 }
@@ -143,7 +209,7 @@ func TestRepository_Update_DifferentTenant_ReturnsNotFoundAndLeavesRowUnchanged(
 
 	// Same id as the real row, attempted from the other tenant's context.
 	attempt := &testutil.Widget{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Name: "hijacked", Value: 999}
-	if err := repo.Update(other, attempt); !isRecordNotFound(err) {
+	if err := repo.Update(other, attempt); !IsRecordNotFound(err) {
 		t.Fatalf("Update() from a different tenant error = %v, want ErrRecordNotFound", err)
 	}
 
@@ -160,7 +226,7 @@ func TestRepository_Update_DifferentTenant_ReturnsNotFoundAndLeavesRowUnchanged(
 	}
 
 	// And no phantom row was created under the attacker's tenant either.
-	if _, err := repo.FindByID(other, "01ARZ3NDEKTSV4RRFFQ69G5FAV"); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(other, "01ARZ3NDEKTSV4RRFFQ69G5FAV"); !IsRecordNotFound(err) {
 		t.Errorf("FindByID() under the attacking tenant after the failed Update error = %v, want ErrRecordNotFound (no phantom row)", err)
 	}
 }
@@ -175,7 +241,7 @@ func TestRepository_Delete_DifferentTenant_ReturnsNotFoundAndDoesNotDeleteRow(t 
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if err := repo.Delete(other, widget.ID); !isRecordNotFound(err) {
+	if err := repo.Delete(other, widget.ID); !IsRecordNotFound(err) {
 		t.Fatalf("Delete() from a different tenant error = %v, want ErrRecordNotFound", err)
 	}
 
@@ -201,7 +267,7 @@ func TestRepository_Create_ForgedTenantIDOnModel_IsOverwrittenByContextTenant(t 
 		t.Errorf("widget.TenantID on the struct after Create() = %q, want %q (Create must overwrite it from ctx)", widget.TenantID, "tenant-a")
 	}
 
-	if _, err := repo.FindByID(ctxTenant("tenant-b"), widget.ID); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(ctxTenant("tenant-b"), widget.ID); !IsRecordNotFound(err) {
 		t.Errorf("FindByID() under the forged tenant error = %v, want ErrRecordNotFound (the row must not exist there)", err)
 	}
 
@@ -226,7 +292,7 @@ func TestRepository_Update_EmptyID_ReturnsErrorWithoutInserting(t *testing.T) {
 	if err == nil {
 		t.Fatal("Update() with an empty id error = nil, want an error")
 	}
-	if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrMissingID.Code {
+	if !apperr.HasCode(err, ErrMissingID.Code) {
 		t.Errorf("Update() with an empty id error = %v, want code %q", err, ErrMissingID.Code)
 	}
 
@@ -316,7 +382,7 @@ func TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFoun
 	}
 
 	// Same id as the real row, attempted from the other tenant's context.
-	if err := repo.Update(other, &testutil.IDAndTenantOnlyMarker{ID: "marker-1"}); !isRecordNotFound(err) {
+	if err := repo.Update(other, &testutil.IDAndTenantOnlyMarker{ID: "marker-1"}); !IsRecordNotFound(err) {
 		t.Fatalf("Update() from a different tenant error = %v, want ErrRecordNotFound", err)
 	}
 
@@ -326,7 +392,7 @@ func TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFoun
 	}
 
 	// And no phantom row was created under the attacker's tenant either.
-	if _, err := repo.FindByID(other, "marker-1"); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(other, "marker-1"); !IsRecordNotFound(err) {
 		t.Errorf("FindByID() under the attacking tenant after the failed Update error = %v, want ErrRecordNotFound (no phantom row)", err)
 	}
 }
@@ -342,7 +408,7 @@ func TestRepository_Update_IDAndTenantIDOnlyModel_NoSuchID_ReturnsNotFound(t *te
 	ctx := ctxTenant("tenant-a")
 
 	err := repo.Update(ctx, &testutil.IDAndTenantOnlyMarker{ID: "never-created"})
-	if !isRecordNotFound(err) {
+	if !IsRecordNotFound(err) {
 		t.Fatalf("Update() for an id that was never created error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -580,7 +646,7 @@ func TestRepository_Delete_SoftDeletable_HiddenFromFindByIDAndList(t *testing.T)
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	if _, err := repo.FindByID(ctx, w.ID); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(ctx, w.ID); !IsRecordNotFound(err) {
 		t.Errorf("FindByID() after Delete() error = %v, want ErrRecordNotFound", err)
 	}
 	list, err := repo.List(ctx)
@@ -610,7 +676,7 @@ func TestRepository_Delete_SoftDeletable_AlreadyDeleted_ReturnsNotFound(t *testi
 	// the deleted_at IS NULL guard in softDelete's own WHERE clause is what
 	// makes this a no-match rather than a second write.
 	secondCtx := ctxTenantActor("tenant-a", "user-2")
-	if err := repo.Delete(secondCtx, w.ID); !isRecordNotFound(err) {
+	if err := repo.Delete(secondCtx, w.ID); !IsRecordNotFound(err) {
 		t.Fatalf("second Delete() on an already-soft-deleted row error = %v, want ErrRecordNotFound", err)
 	}
 
@@ -675,7 +741,7 @@ func TestRepository_Restore_SoftDeletable_NotCurrentlyDeleted_ReturnsNotFound(t 
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if err := repo.Restore(ctx, w.ID); !isRecordNotFound(err) {
+	if err := repo.Restore(ctx, w.ID); !IsRecordNotFound(err) {
 		t.Fatalf("Restore() on a never-deleted row error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -690,8 +756,7 @@ func TestRepository_Restore_NonSoftDeletable_ReturnsErrNotSoftDeletable(t *testi
 	}
 
 	err := repo.Restore(ctx, widget.ID)
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != ErrNotSoftDeletable.Code {
+	if !apperr.HasCode(err, ErrNotSoftDeletable.Code) {
 		t.Fatalf("Restore() on a non-SoftDeletable T error = %v, want ErrNotSoftDeletable", err)
 	}
 }
@@ -722,7 +787,7 @@ func TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged(t *testing.T
 		t.Fatalf("raw row count after Delete() = %d, want 0 (physical delete, row genuinely gone)", count)
 	}
 
-	if err := repo.Delete(ctx, widget.ID); !isRecordNotFound(err) {
+	if err := repo.Delete(ctx, widget.ID); !IsRecordNotFound(err) {
 		t.Fatalf("second Delete() of an already-gone row error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -766,7 +831,7 @@ func TestRepository_Update_StaleModelAfterSoftDelete_ReturnsNotFoundAndKeepsMark
 	}
 
 	staleCopy := stale
-	if err := repo.Update(ctx, &staleCopy); !isRecordNotFound(err) {
+	if err := repo.Update(ctx, &staleCopy); !IsRecordNotFound(err) {
 		t.Fatalf("Update() with a stale pre-delete model error = %v, want ErrRecordNotFound (the write must not reach a soft-deleted row)", err)
 	}
 

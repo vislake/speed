@@ -39,7 +39,6 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/dbkit/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // tenantA and tenantB are the two tenants every isolation scenario in this
@@ -53,14 +52,6 @@ const (
 // ctxFor returns a context carrying tid as the current tenant.
 func ctxFor(tid pkgcore.TenantID) context.Context {
 	return pkgcore.WithTenant(context.Background(), tid)
-}
-
-// isRecordNotFound reports whether err is dbkit.ErrRecordNotFound, matched
-// by Code rather than identity (apperr.WithParam always returns a new
-// *apperr.Error; see dbkit's own repository_test.go for the same pattern).
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }
 
 // startPostgresContainer starts a disposable PostgreSQL 16 container and
@@ -243,14 +234,14 @@ func TestPostgresRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp(t *test
 			t.Fatalf("Create() error = %v", err)
 		}
 
-		if err := repo.Update(ctxFor(tenantB), &testutil.IDAndTenantOnlyMarker{ID: "pg-marker-2"}); !isRecordNotFound(err) {
+		if err := repo.Update(ctxFor(tenantB), &testutil.IDAndTenantOnlyMarker{ID: "pg-marker-2"}); !dbkit.IsRecordNotFound(err) {
 			t.Fatalf("Update() from a different tenant error = %v, want ErrRecordNotFound", err)
 		}
 
 		if _, err := repo.FindByID(ctxFor(tenantA), "pg-marker-2"); err != nil {
 			t.Errorf("FindByID() by the real owner after the failed cross-tenant Update error = %v, want the row still present", err)
 		}
-		if _, err := repo.FindByID(ctxFor(tenantB), "pg-marker-2"); !isRecordNotFound(err) {
+		if _, err := repo.FindByID(ctxFor(tenantB), "pg-marker-2"); !dbkit.IsRecordNotFound(err) {
 			t.Errorf("FindByID() under the attacking tenant after the failed Update error = %v, want ErrRecordNotFound (no phantom row)", err)
 		}
 	})
@@ -303,7 +294,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 		if err := repo.Delete(ctxFor(tenantA), widget.ID); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
-		if _, err := repo.FindByID(ctxFor(tenantA), widget.ID); !isRecordNotFound(err) {
+		if _, err := repo.FindByID(ctxFor(tenantA), widget.ID); !dbkit.IsRecordNotFound(err) {
 			t.Errorf("FindByID() after Delete error = %v, want ErrRecordNotFound", err)
 		}
 	})
@@ -318,7 +309,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 		if got != nil {
 			t.Errorf("FindByID() from tenant B returned a row: %+v, want nil", got)
 		}
-		if !isRecordNotFound(err) {
+		if !dbkit.IsRecordNotFound(err) {
 			t.Errorf("FindByID() from tenant B error = %v, want ErrRecordNotFound", err)
 		}
 
@@ -341,7 +332,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 		}
 
 		attempt := &testutil.Widget{ID: widget.ID, Name: "hijacked", Value: 999}
-		if err := repo.Update(ctxFor(tenantB), attempt); !isRecordNotFound(err) {
+		if err := repo.Update(ctxFor(tenantB), attempt); !dbkit.IsRecordNotFound(err) {
 			t.Fatalf("Update() from tenant B error = %v, want ErrRecordNotFound", err)
 		}
 
@@ -371,7 +362,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 			t.Fatalf("Create() error = %v", err)
 		}
 
-		if err := repo.Delete(ctxFor(tenantB), widget.ID); !isRecordNotFound(err) {
+		if err := repo.Delete(ctxFor(tenantB), widget.ID); !dbkit.IsRecordNotFound(err) {
 			t.Fatalf("Delete() from tenant B error = %v, want ErrRecordNotFound", err)
 		}
 		if _, err := repo.FindByID(ctxFor(tenantA), widget.ID); err != nil {

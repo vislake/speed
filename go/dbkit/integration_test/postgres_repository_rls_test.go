@@ -243,7 +243,7 @@ func TestRepository_PostgresRLS_RestrictedRoleEnforcesIsolation(t *testing.T) {
 		if got != nil {
 			t.Errorf("FindByID(tenant-a, tenant-b's id) = %+v, want nil", got)
 		}
-		if !isRecordNotFound(err) {
+		if !dbkit.IsRecordNotFound(err) {
 			t.Errorf("FindByID(tenant-a, tenant-b's id) error = %v, want ErrRecordNotFound", err)
 		}
 	})

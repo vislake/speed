@@ -18,15 +18,6 @@ import (
 // module's Register, exactly as tenancy's own system-context tests do.
 const hardDeleteTestPurpose pkgcore.SystemPurpose = "dbkit.test.hard_delete"
 
-// isHardDeleteRefused reports whether err is ErrHardDeleteRequiresSystemContext,
-// matched by Code rather than by identity, on the same convention
-// isRecordNotFound in repository_test.go follows (apperr.WithParam always
-// derives a new *apperr.Error, so pointer identity is not stable).
-func isHardDeleteRefused(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == ErrHardDeleteRequiresSystemContext.Code
-}
-
 // hardDeleteSystemCtx returns a context for tenant that passes HardDelete's
 // system-context gate: a tenant, an actor, and a granted system context
 // whose reason names hardDeleteTestPurpose. RegisterSystemPurpose is
@@ -74,7 +65,7 @@ func TestRepository_HardDelete_PlainTenantContext_Refused(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if err := repo.HardDelete(ctx, w.ID); !isHardDeleteRefused(err) {
+	if err := repo.HardDelete(ctx, w.ID); !apperr.HasCode(err, ErrHardDeleteRequiresSystemContext.Code) {
 		t.Fatalf("HardDelete() on a plain tenant-scoped context error = %v, want ErrHardDeleteRequiresSystemContext", err)
 	}
 	if found, _, _ := rawSoftDeletableWidgetRow(t, repo.db, w.ID); !found {
@@ -86,7 +77,7 @@ func TestRepository_HardDelete_BareContext_Refused(t *testing.T) {
 	repo := newSoftDeletableWidgetRepo(t)
 
 	err := repo.HardDelete(context.Background(), "w1")
-	if !isHardDeleteRefused(err) {
+	if !apperr.HasCode(err, ErrHardDeleteRequiresSystemContext.Code) {
 		t.Fatalf("HardDelete() on a bare context error = %v, want ErrHardDeleteRequiresSystemContext (the gate runs before the tenant check: a bare context must report the system-context refusal, not pkgcore.ErrNoTenant)", err)
 	}
 }
@@ -127,7 +118,7 @@ func TestRepository_HardDelete_SystemContext_PhysicallyDeletesNeverDeletedRow(t 
 		t.Fatalf("raw soft_deletable_widgets COUNT(*) = %d after HardDelete, want 0 (the row must be physically gone, not merely marked)", n)
 	}
 
-	if err := repo.HardDelete(sysCtx, w.ID); !isRecordNotFound(err) {
+	if err := repo.HardDelete(sysCtx, w.ID); !IsRecordNotFound(err) {
 		t.Fatalf("second HardDelete() error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -165,7 +156,7 @@ func TestRepository_HardDelete_CrossTenant_SystemContextDoesNotEscapeTenantScope
 	}
 
 	err := repo.HardDelete(hardDeleteSystemCtx(t, "tenant-b", "platform-admin"), w.ID)
-	if !isRecordNotFound(err) {
+	if !IsRecordNotFound(err) {
 		t.Fatalf("HardDelete() of tenant-a's row from tenant-b with a system context error = %v, want ErrRecordNotFound (a system context never escapes the ctx tenant's own rows)", err)
 	}
 	if found, _, _ := rawSoftDeletableWidgetRow(t, repo.db, w.ID); !found {
@@ -185,7 +176,7 @@ func TestRepository_HardDelete_NonSoftDeletableModel_MatchesDeleteSemantics(t *t
 	// The gate applies to every T, not only to SoftDeletable ones: Delete on
 	// a plain tenant context is the sanctioned physical delete, but
 	// HardDelete on the same context is refused.
-	if err := repo.HardDelete(ctx, w.ID); !isHardDeleteRefused(err) {
+	if err := repo.HardDelete(ctx, w.ID); !apperr.HasCode(err, ErrHardDeleteRequiresSystemContext.Code) {
 		t.Fatalf("HardDelete() on a plain tenant-scoped context error = %v, want ErrHardDeleteRequiresSystemContext", err)
 	}
 
@@ -193,7 +184,7 @@ func TestRepository_HardDelete_NonSoftDeletableModel_MatchesDeleteSemantics(t *t
 	if err := repo.HardDelete(sysCtx, w.ID); err != nil {
 		t.Fatalf("HardDelete() error = %v", err)
 	}
-	if _, err := repo.FindByID(ctx, w.ID); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(ctx, w.ID); !IsRecordNotFound(err) {
 		t.Fatalf("FindByID() after HardDelete() error = %v, want ErrRecordNotFound", err)
 	}
 	var n int64
@@ -204,7 +195,7 @@ func TestRepository_HardDelete_NonSoftDeletableModel_MatchesDeleteSemantics(t *t
 		t.Fatalf("raw widgets COUNT(*) = %d after HardDelete, want 0 (the row must be physically gone)", n)
 	}
 
-	if err := repo.HardDelete(sysCtx, w.ID); !isRecordNotFound(err) {
+	if err := repo.HardDelete(sysCtx, w.ID); !IsRecordNotFound(err) {
 		t.Fatalf("second HardDelete() error = %v, want ErrRecordNotFound", err)
 	}
 }

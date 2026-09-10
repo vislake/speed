@@ -127,7 +127,7 @@ func TestTenantModel_EmbeddedInFixtureUsedThroughRepository_CreateAndFindByIDRou
 	// tenant") must correctly read the field promoted from the embedded
 	// TenantModel, exactly as it would a directly-declared one, for this to
 	// deny tenant B here.
-	if _, err := repo.FindByID(ctxFor(tenantB), created.ID); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(ctxFor(tenantB), created.ID); !IsRecordNotFound(err) {
 		t.Errorf("FindByID() from a different tenant error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -251,7 +251,7 @@ func TestTenantModel_ShadowingPromotedFieldToAddPrimaryKey_BreaksFindByIDForTheO
 		t.Fatalf("after Create(), m.TenantID = %q, want %q — the outer field itself must round-trip correctly for this test to demonstrate anything", m.TenantID, tenantA)
 	}
 
-	if _, err := repo.FindByID(ctxFor(tenantA), m.ID); !isRecordNotFound(err) {
+	if _, err := repo.FindByID(ctxFor(tenantA), m.ID); !IsRecordNotFound(err) {
 		t.Errorf("FindByID() by the legitimate owning tenant error = %v, want ErrRecordNotFound — if this starts succeeding, GORM's field-shadowing/population behavior changed versus what this test (and TenantModel's doc comment) assume, and both need re-checking together", err)
 	}
 }

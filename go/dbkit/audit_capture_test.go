@@ -47,17 +47,6 @@ func createWidgetsTable(t *testing.T, db *gorm.DB) {
 	}
 }
 
-// isRecordNotFound reports whether err is dbkit's ErrRecordNotFound — by
-// code, never by pointer identity, because apperr.WithParam always returns a
-// new *apperr.Error, so the pointer a Repository method returns is never the
-// package-level sentinel itself. It is this black-box file's twin of the
-// same-named helper in repository_test.go (which package dbkit cannot share
-// across the package boundary).
-func isRecordNotFound(err error) bool {
-	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
-}
-
 // rawSoftDeletableWidgetRow reads id's raw deleted_at/deleted_by columns
 // directly through db.Raw, bypassing every GORM callback (including the
 // soft-delete auto-scope plugin, which raw SQL never runs) — the "what
@@ -210,8 +199,7 @@ func TestOpen_AuditModels_NonAuditableEntryRefused(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Open with a non-Auditable AuditModels entry error = nil, want a named refusal")
 	}
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != "dbkit.invalid_audit_model" {
+	if !apperr.HasCode(err, "dbkit.invalid_audit_model") {
 		t.Fatalf("Open error = %v, want apperr code dbkit.invalid_audit_model", err)
 	}
 }
@@ -1209,7 +1197,7 @@ func TestAuditCapturePlugin_SoftDelete_DoubleDelete_PublishesNothing(t *testing.
 		t.Fatalf("first Delete() (soft-delete) error = %v", err)
 	}
 	err := repo.Delete(ctx, w.ID)
-	if !isRecordNotFound(err) {
+	if !dbkit.IsRecordNotFound(err) {
 		t.Fatalf("second Delete() error = %v, want ErrRecordNotFound (the row is already soft-deleted, so nothing matched)", err)
 	}
 
@@ -1239,7 +1227,7 @@ func TestAuditCapturePlugin_UpdateMatchingNoRows_PublishesNothing(t *testing.T) 
 	}
 	ghost := &testutil.SoftDeletableWidget{ID: "sdw-never-created", Name: "ghost"}
 	err := repo.Update(ctx, ghost)
-	if !isRecordNotFound(err) {
+	if !dbkit.IsRecordNotFound(err) {
 		t.Fatalf("Update() of a never-created id error = %v, want ErrRecordNotFound (nothing matched)", err)
 	}
 
@@ -1264,7 +1252,7 @@ func TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing(t *testing.T) 
 		t.Fatalf("seed Create() error = %v", err)
 	}
 	err := repo.Delete(ctx, "w-never-created")
-	if !isRecordNotFound(err) {
+	if !dbkit.IsRecordNotFound(err) {
 		t.Fatalf("Delete() of a never-created id error = %v, want ErrRecordNotFound (nothing matched)", err)
 	}
 
@@ -1408,7 +1396,7 @@ func TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing(t *testing
 	}
 
 	err := repo.HardDelete(auditCaptureHardDeleteCtx(t, ctx), "sdw-never-created")
-	if !isRecordNotFound(err) {
+	if !dbkit.IsRecordNotFound(err) {
 		t.Fatalf("HardDelete() of a never-created id error = %v, want ErrRecordNotFound (nothing matched)", err)
 	}
 

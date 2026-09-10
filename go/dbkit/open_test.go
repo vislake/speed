@@ -72,7 +72,7 @@ func TestOpen_InvalidDialect_ReturnsInvalidError(t *testing.T) {
 			if appErr.Status != http.StatusBadRequest {
 				t.Errorf("Open() error Status = %d, want %d (apperr.Invalid)", appErr.Status, http.StatusBadRequest)
 			}
-			if appErr.Code != "dbkit.invalid_dialect" {
+			if !apperr.HasCode(err, "dbkit.invalid_dialect") {
 				t.Errorf("Open() error Code = %q, want %q", appErr.Code, "dbkit.invalid_dialect")
 			}
 		})
@@ -106,7 +106,7 @@ func TestOpen_PostgresGarbageDSN_ReturnsError(t *testing.T) {
 	if appErr.Status != http.StatusInternalServerError {
 		t.Errorf("Open() error Status = %d, want %d (apperr.Internal)", appErr.Status, http.StatusInternalServerError)
 	}
-	if appErr.Code != "dbkit.connect_failed" {
+	if !apperr.HasCode(err, "dbkit.connect_failed") {
 		t.Errorf("Open() error Code = %q, want %q", appErr.Code, "dbkit.connect_failed")
 	}
 }
