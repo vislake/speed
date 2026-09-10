@@ -59,15 +59,11 @@ var orgMemberJoinedWebhookMapping = integration.EventMapping{
 		// A same-replica publish hands this function org's own
 		// org.MemberJoined struct; the distributed mode's Redis bus would
 		// hand it a map[string]any built from the identical json tags.
-		// Round-tripping through JSON decodes both shapes identically
+		// pkgcore.DecodeEventPayload decodes both shapes identically
 		// without this app needing a type assertion against a struct
 		// go/integration itself is not allowed to import.
-		raw, err := json.Marshal(evt.Payload)
-		if err != nil {
-			return nil, err
-		}
 		var fields orgMemberJoinedWebhookPublicPayload
-		if err := json.Unmarshal(raw, &fields); err != nil {
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &fields); err != nil {
 			return nil, err
 		}
 		return json.Marshal(fields)

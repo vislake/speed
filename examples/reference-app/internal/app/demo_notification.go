@@ -157,39 +157,18 @@ var noteCreatedFieldKeys = struct {
 }
 
 // NoteCreatedFieldsFromPayload extracts the note id and the creating user's
-// id from a notes.note.created payload of any shape, by round-tripping it
-// through JSON into a map and probing the accepted key spellings. It returns
-// ok=false rather than an error for every unusable shape, because the
-// subscription's contract is to log and drop the event, never to fail the
-// publisher (see wireDemoNotification).
+// id from a notes.note.created payload of any shape, probing the accepted
+// key spellings through pkgcore.EventPayloadString. It returns ok=false
+// rather than an error for every unusable shape, because the subscription's
+// contract is to log and drop the event, never to fail the publisher (see
+// wireDemoNotification).
 func NoteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok bool) {
-	if payload == nil {
-		return "", "", false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", "", false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", "", false
-	}
-	probe := func(spellings []string) (string, bool) {
-		for _, key := range spellings {
-			if value, present := fields[key]; present {
-				if id, isString := value.(string); isString && id != "" {
-					return id, true
-				}
-			}
-		}
-		return "", false
-	}
-	noteID, hasNote := probe(noteCreatedFieldKeys.noteID)
-	creator, hasCreator := probe(noteCreatedFieldKeys.creator)
+	noteID, hasNote := pkgcore.EventPayloadString(payload, noteCreatedFieldKeys.noteID...)
+	creatorUserID, hasCreator := pkgcore.EventPayloadString(payload, noteCreatedFieldKeys.creator...)
 	if !hasNote || !hasCreator {
 		return "", "", false
 	}
-	return noteID, creator, true
+	return noteID, creatorUserID, true
 }
 
 // simulationCompletedFieldKeys are the field spellings accepted for the
@@ -226,12 +205,12 @@ var simulationCompletedFieldKeys = struct {
 
 // SimulationCompletedFieldsFromPayload extracts the image job id, the
 // recipient user id and the success flag from a
-// smilesim.EventSimulationCompleted payload of any shape, by round-tripping
-// it through JSON into a map and probing the accepted key spellings --
-// mirroring NoteCreatedFieldsFromPayload exactly, down to returning ok=false
-// rather than an error for every unusable shape (the subscription's contract
-// is to log and drop the event, never to fail the publisher; see
-// wireDemoNotification). imageJobID and recipientUserID must each be a
+// smilesim.EventSimulationCompleted payload of any shape, probing the
+// accepted key spellings through pkgcore.EventPayloadString and
+// EventPayloadBool -- mirroring NoteCreatedFieldsFromPayload exactly, down
+// to returning ok=false rather than an error for every unusable shape (the
+// subscription's contract is to log and drop the event, never to fail the
+// publisher; see wireDemoNotification). imageJobID and recipientUserID must each be a
 // non-empty string to count as present: recipientUserID matching
 // SimulationCompletedPayload.RecipientUserID's own "never empty" invariant,
 // and imageJobID because the dispatch below carries it in the delivery's
@@ -244,44 +223,13 @@ var simulationCompletedFieldKeys = struct {
 // meaningful, valid answer (a failed or cancelled simulation), so its
 // presence is tracked separately from its value.
 func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJobID string, succeeded, ok bool) {
-	if payload == nil {
-		return "", "", false, false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", "", false, false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", "", false, false
-	}
-	probeString := func(spellings []string) (string, bool) {
-		for _, key := range spellings {
-			if value, present := fields[key]; present {
-				if s, isString := value.(string); isString && s != "" {
-					return s, true
-				}
-			}
-		}
-		return "", false
-	}
-	probeBool := func(spellings []string) (bool, bool) {
-		for _, key := range spellings {
-			if value, present := fields[key]; present {
-				if b, isBool := value.(bool); isBool {
-					return b, true
-				}
-			}
-		}
-		return false, false
-	}
-	jobID, hasJob := probeString(simulationCompletedFieldKeys.imageJobID)
-	recipient, hasRecipient := probeString(simulationCompletedFieldKeys.recipientUserID)
-	succeededValue, hasSucceeded := probeBool(simulationCompletedFieldKeys.succeeded)
+	imageJobID, hasJob := pkgcore.EventPayloadString(payload, simulationCompletedFieldKeys.imageJobID...)
+	recipientUserID, hasRecipient := pkgcore.EventPayloadString(payload, simulationCompletedFieldKeys.recipientUserID...)
+	succeeded, hasSucceeded := pkgcore.EventPayloadBool(payload, simulationCompletedFieldKeys.succeeded...)
 	if !hasJob || !hasRecipient || !hasSucceeded {
 		return "", "", false, false
 	}
-	return recipient, jobID, succeededValue, true
+	return recipientUserID, imageJobID, succeeded, true
 }
 
 // wireDemoNotification mounts the reference app's demo glue for the

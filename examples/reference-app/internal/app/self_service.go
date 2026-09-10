@@ -14,6 +14,7 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -546,7 +547,7 @@ func (p *SelfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// The membership: one seat per person per tenant; an already-present
 	// seat (a redelivery) is left exactly where it is.
 	if _, err := p.orgModule.Members().Add(tenantCtx, userID, root.ID); err != nil {
-		if !orgCodeIs(err, org.ErrMembershipExists.Code) {
+		if !apperr.HasCode(err, org.ErrMembershipExists.Code) {
 			return fmt.Errorf("reference-app: add the registrant to the clinic org: %w", err)
 		}
 	}
@@ -688,7 +689,7 @@ func ensureClinicRoot(ctx context.Context, tree *org.TreeService, name string) (
 	switch {
 	case err == nil:
 		return existing, false, nil
-	case !orgCodeIs(err, org.ErrNodeNotFound.Code):
+	case !apperr.HasCode(err, org.ErrNodeNotFound.Code):
 		return nil, false, err
 	}
 
@@ -703,7 +704,7 @@ func ensureClinicRoot(ctx context.Context, tree *org.TreeService, name string) (
 	if err == nil {
 		return created, true, nil
 	}
-	if orgCodeIs(err, org.ErrRootAlreadyExists.Code) {
+	if apperr.HasCode(err, org.ErrRootAlreadyExists.Code) {
 		reRead, reReadErr := tree.Root(ctx)
 		return reRead, false, reReadErr
 	}
@@ -733,33 +734,12 @@ func ClinicTenantOf(userID string) pkgcore.TenantID {
 var selfServiceUserIDKeys = []string{"user_id", "userId", "UserID", "userID"}
 
 // userIDFromUserCreatedPayload extracts the user id from an
-// authn.user.created payload of any shape, by round-tripping it through
-// JSON into a map and probing the accepted key spellings -- the same
-// normalization org's own userIDFromPayload (go/org/events.go) documents,
-// and never a type assertion against authn's concrete payload type.
+// authn.user.created payload of any shape, probing the accepted key
+// spellings through pkgcore.EventPayloadString -- the same normalization
+// org's own userIDFromPayload (go/org/events.go) applies, and never a type
+// assertion against authn's concrete payload type.
 func userIDFromUserCreatedPayload(payload any) (string, bool) {
-	if payload == nil {
-		return "", false
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", false
-	}
-	for _, key := range selfServiceUserIDKeys {
-		value, ok := fields[key]
-		if !ok {
-			continue
-		}
-		id, ok := value.(string)
-		if ok && id != "" {
-			return id, true
-		}
-	}
-	return "", false
+	return pkgcore.EventPayloadString(payload, selfServiceUserIDKeys...)
 }
 
 // wireSelfService installs the self-service signup chain into a composed

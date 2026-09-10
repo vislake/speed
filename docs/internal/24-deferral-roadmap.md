@@ -352,6 +352,7 @@
 | 197 | ROADMAP | `web/packages/account-ui/README.md` | 家族无改密面与 profile 字段(原属 profile round) | 待排期:change-password 操作+账户字段编辑(需 spec 新 op+UI 轮;profile 面) |
 | 198 | ROADMAP | `go/admin/export.go` | 审计导出的一次性下载令牌无同步中继通道 | 待排期:审计导出一次性令牌的同步中继通道+送达通知(运维面设计,未命名归属轮) |
 | 202 | ROADMAP | `docs/internal/21-api-contract.md` | saasctl openapi generate 未实现 | 待排期:saasctl openapi generate(不在 v0.1 范围);参考实现已在库内以 reference-app 应用自有生成流落地为种子(task api:gen:app:应用自有合并文档+SDK+全检 porcelain 门禁,21 记录)——产品化时按生成项目形状复刻并重定接缝决策 |
+| — | 待排期(轮内设计讨论) | `go/pkgcore/AGENTS.md` | EventBus 发布方载荷形状未规范化 | 待排期:事件契约规范化——发布方统一载荷形状(例如统一经 pkgcore 的编码路径发布),使订阅侧的结构化探测(`EventPayloadString`/`EventPayloadFields` 一族的拼写探测)最终可退役为类型化解码。现状:同进程投递发布方结构体、代理总线投递 JSON 解码后的 map,订阅方因此按字段拼写探测;探测助手已收拢于 pkgcore(见其 AGENTS.md 的载荷解码条目),规范化是后续独立项 |
 
 ## 9. 闭于 main 的普查行(记录时点 2026-09-09)
 
