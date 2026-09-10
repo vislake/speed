@@ -65,6 +65,13 @@ func pollWindowStart(now time.Time) time.Time {
 	return now.Truncate(pollIdempotencyWindowSize)
 }
 
+// pollKeyPrefix is the prefix of every payment-poll idempotency key. It is
+// a named constant because two derivations must agree on it byte for byte:
+// pollIdempotencyKey below, and the declaration (pollSchedule) a
+// jobs.Scheduler composes keys from with its own window derivation -- one
+// window must resolve one key through both paths.
+const pollKeyPrefix = "billing.poll:"
+
 // pollIdempotencyKey derives the jobs idempotency key of one poll window
 // for a tenant, per the rule that an idempotency key derives from the
 // business operation, never random -- the identical shape go/storage's
@@ -79,13 +86,6 @@ func pollWindowStart(now time.Time) time.Time {
 // and the poll runs again -- a stuck PaymentEvent is actively polled as
 // long as a host keeps scheduling EnqueuePoll, instead of once per tenant
 // lifetime.
-// pollKeyPrefix is the prefix of every payment-poll idempotency key. It is
-// a named constant because two derivations must agree on it byte for byte:
-// pollIdempotencyKey above, and the declaration (pollSchedule) a
-// jobs.Scheduler composes keys from with its own window derivation -- one
-// window must resolve one key through both paths.
-const pollKeyPrefix = "billing.poll:"
-
 func pollIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
 	return pollKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
 }
@@ -243,14 +243,17 @@ func (s *PollingService) Poll(ctx context.Context) error {
 }
 
 // EnqueuePoll enqueues the poll task for the tenant ctx carries -- the
-// host-facing schedule point, matching go/storage's EnqueueExpirySweep and
-// go/pki's EnqueueExpiryScan: a host with workers runs this on its own
-// timer per tenant, relying on the task's window-scoped idempotency key
-// (pollIdempotencyKey) to collapse the enqueues of one
-// pollIdempotencyWindowSize window into one job. An enqueue whose clock
-// has moved into a later window (pollWindowStart) is a new job and runs
-// again -- this is what makes the poll periodic on queues whose
-// idempotency is unconditional (StandaloneQueue holds a resolved key
+// manual entry point, matching go/storage's EnqueueExpirySweep and
+// go/pki's EnqueueExpiryScan. The poll's default schedule is the module's
+// own: a queue-wired Register declares it on the
+// pkgcore.Registry.Schedules seat (pollSchedule, a per-tenant task at the
+// poll's own window), so a host that runs a jobs.Scheduler polls every
+// tenant without writing a schedule point of its own. The task's
+// window-scoped idempotency key (pollIdempotencyKey) collapses the
+// enqueues of one pollIdempotencyWindowSize window into one job. An
+// enqueue whose clock has moved into a later window (pollWindowStart) is a
+// new job and runs again -- this is what makes the poll periodic on queues
+// whose idempotency is unconditional (StandaloneQueue holds a resolved key
 // forever, so a tenant-only key would poll a tenant exactly once per
 // database file, and a dead-lettered poll would silence its tenant's
 // later enqueues entirely), and what keeps one dead-lettered poll window
