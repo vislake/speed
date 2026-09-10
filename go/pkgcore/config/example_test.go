@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/config"
@@ -106,4 +107,59 @@ func ExampleWithConfigFile() {
 
 	// Output:
 	// standalone file:speed.db 32
+}
+
+// ExampleWithEnvPrefix shows a host whose environment carries its own prefix,
+// and one variable its platform assigns by a name no prefix can reach: the
+// pinned field reads PORT whatever the prefix is, while the other keys derive
+// their names from APP_ and ignore SPEED_.
+func ExampleWithEnvPrefix() {
+	type hostConfig struct {
+		// Port is pinned to the platform's own variable name; the key stays
+		// "port", so the flag is still --port.
+		Port int `config:"env=PORT"`
+		// Database derives its name: APP_DATABASE under this prefix.
+		Database string
+	}
+
+	var cfg hostConfig
+	loader := config.New(
+		config.WithEnvPrefix("APP_"),
+		config.WithArgs(nil),
+		config.WithEnviron([]string{
+			"PORT=3123",
+			"APP_DATABASE=app.db",
+			"SPEED_DATABASE=ignored.db", // the old prefix is not a source any more
+		}),
+	)
+	if err := loader.Load(&cfg); err != nil {
+		fmt.Println("load:", err)
+		return
+	}
+
+	fmt.Println(cfg.Port, cfg.Database)
+
+	// Output:
+	// 3123 app.db
+}
+
+// ExampleVerify shows the check a host runs once it knows which bootstrap keys
+// its modules declared (the pkgcore Registry.Bootstrap seat): every declared
+// key must map onto a field of the host's loader target, and the error names
+// the ones that do not.
+func ExampleVerify() {
+	type hostConfig struct {
+		Port     int `config:"env=PORT"`
+		Database struct {
+			DSN string
+		}
+	}
+
+	err := config.Verify(&hostConfig{}, []string{"port", "database.dsn", "authn.pii_cipher_key"})
+	fmt.Println(errors.Is(err, config.ErrInvalidTarget))
+	fmt.Println(strings.Contains(err.Error(), "authn.pii_cipher_key"))
+
+	// Output:
+	// true
+	// true
 }

@@ -1020,3 +1020,456 @@ func TestLoad_SelfReferentialTargetTerminates(t *testing.T) {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
 }
+
+// --- Environment prefix and pinned variable names -------------------------
+//
+// The prefix decides which variable a field's key derives to; the env struct
+// tag option pins a field's exact variable name, which no prefix reaches. The
+// tests below pin both, plus the messages an operator sees when a value is
+// missing: an error that told the reader to look at SPEED_PORT while the loader
+// read APP_PORT would send them to the wrong variable.
+
+// prefixedConfig is the fixture for the prefix and pin tests. Port pins its
+// variable (a platform-assigned PORT, which no derivation reaches); DBPath,
+// Name and Debug derive theirs from the loader's prefix.
+type prefixedConfig struct {
+	Port   int `config:"env=PORT"`
+	DBPath string
+	Name   string
+	Debug  bool
+}
+
+func newPrefixedConfig() *prefixedConfig {
+	return &prefixedConfig{Port: 8080, DBPath: "speed.db", Name: "default-name"}
+}
+
+// loadPrefixed loads the fixture with a given prefix, driven only by the
+// environment handed in. An empty prefix means "no WithEnvPrefix option", the
+// SPEED_ default.
+func loadPrefixed(prefix string, env ...string) (*prefixedConfig, error) {
+	opts := []Option{WithArgs(nil), WithEnviron(env)}
+	if prefix != "" {
+		opts = append(opts, WithEnvPrefix(prefix))
+	}
+	target := newPrefixedConfig()
+	err := New(opts...).Load(target)
+	return target, err
+}
+
+// TestNew_DefaultPrefixIsSpeed pins the default the WithEnvPrefix option
+// replaces: no option means SPEED_, the spelling the package documents and
+// every other test in this file exercises.
+func TestNew_DefaultPrefixIsSpeed(t *testing.T) {
+	t.Parallel()
+
+	l := New()
+	if got := l.derivedEnvName("database.dsn"); got != "SPEED_DATABASE__DSN" {
+		t.Errorf("derivedEnvName(database.dsn) = %q, want %q", got, "SPEED_DATABASE__DSN")
+	}
+}
+
+// TestLoad_WithEnvPrefix_ReadsOnlyThePrefixesVariables pins that the prefix
+// swaps which variables carry the keys: APP_-prefixed names are read, and a
+// SPEED_-prefixed name is no longer a source at all.
+func TestLoad_WithEnvPrefix_ReadsOnlyThePrefixesVariables(t *testing.T) {
+	t.Parallel()
+
+	got, err := loadPrefixed("APP_",
+		"APP_DBPATH=app.db",
+		"APP_NAME=app-name",
+		"APP_DEBUG=true",
+		"SPEED_DBPATH=ignored.db",
+		"SPEED_NAME=ignored-name",
+		"OTHER_NAME=also-ignored",
+	)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.DBPath != "app.db" {
+		t.Errorf("DBPath = %q, want the APP_-prefixed value", got.DBPath)
+	}
+	if got.Name != "app-name" {
+		t.Errorf("Name = %q, want the APP_-prefixed value", got.Name)
+	}
+	if !got.Debug {
+		t.Error("Debug = false, want true from APP_DEBUG")
+	}
+	if got.Port != 8080 {
+		t.Errorf("Port = %d, want the default 8080 with no PORT variable set", got.Port)
+	}
+}
+
+// TestLoad_PinnedFieldIgnoresThePrefix pins that a pinned field is read from
+// its own name whatever the prefix is, and from no other: PORT is read under
+// the APP_ prefix even though it carries none of it, and the spelling the
+// field's key would derive (APP_PORT) is not a second way in.
+func TestLoad_PinnedFieldIgnoresThePrefix(t *testing.T) {
+	t.Parallel()
+
+	got, err := loadPrefixed("APP_", "PORT=3123", "APP_PORT=9999")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Port != 3123 {
+		t.Errorf("Port = %d, want 3123 from the pinned PORT; APP_PORT must not feed a pinned field", got.Port)
+	}
+
+	// The same pin under the default prefix: pins are prefix-independent.
+	got, err = loadPrefixed("", "PORT=3123")
+	if err != nil {
+		t.Fatalf("Load() with the default prefix error = %v", err)
+	}
+	if got.Port != 3123 {
+		t.Errorf("Port = %d, want 3123 from the pinned PORT under the default prefix", got.Port)
+	}
+}
+
+// TestLoad_PrefixDoesNotChangeFlagsOrFileKeys pins the other half of the
+// prefix's scope: it renames environment variables and nothing else, so a flag
+// or a config-file key is spelled identically under every prefix.
+func TestLoad_PrefixDoesNotChangeFlagsOrFileKeys(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfigFile(t, "dbpath: from-file.db\nname: from-file\n")
+	target := newPrefixedConfig()
+	loader := New(
+		WithConfigFile(path),
+		WithEnvPrefix("APP_"),
+		WithArgs([]string{"--name=from-flag"}),
+		WithEnviron([]string{"APP_NAME=from-env"}),
+	)
+	if err := loader.Load(target); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if target.DBPath != "from-file.db" {
+		t.Errorf("DBPath = %q, want the file's value under a non-default prefix", target.DBPath)
+	}
+	if target.Name != "from-flag" {
+		t.Errorf("Name = %q, want the flag's value; the flag name must not depend on the prefix", target.Name)
+	}
+}
+
+// TestLoad_PrefixWithoutEnvironmentSourceHasNoEffect pins that the prefix
+// cannot resurrect a source the caller switched off.
+func TestLoad_PrefixWithoutEnvironmentSourceHasNoEffect(t *testing.T) {
+	t.Parallel()
+
+	target := newPrefixedConfig()
+	loader := New(WithEnvPrefix("APP_"), WithArgs(nil), WithEnviron([]string{}))
+	if err := loader.Load(target); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if *target != *newPrefixedConfig() {
+		t.Errorf("loaded = %+v, want every field left at its default %+v", *target, *newPrefixedConfig())
+	}
+}
+
+// TestWithEnvPrefix_RejectsUnusablePrefixes pins the two prefixes that cannot
+// describe variables: an empty one would read the whole environment, and one
+// without the trailing separator builds misspelled names. Both are wiring
+// errors, so both panic at the point the option is applied.
+func TestWithEnvPrefix_RejectsUnusablePrefixes(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range []string{"", "APP", "SPEED"} {
+		prefix := prefix
+		t.Run("prefix="+prefix, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				if recover() == nil {
+					t.Errorf("New(WithEnvPrefix(%q)) did not panic, want a wiring error", prefix)
+				}
+			}()
+			New(WithEnvPrefix(prefix))
+		})
+	}
+}
+
+// --- Pinned-name conflicts -------------------------------------------------
+
+// pinConflictConfig pins the same variable twice: both fields would be fed by
+// one variable, and which one won would depend on nothing an operator can see.
+type pinConflictConfig struct {
+	First  string `config:"env=SHARED"`
+	Second string `config:"env=SHARED"`
+}
+
+// derivedConflictConfig pins a name another field derives from its key under
+// the default prefix: key "secret" derives SPEED_SECRET, which Alias claims.
+type derivedConflictConfig struct {
+	Secret string
+	Alias  string `config:"env=SPEED_SECRET"`
+}
+
+// TestLoad_EnvironmentNameConflictIsRefused pins the describe-time refusal:
+// an ambiguous target fails before any source is read, naming both keys and
+// the variable they share.
+func TestLoad_EnvironmentNameConflictIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target any
+		want   []string
+	}{
+		{
+			name:   "two fields pinning one variable",
+			target: &pinConflictConfig{},
+			want:   []string{"first", "second", "SHARED"},
+		},
+		{
+			name:   "a pin colliding with another field's derived name",
+			target: &derivedConflictConfig{},
+			want:   []string{"secret", "alias", "SPEED_SECRET"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := New(WithArgs(nil), WithEnviron(nil)).Load(tt.target)
+			if !errors.Is(err, ErrInvalidTarget) {
+				t.Fatalf("Load() error = %v, want it to wrap ErrInvalidTarget", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestParseTag_RejectsMalformedEnvOption pins the tag option's own refusals: a
+// pin with no name is a misspelling of the option, and a second pin on one
+// field leaves what the first meant undecidable.
+func TestParseTag_RejectsMalformedEnvOption(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		tag  string
+	}{
+		{name: "a pin with no name", tag: "env="},
+		{name: "a second pin", tag: "env=ONE,env=TWO"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			sf := reflect.StructField{Name: "Port", Tag: reflect.StructTag(`config:"` + tt.tag + `"`)}
+			_, _, _, _, err := parseTag(sf)
+			if !errors.Is(err, ErrInvalidTarget) {
+				t.Errorf("parseTag(%q) error = %v, want it to wrap ErrInvalidTarget", tt.tag, err)
+			}
+		})
+	}
+}
+
+// --- Error messages under a prefix ----------------------------------------
+
+// requiredPrefixConfig carries one required key, for the missing-value error
+// message.
+type requiredPrefixConfig struct {
+	DBPath string `config:"required"`
+}
+
+// TestLoad_ErrorNamesTheVariableTheLoaderRead pins the error text an operator
+// acts on: under the APP_ prefix a missing required value points at the
+// APP_-derived variable, never at a hardcoded SPEED_ spelling, and a pinned
+// field points at its pin.
+func TestLoad_ErrorNamesTheVariableTheLoaderRead(t *testing.T) {
+	t.Parallel()
+
+	// A required key no source supplied: the error lists the variables checked.
+	required := &requiredPrefixConfig{}
+	err := New(WithEnvPrefix("APP_"), WithArgs(nil), WithEnviron(nil)).Load(required)
+	if !errors.Is(err, ErrMissingValue) {
+		t.Fatalf("Load() error = %v, want it to wrap ErrMissingValue", err)
+	}
+	if !strings.Contains(err.Error(), "APP_DBPATH") {
+		t.Errorf("error = %q, want it to name APP_DBPATH", err)
+	}
+	if strings.Contains(err.Error(), "SPEED_DBPATH") {
+		t.Errorf("error = %q, want no SPEED_ spelling under the APP_ prefix", err)
+	}
+
+	// An empty value a non-text field cannot hold: the same rule for the
+	// message checkEmpty builds.
+	target := newPrefixedConfig()
+	err = New(WithEnvPrefix("APP_"), WithArgs(nil), WithEnviron([]string{"PORT="})).Load(target)
+	if !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("Load(PORT=) error = %v, want it to wrap ErrInvalidValue", err)
+	}
+	if !strings.Contains(err.Error(), "PORT") {
+		t.Errorf("error = %q, want it to name the pinned variable PORT", err)
+	}
+	if strings.Contains(err.Error(), "SPEED_PORT") {
+		t.Errorf("error = %q, want no derived spelling for a pinned field", err)
+	}
+}
+
+// --- Text values read by strconv ------------------------------------------
+
+// TestLoad_TextValuesReadStrconvSyntax pins the conversion a text source gets
+// for each scalar kind: bools accept strconv.ParseBool's whole set and
+// durations accept Go's duration syntax, from the environment and from a flag
+// alike. The integer spellings are pinned by
+// TestLoad_IntegerLiteralsAcceptGoSyntax above.
+func TestLoad_TextValuesReadStrconvSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		env   string
+		check func(t *testing.T, got *envConfig)
+	}{
+		{
+			name: "the full bool set, true",
+			env:  "SPEED_DEBUG=TRUE",
+			check: func(t *testing.T, got *envConfig) {
+				if !got.Debug {
+					t.Error("Debug = false, want true from TRUE")
+				}
+			},
+		},
+		{
+			name: "the full bool set, false",
+			env:  "SPEED_DEBUG=F",
+			check: func(t *testing.T, got *envConfig) {
+				if got.Debug {
+					t.Error("Debug = true, want false from F")
+				}
+			},
+		},
+		{
+			name: "a duration in Go syntax",
+			env:  "SPEED_TIMEOUT=1m30s",
+			check: func(t *testing.T, got *envConfig) {
+				if got.Timeout != 90*time.Second {
+					t.Errorf("Timeout = %v, want 1m30s", got.Timeout)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := loadEnv(tt.env)
+			if err != nil {
+				t.Fatalf("Load(%s) error = %v", tt.env, err)
+			}
+			tt.check(t, got)
+		})
+	}
+}
+
+// TestLoad_TextValueFromAFlagIsConvertedToo pins that the conversion is a
+// property of the value's text, not of the environment source: a flag value
+// arrives as text as well, and is judged by the same rules.
+func TestLoad_TextValueFromAFlagIsConvertedToo(t *testing.T) {
+	t.Parallel()
+
+	target := newEnvConfig()
+	loader := New(WithArgs([]string{"--debug=true", "--ratio=2.5", "--timeout=45s"}), WithEnviron(nil))
+	if err := loader.Load(target); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !target.Debug || target.Ratio != 2.5 || target.Timeout != 45*time.Second {
+		t.Errorf("loaded = %+v, want the flag values applied", *target)
+	}
+}
+
+// --- Verify ----------------------------------------------------------------
+
+// verifyTarget is the struct Verify is measured against: a nested key, a
+// pinned key, and nothing else.
+type verifyTarget struct {
+	Port     int `config:"env=PORT"`
+	Database struct {
+		DSN string
+	}
+}
+
+// TestVerify_ReportsEveryKeyWithNoField pins the check a host runs to prove its
+// loader target binds the declarations its modules registered: every declared
+// key must have a field, and every key without one is named, so a host fixing
+// the target reads its list from the error rather than from a failed load.
+func TestVerify_ReportsEveryKeyWithNoField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		declared []string
+		wantErr  bool
+		want     string
+	}{
+		{name: "no declarations", declared: nil},
+		{
+			name:     "every declared key has a field",
+			declared: []string{"port", "database.dsn"},
+		},
+		{
+			name:     "keys are compared as dotted paths, case-insensitively",
+			declared: []string{"Port", "Database.DSN"},
+		},
+		{
+			name:     "an undeclared field is not an error",
+			declared: []string{"port"},
+		},
+		{
+			name:     "a key with no field is reported",
+			declared: []string{"port", "authn.pii_cipher_key"},
+			wantErr:  true,
+			want:     "authn.pii_cipher_key",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := Verify(&verifyTarget{}, tt.declared)
+			if tt.wantErr {
+				if !errors.Is(err, ErrInvalidTarget) {
+					t.Fatalf("Verify() error = %v, want it to wrap ErrInvalidTarget", err)
+				}
+				if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("error = %q, want it to name %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Verify() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestVerify_ReportsEveryMissingKeyAtOnce pins that one call reports the whole
+// gap: a host fixing its target should not have to re-run the check once per
+// key.
+func TestVerify_ReportsEveryMissingKeyAtOnce(t *testing.T) {
+	t.Parallel()
+
+	err := Verify(&verifyTarget{}, []string{"one.gone", "two.gone"})
+	if err == nil {
+		t.Fatal("Verify() error = nil, want both missing keys reported")
+	}
+	for _, key := range []string{"one.gone", "two.gone"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error = %q, want it to name %q", err, key)
+		}
+	}
+}
+
+// TestVerify_RejectsANonStructTarget pins that Verify holds the same target
+// contract Load does, through the same error.
+func TestVerify_RejectsANonStructTarget(t *testing.T) {
+	t.Parallel()
+
+	if err := Verify(nil, []string{"port"}); !errors.Is(err, ErrInvalidTarget) {
+		t.Errorf("Verify(nil, ...) error = %v, want it to wrap ErrInvalidTarget", err)
+	}
+}

@@ -8,6 +8,19 @@
 // override, belong to the separate dynamic configuration module; they are not
 // resolved here.
 //
+// # One key, one layer
+//
+// A configuration key belongs to exactly one layer. Bootstrap keys are process
+// startup input: they are resolved once on the four-source chain below and read
+// no more, they have no tenant dimension, and a change takes effect at the next
+// start. Runtime configuration items are the dynamic values in the configs
+// table: stored per tenant or per platform, edited by an operator while the
+// process runs, propagated through the config module's service and events, and
+// effective immediately. Declaring the same dotted key on both layers is
+// refused where both declaration seats are visible: the two layers give one
+// identifier two meanings, two defaults and two edit surfaces, and an operator
+// changing "that key" could not tell which one they were changing.
+//
 // # Sources
 //
 // Values are resolved from four sources. Highest priority wins:
@@ -21,25 +34,55 @@
 // actually supplied, so a field left untouched keeps the value the caller
 // assigned before calling Load.
 //
+// The environment source is read under the loader's prefix, SPEED_ by default;
+// WithEnvPrefix replaces it, so a host whose variables carry another prefix
+// (APP_, say) drives the same loader without renaming a single variable.
+//
 // # Key mapping
 //
 // A key path is derived from exported field names, lowercased and joined with
 // KeyDelimiter, so the field Database.DSN maps to the key "database.dsn". An
 // embedded struct is not flattened away; it contributes its type name as a key
 // segment just as a named field does. The
-// same key becomes the flag --database.dsn and the environment variable
-// SPEED_DATABASE__DSN, where EnvSeparator (a double underscore) marks each level
-// of nesting. Matching is case-insensitive in every source. Note that a single
-// underscore is not a nesting marker: SPEED_DATABASE_DSN does not resolve to
-// database.dsn, and keys that match no field are ignored rather than rejected,
-// so unrelated SPEED_-prefixed variables are harmless.
+// same key becomes the flag --database.dsn and, by default, the environment
+// variable SPEED_DATABASE__DSN, where EnvSeparator (a double underscore) marks
+// each level of nesting. Matching is case-insensitive in every source. Note
+// that a single underscore is not a nesting marker: SPEED_DATABASE_DSN does not
+// resolve to database.dsn, and keys that match no field are ignored rather than
+// rejected, so unrelated SPEED_-prefixed variables are harmless.
+//
+// A field may instead pin its exact environment variable name (see the env
+// struct tag option below). A pinned field is read from that name whatever the
+// prefix is, and that name is the only variable it reads -- the spelling its
+// key would otherwise derive is not a second way in, so a field never has two
+// environment variables competing for it. The pinned name need not be
+// derivable from the key at all: PORT is the customary name for "the port this
+// platform told me to listen on", and no prefix-derived spelling of the key
+// "port" can reach it. A file's or flag's spelling never depends on the prefix
+// or on pinning: only environment variable names do.
 //
 // # Struct tags
 //
 // Fields may carry a "config" struct tag holding comma-separated options:
 //
-//	Field string `config:"required"` // must end up non-zero, from any source
-//	Field string `config:"-"`        // never populated from any source
+//	Field string `config:"required"`     // must end up non-zero, from any source
+//	Field string `config:"-"`            // never populated from any source
+//	Field string `config:"env=PORT"`     // read from the variable PORT, pinned
+//
+// A pinned name must not be empty, and two fields must not resolve to the same
+// environment variable name -- both fields pinning it, or one pinning a name
+// another field derives. That ambiguity is refused when the target is described
+// (ErrInvalidTarget, naming both fields), because a single variable cannot feed
+// two fields whose values the loader would then decide by traversal order.
+//
+// # Verification
+//
+// Verify checks a list of declared keys against a target struct: every declared
+// key must map onto a field. A host that knows the bootstrap keys its modules
+// declared (pkgcore.BootstrapKey, the Registry.Bootstrap seat) runs it to prove
+// its loader target binds everything those declarations promise, and a
+// generated reference runs it so the keys it documents are exactly the keys a
+// real target resolves.
 //
 // # Failure
 //
@@ -65,17 +108,18 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
-	"github.com/knadh/koanf/providers/env/v2"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
 
-// EnvPrefix is the prefix every environment variable must carry to be
-// considered part of the bootstrap configuration.
+// EnvPrefix is the default prefix every environment variable must carry to be
+// considered part of the bootstrap configuration. WithEnvPrefix replaces it per
+// Loader.
 const EnvPrefix = "SPEED_"
 
 // EnvSeparator marks one level of nesting inside an environment variable name,
@@ -93,6 +137,11 @@ const TagName = "config"
 const (
 	tagRequired = "required"
 	tagSkip     = "-"
+	// tagEnvPrefix introduces the option that pins a field's exact environment
+	// variable name: config:"env=PORT".
+	tagEnvPrefix = "env="
+	// tagOptionSeparator splits a tag into its comma-separated options.
+	tagOptionSeparator = ","
 )
 
 // Command-line flag syntax.
@@ -126,6 +175,7 @@ var (
 var (
 	anyType             = reflect.TypeOf((*any)(nil)).Elem()
 	timeType            = reflect.TypeOf(time.Time{})
+	durationType        = reflect.TypeOf(time.Duration(0))
 	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
 )
 
@@ -165,6 +215,7 @@ type Loader struct {
 	configFile string
 	args       []string
 	environ    []string
+	prefix     string
 	argsSet    bool
 	environSet bool
 }
@@ -173,16 +224,43 @@ type Loader struct {
 type Option func(*Loader)
 
 // New returns a Loader configured by the given options. With no options it
-// reads flags from os.Args, the environment from os.Environ and consults no
-// config file.
+// reads flags from os.Args, the environment from os.Environ under the SPEED_
+// prefix, and consults no config file.
 func New(opts ...Option) *Loader {
-	l := &Loader{}
+	l := &Loader{prefix: EnvPrefix}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(l)
 		}
 	}
 	return l
+}
+
+// WithEnvPrefix replaces the prefix a field's environment variable name is
+// derived from, SPEED_ by default. It changes environment variable names only:
+// config keys and command-line flags are spelled the same whatever the prefix,
+// so a host driving this loader with WithEnvPrefix("APP_") still reads the key
+// "port" from the flag --port.
+//
+// A field pinning its name with the env struct tag option is unaffected by the
+// prefix, and a prefix matching no field is harmless: variables outside the
+// target struct's keys are ignored, never rejected.
+//
+// The prefix must be non-empty and end in "_"; anything else panics, because it
+// is a wiring error rather than a runtime condition. An empty prefix would read
+// the whole process environment into the loader's namespace, and a prefix
+// without the trailing separator builds misspelled names such as FOOPORT out of
+// the key "port".
+func WithEnvPrefix(prefix string) Option {
+	return func(l *Loader) {
+		if prefix == "" {
+			panic("config: WithEnvPrefix requires a non-empty prefix")
+		}
+		if !strings.HasSuffix(prefix, "_") {
+			panic("config: WithEnvPrefix requires a prefix ending in \"_\", got " + prefix)
+		}
+		l.prefix = prefix
+	}
 }
 
 // WithConfigFile points the loader at a YAML (or JSON) config file. The file is
@@ -230,6 +308,9 @@ func (l *Loader) Load(target any) error {
 	if err != nil {
 		return err
 	}
+	if err := l.resolveEnvNames(schema); err != nil {
+		return err
+	}
 
 	values, origins, err := l.collect(schema)
 	if err != nil {
@@ -240,16 +321,24 @@ func (l *Loader) Load(target any) error {
 		return err
 	}
 
+	// Text values are converted here, once, so that the decode and the per-key
+	// replay in explain judge the same value by the same rules. The empty-value
+	// check above keeps its own error, which states the fault better than a
+	// parse failure would.
+	if err := l.coerceTextValues(schema, values, origins); err != nil {
+		return err
+	}
+
 	k := koanf.New(KeyDelimiter)
 	for _, key := range slices.Sorted(maps.Keys(values)) {
 		if err := k.Set(key, values[key]); err != nil {
 			return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
-				ErrInvalidValue, key, origins[key], err, l.sourcesFor(key))
+				ErrInvalidValue, key, origins[key], err, l.sourcesFor(schema, key))
 		}
 	}
 
 	if err := decode(k, target); err != nil {
-		return l.explain(target, values, origins, err)
+		return l.explain(schema, target, values, origins, err)
 	}
 
 	return l.checkRequired(target, schema)
@@ -278,7 +367,7 @@ func (l *Loader) collect(s *schema) (map[string]any, map[string]source, error) {
 	}
 	apply(fileValues, sourceFile)
 
-	envValues, err := l.readEnv()
+	envValues, err := l.readEnv(s)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -313,29 +402,55 @@ func (l *Loader) readFile() (map[string]any, error) {
 	return k.All(), nil
 }
 
-// readEnv reads the SPEED_-prefixed environment into a flat map of key to
-// value, translating EnvSeparator back into KeyDelimiter.
-func (l *Loader) readEnv() (map[string]any, error) {
-	opt := env.Opt{
-		Prefix: EnvPrefix,
-		TransformFunc: func(name, value string) (string, any) {
-			key := strings.TrimPrefix(name, EnvPrefix)
-			if key == "" {
-				return "", nil
-			}
-			return strings.ReplaceAll(strings.ToLower(key), EnvSeparator, KeyDelimiter), value
-		},
-	}
-	if l.environSet {
-		environ := l.environ
-		opt.EnvironFunc = func() []string { return environ }
+// readEnv reads the environment into a flat map of key to value. A variable is
+// accepted when its name is one some field pinned with the env struct tag
+// option, or when it carries the loader's prefix and its remainder translates
+// EnvSeparator back into KeyDelimiter, lowercased. Every other variable is
+// ignored, so an unrelated variable whose name happens to share the prefix
+// stays harmless.
+//
+// A pinned field is read from its pinned name only: the variable its key would
+// otherwise derive to is not a second spelling of the same field, because a
+// field that could be fed by either name would have two sources whose relative
+// weight depended on the environment's order.
+func (l *Loader) readEnv(s *schema) (map[string]any, error) {
+	environ := l.environ
+	if !l.environSet {
+		environ = os.Environ()
 	}
 
-	// An empty delimiter keeps the provider's map flat, which is the shape the
-	// merge below works in.
-	values, err := env.Provider("", opt).Read()
-	if err != nil {
-		return nil, fmt.Errorf("%w: environment: %w", ErrSourceUnreadable, err)
+	pinned := make(map[string]string, len(s.fields))
+	onlyPinned := make(map[string]struct{}, len(s.fields))
+	for i := range s.fields {
+		if s.fields[i].pinned == "" {
+			continue
+		}
+		pinned[s.fields[i].pinned] = s.fields[i].key
+		onlyPinned[s.fields[i].key] = struct{}{}
+	}
+
+	values := make(map[string]any)
+	for _, entry := range environ {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if key, isPinned := pinned[name]; isPinned {
+			values[key] = value
+			continue
+		}
+		if !strings.HasPrefix(name, l.prefix) {
+			continue
+		}
+		key := strings.TrimPrefix(name, l.prefix)
+		if key == "" {
+			continue
+		}
+		key = strings.ReplaceAll(strings.ToLower(key), EnvSeparator, KeyDelimiter)
+		if _, pinnedElsewhere := onlyPinned[key]; pinnedElsewhere {
+			continue
+		}
+		values[key] = value
 	}
 	return values, nil
 }
@@ -418,7 +533,7 @@ func decode(k *koanf.Koanf, target any) error {
 // responsible. It replays each key on its own against a fresh copy of the
 // target type, so the diagnosis uses exactly the same conversion rules as the
 // failed decode rather than a second-guessed imitation of them.
-func (l *Loader) explain(target any, values map[string]any, origins map[string]source, cause error) error {
+func (l *Loader) explain(s *schema, target any, values map[string]any, origins map[string]source, cause error) error {
 	elem := reflect.TypeOf(target).Elem()
 	for _, key := range slices.Sorted(maps.Keys(values)) {
 		probe := koanf.New(KeyDelimiter)
@@ -427,7 +542,7 @@ func (l *Loader) explain(target any, values map[string]any, origins map[string]s
 		}
 		if err := decode(probe, reflect.New(elem).Interface()); err != nil {
 			return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
-				ErrInvalidValue, key, origins[key], err, l.sourcesFor(key))
+				ErrInvalidValue, key, origins[key], err, l.sourcesFor(s, key))
 		}
 	}
 	return fmt.Errorf("%w: %w", ErrInvalidValue, cause)
@@ -450,7 +565,7 @@ func (l *Loader) checkEmpty(s *schema, values map[string]any, origins map[string
 			continue
 		}
 		return fmt.Errorf("%w for key %q (supplied by %s): a field of type %s has no representation for an empty value; sources checked: %s",
-			ErrInvalidValue, key, origins[key], t, l.sourcesFor(key))
+			ErrInvalidValue, key, origins[key], t, l.sourcesFor(s, key))
 	}
 	return nil
 }
@@ -468,17 +583,20 @@ func (l *Loader) checkRequired(target any, s *schema) error {
 			continue
 		}
 		missing = append(missing, fmt.Errorf("%w: key %q was not supplied; sources checked: %s",
-			ErrMissingValue, f.key, l.sourcesFor(f.key)))
+			ErrMissingValue, f.key, l.sourcesFor(s, f.key)))
 	}
 	return errors.Join(missing...)
 }
 
 // sourcesFor lists, in priority order, every place the loader looked for a key,
-// so the reader of an error knows exactly where to put the missing value.
-func (l *Loader) sourcesFor(key string) string {
+// so the reader of an error knows exactly where to put the missing value. The
+// environment name it names is the one this loader actually read -- a field's
+// pinned name when it has one, its prefix-derived name otherwise -- never a
+// hardcoded SPEED_ spelling.
+func (l *Loader) sourcesFor(s *schema, key string) string {
 	parts := []string{
 		"command-line flag " + flagPrefix + key,
-		"environment variable " + envVarFor(key),
+		"environment variable " + s.envNameFor(l, key),
 	}
 	if l.configFile != "" {
 		parts = append(parts, fmt.Sprintf("key %s in config file %s", key, l.configFile))
@@ -488,9 +606,22 @@ func (l *Loader) sourcesFor(key string) string {
 	return strings.Join(append(parts, "the default set on the target struct"), ", ")
 }
 
-// envVarFor returns the environment variable name a config key is read from.
-func envVarFor(key string) string {
-	return EnvPrefix + strings.ToUpper(strings.ReplaceAll(key, KeyDelimiter, EnvSeparator))
+// envNameFor returns the environment variable name a config key is read from:
+// the field's pinned name when it has one, its prefix-derived name otherwise.
+// A key nested under a map-like leaf has no field of its own and is always
+// derived.
+func (s *schema) envNameFor(l *Loader, key string) string {
+	if f, ok := s.byKey[key]; ok && f.pinned != "" {
+		return f.pinned
+	}
+	return l.derivedEnvName(key)
+}
+
+// derivedEnvName spells a config key the way the environment carries it for
+// this loader: the prefix, then the key uppercased with each level of nesting
+// marked by EnvSeparator.
+func (l *Loader) derivedEnvName(key string) string {
+	return l.prefix + strings.ToUpper(strings.ReplaceAll(key, KeyDelimiter, EnvSeparator))
 }
 
 // field is one leaf of the target struct: a value a source can actually supply.
@@ -498,6 +629,7 @@ type field struct {
 	key      string       // dotted key path, for example "database.dsn"
 	index    []int        // field index path from the root struct
 	typ      reflect.Type // the leaf's own type, which a supplied value must fit
+	pinned   string       // the exact environment variable name, tagged config:"env=NAME"; empty when derived
 	required bool         // tagged config:"required"
 	subKeys  bool         // a map-like leaf, so keys nested under it belong to it
 }
@@ -537,6 +669,141 @@ func (s *schema) targetType(key string) (reflect.Type, bool) {
 	return nil, false
 }
 
+// resolveEnvNames refuses a target whose fields would be read from one
+// environment variable twice: both pinning the same name, or one pinning a name
+// another field derives. Such a target has no single-valued reading -- which
+// field a variable feeds would depend on traversal order -- so it fails here,
+// before any source is consulted, naming both keys and the shared name.
+func (l *Loader) resolveEnvNames(s *schema) error {
+	owners := make(map[string]string, len(s.fields))
+	for i := range s.fields {
+		f := &s.fields[i]
+		name := f.pinned
+		pinned := f.pinned != ""
+		if name == "" {
+			name = l.derivedEnvName(f.key)
+		}
+		if owner, taken := owners[name]; taken {
+			how := "both derive"
+			if pinned {
+				how = "pins"
+			}
+			return fmt.Errorf("%w: key %q %s environment variable %s, which key %q also reads; give one of them a distinct env name",
+				ErrInvalidTarget, f.key, how, name, owner)
+		}
+		owners[name] = f.key
+	}
+	return nil
+}
+
+// Verify reports every declared key that maps onto no field of target, so that
+// a host proving its loader target binds the declarations its modules
+// registered gets a named list of what is missing rather than a load failure
+// later. target must be the same kind of non-nil struct pointer Load accepts;
+// an invalid one returns the same error describe produces.
+//
+// Keys are compared as dotted key paths, lowercased, exactly as Load resolves
+// them; a key nested under a map-like field has no field of its own and is
+// reported as missing, because a declaration names a value the loader must
+// resolve, not a collection member.
+func Verify(target any, declared []string) error {
+	s, err := describe(target)
+	if err != nil {
+		return err
+	}
+	var missing []error
+	for _, key := range declared {
+		if _, ok := s.byKey[strings.ToLower(key)]; !ok {
+			missing = append(missing, fmt.Errorf("%w: declared key %q maps onto no field of the target struct",
+				ErrInvalidTarget, key))
+		}
+	}
+	return errors.Join(missing...)
+}
+
+// coerceTextValues converts the text of a flag, environment variable or
+// string-valued config file entry into the type the field it maps to must hold,
+// so a text value is judged by strconv's rules -- and reported by this loader,
+// naming the key and every source consulted -- rather than by the decoder's
+// weaker ones. Values already carrying a type (a YAML integer, say) are left
+// alone, as are fields that parse their own text and fields that hold text
+// verbatim.
+func (l *Loader) coerceTextValues(s *schema, values map[string]any, origins map[string]source) error {
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		text, isText := values[key].(string)
+		if !isText {
+			continue
+		}
+		t, known := s.targetType(key)
+		if !known {
+			continue
+		}
+		converted, handled, err := parseText(text, t)
+		if err != nil {
+			return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
+				ErrInvalidValue, key, origins[key], err, l.sourcesFor(s, key))
+		}
+		if handled {
+			values[key] = converted
+		}
+	}
+	return nil
+}
+
+// parseText converts one text value into t's own type, reporting whether the
+// type is one the conversion covers. Integral fields read Go's integer literal
+// syntax (strconv.ParseInt and ParseUint with base 0: 0x10, 0o17 and 1_0 are
+// literals, and a leading zero makes 010 octal), bool fields read
+// strconv.ParseBool's full set (1/t/T/TRUE/true/True and their false
+// counterparts), and duration fields read Go's duration syntax. Everything
+// else -- text, interfaces, collections, structs, and types that parse their
+// own text -- stays as it arrived.
+func parseText(text string, t reflect.Type) (any, bool, error) {
+	elem := deref(t)
+	if isScalarStruct(elem) {
+		return nil, false, nil
+	}
+
+	v := reflect.New(elem).Elem()
+	switch elem.Kind() {
+	case reflect.Bool:
+		parsed, err := strconv.ParseBool(text)
+		if err != nil {
+			return nil, true, fmt.Errorf("value %q is not a valid bool", text)
+		}
+		v.SetBool(parsed)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if elem == durationType {
+			parsed, err := time.ParseDuration(text)
+			if err != nil {
+				return nil, true, fmt.Errorf("value %q is not a valid duration", text)
+			}
+			v.SetInt(int64(parsed))
+			break
+		}
+		parsed, err := strconv.ParseInt(text, 0, elem.Bits())
+		if err != nil {
+			return nil, true, fmt.Errorf("value %q is not a valid integer", text)
+		}
+		v.SetInt(parsed)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		parsed, err := strconv.ParseUint(text, 0, elem.Bits())
+		if err != nil {
+			return nil, true, fmt.Errorf("value %q is not a valid unsigned integer", text)
+		}
+		v.SetUint(parsed)
+	case reflect.Float32, reflect.Float64:
+		parsed, err := strconv.ParseFloat(text, elem.Bits())
+		if err != nil {
+			return nil, true, fmt.Errorf("value %q is not a valid number", text)
+		}
+		v.SetFloat(parsed)
+	default:
+		return nil, false, nil
+	}
+	return v.Interface(), true, nil
+}
+
 // describe validates the target and flattens its type into a schema.
 func describe(target any) (*schema, error) {
 	rv := reflect.ValueOf(target)
@@ -574,7 +841,7 @@ func (s *schema) walk(t reflect.Type, prefix []string, index []int, visiting map
 			continue
 		}
 
-		name, required, skip, err := parseTag(sf)
+		name, pinned, required, skip, err := parseTag(sf)
 		if err != nil {
 			return err
 		}
@@ -595,6 +862,7 @@ func (s *schema) walk(t reflect.Type, prefix []string, index []int, visiting map
 			key:      strings.Join(path, KeyDelimiter),
 			index:    idx,
 			typ:      sf.Type,
+			pinned:   pinned,
 			required: required,
 			subKeys:  acceptsSubKeys(sf.Type),
 		})
@@ -602,27 +870,38 @@ func (s *schema) walk(t reflect.Type, prefix []string, index []int, visiting map
 	return nil
 }
 
-// parseTag reads a field's config tag, yielding its key segment and options.
-func parseTag(sf reflect.StructField) (name string, required, skip bool, err error) {
+// parseTag reads a field's config tag, yielding its key segment, its pinned
+// environment variable name when the tag carries one, and the remaining
+// options.
+func parseTag(sf reflect.StructField) (name, pinned string, required, skip bool, err error) {
 	name = strings.ToLower(sf.Name)
 	tag, ok := sf.Tag.Lookup(TagName)
 	if !ok {
-		return name, false, false, nil
+		return name, "", false, false, nil
 	}
 
-	for _, opt := range strings.Split(tag, ",") {
-		switch strings.TrimSpace(opt) {
-		case "":
-		case tagSkip:
-			return "", false, true, nil
-		case tagRequired:
+	for _, opt := range strings.Split(tag, tagOptionSeparator) {
+		opt = strings.TrimSpace(opt)
+		switch {
+		case opt == "":
+		case opt == tagSkip:
+			return "", "", false, true, nil
+		case opt == tagRequired:
 			required = true
+		case strings.HasPrefix(opt, tagEnvPrefix):
+			// A pin without a name is a misspelling of the option itself, not a
+			// request to read an unnamed variable, so it is rejected here.
+			if pinned != "" || opt == tagEnvPrefix {
+				return "", "", false, false, fmt.Errorf("%w: field %s has a malformed or repeated %s tag option %q; it needs exactly one variable name, as in %sNAME",
+					ErrInvalidTarget, sf.Name, TagName, opt, tagEnvPrefix)
+			}
+			pinned = strings.TrimPrefix(opt, tagEnvPrefix)
 		default:
-			return "", false, false, fmt.Errorf("%w: field %s has unknown %s tag option %q",
+			return "", "", false, false, fmt.Errorf("%w: field %s has unknown %s tag option %q",
 				ErrInvalidTarget, sf.Name, TagName, opt)
 		}
 	}
-	return name, required, false, nil
+	return name, pinned, required, false, nil
 }
 
 // structType reports whether a field is a struct the loader should descend
