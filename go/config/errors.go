@@ -109,7 +109,7 @@ var (
 	// already classify that sentinel keep working; the key material itself
 	// is never echoed.
 	ErrInvalidRootKey = apperr.Invalid("config.invalid_root_key").
-		WithCause(dbkit.ErrInvalidKeySize)
+				WithCause(dbkit.ErrInvalidKeySize)
 
 	// ErrAuditPublishFailed reports that a Set wrote its row but could not
 	// publish the resulting config.item.changed event. The write itself has

@@ -21,8 +21,8 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/org"
-	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pki"
 )
 
 // TestConfigFromEnv_Defaults verifies ConfigFromEnv's zero-environment
