@@ -44,6 +44,10 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
 | `WithVendorClientIPHeaders(headers ...VendorClientIPHeader)` | The per-header opt-in that authorizes reading a single-hop vendor client-address header (`VendorClientIPHeaderFlyClientIP`, wire value `Fly-Client-IP`) for a request whose peer is a declared trusted proxy. The `VendorClientIPHeader` set is closed -- any other value is refused at wiring time -- and the default is none. See "Every recorded address is the client's, gated on host-declared trusted proxies" below for why the trusted-proxy declaration alone must never authorize such a header. |
 
+### Declared bootstrap keys
+
+`Register` declares two process-start keys on the `Registry.Bootstrap` seat: `authn.pii_cipher_key` (the AES key behind `RegisterPIISerializer`'s field serializer) and `authn.blind_index_key` (the HMAC key behind `WithBlindIndexKey`). Both are `hexkey` and Sensitive, both documented as a non-secret development default, and both are separate secrets on purpose -- an AES key never doubles as an HMAC key, and the rule spans modules, not only authn's own two keys. The declaration states the module's contract; the host resolves the values (flags, environment, an optional file, its own defaults) and injects them through the options above. The module never reads the environment itself. `pkgcore/AGENTS.md` carries the seat's own contract, including why a key declared on both the bootstrap and the runtime configuration layers is refused.
+
 ### Feature flags are enforced through a host-supplied gate
 
 This module declares eight feature flags in `Register` (`authn.password_login`,

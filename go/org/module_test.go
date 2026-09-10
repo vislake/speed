@@ -755,3 +755,29 @@ func (g fixedGate) IsEnabled(_ context.Context, _ string) (bool, error) {
 // satisfies FeatureGate exactly this way, and neither module imports the
 // other.
 var _ FeatureGate = fixedGate{}
+
+// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
+// org's contract names: the HMAC key behind the invitation-address blind
+// indexer, a Sensitive hex key separate from every cipher key -- and the only
+// key org declares, since the runtime schema beside it is deliberately absent.
+func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+	reg := bootstrapTestModule(t)
+
+	declared := reg.Bootstrap.Keys()
+	if len(declared) != 1 {
+		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly one", len(declared), declared)
+	}
+	key := declared[0]
+	if key.Key != "org.invitation_email_index_key" {
+		t.Errorf("declared key = %q, want org.invitation_email_index_key", key.Key)
+	}
+	if key.Format != "hexkey" || !key.Sensitive {
+		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	}
+	if key.Group != moduleName {
+		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	}
+	if key.Default == "" || key.Description == "" || key.Example != "" {
+		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	}
+}

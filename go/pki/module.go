@@ -441,6 +441,24 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // all -- exactly as every other module fragment's identical constant does.
 const apiPath = "/api/v1/pki"
 
+// bootstrapKeyDecl is the process-start key material this module consumes: the
+// AES key that seals the LocalSigner private-key column (pki_local_keys, via
+// RegisterLocalKeySerializer).
+//
+// It is a separate secret from every other module's key material, because
+// dbkit's key-separation rule applies across modules and not only within one.
+// The keys it seals are the ones authn's access tokens are ultimately signed
+// with, so a host that leaves it at the development default ships with signing
+// keys sealed under a key committed to this repository's own source.
+var bootstrapKeyDecl = pkgcore.BootstrapKey{
+	Key:         "pki.local_key_cipher_key",
+	Format:      "hexkey",
+	Default:     "documented non-secret development default",
+	Sensitive:   true,
+	Description: "AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one.",
+	Group:       moduleName,
+}
+
 // openAPISpecYAML is pki's OpenAPI fragment, embedded from api/ so the spec
 // -- and the generated ServerInterface and types derived from it -- travels
 // inside the module binary.
@@ -497,6 +515,9 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	if err := reg.Config.Add(configItemDecls...); err != nil {
+		return err
+	}
+	if err := reg.Bootstrap.Add(bootstrapKeyDecl); err != nil {
 		return err
 	}
 	if err := reg.Events.Publishes(eventDecls...); err != nil {

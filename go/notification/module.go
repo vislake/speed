@@ -436,7 +436,27 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.handler = NewHandler(m.inbox, m.prefs, m.contacts, m.hub, m.subject)
 	m.handler.attachHost(reg)
 	reg.Routes.Mount(apiPath, m.handler)
-	return nil
+	return reg.Bootstrap.Add(bootstrapKeyDecl)
+}
+
+// bootstrapKeyDecl is the process-start key material this module consumes: the
+// HMAC key the blind indexers over its encrypted contact addresses are built
+// from (WithContactEmailIndexer / WithContactPhoneIndexer over
+// dbkit.NewBlindIndexer). A host that withholds it cannot be wired at all
+// (ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired).
+//
+// One key serves both indexers. Separate secrets from every cipher key is the
+// rule that shapes it: a host reusing its configuration cipher to encrypt
+// Contact.Address may not reuse that key as an HMAC key, and the two
+// normalizers keep the email and phone index columns' inputs in disjoint
+// canonical forms, so one HMAC key leaks nothing between them.
+var bootstrapKeyDecl = pkgcore.BootstrapKey{
+	Key:         "notification.contact_index_key",
+	Format:      "hexkey",
+	Default:     "documented non-secret development default",
+	Sensitive:   true,
+	Description: "HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key.",
+	Group:       moduleName,
 }
 
 // compile-time check that *Module satisfies pkgcore.Module.

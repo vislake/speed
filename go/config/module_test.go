@@ -310,3 +310,38 @@ func TestModule_Attach_RequiresACipherForSensitiveDeclarations(t *testing.T) {
 	_, err := NewModule(db, WithPollInterval(0)).Attach(reg)
 	assertCode(t, err, ErrCipherRequired)
 }
+
+// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
+// this module's contract names: the master key behind the cipher that seals
+// Sensitive values. It is declared on the bootstrap layer precisely because the
+// key that encrypts the configs table cannot be a row in it, so the runtime
+// schema must stay free of the identifier.
+func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+	reg := newPlainRegistry()
+	if err := NewModule(nil).Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	declared := reg.Bootstrap.Keys()
+	if len(declared) != 1 {
+		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the master key", len(declared), declared)
+	}
+	key := declared[0]
+	if key.Key != "config.master_key" {
+		t.Errorf("declared key = %q, want config.master_key", key.Key)
+	}
+	if key.Format != "hexkey" || !key.Sensitive {
+		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	}
+	if key.Group != moduleName {
+		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	}
+	if key.Default == "" || key.Description == "" || key.Example != "" {
+		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	}
+	for _, item := range reg.Config.Items() {
+		if item.Key == key.Key {
+			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
+		}
+	}
+}

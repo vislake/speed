@@ -267,7 +267,12 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
   column's exact SQL name, carried as a referenced constant rather than a
   hand-typed string (see that constant's doc comment for why dbkit refuses
   an empty name but cannot guard a wrong one; the reference app is the
-  mandatory consumer).
+  mandatory consumer). The HMAC key behind them is declared, once, on the
+  `Registry.Bootstrap` seat as `notification.contact_index_key` (`hexkey`,
+  Sensitive) -- one key serves both indexers, exactly as the options'
+  contract allows, and it stays separate from every cipher key. Register
+  states the contract; the host resolves the value and injects the indexers,
+  and the module never reads the environment.
 - `WithDeliveryQueue` -- the `jobs.Queue` delivery jobs are enqueued on and
   the registered handler consumes.
 - `WithUserAddressResolver` -- the host's read of a user recipient's

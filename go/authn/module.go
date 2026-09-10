@@ -836,6 +836,9 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Config.Add(configItems()...); err != nil {
 		return err
 	}
+	if err := reg.Bootstrap.Add(bootstrapKeyDecls...); err != nil {
+		return err
+	}
 	if err := reg.Permissions.Add(PermissionSSOManage); err != nil {
 		return err
 	}
@@ -887,6 +890,37 @@ func featureFlags() []pkgcore.FeatureFlag {
 			Description: "Allows each tenant to configure an OpenID Connect identity provider its members sign in through.",
 		},
 	}
+}
+
+// bootstrapKeyDecls is the process-start key material this module consumes,
+// declared on the bootstrap seat.
+//
+// Both keys are separate secrets on purpose. The cipher key seals the PII
+// columns (email, phone, TOTP secrets) and the blind-index key is the HMAC key
+// over users.email_index/phone_index; dbkit's rule that an AES key never
+// doubles as an HMAC key is what keeps them apart, and the same rule separates
+// them from every other module's key material.
+//
+// The blind-index key must stay IDENTICAL across restarts: a rotation makes
+// every already-stored email and phone index unfindable, so the host must feed
+// it from a durable secret store rather than one that regenerates it.
+var bootstrapKeyDecls = []pkgcore.BootstrapKey{
+	{
+		Key:         "authn.pii_cipher_key",
+		Format:      "hexkey",
+		Default:     "documented non-secret development default",
+		Sensitive:   true,
+		Description: "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below.",
+		Group:       moduleName,
+	},
+	{
+		Key:         "authn.blind_index_key",
+		Format:      "hexkey",
+		Default:     "documented non-secret development default",
+		Sensitive:   true,
+		Description: "HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key.",
+		Group:       moduleName,
+	},
 }
 
 // configItems is the dynamic-configuration schema this module declares.

@@ -530,3 +530,52 @@ func TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole(t *testing.
 		t.Fatalf("newOptions() smsSender = nil, want a default console sender")
 	}
 }
+
+// TestModule_RegisterDeclaresItsBootstrapKeys pins the process-start key
+// material authn's contract names: two hex keys, both Sensitive (their values
+// are material a real deployment feeds from a secret store), each separate from
+// the other and from the runtime schema's keys.
+func TestModule_RegisterDeclaresItsBootstrapKeys(t *testing.T) {
+	t.Parallel()
+
+	module := newTestModule(t)
+	reg := newTestRegistry()
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	declared := reg.Bootstrap.Keys()
+	byKey := make(map[string]pkgcore.BootstrapKey, len(declared))
+	for _, key := range declared {
+		byKey[key.Key] = key
+	}
+	if len(declared) != 2 {
+		t.Fatalf("Register() declared %d bootstrap keys (%v), want exactly the two key materials", len(declared), declared)
+	}
+	for _, want := range []string{"authn.pii_cipher_key", "authn.blind_index_key"} {
+		key, ok := byKey[want]
+		if !ok {
+			t.Errorf("Register() did not declare %q", want)
+			continue
+		}
+		if key.Format != "hexkey" {
+			t.Errorf("%s format = %q, want hexkey", want, key.Format)
+		}
+		if !key.Sensitive {
+			t.Errorf("%s is not marked Sensitive, want a key material", want)
+		}
+		if key.Group != moduleName {
+			t.Errorf("%s group = %q, want the module name %q", want, key.Group, moduleName)
+		}
+		if key.Default == "" || key.Description == "" || key.Example != "" {
+			t.Errorf("%s = %+v, want a documented fallback and contract text, and no suggested value", want, key)
+		}
+	}
+	// The two layers must stay disjoint: no declared bootstrap key may also be
+	// a runtime configuration item of this module's own schema.
+	for _, item := range reg.Config.Items() {
+		if _, clash := byKey[item.Key]; clash {
+			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
+		}
+	}
+}

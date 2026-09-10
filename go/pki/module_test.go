@@ -341,3 +341,39 @@ func (stubQueue) Cancel(context.Context, jobs.JobID) error           { return ni
 
 // compile-time check that stubQueue satisfies jobs.Queue.
 var _ jobs.Queue = stubQueue{}
+
+// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
+// pki's contract names: the AES key sealing the LocalSigner key column, a
+// Sensitive hex key separate from every other module's material, and disjoint
+// from the runtime schema's own validity items.
+func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+	t.Parallel()
+
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := NewModule(newTestDB(t)).Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	declared := reg.Bootstrap.Keys()
+	if len(declared) != 1 {
+		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the local-key cipher key", len(declared), declared)
+	}
+	key := declared[0]
+	if key.Key != "pki.local_key_cipher_key" {
+		t.Errorf("declared key = %q, want pki.local_key_cipher_key", key.Key)
+	}
+	if key.Format != "hexkey" || !key.Sensitive {
+		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	}
+	if key.Group != moduleName {
+		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	}
+	if key.Default == "" || key.Description == "" || key.Example != "" {
+		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	}
+	for _, item := range reg.Config.Items() {
+		if item.Key == key.Key {
+			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
+		}
+	}
+}

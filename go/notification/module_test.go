@@ -488,3 +488,35 @@ func mapKeys(m map[string]any) []string {
 	slices.Sort(out)
 	return out
 }
+
+// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
+// this module's contract names: the HMAC key both contact-address blind
+// indexers are built from, one Sensitive hex key that stays separate from every
+// cipher key.
+func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db, testModuleOptions(t)...)
+	reg := newHostRegistry(t)
+
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	declared := reg.Bootstrap.Keys()
+	if len(declared) != 1 {
+		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the contact index key", len(declared), declared)
+	}
+	key := declared[0]
+	if key.Key != "notification.contact_index_key" {
+		t.Errorf("declared key = %q, want notification.contact_index_key", key.Key)
+	}
+	if key.Format != "hexkey" || !key.Sensitive {
+		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	}
+	if key.Group != moduleName {
+		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	}
+	if key.Default == "" || key.Description == "" || key.Example != "" {
+		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	}
+}

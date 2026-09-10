@@ -12,6 +12,10 @@ Revocation for both layers: `Service.RevokeSigningKey` (any prior status, immedi
 
 **Still not in scope, by design:** TLS certificates for transport, ACME, an OCSP responder (CRL only), Certificate Transparency logs, cross-deployment CA federation, a generic "export private key" API, and SM2. `pki.authority.expiring`/`pki.certificate.expiring`/`.issued`/`.renewed` events and `pki.key.rotate`/`pki.private_key.deliver` audit actions are likewise undeclared -- see events.go's and module.go's own doc comments for exactly why each one has no genuine emitter.
 
+## The bootstrap key it declares
+
+`Register` declares one process-start key on the `Registry.Bootstrap` seat: `pki.local_key_cipher_key`, the AES key that seals `LocalSigner`'s `pki_local_keys` private-key column (`RegisterLocalKeySerializer`). It is `hexkey` and Sensitive, its documented fallback is a non-secret development default (which a real deployment must override, or its signing keys are sealed under material committed to this repository's source), and it is separate from every other module's key material -- the keys it seals are the ones `authn`'s access tokens are ultimately signed with, and dbkit's key-separation rule spans modules. The declaration states the contract; the host resolves the value and injects the cipher. pki never reads the environment. The `vault`/`kmsaws` provider modes have no equivalent key here: their material lives in the external service.
+
 ## Signer seam
 
 The single most important interface-shape decision in this module: `Signer` exposes signing *operations* (`GenerateKey`/`Sign`/`Public`/`Destroy`), never a way to read a private key back out. A `Protect(key)`/`Unprotect(ref)` shape would require the private key to exist in plaintext inside this process's memory at some point, which defeats the entire point of a KMS-backed implementation. See `signer.go`'s doc comment for the full argument, including why `Sign` does not reuse the standard library's `crypto.Signer` (no `context.Context` parameter, which a KMS-backed direct-sign implementation genuinely needs for timeout/cancellation/trace propagation on a path a login walks through).

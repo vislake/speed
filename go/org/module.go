@@ -173,6 +173,25 @@ var featureFlagDecls = []pkgcore.FeatureFlag{
 	},
 }
 
+// bootstrapKeyDecl is the process-start key material this module consumes: the
+// HMAC key its invitation-address blind indexer is built from
+// (WithEmailIndexer over dbkit.NewBlindIndexer).
+//
+// It is a separate secret from the host's configuration cipher key on purpose.
+// A host reusing that cipher to encrypt org's Invitation.Email column is the
+// ordinary wiring, and dbkit's own rule is that an AES key must never double as
+// an HMAC key; introducing this one additional key is what keeps that rule real
+// rather than aspirational. An invitation whose address cannot be indexed can
+// never be found again, so the key must not change between restarts.
+var bootstrapKeyDecl = pkgcore.BootstrapKey{
+	Key:         "org.invitation_email_index_key",
+	Format:      "hexkey",
+	Default:     "documented non-secret development default",
+	Sensitive:   true,
+	Description: "HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key.",
+	Group:       moduleName,
+}
+
 // FeatureGate reports whether a feature flag is enabled for the tenant in
 // ctx.
 //
@@ -513,6 +532,9 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	if err := reg.Features.Add(featureFlagDecls...); err != nil {
+		return err
+	}
+	if err := reg.Bootstrap.Add(bootstrapKeyDecl); err != nil {
 		return err
 	}
 	if err := reg.Events.Publishes(append(append([]pkgcore.EventDecl{}, nodeEventDecls...), memberEventDecls...)...); err != nil {
