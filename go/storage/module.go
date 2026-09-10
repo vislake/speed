@@ -482,6 +482,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Jobs.Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.life}); err != nil {
 		return err
 	}
+	// Declare the expiry sweep's periodic schedule alongside its handler:
+	// declaring means scheduled, so a host that runs a jobs.Scheduler over
+	// the registry's declarations sweeps every tenant at the module's own
+	// window cadence without writing a schedule point of its own.
+	if err := reg.Schedules.Add(expirySweepSchedule); err != nil {
+		return err
+	}
 	// Build and mount the module's HTTP surface. Handler is built here, not
 	// in NewModule, deliberately: every Option a caller passed to NewModule
 	// has already run by the time Register is called (Bootstrap calls

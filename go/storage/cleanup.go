@@ -113,6 +113,14 @@ func expirySweepWindowStart(now time.Time) time.Time {
 	return now.Truncate(expirySweepWindowSize)
 }
 
+// expirySweepKeyPrefix is the prefix of every expiry-sweep idempotency
+// key. It is a named constant because two derivations must agree on it
+// byte for byte: expirySweepIdempotencyKey below, and the declaration
+// (expirySweepSchedule) a jobs.Scheduler composes keys from with its own
+// window derivation -- one window must resolve one key through both
+// paths.
+const expirySweepKeyPrefix = "storage.sweep:"
+
 // expirySweepIdempotencyKey derives the jobs idempotency key of one
 // expiry-sweep window for a tenant, per the rule that an idempotency key
 // derives from the business operation, never random: the operation one key
@@ -121,11 +129,23 @@ func expirySweepWindowStart(now time.Time) time.Time {
 // same reasoning notification's derived keys encode the business
 // operation's identity). windowStart is the expirySweepWindowSize window
 // start the enqueue belongs to (expirySweepWindowStart). The
-// "storage.sweep:" prefix keeps the key inside the module's namespace
-// within the shared queue store, and the RFC 3339 window stamp keeps the
-// key readable in DeadLetterJobs while staying unambiguous.
+// expirySweepKeyPrefix keeps the key inside the module's namespace within
+// the shared queue store, and the RFC 3339 window stamp keeps the key
+// readable in DeadLetterJobs while staying unambiguous.
 func expirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return "storage.sweep:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+	return expirySweepKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+}
+
+// expirySweepSchedule is the module's declaration of the expiry sweep on
+// the pkgcore.Registry.Schedules seat: a per-tenant task at the sweep's
+// own window, keyed with the same prefix and window function the manual
+// EnqueueExpirySweep path uses, so a scheduler tick and a manual enqueue
+// landing in one window resolve one key and dedupe onto one job.
+var expirySweepSchedule = pkgcore.PeriodicTask{
+	Type:      taskTypeExpirySweep,
+	Every:     expirySweepWindowSize,
+	Scope:     pkgcore.PeriodicScopePerTenant,
+	KeyPrefix: expirySweepKeyPrefix,
 }
 
 // LifecycleService ends object life: Delete removes one object -- its

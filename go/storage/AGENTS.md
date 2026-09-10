@@ -274,13 +274,18 @@ ordinary shape), and the tenant rides in the task's `TenantID` — rebuilt into
 context by the worker before the handler runs, never inherited from the
 enqueuing side. The task carries no payload (the sweep reads the rows and the
 clock at run time) and a deterministic per-tenant idempotency key
-(`storage.sweep:<tenant>`), so concurrent enqueues — a scheduler with
-replicas, a manual re-run — collapse into one job and a tenant is never swept
-by two workers at once. A nil queue makes the enqueue fail with a plain error:
-sweeping is optional work, and a host that runs no workers must not be forced
-to wire a queue it cannot drain — the module's queue requirement is about the
-thumbnail work the completion pipeline already promised (see "Known
-limitations" for who actually schedules sweeps).
+(`storage.sweep:<tenant>:<window start>`), so concurrent enqueues — a
+scheduler with replicas, a manual re-run — collapse into one job and a tenant
+is never swept by two workers at once. A nil queue makes the enqueue fail with
+a plain error: sweeping is optional work, and a host that runs no workers must
+not be forced to wire a queue it cannot drain — the module's queue requirement
+is about the thumbnail work the completion pipeline already promised. The
+module also declares the sweep's periodic schedule on the
+`pkgcore.Registry.Schedules` seat (cleanup.go's `expirySweepSchedule`,
+declared by `Register` alongside the handler), so a host that starts a
+`jobs.Scheduler` over the finished registry sweeps every tenant at the
+module's own window without writing a schedule point of its own (see "Known
+limitations" for the running example).
 
 ## Module wiring
 
@@ -322,7 +327,9 @@ magic numbers:
   expiry-sweep task `EnqueueExpirySweep` schedules (cleanup.go's
   `expirySweepHandler`, backed by `LifecycleService`) — catalog insertions a
   host drains onto its queue after Bootstrap and gets a worker that produces
-  thumbnails and sweeps expiry;
+  thumbnails and sweeps expiry — and declares the expiry sweep's periodic
+  schedule on `reg.Schedules` (cleanup.go's `expirySweepSchedule`), the seat
+  a host's `jobs.Scheduler` reads;
 - builds `Handler` (`handler.go`) and mounts the module's HTTP surface on
   `reg.Routes` at `apiPath` (`/api/v1/storage`, agreed with the fragment's
   `paths:` keys so the host's outer mux knows which requests to hand over).
@@ -491,53 +498,57 @@ invocation full-check.yml's integration-tiers job runs for this module:
 - The completion event, the derive enqueue and the object-deleted publish all
   warn rather than fail their calls, by design; a host that needs delivery
   guarantees subscribes through the bus machinery those guarantees belong to.
-- **Expiry is enforced by the sweep the host schedules, not by the module
-  itself.** Nothing in the module runs a timer: expired uploads are reclaimed
-  and expired objects deleted only when a host actually enqueues each tenant's
-  expiry-sweep task (through `EnqueueExpirySweep`) or calls `Sweep` — retention
-  is validated at create and enforced at sweep time, and a host that schedules
-  no sweeps retains everything. The window-scoped idempotency key
-  (`expirySweepIdempotencyKey`, one `expirySweepWindowSize` window per key)
-  keeps one window's concurrent enqueues from racing each other — the sweeps
-  that do run never duplicate within a window — while later windows' enqueues
-  schedule the sweep again.
-- **The sweep keys are window-scoped.** The app's host-side periodic-task
-  scheduler (`examples/reference-app/internal/app/periodic_scheduler.go`)
-  enqueues one sweep per unique host tenant every tick — the cadence
-  `cfg.PeriodicTaskInterval` (one minute by default,
-  `defaultPeriodicTaskSchedulerInterval`), the tenants the values of the
-  host's own `cfg.HostTenants` map, deduplicated, each sweep enqueued under
-  the tenant's own `pkgcore` context because the sweep handler runs
-  tenant-scoped — started and stopped with the queue worker in
-  `internal/app/server.go`'s `BuildServer` (the same `cfg.DisableQueueWorker`
-  gate). `EnqueueExpirySweep` derives its idempotency key from the
-  `expirySweepWindowSize` window the enqueue falls in
-  (`expirySweepIdempotencyKey`/`expirySweepWindowStart`, cleanup.go), not
-  from the tenant alone: on the host's `StandaloneQueue`, whose resolved
-  idempotency keys are held forever (go/jobs), the ticks inside one window
-  still merge into the window's one job — the concurrency protection the
-  key exists for — but the first tick of every later window resolves a
-  fresh key and schedules the sweep again, at most one sweep per tenant
-  per window. A sweep job that dead-letters therefore poisons only its own
-  window; the next window's tick is a new job. The end-to-end deletion
-  proof — two boots over one database file and one object-store directory,
-  boot 1 hosting a completed object whose retention deadline passes plus a
-  no-deadline survivor with the worker-and-scheduler pair disabled (expiry
-  alone removes nothing), boot 2 starting the normal gate so the sweep its
-  first tick enqueues removes the expired object's row and bytes — is
+- **Expiry is enforced by the schedule the module declares, driven by a host,
+  never by a timer in the module.** Nothing in the module runs a timer:
+  expired uploads are reclaimed and expired objects deleted only when a host
+  actually enqueues each tenant's expiry-sweep task — by running a
+  `jobs.Scheduler` over the registry's declared schedules (the ordinary
+  shape), through `EnqueueExpirySweep`, or by calling `Sweep` directly —
+  retention is validated at create and enforced at sweep time, and a host
+  that runs no scheduler and enqueues nothing retains everything. The
+  window-scoped idempotency key (`expirySweepIdempotencyKey`, one
+  `expirySweepWindowSize` window per key) keeps one window's concurrent
+  enqueues from racing each other — the sweeps that do run never duplicate
+  within a window — while later windows' enqueues schedule the sweep again.
+- **The sweep keys are window-scoped.** The reference app's host-side
+  scheduler (installed in `examples/reference-app/internal/app/server.go`'s
+  `BuildServer` over `reg.Schedules`, with the host's configured-tenants-∪-D3
+  -ledger universe as the `jobs.TenantLister`) enqueues one sweep per unique
+  host tenant every window — the cadence `cfg.PeriodicTaskInterval` (one
+  minute by default, `jobs.DefaultScheduleInterval`), each enqueue under the
+  tenant's own `pkgcore` context because the sweep handler runs
+  tenant-scoped — started and stopped with the queue worker (the same
+  `cfg.DisableQueueWorker` gate). `EnqueueExpirySweep` derives its
+  idempotency key from the `expirySweepWindowSize` window the enqueue falls
+  in (`expirySweepIdempotencyKey`/`expirySweepWindowStart`, cleanup.go), not
+  from the tenant alone, and the scheduler's own derivation over the
+  declared schedule resolves the byte-identical key for the same window
+  (pinned by `cleanup_test.go`'s key-identity test): on the host's
+  `StandaloneQueue`, whose resolved idempotency keys are held forever
+  (go/jobs), the ticks inside one window still merge into the window's one
+  job — the concurrency protection the key exists for — but the first tick
+  of every later window resolves a fresh key and schedules the sweep again,
+  at most one sweep per tenant per window. A sweep job that dead-letters
+  therefore poisons only its own window; the next window's tick is a new
+  job. The end-to-end deletion proof — two boots over one database file and
+  one object-store directory, boot 1 hosting a completed object whose
+  retention deadline passes plus a no-deadline survivor with the
+  worker-and-scheduler pair disabled (expiry alone removes nothing), boot 2
+  starting the normal gate so the sweep its first tick enqueues removes the
+  expired object's row and bytes — is
   `TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject`
   (`examples/reference-app/flowtests/periodic_scheduler_flow_test.go`),
   observed through the host's HTTP surface, a second-connection repository
   read and the filesystem, with the survivor untouched. That proof holds
-  unchanged under the windowed key (boot 2's first tick is in a fresh
-  window), and the windowed keying is pinned by this module's own
-  `sweep_window_test.go` (same-window collapse, later-window re-run,
-  dead-lettered-window non-poisoning, each against a real
-  `jobs.StandaloneQueue`). What remains genuinely limited: an object whose
-  retention deadline passes is reaped at most once per
-  `expirySweepWindowSize` per tenant — a host that needs tighter reaping
-  bounds must enqueue more often or shrink the window constant — and, as
-  always, a host that schedules no sweeps retains everything.
+  under the windowed key (boot 2's first tick is in a fresh window), and the
+  windowed keying is pinned by this module's own `cleanup_test.go`
+  (same-window collapse, later-window re-run, dead-lettered-window
+  non-poisoning, each against a real `jobs.StandaloneQueue`). What remains
+  genuinely limited: an object whose retention deadline passes is reaped at
+  most once per `expirySweepWindowSize` per tenant — a host that needs
+  tighter reaping bounds must enqueue more often or shrink the window
+  constant — and, as always, a host that runs no scheduler and enqueues no
+  sweeps retains everything.
 - **Upload and Complete serialize per object only inside one process.** The
   service's `objectLocks` (object.go) keep a completed row's finalized
   metadata honest within a single process: a second Upload of the same object

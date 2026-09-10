@@ -642,6 +642,43 @@ func TestLifecycleService_EnqueueExpirySweep_ShapesTheTask(t *testing.T) {
 	}
 }
 
+// TestExpirySweepKeyMatchesTheSchedulerDerivation pins the schedule
+// migration's key identity: the same (task type, tenant, window) must
+// resolve one idempotency key through the module's own schedule point and
+// through the jobs.Scheduler's derivation over the module's declaration,
+// or a scheduler tick and a manual enqueue landing in one window would
+// run the sweep twice. The key literals below are the pinned strings.
+func TestExpirySweepKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	windowStart := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+
+	// Path one: the module's own schedule point, through the real enqueue.
+	life, _, _, _, queue, _ := newCleanupHarness(t)
+	life.now = func() time.Time { return windowStart.Add(30 * time.Minute) }
+	if err := life.EnqueueExpirySweep(serviceCtx("tenant-a")); err != nil {
+		t.Fatalf("EnqueueExpirySweep: %v", err)
+	}
+	if len(queue.tasks) != 1 {
+		t.Fatalf("tasks = %d, want exactly one", len(queue.tasks))
+	}
+	manual := queue.tasks[0].IdempotencyKey
+	if want := "storage.sweep:tenant-a:2026-09-07T10:00:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	// Path two: the scheduler's own derivation over the declaration, for
+	// the same (tenant, window).
+	decl := expirySweepSchedule
+	if decl.Type != taskTypeExpirySweep || decl.Every != expirySweepWindowSize {
+		t.Errorf("declaration = %+v, want the site's own type %q and window %s", decl, taskTypeExpirySweep, expirySweepWindowSize)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePerTenant {
+		t.Errorf("declaration scope = %q, want %q", decl.Scope, pkgcore.PeriodicScopePerTenant)
+	}
+	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, pkgcore.TenantID("tenant-a"), windowStart); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
+	}
+}
+
 // TestLifecycleService_EnqueueExpirySweep_NoTenantInContextFails pins the
 // schedule point's one refusal: a tenant-less context is a wiring error --
 // nothing in this service may guess a tenant -- and reports
