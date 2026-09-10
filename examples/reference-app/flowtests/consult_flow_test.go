@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
@@ -241,6 +242,58 @@ func TestConsultSuggest_MalformedBody_Refused(t *testing.T) {
 	}
 	if aiServer.lastReqBody != nil {
 		t.Fatal("the fake OpenAI-compatible server received a request for a malformed body, want none")
+	}
+}
+
+// TestConsultSuggest_OversizedBody_RefusedWithInvalidRequestBody pins the
+// MaxBytesReader bound the consult route applies (see
+// internal/app/consult.go's consultMaxRequestBodyBytes): an arbitrarily
+// large suggest body must not be read in full before any validation has
+// run, and the refusal must surface as the catalogued
+// invalid-request-body code. The body below is valid JSON whose SIZE alone
+// exceeds the byte bound -- the padding is JSON-leading whitespace (legal,
+// and skipped by the decoder), so the payload that follows is a
+// well-formed request an unbounded decoder would have accepted and served
+// through the note lookup. One byte over the bound, written as the literal
+// 1<<16 so this test also compiles against a handler that defines no
+// constant for it.
+func TestConsultSuggest_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
+	aiServer := newFakeOpenAICompatibleServer(t, "unused")
+	srv, cfg := buildConsultTestServer(t, aiServer)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-oversized")
+
+	var body strings.Builder
+	body.WriteString(strings.Repeat(" ", (1<<16)+1))
+	body.WriteString(`{"note_id":"does-not-exist"}`)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+app.ConsultSuggestPath, strings.NewReader(body.String()))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", app.ConsultSuggestPath, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST %s with an oversized body status = %d, want %d", app.ConsultSuggestPath, resp.StatusCode, http.StatusBadRequest)
+	}
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Code != "consult.invalid_request_body" {
+		t.Fatalf("oversized-body code = %q, want %q", envelope.Code, "consult.invalid_request_body")
+	}
+	if aiServer.lastReqBody != nil {
+		t.Fatal("the fake OpenAI-compatible server received a request for an oversized body, want none")
 	}
 }
 

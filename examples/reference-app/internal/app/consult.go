@@ -40,6 +40,14 @@ const ConsultSuggestPath = "/api/v1/consult/suggest"
 // provider did not itself wrap.
 var consultErrInternal = apperr.Internal("consult.internal_error")
 
+// consultMaxRequestBodyBytes bounds the suggest route's request body
+// BEFORE it is decoded, the same 64 KiB notes' own maxRequestBodyBytes and
+// the cases surface's casesMaxRequestBodyBytes use: the body is one JSON
+// object naming a note id, and without the bound it would feed an
+// unbounded json.Decoder before any validation had a chance to refuse it.
+// A body any legitimate request can produce stays far below the bound.
+const consultMaxRequestBodyBytes = 1 << 16
+
 // wireConsult mounts ConsultSuggestPath on mux, backed by svc.
 //
 // The route takes no subject and checks no permission of its own -- the
@@ -59,7 +67,7 @@ func wireConsult(mux *http.ServeMux, svc *consult.Service) {
 		var body struct {
 			NoteID string `json:"note_id"`
 		}
-		if !httpapi.DecodeJSON(w, r, 0, &body, apperr.Invalid("consult.invalid_request_body")) {
+		if !httpapi.DecodeJSON(w, r, consultMaxRequestBodyBytes, &body, apperr.Invalid("consult.invalid_request_body")) {
 			return
 		}
 		if body.NoteID == "" {
