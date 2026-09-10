@@ -285,7 +285,8 @@ func publishEvent(ctx context.Context, host hostSeams, eventType string, payload
 //     tenant yet -- at the moment a social login
 //     succeeds there is no tenant at all -- so there is no workspace to
 //     create. Logged at Debug and skipped; the tenant-creating path is the
-//     explicit CreateTenantRoot call a host makes when a tenant is born.
+//     explicit TreeService.EnsureRoot / MemberService.EnsureRootSeat call a
+//     host makes when a tenant is born.
 //
 //  4. The event carries a tenant. The tenant context is rebuilt from the
 //     event (pkgcore.WithTenant) because a handler invoked by the
