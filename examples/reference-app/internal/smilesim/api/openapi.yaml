@@ -6,12 +6,10 @@ info:
     mounted by the app in internal/app/smilesim.go): enqueue one async
     go/ai-gateway image-to-image simulation job for a patient photo,
     poll its status, enumerate every simulation generated from one
-    photo, and read one simulation's generated image content. Product
-    round P3a promoted the three original routes from hand-written
-    registrations to this fragment (the block-B round grew the fourth,
-    the simulation-content read the before/after view renders); the
-    app's handlers now implement the generated interface below, so a
-    spec change without a matching handler change cannot compile.
+    photo, and read one simulation's generated image content -- the
+    read the comparison view renders. The app's handlers implement the
+    generated interface below, so a spec change without a matching
+    handler change cannot compile.
     This fragment is the app's own API, not platform API: it serves the
     app-owned merged document examples/reference-app/web/app-openapi.yaml
     and the app-owned SDK the app's web host imports (src/app-api) --
@@ -156,8 +154,8 @@ paths:
       summary: List every simulation generated from one photo.
       description: >-
         Lists every simulation generated from the photo under the
-        caller's tenant, newest first -- the P3 gallery's data source for
-        one case photo. Each entry carries the effective options it was
+        caller's tenant, newest first -- the case view's per-photo
+        gallery data source. Each entry carries the effective options it was
         generated with, its live status and, once the job succeeded, its
         output object id. An unknown photo id is an empty list, not an
         error: this route reads the durable per-photo result index, which

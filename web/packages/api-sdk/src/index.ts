@@ -464,7 +464,7 @@ export const BillingInvoiceStatus = {
 } as const;
 
 /**
- * One billing document of the caller's tenant, exactly as the module's channel-agnostic Invoice model (go/billing/invoice.go) carries it -- and therefore the detail shape of billing_getInvoice and the row shape of billing_listInvoices at once, since the model has no extra detail fields a separate get-shape would add: no line items, no payment-channel reference of any kind (an invoice records a Subscription's billing cycle and its amount; which channel, if any, collected it is a later round's gateway settlement, never a field this round invents). Money is flattened the same way the model stores it: amountCents plus its ISO 4217 currency, never a floating-point amount.
+ * One billing document of the caller's tenant, exactly as the module's channel-agnostic Invoice model (go/billing/invoice.go) carries it -- and therefore the detail shape of billing_getInvoice and the row shape of billing_listInvoices at once, since the model has no extra detail fields a separate get-shape would add: no line items, no payment-channel reference of any kind -- an invoice records a Subscription's billing cycle and its amount, never which channel, if any, collected it. Money is flattened the same way the model stores it: amountCents plus its ISO 4217 currency, never a floating-point amount.
  */
 export interface BillingInvoice {
   /** The invoice's application-generated UUID. */
@@ -3553,7 +3553,7 @@ export function useBillingGetCreditBalance<TData = Awaited<ReturnType<typeof bil
 
 
 /**
- * The recent window of the tenant's append-only credit ledger: at most limit rows (1-100, default 50), newest first. Every balance movement the tenant ever experienced is a row here and only here: a grant (type "grant", status "confirmed") is a top-up, an expire (type "expire", status "confirmed") a single-phase deduction, and a deduct row is the two-phase reservation lifecycle itself -- status "pending" while its credits sit in the balance's reserved bucket, "confirmed" once the reservation became a permanent spend, "refunded" once it was released back to available. A refund is therefore observable as that one deduct row's status transition (plus the balance delta the balance route reports), never as a row that silently disappears or a balance-only change with no ledger trace. The window is served from the module's full newest-first listing; a keyset-paginated read over the whole ledger is future work -- a credit view needs the recent rows, and the ledger itself is reconstructable in full service-side today.
+ * The recent window of the tenant's append-only credit ledger: at most limit rows (1-100, default 50), newest first. Every balance movement the tenant ever experienced is a row here and only here: a grant (type "grant", status "confirmed") is a top-up, an expire (type "expire", status "confirmed") a single-phase deduction, and a deduct row is the two-phase reservation lifecycle itself -- status "pending" while its credits sit in the balance's reserved bucket, "confirmed" once the reservation became a permanent spend, "refunded" once it was released back to available. A refund is therefore observable as that one deduct row's status transition (plus the balance delta the balance route reports), never as a row that silently disappears or a balance-only change with no ledger trace. The window is served from the module's full newest-first listing; this surface offers no keyset-paginated read over the whole ledger -- a credit view needs the recent rows, and the ledger itself is reconstructable in full service-side.
  * @summary List the caller's tenant's recent credit transactions, newest first.
  */
 export const billingListCreditTransactions = (
@@ -3624,7 +3624,7 @@ export function useBillingListCreditTransactions<TData = Awaited<ReturnType<type
 
 
 /**
- * The tenant's billing documents, newest first -- every Invoice row the module's plain-Go lifecycle wrote for the tenant (invoice.go's CreateInvoice/MarkPaid/Void; nothing writes invoices over HTTP, so this read and the lifecycle can never disagree about what exists). At most limit rows (1-100, default 50). Newest first is creation order, the same ordering key the credit-transactions listing uses -- never the period an invoice bills, since a voided document and its replacement need not share cycle dates. Status is the lifecycle's own closed vocabulary: "open" awaiting payment, "paid" settled in full, "void" canceled before payment. A tenant that has never been issued an invoice answers an empty array, never an error, so the invoice page renders an empty state rather than a missing-resource refusal. The window is served from the module's full newest-first listing; a keyset-paginated read over a whole history is future work -- an invoice page needs the recent documents, and the full history stays reconstructable service-side today.
+ * The tenant's billing documents, newest first -- every Invoice row the module's plain-Go lifecycle wrote for the tenant (invoice.go's CreateInvoice/MarkPaid/Void; nothing writes invoices over HTTP, so this read and the lifecycle can never disagree about what exists). At most limit rows (1-100, default 50). Newest first is creation order, the same ordering key the credit-transactions listing uses -- never the period an invoice bills, since a voided document and its replacement need not share cycle dates. Status is the lifecycle's own closed vocabulary: "open" awaiting payment, "paid" settled in full, "void" canceled before payment. A tenant that has never been issued an invoice answers an empty array, never an error, so the invoice page renders an empty state rather than a missing-resource refusal. The window is served from the module's full newest-first listing; this surface offers no keyset-paginated read over a whole history -- an invoice page needs the recent documents, and the full history stays reconstructable service-side.
  * @summary List the caller's tenant's invoices, newest first.
  */
 export const billingListInvoices = (
@@ -3765,8 +3765,8 @@ export function useBillingGetInvoice<TData = Awaited<ReturnType<typeof billingGe
 
 
 /**
- * Record-only: this ledger is an operator convenience, never the authoritative source of tenant existence (see D3's own doc comment in tenant_service.go).
- * @summary List the operator-facing tenant ledger (D3).
+ * Record-only: this ledger is an operator convenience, never the authoritative source of tenant existence -- a tenant with no ledger row is reported active, not refused (see TenantService.Status's own doc comment).
+ * @summary List the operator-facing tenant ledger.
  */
 export const adminListTenants = (
     params?: AdminListTenantsParams,
@@ -3814,7 +3814,7 @@ export type AdminListTenantsQueryError = unknown
 
 
 /**
- * @summary List the operator-facing tenant ledger (D3).
+ * @summary List the operator-facing tenant ledger.
  */
 
 export function useAdminListTenants<TData = Awaited<ReturnType<typeof adminListTenants>>, TError = unknown>(
@@ -3836,8 +3836,8 @@ export function useAdminListTenants<TData = Awaited<ReturnType<typeof adminListT
 
 
 /**
- * For pre-registering a tenant's name before any business write has happened (for example, before an operator opens an account for a new customer).
- * @summary Manually register a tenant ledger row (D3's second population path).
+ * For pre-registering a tenant's name before any business write has happened (for example, before an operator opens an account for a new customer). The ledger is also populated automatically: a tenant's root org-node creation event lazily registers an active row, without overwriting an operator's own edits.
+ * @summary Manually register a tenant ledger row.
  */
 export const adminCreateTenant = (
     adminCreateTenantRequest: AdminCreateTenantRequest,
@@ -3887,7 +3887,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminCreateTenantMutationError = AdminError
 
     /**
- * @summary Manually register a tenant ledger row (D3's second population path).
+ * @summary Manually register a tenant ledger row.
  */
 export const useAdminCreateTenant = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminCreateTenant>>, TError,{data: AdminCreateTenantRequest}, TContext>, }
@@ -3970,8 +3970,8 @@ export function useAdminGetTenant<TData = Awaited<ReturnType<typeof adminGetTena
 
 
 /**
- * Writing status=suspended here only records the ledger's opinion -- it does not, by itself, block a single request against the tenant. D4, the enforcement seam, is round 2's work.
- * @summary Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+ * Writing status=suspended here records the ledger row's status; the refusal that makes it bite belongs to tenancy's own status-resolution gate -- wired to this ledger through TenantService.Status, it refuses every request against a tenant it reports suspended. Suspension has no route of its own.
+ * @summary Rename, suspend or resume a tenant ledger row.
  */
 export const adminUpdateTenant = (
     id: string,
@@ -4022,7 +4022,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminUpdateTenantMutationError = AdminError
 
     /**
- * @summary Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+ * @summary Rename, suspend or resume a tenant ledger row.
  */
 export const useAdminUpdateTenant = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminUpdateTenant>>, TError,{id: string;data: AdminUpdateTenantRequest}, TContext>, }
@@ -4037,7 +4037,7 @@ export const useAdminUpdateTenant = <TError = AdminError,
 
 /**
  * Exactly one of email, phone or displayNamePrefix must be given, in that precedence order when more than one is present -- see authn.UserSearchQuery's own doc comment.
- * @summary Cross-tenant user search (D6).
+ * @summary Cross-tenant user search.
  */
 export const adminSearchUsers = (
     params?: AdminSearchUsersParams,
@@ -4085,7 +4085,7 @@ export type AdminSearchUsersQueryError = AdminError
 
 
 /**
- * @summary Cross-tenant user search (D6).
+ * @summary Cross-tenant user search.
  */
 
 export function useAdminSearchUsers<TData = Awaited<ReturnType<typeof adminSearchUsers>>, TError = AdminError>(
@@ -4107,7 +4107,7 @@ export function useAdminSearchUsers<TData = Awaited<ReturnType<typeof adminSearc
 
 
 /**
- * @summary List every tenant a user currently has an active membership in (D6 + D2).
+ * @summary List every tenant a user currently has an active membership in.
  */
 export const adminListUserMemberships = (
     id: string,
@@ -4154,7 +4154,7 @@ export type AdminListUserMembershipsQueryError = unknown
 
 
 /**
- * @summary List every tenant a user currently has an active membership in (D6 + D2).
+ * @summary List every tenant a user currently has an active membership in.
  */
 
 export function useAdminListUserMemberships<TData = Awaited<ReturnType<typeof adminListUserMemberships>>, TError = unknown>(
@@ -4176,7 +4176,7 @@ export function useAdminListUserMemberships<TData = Awaited<ReturnType<typeof ad
 
 
 /**
- * @summary List currently-active impersonation grants (D5's self-audit listing).
+ * @summary List currently-active impersonation grants.
  */
 export const adminListImpersonationGrants = (
 
@@ -4223,7 +4223,7 @@ export type AdminListImpersonationGrantsQueryError = unknown
 
 
 /**
- * @summary List currently-active impersonation grants (D5's self-audit listing).
+ * @summary List currently-active impersonation grants.
  */
 
 export function useAdminListImpersonationGrants<TData = Awaited<ReturnType<typeof adminListImpersonationGrants>>, TError = unknown>(
@@ -4245,7 +4245,7 @@ export function useAdminListImpersonationGrants<TData = Awaited<ReturnType<typeo
 
 
 /**
- * @summary Start an impersonation session (D5).
+ * @summary Start an impersonation session.
  */
 export const adminStartImpersonation = (
     adminStartImpersonationRequest: AdminStartImpersonationRequest,
@@ -4295,7 +4295,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminStartImpersonationMutationError = AdminError
 
     /**
- * @summary Start an impersonation session (D5).
+ * @summary Start an impersonation session.
  */
 export const useAdminStartImpersonation = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminStartImpersonation>>, TError,{data: AdminStartImpersonationRequest}, TContext>, }
@@ -4309,7 +4309,7 @@ export const useAdminStartImpersonation = <TError = AdminError,
     }
 
 /**
- * @summary End an impersonation session early (D5).
+ * @summary End an impersonation session early.
  */
 export const adminEndImpersonation = (
     id: string,
@@ -4357,7 +4357,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminEndImpersonationMutationError = AdminError
 
     /**
- * @summary End an impersonation session early (D5).
+ * @summary End an impersonation session early.
  */
 export const useAdminEndImpersonation = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminEndImpersonation>>, TError,{id: string}, TContext>, }
@@ -4372,7 +4372,7 @@ export const useAdminEndImpersonation = <TError = AdminError,
 
 /**
  * A thin HTTP shell over compliance.AuditQuery -- see AuditService's own doc comment. tenantId absent means "every tenant this operator is entitled to see" (the cross-tenant, system-context-gated path); present means the single-tenant path. onBehalfOf narrows the result to rows written during an impersonation session whose real administrator (the row's on-behalf-of identity) is the given id -- the impersonation-accountability read dimension: an administrator never appears as the actor on such a row, so only this filter can answer "what did this administrator do through impersonation".
- * @summary Query the audit trail, single-tenant or cross-tenant (D7).
+ * @summary Query the audit trail, single-tenant or cross-tenant.
  */
 export const adminListAuditEvents = (
     params?: AdminListAuditEventsParams,
@@ -4420,7 +4420,7 @@ export type AdminListAuditEventsQueryError = unknown
 
 
 /**
- * @summary Query the audit trail, single-tenant or cross-tenant (D7).
+ * @summary Query the audit trail, single-tenant or cross-tenant.
  */
 
 export function useAdminListAuditEvents<TData = Awaited<ReturnType<typeof adminListAuditEvents>>, TError = unknown>(
@@ -4443,7 +4443,7 @@ export function useAdminListAuditEvents<TData = Awaited<ReturnType<typeof adminL
 
 /**
  * Wraps compliance.ExportService.Export, which gathers every registered participant's data for the tenant, stores it and delivers it as a short-lived, single-view go/sharing link. This is necessarily asynchronous -- the handler enqueues one go/jobs task and returns immediately with its id, never running Export synchronously inside the request.
- * @summary Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+ * @summary Kick off an asynchronous audit-event export for one tenant.
  */
 export const adminExportAuditEvents = (
     adminExportAuditEventsRequest: AdminExportAuditEventsRequest,
@@ -4493,7 +4493,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminExportAuditEventsMutationError = AdminError
 
     /**
- * @summary Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+ * @summary Kick off an asynchronous audit-event export for one tenant.
  */
 export const useAdminExportAuditEvents = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminExportAuditEvents>>, TError,{data: AdminExportAuditEventsRequest}, TContext>, }
@@ -4508,7 +4508,7 @@ export const useAdminExportAuditEvents = <TError = AdminError,
 
 /**
  * Wraps rbac.Service.DeclaredPermissions -- the frozen catalog snapshot, not any one subject's own granted permissions (ListPermissions answers that, and is not exposed here).
- * @summary List every permission any module has declared (D8's role-editing checklist).
+ * @summary List every permission any module has declared.
  */
 export const adminListDeclaredPermissions = (
 
@@ -4555,7 +4555,7 @@ export type AdminListDeclaredPermissionsQueryError = unknown
 
 
 /**
- * @summary List every permission any module has declared (D8's role-editing checklist).
+ * @summary List every permission any module has declared.
  */
 
 export function useAdminListDeclaredPermissions<TData = Awaited<ReturnType<typeof adminListDeclaredPermissions>>, TError = unknown>(
@@ -4577,7 +4577,7 @@ export function useAdminListDeclaredPermissions<TData = Awaited<ReturnType<typeo
 
 
 /**
- * @summary Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+ * @summary Define or update a role inside one tenant, wrapping rbac.Service.DefineRole.
  */
 export const adminDefineRole = (
     adminDefineRoleRequest: AdminDefineRoleRequest,
@@ -4627,7 +4627,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminDefineRoleMutationError = AdminError
 
     /**
- * @summary Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+ * @summary Define or update a role inside one tenant, wrapping rbac.Service.DefineRole.
  */
 export const useAdminDefineRole = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminDefineRole>>, TError,{data: AdminDefineRoleRequest}, TContext>, }
@@ -4641,7 +4641,7 @@ export const useAdminDefineRole = <TError = AdminError,
     }
 
 /**
- * @summary Assign a role to a user, optionally scoped to one org node (D8), wrapping rbac.Service.AssignRole.
+ * @summary Assign a role to a user, optionally scoped to one org node, wrapping rbac.Service.AssignRole.
  */
 export const adminCreateRoleBinding = (
     id: string,
@@ -4692,7 +4692,7 @@ const {mutation: mutationOptions} = options ?
     export type AdminCreateRoleBindingMutationError = AdminError
 
     /**
- * @summary Assign a role to a user, optionally scoped to one org node (D8), wrapping rbac.Service.AssignRole.
+ * @summary Assign a role to a user, optionally scoped to one org node, wrapping rbac.Service.AssignRole.
  */
 export const useAdminCreateRoleBinding = <TError = AdminError,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminCreateRoleBinding>>, TError,{id: string;data: AdminCreateRoleBindingRequest}, TContext>, }
@@ -4706,8 +4706,8 @@ export const useAdminCreateRoleBinding = <TError = AdminError,
     }
 
 /**
- * Stitched from go/metering's and go/billing's already-real, per-tenant query methods, looped once per tenant in admin's own ledger under D2's tenancy.WithSystemContext mechanism -- no new database table. meteringSummaries/creditBalance/activeSubscription are absent from a row when the corresponding module was never wired through WithMetering/WithBilling.
- * @summary Cross-tenant usage/billing dashboard (D9).
+ * Stitched from go/metering's and go/billing's already-real, per-tenant query methods, looped once per tenant in admin's own ledger under tenancy.WithSystemContext, the audited system-context wrapper -- no new database table. meteringSummaries/creditBalance/activeSubscription are absent from a row when the corresponding module was never wired through WithMetering/WithBilling.
+ * @summary Cross-tenant usage/billing dashboard.
  */
 export const adminGetUsageSummary = (
 
@@ -4754,7 +4754,7 @@ export type AdminGetUsageSummaryQueryError = AdminError
 
 
 /**
- * @summary Cross-tenant usage/billing dashboard (D9).
+ * @summary Cross-tenant usage/billing dashboard.
  */
 
 export function useAdminGetUsageSummary<TData = Awaited<ReturnType<typeof adminGetUsageSummary>>, TError = AdminError>(
@@ -4776,8 +4776,8 @@ export function useAdminGetUsageSummary<TData = Awaited<ReturnType<typeof adminG
 
 
 /**
- * Wraps notification.SendRecordRepository.ListByFilter. tenantId absent means every tenant in admin's own ledger (D2's per-tenant loop under tenancy.WithSystemContext); present means the single-tenant path.
- * @summary Cross-tenant notification send-record search (D10).
+ * Wraps notification.SendRecordRepository.ListByFilter. tenantId absent means every tenant in admin's own ledger (a per-tenant loop under tenancy.WithSystemContext); present means the single-tenant path.
+ * @summary Cross-tenant notification send-record search.
  */
 export const adminListSendRecords = (
     params?: AdminListSendRecordsParams,
@@ -4825,7 +4825,7 @@ export type AdminListSendRecordsQueryError = unknown
 
 
 /**
- * @summary Cross-tenant notification send-record search (D10).
+ * @summary Cross-tenant notification send-record search.
  */
 
 export function useAdminListSendRecords<TData = Awaited<ReturnType<typeof adminListSendRecords>>, TError = unknown>(

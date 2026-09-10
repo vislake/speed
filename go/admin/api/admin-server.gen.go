@@ -315,52 +315,52 @@ type AdminUpdateTenantJSONRequestBody = AdminUpdateTenantRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// AdminListAuditEvents Query the audit trail, single-tenant or cross-tenant (D7).
+	// AdminListAuditEvents Query the audit trail, single-tenant or cross-tenant.
 	// (GET /api/v1/admin/audit-events)
 	AdminListAuditEvents(w http.ResponseWriter, r *http.Request, params AdminListAuditEventsParams)
-	// AdminExportAuditEvents Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+	// AdminExportAuditEvents Kick off an asynchronous audit-event export for one tenant.
 	// (POST /api/v1/admin/audit-events/export)
 	AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
-	// AdminListImpersonationGrants List currently-active impersonation grants (D5's self-audit listing).
+	// AdminListImpersonationGrants List currently-active impersonation grants.
 	// (GET /api/v1/admin/impersonation)
 	AdminListImpersonationGrants(w http.ResponseWriter, r *http.Request)
-	// AdminStartImpersonation Start an impersonation session (D5).
+	// AdminStartImpersonation Start an impersonation session.
 	// (POST /api/v1/admin/impersonation)
 	AdminStartImpersonation(w http.ResponseWriter, r *http.Request)
-	// AdminEndImpersonation End an impersonation session early (D5).
+	// AdminEndImpersonation End an impersonation session early.
 	// (DELETE /api/v1/admin/impersonation/{id})
 	AdminEndImpersonation(w http.ResponseWriter, r *http.Request, id string)
-	// AdminListSendRecords Cross-tenant notification send-record search (D10).
+	// AdminListSendRecords Cross-tenant notification send-record search.
 	// (GET /api/v1/admin/notifications/send-records)
 	AdminListSendRecords(w http.ResponseWriter, r *http.Request, params AdminListSendRecordsParams)
-	// AdminListDeclaredPermissions List every permission any module has declared (D8's role-editing checklist).
+	// AdminListDeclaredPermissions List every permission any module has declared.
 	// (GET /api/v1/admin/roles)
 	AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Request)
-	// AdminDefineRole Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+	// AdminDefineRole Define or update a role inside one tenant, wrapping rbac.Service.DefineRole.
 	// (POST /api/v1/admin/roles)
 	AdminDefineRole(w http.ResponseWriter, r *http.Request)
-	// AdminCreateRoleBinding Assign a role to a user, optionally scoped to one org node (D8), wrapping rbac.Service.AssignRole.
+	// AdminCreateRoleBinding Assign a role to a user, optionally scoped to one org node, wrapping rbac.Service.AssignRole.
 	// (POST /api/v1/admin/roles/{id}/bindings)
 	AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request, id string)
-	// AdminListTenants List the operator-facing tenant ledger (D3).
+	// AdminListTenants List the operator-facing tenant ledger.
 	// (GET /api/v1/admin/tenants)
 	AdminListTenants(w http.ResponseWriter, r *http.Request, params AdminListTenantsParams)
-	// AdminCreateTenant Manually register a tenant ledger row (D3's second population path).
+	// AdminCreateTenant Manually register a tenant ledger row.
 	// (POST /api/v1/admin/tenants)
 	AdminCreateTenant(w http.ResponseWriter, r *http.Request)
 	// AdminGetTenant Read one tenant ledger row.
 	// (GET /api/v1/admin/tenants/{id})
 	AdminGetTenant(w http.ResponseWriter, r *http.Request, id string)
-	// AdminUpdateTenant Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+	// AdminUpdateTenant Rename, suspend or resume a tenant ledger row.
 	// (PATCH /api/v1/admin/tenants/{id})
 	AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id string)
-	// AdminGetUsageSummary Cross-tenant usage/billing dashboard (D9).
+	// AdminGetUsageSummary Cross-tenant usage/billing dashboard.
 	// (GET /api/v1/admin/usage-summary)
 	AdminGetUsageSummary(w http.ResponseWriter, r *http.Request)
-	// AdminSearchUsers Cross-tenant user search (D6).
+	// AdminSearchUsers Cross-tenant user search.
 	// (GET /api/v1/admin/users)
 	AdminSearchUsers(w http.ResponseWriter, r *http.Request, params AdminSearchUsersParams)
-	// AdminListUserMemberships List every tenant a user currently has an active membership in (D6 + D2).
+	// AdminListUserMemberships List every tenant a user currently has an active membership in.
 	// (GET /api/v1/admin/users/{id}/memberships)
 	AdminListUserMemberships(w http.ResponseWriter, r *http.Request, id string)
 }

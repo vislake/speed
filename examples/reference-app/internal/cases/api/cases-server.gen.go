@@ -13,7 +13,7 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// CasesCase A case as the create answer, the list entries and the detail answer all render it -- one shape a P3 view renders with one component.
+// CasesCase A case as the create answer, the list entries and the detail answer all render it -- one shape a case view renders with one component.
 type CasesCase struct {
 	// CreatedAt When the case was created, whole seconds, UTC.
 	CreatedAt time.Time `json:"created_at"`

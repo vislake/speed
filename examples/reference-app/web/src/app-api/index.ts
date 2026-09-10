@@ -85,7 +85,7 @@ export interface CasesPhoto {
 }
 
 /**
- * A case as the create answer, the list entries and the detail answer all render it -- one shape a P3 view renders with one component.
+ * A case as the create answer, the list entries and the detail answer all render it -- one shape a case view renders with one component.
  */
 export interface CasesCase {
   /** The case's application-generated id. */
@@ -1180,7 +1180,7 @@ export function useSmilesimGetJob<TData = Awaited<ReturnType<typeof smilesimGetJ
 
 
 /**
- * Lists every simulation generated from the photo under the caller's tenant, newest first -- the P3 gallery's data source for one case photo. Each entry carries the effective options it was generated with, its live status and, once the job succeeded, its output object id. An unknown photo id is an empty list, not an error: this route reads the durable per-photo result index, which simply holds no rows for a photo nothing was generated from.
+ * Lists every simulation generated from the photo under the caller's tenant, newest first -- the case view's per-photo gallery data source. Each entry carries the effective options it was generated with, its live status and, once the job succeeded, its output object id. An unknown photo id is an empty list, not an error: this route reads the durable per-photo result index, which simply holds no rows for a photo nothing was generated from.
  * @summary List every simulation generated from one photo.
  */
 export const smilesimListPhotoSimulations = (

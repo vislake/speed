@@ -21,8 +21,8 @@ info:
     one tenancy.Middleware already resolved from the request -- never a
     caller-supplied value.
 
-    READ-ONLY BY DESIGN THIS ROUND: every operation below is a GET, and
-    that is the whole surface. Credit consumption in this codebase happens
+    READ-ONLY BY DESIGN: every operation below is a GET, and that is the
+    whole surface. Credit consumption in this codebase happens
     service-side, never over HTTP -- internal/smilesim's reserve/confirm/
     refund wiring calls billing.CreditService's own Go API in-process
     (PreDeduct at Simulate time, Confirm on success, Refund on failure),
@@ -35,15 +35,13 @@ info:
     refunded the refund; grant and expire rows are single-phase). The
     invoice half is read-only for the same reason, in the same shape:
     Invoice rows are written only by the module's plain-Go lifecycle --
-    invoice.go's CreateInvoice/MarkPaid/Void, which as of this round
-    still has no caller at all -- never
-    over HTTP, so there is no invoice write journey whose endpoint this
-    surface must carry, and what a tenant-facing invoice page genuinely
-    needs is the read side this round adds. A later round that builds a
-    caller-driven write journey (an operator grant or refund, gated on
-    the module's declared billing:credit:manage permission) will add
-    that POST surface here; until such a journey exists this fragment
-    stays read-only rather than shipping an endpoint nothing calls.
+    invoice.go's CreateInvoice/MarkPaid/Void, which has no caller at all
+    -- never over HTTP, so there is no invoice write journey whose
+    endpoint this surface must carry, and what a tenant-facing invoice
+    page genuinely needs is the read side this fragment ships. No
+    caller-driven write journey (an operator grant or refund) exists, so
+    this fragment ships no write operation rather than an endpoint
+    nothing calls.
 
     This fragment is part of the application-wide contracts/speed.yaml
     merge (task api:merge, redocly pinned at 2.51.1), the frontend SDK's
@@ -98,9 +96,10 @@ paths:
         (plus the balance delta the balance route reports), never as a
         row that silently disappears or a balance-only change with no
         ledger trace. The window is served from the module's full
-        newest-first listing; a keyset-paginated read over the whole
-        ledger is future work -- a credit view needs the recent rows, and the
-        ledger itself is reconstructable in full service-side today.
+        newest-first listing; this surface offers no keyset-paginated
+        read over the whole ledger -- a credit view needs the recent
+        rows, and the ledger itself is reconstructable in full
+        service-side.
       parameters:
         - name: limit
           in: query
@@ -150,10 +149,10 @@ paths:
         issued an invoice answers an empty array, never an error, so
         the invoice page renders an empty state rather than a
         missing-resource refusal. The window is served from the
-        module's full newest-first listing; a keyset-paginated read
-        over a whole history is future work -- an invoice page needs the recent
-        documents, and the full history stays reconstructable
-        service-side today.
+        module's full newest-first listing; this surface offers no
+        keyset-paginated read over a whole history -- an invoice page
+        needs the recent documents, and the full history stays
+        reconstructable service-side.
       parameters:
         - name: limit
           in: query
@@ -338,10 +337,9 @@ components:
         billing_getInvoice and the row shape of billing_listInvoices at
         once, since the model has no extra detail fields a separate
         get-shape would add: no line items, no payment-channel
-        reference of any kind (an invoice records a Subscription's
-        billing cycle and its amount; which channel, if any, collected
-        it is a later round's gateway settlement, never a field this
-        round invents). Money is flattened the same way the model
+        reference of any kind -- an invoice records a Subscription's
+        billing cycle and its amount, never which channel, if any,
+        collected it. Money is flattened the same way the model
         stores it: amountCents plus its ISO 4217 currency, never a
         floating-point amount.
       properties:

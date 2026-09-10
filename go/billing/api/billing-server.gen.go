@@ -123,7 +123,7 @@ type BillingError struct {
 	Params *map[string]interface{} `json:"params,omitempty"`
 }
 
-// BillingInvoice One billing document of the caller's tenant, exactly as the module's channel-agnostic Invoice model (go/billing/invoice.go) carries it -- and therefore the detail shape of billing_getInvoice and the row shape of billing_listInvoices at once, since the model has no extra detail fields a separate get-shape would add: no line items, no payment-channel reference of any kind (an invoice records a Subscription's billing cycle and its amount; which channel, if any, collected it is a later round's gateway settlement, never a field this round invents). Money is flattened the same way the model stores it: amountCents plus its ISO 4217 currency, never a floating-point amount.
+// BillingInvoice One billing document of the caller's tenant, exactly as the module's channel-agnostic Invoice model (go/billing/invoice.go) carries it -- and therefore the detail shape of billing_getInvoice and the row shape of billing_listInvoices at once, since the model has no extra detail fields a separate get-shape would add: no line items, no payment-channel reference of any kind -- an invoice records a Subscription's billing cycle and its amount, never which channel, if any, collected it. Money is flattened the same way the model stores it: amountCents plus its ISO 4217 currency, never a floating-point amount.
 type BillingInvoice struct {
 	// AmountCents The invoice amount in the currency's minor unit (cents for a two-decimal currency like USD or CNY).
 	AmountCents int64 `json:"amountCents"`

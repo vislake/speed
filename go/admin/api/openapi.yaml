@@ -14,21 +14,11 @@ info:
     per-tenant methods (no new aggregate table), and cross-tenant
     notification send-record search. This fragment follows the operationId
     (admin_<action><Resource>) and schema-name (Admin<Type>) naming
-    conventions. Regenerating
-    admin-server.gen.go (in this directory) from this file with oapi-codegen
-    pinned at v2.8.0 uses this directory's own oapi-codegen.yaml -- see that
-    file for the exact command.
-
-    This fragment is wired into both regeneration halves now. Taskfile.yml's
-    api:gen task names admin explicitly: its backend generator list includes
-    this directory, with its own leg running the pinned oapi-codegen here
-    exactly as for every other fragment. api-contract.yml's
-    regenerate-then-diff gate carries the same single-fragment entry
-    (the same single-fragment regeneration entry every fragment's step
-    carries). Round 1's honest "neither Taskfile.yml's api:gen task nor
-    api-contract.yml includes this fragment yet" gap is closed on both
-    sides, so a spec edit needs no hand regeneration and no hand diffing:
-    the same gate that guards every other fragment guards this one.
+    conventions. task api:gen regenerates admin-server.gen.go (in this
+    directory) from this file, with oapi-codegen pinned at v2.8.0 -- see
+    oapi-codegen.yaml. api-contract.yml's regenerate-then-diff gate
+    covers this fragment exactly as it covers every other one, so a spec
+    edit needs no hand regeneration and no hand diffing.
 
     Every operation here is a platform-operations action gated on a
     rbac.SystemDomain permission (admin:access, admin:tenants_manage,
@@ -53,11 +43,12 @@ paths:
     get:
       operationId: admin_listTenants
       tags: [admin]
-      summary: List the operator-facing tenant ledger (D3).
+      summary: List the operator-facing tenant ledger.
       description: >-
         Record-only: this ledger is an operator convenience, never the
-        authoritative source of tenant existence (see D3's own doc
-        comment in tenant_service.go).
+        authoritative source of tenant existence -- a tenant with no
+        ledger row is reported active, not refused (see
+        TenantService.Status's own doc comment).
       parameters:
         - name: status
           in: query
@@ -84,11 +75,13 @@ paths:
     post:
       operationId: admin_createTenant
       tags: [admin]
-      summary: Manually register a tenant ledger row (D3's second population path).
+      summary: Manually register a tenant ledger row.
       description: >-
         For pre-registering a tenant's name before any business write has
         happened (for example, before an operator opens an account for a
-        new customer).
+        new customer). The ledger is also populated automatically: a
+        tenant's root org-node creation event lazily registers an active
+        row, without overwriting an operator's own edits.
       requestBody:
         required: true
         content:
@@ -141,11 +134,13 @@ paths:
     patch:
       operationId: admin_updateTenant
       tags: [admin]
-      summary: Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+      summary: Rename, suspend or resume a tenant ledger row.
       description: >-
-        Writing status=suspended here only records the ledger's opinion --
-        it does not, by itself, block a single request against the tenant.
-        D4, the enforcement seam, is round 2's work.
+        Writing status=suspended here records the ledger row's status;
+        the refusal that makes it bite belongs to tenancy's own
+        status-resolution gate -- wired to this ledger through
+        TenantService.Status, it refuses every request against a tenant
+        it reports suspended. Suspension has no route of its own.
       parameters:
         - name: id
           in: path
@@ -175,7 +170,7 @@ paths:
     get:
       operationId: admin_searchUsers
       tags: [admin]
-      summary: Cross-tenant user search (D6).
+      summary: Cross-tenant user search.
       description: >-
         Exactly one of email, phone or displayNamePrefix must be given, in
         that precedence order when more than one is present -- see
@@ -218,7 +213,7 @@ paths:
     get:
       operationId: admin_listUserMemberships
       tags: [admin]
-      summary: List every tenant a user currently has an active membership in (D6 + D2).
+      summary: List every tenant a user currently has an active membership in.
       parameters:
         - name: id
           in: path
@@ -236,7 +231,7 @@ paths:
     get:
       operationId: admin_listImpersonationGrants
       tags: [admin]
-      summary: List currently-active impersonation grants (D5's self-audit listing).
+      summary: List currently-active impersonation grants.
       responses:
         '200':
           description: The active grants.
@@ -247,7 +242,7 @@ paths:
     post:
       operationId: admin_startImpersonation
       tags: [admin]
-      summary: Start an impersonation session (D5).
+      summary: Start an impersonation session.
       requestBody:
         required: true
         content:
@@ -273,7 +268,7 @@ paths:
     delete:
       operationId: admin_endImpersonation
       tags: [admin]
-      summary: End an impersonation session early (D5).
+      summary: End an impersonation session early.
       parameters:
         - name: id
           in: path
@@ -303,7 +298,7 @@ paths:
     get:
       operationId: admin_listAuditEvents
       tags: [admin]
-      summary: Query the audit trail, single-tenant or cross-tenant (D7).
+      summary: Query the audit trail, single-tenant or cross-tenant.
       description: >-
         A thin HTTP shell over compliance.AuditQuery -- see AuditService's
         own doc comment. tenantId absent means "every tenant this operator
@@ -378,7 +373,7 @@ paths:
     post:
       operationId: admin_exportAuditEvents
       tags: [admin]
-      summary: Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+      summary: Kick off an asynchronous audit-event export for one tenant.
       description: >-
         Wraps compliance.ExportService.Export, which gathers every
         registered participant's data for the tenant, stores it and
@@ -409,7 +404,7 @@ paths:
     get:
       operationId: admin_listDeclaredPermissions
       tags: [admin]
-      summary: List every permission any module has declared (D8's role-editing checklist).
+      summary: List every permission any module has declared.
       description: >-
         Wraps rbac.Service.DeclaredPermissions -- the frozen catalog
         snapshot, not any one subject's own granted permissions
@@ -424,7 +419,7 @@ paths:
     post:
       operationId: admin_defineRole
       tags: [admin]
-      summary: Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+      summary: Define or update a role inside one tenant, wrapping rbac.Service.DefineRole.
       requestBody:
         required: true
         content:
@@ -449,7 +444,7 @@ paths:
       operationId: admin_createRoleBinding
       tags: [admin]
       summary: >-
-        Assign a role to a user, optionally scoped to one org node (D8),
+        Assign a role to a user, optionally scoped to one org node,
         wrapping rbac.Service.AssignRole.
       parameters:
         - name: id
@@ -481,12 +476,13 @@ paths:
     get:
       operationId: admin_getUsageSummary
       tags: [admin]
-      summary: Cross-tenant usage/billing dashboard (D9).
+      summary: Cross-tenant usage/billing dashboard.
       description: >-
         Stitched from go/metering's and go/billing's already-real,
         per-tenant query methods, looped once per tenant in admin's own
-        ledger under D2's tenancy.WithSystemContext mechanism -- no new
-        database table. meteringSummaries/creditBalance/activeSubscription
+        ledger under tenancy.WithSystemContext, the audited
+        system-context wrapper -- no new database table.
+        meteringSummaries/creditBalance/activeSubscription
         are absent from a row when the corresponding module was never
         wired through WithMetering/WithBilling.
       responses:
@@ -506,10 +502,10 @@ paths:
     get:
       operationId: admin_listSendRecords
       tags: [admin]
-      summary: Cross-tenant notification send-record search (D10).
+      summary: Cross-tenant notification send-record search.
       description: >-
         Wraps notification.SendRecordRepository.ListByFilter. tenantId
-        absent means every tenant in admin's own ledger (D2's per-tenant
+        absent means every tenant in admin's own ledger (a per-tenant
         loop under tenancy.WithSystemContext); present means the
         single-tenant path.
       parameters:

@@ -10,25 +10,22 @@ info:
     uploaded), list the caller's tenant's cases, read one case's detail
     with its photos, and read one photo's bytes (base64 in JSON, the
     shape this surface's JSON-only frontend transport can carry) for the
-    case view to render. The block-A product round widened the case list
-    from the caller's own cases to every case of the caller's tenant --
-    the clinic-scoped list the acceptance chain demands: one practice's
+    case view to render. The case list is clinic-scoped -- every case of
+    the caller's tenant, never only the caller's own: one practice's
     staff must see the same patient's cases, and only the tenant
     boundary (not the creator column) may hide a case from a colleague
-    in the same clinic. Product round P3a promoted the original three
-    routes from hand-written registrations to this fragment; the photo
-    upload and photo-content operations joined it when the block-A web
-    surface shipped (the frontend may only reach the backend through
-    generated operations, so every op the cases UI calls must live
-    here). The app's handlers implement the generated interface below,
-    so a spec change without a matching handler change cannot compile.
-    This fragment is the app's own API, not platform API: it serves the
-    app-owned merged document examples/reference-app/web/app-openapi.yaml
-    and the app-owned SDK the app's web host imports (src/app-api) --
-    never the platform merge contracts/speed.yaml or @speed/api-sdk. A case
-    detail's per-photo simulations deliberately stay on the
-    smile-simulation surface (smilesim's own fragment), fetched per
-    photo by the P3 view. This fragment follows the operationId
+    in the same clinic. Every operation the cases UI calls lives here --
+    the frontend may only reach the backend through generated
+    operations. The app's handlers implement the generated interface
+    below, so a spec change without a matching handler change cannot
+    compile. This fragment is the app's own API, not platform API: it
+    serves the app-owned merged document
+    examples/reference-app/web/app-openapi.yaml and the app-owned SDK the
+    app's web host imports (src/app-api) -- never the platform merge
+    contracts/speed.yaml or @speed/api-sdk. A case detail's per-photo
+    simulations deliberately stay on the smile-simulation surface
+    (smilesim's own fragment), fetched per photo by the case view. This
+    fragment follows the operationId
     (<module>_<action><Resource>) and schema-name (<Module><Type>)
     naming conventions; task api:gen:app
     regenerates cases-server.gen.go (in this directory) from this file,
@@ -410,7 +407,7 @@ components:
             empty list for a case whose photos arrive later.
       description: >-
         A case as the create answer, the list entries and the detail
-        answer all render it -- one shape a P3 view renders with one
+        answer all render it -- one shape a case view renders with one
         component.
     CasesListResponse:
       type: object

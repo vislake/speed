@@ -1142,9 +1142,9 @@ paths:
         row's status transition (plus the balance delta the balance route
         reports), never as a row that silently disappears or a balance-only
         change with no ledger trace. The window is served from the module's full
-        newest-first listing; a keyset-paginated read over the whole ledger is
-        future work -- a credit view needs the recent rows, and the ledger
-        itself is reconstructable in full service-side today.
+        newest-first listing; this surface offers no keyset-paginated read over
+        the whole ledger -- a credit view needs the recent rows, and the ledger
+        itself is reconstructable in full service-side.
       parameters:
         - name: limit
           in: query
@@ -1194,9 +1194,9 @@ paths:
         payment. A tenant that has never been issued an invoice answers an empty
         array, never an error, so the invoice page renders an empty state rather
         than a missing-resource refusal. The window is served from the module's
-        full newest-first listing; a keyset-paginated read over a whole history
-        is future work -- an invoice page needs the recent documents, and the
-        full history stays reconstructable service-side today.
+        full newest-first listing; this surface offers no keyset-paginated read
+        over a whole history -- an invoice page needs the recent documents, and
+        the full history stays reconstructable service-side.
       parameters:
         - name: limit
           in: query
@@ -1279,11 +1279,12 @@ paths:
       operationId: admin_listTenants
       tags:
         - admin
-      summary: List the operator-facing tenant ledger (D3).
+      summary: List the operator-facing tenant ledger.
       description: >-
         Record-only: this ledger is an operator convenience, never the
-        authoritative source of tenant existence (see D3's own doc comment in
-        tenant_service.go).
+        authoritative source of tenant existence -- a tenant with no ledger row
+        is reported active, not refused (see TenantService.Status's own doc
+        comment).
       parameters:
         - name: status
           in: query
@@ -1311,11 +1312,13 @@ paths:
       operationId: admin_createTenant
       tags:
         - admin
-      summary: Manually register a tenant ledger row (D3's second population path).
+      summary: Manually register a tenant ledger row.
       description: >-
         For pre-registering a tenant's name before any business write has
         happened (for example, before an operator opens an account for a new
-        customer).
+        customer). The ledger is also populated automatically: a tenant's root
+        org-node creation event lazily registers an active row, without
+        overwriting an operator's own edits.
       requestBody:
         required: true
         content:
@@ -1371,13 +1374,13 @@ paths:
       operationId: admin_updateTenant
       tags:
         - admin
-      summary: >-
-        Rename, suspend or resume a tenant ledger row (D3 + D4's record-only
-        half).
+      summary: Rename, suspend or resume a tenant ledger row.
       description: >-
-        Writing status=suspended here only records the ledger's opinion -- it
-        does not, by itself, block a single request against the tenant. D4, the
-        enforcement seam, is round 2's work.
+        Writing status=suspended here records the ledger row's status; the
+        refusal that makes it bite belongs to tenancy's own status-resolution
+        gate -- wired to this ledger through TenantService.Status, it refuses
+        every request against a tenant it reports suspended. Suspension has no
+        route of its own.
       parameters:
         - name: id
           in: path
@@ -1409,7 +1412,7 @@ paths:
       operationId: admin_searchUsers
       tags:
         - admin
-      summary: Cross-tenant user search (D6).
+      summary: Cross-tenant user search.
       description: >-
         Exactly one of email, phone or displayNamePrefix must be given, in that
         precedence order when more than one is present -- see
@@ -1454,9 +1457,7 @@ paths:
       operationId: admin_listUserMemberships
       tags:
         - admin
-      summary: >-
-        List every tenant a user currently has an active membership in (D6 +
-        D2).
+      summary: List every tenant a user currently has an active membership in.
       parameters:
         - name: id
           in: path
@@ -1476,7 +1477,7 @@ paths:
       operationId: admin_listImpersonationGrants
       tags:
         - admin
-      summary: List currently-active impersonation grants (D5's self-audit listing).
+      summary: List currently-active impersonation grants.
       responses:
         '200':
           description: The active grants.
@@ -1488,7 +1489,7 @@ paths:
       operationId: admin_startImpersonation
       tags:
         - admin
-      summary: Start an impersonation session (D5).
+      summary: Start an impersonation session.
       requestBody:
         required: true
         content:
@@ -1516,7 +1517,7 @@ paths:
       operationId: admin_endImpersonation
       tags:
         - admin
-      summary: End an impersonation session early (D5).
+      summary: End an impersonation session early.
       parameters:
         - name: id
           in: path
@@ -1548,7 +1549,7 @@ paths:
       operationId: admin_listAuditEvents
       tags:
         - admin
-      summary: Query the audit trail, single-tenant or cross-tenant (D7).
+      summary: Query the audit trail, single-tenant or cross-tenant.
       description: >-
         A thin HTTP shell over compliance.AuditQuery -- see AuditService's own
         doc comment. tenantId absent means "every tenant this operator is
@@ -1625,9 +1626,7 @@ paths:
       operationId: admin_exportAuditEvents
       tags:
         - admin
-      summary: >-
-        Kick off an asynchronous audit-event export for one tenant (D7's export
-        leg).
+      summary: Kick off an asynchronous audit-event export for one tenant.
       description: >-
         Wraps compliance.ExportService.Export, which gathers every registered
         participant's data for the tenant, stores it and delivers it as a
@@ -1660,9 +1659,7 @@ paths:
       operationId: admin_listDeclaredPermissions
       tags:
         - admin
-      summary: >-
-        List every permission any module has declared (D8's role-editing
-        checklist).
+      summary: List every permission any module has declared.
       description: >-
         Wraps rbac.Service.DeclaredPermissions -- the frozen catalog snapshot,
         not any one subject's own granted permissions (ListPermissions answers
@@ -1679,7 +1676,7 @@ paths:
       tags:
         - admin
       summary: >-
-        Define or update a role inside one tenant (D8), wrapping
+        Define or update a role inside one tenant, wrapping
         rbac.Service.DefineRole.
       requestBody:
         required: true
@@ -1709,8 +1706,8 @@ paths:
       tags:
         - admin
       summary: >-
-        Assign a role to a user, optionally scoped to one org node (D8),
-        wrapping rbac.Service.AssignRole.
+        Assign a role to a user, optionally scoped to one org node, wrapping
+        rbac.Service.AssignRole.
       parameters:
         - name: id
           in: path
@@ -1743,13 +1740,13 @@ paths:
       operationId: admin_getUsageSummary
       tags:
         - admin
-      summary: Cross-tenant usage/billing dashboard (D9).
+      summary: Cross-tenant usage/billing dashboard.
       description: >-
         Stitched from go/metering's and go/billing's already-real, per-tenant
-        query methods, looped once per tenant in admin's own ledger under D2's
-        tenancy.WithSystemContext mechanism -- no new database table.
-        meteringSummaries/creditBalance/activeSubscription are absent from a row
-        when the corresponding module was never wired through
+        query methods, looped once per tenant in admin's own ledger under
+        tenancy.WithSystemContext, the audited system-context wrapper -- no new
+        database table. meteringSummaries/creditBalance/activeSubscription are
+        absent from a row when the corresponding module was never wired through
         WithMetering/WithBilling.
       responses:
         '200':
@@ -1770,10 +1767,10 @@ paths:
       operationId: admin_listSendRecords
       tags:
         - admin
-      summary: Cross-tenant notification send-record search (D10).
+      summary: Cross-tenant notification send-record search.
       description: >-
         Wraps notification.SendRecordRepository.ListByFilter. tenantId absent
-        means every tenant in admin's own ledger (D2's per-tenant loop under
+        means every tenant in admin's own ledger (a per-tenant loop under
         tenancy.WithSystemContext); present means the single-tenant path.
       parameters:
         - name: tenantId
@@ -4391,10 +4388,9 @@ components:
         therefore the detail shape of billing_getInvoice and the row shape of
         billing_listInvoices at once, since the model has no extra detail fields
         a separate get-shape would add: no line items, no payment-channel
-        reference of any kind (an invoice records a Subscription's billing cycle
-        and its amount; which channel, if any, collected it is a later round's
-        gateway settlement, never a field this round invents). Money is
-        flattened the same way the model stores it: amountCents plus its ISO
+        reference of any kind -- an invoice records a Subscription's billing
+        cycle and its amount, never which channel, if any, collected it. Money
+        is flattened the same way the model stores it: amountCents plus its ISO
         4217 currency, never a floating-point amount.
       properties:
         id:
