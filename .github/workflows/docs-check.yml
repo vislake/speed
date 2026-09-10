@@ -191,6 +191,13 @@ name: docs-check
 #                                generator command (self-test on change;
 #                                its unit suite runs under full-check's
 #                                reference-app job too)
+#   examples/reference-app/internal/**  the app sources the error-code
+#                                index scans (internal/app, internal/cases,
+#                                internal/notes, internal/smilesim): the
+#                                committed index names the constructing
+#                                file and line, so a construction site
+#                                moving changes docs/error-codes.json and
+#                                its site page
 #   go/config/**                 the dynamic-config schema machinery
 #                                (item canonicalization and descriptor
 #                                semantics) the reference renders
@@ -239,6 +246,7 @@ on:
       - tools/check_error_code_index_coverage.py
       - tools/test_check_error_code_index_coverage.py
       - examples/reference-app/cmd/configrefgen/**
+      - examples/reference-app/internal/**
       - go/config/**
       - go/authn/module.go
       - go/metering/module.go
