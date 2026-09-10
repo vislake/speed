@@ -26,8 +26,9 @@
  *    path turns the form over (notes-view.tsx's handleCreate);
  *  - a session end -- the next account signing into this page must
  *    not inherit the departing account's half-typed record, the same
- *    rule main.tsx's evictQueriesOnSessionEnd applies to the query
- *    cache (a draft is the same class of leftover as a cached row);
+ *    rule the bootstrap's shipped session-end default applies to the
+ *    query cache (a draft is the same class of leftover as a cached
+ *    row);
  *  - a refused create does NOT clear it -- the surface keeps the text
  *    for the retry, exactly as the form itself does while it stays
  *    mounted.

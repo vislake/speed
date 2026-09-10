@@ -42,7 +42,7 @@ import layoutKitZhCN from '../../../../../web/packages/layout-kit/src/locales/zh
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
-import { createAppQueryClient } from '../main.js'
+import { createQueryClient } from '@speed/product-shell/bootstrap'
 import { demoServer } from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
 import {
@@ -481,16 +481,17 @@ describe('NotesView', () => {
   })
 
   it('surfaces a refused read on the first response under the app bootstrap\'s own query-client policy (reference-app-web.md P2-rnweb-2)', async () => {
-    // The production QueryClient (createAppQueryClient) retries
-    // nothing: transient retries belong to the api-client transport
-    // (its frozen policy already retries the transient classes on
-    // idempotent methods before an answer surfaces), and a definitive
-    // refusal like the rbac gate's 403 must never burn a doomed
-    // multi-second react-query retry window before the gate sees it.
-    // The gate answer must land on the FIRST response.
+    // The production QueryClient (@speed/product-shell/bootstrap's
+    // createQueryClient) retries nothing: transient retries belong to
+    // the api-client transport (its frozen policy already retries the
+    // transient classes on idempotent methods before an answer
+    // surfaces), and a definitive refusal like the rbac gate's 403 must
+    // never burn a doomed multi-second react-query retry window before
+    // the gate sees it. The gate answer must land on the FIRST
+    // response.
     const rig = makeRealClientRig(demoServer({ denyNotesRead: true }))
     await signInWithPassword(rig)
-    const view = renderNotes(rig, { queryClient: createAppQueryClient() })
+    const view = renderNotes(rig, { queryClient: createQueryClient() })
 
     expect(
       await view.findByText(uiKitZhCN.emptyState.noPermission.title),

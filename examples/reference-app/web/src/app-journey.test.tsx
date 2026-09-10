@@ -96,7 +96,7 @@ import {
 } from './test-utils/demo-server.js'
 import type { RealCall, RealClientRig } from './test-utils/real-client.js'
 import { errorResponse, makeRealClientRig } from './test-utils/real-client.js'
-import { evictQueriesOnSessionEnd } from './main.js'
+import { watchSessionEnd } from '@speed/product-shell/bootstrap'
 
 /** The identifier the register turn creates -- the account whose own
  * sign-in the day's closing self-service leg lands in its clinic (the
@@ -669,7 +669,7 @@ describe('the app journey', () => {
     //
     // The second account's read is held open on a gate this test
     // releases by hand -- proving the cache-eviction half, not only
-    // the gate-order half: without evictQueriesOnSessionEnd, the
+    // the gate-order half: without the session-end eviction, the
     // query's cache still holds the first account's row the instant
     // the second account's view remounts, and that row would render
     // for the whole time this gate stays held (data defined, isError
@@ -694,10 +694,10 @@ describe('the app journey', () => {
     // The harness's rendered() -- like every suite here -- composes the
     // tree by hand rather than calling bootstrapReferenceApp itself (no
     // suite mounts a real DOM root; see main.tsx's own doc comment), so
-    // the bootstrap's own session-end cache eviction is wired here
-    // explicitly, exactly as the real bootstrap wires it, over the same
-    // rig session and the same QueryClient this render uses.
-    evictQueriesOnSessionEnd(rig.session, view.queryClient)
+    // the shipped session-end strategy is wired here explicitly,
+    // exactly as the real assembly wires it, over the same rig session
+    // and the same QueryClient this render uses.
+    watchSessionEnd(rig.session, view.queryClient)
     const user = userEvent.setup()
 
     // The first account signs in and reads the tenant's notes -- the
@@ -709,8 +709,8 @@ describe('the app journey', () => {
 
     // It signs out: the session-ended screen, then back to sign-in --
     // the same authenticated -> anonymous transition a session death
-    // produces (main.tsx's evictQueriesOnSessionEnd fires on either,
-    // emptying the whole cache).
+    // produces (the session-end strategy fires on either, emptying the
+    // whole cache).
     await user.click(
       view.getByRole('button', { name: authUiZhCN.signOut.label }),
     )
@@ -776,11 +776,11 @@ describe('the app journey', () => {
       return server(call)
     })
     const view = rendered(rig)
-    // The bootstrap's own session-end eviction, wired over this
-    // render's session and QueryClient exactly as the real bootstrap
-    // wires it (rendered() composes the tree by hand; see the notes
+    // The shipped session-end strategy, wired over this render's
+    // session and QueryClient exactly as the real assembly wires it
+    // (rendered() composes the tree by hand; see the notes
     // cross-account regression above).
-    evictQueriesOnSessionEnd(rig.session, view.queryClient)
+    watchSessionEnd(rig.session, view.queryClient)
     const user = userEvent.setup()
 
     // The first account signs in and reads the account surface: the

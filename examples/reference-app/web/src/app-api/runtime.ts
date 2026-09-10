@@ -7,8 +7,9 @@
  *
  * The seam re-exports the platform seam -- @speed/api-sdk/runtime --
  * instead of holding its own binding slot: the app host binds exactly
- * one RequestFn at bootstrap (main.tsx's bindRequestFn(createClient
- * (...))), and both generated surfaces this host renders -- the
+ * one RequestFn at bootstrap (the assembly's bindRequestFn(createClient
+ * (...)), driven by main.tsx's definition), and both generated surfaces
+ * this host renders -- the
  * platform @speed/api-sdk operations and this app-owned SDK's
  * operations -- travel through that one binding. A second module-level
  * slot would have to be kept in sync at every bind site (the bootstrap

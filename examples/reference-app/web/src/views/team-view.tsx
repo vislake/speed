@@ -8,7 +8,8 @@
  * RequestFn the host bound, on a tenant-namespaced query key
  * (['tenant', tenantId, 'team']) so a tenant switch can never read the
  * previous clinic's roster -- user-menu.tsx evicts the departing
- * tenant's ['tenant', tenantId] queries and main.tsx empties the whole
+ * tenant's ['tenant', tenantId] queries and the assembly's shipped
+ * session-end default empties the whole
  * cache the moment the session ends, exactly as the notes surface's own
  * key relies on. The members half of the roster reads the app's OWN
  * roster-with-identity answer (team-api.ts -- GET

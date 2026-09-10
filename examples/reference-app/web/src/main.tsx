@@ -1,110 +1,68 @@
 /**
- * main.tsx -- reference-app-web's bootstrap: the single composition
- * point where the app wires the @speed packages the way a delivered
- * consumer project does, and the browser-leg consumer proof of their
- * host contract.
+ * main.tsx -- reference-app-web's bootstrap: the app's declarative
+ * definition handed to the platform's entry assembly
+ * (@speed/product-shell/bootstrap's bootstrapSpeedApp), the one call a
+ * delivered app's main module makes.
  *
  * The file exports a bootstrap function and never runs module-scope
  * side effects: importing the module does nothing, so component suites
  * and future harnesses can import it safely, and the whole composition
- * runs exactly once per page load, wherever the host mounts it.
+ * runs exactly once per page load, wherever the host mounts it. The
+ * assembly itself -- the fresh bilingual i18n instance with the
+ * family's four namespaces registered, the memory-token session
+ * attached over the generated authn operations, the one client bound
+ * into the api-sdk runtime seam with the session refresh as its
+ * 401-refresh leg, the no-retry query client, the session-end strategy
+ * and the provider stack (I18next -> theme -> QueryClient -> declared
+ * providers) -- is the package's, documented there.
  *
- * What bootstrapReferenceApp wires, in order:
+ * What remains here is the app's variation, in one table:
  *
- *  1. i18n -- one fresh bilingual instance under the browser's default
- *     negotiation (the ?lang= URL parameter, the stored choice, then
- *     the navigator languages, zh-CN last), with every namespace a
- *     rendered unit can read registered exactly once: the six
- *     namespace-shipping package families (ui-kit, whose built-in
- *     strings the components compose without saying so, layout-kit,
- *     auth-ui, tenancy-ui, account-ui and product-shell -- the shell
- *     this app composes, whose one string of its own, the polite
- *     announcement of its session-ended flip, renders only where the
- *     host registered its namespace) plus the app's own
- *     reference-app namespace. Cross-language fallback is impossible
- *     by construction: a missing key renders as the key itself.
+ *  - The namespaces the app's views render beyond the family's
+ *    automatic four: tenancy-ui's (the tenant switcher in the user
+ *    menu), account-ui's (the account surface) and the app's own
+ *    reference-app bundle.
  *
- *  2. The session -- a memory access-token store (the credential never
- *     touches storage; nothing here writes localStorage) feeding the
- *     auth-core session state machine over the generated authn
- *     operations, attached to the auth-core hooks. A reload starts
- *     anonymous: the session is memory-only by contract. A session-end
- *     transition (a sign-out or a session death -- a silently refused
- *     refresh) also empties the whole query cache
- *     (evictQueriesOnSessionEnd, below): every row the departing
- *     principal's reads cached -- tenant-namespaced data and the
- *     identity-domain rows the account surface reads alike -- is gone
- *     the moment the session is, so a different account signing in
- *     afterward, into any tenant, starts from an empty cache and can
- *     never inherit an earlier session's rows.
+ *  - The app's services provider: AppServicesProvider carries the
+ *    assembled session and client down to the views (the session for
+ *    every view that drives a session operation, the client as the one
+ *    RequestFn the config hooks share).
  *
- *  2a. The query client itself -- created by createAppQueryClient,
- *     below, whose no-retry policy is this host's deliberate answer to
- *     where transient retries belong (its doc comment carries the
- *     reasoning).
+ *  - The view machine: AppView, the app's product-shell composition
+ *    (app.tsx), as the single view root.
  *
- *  3. The client -- the app's one HTTP surface: @speed/api-client's
- *     createClient over the environment's own fetch (no fetch option:
- *     createClient captures globalThis.fetch at construction), with
- *     the session's silent refresh as the 401-refresh leg, bound into
- *     the api-sdk runtime seam every generated operation calls
- *     through. All API traffic is generated-code traffic from here on;
- *     no other module in the app touches HTTP.
+ *  - The session-end override: the base root assembly already ships a
+ *    total query-cache eviction the moment the session ends (nothing a
+ *    departing principal's reads cached may greet the next account);
+ *    the app adds its own principal-bound leftover of the same class,
+ *    the notes create form's half-typed draft (views/notes-draft.ts --
+ *    text typed by the departing account must not greet the next
+ *    account signing into this page). Both fire on the same
+ *    authenticated -> anonymous transition -- a manual sign-out and a
+ *    session death (a silently refused refresh) settle it the same
+ *    way -- so the override composes the default action with the
+ *    draft's clearing.
  *
- *  4. The providers -- I18nextProvider around AppThemeProvider (token
- *     theme + the MUI locale of the active language + CssBaseline)
- *     around the shared QueryClientProvider contract the generated
- *     react-query hooks read from, then the app's own
- *     AppServicesProvider carrying the session and the client (as the
- *     RequestFn the config hooks fetch through) down to the views.
- *
- *  5. The view machine -- AppView, the product-shell composition: the
- *     auth-core-driven three-branch machine (signed out showing the
- *     sign-in surface, signed in with a tenant showing the AppShell
- *     frame over the hash-routed surfaces, a dead session converging
- *     to the session-ended screen), with the frame's nav, header brand
- *     (the server-served Public brand.site_name value) and user menu
- *     (tenant switcher over the demo roster, sign-out) all host
- *     content. The host page itself ships with this directory: index.html
- *     is a real HTML entry that imports this bootstrap and mounts it into
- *     the #root element exactly once, runnable through the vite dev
- *     server and the production build this directory now carries
- *     (vite.config.ts -- the one bundler in the workspace, since the
- *     library packages stay bundler-free by discipline). The built page
- *     is also what the reference-app server itself serves in a deployed
- *     shape: the Dockerfile builds this directory's dist/ into the image
- *     and the server serves it from disk under APP_WEB_DIST
- *     (internal/app/frontend.go). What does not ship is browser automation
- *     driving that server-served page; the shipped browser story is the
- *     dev-server page plus rendering under test harnesses.
+ * The host page itself ships with this directory: index.html is a real
+ * HTML entry that imports this bootstrap and mounts it into the #root
+ * element exactly once, runnable through the vite dev server and the
+ * production build this directory now carries (vite.config.ts -- the
+ * one bundler in the workspace, since the library packages stay
+ * bundler-free by discipline). The built page is also what the
+ * reference-app server itself serves in a deployed shape: the
+ * Dockerfile builds this directory's dist/ into the image and the
+ * server serves it from disk under APP_WEB_DIST
+ * (internal/app/frontend.go). What does not ship is browser automation
+ * driving that server-served page; the shipped browser story is the
+ * dev-server page plus rendering under test harnesses.
  */
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { StrictMode } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { createClient, createMemoryAccessTokenStore } from '@speed/api-client'
-import { bindRequestFn } from '@speed/api-sdk/runtime'
-import { attachSession, createAuthSession } from '@speed/auth-core'
-import type { AuthSession } from '@speed/auth-core'
-import {
-  createI18n,
-  I18nextProvider,
-  registerNamespace,
-  type I18nInstance,
-} from '@speed/i18n'
-import {
-  AppThemeProvider,
-  UI_KIT_NAMESPACE,
-  uiKitResources,
-} from '@speed/ui-kit'
-import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
-import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
-import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
 import { ACCOUNT_UI_NAMESPACE, accountUiResources } from '@speed/account-ui'
 import {
-  PRODUCT_SHELL_NAMESPACE,
-  productShellResources,
-} from '@speed/product-shell'
+  bootstrapSpeedApp,
+  type SpeedAppBootstrap,
+} from '@speed/product-shell/bootstrap'
+import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
 import { AppView } from './app.js'
 import { AppServicesProvider } from './app-services.js'
 import {
@@ -114,111 +72,9 @@ import {
 import { clearNotesDraft } from './views/notes-draft.js'
 
 /** What a page's bootstrap produced: the mounted root, the i18n
- * instance and the query client, for hosts and harnesses that act on
- * the composition. */
-export interface ReferenceAppBootstrap {
-  /** The mounted root; unmount() tears the page down. */
-  readonly root: Root
-  /** The instance the tree renders with (language switching acts on it). */
-  readonly i18n: I18nInstance
-  /** The query client the tree renders with. */
-  readonly queryClient: QueryClient
-}
-
-/**
- * Wires the page's principal-bound leftovers to empty the moment the
- * session ends: the query cache (every query was fetched under the
- * departing principal's access token) and the notes create form's
- * half-typed draft (views/notes-draft.ts -- a draft is the same class
- * of leftover as a cached row: text typed by the departing account
- * must not greet the next account signing into this page). A manual
- * sign-out and a session death (a silently refused refresh) both
- * settle the same authenticated -> anonymous AuthSnapshot transition
- * (auth-core's session.ts clears the same way for either), so this
- * fires on both.
- *
- * The eviction is total -- removeQueries() with no filter -- because
- * every query this page holds was fetched under the departing
- * principal's access token, and no query is safe to carry across an
- * authenticated -> anonymous boundary. Two domains make total
- * eviction necessary rather than a coarse hammer:
- *
- *  - the tenant-namespaced rows (['tenant', tenantId, ...] -- the
- *    notes list), keyed under the session's one tenant, and
- *  - the identity-domain rows the account surface reads through bare
- *    spec-path keys ('/api/v1/authn/sessions', '/api/v1/authn/
- *    login-history' and '/api/v1/authn/identities' -- nothing in
- *    @speed/api-sdk is tenant-namespaced): those keys carry no tenant
- *    segment for a tenant-scoped removal to reach, so only a total
- *    eviction stops a different account signing in afterward from
- *    inheriting the earlier account's sessions, login history and
- *    bound identities out of the shared QueryClient's memory.
- *
- * Evicting everything on the authenticated -> anonymous edge closes
- * both at the root: whatever domain a surface reads in, its rows
- * cannot outlive the session that fetched them, and a later account
- * always starts from an empty cache. (user-menu.tsx's own tenant-switch
- * eviction -- still mid-session, where this eviction deliberately does
- * not fire -- clears the same tenant prefix plus the identity-domain
- * keys, since a switch rotates the access token those rows were
- * answered under.)
- *
- * Returns the session's own unsubscribe function for a caller that
- * wants to tear this down (unit tests do); bootstrapReferenceApp does
- * not hold onto it, since the composed page never tears itself down
- * before an unload a fresh reload starts over from anyway.
- */
-export function evictQueriesOnSessionEnd(
-  session: AuthSession,
-  queryClient: QueryClient,
-): () => void {
-  let previous = session.getSnapshot()
-  return session.subscribe((snapshot) => {
-    if (previous.state === 'authenticated' && snapshot.state === 'anonymous') {
-      queryClient.removeQueries()
-      clearNotesDraft()
-    }
-    previous = snapshot
-  })
-}
-
-/**
- * The page's QueryClient. It retries nothing -- neither queries nor
- * mutations -- by deliberate policy, because transient retries belong
- * to the transport, not to this layer:
- *
- *  - @speed/api-client's frozen retry policy already retries exactly
- *    the transient classes a repetition could redeem -- 429 (honouring
- *    Retry-After) plus 502/503/504, network failures and timeouts, on
- *    idempotent methods only, up to three attempts under full-jitter
- *    backoff -- inside a single request. By the time a queryFn call
- *    rejects, that budget is already spent; a react-query retry would
- *    only re-run it whole (up to a twelve-attempt worst case across
- *    the two layers) and add exponential backoff on top.
- *  - Every answer that carries a code -- an envelope answer such as a
- *    403 rbac.permission_denied, or a client.* transport code -- is a
- *    definitive answer a repetition cannot redeem. Retrying a refused
- *    authorization read with the default backoff burns a doomed
- *    multi-second window before the refusal surfaces, and re-arms it
- *    on every refetch.
- *  - A mutation must never re-fire after a lost response: a create
- *    whose answer timed out server-side may already have committed,
- *    and a retry would duplicate it.
- *
- * Recovery is not lost: every query is staleTime 0, so a remount or a
- * window refocus re-reads under the current token; the transport's own
- * transient retries cover momentary outages; and a refused read now
- * surfaces to the gate on the first response, where the surface's
- * fail-closed states answer it.
- */
-export function createAppQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  })
-}
+ * instance, the query client and the session, for hosts and harnesses
+ * that act on the composition. */
+export type ReferenceAppBootstrap = SpeedAppBootstrap
 
 /**
  * Builds the whole app composition into the given container. Calling it
@@ -228,44 +84,26 @@ export function createAppQueryClient(): QueryClient {
 export function bootstrapReferenceApp(
   container: Element,
 ): ReferenceAppBootstrap {
-  const i18n = createI18n({
-    supportedLanguages: ['zh-CN', 'en-US'],
-    defaultLanguage: 'zh-CN',
+  return bootstrapSpeedApp(container, {
+    namespaces: [
+      { namespace: TENANCY_UI_NAMESPACE, resources: tenancyUiResources },
+      { namespace: ACCOUNT_UI_NAMESPACE, resources: accountUiResources },
+      {
+        namespace: REFERENCE_APP_NAMESPACE,
+        resources: referenceAppResources,
+      },
+    ],
+    providers: [
+      ({ session, api }, children) => (
+        <AppServicesProvider session={session} api={api}>
+          {children}
+        </AppServicesProvider>
+      ),
+    ],
+    view: <AppView />,
+    sessionEnded: (context) => {
+      context.evictAllQueries()
+      clearNotesDraft()
+    },
   })
-  registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
-  registerNamespace(i18n, LAYOUT_KIT_NAMESPACE, layoutKitResources)
-  registerNamespace(i18n, AUTH_UI_NAMESPACE, authUiResources)
-  registerNamespace(i18n, TENANCY_UI_NAMESPACE, tenancyUiResources)
-  registerNamespace(i18n, ACCOUNT_UI_NAMESPACE, accountUiResources)
-  registerNamespace(i18n, PRODUCT_SHELL_NAMESPACE, productShellResources)
-  registerNamespace(i18n, REFERENCE_APP_NAMESPACE, referenceAppResources)
-
-  const accessTokenStore = createMemoryAccessTokenStore()
-  const session = createAuthSession(accessTokenStore)
-  attachSession(session)
-
-  const client = createClient({
-    baseUrl: window.location.origin,
-    accessTokenStore,
-    refreshAccessToken: () => session.refresh(),
-  })
-  bindRequestFn(client)
-
-  const queryClient = createAppQueryClient()
-  evictQueriesOnSessionEnd(session, queryClient)
-  const root = createRoot(container)
-  root.render(
-    <StrictMode>
-      <I18nextProvider i18n={i18n}>
-        <AppThemeProvider i18n={i18n}>
-          <QueryClientProvider client={queryClient}>
-            <AppServicesProvider session={session} api={client}>
-              <AppView />
-            </AppServicesProvider>
-          </QueryClientProvider>
-        </AppThemeProvider>
-      </I18nextProvider>
-    </StrictMode>,
-  )
-  return { root, i18n, queryClient }
 }

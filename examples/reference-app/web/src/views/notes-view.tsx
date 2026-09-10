@@ -39,9 +39,10 @@
  * (['tenant', tenantId, ...] over the generated bare key) so a tenant
  * switch can never read the previous tenant's cached notes -- user-
  * menu.tsx evicts the departing tenant's ['tenant', tenantId] queries
- * (and the identity-domain rows) on every switch, and main.tsx's
- * evictQueriesOnSessionEnd empties the whole cache the moment the
- * session ends (a sign-out or a session death), so a different account
+ * (and the identity-domain rows) on every switch, and the bootstrap's
+ * shipped session-end default (main.tsx's sessionEnded override)
+ * empties the whole cache the moment the session ends (a sign-out or a
+ * session death), so a different account
  * signing in afterward -- into any tenant -- starts from an empty
  * cache rather than inheriting rows an earlier session's reads left
  * behind. The create invalidates exactly the namespaced key.
@@ -153,8 +154,8 @@ export function NotesView(): ReactElement {
   // useCurrentTenant returns { tenantId } | null, not a bare string --
   // the plain string is what the tenant-namespaced-key convention
   // documents (['tenant', tenantId, ...]) and what user-menu.tsx's
-  // tenant-switch eviction and main.tsx's session-end eviction both key
-  // their removeQueries call on, so it is extracted here rather than
+  // tenant-switch eviction and the shipped session-end strategy both
+  // key their removeQueries call on, so it is extracted here rather than
   // embedding the hook's object: the object is a fresh reference per
   // render, so a key or an eviction built from it could never
   // structurally match the cached key and would evict nothing --

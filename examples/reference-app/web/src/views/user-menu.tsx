@@ -77,9 +77,10 @@ export const TENANT_QUERY_PREFIX = 'tenant'
  * reach them, yet every one is answered under the caller's access
  * token. The transitions that rotate that token must therefore evict
  * them by key: a tenant switch (this module's own handleSwitched,
- * below) and a session end (main.tsx's evictQueriesOnSessionEnd, which
- * removes the whole cache). Exported for the session-end side of that
- * story to name the same keys in tests.
+ * below) and a session end (main.tsx's sessionEnded override composes
+ * the assembly's shipped default -- @speed/product-shell/bootstrap's
+ * total eviction). Exported for the session-end side of that story to
+ * name the same keys in tests.
  */
 export function evictIdentityDomainQueries(queryClient: QueryClient): void {
   for (const queryKey of [

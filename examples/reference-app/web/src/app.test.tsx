@@ -26,7 +26,7 @@
  * frame converges to the session-ended screen and back to the sign-in
  * surface -- the session still anonymous, the config cache still one
  * fetch, and the shell's own polite announcement of that flip (its
- * product-shell namespace, registered by this host at bootstrap like
+ * product-shell namespace, registered at the host's bootstrap like
  * every sibling's) carrying the human session-ended text in the
  * status region, in the active language, never the raw key. A
  * bilingual leg proves the frame and the auth surface speak the
@@ -660,9 +660,10 @@ describe('AppView', () => {
     // whole-page switch -- a server-ended session and an explicit
     // sign-out being the same snapshot flip -- and its polite
     // role="status" announcement is the one string the shell renders
-    // from its own product-shell namespace, which the host registers
-    // at bootstrap like every sibling's (product-shell's resources.ts
-    // declares the obligation). An unregistered host keeps the focus
+    // from its own product-shell namespace, which the assembly
+    // registers at the host's bootstrap like every sibling's
+    // (product-shell's resources.ts declares the obligation). An
+    // unregistered host keeps the focus
     // half only: the shell's registration guard renders no region, so
     // assistive tech hears nothing when the whole page silently
     // switches under them.

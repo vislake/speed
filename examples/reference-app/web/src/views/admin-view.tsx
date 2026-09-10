@@ -107,7 +107,7 @@ export function AdminView(): ReactElement {
   // THIS principal's access token, and the app's eviction discipline
   // keys every cached row it may have to drop on a tenant switch or a
   // session end under ['tenant', tenantId, ...] (user-menu.tsx's
-  // TENANT_QUERY_PREFIX, main.tsx's session-end eviction) -- so the
+  // TENANT_QUERY_PREFIX, the assembly's session-end eviction) -- so the
   // platform ledger shares the prefix, exactly like the clinic-name
   // row does.
   const tenantsKey = useMemo(() => ['tenant', tenantId, 'admin'], [tenantId])

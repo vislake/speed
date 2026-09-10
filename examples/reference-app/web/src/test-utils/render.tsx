@@ -72,8 +72,9 @@ export interface RenderWithProvidersOptions {
   readonly i18n?: I18nInstance
   /**
    * Render under a caller-supplied query client instead of the fresh
-   * retries-nothing one -- the suites that pin the app's own bootstrap
-   * policy (createAppQueryClient) drive the tree under that client.
+   * retries-nothing one -- the suites that pin the assembly's own
+   * policy (createQueryClient, @speed/product-shell/bootstrap) drive
+   * the tree under that client.
    */
   readonly queryClient?: QueryClient
 }

@@ -19,8 +19,9 @@
  * the generated bare key) exactly like the notes list's, so a tenant
  * switch can never read the previous tenant's cached cases: user-menu
  * evicts the departing tenant's ['tenant', tenantId] queries on every
- * switch and main.tsx's evictQueriesOnSessionEnd empties the whole
- * cache the moment the session ends. A create that lands navigates
+ * switch and the bootstrap's shipped session-end default (main.tsx's
+ * sessionEnded override) empties the whole cache the moment the
+ * session ends. A create that lands navigates
  * back here and remounts the view; with the app's staleTime-0 policy
  * the mount re-reads under the current token, so the new case appears
  * on the list the person just came back to.
