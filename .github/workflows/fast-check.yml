@@ -111,6 +111,16 @@ name: fast-check
 #         loop, the liveness/authn path literals) outside that copy. Its
 #         planted-drift suite (tools/test_check_host_core_parity.py)
 #         runs in the same step pair below.
+#       - tools/check_env_example_consistency.py -- the reference app's
+#         .env.example drift gate: the env variables the host's loader
+#         target declares (internal/app/bootstrap.go's config:"env=NAME"
+#         pins, the derive option included, plus the APP_ROOT_KEY
+#         literal WithRootKeyEnv reads) must equal the key set
+#         examples/reference-app/.env.example documents -- its active
+#         KEY= entries and its commented-out examples alike. Its
+#         planted-drift suite
+#         (tools/test_check_env_example_consistency.py) runs in the same
+#         step pair below.
 #       - tools/semgrep_rules/ -- the architecture-discipline semgrep
 #         ruleset: seven rules, each mapping to an 18-cicd discipline-table
 #         row (deployment-mode branching outside kernel wiring,
@@ -357,6 +367,19 @@ jobs:
         run: python3 tools/test_check_host_core_parity.py
       - name: Shared host-kernel parity check (internal/hostcore copies)
         run: python3 tools/check_host_core_parity.py
+      # Reference-app env-example consistency: the env variables the
+      # host's loader target declares (internal/app/bootstrap.go's
+      # config:"env=NAME" pins, the derive option included, plus the
+      # APP_ROOT_KEY literal WithRootKeyEnv reads) must equal the key set
+      # examples/reference-app/.env.example documents -- its active KEY=
+      # entries and its commented-out examples alike, so a variable
+      # added to one side alone goes red. The planted-drift suite runs
+      # first, then the gate over the real tree: pure python, like the
+      # checks above.
+      - name: Env-example checker's planted-drift suite (tools/test_check_env_example_consistency.py)
+        run: python3 tools/test_check_env_example_consistency.py
+      - name: Env-example consistency check (reference-app .env.example)
+        run: python3 tools/check_env_example_consistency.py
       # The fixture checker's own unit suite: stdlib-only unittest over
       # the env-literal reader the fixture-liveness expectation reads
       # the tree with -- direct os.Getenv/os.LookupEnv arguments,
