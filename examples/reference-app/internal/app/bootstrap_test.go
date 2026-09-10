@@ -342,6 +342,11 @@ func TestServerConfigFrom_RefusesCrossVariableCombinations(t *testing.T) {
 			wantErr: "APP_SMTP_PORT",
 		},
 		{
+			name:    "an SMTP reply-to without a target",
+			mutate:  func(hc *hostConfig) { hc.SMTPReplyTo = "support@example.test" },
+			wantErr: "APP_SMTP_HOST",
+		},
+		{
 			name: "the Fly declaration with only empty proxy entries",
 			mutate: func(hc *hostConfig) {
 				hc.ReadFlyClientIP = true
@@ -447,6 +452,7 @@ func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *
 	hc.SMTPPort = 587
 	hc.SMTPUsername = "mailer@example.test"
 	hc.SMTPPassword = "smtp-password"
+	hc.SMTPReplyTo = "support@example.test"
 
 	cfg, err := serverConfigFrom(hc)
 	if err != nil {
@@ -455,9 +461,9 @@ func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *
 	if cfg.Mailer != nil {
 		t.Error("Mailer is non-nil with a complete APP_SMTP_* composition, want the host to pre-build nothing: BuildServer composes \"mailer.smtp\" through the preset channel from the SMTP fields")
 	}
-	if cfg.SMTPHost != "smtp.example.test" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.test" || cfg.SMTPPassword != "smtp-password" {
-		t.Errorf("SMTP target = %s:%d user=%q, want the complete APP_SMTP_* group carried through for the preset channel",
-			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername)
+	if cfg.SMTPHost != "smtp.example.test" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.test" || cfg.SMTPPassword != "smtp-password" || cfg.SMTPReplyTo != "support@example.test" {
+		t.Errorf("SMTP target = %s:%d user=%q reply-to=%q, want the complete APP_SMTP_* group carried through for the preset channel",
+			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPReplyTo)
 	}
 }
 

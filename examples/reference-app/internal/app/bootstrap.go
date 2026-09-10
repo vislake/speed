@@ -238,8 +238,9 @@ type hostConfig struct {
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
 	ObjectStoreRoot string `config:"env=APP_OBJECT_STORE_ROOT"`
 
-	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword name
-	// APP_SMTP_HOST/APP_SMTP_PORT/APP_SMTP_USERNAME/APP_SMTP_PASSWORD: the
+	// SMTPHost, SMTPPort, SMTPUsername, SMTPPassword and SMTPReplyTo name
+	// APP_SMTP_HOST/APP_SMTP_PORT/APP_SMTP_USERNAME/APP_SMTP_PASSWORD/
+	// APP_SMTP_REPLY_TO: the
 	// variables that together point the "mailer" seam at the registered
 	// "mailer.smtp" implementation -- BuildServer overrides that one preset
 	// entry with these values, and the registration builds the SMTP Mailer
@@ -259,6 +260,15 @@ type hostConfig struct {
 	// #nosec G101 -- an ENVIRONMENT VARIABLE NAME, not a credential value; see
 	// S3SecretKey's identical exception above.
 	SMTPPassword string `config:"env=APP_SMTP_PASSWORD"`
+	// SMTPReplyTo is the transport-level Reply-To default
+	// (pkgcore.SMTPConfig.ReplyTo): every message whose own Mail carries no
+	// ReplyTo of its own goes out with this one. Optional and independent of
+	// the host/port pair -- a value here without a complete SMTP target is
+	// refused at load time, since the console default it would compose with
+	// has no Reply-To knob. The modules this app assembles set their own
+	// Reply-To (org's and notification's WithReplyTo options in
+	// internal/app/server.go), which wins over this default for their mail.
+	SMTPReplyTo string `config:"env=APP_SMTP_REPLY_TO"`
 
 	// SMSGatewayURL names APP_SMS_GATEWAY_URL: the endpoint the real HTTP SMS
 	// transport (pkgcore.NewHTTPSMSSender) posts delivery requests to. Empty
@@ -752,15 +762,18 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 
 	// smtpHost/smtpPort mirror the S3 group above: both unset leaves the
 	// "mailer" seam on the Preset's console default, and a partial APP_SMTP_*
-	// set is refused rather than silently ignored. The port's zero value is its
-	// unset value -- 0 is no usable SMTP port -- and an emptied APP_SMTP_PORT
-	// never reaches here at all: the loader refuses an empty value for an int
-	// field.
+	// set is refused rather than silently ignored -- SMTPReplyTo alone
+	// included, because the console default it would compose with has no
+	// Reply-To knob and the value would go silently unused. The port's zero
+	// value is its unset value -- 0 is no usable SMTP port -- and an emptied
+	// APP_SMTP_PORT never reaches here at all: the loader refuses an empty
+	// value for an int field.
 	smtpHost := hc.SMTPHost
 	smtpPort := hc.SMTPPort
+	smtpReplyTo := hc.SMTPReplyTo
 	switch {
-	case smtpHost == "" && smtpPort == 0:
-		// Both unset: the "mailer" seam stays on its Preset default.
+	case smtpHost == "" && smtpPort == 0 && smtpReplyTo == "":
+		// All unset: the "mailer" seam stays on its Preset default.
 	case smtpHost == "" || smtpPort == 0:
 		return ServerConfig{}, fmt.Errorf(
 			"reference-app: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set")
@@ -801,6 +814,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 		SMTPPort:              smtpPort,
 		SMTPUsername:          hc.SMTPUsername,
 		SMTPPassword:          hc.SMTPPassword,
+		SMTPReplyTo:           smtpReplyTo,
 		SMSGatewayURL:         hc.SMSGatewayURL,
 		DisableQueueWorker:    hc.DisableQueueWorker != "",
 		DisableDemoUserHeader: hc.DisableDemoUserHeader != "",
@@ -887,6 +901,7 @@ var hostBootstrapKeys = []string{
 	"smtpport",
 	"smtpusername",
 	"smtppassword",
+	"smtpreplyto",
 	"smsgatewayurl",
 	"demouserspassword",
 	"demoplatformstaffpassword",

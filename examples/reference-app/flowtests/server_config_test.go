@@ -831,6 +831,11 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 			wantIn: "APP_SMTP_PORT",
 		},
 		{
+			name:   "smtp_reply_to_without_a_target",
+			env:    map[string]string{"APP_SMTP_REPLY_TO": "support@example.com"},
+			wantIn: "APP_SMTP_HOST",
+		},
+		{
 			name:   "s3_partial_set",
 			env:    map[string]string{"APP_S3_ENDPOINT": "http://s3.example.com"},
 			wantIn: "APP_S3_BUCKET",
@@ -862,7 +867,8 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 
 // TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget pins the
 // success half of the SMTP wiring: with both variables set and a
-// parseable port, ConfigFromEnv carries the host and the credentials as the
+// parseable port, ConfigFromEnv carries the host, the credentials and the
+// optional reply-to as the
 // resolved SMTP target fields -- the values BuildServer hands the preset
 // channel -- and pre-builds no Mailer of its own.
 func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
@@ -871,6 +877,7 @@ func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
 	t.Setenv("APP_SMTP_PORT", "587")
 	t.Setenv("APP_SMTP_USERNAME", "mailer@example.com")
 	t.Setenv("APP_SMTP_PASSWORD", "smtp-secret")
+	t.Setenv("APP_SMTP_REPLY_TO", "support@example.com")
 
 	cfg, err := app.ConfigFromEnv()
 	if err != nil {
@@ -879,8 +886,8 @@ func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
 	if cfg.Mailer != nil {
 		t.Error("Mailer non-nil, want ConfigFromEnv to pre-build nothing: BuildServer composes \"mailer.smtp\" through the preset channel from the SMTP fields")
 	}
-	if cfg.SMTPHost != "smtp.example.com" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.com" || cfg.SMTPPassword != "smtp-secret" {
-		t.Errorf("SMTP target = %s:%d user=%q, want the complete APP_SMTP_* group carried through", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername)
+	if cfg.SMTPHost != "smtp.example.com" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.com" || cfg.SMTPPassword != "smtp-secret" || cfg.SMTPReplyTo != "support@example.com" {
+		t.Errorf("SMTP target = %s:%d user=%q reply-to=%q, want the complete APP_SMTP_* group carried through", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPReplyTo)
 	}
 }
 

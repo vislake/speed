@@ -735,8 +735,9 @@ type ServerConfig struct {
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
 	ObjectStoreRoot string
 
-	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword name the registered
-	// "mailer.smtp" implementation for the "mailer" seam through the Preset's
+	// SMTPHost, SMTPPort, SMTPUsername, SMTPPassword and SMTPReplyTo name the
+	// registered "mailer.smtp" implementation for the "mailer" seam through
+	// the Preset's
 	// config channel when SMTPHost is non-empty: BuildServer overrides that
 	// one entry of the standalone Preset with these values, and the
 	// registration builds the SMTP Mailer from them -- the host pre-builds
@@ -748,6 +749,10 @@ type ServerConfig struct {
 	SMTPPort     int
 	SMTPUsername string
 	SMTPPassword string
+	// SMTPReplyTo is the transport-level Reply-To default the "mailer.smtp"
+	// registration carries (pkgcore.SMTPConfig.ReplyTo); the modules' own
+	// Reply-To (server.go's org/notification assembly) wins over it.
+	SMTPReplyTo string
 
 	// SMSGatewayURL composes the real HTTP SMS transport
 	// (pkgcore.NewHTTPSMSSender) for authn's "SMS sender" seam when
@@ -1358,6 +1363,11 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// header-only refusal stays pinned).
 		org.WithSubjectResolver(org.SubjectResolverFunc(DemoOrgSubjectResolverFor(cfg.DisableDemoUserHeader, true))),
 		org.WithMailFrom("invitations@reference-app.example"),
+		// Replies to an invitation land in the support inbox rather than on
+		// the no-reply-ish sender above. Module-level configuration by
+		// design: the inviter's own address is not reachable here (see
+		// org.WithReplyTo's own doc comment).
+		org.WithReplyTo("support@reference-app.example"),
 		org.WithInvitationLinkBuilder(func(ctx context.Context, token string) (string, error) {
 			tenant, tenantErr := pkgcore.MustTenantFromContext(ctx)
 			if tenantErr != nil {
@@ -1754,6 +1764,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	notificationModule := notification.NewModule(db,
 		notification.WithSMSSender(pkgcore.NewConsoleSMSSender(smsOutput)),
 		notification.WithMailFrom("notifications@reference-app.example"),
+		// Replies to a notification land in the support inbox; the
+		// APP_SMTP_REPLY_TO default, when configured, backs this up for any
+		// mail the modules do not stamp themselves.
+		notification.WithReplyTo("support@reference-app.example"),
 		notification.WithContactEmailIndexer(contactEmailIndexer),
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),
 		notification.WithDeliveryQueue(standaloneQueue),
@@ -2242,6 +2256,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 				"port":     strconv.Itoa(cfg.SMTPPort),
 				"username": cfg.SMTPUsername,
 				"password": cfg.SMTPPassword,
+				"reply_to": cfg.SMTPReplyTo,
 			},
 		})
 	}
