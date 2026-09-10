@@ -297,7 +297,15 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// Claim the retention-sweep task handler so a host that drains
 	// reg.Jobs.Handlers() onto its jobs.Queue after Bootstrap gets a
 	// worker that runs it -- a plain catalog insertion, no I/O.
-	return reg.Jobs.Handle(taskTypeRetentionSweep, retentionSweepHandler{svc: m.retention})
+	if err := reg.Jobs.Handle(taskTypeRetentionSweep, retentionSweepHandler{svc: m.retention}); err != nil {
+		return err
+	}
+	// Declare the sweep's periodic schedule alongside its handler:
+	// declaring means scheduled, so a host that runs a jobs.Scheduler over
+	// the registry's declarations sweeps every tenant at the module's own
+	// window cadence -- the schedule point this module does not run
+	// itself.
+	return reg.Schedules.Add(retentionSweepSchedule)
 }
 
 // compile-time check that *Module satisfies pkgcore.Module.

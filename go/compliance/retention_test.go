@@ -432,6 +432,46 @@ func TestRetentionService_EnqueueRetentionSweep_ShapesTheTask(t *testing.T) {
 	}
 }
 
+// TestRetentionSweepKeyMatchesTheSchedulerDerivation pins the schedule
+// migration's key identity: the same (task type, tenant, window) must
+// resolve one idempotency key through the module's own schedule point and
+// through the jobs.Scheduler's derivation over the module's declaration,
+// or a scheduler tick and a manual enqueue landing in one window would
+// run the sweep twice. The key literals below are the pinned strings.
+func TestRetentionSweepKeyMatchesTheSchedulerDerivation(t *testing.T) {
+	windowStart := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+
+	// Path one: the module's own schedule point, through the real enqueue.
+	svc, _ := newRetentionHarness(t)
+	svc.now = func() time.Time { return windowStart.Add(30 * time.Minute) }
+	queue := &recordingQueue{}
+	svc.queue = queue
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	if err := svc.EnqueueRetentionSweep(ctx); err != nil {
+		t.Fatalf("EnqueueRetentionSweep: %v", err)
+	}
+	if len(queue.tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(queue.tasks))
+	}
+	manual := queue.tasks[0].IdempotencyKey
+	if want := "compliance.retention_sweep:tenant-a:2026-09-07T10:00:00Z"; manual != want {
+		t.Fatalf("the manual path resolved key %q, want the pinned %q", manual, want)
+	}
+
+	// Path two: the scheduler's own derivation over the declaration, for
+	// the same (tenant, window).
+	decl := retentionSweepSchedule
+	if decl.Type != taskTypeRetentionSweep || decl.Every != retentionSweepWindowSize {
+		t.Errorf("declaration = %+v, want the site's own type %q and window %s", decl, taskTypeRetentionSweep, retentionSweepWindowSize)
+	}
+	if decl.Scope != pkgcore.PeriodicScopePerTenant {
+		t.Errorf("declaration scope = %q, want %q", decl.Scope, pkgcore.PeriodicScopePerTenant)
+	}
+	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, pkgcore.TenantID("tenant-a"), windowStart); got != manual {
+		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
+	}
+}
+
 // TestRetentionService_EnqueueRetentionSweep_NoTenantFails pins the
 // no-guessing rule.
 func TestRetentionService_EnqueueRetentionSweep_NoTenantFails(t *testing.T) {

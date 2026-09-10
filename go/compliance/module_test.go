@@ -302,6 +302,25 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 	}
 }
 
+// TestModule_Register_DeclaresTheRetentionSweepSchedule pins the module's
+// periodic declaration: Register puts exactly the retention-sweep schedule
+// on the registry's Schedules seat -- declaring means scheduled, so a host
+// running a jobs.Scheduler over the finished registry sweeps every tenant
+// at the module's own window cadence, the schedule point this module does
+// not run itself.
+func TestModule_Register_DeclaresTheRetentionSweepSchedule(t *testing.T) {
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	decls := reg.Schedules.Declarations()
+	if len(decls) != 1 || decls[0] != retentionSweepSchedule {
+		t.Errorf("Register declared %+v, want exactly the retention-sweep schedule %+v", decls, retentionSweepSchedule)
+	}
+}
+
 func containsString(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {

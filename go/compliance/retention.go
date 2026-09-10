@@ -82,6 +82,14 @@ func retentionSweepWindowStart(now time.Time) time.Time {
 	return now.Truncate(retentionSweepWindowSize)
 }
 
+// retentionSweepKeyPrefix is the prefix of every retention-sweep
+// idempotency key. It is a named constant because two derivations must
+// agree on it byte for byte: retentionSweepIdempotencyKey below, and the
+// declaration (retentionSweepSchedule) a jobs.Scheduler composes keys
+// from with its own window derivation -- one window must resolve one key
+// through both paths.
+const retentionSweepKeyPrefix = "compliance.retention_sweep:"
+
 // retentionSweepIdempotencyKey derives the jobs idempotency key of one
 // retention-sweep window for a tenant, mirroring go/storage's
 // expirySweepIdempotencyKey: the operation one key names is "the sweep of
@@ -93,7 +101,20 @@ func retentionSweepWindowStart(now time.Time) time.Time {
 // swept by two workers at once; a dead-lettered job poisons only its own
 // window, and an enqueue in a later window runs the sweep again.
 func retentionSweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return "compliance.retention_sweep:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+	return retentionSweepKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
+}
+
+// retentionSweepSchedule is the module's declaration of the retention
+// sweep on the pkgcore.Registry.Schedules seat: a per-tenant task at the
+// sweep's own window, keyed with the same prefix and window function the
+// manual EnqueueRetentionSweep path uses, so a scheduler tick and a
+// manual enqueue landing in one window resolve one key and dedupe onto
+// one job.
+var retentionSweepSchedule = pkgcore.PeriodicTask{
+	Type:      taskTypeRetentionSweep,
+	Every:     retentionSweepWindowSize,
+	Scope:     pkgcore.PeriodicScopePerTenant,
+	KeyPrefix: retentionSweepKeyPrefix,
 }
 
 // TenantLister is a host-supplied, structurally typed seam letting
