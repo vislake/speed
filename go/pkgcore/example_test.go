@@ -915,3 +915,34 @@ func ExampleKernel_Shutdown() {
 	// Output:
 	// true <nil>
 }
+
+// ExampleEventPayloadString shows a cross-module subscriber reading a field
+// out of an event payload it cannot type-assert: a same-process publish hands
+// it the publisher's own struct, a broker-backed bus hands it the decoded
+// wire shape, and the probe accepts both by trying the spellings a field may
+// carry, in the order given. An unusable spelling is reported, never guessed.
+func ExampleEventPayloadString() {
+	// The publisher's own value, as a same-process delivery hands it over:
+	// this subscriber cannot name the type (it lives in another module), only
+	// the JSON spelling it documents.
+	published := struct {
+		UserID string `json:"user_id"`
+	}{UserID: "u-42"}
+
+	// The wire shape the same publish arrives as over a broker-backed bus.
+	wire := map[string]any{"user_id": "u-42"}
+
+	for _, payload := range []any{published, wire} {
+		id, ok := pkgcore.EventPayloadString(payload, "user_id", "userId", "UserID")
+		fmt.Println(id, ok)
+	}
+
+	// A payload whose value is not the expected shape is reported as absent.
+	_, ok := pkgcore.EventPayloadString(map[string]any{"user_id": 42}, "user_id")
+	fmt.Println(ok)
+
+	// Output:
+	// u-42 true
+	// u-42 true
+	// false
+}
