@@ -83,8 +83,8 @@ type Registration[T any] struct {
 // package-level registry before it bootstraps a Kernel that names it in a
 // Preset.
 //
-// For pkgcore's own distributed implementations (the seven Redis-,
-// PostgreSQL-, NATS-, Memcached- and S3-backed ones), the package
+// For pkgcore's own distributed implementations (the eight Redis-,
+// PostgreSQL-, NATS-, Memcached- and S3-backed packages), the package
 // carrying the implementation also exports a Registration factory that
 // wraps a host-built client, connection, pool or typed Config --
 // eventbus/redis.Registration, kv/postgres.Registration and so on -- and
