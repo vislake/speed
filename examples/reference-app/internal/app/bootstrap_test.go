@@ -19,6 +19,7 @@ package app
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"reflect"
@@ -126,181 +127,155 @@ func TestHostConfigPinsEveryLeafField(t *testing.T) {
 	}
 }
 
-// TestServerConfigFrom_RefusesAMalformedIndividualKey pins the transform's
-// per-variable refusal: an explicitly set key-material variable whose text is
-// not exactly configKeyHexLength hex characters fails the boot with a message
-// naming that variable, so the operator sees which variable to fix rather
-// than an opaque cipher error surfacing later.
-func TestServerConfigFrom_RefusesAMalformedIndividualKey(t *testing.T) {
-	const malformed = "not-64-hex-characters"
-	for _, tc := range []struct {
-		name    string
-		envName string
-		set     func(hc *hostConfig, value string)
-	}{
-		{
-			"config.cipher_key", "APP_CONFIG_KEY",
-			func(hc *hostConfig, value string) { hc.Config.Cipher_Key = value },
-		},
-		{
-			"org.invitation_email_index_key", "APP_ORG_INDEX_KEY",
-			func(hc *hostConfig, value string) { hc.Org.Invitation_Email_Index_Key = value },
-		},
-		{
-			"notification.contact_index_key", "APP_NOTIFICATION_INDEX_KEY",
-			func(hc *hostConfig, value string) { hc.Notification.Contact_Index_Key = value },
-		},
-		{
-			"pki.local_key_cipher_key", "APP_PKI_LOCAL_KEY_CIPHER_KEY",
-			func(hc *hostConfig, value string) { hc.Pki.Local_Key_Cipher_Key = value },
-		},
-		{
-			"authn.blind_index_key", "APP_AUTHN_BLIND_INDEX_KEY",
-			func(hc *hostConfig, value string) { hc.Authn.Blind_Index_Key = value },
-		},
-		{
-			"authn.pii_cipher_key", "APP_AUTHN_PII_CIPHER_KEY",
-			func(hc *hostConfig, value string) { hc.Authn.PII_Cipher_Key = value },
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			hc := hostConfigDefaults()
-			tc.set(&hc, malformed)
-			if _, err := serverConfigFrom(hc); err == nil {
-				t.Fatalf("serverConfigFrom accepted a malformed %s", tc.envName)
-			} else if !strings.Contains(err.Error(), tc.envName) {
-				t.Errorf("refusal does not name %s: %v", tc.envName, err)
+// TestConfigFromEnv_RefusesMalformedKeyMaterial pins the loader's own
+// key-material refusals as this app's wiring delivers them: a malformed
+// explicit value for any of the six keys fails the load wrapping
+// config.ErrInvalidValue, and a malformed APP_ROOT_KEY fails it with the
+// loader's dedicated config.ErrInvalidRootKey -- each naming the variable the
+// operator must fix. The refusal text itself belongs to the loader now, so
+// the assertion is the sentinel and the named variable, not the message.
+func TestConfigFromEnv_RefusesMalformedKeyMaterial(t *testing.T) {
+	t.Run("an individual key's malformed hex text", func(t *testing.T) {
+		for _, envName := range []string{
+			"APP_CONFIG_KEY",
+			"APP_ORG_INDEX_KEY",
+			"APP_NOTIFICATION_INDEX_KEY",
+			"APP_PKI_LOCAL_KEY_CIPHER_KEY",
+			"APP_AUTHN_BLIND_INDEX_KEY",
+			"APP_AUTHN_PII_CIPHER_KEY",
+		} {
+			t.Run(envName, func(t *testing.T) {
+				testutil.ClearBootstrapEnv(t)
+				t.Setenv(envName, "not-64-hex-characters")
+
+				_, err := ConfigFromEnv()
+				if !errors.Is(err, config.ErrInvalidValue) {
+					t.Fatalf("ConfigFromEnv() error = %v, want it to wrap config.ErrInvalidValue", err)
+				}
+				if !strings.Contains(err.Error(), envName) {
+					t.Errorf("refusal does not name %s: %v", envName, err)
+				}
+			})
+		}
+	})
+
+	t.Run("a malformed root key", func(t *testing.T) {
+		for name, value := range map[string]string{
+			"the wrong length":       "zzzz",
+			"64 characters, not hex": strings.Repeat("z", 64),
+		} {
+			t.Run(name, func(t *testing.T) {
+				testutil.ClearBootstrapEnv(t)
+				t.Setenv("APP_ROOT_KEY", value)
+
+				_, err := ConfigFromEnv()
+				if !errors.Is(err, config.ErrInvalidRootKey) {
+					t.Fatalf("ConfigFromEnv() error = %v, want it to wrap config.ErrInvalidRootKey", err)
+				}
+				if !strings.Contains(err.Error(), "APP_ROOT_KEY") {
+					t.Errorf("refusal does not name APP_ROOT_KEY: %v", err)
+				}
+			})
+		}
+	})
+}
+
+// TestLoadHostConfig_ResolvesKeyMaterialAndKeepsTheDevDefaultsIntact pins the
+// app-side half of the loader integration. It drives the real wiring
+// (loadHostConfig): APP_ROOT_KEY alone derives each of the six key materials
+// under its declared key path through the platform composition
+// (pkgcore.BootstrapKeyPurpose + dbkit.DeriveKey), an explicitly set
+// individual variable still wins over the derivation, and with no root key
+// every material falls back to its Dev* default.
+//
+// The hazard it guards is the loader's decode step: mapstructure writes a
+// decoded value through a pre-filled []byte field's own backing array, so a
+// key-material field left pre-filled from a package-level Dev* constant would
+// have that constant silently rewritten with hex text -- poisoning the default
+// every later zero-setup load in this process falls back to. The assertion
+// after every load is that the six Dev* variables are byte-identical to their
+// snapshots, so a regression to a decode-based resolution fails here.
+func TestLoadHostConfig_ResolvesKeyMaterialAndKeepsTheDevDefaultsIntact(t *testing.T) {
+	testutil.ClearBootstrapEnv(t)
+
+	defaults := map[string][]byte{
+		"APP_CONFIG_KEY":               DevConfigKey,
+		"APP_ORG_INDEX_KEY":            DevOrgIndexKey,
+		"APP_NOTIFICATION_INDEX_KEY":   DevNotificationIndexKey,
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY": DevPKILocalKeyCipherKey,
+		"APP_AUTHN_BLIND_INDEX_KEY":    DevBlindIndexKey,
+		"APP_AUTHN_PII_CIPHER_KEY":     DevPIICipherKey,
+	}
+	before := make(map[string][]byte, len(defaults))
+	for name, key := range defaults {
+		before[name] = bytes.Clone(key)
+	}
+	assertDefaultsIntact := func(t *testing.T) {
+		t.Helper()
+		for name, key := range defaults {
+			if !bytes.Equal(key, before[name]) {
+				t.Errorf("the %s development default was rewritten in place: got %x, want it byte-identical to %x", name, key, before[name])
 			}
-		})
+		}
 	}
-}
 
-// TestServerConfigFrom_RefusesAMalformedRootKey pins APP_ROOT_KEY's own
-// validation, which runs before any of the six derivations: a root key of the
-// wrong length and one of the right length that is not hex both fail the boot
-// naming APP_ROOT_KEY.
-func TestServerConfigFrom_RefusesAMalformedRootKey(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		rootKey string
-	}{
-		{"wrong length", "zzzz"},
-		{"right length, not hex", strings.Repeat("z", configKeyHexLength)},
+	rootKey := sha256.Sum256([]byte("TestLoadHostConfig root secret"))
+	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
+
+	hc, err := loadHostConfig()
+	if err != nil {
+		t.Fatalf("loadHostConfig: %v", err)
+	}
+	assertDefaultsIntact(t)
+
+	// Every field's material is the composed derivation over the declared key
+	// path -- reproduced independently here, so a field whose key path drifted
+	// from what its module declares shows up as a value mismatch.
+	for keyPath, got := range map[string][]byte{
+		"config.cipher_key":              hc.Config.Cipher_Key,
+		"org.invitation_email_index_key": hc.Org.Invitation_Email_Index_Key,
+		"notification.contact_index_key": hc.Notification.Contact_Index_Key,
+		"pki.local_key_cipher_key":       hc.Pki.Local_Key_Cipher_Key,
+		"authn.blind_index_key":          hc.Authn.Blind_Index_Key,
+		"authn.pii_cipher_key":           hc.Authn.PII_Cipher_Key,
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			hc := hostConfigDefaults()
-			hc.RootKey = tc.rootKey
-			if _, err := serverConfigFrom(hc); err == nil {
-				t.Fatal("serverConfigFrom accepted a malformed APP_ROOT_KEY")
-			} else if !strings.Contains(err.Error(), "APP_ROOT_KEY") {
-				t.Errorf("refusal does not name APP_ROOT_KEY: %v", err)
-			}
-		})
+		purpose, purposeErr := pkgcore.BootstrapKeyPurpose(keyPath)
+		if purposeErr != nil {
+			t.Fatalf("pkgcore.BootstrapKeyPurpose(%q): %v", keyPath, purposeErr)
+		}
+		want, deriveErr := dbkit.DeriveKey(rootKey[:], purpose)
+		if deriveErr != nil {
+			t.Fatalf("dbkit.DeriveKey(rootKey, %q): %v", purpose, deriveErr)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("material for %s = %x, want the composed derivation %x", keyPath, got, want)
+		}
 	}
-}
 
-// TestParseHexKeyEnv pins the decode contract every key-material variable and
-// APP_ROOT_KEY share: configKeyHexLength hex characters decode to the 32-byte
-// key they encode, a shorter text refuses with the expected length in the
-// message, and a right-length text that is not hex refuses naming the
-// variable.
-func TestParseHexKeyEnv(t *testing.T) {
-	const envName = "APP_EXAMPLE_KEY"
-	valid := strings.Repeat("ab", 32)
-
-	decoded, err := parseHexKeyEnv(envName, valid)
+	// An explicit individual variable wins over the derivation.
+	explicit := sha256.Sum256([]byte("TestLoadHostConfig explicit APP_CONFIG_KEY"))
+	t.Setenv("APP_CONFIG_KEY", hex.EncodeToString(explicit[:]))
+	hc, err = loadHostConfig()
 	if err != nil {
-		t.Fatalf("parseHexKeyEnv(%q): %v", valid, err)
+		t.Fatalf("loadHostConfig with an explicit override: %v", err)
 	}
-	if len(decoded) != 32 || hex.EncodeToString(decoded) != valid {
-		t.Fatalf("parseHexKeyEnv(%q) = %x, want the 32 bytes it encodes", valid, decoded)
+	if !bytes.Equal(hc.Config.Cipher_Key, explicit[:]) {
+		t.Errorf("Config.Cipher_Key = %x, want the explicit override %x", hc.Config.Cipher_Key, explicit[:])
 	}
+	assertDefaultsIntact(t)
 
-	if _, err := parseHexKeyEnv(envName, "abcd"); err == nil {
-		t.Fatal("parseHexKeyEnv accepted a 4-character text")
-	} else if !strings.Contains(err.Error(), envName) || !strings.Contains(err.Error(), "64") {
-		t.Errorf("length refusal does not state the variable and the expected length: %v", err)
-	}
-
-	if _, err := parseHexKeyEnv(envName, strings.Repeat("zz", 32)); err == nil {
-		t.Fatal("parseHexKeyEnv accepted non-hex text of the right length")
-	} else if !strings.Contains(err.Error(), envName) {
-		t.Errorf("decode refusal does not name %s: %v", envName, err)
-	}
-}
-
-// TestResolveKey_AppliesTheThreeTierPrecedence drives resolveKey through all
-// three tiers and both refusals: the hardcoded development default when
-// nothing is set, the APP_ROOT_KEY derivation when the root key alone is set,
-// the individual variable when it is set (winning over the derivation), a
-// malformed individual value refusing by its variable name, and a root key
-// that cannot derive refusing too.
-func TestResolveKey_AppliesTheThreeTierPrecedence(t *testing.T) {
-	const envName = "APP_CONFIG_KEY"
-	keyPath := "config.cipher_key"
-	devDefault := []byte("dev-default-key-material")
-	rootKey := bytes.Repeat([]byte{0x5a}, 32)
-
-	key, err := resolveKey(nil, keyPath, envName, "", devDefault)
+	// With the root key and the override emptied, every material falls back to
+	// its development default.
+	t.Setenv("APP_ROOT_KEY", "")
+	t.Setenv("APP_CONFIG_KEY", "")
+	hc, err = loadHostConfig()
 	if err != nil {
-		t.Fatalf("resolveKey with nothing set: %v", err)
+		t.Fatalf("loadHostConfig with nothing set: %v", err)
 	}
-	if !bytes.Equal(key, devDefault) {
-		t.Fatalf("resolveKey with nothing set = %x, want the development default %x", key, devDefault)
+	if !bytes.Equal(hc.Config.Cipher_Key, DevConfigKey) {
+		t.Errorf("Config.Cipher_Key = %x, want the development default %x", hc.Config.Cipher_Key, DevConfigKey)
 	}
-
-	key, err = resolveKey(rootKey, keyPath, envName, "", devDefault)
-	if err != nil {
-		t.Fatalf("resolveKey with a root key: %v", err)
-	}
-	derived := mustDeriveKey(t, rootKey, keyPath)
-	if !bytes.Equal(key, derived) {
-		t.Fatalf("resolveKey with a root key = %x, want the composed derivation's %x", key, derived)
-	}
-	if bytes.Equal(key, devDefault) {
-		t.Fatal("the root key tier did not move the key off the development default")
-	}
-
-	override := hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32))
-	key, err = resolveKey(rootKey, keyPath, envName, override, devDefault)
-	if err != nil {
-		t.Fatalf("resolveKey with an individual override: %v", err)
-	}
-	if got := hex.EncodeToString(key); got != override {
-		t.Fatalf("resolveKey with an individual override = %s, want the override %s", got, override)
-	}
-
-	if _, err := resolveKey(nil, keyPath, envName, "not-a-key", devDefault); err == nil {
-		t.Fatal("resolveKey accepted a malformed individual value")
-	} else if !strings.Contains(err.Error(), envName) {
-		t.Errorf("malformed-override refusal does not name %s: %v", envName, err)
-	}
-
-	if _, err := resolveKey([]byte("short"), keyPath, envName, "", devDefault); err == nil {
-		t.Fatal("resolveKey derived from a root key that cannot derive")
-	} else if !strings.Contains(err.Error(), keyPath) || !strings.Contains(err.Error(), "APP_ROOT_KEY") {
-		t.Errorf("derivation refusal does not name both the key path and APP_ROOT_KEY: %v", err)
-	}
-}
-
-// mustDeriveKey builds the expectation TestResolveKey compares against by
-// composing the platform's two derivation contracts directly -- the key
-// path's purpose string (pkgcore.BootstrapKeyPurpose) and the material under
-// it (dbkit.DeriveKey) -- rather than reusing production's resolveKey, so a
-// purpose or path-spelling mistake inside resolveKey shows up as a value
-// mismatch here instead of the test echoing whatever production computed.
-func mustDeriveKey(t *testing.T, rootKey []byte, keyPath string) []byte {
-	t.Helper()
-
-	purpose, err := pkgcore.BootstrapKeyPurpose(keyPath)
-	if err != nil {
-		t.Fatalf("pkgcore.BootstrapKeyPurpose(%q): %v", keyPath, err)
-	}
-	derived, err := dbkit.DeriveKey(rootKey, purpose)
-	if err != nil {
-		t.Fatalf("dbkit.DeriveKey(rootKey, %q): %v", purpose, err)
-	}
-	return derived
+	assertDefaultsIntact(t)
 }
 
 // TestSplitTrustedProxies pins the list shape ServerConfig.TrustedProxies

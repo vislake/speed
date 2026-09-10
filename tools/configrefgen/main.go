@@ -42,8 +42,8 @@
 //     own surface, documented where that host lives, while this
 //     repository-wide reference is the platform surface -- the declared keys
 //     and the mechanism a host drives to resolve them (go/pkgcore/config:
-//     the four-source chain, the prefix option, pinned variable names, and
-//     Verify's binding check).
+//     the five-source chain, the prefix option, pinned variable names, the
+//     derive-tagged key-material fields and Verify's binding check).
 //
 // The outputs are docs/config-reference.md and docs/config-reference.json,
 // docs/config.example.json (the JSON counterpart of the committed YAML

@@ -16,6 +16,12 @@
 #   3. this config file          authn.blind_index_key: ...
 #   4. the defaults the host already set on its target struct
 #
+# A declared key material's field -- typed []byte and tagged "derive" on the
+# host's loader target -- gains a fifth source between the file and the
+# default: the root-key derivation (see the note below). An explicit value
+# must be exactly 64 hex characters; quote it here so the YAML parser keeps
+# it text, since an unquoted all-digit value is read as a number.
+#
 # An absent file is skipped silently (it is a local-development convenience,
 # never a requirement); a file that exists but cannot be parsed is a hard
 # error. Keys in any source that map onto no target-struct field are ignored,
@@ -34,8 +40,10 @@
 # a host must feed. A real deployment injects each key from a secret store,
 # or derives it from one 32-byte root key through the platform composition:
 # pkgcore.BootstrapKeyPurpose fixes one purpose string per declared key
-# path, and dbkit.DeriveKey turns the root key plus that purpose into the
-# key's material. docs/config-reference.md's bootstrap section states each
+# path, and dbkit.DeriveBootstrapKey turns the root key plus that purpose
+# into the key's material -- the function a host installs with the loader's
+# WithKeyDerivation, naming its root-key source with WithRootKey or
+# WithRootKeyEnv. docs/config-reference.md's bootstrap section states each
 # key's contract, purpose string and unset fallback.
 #
 # IMPORTANT: this file is a template to copy, not a file any process in this

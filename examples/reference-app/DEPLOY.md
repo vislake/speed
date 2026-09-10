@@ -84,8 +84,8 @@ Run every command below from the **repository root** (where `fly.toml` lives):
 fly launch --name <your-unique-app-name> --region <your-region> --no-deploy \
   --copy-config --org <your-org>
 
-# 2. Set the one root secret ConfigFromEnv derives all six of its
-#    bootstrap key materials from (see "Secrets to set first" below).
+# 2. Set the one root secret ConfigFromEnv's loader derives all six of
+#    its bootstrap key materials from (see "Secrets to set first" below).
 #    Generate a real value -- never reuse the example below, never commit
 #    a real value anywhere in this repository.
 fly secrets set \
@@ -115,7 +115,7 @@ curl -s "https://<your-app-name>.fly.dev/api/v1/config/public"
 
 ### Secrets to set first
 
-**Set `APP_ROOT_KEY` — that is the whole recommended path.** `internal/app/bootstrap.go`'s `ConfigFromEnv` derives all six of the bootstrap key materials below from this one 32-byte hex secret: each declared key path fixes its purpose string at the bootstrap seat (`pkgcore.BootstrapKeyPurpose`), and `dbkit.DeriveKey` (HKDF-SHA256) turns the root key plus that purpose into the key's 32-byte material — the honest trade-off standing: a leaked root key compromises all six at once, and rotating it rotates all six together. Generate one value and set it, never valued by this repository — generate it yourself (`openssl rand -hex 32`) and set it only through `fly secrets set`, never in `fly.toml`'s `[env]` (which is plaintext and committed) or anywhere else in this repository:
+**Set `APP_ROOT_KEY` — that is the whole recommended path.** The loader `ConfigFromEnv` drives (`go/pkgcore/config`, wired in `internal/app/bootstrap.go`'s `loadHostConfig`) derives all six of the bootstrap key materials below from this one 32-byte hex secret, in the same `Load` that reads it: the loader keeps each key-material field out of the text-decode pipeline, resolves an explicit individual variable first, then derives the rest — each declared key path fixes its purpose string at the bootstrap seat (`pkgcore.BootstrapKeyPurpose`), and `dbkit.DeriveBootstrapKey` (the seat's purpose, then `dbkit.DeriveKey`, HKDF-SHA256) turns the root key plus that purpose into the key's 32-byte material — the honest trade-off standing: a leaked root key compromises all six at once, and rotating it rotates all six together. An unset or emptied `APP_ROOT_KEY` means no root key, and every material keeps its development default. Generate one value and set it, never valued by this repository — generate it yourself (`openssl rand -hex 32`) and set it only through `fly secrets set`, never in `fly.toml`'s `[env]` (which is plaintext and committed) or anywhere else in this repository:
 
 ```bash
 fly secrets set APP_ROOT_KEY="$(openssl rand -hex 32)"
@@ -127,9 +127,9 @@ fly secrets set APP_ROOT_KEY="$(openssl rand -hex 32)"
 
 | Secret | Why it is sensitive |
 |---|---|
-| `APP_ROOT_KEY` | **Recommended default.** The single root secret `ConfigFromEnv` derives every other key below from. Set this and skip the rest of this table entirely for a normal deployment. |
+| `APP_ROOT_KEY` | **Recommended default.** The single root secret `ConfigFromEnv`'s loader derives every other key below from. Set this and skip the rest of this table entirely for a normal deployment. |
 
-Advanced: setting one or more of the six individual keys directly, instead of (or in addition to) `APP_ROOT_KEY`, for fine-grained per-key rotation. **An explicitly-set individual variable always wins over what `APP_ROOT_KEY` would derive for that same key** — the two compose freely, so a deployment can derive five keys from the root and rotate the sixth independently by setting only its own variable.
+Advanced: setting one or more of the six individual keys directly, instead of (or in addition to) `APP_ROOT_KEY`, for fine-grained per-key rotation. **An explicitly-set individual variable always wins over what `APP_ROOT_KEY` would derive for that same key** — the loader applies that precedence per field, and the two compose freely, so a deployment can derive five keys from the root and rotate the sixth independently by setting only its own variable (which must be exactly 64 hex characters, like every explicit key-material value).
 
 | Secret | Why it is sensitive |
 |---|---|
