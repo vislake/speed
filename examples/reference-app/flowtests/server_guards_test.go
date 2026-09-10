@@ -1,9 +1,11 @@
 package flowtests
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -431,5 +433,68 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 	}
 	if !errors.Is(err, authn.ErrMissingDistributedSMSSender) {
 		t.Fatalf("BuildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
+	}
+}
+
+// TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel pins
+// the channel this app routes its two string-expressible seam compositions
+// through -- the APP_SMTP_* and APP_S3_* groups -- by reading
+// Kernel.Bootstrap's own startup composition line. With those groups
+// configured, the "mailer" seam must be named as the registered
+// "mailer.smtp" implementation it resolves to and the "objectstore" seam as
+// "objectstore.s3", not as "<injected>" (a host-built value handed over with
+// WithMailer/WithObjectStore). A regression back to constructing
+// pkgcore.NewSMTPMailer / objectstore/s3.NewObjectStore in this host would
+// boot identically and name "<injected>" for both, so the line is the
+// discriminator between composing through the channel and pre-building; the
+// same boot must keep naming the eventbus as "<injected>" and the kv seam as
+// its in-process default, since those two deliberately stay on the injection
+// path.
+//
+// The slog default logger is process-global, and nothing in this package
+// calls t.Parallel, so the swap cannot overlap another test's boot (the same
+// ground pkgcore's own TestBootstrap_LogsOneInfoLineNamingEveryResolvedSeam
+// stands on). Neither composition dials anything at boot: mailer.smtp dials
+// per message and the S3 client is constructed lazily, so this test needs no
+// Docker and touches no network.
+func TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(previous)
+
+	cfg := testConfig(t)
+	cfg.SMTPHost = "smtp.example.test"
+	cfg.SMTPPort = 587
+	cfg.SMTPUsername = "mailer@example.test"
+	cfg.SMTPPassword = "smtp-password"
+	cfg.S3Endpoint = "objects.example.test:9000"
+	cfg.S3Bucket = "objects"
+	cfg.S3AccessKey = "access-key"
+	cfg.S3SecretKey = "secret-key"
+
+	_, cleanup, _, err := app.BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("BuildServer with SMTP and S3 compositions: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
+
+	out := buf.String()
+	for _, want := range []string{
+		"mailer=mailer.smtp",
+		"objectstore=objectstore.s3",
+		"eventbus=<injected>",
+		"kv=kv.memory",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bootstrap logged %q, want the composition line to name %s", out, want)
+		}
+	}
+	if strings.Contains(out, "mailer=<injected>") || strings.Contains(out, "objectstore=<injected>") {
+		t.Errorf("bootstrap logged %q, want neither the mailer nor the objectstore seam injected", out)
 	}
 }

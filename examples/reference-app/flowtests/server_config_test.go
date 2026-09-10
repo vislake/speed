@@ -860,12 +860,12 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 	}
 }
 
-// TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer pins the
+// TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget pins the
 // success half of the SMTP wiring: with both variables set and a
-// parseable port, ConfigFromEnv resolves a real SMTP Mailer carrying the
-// host and the credentials -- the composition the config's Mailer field
-// and MailerCapabilities hand to Kernel.Bootstrap.
-func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
+// parseable port, ConfigFromEnv carries the host and the credentials as the
+// resolved SMTP target fields -- the values BuildServer hands the preset
+// channel -- and pre-builds no Mailer of its own.
+func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
 	testutil.ClearBootstrapEnv(t)
 	t.Setenv("APP_SMTP_HOST", "smtp.example.com")
 	t.Setenv("APP_SMTP_PORT", "587")
@@ -876,11 +876,11 @@ func TestConfigFromEnv_CompleteSMTPComposition_ResolvesAMailer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
-	if cfg.Mailer == nil {
-		t.Fatal("Mailer = nil, want the resolved SMTP mailer")
+	if cfg.Mailer != nil {
+		t.Error("Mailer non-nil, want ConfigFromEnv to pre-build nothing: BuildServer composes \"mailer.smtp\" through the preset channel from the SMTP fields")
 	}
-	if cfg.MailerCapabilities&pkgcore.SurvivesRestart == 0 {
-		t.Error("MailerCapabilities lacks SurvivesRestart, want the capability-honest SMTP declaration")
+	if cfg.SMTPHost != "smtp.example.com" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.com" || cfg.SMTPPassword != "smtp-secret" {
+		t.Errorf("SMTP target = %s:%d user=%q, want the complete APP_SMTP_* group carried through", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername)
 	}
 }
 

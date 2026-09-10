@@ -61,7 +61,7 @@ This starts a server on `:8080` (override with `PORT`), backed by a SQLite file 
 
 ### Real Redis inside a standalone topology
 
-Deployment mode and implementation composition are two orthogonal axes (`docs/internal/03-deployment-modes.md`): the mode constrains which implementations are *permissible* — it never selects one. This app demonstrates the point with no code changes: set `APP_REDIS_ADDR` and the same standalone topology keeps its SQLite file, in-process KVStore, console mailer and local object store, but the EventBus seam becomes a real Redis Streams bus:
+Deployment mode and implementation composition are two orthogonal axes (`docs/internal/03-deployment-modes.md`): the mode constrains which implementations are *permissible* — it never selects one. This app demonstrates the point with no code changes: set `APP_REDIS_ADDR` and the same standalone topology keeps its SQLite file, console mailer and local object store, but the EventBus and KVStore seams become real Redis-backed ones over one shared client:
 
 ```
 docker run --rm -p 6379:6379 redis:7-alpine

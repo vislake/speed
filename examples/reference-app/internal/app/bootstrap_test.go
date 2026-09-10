@@ -433,10 +433,15 @@ func TestServerConfigFrom_ResolvesEmptyValuesToTheirDefaults(t *testing.T) {
 	}
 }
 
-// TestServerConfigFrom_ComposesTheSMTPMailer pins the complete-composition
-// branch: a host and port together compose the real SMTP Mailer from the
-// credentials, declaring the capabilities the mailer.smtp builtin declares.
-func TestServerConfigFrom_ComposesTheSMTPMailer(t *testing.T) {
+// TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer
+// pins the complete-composition branch's resolution shape: a host and port
+// together carry the SMTP target fields on the resolved config, and
+// deliberately pre-build no Mailer. The mailer itself is composed from these
+// fields through the Preset's config channel in BuildServer (its
+// kernel-options comment has the full split), so constructing
+// pkgcore.NewSMTPMailer here would only duplicate what the "mailer.smtp"
+// registration already does from the same four values.
+func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *testing.T) {
 	hc := hostConfigDefaults()
 	hc.SMTPHost = "smtp.example.test"
 	hc.SMTPPort = 587
@@ -447,11 +452,12 @@ func TestServerConfigFrom_ComposesTheSMTPMailer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serverConfigFrom with a complete APP_SMTP_* composition: %v", err)
 	}
-	if cfg.Mailer == nil {
-		t.Fatal("Mailer is nil with a complete APP_SMTP_* composition")
+	if cfg.Mailer != nil {
+		t.Error("Mailer is non-nil with a complete APP_SMTP_* composition, want the host to pre-build nothing: BuildServer composes \"mailer.smtp\" through the preset channel from the SMTP fields")
 	}
-	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; cfg.MailerCapabilities != want {
-		t.Errorf("MailerCapabilities = %v, want %v", cfg.MailerCapabilities, want)
+	if cfg.SMTPHost != "smtp.example.test" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.test" || cfg.SMTPPassword != "smtp-password" {
+		t.Errorf("SMTP target = %s:%d user=%q, want the complete APP_SMTP_* group carried through for the preset channel",
+			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername)
 	}
 }
 

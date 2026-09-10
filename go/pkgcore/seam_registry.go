@@ -14,7 +14,7 @@ var ErrDuplicateImplementation = errors.New("pkgcore: duplicate seam implementat
 // no Registration ever added to that SeamRegistry.
 var ErrUnknownImplementation = errors.New("pkgcore: unknown seam implementation")
 
-// Config carries the flat scalar settings a Preset hands to a seam
+// Config carries the flat scalar settings a Preset entry hands to a seam
 // implementation's constructor: what a preset file or environment can
 // naturally provide, keyed by whatever name the implementation documents.
 // The type is deliberately shallow -- a host constructor that wants a typed

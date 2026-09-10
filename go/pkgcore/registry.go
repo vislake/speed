@@ -1010,8 +1010,9 @@ type Kernel struct {
 	deploymentMode DeploymentMode
 
 	// preset names, for each seam, which registered implementation to build
-	// when the host has not injected one directly for that seam. NewKernel
-	// defaults it to PresetStandalone; WithPreset replaces the whole map.
+	// (and with which Config) when the host has not injected one directly
+	// for that seam. NewKernel defaults it to PresetStandalone; WithPreset
+	// replaces the whole map.
 	preset Preset
 
 	eventBus    kernelSeam[EventBus]
@@ -1047,8 +1048,9 @@ type kernelSeam[T any] struct {
 
 // KernelOption configures a Kernel before Bootstrap resolves its seams.
 // WithDeploymentMode sets the topology to validate the composition against;
-// WithPreset replaces which registered implementation each unwired seam
-// resolves to; WithEventBus, WithKVStore, WithMailer and WithObjectStore
+// WithPreset replaces which registered implementation (and which Config)
+// each unwired seam resolves to; WithEventBus, WithKVStore, WithMailer and
+// WithObjectStore
 // inject a specific implementation for one seam, overriding whatever the
 // Preset would have picked for it, and carry the Capability that
 // implementation declares.
@@ -1064,7 +1066,12 @@ func WithDeploymentMode(mode DeploymentMode) KernelOption {
 
 // WithPreset replaces the whole seam-name mapping a Kernel resolves its
 // unwired seams against, in place of the zero-value default,
-// PresetStandalone. It has no effect on a seam the host also injects
+// PresetStandalone. Each entry names the registered implementation Bootstrap
+// builds for its seam and carries the Config that implementation's
+// Registration.New is called with, so per-implementation settings travel
+// through the preset layer exactly as a host's own configuration resolved
+// them. Preset.With derives an override from a built-in preset without
+// mutating it. WithPreset has no effect on a seam the host also injects
 // directly with WithEventBus or one of its siblings: injection always wins,
 // per seam, regardless of option order.
 func WithPreset(preset Preset) KernelOption {
@@ -1169,12 +1176,15 @@ type seamResolution struct {
 
 // resolveKernelSeam returns the value a Kernel bootstraps one seam with:
 // seam.value when the host injected one, or preset[seamKey] built through
-// registry otherwise. cfg is always the empty Config for a preset-resolved
-// seam: carrying per-implementation settings (a Redis address, SMTP
-// credentials) through the Preset layer is not implemented (see Config's
-// own doc comment); a host that needs them injects the implementation
-// directly instead, which is exactly what WithEventBus and its siblings are
-// for.
+// registry otherwise. The preset entry supplies both halves -- which
+// registered implementation to build, and the Config its Registration.New is
+// called with -- so per-implementation settings (a Redis address, SMTP
+// credentials) travel the same channel as the implementation name, exactly
+// what a host's own configuration layer resolves and hands over; a host with
+// a value it built itself, from a typed configuration the flat strings
+// cannot express or because it owns a resource the seam shares with others,
+// injects it instead, which is exactly what WithEventBus and its siblings
+// are for.
 //
 // The third return value is the closer Bootstrap must run to release the
 // resources this resolution created: nil for an injected seam (the host owns
@@ -1187,13 +1197,13 @@ func resolveKernelSeam[T any](seam kernelSeam[T], seamKey string, preset Preset,
 		return seam.value, seamResolution{seamKey: seamKey, implementation: "<injected>", capabilities: seam.capabilities}, nil, nil
 	}
 
-	name := preset[seamKey]
-	impl, caps, err := registry.Build(name, Config{})
+	sp := preset[seamKey]
+	impl, caps, err := registry.Build(sp.Implementation, sp.Config)
 	if err != nil {
 		var zero T
 		return zero, seamResolution{}, nil, fmt.Errorf("pkgcore: resolve %q seam: %w", seamKey, err)
 	}
-	return impl, seamResolution{seamKey: seamKey, implementation: name, capabilities: caps}, seamCloserOf(impl), nil
+	return impl, seamResolution{seamKey: seamKey, implementation: sp.Implementation, capabilities: caps}, seamCloserOf(impl), nil
 }
 
 // seamCloserOf returns value's own Close() error method when value

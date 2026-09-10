@@ -181,8 +181,10 @@ type hostConfig struct {
 
 	// S3Endpoint, S3Bucket, S3AccessKey and S3SecretKey name
 	// APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY: the
-	// four variables that together compose a real S3-compatible ObjectStore
-	// (objectstore/s3.NewObjectStore) for the "objectstore" seam. All four are
+	// four variables that together point the "objectstore" seam at the
+	// registered "objectstore.s3" implementation -- BuildServer overrides
+	// that one preset entry with these values, and the registration builds
+	// the S3-compatible store from them. All four are
 	// required together -- the transform fails loudly when only some of them
 	// are set, rather than silently falling back to the local-directory Preset
 	// default, since a partially named S3 target is far more likely a typo than
@@ -227,8 +229,10 @@ type hostConfig struct {
 
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword name
 	// APP_SMTP_HOST/APP_SMTP_PORT/APP_SMTP_USERNAME/APP_SMTP_PASSWORD: the
-	// variables that compose a real SMTP Mailer (pkgcore.NewSMTPMailer) for the
-	// "mailer" seam. Host and port are required together, for the same
+	// variables that together point the "mailer" seam at the registered
+	// "mailer.smtp" implementation -- BuildServer overrides that one preset
+	// entry with these values, and the registration builds the SMTP Mailer
+	// from them. Host and port are required together, for the same
 	// fail-loud-on-partial-config reason the S3 group gives; username and
 	// password are optional -- SMTP AUTH activates only when a username is set
 	// (pkgcore.SMTPConfig.Username's own doc comment). All unset -- the default
@@ -807,20 +811,12 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 		// the e2e rig drives (the field's own doc comment).
 		FailSelfServiceProvision: newProvisionFailureInjector(failProvisionCount),
 	}
-	if smtpHost != "" {
-		// A real SMTP composition: declare the capabilities the "mailer.smtp"
-		// builtin registration itself declares (mailer_builtins.go), so this
-		// app's own SMTP wiring is capability-honest rather than borrowing the
-		// Stateless declaration flowtests/server_test.go's in-process double
-		// uses (the ServerConfig.Mailer doc comment explains the split).
-		cfg.Mailer = pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
-			Host:     smtpHost,
-			Port:     smtpPort,
-			Username: cfg.SMTPUsername,
-			Password: cfg.SMTPPassword,
-		})
-		cfg.MailerCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
-	}
+	// The SMTP target itself needs no further resolution here: BuildServer
+	// names "mailer.smtp" in the preset entry the resolved SMTPHost group
+	// overrides and hands the four values over as that entry's Config -- the
+	// registration builds the mailer, the host pre-builds nothing (the
+	// ServerConfig.SMTPHost doc comment and BuildServer's kernel-options
+	// comment carry the full split).
 	return cfg, nil
 }
 

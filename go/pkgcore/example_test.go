@@ -839,28 +839,51 @@ func ExampleSeamRegistry() {
 
 // ExampleWithPreset shows the middle composition layer: a Preset names, per
 // seam, which registered implementation Bootstrap builds for a seam the host
-// has not injected directly. WithPreset replaces the whole map; injecting a
-// seam directly (WithMailer, here) still wins over the Preset for that one
-// seam, regardless of option order.
+// has not injected directly -- and with which Config. WithPreset replaces
+// the whole map; Preset.With derives one from a built-in preset without
+// mutating it, and injecting a seam directly still wins over the Preset for
+// that one seam, regardless of option order.
 func ExampleWithPreset() {
 	// A host that wants pkgcore's own Redis-backed EventBus and KVStore, but
-	// keeps the console Mailer, composes a Preset from the two built-in ones:
-	// PresetDistributed's eventbus/kv entries, PresetStandalone's mailer
-	// entry. Nothing is dialed by resolving "eventbus.redis"/"kv.redis" here
-	// (see eventbus/redis's NewEventBus and kv/redis's NewKVStore, whose
-	// packages this file's own blank imports register onto the shared
-	// registries), so this example needs no real Redis to run.
-	custom := pkgcore.Preset{
-		"eventbus":    pkgcore.PresetDistributed["eventbus"],
-		"kv":          pkgcore.PresetDistributed["kv"],
-		"mailer":      pkgcore.PresetStandalone["mailer"],
-		"objectstore": pkgcore.PresetStandalone["objectstore"],
-	}
+	// keeps the console Mailer, derives its Preset from the standalone one by
+	// overriding the two entries PresetDistributed names. Nothing is dialed by
+	// resolving "eventbus.redis"/"kv.redis" here (see eventbus/redis's
+	// NewEventBus and kv/redis's NewKVStore, whose packages this file's own
+	// blank imports register onto the shared registries), so this example
+	// needs no real Redis to run; see ExampleSeamPreset for an entry that
+	// carries the implementation's own configuration.
+	custom := pkgcore.PresetStandalone.
+		With("eventbus", pkgcore.PresetDistributed["eventbus"]).
+		With("kv", pkgcore.PresetDistributed["kv"])
 	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(custom)).Bootstrap(context.Background())
 	fmt.Println(err, reg.EventBus() != nil, reg.KVStore() != nil, reg.Mailer() != nil)
 
 	// Output:
 	// <nil> true true true
+}
+
+// ExampleSeamPreset shows a preset entry carrying configuration: the Config
+// on a SeamPreset is what the named Registration.New is called with, so a
+// host names an implementation and hands over the settings its own
+// configuration layer resolved -- without building anything itself. A
+// setting the implementation cannot default (the SMTP host here) fails
+// Bootstrap with ErrMissingSeamConfig when the entry leaves it out, instead
+// of silently resolving to an implementation nothing configured.
+func ExampleSeamPreset() {
+	preset := pkgcore.PresetStandalone.With("mailer", pkgcore.SeamPreset{
+		Implementation: "mailer.smtp",
+		Config:         pkgcore.Config{"host": "smtp.example.com", "port": "587"},
+	})
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
+	fmt.Println(err, reg.Mailer() != nil)
+
+	hostless := pkgcore.PresetStandalone.With("mailer", pkgcore.SeamPreset{Implementation: "mailer.smtp"})
+	_, err = pkgcore.NewKernel(pkgcore.WithPreset(hostless)).Bootstrap(context.Background())
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingSeamConfig))
+
+	// Output:
+	// <nil> true
+	// true
 }
 
 // ExampleDeploymentMode_RequiredCapabilities shows what Kernel.Bootstrap
@@ -876,12 +899,12 @@ func ExampleDeploymentMode_RequiredCapabilities() {
 
 // ExampleErrMissingSeamConfig shows the built-in "mailer.smtp" and
 // "objectstore.s3" implementations' one deliberate gap: neither has a safe
-// default host, bucket or credential, so resolving either through a Preset
-// with an empty Config fails instead of building an unusable mailer or
-// store. A host that wants real credentials injects the implementation
-// directly with WithMailer or WithObjectStore instead (see
-// ExampleNewSMTPMailer and the objectstore/s3 subpackage's own
-// ExampleNewObjectStore).
+// default host, bucket or credential, so building either with a Config
+// missing one fails instead of producing an unusable mailer or store. A host
+// supplies them through a preset entry carrying the settings its own
+// configuration resolved (see ExampleSeamPreset), or injects a value it
+// built itself (see ExampleNewSMTPMailer and the objectstore/s3
+// subpackage's own ExampleNewObjectStore).
 func ExampleErrMissingSeamConfig() {
 	_, _, err := pkgcore.MailerRegistry.Build("mailer.smtp", pkgcore.Config{})
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingSeamConfig))

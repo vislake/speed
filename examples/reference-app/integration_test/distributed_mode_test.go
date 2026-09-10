@@ -147,8 +147,8 @@
 // BOOT (no boot-time seeding step reads or writes an object or sends a
 // mail), so in principle a fake, never-dialed S3 endpoint and SMTP relay
 // would let Kernel.Bootstrap's capability validation pass just as well,
-// since that validation checks only the DECLARED capability bits of an
-// injected implementation, never its reachability
+// since that validation checks only the DECLARED capability bits of a
+// resolved implementation, never its reachability
 // (objectstore/s3.NewObjectStore and pkgcore.NewSMTPMailer both dial
 // nothing at construction -- their own doc comments say so). This file
 // uses REAL RustFS and a REAL SMTP catcher anyway, deliberately: declaring

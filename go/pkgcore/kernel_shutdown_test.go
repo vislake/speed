@@ -130,10 +130,10 @@ func lifecyclePreset(t *testing.T, log *closeLog) Preset {
 	t.Helper()
 
 	preset := Preset{}
-	preset[presetKeyEventBus] = registerLifecycleBus(t, log)
-	preset[presetKeyKVStore] = registerLifecycleKVStore(t, log)
-	preset[presetKeyMailer] = registerLifecycleMailer(t, log)
-	preset[presetKeyObjectStore] = registerLifecycleObjectStore(t, log)
+	preset[presetKeyEventBus] = SeamPreset{Implementation: registerLifecycleBus(t, log)}
+	preset[presetKeyKVStore] = SeamPreset{Implementation: registerLifecycleKVStore(t, log)}
+	preset[presetKeyMailer] = SeamPreset{Implementation: registerLifecycleMailer(t, log)}
+	preset[presetKeyObjectStore] = SeamPreset{Implementation: registerLifecycleObjectStore(t, log)}
 	return preset
 }
 
@@ -224,7 +224,10 @@ func TestKernel_ShutdownClosesEveryPresetResolvedSeam(t *testing.T) {
 
 	// Resolution order is bus, kv, mailer, objectstore, so reverse
 	// teardown order is objectstore, mailer, kv, bus.
-	bus, kv, mailer, objectStore := preset[presetKeyEventBus], preset[presetKeyKVStore], preset[presetKeyMailer], preset[presetKeyObjectStore]
+	bus := preset[presetKeyEventBus].Implementation
+	kv := preset[presetKeyKVStore].Implementation
+	mailer := preset[presetKeyMailer].Implementation
+	objectStore := preset[presetKeyObjectStore].Implementation
 	got := log.closed()
 	want := []string{objectStore, mailer, kv, bus}
 	if len(got) != len(want) {
@@ -255,9 +258,9 @@ func TestBootstrap_FailureAfterResolvingSeams_ClosesWhatItResolved(t *testing.T)
 	t.Run("a later resolution error closes the earlier seams", func(t *testing.T) {
 		log := &closeLog{}
 		preset := Preset{
-			presetKeyEventBus: registerLifecycleBus(t, log),
-			presetKeyKVStore:  registerLifecycleKVStore(t, log),
-			presetKeyMailer:   "test.lifecycle.no.such.mailer", // resolves after bus and kv
+			presetKeyEventBus: SeamPreset{Implementation: registerLifecycleBus(t, log)},
+			presetKeyKVStore:  SeamPreset{Implementation: registerLifecycleKVStore(t, log)},
+			presetKeyMailer:   SeamPreset{Implementation: "test.lifecycle.no.such.mailer"}, // resolves after bus and kv
 		}
 		kernel := NewKernel(WithPreset(preset))
 

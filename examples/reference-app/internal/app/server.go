@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,7 +67,14 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
-	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
+
+	// Blank-imported for its init() side effect: registers "objectstore.s3"
+	// on pkgcore's shared ObjectStoreRegistry, the name the preset entry the
+	// APP_S3_* composition overrides below points the "objectstore" seam at.
+	// Without this import the entry would fail Bootstrap with
+	// ErrUnknownImplementation -- the database/sql driver trade every
+	// registered built-in makes.
+	_ "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/sharing"
@@ -693,9 +701,12 @@ type ServerConfig struct {
 	PublicOrigin string
 
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
-	// compose a real S3-compatible ObjectStore for the "objectstore" seam
-	// (objectstore/s3.NewObjectStore) when S3Endpoint is non-empty --
-	// the S3 fields' own doc comment (bootstrap.go) has the completeness
+	// name the registered "objectstore.s3" implementation for the
+	// "objectstore" seam through the Preset's config channel when S3Endpoint
+	// is non-empty: BuildServer overrides that one entry of the standalone
+	// Preset with these values, and the registration builds the
+	// S3-compatible ObjectStore from them -- the host pre-builds nothing.
+	// The S3 fields' own doc comment (bootstrap.go) has the completeness
 	// rule.
 	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
 	// local-directory default.
@@ -722,9 +733,12 @@ type ServerConfig struct {
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
 	ObjectStoreRoot string
 
-	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
-	// Mailer for the "mailer" seam (pkgcore.NewSMTPMailer) when SMTPHost is
-	// non-empty -- the SMTP fields' own doc comment (bootstrap.go) has the
+	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword name the registered
+	// "mailer.smtp" implementation for the "mailer" seam through the Preset's
+	// config channel when SMTPHost is non-empty: BuildServer overrides that
+	// one entry of the standalone Preset with these values, and the
+	// registration builds the SMTP Mailer from them -- the host pre-builds
+	// nothing. The SMTP fields' own doc comment (bootstrap.go) has the
 	// completeness rule.
 	// Empty SMTPHost (the default) leaves "mailer" on the Preset's
 	// console default, exactly like an unset Mailer field below.
@@ -855,28 +869,18 @@ type ServerConfig struct {
 	PKIRenewalLeadTime   time.Duration
 	PKIExpiryScanWindow  time.Duration
 
-	// Mailer overrides the console mailer the standalone Preset resolves
-	// for the "mailer" seam when set. ConfigFromEnv sets it to a real
-	// pkgcore.NewSMTPMailer composition when SMTPHost is configured (see
-	// SMTPHost's doc comment above); it is otherwise nil in production, so
-	// this field also exists for the org invitation-accept flows
+	// Mailer overrides the "mailer" seam with the host's own value when set
+	// -- nil in production, where the seam is composed through the Preset's
+	// config channel instead (the SMTPHost group above), so this field
+	// exists for the org invitation-accept flows
 	// (flowtests/org_flow_test.go, flowtests/org_clinic_invitation_test.go,
 	// flowtests/org_invitation_signin_test.go), which need the rendered mail back
 	// in-process to extract the invitation token rather than parsing it out
-	// of console output.
-	// BuildServer injects Mailer with MailerCapabilities below, defaulting
-	// to pkgcore.Stateless when that field is left at its zero value --
-	// the honest capability for a throwaway test double.
+	// of console output. BuildServer injects it declaring pkgcore.Stateless
+	// -- the honest capability for a throwaway in-process test double, and
+	// exactly the bits the "mailer.smtp" registration declares for the real
+	// transport.
 	Mailer pkgcore.Mailer
-
-	// MailerCapabilities declares the capability bits BuildServer wires
-	// Mailer with, when Mailer is non-empty. ConfigFromEnv sets it to
-	// pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart -- the capabilities
-	// the "mailer.smtp" builtin registration itself declares -- alongside
-	// its real SMTP Mailer; every other caller (every test's in-process
-	// double) leaves it at the zero value, which BuildServer treats as
-	// pkgcore.Stateless.
-	MailerCapabilities pkgcore.Capability
 
 	// Memberships is the seam authn asks tenant-membership questions
 	// through (authn.WithMembershipReader below): customer-tenant answers
@@ -1710,9 +1714,10 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// the console SMS sender writes to the same smsOutput the authn module's
 	// sender writes to (the standalone deployment mode's transport,
 	// go/notification/sms.go); the mail transport is whatever the "mailer"
-	// seam resolves to -- the console mailer in production, cfg.Mailer in
-	// tests; the two blind indexers built above make a contact's encrypted
-	// email and phone address queryable by exact match; the delivery queue
+	// seam resolves to -- the console default, "mailer.smtp" once the
+	// APP_SMTP_* group is configured, cfg.Mailer in tests; the two blind
+	// indexers built above make a contact's encrypted email and phone
+	// address queryable by exact match; the delivery queue
 	// is the same standaloneQueue storage's derive task runs on, so a
 	// completed note-created or patient-reminder dispatch is drained by the
 	// same worker pool (its Register call declares the delivery job handler
@@ -2114,17 +2119,17 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
 	// composition is validated against; it never selects an implementation
 	// (a deployment mode constrains which implementations may compose,
-	// never selects one). Every
-	// stateful seam below except the eventbus seam follows the same
-	// conditional-injection shape: an unset env var leaves THAT seam on
-	// the Preset's in-process default (so a plain `go run ./cmd/server`
-	// needs nothing else running), and a configured one
-	// injects a real implementation with the capability bits that
-	// implementation genuinely carries. The eventbus seam is the one
-	// deliberate exception -- it is injected in BOTH branches, memory or
-	// Redis, because its construction happens before
-	// dbkit.Open (see the Open call's own comment) and Kernel.Bootstrap
-	// must resolve to that same pre-built bus.
+	// never selects one). Every seam below follows the same
+	// "an unset env var leaves THAT seam on the Preset's in-process
+	// default, so a plain `go run ./cmd/server` needs nothing else
+	// running" shape, but the configured half travels one of two paths:
+	// the SMTP and S3 compositions -- pure strings, no shared resource --
+	// override the Preset entry through its config channel, while the
+	// eventbus and the Redis-composed kv seam are injected, because the
+	// bus must be constructed before dbkit.Open (see the Open call's own
+	// comment) and the one *redis.Client backing both is a typed resource
+	// this host owns and closes. The per-path reasoning is on the option
+	// list below.
 	//
 	// When APP_REDIS_ADDR is set, that pre-built bus is a REAL
 	// Redis-backed EventBus -- eventbus/redis's NewEventBus over a go-redis
@@ -2142,36 +2147,51 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// resolves and validates, "kv", would still fail on the Preset's
 	// in-process default.
 	//
-	// When the APP_S3_* variables are set (the S3 fields' own doc comment
-	// (bootstrap.go) has the completeness rule), WithObjectStore
-	// injects a REAL S3-compatible ObjectStore (objectstore/s3.
-	// NewObjectStore, reaching MinIO, Aliyun OSS or AWS S3 through the
-	// minio-go client), declaring the same MultiReplicaSafe|SurvivesRestart
-	// the "objectstore.s3" builtin registration itself declares. A
-	// non-empty cfg.ObjectStoreRoot (from APP_OBJECT_STORE_ROOT, or
-	// injected straight onto the struct by a test) is the local twin of
-	// that composition and an alternative to it: WithObjectStore then
-	// injects pkgcore.NewLocalObjectStore over the fixed directory,
-	// declaring SurvivesRestart alone -- the directory genuinely survives
-	// a process restart, and genuinely nothing about a single-process
-	// local store is replica-safe, so MultiReplicaSafe is never claimed
-	// for it.
+	// The two seam compositions whose settings are fully expressible as
+	// flat strings -- the SMTP mailer (the APP_SMTP_* variables; the SMTP
+	// fields' own doc comment (bootstrap.go) has the completeness rule)
+	// and the S3-compatible object store (APP_S3_* likewise, reaching
+	// MinIO, Aliyun OSS or AWS S3 through the registration's minio-go
+	// client) -- ride the Preset's config channel: the standalone preset's
+	// entry for that seam is overridden with the registered
+	// implementation's name and the resolved values, and the registration
+	// builds (and, where it owns one, closes) the client from them. The
+	// host pre-builds nothing for either, and Bootstrap's startup line
+	// names the registration it resolved -- "mailer.smtp" /
+	// "objectstore.s3" -- exactly as any other preset entry.
 	//
-	// The Mailer override -- cfg.Mailer, non-nil either because
-	// ConfigFromEnv composed a real pkgcore.NewSMTPMailer from the
-	// APP_SMTP_* variables, or because a flowtests org or notification
-	// suite injected an in-process capture double --
-	// rides along as a fourth conditional option. Its capability
-	// declaration is cfg.MailerCapabilities when set (MultiReplicaSafe|
-	// SurvivesRestart for the real SMTP composition, matching the
-	// "mailer.smtp" builtin's own declaration) and pkgcore.Stateless
-	// otherwise -- the honest capability for a throwaway in-process test
-	// double.
+	// The seams that stay injected are the ones a flat Config cannot
+	// express or must not duplicate. The eventbus is injected in BOTH
+	// branches -- not left to the Preset's default -- because the bus was
+	// already constructed above (before dbkit.Open wired it as
+	// Options.AuditBus): reg.EventBus() must resolve to that same bus, or
+	// org's captured writes would publish onto a bus auditModule's
+	// subscriptions never see, each half of the audit path working in
+	// isolation while no row ever lands; busCapabilities carries the
+	// declaration of whichever implementation the branch above chose (zero
+	// for the in-process memory bus, the same declaration its
+	// "eventbus.memory" builtin registration carries). The Redis-composed
+	// kv seam shares the SAME *redis.Client the bus was built on -- one
+	// Redis instance backing both seams is this app's minimal-footprint
+	// choice -- and that client is a typed, shared resource with exactly
+	// one owner: this host. A non-empty cfg.ObjectStoreRoot (from
+	// APP_OBJECT_STORE_ROOT, or injected straight onto the struct by a
+	// test) is the local twin of the S3 composition, and it stays on the
+	// injection path because no registered name wraps its constructor:
+	// WithObjectStore injects pkgcore.NewLocalObjectStore over the fixed
+	// directory, declaring SurvivesRestart alone -- the directory
+	// genuinely survives a process restart, and genuinely nothing about a
+	// single-process local store is replica-safe, so MultiReplicaSafe is
+	// never claimed for it. cfg.Mailer is the in-process capture double
+	// the org invitation suites inject, declared Stateless -- the honest
+	// capability for a throwaway double. Injection always wins over the
+	// preset, per seam, so none of these and the channel entries above
+	// ever fight.
 	//
 	// Nothing about the rest of this wiring changes when any of these are
-	// injected: audit.Emit still publishes on reg.EventBus() (the injected
-	// bus), auditModule's subscriptions run synchronously on the
-	// publishing side exactly as they do on the in-memory bus, and any
+	// resolved either way: audit.Emit still publishes on reg.EventBus()
+	// (the injected bus), auditModule's subscriptions run synchronously on
+	// the publishing side exactly as they do on the in-memory bus, and any
 	// OTHER process consuming the same Redis streams, the same S3 bucket
 	// or the same SMTP relay observes the same effects.
 	//
@@ -2184,42 +2204,47 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// itself. The no-concrete-infrastructure-implementation rule constrains
 	// business modules, not the application that assembles them.
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
-	// The eventbus seam is injected in BOTH branches -- not left to the
-	// Preset's default -- because the bus was already constructed above
-	// (before dbkit.Open wired it as Options.AuditBus): reg.EventBus()
-	// must resolve to that same bus, or org's captured writes would
-	// publish onto a bus auditModule's subscriptions never see, each half
-	// of the audit path working in isolation while no row ever lands.
-	// busCapabilities carries the declaration of whichever implementation
-	// the branch above chose (zero for the in-process memory bus, the
-	// same declaration its "eventbus.memory" builtin registration
-	// carries).
 	kernelOptions = append(kernelOptions, pkgcore.WithEventBus(bus, busCapabilities))
 	if cfg.RedisAddr != "" {
 		kernelOptions = append(kernelOptions,
 			pkgcore.WithKVStore(kvredis.NewKVStore(redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 	}
-	if cfg.S3Endpoint != "" {
-		kernelOptions = append(kernelOptions,
-			pkgcore.WithObjectStore(objectstores3.NewObjectStore(objectstores3.Config{
-				Endpoint:  cfg.S3Endpoint,
-				Bucket:    cfg.S3Bucket,
-				AccessKey: cfg.S3AccessKey,
-				SecretKey: cfg.S3SecretKey,
-				Region:    cfg.S3Region,
-				UseSSL:    cfg.S3UseSSL,
-			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	// The preset layer, composed explicitly: the standalone preset is the
+	// same base NewKernel would default to anyway, and each configured
+	// channel seam overrides its one entry. Preset.With returns a copy, so
+	// the process-shared PresetStandalone map is never written through.
+	preset := pkgcore.PresetStandalone
+	if cfg.SMTPHost != "" {
+		preset = preset.With("mailer", pkgcore.SeamPreset{
+			Implementation: "mailer.smtp",
+			Config: pkgcore.Config{
+				"host":     cfg.SMTPHost,
+				"port":     strconv.Itoa(cfg.SMTPPort),
+				"username": cfg.SMTPUsername,
+				"password": cfg.SMTPPassword,
+			},
+		})
 	}
+	if cfg.S3Endpoint != "" {
+		preset = preset.With("objectstore", pkgcore.SeamPreset{
+			Implementation: "objectstore.s3",
+			Config: pkgcore.Config{
+				"endpoint":   cfg.S3Endpoint,
+				"bucket":     cfg.S3Bucket,
+				"access_key": cfg.S3AccessKey,
+				"secret_key": cfg.S3SecretKey,
+				"region":     cfg.S3Region,
+				"use_ssl":    strconv.FormatBool(cfg.S3UseSSL),
+			},
+		})
+	}
+	kernelOptions = append(kernelOptions, pkgcore.WithPreset(preset))
 	if cfg.ObjectStoreRoot != "" {
 		kernelOptions = append(kernelOptions,
 			pkgcore.WithObjectStore(pkgcore.NewLocalObjectStore(cfg.ObjectStoreRoot), pkgcore.SurvivesRestart))
 	}
 	if cfg.Mailer != nil {
-		mailerCapabilities := cfg.MailerCapabilities
-		if mailerCapabilities == 0 {
-			mailerCapabilities = pkgcore.Stateless
-		}
-		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, mailerCapabilities))
+		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
 	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, integrationModule, demoModule, notificationModule, aiGatewayModule, billingModule, meteringModule, complianceModule, adminModule, auditModule)
 	if err != nil {

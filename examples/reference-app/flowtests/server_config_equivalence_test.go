@@ -199,15 +199,9 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		AIGatewayImageAPIKey:      os.Getenv("APP_AI_GATEWAY_IMAGE_API_KEY"),
 		FailSelfServiceProvision:  legacyProvisionFailureInjector(failProvisionCount),
 	}
-	if smtpHost != "" {
-		cfg.Mailer = pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
-			Host:     smtpHost,
-			Port:     smtpPort,
-			Username: cfg.SMTPUsername,
-			Password: cfg.SMTPPassword,
-		})
-		cfg.MailerCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
-	}
+	// The SMTP group resolves to the four target fields alone, exactly like
+	// production: no Mailer is built here either -- BuildServer composes
+	// "mailer.smtp" from those fields through the Preset's config channel.
 	return cfg, nil
 }
 
@@ -547,7 +541,6 @@ type serverConfigValues struct {
 	demoPlatformStaffPassword string
 	aiGatewayImageBaseURL     string
 	aiGatewayImageAPIKey      string
-	mailerCapabilities        pkgcore.Capability
 }
 
 // comparableValues projects a resolved configuration onto the comparable
@@ -590,7 +583,6 @@ func comparableValues(c app.ServerConfig) serverConfigValues {
 		demoPlatformStaffPassword: c.DemoPlatformStaffPassword,
 		aiGatewayImageBaseURL:     c.AIGatewayImageBaseURL,
 		aiGatewayImageAPIKey:      c.AIGatewayImageAPIKey,
-		mailerCapabilities:        c.MailerCapabilities,
 	}
 }
 

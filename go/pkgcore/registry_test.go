@@ -1758,6 +1758,41 @@ func TestBootstrap_DistributedModeWithMemoryKVStore_FailsCapabilityCheck(t *test
 	}
 }
 
+// TestBootstrap_PresetEntryConfigReachesRegistrationNew pins the preset
+// channel itself, end to end: the Config a SeamPreset entry carries is what
+// the entry's Registration.New is called with, through a real
+// Kernel.Bootstrap. A regression to building every preset-resolved seam with
+// an empty Config -- the channel's original empty state -- leaves the fake's
+// recorded Config nil and this test naming the difference. The fake
+// registers under a name unique to this test (SeamRegistry has no
+// unregister; the registration persists harmlessly, exactly like
+// kernel_shutdown_test.go's lifecycle fakes).
+func TestBootstrap_PresetEntryConfigReachesRegistrationNew(t *testing.T) {
+	const name = "test.preset.channel.probe"
+	var got Config
+	if err := KVStoreRegistry.Register(Registration[KVStore]{
+		Name: name,
+		New: func(cfg Config) (KVStore, error) {
+			got = cfg
+			return NewMemoryKVStore(), nil
+		},
+	}); err != nil {
+		t.Fatalf("register %q on KVStoreRegistry: %v", name, err)
+	}
+
+	preset := PresetStandalone.With(presetKeyKVStore, SeamPreset{
+		Implementation: name,
+		Config:         Config{"addr": "redis.internal:6380", "db": "3"},
+	})
+	if _, err := NewKernel(WithPreset(preset)).Bootstrap(context.Background()); err != nil {
+		t.Fatalf("Bootstrap() error = %v, want nil", err)
+	}
+
+	if len(got) != 2 || got["addr"] != "redis.internal:6380" || got["db"] != "3" {
+		t.Errorf("Registration.New received Config %v, want the entry's own {addr: redis.internal:6380, db: 3}", got)
+	}
+}
+
 func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 	tests := []struct {
 		name string
