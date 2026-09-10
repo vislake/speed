@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,37 @@ func TestConsoleSMSSender_WritesToInjectedWriter(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, "+8613800000000") || !strings.Contains(got, "123456") {
 		t.Errorf("Send() wrote %q, want it to contain the phone number and the message text", got)
+	}
+}
+
+// TestConsoleSMSSender_TemplateIdentityFields_PrintsOnlyToAndText proves the
+// console transport is a free-text one: a message whose template-identity
+// fields (MessageID, Locale, Params) are all set prints exactly the same
+// one-line record it prints for a bare To/Text message, with no identity
+// field and no parameter value in the output. The Params value here is a
+// verification-code stand-in: a transport that echoed it would put the
+// credential on whatever the writer is pointed at, which is exactly what
+// the seam's Params doc forbids.
+func TestConsoleSMSSender_TemplateIdentityFields_PrintsOnlyToAndText(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	sender := NewConsoleSMSSender(&buf)
+
+	err := sender.Send(t.Context(), SMS{
+		To:        "+8613800000000",
+		Text:      "your code is 123456",
+		MessageID: "authn.sms.verification_code",
+		Locale:    "zh-CN",
+		Params:    map[string]string{"code": "123456", "minutes": "5"},
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	const want = "SMS to +8613800000000: your code is 123456\n"
+	if got := buf.String(); got != want {
+		t.Errorf("Send() wrote %q, want exactly %q -- the template-identity fields must not reach the record", got, want)
 	}
 }
 
@@ -144,6 +176,44 @@ func TestHTTPSMSSender_PostsExpectedJSON(t *testing.T) {
 	}
 	if gotContentType != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+}
+
+// TestHTTPSMSSender_TemplateIdentityFields_BodyStaysToAndText proves the
+// gateway's body contract is unaffected by the template-identity fields: a
+// message carrying all three of them still posts the byte-exact
+// {"to","text"} body, with no extra keys and no parameter values -- the
+// gateway is a free-text transport, and an operator's gateway contract must
+// not silently widen when the seam grows a field.
+func TestHTTPSMSSender_TemplateIdentityFields_BodyStaysToAndText(t *testing.T) {
+	t.Parallel()
+
+	var gotBody []byte
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		gotBody = raw
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := NewHTTPSMSSender(server.URL, WithHTTPSMSSenderClient(server.Client()))
+	err := sender.Send(t.Context(), SMS{
+		To:        "+8613800000001",
+		Text:      "your code is 654321",
+		MessageID: "authn.sms.verification_code",
+		Locale:    "zh-CN",
+		Params:    map[string]string{"code": "654321", "minutes": "5"},
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	const want = `{"to":"+8613800000001","text":"your code is 654321"}`
+	if got := string(gotBody); got != want {
+		t.Errorf("gateway body = %s, want exactly %s -- the template-identity fields must not widen the body", got, want)
 	}
 }
 

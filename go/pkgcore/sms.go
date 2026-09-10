@@ -10,18 +10,58 @@ import (
 )
 
 // SMS is one message to deliver to a phone number, already rendered by the
-// caller. SMSSender never sees a code or a locale separately: by the time an
-// SMS reaches this seam it is content, not data. Rendering (templates, the
-// recipient's locale) and consent checks are the caller's business, never
-// the transport's -- the same division pkgcore.Mailer's doc comment draws
-// for email -- and so is number normalization: To travels in whatever form
-// the caller built it in, every implementation passes it through to its
-// transport unchanged, and a caller that needs a canonical form (the E.164
-// shape dbkit.NormalizePhoneE164 produces, say) normalizes before the
-// message reaches this seam.
+// caller. Rendering (the recipient's locale, the message template), consent
+// checks and number normalization are the caller's business, never the
+// transport's -- the same division pkgcore.Mailer's doc comment draws for
+// email -- and To travels in whatever form the caller built it in: every
+// implementation passes it through to its transport unchanged, and a caller
+// that needs a canonical form (the E.164 shape dbkit.NormalizePhoneE164
+// produces, say) normalizes before the message reaches this seam.
+//
+// A message reaches a transport in two renderings of the same fact, and
+// which one a transport uses depends on what the carrier supports. Text is
+// the fully rendered message, the whole of what a free-text transport (the
+// console sender, the operator HTTP gateway, the twilio adapter) delivers.
+// MessageID, Locale and Params are the message's identity and its
+// interpolation values, the whole of what a carrier with no free-text send
+// (the aliyun and tencent adapters, which instantiate an approved account
+// template) needs: such an adapter selects the account template its config
+// maps from "<locale>/<message_id>" and fills the template's variables from
+// Params, never from Text. The two renderings are filled by the same caller
+// from the same render, so a template-typed adapter ignores Text and a
+// free-text adapter ignores the identity fields.
 type SMS struct {
 	To   string
 	Text string
+
+	// MessageID is the stable id of the locale message Text was rendered
+	// from -- go/notification's "<type_key>.sms.text" ids and go/authn's
+	// "authn.sms.verification_code" are the two in-repo producers. It is
+	// message identity, not a purpose: the same id names the same message
+	// in every locale, so a template-typed adapter can key templates by
+	// (Locale, MessageID) without knowing which module sent the message.
+	// It is empty for a caller that has only free text to deliver.
+	MessageID string
+
+	// Locale is the locale Text was actually rendered in -- the value the
+	// render used, after any fallback the rendering call applied, never the
+	// recipient's stored preference: the two can differ (a stored locale
+	// the render does not ship falls back), and a template-typed adapter
+	// must select the template in the language the message was really
+	// rendered in. It is empty for a caller that has only free text.
+	Locale string
+
+	// Params carries the interpolation values the rendered message used,
+	// keyed by the names the message template's own placeholders spell out
+	// ({{.code}}, {{.minutes}}), already stringified. A template-typed
+	// adapter forwards exactly the variables its selected account template
+	// declares and no others. The map may be empty or nil; a free-text
+	// transport ignores it.
+	//
+	// A Params value can be a credential (a verification code). An
+	// implementation must not log, echo or otherwise surface values, and
+	// the errors it returns must name a missing variable, never its value.
+	Params map[string]string
 }
 
 // SMSSender is the outbound-SMS contract shared by every module that
@@ -37,9 +77,14 @@ type SMS struct {
 //
 // The interface is designed against the weakest implementation it must
 // support, exactly as Mailer is: Send takes one already-rendered SMS and
-// reports only success or failure. The message shape is two strings, the
+// reports only success or failure. The message shape is one struct, the
 // call is one round trip, and nothing else is promised -- no delivery
-// receipt, no retry policy, no template handling, no number validation.
+// receipt, no retry policy, no capability probe, no number validation. What
+// an implementation owes the template-identity fields is its own
+// documented contract: a free-text transport ignores them, while a
+// template-typed carrier adapter must refuse a message it has no mapped
+// template for before contacting its gateway, never fall back to another
+// template or to sending free text.
 //
 // Send must honour a cancelled context by returning its context's error
 // instead of sending, must not retain the SMS after returning, and must be
@@ -72,7 +117,10 @@ type SMSSender interface {
 // every message to an io.Writer instead of sending anything -- the
 // console-form degradation for SMS ("printed to stdout"), the same role
 // consoleMailer plays for email. A mutex guards the writer so that
-// concurrent Send calls cannot interleave their output.
+// concurrent Send calls cannot interleave their output. It is a free-text
+// transport: it prints To and Text and ignores the template-identity fields
+// (MessageID, Locale, Params), whose only consumer is a template-typed
+// carrier adapter.
 type consoleSMSSender struct {
 	mu sync.Mutex
 	w  io.Writer

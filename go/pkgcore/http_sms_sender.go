@@ -86,7 +86,12 @@ func NewHTTPSMSSender(endpoint string, opts ...HTTPSMSSenderOption) SMSSender {
 	return &httpSMSSender{endpoint: endpoint, client: cfg.httpClient, guard: guard}
 }
 
-// httpSMSGatewayRequest is the body posted to the gateway.
+// httpSMSGatewayRequest is the body posted to the gateway. The gateway is a
+// free-text transport, so the body is To and Text and nothing else: the
+// seam's template-identity fields (MessageID, Locale, Params) never reach
+// the wire here, and are built into the body by explicit construction
+// rather than a struct conversion so that adding a seam field cannot
+// silently widen the gateway's body contract.
 type httpSMSGatewayRequest struct {
 	To   string `json:"to"`
 	Text string `json:"text"`
@@ -115,7 +120,7 @@ func (s *httpSMSSender) Send(ctx context.Context, sms SMS) error {
 		return fmt.Errorf("pkgcore: sms gateway endpoint: %w", err)
 	}
 
-	body, err := json.Marshal(httpSMSGatewayRequest(sms))
+	body, err := json.Marshal(httpSMSGatewayRequest{To: sms.To, Text: sms.Text})
 	if err != nil {
 		return fmt.Errorf("pkgcore: encode sms gateway request: %w", err)
 	}
