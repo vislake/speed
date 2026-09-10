@@ -3185,7 +3185,7 @@
       "kind": "declared",
       "line": 116,
       "module": "sharing",
-      "status": 429
+      "status": 502
     },
     {
       "code": "sharing.share_not_found",

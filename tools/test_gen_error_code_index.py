@@ -79,6 +79,81 @@ class ScanGoFileTests(unittest.TestCase):
         self.assertEqual(e.status, 429)
         self.assertEqual(e.doc, "ErrRateLimited reports a 429.")
 
+    def test_struct_literal_with_integer_status_is_parsed(self):
+        # The literal's Status field is read, never assumed: a status
+        # outside the six builder statuses renders as itself (the shape
+        # sharing.resource_unavailable's 502 takes).
+        entries = self._scan(
+            'package foo\n\n'
+            'var ErrUnavailable = &apperr.Error{Code: "foo.unavailable", Status: 502}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].status, 502)
+
+    def test_struct_literal_with_http_status_constant_is_parsed(self):
+        entries = self._scan(
+            'package foo\n\n'
+            'var ErrUnavailable = &apperr.Error{Code: "foo.unavailable", Status: http.StatusBadGateway}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].status, 502)
+
+    def test_struct_literal_without_status_keeps_the_429_default(self):
+        # A literal carrying no Status field at all keeps the documented
+        # default: 429, the status the struct-literal shape exists to
+        # stamp, since none of the six builders provides it.
+        entries = self._scan(
+            'package foo\n\n'
+            'var ErrRateLimited = &apperr.Error{Code: "foo.rate_limited"}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].status, 429)
+        self.assertEqual(entries[0].status, m._DEFAULT_STRUCT_STATUS)
+
+    def test_struct_literal_status_across_lines_with_comments_is_parsed(self):
+        # gofmt may wrap a literal and a comment may sit between its
+        # fields: the code sits on the opening line (the tool's recorded
+        # boundary), and the scan finds the Status below a comment line
+        # instead of defaulting to 429.
+        entries = self._scan(
+            'package foo\n\n'
+            'var ErrUnavailable = &apperr.Error{Code: "foo.unavailable",\n'
+            '\t// The resource behind the share refused; the share surface itself worked.\n'
+            '\tStatus: http.StatusBadGateway,\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].status, 502)
+
+    def test_struct_literal_with_braces_in_quoted_values_is_parsed(self):
+        # A brace inside a quoted value is data, not the literal's end:
+        # the scan must find the Status after the quoted "}" anyway.
+        entries = self._scan(
+            'package foo\n\n'
+            'var ErrX = &apperr.Error{Code: "foo.x", Params: map[string]any{"pattern": "}"}, Status: 500}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].status, 500)
+
+    def test_struct_literal_with_unresolvable_status_is_reported(self):
+        # A Status in a form the tool cannot read (a local constant, a
+        # computed expression) refuses the run naming the site and the
+        # value -- never a silently assumed 429.
+        with self.assertRaises(m.UnparseableStructLiteral) as ctx:
+            self._scan(
+                'package foo\n\n'
+                'var ErrX = &apperr.Error{Code: "foo.x", Status: statusGatewayTimeout}\n'
+            )
+        self.assertIn("errors.go:3", str(ctx.exception))
+        self.assertIn("statusGatewayTimeout", str(ctx.exception))
+
+    def test_struct_literal_that_never_closes_is_reported(self):
+        with self.assertRaises(m.UnparseableStructLiteral):
+            self._scan(
+                'package foo\n\n'
+                'var ErrX = &apperr.Error{Code: "foo.x",\n'
+            )
+
     def test_chained_with_param_does_not_break_the_match(self):
         entries = self._scan(
             'package foo\n\n'
@@ -254,6 +329,21 @@ class ScanGoFileTests(unittest.TestCase):
         e = entries[0]
         self.assertEqual(e.code, "foo.structy")
         self.assertEqual(e.status, 429)
+        self.assertEqual(e.kind, "inline")
+
+    def test_inline_struct_literal_parses_its_status(self):
+        # The inline shape reads its Status exactly as the declared one
+        # does: a non-429 status must not fall back to the default.
+        entries = self._scan(
+            'package foo\n\n'
+            'func handle() *apperr.Error {\n'
+            '\treturn &apperr.Error{Code: "foo.unavailable", Status: http.StatusBadGateway}\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e.code, "foo.unavailable")
+        self.assertEqual(e.status, 502)
         self.assertEqual(e.kind, "inline")
 
     def test_declaration_line_is_not_double_indexed(self):

@@ -41,11 +41,19 @@ land.
 The struct-literal and helper shapes exist because none of apperr's six
 builder statuses (400/401/403/404/409/500) is 429: a module stamps HTTP
 429 either as the &apperr.Error literal or through a small helper like
-rateLimited. The tool assumes 429 for both shapes, matching the
-convention's documented purpose. The struct literal is also the shape a
-code with a status outside the builders' vocabulary uses (e.g.
-sharing.resource_unavailable's 502); the tool renders those rows with
-the 429 assumption too, since the literal's Status field is not parsed.
+rateLimited. A struct literal's status is read from the literal itself:
+its Status field must be an integer literal or an http.Status* constant
+(the closed net/http vocabulary in _HTTP_STATUS_CONSTANTS), and a Status
+this tool cannot read -- a local constant, a computed expression, a
+literal that does not close within its line bound -- aborts the run
+naming the site, because a guessed status is the one output worse than
+no output (sharing.resource_unavailable carries 502, a status outside
+the builders' vocabulary, and an assumed 429 would contradict the code's
+own documentation). A literal carrying no Status field at all keeps the
+shape's documented 429 default -- the convention's purpose, since this
+shape is how a module stamps the one status the builders do not
+provide -- and the helper shape (rateLimited, which stamps 429 in its
+own body) keeps 429 across its literal call sites.
 
 For each construction the tool captures the Go identifier (when the
 construction binds one), the apperr code string, the resulting HTTP
@@ -90,7 +98,10 @@ Usage:
     python3 tools/gen_error_code_index.py [--roots go examples] [--out docs/site/content.en/docs/user-guide/error-codes.md] [--check]
 
 --check exits nonzero (printing a diff) instead of writing, for the CI
-wiring in docs-check.yml. The generator's own drift gate can only compare
+wiring in docs-check.yml. A struct literal whose Status cannot be read
+aborts either mode with exit 2, naming the construction site, the value
+it could not resolve and the forms it accepts (an integer literal or an
+http.Status* constant). The generator's own drift gate can only compare
 the committed file against its own output, so it can never see a
 construction form the tool itself does not index -- that blind spot is
 closed by tools/check_error_code_index_coverage.py, which derives the
@@ -134,11 +145,12 @@ _BUILDER_RE = re.compile(
     r'\(\s*"(?P<code>[^"]+)"\s*\)'
 )
 
-# Matches the struct-literal 429 shape: "IDENT = &apperr.Error{Code:
+# Matches the struct-literal shape: "IDENT = &apperr.Error{Code:
 # "code", Status: http.StatusTooManyRequests}" (field order and whitespace
-# tolerant, optional leading "var ", same as _BUILDER_RE above). The
-# Status field is not parsed: the row renders the 429 assumption this
-# header's opening paragraph states.
+# tolerant, optional leading "var ", same as _BUILDER_RE above). This
+# pattern anchors the declaration and captures the code; the literal's
+# Status field is read from the literal body the match opens, by
+# _struct_literal_status.
 _STRUCT_RE = re.compile(
     r'^(?:var\s+)?(?P<ident>[A-Za-z_]\w*)\s*=\s*&apperr\.Error\{'
     r'\s*Code:\s*"(?P<code>[^"]+)"'
@@ -208,9 +220,98 @@ _BUILDER_STATUS = {
     "Internal": 500,
 }
 
-# The status assumed for the struct-literal and helper shapes (see the
-# header): HTTP 429, the status none of the six builders provides.
-_HELPER_STRUCT_STATUS = 429
+# The status the helper shape carries: rateLimited stamps HTTP 429 in its
+# own body (the convention), and every literal call site of a discovered
+# helper inherits it. HTTP 429 is the status none of the six builders
+# provides, which is why the helper exists at all.
+_HELPER_STATUS = 429
+
+# The status a struct literal with no Status field at all keeps: 429, the
+# shape's documented default (the struct-literal shape is how a module
+# stamps the one status the builders do not provide). A literal that does
+# carry a Status field renders it -- the field is read, never assumed.
+_DEFAULT_STRUCT_STATUS = 429
+
+# net/http's status constants: the closed vocabulary a struct literal's
+# Status field may name (the full set from net/http/status.go, not only
+# the constants in use, so a literal naming any standard status resolves
+# without a tool change). A Status value outside this table and the
+# integer-literal form is refused by _struct_literal_status, never
+# guessed.
+_HTTP_STATUS_CONSTANTS = {
+    "StatusContinue": 100,
+    "StatusSwitchingProtocols": 101,
+    "StatusProcessing": 102,
+    "StatusEarlyHints": 103,
+    "StatusOK": 200,
+    "StatusCreated": 201,
+    "StatusAccepted": 202,
+    "StatusNonAuthoritativeInfo": 203,
+    "StatusNoContent": 204,
+    "StatusResetContent": 205,
+    "StatusPartialContent": 206,
+    "StatusMultiStatus": 207,
+    "StatusAlreadyReported": 208,
+    "StatusIMUsed": 226,
+    "StatusMultipleChoices": 300,
+    "StatusMovedPermanently": 301,
+    "StatusFound": 302,
+    "StatusSeeOther": 303,
+    "StatusNotModified": 304,
+    "StatusUseProxy": 305,
+    "StatusTemporaryRedirect": 307,
+    "StatusPermanentRedirect": 308,
+    "StatusBadRequest": 400,
+    "StatusUnauthorized": 401,
+    "StatusPaymentRequired": 402,
+    "StatusForbidden": 403,
+    "StatusNotFound": 404,
+    "StatusMethodNotAllowed": 405,
+    "StatusNotAcceptable": 406,
+    "StatusProxyAuthRequired": 407,
+    "StatusRequestTimeout": 408,
+    "StatusConflict": 409,
+    "StatusGone": 410,
+    "StatusLengthRequired": 411,
+    "StatusPreconditionFailed": 412,
+    "StatusRequestEntityTooLarge": 413,
+    "StatusRequestURITooLong": 414,
+    "StatusUnsupportedMediaType": 415,
+    "StatusRequestedRangeNotSatisfiable": 416,
+    "StatusExpectationFailed": 417,
+    "StatusTeapot": 418,
+    "StatusMisdirectedRequest": 421,
+    "StatusUnprocessableEntity": 422,
+    "StatusLocked": 423,
+    "StatusFailedDependency": 424,
+    "StatusTooEarly": 425,
+    "StatusUpgradeRequired": 426,
+    "StatusPreconditionRequired": 428,
+    "StatusTooManyRequests": 429,
+    "StatusRequestHeaderFieldsTooLarge": 431,
+    "StatusUnavailableForLegalReasons": 451,
+    "StatusInternalServerError": 500,
+    "StatusNotImplemented": 501,
+    "StatusBadGateway": 502,
+    "StatusServiceUnavailable": 503,
+    "StatusGatewayTimeout": 504,
+    "StatusHTTPVersionNotSupported": 505,
+    "StatusVariantAlsoNegotiates": 506,
+    "StatusInsufficientStorage": 507,
+    "StatusLoopDetected": 508,
+    "StatusNotExtended": 510,
+    "StatusNetworkAuthenticationRequired": 511,
+}
+
+# The Status field inside a struct literal's body: the value runs to the
+# next comma, closing brace or line end, so a trailing comment or a
+# following field is never swallowed.
+_STRUCT_STATUS_FIELD_RE = re.compile(r'\bStatus:\s*(?P<value>[^,}\n]+)')
+
+# How many lines a struct literal's body may span before its Status can no
+# longer be read (see _struct_literal_body): generous against gofmt's
+# wrapping, bounded so a malformed tree cannot walk to EOF.
+_STRUCT_LITERAL_MAX_LINES = 20
 
 _EXCLUDED_SUFFIXES = ("_test.go",)
 _EXCLUDED_GLOBS = ("*.gen.go", "*_gen.go")
@@ -401,20 +502,118 @@ def discover_apperr_helpers(roots: list[pathlib.Path], repo_root: pathlib.Path) 
     return helpers
 
 
+class UnparseableStructLiteral(Exception):
+    """Raised when an &apperr.Error struct literal's Status field cannot be
+    read: the literal does not close within _STRUCT_LITERAL_MAX_LINES
+    lines, or its Status names something this tool cannot resolve. main
+    prints the message (which names the construction site) and exits 2 --
+    a refused run, never a rendered guess, because the index's whole claim
+    is that each status is what the source says."""
+
+
+def _struct_literal_body(lines: list[str], line_index: int, open_col: int) -> str | None:
+    """Returns the text between a struct literal's opening brace (at
+    lines[line_index][open_col]) and its matching closing brace, or None
+    when the brace does not close within _STRUCT_LITERAL_MAX_LINES lines.
+
+    Braces inside double-quoted values are data, not structure, and a
+    "//" sequence outside such a value starts a comment skipped to the
+    end of its line, so neither can end the scan early. The line bound
+    turns the one shape this scanner cannot read (a literal longer than
+    the bound) into a report by the caller instead of a silent default."""
+    depth = 0
+    body: list[str] = []
+    in_string = False
+    last = min(line_index + _STRUCT_LITERAL_MAX_LINES, len(lines))
+    for i in range(line_index, last):
+        line = lines[i]
+        j = open_col if i == line_index else 0
+        while j < len(line):
+            ch = line[j]
+            if in_string:
+                body.append(ch)
+                if ch == "\\" and j + 1 < len(line):
+                    body.append(line[j + 1])
+                    j += 2
+                    continue
+                if ch == '"':
+                    in_string = False
+                j += 1
+                continue
+            if ch == '"':
+                in_string = True
+                body.append(ch)
+                j += 1
+                continue
+            if line.startswith("//", j):
+                break
+            if ch == "{":
+                depth += 1
+                if depth > 1:
+                    body.append(ch)
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return "".join(body)
+                body.append(ch)
+            else:
+                body.append(ch)
+            j += 1
+    return None
+
+
+def _struct_literal_status(lines: list[str], line_index: int, open_col: int, site: str) -> int:
+    """The HTTP status of the &apperr.Error struct literal whose opening
+    brace sits at lines[line_index][open_col]: the literal's own Status
+    field -- an integer literal or an http.Status* constant -- or the
+    documented _DEFAULT_STRUCT_STATUS when the literal carries no Status
+    field at all. Any other Status value is refused with
+    UnparseableStructLiteral: reading the status from the literal is the
+    point; a guessed status is a rendered falsehood."""
+    body = _struct_literal_body(lines, line_index, open_col)
+    if body is None:
+        raise UnparseableStructLiteral(
+            f"{site}: the struct literal does not close within "
+            f"{_STRUCT_LITERAL_MAX_LINES} lines, so its Status cannot be read"
+        )
+    field = _STRUCT_STATUS_FIELD_RE.search(body)
+    if field is None:
+        return _DEFAULT_STRUCT_STATUS
+    value = field.group("value").strip()
+    if value.isdigit():
+        return int(value)
+    # The source names net/http's constant qualified ("http.StatusBadGateway");
+    # only the standard package's own spelling resolves -- a bare or
+    # otherwise-qualified identifier is not this table's vocabulary.
+    if value.startswith("http.") and value[len("http."):] in _HTTP_STATUS_CONSTANTS:
+        return _HTTP_STATUS_CONSTANTS[value[len("http."):]]
+    raise UnparseableStructLiteral(
+        f"{site}: cannot read the struct literal's Status value {value!r}; "
+        f"use an integer literal or an http.Status* constant"
+    )
+
+
 def _declaration_entry(match, kind: str, lines: list[str], line_index: int, rel: str) -> ErrorEntry:
     """Builds the entry for a package-level declaration matched by one of
     the three anchored declaration patterns."""
+    site = f"{rel}:{line_index + 1}"
     if kind == "builder":
         status = _BUILDER_STATUS[match.group("builder")]
     elif kind == "struct":
-        status = _HELPER_STRUCT_STATUS
+        # The literal's status is read from the literal, not assumed. The
+        # anchored pattern matches the line's first construction, so the
+        # line's first &apperr.Error is the matched one, and its opening
+        # brace is the "{" right after it.
+        line = lines[line_index]
+        open_col = line.index("{", line.index("&apperr.Error"))
+        status = _struct_literal_status(lines, line_index, open_col, site)
     else:  # helper
-        status = _HELPER_STRUCT_STATUS
+        status = _HELPER_STATUS
     return ErrorEntry(
         ident=match.group("ident"),
         code=match.group("code"),
         status=status,
-        source=f"{rel}:{line_index + 1}",
+        source=site,
         doc=_leading_comment(lines, line_index),
         kind="declared",
     )
@@ -440,13 +639,20 @@ def _match_declaration_line(probe: str, helpers: set[str]) -> tuple[re.Match, st
     return None
 
 
-def _inline_entries(line: str, helpers: set[str], rel: str, line_index: int) -> list[ErrorEntry]:
+def _inline_entries(
+    lines: list[str], line: str, helpers: set[str], rel: str, line_index: int
+) -> list[ErrorEntry]:
     """Indexes the inline constructions on one code line: apperr builder
     calls, &apperr.Error literals, and apperr-constructing helper calls,
     each with a string-literal first argument. The same line can carry
     several (finditer over each shape). No doc is harvested here -- the
     caller supplies it, since the harvest looks up the lines array above
-    the construction."""
+    the construction. `line` may be the line's code part (a trailing
+    comment already cut), which is a prefix of lines[line_index], so the
+    struct-literal scan's offsets still address the real line -- and it
+    re-reads the real line, so a literal opening before the cut can close
+    on a later line even when a comment trails its first line."""
+    site = f"{rel}:{line_index + 1}"
     entries: list[ErrorEntry] = []
     for m in _INLINE_BUILDER_RE.finditer(line):
         entries.append(
@@ -454,17 +660,18 @@ def _inline_entries(line: str, helpers: set[str], rel: str, line_index: int) -> 
                 ident="",
                 code=m.group("code"),
                 status=_BUILDER_STATUS[m.group("builder")],
-                source=f"{rel}:{line_index + 1}",
+                source=site,
                 kind="inline",
             )
         )
     for m in _INLINE_STRUCT_RE.finditer(line):
+        open_col = m.start() + m.group(0).index("{")
         entries.append(
             ErrorEntry(
                 ident="",
                 code=m.group("code"),
-                status=_HELPER_STRUCT_STATUS,
-                source=f"{rel}:{line_index + 1}",
+                status=_struct_literal_status(lines, line_index, open_col, site),
+                source=site,
                 kind="inline",
             )
         )
@@ -474,8 +681,8 @@ def _inline_entries(line: str, helpers: set[str], rel: str, line_index: int) -> 
                 ErrorEntry(
                     ident="",
                     code=m.group("code"),
-                    status=_HELPER_STRUCT_STATUS,
-                    source=f"{rel}:{line_index + 1}",
+                    status=_HELPER_STATUS,
+                    source=site,
                     kind="inline",
                 )
             )
@@ -530,7 +737,7 @@ def _scan_go_file(path: pathlib.Path, rel: str, helpers: set[str]) -> list[Error
         # Comment text is already excluded above; a trailing "//"
         # comment is cut off so its incidental text cannot match.
         code_part = _code_part(line)
-        for e in _inline_entries(code_part, helpers, rel, i):
+        for e in _inline_entries(lines, code_part, helpers, rel, i):
             if not e.doc:
                 e.doc = _leading_comment(lines, i) or _enclosing_func_doc(lines, i)
             entries.append(e)
@@ -776,7 +983,13 @@ def main() -> int:
     roots = [repo_root / r for r in args.roots]
 
     helpers = discover_apperr_helpers(roots, repo_root)
-    entries = collect_entries(roots, repo_root, helpers)
+    try:
+        entries = collect_entries(roots, repo_root, helpers)
+    except UnparseableStructLiteral as exc:
+        # A refused run, never a rendered guess (see the exception's own
+        # doc comment): exit 2, the directory's usage/environment code.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     messages = collect_messages(roots)
     for e in entries:
         e.message = messages.get(e.code, "")

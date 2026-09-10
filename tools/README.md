@@ -493,9 +493,14 @@ inline codes -- jobs' option-time panics, dbkit's plugin/connect refusals,
 the reference app's request-shape refusals -- were silently invisible).
 
 For each construction the tool collects: the Go identifier (when the
-construction binds one), the code string, the resulting HTTP status (429
-assumed for the struct-literal and helper shapes, since none of the six
-builder statuses -- 400/401/403/404/409/500 -- is 429), the file:line,
+construction binds one), the code string, the resulting HTTP status --
+read from a struct literal's own `Status` field (an integer literal or an
+`http.Status*` constant), 429 being the documented default for a literal
+with no `Status` field and the status the helper shape (`rateLimited`)
+stamps by convention, since none of the six builder statuses --
+400/401/403/404/409/500 -- is 429; a `Status` in a form the tool cannot
+read refuses the run naming the construction site, never a guessed
+status -- the file:line,
 the "triggering condition" -- for a declaration, the contiguous doc
 comment immediately above it; for an inline construction, the comment
 directly above the construction line, else its enclosing function's doc
