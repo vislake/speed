@@ -59,7 +59,7 @@ function rendered(rig: ReturnType<typeof makeRealClientRig>) {
 function configGets(
   rig: ReturnType<typeof makeRealClientRig>,
 ): number {
-  return rig.calls.filter((call) => call.path === '/api/config/public').length
+  return rig.calls.filter((call) => call.path === '/api/v1/config/public').length
 }
 
 function registerCalls(

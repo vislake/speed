@@ -490,7 +490,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 // uses, so authn's eight declared feature flags are enforced at request
 // time in THIS app -- a deployment that disables authn.password_login must
 // refuse the password endpoint, not merely hide the login form (the
-// frontend reads /api/system/features) while POST /api/v1/authn/login/
+// frontend reads /api/v1/config/features) while POST /api/v1/authn/login/
 // password keeps issuing tokens.
 //
 // The test disables the channel through the real config surface: a
@@ -504,7 +504,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 // GitHub channel still listed), and (3) the SMS and GitHub social channels
 // stay open end to end, each yielding a working token pair. Before the
 // wiring, this test fails at leg (1): the row is written and honored by
-// /api/system/features, but the password endpoint answers 200, because no
+// /api/v1/config/features, but the password endpoint answers 200, because no
 // gate enforced the flag in the app.
 func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *testing.T) {
 	var configSvc *config.Service
@@ -519,7 +519,7 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 	// Disable the password channel the way an operator's write would: a
 	// system-tier row through the module's real Set path, under the audited
 	// system purpose config's own Register declared. The row is the value
-	// both /api/system/features and authn's channel gate resolve.
+	// both /api/v1/config/features and authn's channel gate resolve.
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
 		Actor:   "authn-channel-flag-test",
 		Purpose: config.SystemPurposeSystemWrite,
@@ -577,7 +577,7 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 	var features struct {
 		Features []string `json:"features"`
 	}
-	featuresResp := authnJSON(t, client, http.MethodGet, srv.URL+"/api/system/features", "", nil, &features)
+	featuresResp := authnJSON(t, client, http.MethodGet, srv.URL+"/api/v1/config/features", "", nil, &features)
 	if featuresResp.StatusCode != http.StatusOK {
 		t.Fatalf("features endpoint status = %d, want %d", featuresResp.StatusCode, http.StatusOK)
 	}

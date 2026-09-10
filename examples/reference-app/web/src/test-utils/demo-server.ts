@@ -74,7 +74,7 @@
  * authn.email_already_registered a real handler answers
  * (go/authn/errors.go's ErrEmailAlreadyRegistered).
  *
- * The endpoints: GET /api/config/public (pre-auth, the config fetch
+ * The endpoints: GET /api/v1/config/public (pre-auth, the config fetch
  * usePublicConfig drives), POST /api/v1/authn/register (201, the
  * created AuthnUser; the answer provisions the account's own clinic --
  * see the registration paragraph above), POST /api/v1/authn/login/password
@@ -310,7 +310,7 @@ export const DEMO_MFA_REPLACEMENT_RECOVERY_CODES: readonly string[] = [
 
 export interface DemoServerOptions {
   /**
-   * The GET /api/config/public answer; defaults to an empty config and
+   * The GET /api/v1/config/public answer; defaults to an empty config and
    * feature list. Suites whose surfaces render server-driven content
    * (the brand, the home feature cards) script their answer here.
    */
@@ -1324,7 +1324,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   return (call) => {
     const key = `${call.method} ${call.path}`
     switch (key) {
-      case 'GET /api/config/public':
+      case 'GET /api/v1/config/public':
         return jsonResponse(200, publicConfig)
       case 'GET /api/reference-app/clinic-name': {
         // The app's own tenant-identity answer (internal/app/clinic_name.go

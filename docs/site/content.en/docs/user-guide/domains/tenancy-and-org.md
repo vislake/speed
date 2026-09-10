@@ -36,7 +36,7 @@ header, parameter or body.
 ## Minimal integration steps
 
 1. **Mount the middleware.** `tenancy.Middleware(resolver, opts...)`
-   wraps your mux; pre-auth paths (login page, `/api/config/public`)
+   wraps your mux; pre-auth paths (login page, `/api/v1/config/public`)
    go on the allowlist, everything else fails closed when the tenant
    cannot be resolved.
 2. **Order it after authentication.** In the composed chain the

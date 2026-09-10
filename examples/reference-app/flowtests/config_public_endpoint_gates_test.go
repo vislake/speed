@@ -183,7 +183,7 @@ func withAuthnDefaults(extra ...string) []string {
 }
 
 // requirePublicSnapshot asserts the common shape every successful
-// /api/config/public response carries: exactly the one Public item this
+// /api/v1/config/public response carries: exactly the one Public item this
 // app's notes module registers (brand.site_name), at the given value; the
 // sensitive support.reply_email nowhere in the payload, not even as a key;
 // and the given feature list.
@@ -218,7 +218,7 @@ func requirePublicSnapshot(t *testing.T, body []byte, wantSiteName string, wantF
 	}
 }
 
-// requireFeatures asserts the shape of a successful /api/system/features
+// requireFeatures asserts the shape of a successful /api/v1/config/features
 // response.
 func requireFeatures(t *testing.T, body []byte, want []string) {
 	t.Helper()

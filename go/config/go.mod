@@ -17,6 +17,7 @@ require (
 	github.com/vislake/speed/go/dbkit v0.0.1
 	github.com/vislake/speed/go/observability v0.0.1
 	github.com/vislake/speed/go/pkgcore v0.0.1
+	github.com/vislake/speed/go/ratelimit v0.0.1
 	github.com/vislake/speed/go/tenancy v0.0.1
 	gorm.io/gorm v1.31.2
 )

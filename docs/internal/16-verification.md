@@ -59,7 +59,7 @@
 - 解绑保护：仅剩一种登录方式时解绑必须失败
 - 各渠道用官方沙箱或 mock server 覆盖授权码换取流程；`MockSocialProvider` 作为该 seam 的一套实现，让本地无需真实应用凭证即可跑通
 - 开关组合：CI 跑最小集 / 全开 / 典型交付组合三种构建；非法开关组合（如开启超额计费但禁用 metering）必须启动失败
-- 被禁用功能的接口返回 404，且 `/api/system/features` 状态与实际一致
+- 被禁用功能的接口返回 404，且 `/api/v1/config/features` 状态与实际一致；两个 pre-auth 展示端点按调用方 IP 限流（超预算 429 `config.rate_limited`），成功响应带 `Cache-Control: public, max-age=60`、拒绝响应 `no-store`（语义见 [11 横切能力](11-cross-cutting.md)）
 
 > **实施状态注记：** 三种构建组合的矩阵尚未接线——通读 `.github/workflows/*.yml` 没有任何 job 构造"最小集/全开/典型交付组合"这三种开关组合分别构建，仍是设计意图。
 

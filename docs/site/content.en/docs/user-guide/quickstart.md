@@ -108,7 +108,7 @@ operator-driven twin of that step, for when you want the schema ready
 before the first boot. CLI-then-boot and boot-only agree.
 
 From the moment the skeleton boots, `/healthz` and
-`/api/config/public` answer 200, and registering an account through
+`/api/v1/config/public` answer 200, and registering an account through
 `/api/v1/authn/register` answers 201. A password sign-in cannot
 succeed on the skeleton as shipped: it has no membership store, authn
 re-verifies membership through the host-injected `MembershipReader`

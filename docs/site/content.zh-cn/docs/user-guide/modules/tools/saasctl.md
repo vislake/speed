@@ -131,7 +131,7 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 (checkout 路径)。
 
 启动默认值:standalone 形态、SQLite `app.db`、端口 8080。
-`/healthz` 与 `/api/config/public` 应答 200,注册应答 201;但骨架
+`/healthz` 与 `/api/v1/config/public` 应答 200,注册应答 201;但骨架
 出厂状态下密码登录不可能成功:没有成员库,authn 每次登录都经
 宿主注入的 `MembershipReader` 复核成员身份,空 reader 失败即关闭
 ——错密码与对密码都应答 401 `authn.invalid_credentials`。接好那条

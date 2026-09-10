@@ -65,8 +65,8 @@ flowchart LR
 系统上下文。敏感值用你的 `dbkit.Cipher` 封存,并在一切可能泄漏的
 边界打上 `[redacted]`——事件、日志、Watch 投递。
 
-两个预认证端点——`/api/config/public`(仅 Public 项)与
-`/api/system/features`(解析后的启用开关列表)——服务登录页与前端
+两个预认证端点——`/api/v1/config/public`(仅 Public 项)与
+`/api/v1/config/features`(解析后的启用开关列表)——服务登录页与前端
 渠道可见性。用导出的 `PathPublic` 与 `PathSystemFeatures` 常量把它
 们加进你租户中间件的白名单。
 

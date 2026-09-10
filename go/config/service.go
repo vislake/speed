@@ -83,6 +83,13 @@ type Service struct {
 	// instance is just another subscriber.
 	bus pkgcore.EventBus
 
+	// kv is the registry's KVStore, captured at Attach: the backend the two
+	// pre-auth endpoints' per-address rate-limit budget is counted in
+	// (ratelimit.go). Nil only for a hand-built, zero-value
+	// *pkgcore.Registry (pkgcore.NewRegistry requires a store), and the
+	// check fails closed on that rather than skipping itself.
+	kv pkgcore.KVStore
+
 	// cipher is the host's master-key cipher, nil when the host injected
 	// none. Attach refuses a schema containing Sensitive items without one
 	// (ErrCipherRequired), so at service time a nil cipher implies the
@@ -421,10 +428,10 @@ func (s *Service) IsEnabled(ctx context.Context, key string) (bool, error) {
 
 // EnabledFlags returns every declared feature flag that IsEnabled reports
 // enabled for the context's tenant, sorted ascending by key. It serves the
-// "/api/system/features query" contract: consumers ask "which features are
-// on" rather than probing one flag at a time. The returned slice is never
-// nil: an empty result must marshal as JSON's [] -- the wire shape the
-// features endpoints document -- not as null.
+// PathSystemFeatures query contract: consumers ask "which features are on"
+// rather than probing one flag at a time. The returned slice is never nil:
+// an empty result must marshal as JSON's [] -- the wire shape the features
+// endpoint documents -- not as null.
 func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
 	out := make([]string, 0)
 	for _, item := range s.schema.items {
@@ -444,7 +451,7 @@ func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
 }
 
 // PublicSnapshot renders the response body of the unauthenticated
-// /api/config/public endpoint: every Public item's effective value for the
+// PathPublic endpoint: every Public item's effective value for the
 // context's tenant, decoded and typed for JSON, plus the enabled feature
 // flag list. Sensitive items can never appear (pkgcore's declaration
 // validation makes Sensitive and Public mutually exclusive), so the

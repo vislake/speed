@@ -107,7 +107,7 @@ type ExternalIdentity struct {
 
 **与多租户的衔接**：社交登录成功且是新用户时，进入引导流程——创建自己的组织，或接受已有的邀请（邀请链接里携带 tenant 上下文）。社交登录本身不决定租户归属，租户归属由组织创建/邀请流程决定。
 
-**前端**：`@speed/auth-ui` 的 `SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染 `SocialSignInSection`，渲染哪些 provider 由该块决定——服务端没有"已启用渠道列表"的发现端点（authn 的 spec 无此类 operation，`/api/config/public` 只下发配置项与功能开关），增减渠道因此是宿主组合层的改动；组件渲染的是 bundle 文案按钮，不打包品牌资产。
+**前端**：`@speed/auth-ui` 的 `SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染 `SocialSignInSection`，渲染哪些 provider 由该块决定——服务端没有"已启用渠道列表"的发现端点（authn 的 spec 无此类 operation，`/api/v1/config/public` 只下发配置项与功能开关），增减渠道因此是宿主组合层的改动；组件渲染的是 bundle 文案按钮，不打包品牌资产。
 
 ## 组织模型：多层级组织树
 
@@ -234,7 +234,7 @@ type Membership struct {
 
 > **auth-ui 对照**：落地的 `@speed/auth-ui`（登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）使上文两处设想以修正形状落地（机制记录见 [12 前端架构](12-frontend.md)）：
 >
-> - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。
+> - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/v1/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。
 > - **账号管理页面不在 auth-ui 组件族内。** 该族交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等账号管理页面由 `@speed/account-ui` 提供（见下文对照）。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `flowtests/authn_e2e_test.go` 真实 HTTP 端到端验证，不依赖这些页面存在。
 
 ---

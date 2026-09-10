@@ -228,11 +228,12 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 // the complete declarations the runtime schema folds together (see
 // buildSchema).
 //
-// Attach wires the Service's store to the Module's db, validates the
-// cipher against the schema's Sensitive items (ErrCipherRequired when a
-// Sensitive item exists without one), subscribes the Service to
-// config.item.changed on the registry's bus, and starts the anti-loss
-// poller. Routes mounted at Register resolve the Service lazily, so a
+// Attach wires the Service's store to the Module's db, captures the
+// registry's KVStore as the backend of the pre-auth endpoints' rate
+// limiting, validates the cipher against the schema's Sensitive items
+// (ErrCipherRequired when a Sensitive item exists without one), subscribes
+// the Service to config.item.changed on the registry's bus, and starts the
+// anti-loss poller. Routes mounted at Register resolve the Service lazily, so a
 // request served between Register and Attach reports ErrServiceNotAttached;
 // a host wires Attach immediately after Bootstrap, before serving.
 //
@@ -275,6 +276,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		schema:           schema,
 		st:               &store{db: m.db},
 		bus:              reg.Events.Bus(),
+		kv:               reg.KVStore(),
 		cipher:           m.cipher,
 		cache:            newValueCache(),
 		watchers:         &watchers{byKey: make(map[string][]watch)},

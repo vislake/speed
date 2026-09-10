@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net/http"
+
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -114,9 +116,22 @@ var (
 	// different schema than the first snapshot, so it fails instead.
 	ErrAlreadyAttached = apperr.Internal("config.already_attached")
 
-	// ErrStorage reports a failure to read or write the configs table, or
-	// to seal or unseal a stored Sensitive value. It wraps the underlying
-	// error as its cause; the cause chain never reaches an HTTP response
-	// (see http.go), so no storage detail or value content leaks outward.
+	// ErrStorage reports a failure to read or write the configs table, to
+	// seal or unseal a stored Sensitive value, or to answer the pre-auth
+	// endpoints' rate-limit check. It wraps the underlying error as its
+	// cause; the cause chain never reaches an HTTP response (see http.go),
+	// so no storage detail or value content leaks outward.
 	ErrStorage = apperr.Internal("config.storage_error")
+
+	// ErrRateLimited reports that a pre-auth endpoint refused a request
+	// because the caller address's own budget is spent (see
+	// checkPreAuthIPLimit and the budget constants in ratelimit.go). Status
+	// is 429 -- a struct literal rather than one of apperr's five builder
+	// shapes, none of which fits a rate-limit refusal, matching the same
+	// error go/sharing and go/org build for their own budgets.
+	// WithParam("dimension", ...) records which dimension tripped (the
+	// dimension name only, never the key, which embeds the address) and
+	// WithParam("retry_after_seconds", ...) records how long until the
+	// tripped window recovers.
+	ErrRateLimited = &apperr.Error{Code: "config.rate_limited", Status: http.StatusTooManyRequests}
 )

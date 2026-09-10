@@ -137,7 +137,7 @@ describe('UserMenu', () => {
     // the menu's own subscription started the shared cache's first
     // fetch, and the switch's revalidation issued a second one.
     const configCalls = rig.calls.filter(
-      (call) => call.path === '/api/config/public',
+      (call) => call.path === '/api/v1/config/public',
     )
     expect(configCalls).toHaveLength(2)
   })

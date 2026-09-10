@@ -110,7 +110,7 @@ fly scale count 1
 # 5. Smoke-test.
 fly status
 curl -s "https://<your-app-name>.fly.dev/healthz"   # expect: ok
-curl -s "https://<your-app-name>.fly.dev/api/config/public"
+curl -s "https://<your-app-name>.fly.dev/api/v1/config/public"
 ```
 
 ### Secrets to set first
@@ -171,7 +171,7 @@ curl -s http://localhost:18080/healthz   # ok
 docker stats reference-app-flyio-memtest --no-stream
 ```
 
-Result: **~14.5MiB resident at idle, ~16.1MiB after a burst of `/healthz`, `/metrics` and `/api/config/public` requests** — under 6.3% of the 256MB ceiling in both cases. `shared-cpu-1x`'s default 256MB carries roughly 15x headroom for this app as it stands today; there is no basis in this measurement for choosing a larger, more expensive size.
+Result: **~14.5MiB resident at idle, ~16.1MiB after a burst of `/healthz`, `/metrics` and `/api/v1/config/public` requests** — under 6.3% of the 256MB ceiling in both cases. `shared-cpu-1x`'s default 256MB carries roughly 15x headroom for this app as it stands today; there is no basis in this measurement for choosing a larger, more expensive size.
 
 ## Validating this config
 

@@ -189,7 +189,7 @@ describe('bootstrapReferenceApp', () => {
           path: url.pathname,
           authorization,
         })
-        if (url.pathname === '/api/config/public') {
+        if (url.pathname === '/api/v1/config/public') {
           return jsonResponse(200, { config: {}, features: [] })
         }
         throw new Error(`bootstrap mount: unexpected request ${url.pathname}`)
@@ -247,7 +247,7 @@ describe('bootstrapReferenceApp', () => {
     expect(observedCalls).toHaveLength(1)
     expect(observedCalls[0]).toEqual({
       method: 'GET',
-      path: '/api/config/public',
+      path: '/api/v1/config/public',
       authorization: null,
     })
 

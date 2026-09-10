@@ -1438,7 +1438,7 @@ func TestService_Get_AnAbsentRowIsReadFromTheStoreOnceThenServedFromCache(t *tes
 	// Negative-caching regression: resolving an absent key performs one
 	// store lookup per consulted scope tier on the first read and caches the
 	// confirmed absence, so the second read -- the shape every pre-auth
-	// /api/config/public and /api/system/features request produces while no
+	// PathPublic and PathSystemFeatures request produces while no
 	// override row exists, where falling back to platform defaults is the
 	// normal answer, not an error path -- never touches the database again.
 	// Before negative caching every read of an absent key paid those store

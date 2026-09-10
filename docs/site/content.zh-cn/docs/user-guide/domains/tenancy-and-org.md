@@ -31,7 +31,7 @@ flowchart TD
 ## 最少集成步骤
 
 1. **挂中间件。** `tenancy.Middleware(resolver, opts...)` 包住你的
-   mux;预认证路径(登录页、`/api/config/public`)进白名单,其余一切
+   mux;预认证路径(登录页、`/api/v1/config/public`)进白名单,其余一切
    在租户解析失败时失败关闭。
 2. **排在认证之后。** 组合链里租户层在 `authn.Middleware` 下游,把
    验证过的 principal 变成租户上下文——完整顺序见身份与访问领域页。

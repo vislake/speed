@@ -9,7 +9,7 @@
  * and useFeature (the ./react subpath of @speed/api-client) share one
  * fetch per RequestFn reference, so every consumer on this page --
  * the header brand, the sign-in brand and the home brand -- passing
- * the same context value renders off a single /api/config/public
+ * the same context value renders off a single /api/v1/config/public
  * request. The context therefore holds the client as the RequestFn
  * it structurally is, and the value object itself is memoized on
  * [session, api] so a re-render never mints a fresh reference that

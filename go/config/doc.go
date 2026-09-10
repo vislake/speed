@@ -42,10 +42,12 @@
 //     their caches on it; a background poller re-reads recently-updated
 //     rows as an anti-loss net for events that never arrived.
 //
-//   - GET /api/config/public answers a resolved tenant's effective values
-//     for every Public item plus the enabled feature flag list, and
-//     GET /api/system/features answers the enabled flags -- both
+//   - GET /api/v1/config/public answers a resolved tenant's effective
+//     values for every Public item plus the enabled feature flag list, and
+//     GET /api/v1/config/features answers the enabled flags -- both
 //     unauthenticated, since a login page must render before any sign-in
 //     has happened, resolving the tenant through the host-injected
-//     tenancy.Resolver and never erroring over an unmapped host.
+//     tenancy.Resolver and never erroring over an unmapped host. Both are
+//     rate limited per caller address and both declare a one-minute
+//     freshness lifetime for their display answer.
 package config

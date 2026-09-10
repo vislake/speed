@@ -38,7 +38,7 @@ function BrandProbe(): ReactElement {
 }
 
 const CONFIG_GETS = (rigCalls: readonly { path: string }[]): number =>
-  rigCalls.filter((call) => call.path === '/api/config/public').length
+  rigCalls.filter((call) => call.path === '/api/v1/config/public').length
 
 describe('useBrandName', () => {
   it('renders the served brand.site_name value verbatim', async () => {
@@ -105,7 +105,7 @@ describe('useBrandName', () => {
       publicConfig: { config: { 'brand.site_name': 'Demo Smile Lab' }, features: [] },
     })
     const rig = makeRealClientRig(async (call) => {
-      if (call.method === 'GET' && call.path === '/api/config/public') {
+      if (call.method === 'GET' && call.path === '/api/v1/config/public') {
         return jsonResponse(200, {})
       }
       return server(call)

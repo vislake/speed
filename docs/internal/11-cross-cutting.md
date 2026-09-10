@@ -64,7 +64,7 @@
 - **敏感项加密存储**（复用 AI 网关的 AES-GCM + 环境变量主密钥方案），读取时解密，日志与 API 响应中一律脱敏，导出配置时屏蔽。
 - **变更审计**：每次修改写审计日志（谁、何时、改了什么、旧值→新值），经事件总线流入 `compliance` 模块。配置误改是生产事故的常见来源，没有审计追溯排查会非常痛苦。
 - **未登录时如何知道是哪个租户的配置**：白标场景下品牌、可用登录方式都是租户级的，但此刻还没有登录态。解析顺序为 **自定义域名 → 子域名 → 默认租户**（单租户部署时即平台默认值）。这份映射由 `tenancy` 的 `Resolver` 统一提供，登录前后用的是同一套解析逻辑，避免出现"登录页是 A 品牌、登录后变 B 品牌"。未匹配到任何租户时返回平台默认品牌，绝不报错——登录页打不开是最糟糕的失败模式。
-- **前端运行时配置**：提供 `/api/config/public` 下发前端可见的公开配置（品牌信息、功能开关、可用支付渠道、可选语言），前端在启动时拉取。这样改品牌色、开关功能不需要重新构建前端。`@speed/api-client` 提供 `usePublicConfig()` hook。
+- **前端运行时配置**：提供 `/api/v1/config/public` 下发前端可见的公开配置（品牌信息、功能开关、可用支付渠道、可选语言），前端在启动时拉取。这样改品牌色、开关功能不需要重新构建前端。`@speed/api-client` 提供 `usePublicConfig()` hook。
 
   > **实现落地更正**（实现 `config` 模块时确认）：本节动态配置部分已按下列实际形态落地，个别表述与设计不同：
   > - **声明与冻结分离**：各模块在 `Register` 阶段只通过 `pkgcore` 的 `ConfigSchemaRegistrar`/`FeatureRegistrar` **声明**自己的配置项与功能开关；运行期 schema 要到 `Bootstrap` 走完、所有模块注册完毕才完整，因此宿主在 `Bootstrap` 返回后调用一次 `config.NewModule(...)` 的 `Attach(reg)` 冻结 schema 并取回 `Service`。声明与冻结之间的请求窗口返回 `ErrServiceNotAttached` 而不是带病服务；含 `Sensitive` 项却未注入 cipher 时拒绝启动（`ErrCipherRequired`）；重复 `Attach` 报 `ErrAlreadyAttached`。
@@ -72,9 +72,11 @@
   > - **敏感项**：加密存储、读取时解密、日志与响应脱敏均按设计落地；变更事件同样不携带明文——payload 的两个取值槽位都放 `[redacted]` 标记，明文不跨出模块。
   > - **作用域**：`system` 与 `tenant` 两层已落地（system 行以空字符串 `tenant_id` 为哨兵），读取从租户覆盖回退到 system 行再到 schema 默认值；`user` 层按"未来可扩展"预留但刻意未实现，任何写入返回 `ErrUserScopeUnavailable`。
   > - **审计**："变更审计" bullet 的落地形态是 `configs` 表行级 `updated_by`/`updated_at` 留痕 + 经共享总线发布的变更事件；专门的审计记录与 `compliance` 消费者尚未接入——本模块不依赖审计方，接入方订阅 `config.item.changed` 即可。
-  > - **端点**：`/api/config/public`（公开项生效值 + 依赖解析后的启用功能开关列表）与 `/api/system/features`（启用功能开关列表）都已上线：未登录可访问、只接受 GET/HEAD（其它方法 405 + `Allow: GET, HEAD`），租户经宿主注入的 `tenancy.Resolver` 逐请求解析，未匹配时回退平台默认值、绝不报错——与上面"登录页" bullet 的规则一致。响应里的"可用支付渠道、可选语言"等条目还要等对应模块注册相应公开配置项后才会出现。
+  > - **端点**：`/api/v1/config/public`（公开项生效值 + 依赖解析后的启用功能开关列表）与 `/api/v1/config/features`（启用功能开关列表）都已上线：未登录可访问、只接受 GET/HEAD（其它方法 405 + `Allow: GET, HEAD`），租户经宿主注入的 `tenancy.Resolver` 逐请求解析，未匹配时回退平台默认值、绝不报错——与上面"登录页" bullet 的规则一致。两者的路径已从早先的无版本形态迁入 `/api/v1/<module>/...` 前缀（对按字面量写死旧路径的宿主是破坏性变更；按模块导出的路径常量书写租户中间件白名单的宿主无需改动，常量本身就是为此导出的）。响应里的"可用支付渠道、可选语言"等条目还要等对应模块注册相应公开配置项后才会出现。
   >
-  >   `usePublicConfig(api)` / `useFeature(api, key)` hook 已在 `@speed/api-client` 的隔离子路径 `@speed/api-client/react` 落地（主入口保持零依赖，React 只出现在这个子路径，做法与 `@speed/i18n` 的 `./mui-locale` 一致）。两个 hook 都要求显式传入共享缓存所依据的 `RequestFn`：同一个 `api` 的多个消费者只触发一次请求，`useFeature` 直接复用 `usePublicConfig` 的缓存而不单独打 `/api/system/features`，未决或出错时返回 `false`、从不抛出。配置管理 UI 未交付。详见 `web/packages/api-client/README.md`（"Config hooks"一节）。
+  >   **防护与缓存**：两个端点按调用方 IP 限流——`go/ratelimit` 单维度、同一 IP 在两个端点间共享一份预算（`preAuthPerIPRate` 120 次 / `preAuthPerIPWindow` 1 分钟），超限以模块自身的 `config.rate_limited` 429 拒绝；限流存储不可用时 fail closed（`config.storage_error`）而不是放行。之所以只有"来源地址"一个维度：端点未鉴权，请求里没有别的身份可用，也没有密码/token 之类可被猜解的凭据。成功响应带 `Cache-Control: public, max-age=60` 与 `Vary: Host`：公开配置是展示性数据、只随运营写配置而变，可以缓存——这与 sharing 公开分享"撤销必须立即生效、故 no-store"是相反的结论。60 秒这个上界只约束**下游**缓存：`config.item.changed` 让本进程缓存随写即失效，但它触达不到浏览器与中间缓存，因此 TTL 是品牌/开关改动对已持缓存的客户端的最长可见延迟。拒绝响应（405/429/500）一律 `no-store`，避免被缓存的 429 超出其窗口继续拒绝、被缓存的 500 掩盖恢复。
+  >
+  >   `usePublicConfig(api)` / `useFeature(api, key)` hook 已在 `@speed/api-client` 的隔离子路径 `@speed/api-client/react` 落地（主入口保持零依赖，React 只出现在这个子路径，做法与 `@speed/i18n` 的 `./mui-locale` 一致）。两个 hook 都要求显式传入共享缓存所依据的 `RequestFn`：同一个 `api` 的多个消费者只触发一次请求，`useFeature` 直接复用 `usePublicConfig` 的缓存而不单独打 `/api/v1/config/features`，未决或出错时返回 `false`、从不抛出。配置管理 UI 未交付。详见 `web/packages/api-client/README.md`（"Config hooks"一节）。
 
 **分层缓存**：动态配置读取路径在热路径上（每次权限判断、每次计量都可能读），必须走进程内缓存 + 变更失效，不能每次查库。
 
@@ -109,8 +111,8 @@
 - 粒度示例：关闭自助注册（仅邀请制）、关闭某个社交登录渠道、关闭 AI 功能、关闭某支付渠道、关闭用量超额自动扣费。
 - **启动时校验开关依赖图并 fail-fast**：例如启用了"用量超额计费"却禁用了 `metering`，直接拒绝启动并说明原因，而不是运行到一半才出现诡异行为。
 - **禁用只跳过路由注册与后台任务，不跳过数据库迁移**。表结构始终保持最新，这样开关可以随时来回切换而不需要做数据迁移——这个取舍很关键，反过来做会让"临时关一下"变成一次运维事故。
-- 被禁用功能的接口返回 `404` 而非 `403`（不暴露"存在但被关闭"的信息），但在 `/api/system/features` 里可查询当前启用状态，方便排查。
-- 前端通过 `/api/config/public` 拿到启用列表，`useFeature('billing')` hook 控制菜单与路由的显隐；`layout-kit` 的 `NavItem` 设想支持 `requiredFeature` 字段，与 `requiredPermission` 并列，交由宿主在渲染前过滤。
+- 被禁用功能的接口返回 `404` 而非 `403`（不暴露"存在但被关闭"的信息），但在 `/api/v1/config/features` 里可查询当前启用状态，方便排查。
+- 前端通过 `/api/v1/config/public` 拿到启用列表，`useFeature('billing')` hook 控制菜单与路由的显隐；`layout-kit` 的 `NavItem` 设想支持 `requiredFeature` 字段，与 `requiredPermission` 并列，交由宿主在渲染前过滤。
 
   **实施对照**：这两个字段都未落地。`@speed/layout-kit` 的 `AppShellNavItem`（`components/AppShell.tsx`）只有 `id`/`label`/`icon`/`href`/`onClick`/`selected` 六个字段——没有 `requiredFeature`，也没有 `requiredPermission`；权限与功能开关的显隐完全是宿主自己在构造 `navItems` 数组前过滤好的（`layout-kit` 本身不做任何路径匹配或权限判断，见根 `CLAUDE.md`"Depends on `@speed/i18n` 和 `@speed/ui-kit` only"一段），上面两句按"设想的扩展点"读，不按"现状"读。
 
@@ -118,7 +120,7 @@
 
 ## 限流：独立模块，单一维度，不做业务语义
 
-**独立于 `pkgcore` 之外的共享原语**：`authn` 的登录/注册/密码重置防暴力、`integration` 现有的 API Key 三层限流、`sharing` 的公开分享链接防滥用、`ai-gateway` 独立于信用点成本限额之外的按租户请求频率限流——四个业务模块各自需要限流能力，与其各自实现一遍，不如抽成一个共享的 `go/ratelimit` 模块。但**不并入 `pkgcore`**：`pkgcore` 是所有模块共同的依赖底座，只收纳 `KVStore`/`EventBus`/`tenantctx` 这类每个模块都需要的通用原语；限流是"部分消费者需要"的能力而非通用原语，塞进 `pkgcore` 只会让底座变重。`go/ratelimit` 因此是与 `dbkit`/`observability`/`tenancy` 同一层级、只依赖 `pkgcore` 的独立模块——依赖图见 [01 整体架构](01-architecture.md)——而且是一个**纯库**：不实现 `pkgcore.Module`，不注册路由、配置 schema 或功能开关。
+**独立于 `pkgcore` 之外的共享原语**：`authn` 的登录/注册/密码重置防暴力、`integration` 现有的 API Key 三层限流、`sharing` 的公开分享链接防滥用、`ai-gateway` 独立于信用点成本限额之外的按租户请求频率限流、`config` 两个 pre-auth 展示端点的按 IP 防滥用——五个消费方各自需要限流能力，与其各自实现一遍，不如抽成一个共享的 `go/ratelimit` 模块。但**不并入 `pkgcore`**：`pkgcore` 是所有模块共同的依赖底座，只收纳 `KVStore`/`EventBus`/`tenantctx` 这类每个模块都需要的通用原语；限流是"部分消费者需要"的能力而非通用原语，塞进 `pkgcore` 只会让底座变重。`go/ratelimit` 因此是与 `dbkit`/`observability`/`tenancy` 同一层级、只依赖 `pkgcore` 的独立模块——依赖图见 [01 整体架构](01-architecture.md)——而且是一个**纯库**：不实现 `pkgcore.Module`，不注册路由、配置 schema 或功能开关。
 
 | 消费方 | 限流场景 |
 |---|---|
@@ -126,6 +128,7 @@
 | `integration` | 现有 API Key 三层限流：全局 + 租户 + Key |
 | `sharing` | 公开分享链接防滥用 |
 | `ai-gateway` | 按租户的请求频率限流，独立于按信用点计的成本限额 |
+| `config` | 两个 pre-auth 展示端点（`/api/v1/config/public`、`/api/v1/config/features`）按调用方 IP 限流，同一 IP 在两个端点间共享一份预算 |
 
 **算法：滑动窗口计数器近似，而不是滑动窗口日志。** 这个选择由 `KVStore` 的实际契约决定，不是随意挑的：`KVStore` 故意不提供服务端脚本、pipeline，也不提供超出"不透明字节值"之外的数据类型——这样内存 map、Redis 以及将来任何一套 `KVStore` 实现才能同等地实现它。滑动窗口日志需要为每次请求单独记一条时间戳、再按窗口范围查询，这需要有序集合一类的结构，`KVStore` 的契约给不了；滑动窗口计数器只需要"计数 + 一个界定窗口的 TTL"，`KVStore` 现有的两个原语正好够用：
 - `Set` 创建一个窗口的计数器，用 `ttl` 参数天然界定窗口边界；

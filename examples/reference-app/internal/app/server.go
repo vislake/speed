@@ -569,7 +569,7 @@ func SocialChannelFlagKey(name string) string {
 // channel's own flag on, and this step is how THIS host does that, for
 // exactly the channels it actually wired. A system-tier row is the right
 // tier: pre-auth reads -- authn's own channel gates and the login page's
-// /api/system/features answer -- carry no tenant and resolve from the
+// /api/v1/config/features answer -- carry no tenant and resolve from the
 // system row down, so every request sees the same answer, while a
 // tenant-tier row can still narrow a channel for one tenant.
 //
@@ -2432,7 +2432,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// provider this app wired through cfg.SocialProviders would otherwise
 	// refuse with authn.channel_disabled the moment the gate wired into
 	// authn above became real -- and the login page, which reads the same
-	// system-tier rows through /api/system/features, would agree that the
+	// system-tier rows through /api/v1/config/features, would agree that the
 	// channel does not exist. See openConfiguredAuthnChannels' own doc
 	// comment for the full reasoning. When cfg.SocialProviders is empty the
 	// step writes nothing at all.

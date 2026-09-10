@@ -11,7 +11,7 @@
  * item selected. The journeys render AppView over a real client bound
  * into the runtime seam and drive it through what a user actually does:
  * a fresh visitor sees the sign-in surface over one config fetch (the
- * page's whole first paint is one GET /api/config/public), a completed
+ * page's whole first paint is one GET /api/v1/config/public), a completed
  * sign-in flips the machine into the frame (header brand, nav carrying
  * host-computed aria-current, home over the served brand), navigation
  * travels home/notes/account through the location hash -- notes
@@ -752,7 +752,7 @@ describe('AppView', () => {
           currentTenant = body.tenant_id
         }
       }
-      if (call.path === '/api/config/public') {
+      if (call.path === '/api/v1/config/public') {
         const globex = currentTenant === 'tenant-globex'
         return jsonResponse(200, {
           config: {

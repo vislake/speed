@@ -480,7 +480,7 @@ describe('the app journey', () => {
     expect(configGets(rig)).toBe(3)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}${call.query}`)
     expect(trace).toEqual([
-      'GET /api/config/public',
+      'GET /api/v1/config/public',
       'POST /api/v1/authn/register',
       'POST /api/v1/authn/login/password',
       'GET /api/v1/notes',
@@ -488,10 +488,10 @@ describe('the app journey', () => {
       'GET /api/v1/notes',
       'POST /api/v1/authn/tenant/switch',
       'GET /api/v1/notes',
-      'GET /api/config/public',
+      'GET /api/v1/config/public',
       'POST /api/v1/authn/tenant/switch',
       'GET /api/v1/notes',
-      'GET /api/config/public',
+      'GET /api/v1/config/public',
       'GET /api/v1/authn/sessions',
       'GET /api/v1/authn/login-history?limit=20',
       'GET /api/v1/authn/identities',
@@ -611,7 +611,7 @@ describe('the app journey', () => {
     expect(configGets(rig)).toBe(1)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}`)
     expect(trace).toEqual([
-      'GET /api/config/public',
+      'GET /api/v1/config/public',
       'POST /api/v1/authn/login/password',
       'GET /api/v1/notes',
       'POST /api/v1/notes',
@@ -648,7 +648,7 @@ describe('the app journey', () => {
     expect(configGets(rig)).toBe(1)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}`)
     expect(trace).toEqual([
-      'GET /api/config/public',
+      'GET /api/v1/config/public',
       'POST /api/v1/authn/login/password',
       'GET /api/v1/notes',
     ])

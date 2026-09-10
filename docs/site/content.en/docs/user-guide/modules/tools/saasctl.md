@@ -153,7 +153,7 @@ wiring; `config.go` is shared verbatim — and two tokens,
 path), are substituted at materialisation.
 
 The boot defaults: standalone mode, SQLite `app.db`, port 8080.
-`/healthz` and `/api/config/public` answer 200 and registering answers
+`/healthz` and `/api/v1/config/public` answer 200 and registering answers
 201, but a password sign-in cannot succeed on the skeleton as shipped:
 there is no membership store, and authn's nil host-injected
 `MembershipReader` fails closed — both a wrong and a correct password

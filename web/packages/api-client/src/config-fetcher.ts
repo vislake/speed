@@ -9,9 +9,19 @@
  *
  * The path constants mirror go/config's own PathPublic /
  * PathSystemFeatures exactly. No OpenAPI fragment exists for either
- * endpoint, so no generator keeps these two constants and the two
+ * endpoint yet, so no generator keeps these two constants and the two
  * response shapes in sync with the backend -- a real, hand-maintained
  * seam, not an oversight.
+ *
+ * The generated operations an OpenAPI fragment would produce are the
+ * intended primary call surface for these endpoints; this module stays the
+ * mapping layer over them either way, because the generated type for the
+ * public-config body can only be a record of dynamic keys -- the config
+ * schema is extensible per module, so the per-key typing the hooks below
+ * expose cannot come from a generated type. A consumer of the endpoints
+ * should therefore keep calling these fetchers (and the hooks built on
+ * them) rather than a generated operation, and a generated operation, once
+ * it exists, must agree with the constants here on the two paths.
  */
 
 import type { RequestFn, RequestOptions } from './client.js'
@@ -21,13 +31,13 @@ import type { RequestFn, RequestOptions } from './client.js'
  * server-side from the request host, falling back to platform defaults
  * rather than erroring when nothing matches.
  */
-export const CONFIG_PUBLIC_PATH = '/api/config/public'
+export const CONFIG_PUBLIC_PATH = '/api/v1/config/public'
 
 /**
  * Mirrors go/config.PathSystemFeatures. Same method/pre-auth/tenant-
  * resolution contract as CONFIG_PUBLIC_PATH.
  */
-export const SYSTEM_FEATURES_PATH = '/api/system/features'
+export const SYSTEM_FEATURES_PATH = '/api/v1/config/features'
 
 /**
  * The wire shape of a GET {@link CONFIG_PUBLIC_PATH} response. `config`

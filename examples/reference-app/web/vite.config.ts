@@ -32,8 +32,8 @@
  * Proxy: the app talks to the same origin it is served from (the api
  * client's baseUrl is window.location.origin -- main.tsx), and every
  * path it uses sits under /api: the generated operations under
- * /api/v1/* plus the two pre-auth config endpoints /api/config/public
- * and /api/system/features (@speed/api-client's fetchPublicConfig /
+ * /api/v1/* plus the two pre-auth config endpoints /api/v1/config/public
+ * and /api/v1/config/features (@speed/api-client's fetchPublicConfig /
  * fetchSystemFeatures). In dev those calls proxy to the reference-app
  * backend, defaulting to its own default port (internal/app/server.go's
  * DefaultPort; PORT=8080 in the app's .env.example) and overridable

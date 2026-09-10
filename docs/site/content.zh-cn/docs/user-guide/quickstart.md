@@ -97,7 +97,7 @@ go run .
 migrate` 是同一步骤的运维方手动版本,适合想在第一次启动前就把 schema
 准备好的场景;先 CLI 后启动与只靠启动两条路结果一致。
 
-骨架一启动就有两个可依赖的应答:`/healthz` 与 `/api/config/public`
+骨架一启动就有两个可依赖的应答:`/healthz` 与 `/api/v1/config/public`
 返回 200,经 `/api/v1/authn/register` 注册账号返回 201。密码登录在
 生成的骨架上不可能成功:它没有成员存储,而 authn 契约在每次登录时都
 通过宿主注入的 `MembershipReader` 复核租户成员关系——reader 为 nil

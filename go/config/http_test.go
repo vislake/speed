@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,7 +24,12 @@ import (
 // fallback (custom domain to platform defaults, never an error), the public
 // snapshot's wire shape (canonical durations, no Sensitive key, features as
 // an array even when empty), the GET/HEAD-only method contract with its
-// Allow header, and the service-not-attached window's structured error.
+// Allow header, the service-not-attached window's structured error, the
+// per-address rate-limit budget (spent by either endpoint, refused with the
+// module's own error shape, failing closed on a store that cannot answer),
+// the endpoints' wire paths, and the caching contract every response
+// declares -- a one-minute public freshness lifetime on a successful answer,
+// no-store on every refusal.
 
 // httpTestDBSeq numbers the in-memory SQLite databases this file's tests
 // open, so parallel or repeated runs never share one.
@@ -75,13 +82,15 @@ func mountRoutes(reg *pkgcore.Registry) *http.ServeMux {
 }
 
 // newHTTPHarnessWithItems registers (with the given item/flag schema) and
-// attaches a config module over an in-memory configs table, and returns the
-// attached service -- so tests can write rows the way the platform writes
-// them -- and the mounted mux the requests hit.
-func newHTTPHarnessWithItems(t *testing.T, resolver tenancy.Resolver, items []pkgcore.ConfigItem, flags []pkgcore.FeatureFlag) (*Service, *http.ServeMux) {
+// attaches a config module over an in-memory configs table and the given
+// KVStore -- the pre-auth rate-limit check's backend, so a test can hand
+// the module a store that misbehaves -- and returns the attached service,
+// so tests can write rows the way the platform writes them, and the
+// mounted mux the requests hit.
+func newHTTPHarnessWithItems(t *testing.T, resolver tenancy.Resolver, items []pkgcore.ConfigItem, flags []pkgcore.FeatureFlag, kv pkgcore.KVStore) (*Service, *http.ServeMux) {
 	t.Helper()
 	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), kv, pkgcore.NewConsoleMailer())
 	if err := reg.Config.Add(items...); err != nil {
 		t.Fatalf("reg.Config.Add: %v", err)
 	}
@@ -104,10 +113,11 @@ func newHTTPHarnessWithItems(t *testing.T, resolver tenancy.Resolver, items []pk
 }
 
 // newHTTPHarness is newHTTPHarnessWithItems over the shared item/flag
-// schema, the common case for the endpoint tests.
+// schema and a working in-memory KVStore, the common case for the endpoint
+// tests.
 func newHTTPHarness(t *testing.T, resolver tenancy.Resolver) (*Service, *http.ServeMux) {
 	t.Helper()
-	return newHTTPHarnessWithItems(t, resolver, serviceTestSchemaItems, serviceTestSchemaFlags)
+	return newHTTPHarnessWithItems(t, resolver, serviceTestSchemaItems, serviceTestSchemaFlags, pkgcore.NewMemoryKVStore())
 }
 
 // httpResponse pairs a recorder with its body bytes for the assertions
@@ -119,8 +129,23 @@ type httpResponse struct {
 
 func doRequest(t *testing.T, mux *http.ServeMux, method, path, host string) httpResponse {
 	t.Helper()
+	return doRequestFromIP(t, mux, method, path, host, defaultTestRemoteAddr)
+}
+
+// defaultTestRemoteAddr is the source address httptest.NewRequest stamps on
+// every request it builds (TEST-NET-1). Tests that need distinct rate-limit
+// budgets pass their own.
+const defaultTestRemoteAddr = "192.0.2.1:1234"
+
+// doRequestFromIP is doRequest with an explicit direct-connection address,
+// which is what the pre-auth rate-limit budget is keyed on: a test spending
+// one address's budget passes one value here, and a test proving another
+// address is unaffected passes another.
+func doRequestFromIP(t *testing.T, mux *http.ServeMux, method, path, host, remoteAddr string) httpResponse {
+	t.Helper()
 	req := httptest.NewRequest(method, path, nil)
 	req.Host = host
+	req.RemoteAddr = remoteAddr
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return httpResponse{recorder: rec, body: rec.Body.Bytes()}
@@ -140,14 +165,21 @@ func decodeBody(t *testing.T, resp httpResponse, out any) {
 	}
 }
 
-func decodeErrorCode(t *testing.T, resp httpResponse) string {
+// decodeErrorEnvelope returns the whole structured refusal body, so a test
+// can assert on the params a denial carries and not only on its code.
+func decodeErrorEnvelope(t *testing.T, resp httpResponse) errorEnvelope {
 	t.Helper()
 	var envelope errorEnvelope
 	decodeBody(t, resp, &envelope)
 	if envelope.Code == nil {
 		t.Fatalf("error response carries no code: %s", resp.body)
 	}
-	return *envelope.Code
+	return envelope
+}
+
+func decodeErrorCode(t *testing.T, resp httpResponse) string {
+	t.Helper()
+	return *decodeErrorEnvelope(t, resp).Code
 }
 
 func TestHTTP_Public_ResolvesTheTenantOverridesByHost(t *testing.T) {
@@ -215,7 +247,7 @@ func TestHTTP_Public_OmitsAPublicItemWithNoValueAnywhere(t *testing.T) {
 		{Key: "brand.site_name", Type: "string", Default: "Smile Studio", Public: true, Description: "The tenant's display name", Group: "brand"},
 		{Key: "brand.support_phone", Type: "string", Public: true, Description: "The tenant's support phone", Group: "brand"},
 	}
-	svc, mux := newHTTPHarnessWithItems(t, staticHostResolver{"studio-a.example.com": "tenant-a"}, items, nil)
+	svc, mux := newHTTPHarnessWithItems(t, staticHostResolver{"studio-a.example.com": "tenant-a"}, items, nil, pkgcore.NewMemoryKVStore())
 
 	resp := doRequest(t, mux, http.MethodGet, PathPublic, "studio-a.example.com")
 	if resp.recorder.Code != http.StatusOK {
@@ -393,5 +425,153 @@ func TestHTTP_Endpoints_ReportTheServiceNotAttachedWindow(t *testing.T) {
 		if code := decodeErrorCode(t, resp); code != ErrServiceNotAttached.Code {
 			t.Fatalf("GET %s before Attach error code = %q, want %q", path, code, ErrServiceNotAttached.Code)
 		}
+	}
+}
+
+// TestHTTP_PreAuthEndpoints_ServeUnderTheModuleScopedVersionedPrefix pins
+// the endpoints' wire identity. These strings are the actual contract: a
+// host's allowlist reaches them through the exported constants, and a
+// browser or a frontend path mirror addresses them literally, so the
+// versioned, module-scoped prefix is asserted here next to the constants
+// that carry it.
+func TestHTTP_PreAuthEndpoints_ServeUnderTheModuleScopedVersionedPrefix(t *testing.T) {
+	if PathPublic != "/api/v1/config/public" {
+		t.Fatalf("PathPublic = %q, want %q", PathPublic, "/api/v1/config/public")
+	}
+	if PathSystemFeatures != "/api/v1/config/features" {
+		t.Fatalf("PathSystemFeatures = %q, want %q", PathSystemFeatures, "/api/v1/config/features")
+	}
+	for _, path := range []string{PathPublic, PathSystemFeatures} {
+		if !strings.HasPrefix(path, "/api/v1/config/") {
+			t.Fatalf("path %q is outside the module's versioned prefix %q", path, "/api/v1/config/")
+		}
+	}
+}
+
+func TestHTTP_PreAuthEndpoints_RefuseOnceTheAddressBudgetIsSpent(t *testing.T) {
+	_, mux := newHTTPHarness(t, nil)
+	const spent = "203.0.113.7:5555"
+
+	// Fill the address's budget, alternating endpoints: both draw on one
+	// key, so a client cannot split its budget in two by fetching the
+	// snapshot and the flag list as separate requests.
+	for i := 0; i < preAuthPerIPRate; i++ {
+		path := PathPublic
+		if i%2 == 1 {
+			path = PathSystemFeatures
+		}
+		resp := doRequestFromIP(t, mux, http.MethodGet, path, "studio-a.example.com", spent)
+		if resp.recorder.Code != http.StatusOK {
+			t.Fatalf("request %d/%d (GET %s) = %d, want 200 inside the budget (body: %s)",
+				i+1, preAuthPerIPRate, path, resp.recorder.Code, resp.body)
+		}
+	}
+
+	// The request that pushes the address over its budget is the one
+	// refused, on either endpoint, with the module's own error shape: the
+	// dimension that tripped, the window's recovery time, and a refusal
+	// that is not cacheable.
+	for _, path := range []string{PathPublic, PathSystemFeatures} {
+		resp := doRequestFromIP(t, mux, http.MethodGet, path, "studio-a.example.com", spent)
+		if resp.recorder.Code != http.StatusTooManyRequests {
+			t.Fatalf("GET %s past the budget = %d, want 429 (body: %s)", path, resp.recorder.Code, resp.body)
+		}
+		envelope := decodeErrorEnvelope(t, resp)
+		if *envelope.Code != ErrRateLimited.Code {
+			t.Fatalf("GET %s past the budget error code = %q, want %q", path, *envelope.Code, ErrRateLimited.Code)
+		}
+		if dimension := envelope.Params["dimension"]; dimension != "ip" {
+			t.Fatalf("GET %s past the budget reported dimension %v, want %q", path, dimension, "ip")
+		}
+		if retry, ok := envelope.Params["retry_after_seconds"].(float64); !ok || retry <= 0 {
+			t.Fatalf("GET %s past the budget reported retry_after_seconds %v, want a positive whole-second wait",
+				path, envelope.Params["retry_after_seconds"])
+		}
+		if cc := resp.recorder.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("GET %s past the budget Cache-Control = %q, want %q", path, cc, "no-store")
+		}
+	}
+
+	// The budget belongs to the address that spent it: another caller's
+	// requests are unaffected, which is the property that keeps one
+	// over-budget address from holding anyone else hostage.
+	resp := doRequestFromIP(t, mux, http.MethodGet, PathPublic, "studio-a.example.com", "198.51.100.9:5555")
+	if resp.recorder.Code != http.StatusOK {
+		t.Fatalf("GET %s from a second address = %d, want 200 (body: %s)", PathPublic, resp.recorder.Code, resp.body)
+	}
+}
+
+// errKVStore is a KVStore whose write path always fails: the rate-limit
+// check's store round trip is the first thing the limiter performs, so this
+// is exactly a limiter that cannot answer. Every other method delegates to
+// a working in-memory store, keeping the failure the limiter's own.
+type errKVStore struct {
+	pkgcore.KVStore
+	err error
+}
+
+func (s errKVStore) IncrByFloatWithTTL(context.Context, string, float64, time.Duration) (float64, error) {
+	return 0, s.err
+}
+
+func TestHTTP_PreAuthEndpoints_FailClosedWhenTheStoreCannotAnswer(t *testing.T) {
+	// A limiter that cannot answer must never read as "allow". The check is
+	// the only throttle these endpoints have, so a store outage that opened
+	// the gate would leave exactly the request volume it bounds unguarded
+	// for the outage's duration: the caller gets the module's internal
+	// error and no answer.
+	_, mux := newHTTPHarnessWithItems(t, nil, serviceTestSchemaItems, serviceTestSchemaFlags,
+		errKVStore{KVStore: pkgcore.NewMemoryKVStore(), err: errors.New("kvstore is down")})
+
+	for _, path := range []string{PathPublic, PathSystemFeatures} {
+		resp := doRequest(t, mux, http.MethodGet, path, "anything.example.com")
+		if resp.recorder.Code != http.StatusInternalServerError {
+			t.Fatalf("GET %s with a failing limiter store = %d, want 500 (body: %s)", path, resp.recorder.Code, resp.body)
+		}
+		if code := decodeErrorCode(t, resp); code != ErrStorage.Code {
+			t.Fatalf("GET %s with a failing limiter store error code = %q, want %q", path, code, ErrStorage.Code)
+		}
+		if cc := resp.recorder.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("GET %s with a failing limiter store Cache-Control = %q, want %q", path, cc, "no-store")
+		}
+	}
+}
+
+// TestHTTP_PreAuthEndpoints_DeclareTheCachingContract asserts the header
+// half of the module's caching decision: a successful answer on either
+// endpoint, for either admitted method, declares exactly the pinned
+// freshness lifetime and the host dimension the answer varies on, while a
+// refusal says the opposite -- a cached 429 would keep refusing past the
+// window it announced, and a cached 405 or 500 would hide recovery.
+func TestHTTP_PreAuthEndpoints_DeclareTheCachingContract(t *testing.T) {
+	_, mux := newHTTPHarness(t, nil)
+	if publicCacheMaxAge <= 0 || publicCacheMaxAgeSeconds <= 0 {
+		t.Fatalf("the pinned freshness lifetime must be positive, got %v (%d whole seconds)",
+			publicCacheMaxAge, publicCacheMaxAgeSeconds)
+	}
+	wantCacheControl := fmt.Sprintf("public, max-age=%d", publicCacheMaxAgeSeconds)
+
+	for _, path := range []string{PathPublic, PathSystemFeatures} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			resp := doRequest(t, mux, method, path, "studio-a.example.com")
+			if resp.recorder.Code != http.StatusOK {
+				t.Fatalf("%s %s = %d, want 200", method, path, resp.recorder.Code)
+			}
+			if cc := resp.recorder.Header().Get("Cache-Control"); cc != wantCacheControl {
+				t.Fatalf("%s %s Cache-Control = %q, want %q", method, path, cc, wantCacheControl)
+			}
+			if vary := resp.recorder.Header().Get("Vary"); vary != "Host" {
+				t.Fatalf("%s %s Vary = %q, want %q (the answer is resolved for the request's host)",
+					method, path, vary, "Host")
+			}
+		}
+	}
+
+	resp := doRequest(t, mux, http.MethodPost, PathPublic, "studio-a.example.com")
+	if resp.recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST %s = %d, want 405", PathPublic, resp.recorder.Code)
+	}
+	if cc := resp.recorder.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("POST %s Cache-Control = %q, want %q for a method refusal", PathPublic, cc, "no-store")
 	}
 }

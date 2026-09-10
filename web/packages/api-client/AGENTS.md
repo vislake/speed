@@ -113,7 +113,13 @@ HTTP through it.
 `src/config-fetcher.ts` -- typed wrappers around go/config's two
 pre-auth endpoints (`PathPublic` / `PathSystemFeatures`), built on the
 `RequestFn` seam above. Both path constants are hand-kept in sync with
-the Go side (no OpenAPI fragment exists for these endpoints). Neither
+the Go side (no OpenAPI fragment exists for these endpoints yet). The
+generated operations an OpenAPI fragment would produce are the intended
+primary call surface for those endpoints; these wrappers remain the
+per-key mapping layer over them, because the generated type for the
+public-config body can only be a record of dynamic keys -- the per-key
+typing the hooks expose cannot come from generation. A generated
+operation must agree with the two constants here on the paths. Neither
 function accepts a tenant argument -- the endpoints carry no tenant on the
 wire: which tenant (if any) the request maps to is the server host's own
 wiring, through go/config's host-injected request-to-tenant resolver (the
@@ -134,7 +140,7 @@ consumer of a given `api` starts the one fetch, every other instance
 backed by the same `api` reads and re-renders off that shared state,
 and `refresh()` republishes a forced refetch to all of them.
 `useFeature` composes on `usePublicConfig`'s cache rather than calling
-`/api/system/features` itself, and returns `false` (never throws)
+`/api/v1/config/features` itself, and returns `false` (never throws)
 while loading or on error. Neither hook does fallback-to-defaults
 detection, tenant-switch revalidation, or auto-polling -- see
 `src/react.ts`'s header comment for why each is a deliberate

@@ -106,8 +106,8 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
   enablement list to the frontend. Consumption semantics are the
   consuming modules' job — this module answers what is enabled.
 - **Endpoints** — two pre-auth GET/HEAD endpoints at the exported
-  `PathPublic` (`/api/config/public`) and `PathSystemFeatures`
-  (`/api/system/features`) constants, named by hosts in their
+  `PathPublic` (`/api/v1/config/public`) and `PathSystemFeatures`
+  (`/api/v1/config/features`) constants, named by hosts in their
   tenant-middleware allowlists. Both resolve the request's tenant
   through the host-wired `tenancy.Resolver` and fall back to platform
   defaults — never an error — because a login page that fails to

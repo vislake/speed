@@ -94,7 +94,7 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
   `EnabledFlags` 把开启列表喂给前端。消费语义(「被禁功能答 404,
   不答 403」)是各消费模块的职责——本模块只回答什么开着,别无其他。
 - **端点**——两个预认证 GET/HEAD 端点挂在导出的 `PathPublic`
-  (`/api/config/public`)与 `PathSystemFeatures`(`/api/system/features`)
+  (`/api/v1/config/public`)与 `PathSystemFeatures`(`/api/v1/config/features`)
   常量上,宿主在租户中间件 allowlist 里指名它们。两者经宿主接线的
   `tenancy.Resolver` 解析请求租户,查不到即回落平台默认值——绝不
   报错,因为渲染不出来的登录页才是最糟的失败模式。一个未设值或损坏

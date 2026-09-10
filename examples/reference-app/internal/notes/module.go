@@ -110,7 +110,7 @@ const (
 
 // ConfigKeyBrandSiteName is the public, tenant-overridable display name a
 // tenant's own frontend shows (the white-label brand). It is
-// Public so the unauthenticated /api/config/public endpoint may serve it,
+// Public so the unauthenticated /api/v1/config/public endpoint may serve it,
 // and it defaults to the app's own name.
 const ConfigKeyBrandSiteName = "brand.site_name"
 

@@ -76,7 +76,7 @@ export async function loadNotes(): Promise<Note[]> {
 ## Config hooks (`@speed/api-client/react`)
 
 `usePublicConfig` and `useFeature` read go/config's two pre-auth
-endpoints -- `/api/config/public` and `/api/system/features` -- behind
+endpoints -- `/api/v1/config/public` and `/api/v1/config/features` -- behind
 the isolated `./react` subpath, so the main entry above stays free of
 a React dependency. Build `api` once (a module-scope singleton, or a
 value memoized for the app's lifetime) and pass that same reference
@@ -155,13 +155,18 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   route change, a retry) recovers without calling `refresh()`.
 - **`useFeature(api, key)`** returns a plain `boolean`, composed on
   `usePublicConfig`'s cache rather than a second request to
-  `/api/system/features` -- `false` while loading and on error, never
+  `/api/v1/config/features` -- `false` while loading and on error, never
   throwing, so a consumer such as a `NavItem`'s `requiredFeature` field
   stays hidden until the flag is confirmed on rather than flashing.
   The `features` access is null-guarded defensively: the response
-  shape is a hand-maintained seam with no spec fragment behind it, so
+  shape is a hand-maintained seam with no spec fragment behind it yet, so
   a payload whose `features` is absent or `null` reads as "nothing
-  enabled" rather than throwing during render.
+  enabled" rather than throwing during render. Once an OpenAPI fragment
+  for these endpoints lands, the generated operations become the primary
+  call surface while this hook (and the fetchers under it) stay as the
+  per-key layer: a generated type for the public-config body can only be
+  a record of dynamic keys, so the flag lookup the hook performs cannot
+  come from generation.
   `fetchSystemFeatures` (above) remains the direct route to that
   endpoint for a caller that genuinely wants it standalone.
 - Neither hook accepts or infers a tenant -- both endpoints resolve
@@ -283,7 +288,7 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 | `Reporter` / `createConsoleReporter()` | type / function | The diagnostics seam and its console-backed default. |
 | `fetchPublicConfig(api, options?)` | function | GETs `CONFIG_PUBLIC_PATH` (go/config's `PathPublic`); resolves `PublicConfigResponse`. |
 | `fetchSystemFeatures(api, options?)` | function | GETs `SYSTEM_FEATURES_PATH` (go/config's `PathSystemFeatures`); resolves `SystemFeaturesResponse`. |
-| `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings, hand-kept in sync with go/config (no spec fragment exists yet). |
+| `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings (`/api/v1/config/public`, `/api/v1/config/features`), hand-kept in sync with go/config (no spec fragment exists yet). |
 | `PublicConfigResponse` / `SystemFeaturesResponse` / `ConfigFetchOptions` | type | Wire shapes for the two fetchers above; no tenant field anywhere -- both endpoints resolve tenant server-side from the request host. |
 | `usePublicConfig(api)` *(`@speed/api-client/react`)* | hook | Fetches once per `api` identity and shares the result -- loading/error/data plus a `refresh()` -- with every other instance backed by the same `api`. See "Config hooks" above and the package `AGENTS.md` for the caching contract. |
 | `useFeature(api, key)` *(`@speed/api-client/react`)* | hook | `boolean`, composed on `usePublicConfig`'s cache -- `false` while loading and on error, never throws. |

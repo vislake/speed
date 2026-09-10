@@ -68,7 +68,7 @@ export function makeAppRig(options: DemoServerOptions = {}): RealClientRig {
  * reader, so the count staying at one is a journey property the
  * suites pin. */
 export function configGets(rig: RealClientRig): number {
-  return rig.calls.filter((call) => call.path === '/api/config/public').length
+  return rig.calls.filter((call) => call.path === '/api/v1/config/public').length
 }
 
 /** A rendered AppView over app services -- the value the journey

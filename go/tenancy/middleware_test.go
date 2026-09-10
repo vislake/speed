@@ -507,7 +507,7 @@ func TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed(t *testing.
 // config.PathPublic) and WithTenantStatusResolver together -- was refused
 // with 403 tenancy.tenant_suspended despite the route's whole purpose
 // being to keep working regardless of tenant state, breaking go/config's
-// own "never an error" promise for /api/config/public.
+// own "never an error" promise for /api/v1/config/public.
 func TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceeds(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -520,14 +520,14 @@ func TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceed
 		{
 			name:            "allowlisted GET proceeds with no tenant, not 403",
 			method:          http.MethodGet,
-			path:            "/api/config/public",
+			path:            "/api/v1/config/public",
 			wantHandlerCall: true,
 			wantStatus:      http.StatusOK,
 		},
 		{
 			name:            "same path, unallowlisted method, still refused",
 			method:          http.MethodPost,
-			path:            "/api/config/public",
+			path:            "/api/v1/config/public",
 			wantHandlerCall: false,
 			wantStatus:      http.StatusForbidden,
 			wantCode:        ErrTenantSuspended.Code,
@@ -548,7 +548,7 @@ func TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceed
 			resolver := &stubStatusResolver{statuses: map[pkgcore.TenantID]TenantStatus{"acme": TenantStatusSuspended}}
 			mw := Middleware(
 				stubResolver{tenant: "acme"},
-				WithAllowlist(http.MethodGet, "/api/config/public"),
+				WithAllowlist(http.MethodGet, "/api/v1/config/public"),
 				WithTenantStatusResolver(resolver),
 			)
 

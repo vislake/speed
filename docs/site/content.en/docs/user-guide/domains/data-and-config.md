@@ -77,8 +77,8 @@ a system-tier write requires the audited system context. Sensitive
 values are sealed with your `dbkit.Cipher` and redacted everywhere a
 boundary would leak them — events, logs, watch deliveries.
 
-The two pre-auth endpoints — `/api/config/public` (public items only)
-and `/api/system/features` (the resolved enabled-flag list) — serve the
+The two pre-auth endpoints — `/api/v1/config/public` (public items only)
+and `/api/v1/config/features` (the resolved enabled-flag list) — serve the
 login page and the frontend's channel visibility. Name them in your
 tenant middleware's allowlist via the exported `PathPublic` and
 `PathSystemFeatures` constants.

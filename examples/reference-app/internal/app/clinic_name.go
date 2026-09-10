@@ -28,7 +28,7 @@ import (
 // platform module fragments generate into @speed/api-sdk and the app's
 // own fragments into the app-owned SDK (src/app-api), while this
 // app-owned answer is in neither: it simply belongs to the host,
-// exactly like /api/config/public's host-side resolution. The web
+// exactly like /api/v1/config/public's host-side resolution. The web
 // reaches it through the app's own api-client RequestFn
 // (src/tenant-name.ts), the same transport every other app request
 // rides.

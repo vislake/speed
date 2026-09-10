@@ -232,9 +232,13 @@ export function usePublicConfig(api: RequestFn): UsePublicConfigResult {
 /**
  * Whether feature `key` is enabled for the tenant `api` resolves to.
  * Composes on {@link usePublicConfig}'s shared cache rather than
- * calling `/api/system/features` separately, so using both hooks
+ * calling `/api/v1/config/features` separately, so using both hooks
  * together costs one fetch, not two -- a caller that genuinely wants
  * only the lighter endpoint can call `fetchSystemFeatures` directly.
+ * That preference is also the one to keep once an OpenAPI fragment for
+ * the endpoints lands: the generated operation for the public-config
+ * body types it as a record of dynamic keys, so the per-key layer the
+ * hooks expose here stays hand-written (config-fetcher.ts's header).
  *
  * Returns `false` while loading and on error -- never throws -- so a
  * consumer such as a NavItem's `requiredFeature` stays hidden until

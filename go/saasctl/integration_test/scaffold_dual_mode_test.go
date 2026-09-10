@@ -207,7 +207,7 @@ func runDBMigrateWithEnv(t *testing.T, modPath, dbPath string, extraEnv []string
 
 // smokeBoot boots binPath as a subprocess with APP_DB_PATH=dbPath plus
 // extraEnv, waits for /healthz to answer 200, issues one real smoke request
-// against /api/config/public and one against the authn register endpoint
+// against /api/v1/config/public and one against the authn register endpoint
 // (proving the composed authn+tenancy chain actually answers, not merely
 // that the process is listening), then stops it gracefully with SIGTERM and
 // requires a clean exit -- mirroring examples/reference-app/integration_test/
@@ -267,13 +267,13 @@ func smokeBoot(t *testing.T, binPath, dbPath string, extraEnv []string) {
 		t.Fatalf("%s never answered GET /healthz within 30s\nstdout:\n%s\nstderr:\n%s", binPath, stdout.String(), stderr.String())
 	}
 
-	resp, err := httpClient.Get(baseURL + "/api/config/public")
+	resp, err := httpClient.Get(baseURL + "/api/v1/config/public")
 	if err != nil {
-		t.Fatalf("GET /api/config/public: %v", err)
+		t.Fatalf("GET /api/v1/config/public: %v", err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /api/config/public = %d, want 200\nstdout:\n%s\nstderr:\n%s", resp.StatusCode, stdout.String(), stderr.String())
+		t.Errorf("GET /api/v1/config/public = %d, want 200\nstdout:\n%s\nstderr:\n%s", resp.StatusCode, stdout.String(), stderr.String())
 	}
 
 	registerBody := strings.NewReader(`{"email":"scaffold-verify@example.com","password":"CorrectHorseBatteryStaple1!"}`)
