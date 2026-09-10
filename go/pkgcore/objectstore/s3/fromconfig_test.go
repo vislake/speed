@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // TestFromConfig_BuildsTheStoreAndDeclaresTheCapabilities drives the
@@ -24,6 +26,11 @@ func TestFromConfig_BuildsTheStoreAndDeclaresTheCapabilities(t *testing.T) {
 	if caps != Capabilities {
 		t.Errorf("FromConfig capabilities = %v, want the exported Capabilities constant %v", caps, Capabilities)
 	}
+
+	// The returned pair must be exactly what the injection path takes; this
+	// line is the compile-time half of the contract (WithObjectStore returns
+	// the option without applying it, so nothing runs here).
+	_ = pkgcore.WithObjectStore(store, caps)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

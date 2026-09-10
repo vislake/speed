@@ -32,6 +32,11 @@ func TestFromAddr_BuildsAUsableBusAndDeclaresTheCapabilities(t *testing.T) {
 		t.Errorf("FromAddr capabilities = %v, want the exported Capabilities constant %v", caps, Capabilities)
 	}
 
+	// The returned pair must be exactly what the injection path takes; this
+	// line is the compile-time half of the contract (WithEventBus returns the
+	// option without applying it, so nothing runs here).
+	_ = pkgcore.WithEventBus(bus, caps)
+
 	delivered := 0
 	bus.Subscribe("note.created", func(context.Context, pkgcore.Event) error {
 		delivered++

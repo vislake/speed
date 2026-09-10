@@ -7,6 +7,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // TestFromAddr_BuildsAUsableStoreAndDeclaresTheCapabilities drives the
@@ -30,6 +32,11 @@ func TestFromAddr_BuildsAUsableStoreAndDeclaresTheCapabilities(t *testing.T) {
 	if caps != Capabilities {
 		t.Errorf("FromAddr capabilities = %v, want the exported Capabilities constant %v", caps, Capabilities)
 	}
+
+	// The returned pair must be exactly what the injection path takes; this
+	// line is the compile-time half of the contract (WithKVStore returns the
+	// option without applying it, so nothing runs here).
+	_ = pkgcore.WithKVStore(store, caps)
 
 	ctx := context.Background()
 	err = store.Set(ctx, "billing:invoice:1042", []byte("open"), 0)
