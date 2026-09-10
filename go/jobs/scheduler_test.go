@@ -479,6 +479,11 @@ func TestScheduler_Stop_HaltsTicking(t *testing.T) {
 	}
 }
 
+// TestNewScheduler_DefaultsAndOptionValidation pins the construction
+// defaults and the scheduler options' refusal contract: every invalid
+// value is refused at option time with the coded panic the option's own
+// doc comment names -- jobs.queue_nil, jobs.schedules_nil,
+// jobs.tenant_lister_nil, jobs.schedule_interval_zero.
 func TestNewScheduler_DefaultsAndOptionValidation(t *testing.T) {
 	s := NewScheduler(&recordingQueue{})
 	if s.interval != DefaultScheduleInterval {
@@ -490,22 +495,18 @@ func TestNewScheduler_DefaultsAndOptionValidation(t *testing.T) {
 
 	tests := []struct {
 		name  string
+		code  string
 		build func()
 	}{
-		{"nil queue", func() { NewScheduler(nil) }},
-		{"nil schedules registrar", func() { NewScheduler(&recordingQueue{}, WithSchedules(nil)) }},
-		{"nil tenant lister", func() { NewScheduler(&recordingQueue{}, WithTenantLister(nil)) }},
-		{"zero interval", func() { NewScheduler(&recordingQueue{}, WithInterval(0)) }},
-		{"negative interval", func() { NewScheduler(&recordingQueue{}, WithInterval(-time.Second)) }},
+		{"nil queue", "jobs.queue_nil", func() { NewScheduler(nil) }},
+		{"nil schedules registrar", "jobs.schedules_nil", func() { WithSchedules(nil) }},
+		{"nil tenant lister", "jobs.tenant_lister_nil", func() { WithTenantLister(nil) }},
+		{"zero interval", "jobs.schedule_interval_zero", func() { WithInterval(0) }},
+		{"negative interval", "jobs.schedule_interval_zero", func() { WithInterval(-time.Second) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("NewScheduler with %s did not panic", tt.name)
-				}
-			}()
-			tt.build()
+			assertOptionPanics(t, tt.code, tt.build)
 		})
 	}
 }

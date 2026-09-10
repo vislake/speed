@@ -10,6 +10,7 @@ import (
 
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // DefaultScheduleInterval is the tick granularity a Scheduler uses when no
@@ -47,16 +48,26 @@ type TenantLister interface {
 }
 
 // SchedulerOption configures a Scheduler before it starts.
+//
+// Every construction option in this module follows ONE rule, stated once
+// on Option's doc comment (standalone_queue.go): an invalid value -- one
+// this scheduler cannot honour -- is refused at option time with a coded
+// panic (an *apperr.Error carrying the code each With* function's own doc
+// comment names), never accepted and silently reinterpreted. Each option
+// below states its exact rule and why the value it rejects is
+// unhonourable.
 type SchedulerOption func(*Scheduler)
 
 // WithSchedules wires the seat the Scheduler reads its declarations from --
 // normally the bootstrapped Registry's Schedules registrar. Declarations
-// are read once, at Start.
+// are read once, at Start. A nil registrar is refused at option time with
+// a coded panic (jobs.schedules_nil): a scheduler wired to nothing would
+// silently schedule nothing, hiding a wiring mistake.
 func WithSchedules(schedules pkgcore.PeriodicTaskRegistrar) SchedulerOption {
+	if schedules == nil {
+		panic(apperr.Invalid("jobs.schedules_nil"))
+	}
 	return func(s *Scheduler) {
-		if schedules == nil {
-			panic("jobs: WithSchedules requires a non-nil pkgcore.PeriodicTaskRegistrar: a nil value would silently schedule nothing, hiding a wiring mistake")
-		}
 		s.schedules = schedules
 	}
 }
@@ -64,12 +75,15 @@ func WithSchedules(schedules pkgcore.PeriodicTaskRegistrar) SchedulerOption {
 // WithTenantLister wires the lister the Scheduler expands PerTenant
 // declarations through. Without it, Start refuses a declaration set
 // containing any PerTenant declaration (ErrTenantListerRequired) rather
-// than silently scheduling none of them.
+// than silently scheduling none of them. A nil lister is refused at option
+// time with a coded panic (jobs.tenant_lister_nil): it would silently skip
+// every per-tenant declaration, the same wiring mistake the Start refusal
+// exists to name.
 func WithTenantLister(lister TenantLister) SchedulerOption {
+	if lister == nil {
+		panic(apperr.Invalid("jobs.tenant_lister_nil"))
+	}
 	return func(s *Scheduler) {
-		if lister == nil {
-			panic("jobs: WithTenantLister requires a non-nil TenantLister: a nil value would silently skip every per-tenant declaration, hiding a wiring mistake")
-		}
 		s.lister = lister
 	}
 }
@@ -77,12 +91,16 @@ func WithTenantLister(lister TenantLister) SchedulerOption {
 // WithInterval overrides DefaultScheduleInterval: the tick granularity of
 // the Scheduler's loop. It does not change any declaration's window -- the
 // window is the declaration's own Every -- it only decides how often the
-// scheduler asks. A non-positive duration panics.
+// scheduler asks. A non-positive duration is refused at option time with a
+// coded panic (jobs.schedule_interval_zero): the tick loop's
+// time.NewTicker would panic on it only after Start had reported success,
+// turning a wiring mistake into a process crash instead of a construction
+// refusal.
 func WithInterval(d time.Duration) SchedulerOption {
+	if d <= 0 {
+		panic(apperr.Invalid("jobs.schedule_interval_zero"))
+	}
 	return func(s *Scheduler) {
-		if d <= 0 {
-			panic("jobs: WithInterval requires a positive duration")
-		}
 		s.interval = d
 	}
 }
@@ -148,12 +166,13 @@ type Scheduler struct {
 }
 
 // NewScheduler returns a Scheduler that enqueues the declarations wired
-// through WithSchedules onto q. A nil queue panics: a scheduler without a
-// queue has nowhere to enqueue and would silently do nothing. The returned
-// scheduler does nothing until Start is called.
+// through WithSchedules onto q. A nil queue is refused with a coded panic
+// (jobs.queue_nil): a scheduler without a queue has nowhere to enqueue and
+// would silently do nothing. The returned scheduler does nothing until
+// Start is called.
 func NewScheduler(q Queue, opts ...SchedulerOption) *Scheduler {
 	if q == nil {
-		panic("jobs: NewScheduler requires a non-nil Queue")
+		panic(apperr.Invalid("jobs.queue_nil"))
 	}
 	s := &Scheduler{
 		queue:    q,

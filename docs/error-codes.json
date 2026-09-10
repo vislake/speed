@@ -2126,6 +2126,15 @@
       "status": 400
     },
     {
+      "code": "jobs.queue_nil",
+      "file": "go/jobs/scheduler.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 175,
+      "module": "jobs",
+      "status": 400
+    },
+    {
       "code": "jobs.queue_weight_zero",
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
@@ -2149,6 +2158,24 @@
       "ident": "",
       "kind": "inline",
       "line": 347,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.schedule_interval_zero",
+      "file": "go/jobs/scheduler.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 101,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.schedules_nil",
+      "file": "go/jobs/scheduler.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 68,
       "module": "jobs",
       "status": 400
     },
@@ -2185,6 +2212,15 @@
       "ident": "",
       "kind": "inline",
       "line": 227,
+      "module": "jobs",
+      "status": 400
+    },
+    {
+      "code": "jobs.tenant_lister_nil",
+      "file": "go/jobs/scheduler.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 84,
       "module": "jobs",
       "status": 400
     },
