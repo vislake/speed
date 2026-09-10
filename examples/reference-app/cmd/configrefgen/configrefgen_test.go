@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -131,96 +134,6 @@ func TestConfigExampleJSONLoadsThroughTheLoader(t *testing.T) {
 	}
 }
 
-// TestBootstrapInventoryAndTableAgree runs the coverage gate the generator
-// itself runs: every env variable the app source reads has a curated table
-// row and vice versa. A new variable added to internal/app without a table
-// row fails here before the drift gate ever runs.
-func TestBootstrapInventoryAndTableAgree(t *testing.T) {
-	root := repoRootFromTest(t)
-	moduleDir := filepath.Join(root, "examples", "reference-app")
-	if _, problems, err := bootstrapRows(moduleDir); err != nil {
-		t.Fatalf("bootstrapRows: %v", err)
-	} else if len(problems) > 0 {
-		t.Fatalf("bootstrap inventory/table mismatch:\n  %s", strings.Join(problems, "\n  "))
-	}
-}
-
-// TestPlatformEnvNamesBridgeIsBijective pins the transition's bridge against
-// the declarations the composed host actually produces: every declared key is
-// bridged to exactly one variable, every bridge entry names a declared key, and
-// the pair's facts agree -- the reconciliation the generator runs before it
-// renders anything.
-func TestPlatformEnvNamesBridgeIsBijective(t *testing.T) {
-	declared, _ := composeDeclarations(t)
-
-	problems := reconcileDeclarations(declared)
-	if len(problems) > 0 {
-		t.Fatalf("the declarations and the bootstrap table disagree:\n  %s", strings.Join(problems, "\n  "))
-	}
-
-	declaredKeys := make(map[string]struct{}, len(declared))
-	for _, key := range declared {
-		declaredKeys[key.Key] = struct{}{}
-	}
-	for key, env := range platformEnvNames {
-		if _, ok := declaredKeys[key]; !ok {
-			t.Errorf("platformEnvNames bridges %s, which no composed module declares", key)
-		}
-		if _, ok := bootstrapTable[env]; !ok {
-			t.Errorf("platformEnvNames bridges %s to %s, which has no bootstrap table row", key, env)
-		}
-	}
-	if len(declaredKeys) != len(platformEnvNames) {
-		t.Errorf("the composed modules declared %d keys, the bridge maps %d; the two must cover the same set", len(declaredKeys), len(platformEnvNames))
-	}
-}
-
-// TestReconcileDeclarations_CatchesDrift is the negative control for the gate
-// above: a declaration whose facts no longer match its curated row must be
-// reported rather than rendered, in both directions.
-func TestReconcileDeclarations_CatchesDrift(t *testing.T) {
-	declared, _ := composeDeclarations(t)
-
-	t.Run("a misdeclared fact", func(t *testing.T) {
-		drifted := append([]pkgcore.BootstrapKey(nil), declared...)
-		drifted[0].Format = "string"
-		problems := reconcileDeclarations(drifted)
-		if len(problems) == 0 {
-			t.Fatal("reconcileDeclarations accepted a declaration whose format contradicts its curated row")
-		}
-		if !strings.Contains(strings.Join(problems, "\n"), drifted[0].Key) {
-			t.Errorf("problems = %v, want them to name %s", problems, drifted[0].Key)
-		}
-	})
-
-	t.Run("a declaration with no bridged variable", func(t *testing.T) {
-		extra := append(append([]pkgcore.BootstrapKey(nil), declared...), pkgcore.BootstrapKey{
-			Key:         "authn.something_new",
-			Format:      "string",
-			Description: "a key nothing bridges to a variable",
-			Group:       "authn",
-		})
-		problems := reconcileDeclarations(extra)
-		if len(problems) == 0 {
-			t.Fatal("reconcileDeclarations accepted a declared key with no bridged variable")
-		}
-		for _, want := range []string{"authn.something_new", "platformEnvNames"} {
-			if !strings.Contains(strings.Join(problems, "\n"), want) {
-				t.Errorf("problems = %v, want them to mention %s", problems, want)
-			}
-		}
-	})
-
-	t.Run("a declaration attributed to the wrong module", func(t *testing.T) {
-		misgrouped := append([]pkgcore.BootstrapKey(nil), declared...)
-		misgrouped[0].Group = "elsewhere"
-		problems := reconcileDeclarations(misgrouped)
-		if len(problems) == 0 {
-			t.Fatal("reconcileDeclarations accepted a declaration whose group is not its key's module")
-		}
-	})
-}
-
 // TestOverlappingKeys_RefusesOneKeyOnTwoLayers pins the second machine
 // defence: a bootstrap key that is also a runtime configuration item would mean
 // two things at once, so the generator must refuse to render it.
@@ -249,26 +162,95 @@ func TestSitePageTargetsTheUserGuideArea(t *testing.T) {
 	}
 }
 
-// TestEnvExampleRendersEveryKeyOnce pins the generated .env.example shape:
-// every curated row renders exactly one assignment line naming the row's
-// own variable, so the committed carrier can never silently drop a key the
-// app reads.
-func TestEnvExampleRendersEveryKeyOnce(t *testing.T) {
-	rows := make([]bootstrapVar, 0, len(bootstrapTable))
-	for env, row := range bootstrapTable {
-		row.env = env
-		rows = append(rows, row)
+// TestRenderedDeclaredKeysMatchTheCensus is the platform surface's drift gate
+// in both directions, run over the rendered artifacts themselves: every key the
+// composed modules declare appears in the Markdown, the site page and the JSON,
+// and no key appears there that the census does not declare -- so neither a
+// rendering that drops a declaration nor an artifact carrying an undeclared key
+// passes. (The committed bytes' freshness is --check's separate job; this gate
+// is about the correspondence, which no byte comparison can see.)
+func TestRenderedDeclaredKeysMatchTheCensus(t *testing.T) {
+	svc, declared, composed := composeHost(t)
+	doc, err := buildDocument(svc.Describe(), declared, composed)
+	if err != nil {
+		t.Fatalf("buildDocument: %v", err)
 	}
-	rendered := renderEnvExample(rows)
-	for _, row := range rows {
-		line := "\n" + row.env + "="
-		if !strings.Contains(rendered, line) {
-			t.Errorf(".env.example rendering is missing the %s assignment", row.env)
-		}
-		if strings.Count(rendered, line) != 1 {
-			t.Errorf(".env.example rendering assigns %s more than once", row.env)
+
+	want := make(map[string]bool, len(declared))
+	for _, key := range declared {
+		want[key.Key] = true
+	}
+	if len(want) == 0 {
+		t.Fatal("the composed host declared no bootstrap keys; the census is this gate's other side")
+	}
+
+	for _, rendered := range []struct {
+		name string
+		text string
+	}{
+		{"docs/config-reference.md", doc.renderMarkdown()},
+		{sitePagePath, doc.sitePage()},
+	} {
+		got := bootstrapSectionKeys(rendered.text)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s renders the bootstrap keys %v, want exactly the declared %v", rendered.name, sortedKeys(got), sortedKeys(want))
 		}
 	}
+
+	var payload struct {
+		Declared []struct {
+			Keys []struct {
+				Key string `json:"key"`
+			} `json:"keys"`
+		} `json:"declared_bootstrap_keys"`
+	}
+	if err := json.Unmarshal([]byte(doc.marshalJSON()), &payload); err != nil {
+		t.Fatalf("unmarshal the JSON twin: %v", err)
+	}
+	got := make(map[string]bool)
+	for _, module := range payload.Declared {
+		for _, key := range module.Keys {
+			if got[key.Key] {
+				t.Errorf("docs/config-reference.json carries %s more than once", key.Key)
+			}
+			got[key.Key] = true
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the JSON twin carries the bootstrap keys %v, want exactly the declared %v", sortedKeys(got), sortedKeys(want))
+	}
+}
+
+// bootstrapSectionKeys collects the key-path tokens of the bootstrap section's
+// rendered table rows: the first backticked cell of every "| `…` |" line
+// between the section heading and the dynamic section's heading.
+func bootstrapSectionKeys(rendered string) map[string]bool {
+	section := rendered
+	if i := strings.Index(section, "## Bootstrap configuration"); i >= 0 {
+		section = section[i:]
+	}
+	if i := strings.Index(section, "## Dynamic configuration"); i >= 0 {
+		section = section[:i]
+	}
+	keys := map[string]bool{}
+	for _, line := range strings.Split(section, "\n") {
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		if key, _, ok := strings.Cut(strings.TrimPrefix(line, "| `"), "`"); ok && key != "" {
+			keys[key] = true
+		}
+	}
+	return keys
+}
+
+func sortedKeys(keys map[string]bool) []string {
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestOutputsAreDeterministic boots the schema host twice and pins that the
@@ -276,24 +258,23 @@ func TestEnvExampleRendersEveryKeyOnce(t *testing.T) {
 // gate relies on (a nondeterministic generator could never gate anything).
 func TestOutputsAreDeterministic(t *testing.T) {
 	root := repoRootFromTest(t)
-	moduleDir := filepath.Join(root, "examples", "reference-app")
 
 	svc, declared, composed := composeHost(t)
-	doc, boot, err := buildDocument(moduleDir, svc.Describe(), declared, composed)
+	doc, err := buildDocument(svc.Describe(), declared, composed)
 	if err != nil {
 		t.Fatalf("buildDocument: %v", err)
 	}
-	first, err := renderOutputs(root, doc, boot)
+	first, err := renderOutputs(root, doc)
 	if err != nil {
 		t.Fatalf("renderOutputs: %v", err)
 	}
 
 	svc2, declared2, composed2 := composeHost(t)
-	doc2, boot2, err := buildDocument(moduleDir, svc2.Describe(), declared2, composed2)
+	doc2, err := buildDocument(svc2.Describe(), declared2, composed2)
 	if err != nil {
 		t.Fatalf("second buildDocument: %v", err)
 	}
-	second, err := renderOutputs(root, doc2, boot2)
+	second, err := renderOutputs(root, doc2)
 	if err != nil {
 		t.Fatalf("second renderOutputs: %v", err)
 	}
@@ -315,10 +296,8 @@ func TestOutputsAreDeterministic(t *testing.T) {
 // the generated page: Hugo front matter as the first bytes, and the tables the
 // reference renders, so the page is the reference rather than a pointer to it.
 func TestSitePageCarriesFrontMatter(t *testing.T) {
-	root := repoRootFromTest(t)
-	moduleDir := filepath.Join(root, "examples", "reference-app")
 	svc, declared, composed := composeHost(t)
-	doc, _, err := buildDocument(moduleDir, svc.Describe(), declared, composed)
+	doc, err := buildDocument(svc.Describe(), declared, composed)
 	if err != nil {
 		t.Fatalf("buildDocument: %v", err)
 	}

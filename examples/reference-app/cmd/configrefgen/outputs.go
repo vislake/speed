@@ -20,9 +20,9 @@ type outputFile struct {
 }
 
 // renderOutputs assembles the committed artifacts: the reference in both
-// spellings, the environment carrier, the JSON counterpart of the config-file
-// example, and the documentation site's copy of the reference.
-func renderOutputs(root string, doc *document, bootRows []bootstrapVar) ([]outputFile, error) {
+// spellings, the JSON counterpart of the config-file example, and the
+// documentation site's copy of the reference.
+func renderOutputs(root string, doc *document) ([]outputFile, error) {
 	jsonExample, err := deriveConfigExampleJSON(root)
 	if err != nil {
 		return nil, err
@@ -30,15 +30,14 @@ func renderOutputs(root string, doc *document, bootRows []bootstrapVar) ([]outpu
 	return []outputFile{
 		{path: "docs/config-reference.md", content: doc.renderMarkdown()},
 		{path: "docs/config-reference.json", content: doc.marshalJSON()},
-		{path: ".env.example", content: renderEnvExample(bootRows)},
 		{path: "config.example.json", content: jsonExample},
 		{path: sitePagePath, content: doc.sitePage()},
 	}, nil
 }
 
 // writeOutputs writes the artifacts and reports what was written.
-func writeOutputs(root string, doc *document, bootRows []bootstrapVar) int {
-	outputs, err := renderOutputs(root, doc, bootRows)
+func writeOutputs(root string, doc *document) int {
+	outputs, err := renderOutputs(root, doc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configrefgen: %v\n", err)
 		return 1
@@ -68,8 +67,8 @@ func writeOutputs(root string, doc *document, bootRows []bootstrapVar) int {
 // checkOutputs compares the committed artifacts against fresh renderings and
 // exits nonzero when any differs or is missing, printing the first
 // difference.
-func checkOutputs(root string, doc *document, bootRows []bootstrapVar) int {
-	outputs, err := renderOutputs(root, doc, bootRows)
+func checkOutputs(root string, doc *document) int {
+	outputs, err := renderOutputs(root, doc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configrefgen: %v\n", err)
 		return 1
@@ -95,7 +94,7 @@ func checkOutputs(root string, doc *document, bootRows []bootstrapVar) int {
 		return 1
 	}
 	c := doc.counts()
-	fmt.Printf("all %d committed artifacts are up to date (%d bootstrap variable(s), %d declared key(s), %d dynamic item(s)).\n",
-		len(outputs), c.bootstrap, c.declared, c.dynamic)
+	fmt.Printf("all %d committed artifacts are up to date (%d declared key(s), %d dynamic item(s)).\n",
+		len(outputs), c.declared, c.dynamic)
 	return 0
 }

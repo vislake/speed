@@ -2,16 +2,12 @@ package main
 
 // main_test.go is the execution test of the generator's own entry path:
 // run() driven end to end over a throwaway repository root. The pins are
-// the command's contract -- a write pass exits 0 and lands the three
+// the command's contract -- a write pass exits 0 and lands the four
 // artifacts under the root it was told, --check exits 0 over outputs it
 // just wrote (the drift gate's green answer) and exits 1 once an
 // artifact is missing or stale (its red answer). The root the writes
-// land in is a temp directory whose examples/reference-app is a symlink
-// to the real module directory: the generator's bootstrap inventory
-// (bootstrap.go) walks the app's own source there, so the inventory
-// must see the real code for the table parity gate to pass, while the
-// generated artifacts must land somewhere the committed tree never
-// sees.
+// land in is a temp directory, so the generated artifacts land somewhere
+// the committed tree never sees.
 
 import (
 	"os"
@@ -20,22 +16,10 @@ import (
 )
 
 // fakeRepoRoot builds the throwaway repository root one run() drive
-// writes into: the temp root itself for the artifacts, the real module
-// directory behind an examples/reference-app symlink for the source
-// inventory.
+// writes into: the temp root itself for the artifacts.
 func fakeRepoRoot(t *testing.T) string {
 	t.Helper()
-	realRoot := repoRootFromTest(t)
-	root := t.TempDir()
-	moduleLink := filepath.Join(root, "examples", "reference-app")
-	if err := os.MkdirAll(filepath.Dir(moduleLink), 0o755); err != nil {
-		t.Fatalf("mkdir examples under the fake root: %v", err)
-	}
-	realModule := filepath.Join(realRoot, "examples", "reference-app")
-	if err := os.Symlink(realModule, moduleLink); err != nil {
-		t.Fatalf("symlink %s -> %s: %v", moduleLink, realModule, err)
-	}
-	return root
+	return t.TempDir()
 }
 
 // TestRunWritesAndChecksTheOutputsEndToEnd drives run() through the
@@ -45,15 +29,14 @@ func fakeRepoRoot(t *testing.T) string {
 // (nothing is stale); and once an artifact is deleted and another tampered
 // with, a further --check pass must exit 1 -- the drift gate's whole job is
 // refusing a tree whose committed bytes do not match a fresh rendering, and
-// this is that refusal executing against a real schema host and the real app
-// source.
+// this is that refusal executing against a real schema host.
 func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 	root := fakeRepoRoot(t)
 
 	// The JSON example is derived from config.example.yaml, which lives at the
 	// real repository root rather than in the throwaway one: the fake root
-	// carries only the generated artifacts and the source symlink, so the
-	// derivation source is linked in too.
+	// carries only the generated artifacts, so the derivation source is linked
+	// in.
 	if err := os.Symlink(filepath.Join(repoRootFromTest(t), configExampleYAMLPath), filepath.Join(root, configExampleYAMLPath)); err != nil {
 		t.Fatalf("symlink %s: %v", configExampleYAMLPath, err)
 	}
@@ -64,7 +47,6 @@ func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 	for _, artifact := range []string{
 		"docs/config-reference.md",
 		"docs/config-reference.json",
-		".env.example",
 		configExampleJSONPath,
 		sitePagePath,
 	} {
@@ -88,11 +70,11 @@ func TestRunWritesAndChecksTheOutputsEndToEnd(t *testing.T) {
 		t.Fatalf("remove config-reference.md: %v", err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(root, ".env.example"),
-		[]byte("APP_DEPLOYMENT_MODE=distributed\n"),
+		filepath.Join(root, "config.example.json"),
+		[]byte("{\"deploymentmode\": \"distributed\"}\n"),
 		0o644,
 	); err != nil {
-		t.Fatalf("tamper .env.example: %v", err)
+		t.Fatalf("tamper config.example.json: %v", err)
 	}
 	if code := run([]string{"--repo-root", root, "--check"}); code != 1 {
 		t.Fatalf("run (stale --check) = %d, want 1 when an artifact is missing and another is out of date", code)

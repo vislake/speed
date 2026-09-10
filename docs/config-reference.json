@@ -5,7 +5,6 @@
       "keys": [
         {
           "key": "authn.blind_index_key",
-          "env": "APP_AUTHN_BLIND_INDEX_KEY",
           "module": "authn",
           "format": "hexkey",
           "default": "documented non-secret development default",
@@ -14,7 +13,6 @@
         },
         {
           "key": "authn.pii_cipher_key",
-          "env": "APP_AUTHN_PII_CIPHER_KEY",
           "module": "authn",
           "format": "hexkey",
           "default": "documented non-secret development default",
@@ -28,7 +26,6 @@
       "keys": [
         {
           "key": "config.master_key",
-          "env": "APP_CONFIG_KEY",
           "module": "config",
           "format": "hexkey",
           "default": "documented non-secret development default",
@@ -42,7 +39,6 @@
       "keys": [
         {
           "key": "notification.contact_index_key",
-          "env": "APP_NOTIFICATION_INDEX_KEY",
           "module": "notification",
           "format": "hexkey",
           "default": "documented non-secret development default",
@@ -56,7 +52,6 @@
       "keys": [
         {
           "key": "org.invitation_email_index_key",
-          "env": "APP_ORG_INDEX_KEY",
           "module": "org",
           "format": "hexkey",
           "default": "documented non-secret development default",
@@ -70,7 +65,6 @@
       "keys": [
         {
           "key": "pki.local_key_cipher_key",
-          "env": "APP_PKI_LOCAL_KEY_CIPHER_KEY",
           "module": "pki",
           "format": "hexkey",
           "default": "documented non-secret development default",
@@ -83,497 +77,6 @@
   "generated_by": "examples/reference-app/cmd/configrefgen (go run ./cmd/configrefgen)",
   "items": [
     {
-      "layer": "bootstrap",
-      "key": "APP_DB_PATH",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "reference-app.db",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "SQLite database file path (relative to the working directory)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_DEPLOYMENT_MODE",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "standalone",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Deployment topology: standalone (default) or distributed; constrains which seam implementations may compose."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "PORT",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "8080",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "HTTP listen port."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_AUTHN_BLIND_INDEX_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "documented non-secret development default",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "HMAC key authn indexes users.email_index/phone_index with; must stay identical across restarts or stored indexes become unfindable."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_AUTHN_PII_CIPHER_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "documented non-secret development default",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets); separate from every other key."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_CONFIG_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "documented non-secret development default",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Master key the config module seals every Sensitive dynamic-configuration value with; the key that encrypts the configs table can never live in that table."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_NOTIFICATION_INDEX_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "documented non-secret development default",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "HMAC key the notification module's blind indexers index encrypted contact addresses with; separate from every other key."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_ORG_INDEX_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "documented non-secret development default",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "HMAC key org's blind indexer indexes invitation email addresses with; separate from APP_CONFIG_KEY (an AES key must never double as an HMAC key)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_PKI_LOCAL_KEY_CIPHER_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "documented non-secret development default",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_ROOT_KEY",
-      "module": "reference-app",
-      "type": "hexkey",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "individual development defaults",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Single root secret from which the other six keys of this group are derived (HKDF-SHA256, one purpose string per key); an explicitly-set individual key always wins over its derivation."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_OBJECT_STORE_ROOT",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "throwaway temp directory",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Fixed local directory for the objectstore seam, the SurvivesRestart twin of the S3 composition; setting both is refused."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_REDIS_ADDR",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "in-process eventbus/kv (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Redis address composing real, multi-replica-safe EventBus and KVStore implementations for both seams."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_S3_ACCESS_KEY",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "local-directory objectstore (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "S3 access key id for the objectstore seam (required with the S3 group)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_S3_BUCKET",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "local-directory objectstore (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "S3 bucket name for the objectstore seam (required with the S3 group)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_S3_ENDPOINT",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "local-directory objectstore (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "S3-compatible endpoint; required together with bucket/access-key/secret-key below."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_S3_REGION",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "unset (ignored by S3-compatible local servers)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Optional S3 region, used only when the S3 group above is set."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_S3_SECRET_KEY",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "local-directory objectstore (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "S3 secret key for the objectstore seam (required with the S3 group)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_S3_USE_SSL",
-      "module": "reference-app",
-      "type": "bool",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "false",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Whether the S3 endpoint speaks TLS (optional; plain HTTP is the local-server default)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_SMS_GATEWAY_URL",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "console SMS sender (standalone) / refused boot (distributed)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Endpoint the real HTTP SMS transport posts delivery requests to; the URL is where gateway credentials live."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_SMTP_HOST",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "console mailer (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "SMTP host composing a real Mailer for the mailer seam; required together with APP_SMTP_PORT."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_SMTP_PASSWORD",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": true,
-      "default": "no SMTP AUTH (optional)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Optional SMTP AUTH password."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_SMTP_PORT",
-      "module": "reference-app",
-      "type": "int",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "console mailer (Preset default)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "SMTP port for the mailer seam (required with APP_SMTP_HOST)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_SMTP_USERNAME",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no SMTP AUTH (optional)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Optional SMTP AUTH username; AUTH activates only when a username is set."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_OTLP_ENDPOINT",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "local exporters (stdout traces/metrics)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "OTLP/gRPC endpoint traces and metrics are pushed to; empty keeps go/observability's local exporters."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_PUBLIC_ORIGIN",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "http://localhost:\u003cresolved PORT\u003e",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "This deployment's own public origin, the base URL outbound mail links render when a tenant has no branded host; an unset value ships mail with unreachable localhost links."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_READ_FLY_CLIENT_IP",
-      "module": "reference-app",
-      "type": "bool",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "false",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Declares the proxy is Fly's, authorizing authn to read the single-hop Fly-Client-IP header; only takes effect alongside APP_TRUSTED_PROXIES ('true' with an empty proxy list refuses boot)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_TRUSTED_PROXIES",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no trusted proxies (direct connection address recorded)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Comma-separated reverse-proxy addresses this deployment receives requests through; what lets session/login-history records carry the real client address."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_WEB_DIST",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no frontend served (API only)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Directory the server serves the app's built frontend from; unset serves no frontend at all."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_AI_GATEWAY_IMAGE_API_KEY",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no image credential row written",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Key the images endpoint accepts; the demo value is not a secret (a local or CI-only fake provider accepts it), while a real deployment's key travels the same variable."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_AI_GATEWAY_IMAGE_BASE_URL",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no image credential row written",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Base URL of the OpenAI-compatible images endpoint the smile-simulation pipeline posts to; set together with the API key pair."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_DEMO_PLATFORM_STAFF_PASSWORD",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no platform-staff seed",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Gates the boot-time seed of demo-platform-staff@example.com, the rbac.SystemDomain platform administrator; deliberately separate from APP_DEMO_USERS_PASSWORD."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_DEMO_USERS_PASSWORD",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "no demo-account seed",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Gates the boot-time seed of the three demo user accounts (demo-owner/demo-reader/demo-acme-only); a passphrase only a disposable demo server should carry."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_DISABLE_DEMO_USER_HEADER",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "demo identity headers read (any non-empty value disables them)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Kill switch closing the X-Demo-User/X-Demo-User-Id privilege-escalation hole: any non-empty value makes every route resolve its actor from the verified access token alone."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_DISABLE_QUEUE_WORKER",
-      "module": "reference-app",
-      "type": "string",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "queue worker started",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Test-only: any non-empty value skips standaloneQueue.Start, so this replica never claims or executes a job itself (the distributed-mode integration proof's other-replica driver)."
-    },
-    {
-      "layer": "bootstrap",
-      "key": "APP_FAIL_SELF_SERVICE_PROVISION",
-      "module": "reference-app",
-      "type": "int",
-      "source": "process environment (os.Getenv)",
-      "scope": [
-        "process"
-      ],
-      "sensitive": false,
-      "default": "0 (disabled)",
-      "consumers": "the reference app's bootstrap (internal/app ConfigFromEnv and its siblings)",
-      "description": "Test-and-e2e-only failure injection: a positive N fails the first N self-service provisioning attempts of each account; anything that is not a non-negative whole number refuses boot."
-    },
-    {
-      "layer": "dynamic",
       "key": "authn.access_token_ttl",
       "module": "authn",
       "group": "authn",
@@ -592,7 +95,6 @@
       "description": "How long an access token stays valid, and the worst-case delay before a sign-out takes effect under natural revocation."
     },
     {
-      "layer": "dynamic",
       "key": "authn.oauth_state_ttl",
       "module": "authn",
       "group": "authn",
@@ -611,7 +113,6 @@
       "description": "How long a social or single sign-on authorization flow may take between leaving for the provider and returning."
     },
     {
-      "layer": "dynamic",
       "key": "authn.password_login",
       "module": "authn",
       "type": "bool",
@@ -628,7 +129,6 @@
       "description": "Allows signing in with an email address or phone number and a password."
     },
     {
-      "layer": "dynamic",
       "key": "authn.password_max_length",
       "module": "authn",
       "group": "authn",
@@ -647,7 +147,6 @@
       "description": "Maximum number of characters a new password may have."
     },
     {
-      "layer": "dynamic",
       "key": "authn.password_min_length",
       "module": "authn",
       "group": "authn",
@@ -666,7 +165,6 @@
       "description": "Minimum number of characters a new password must have."
     },
     {
-      "layer": "dynamic",
       "key": "authn.refresh_token_ttl",
       "module": "authn",
       "group": "authn",
@@ -685,7 +183,6 @@
       "description": "How long a refresh token stays usable before the user must sign in again."
     },
     {
-      "layer": "dynamic",
       "key": "authn.session_ttl",
       "module": "authn",
       "group": "authn",
@@ -704,7 +201,6 @@
       "description": "Maximum lifetime of a session, however often it is refreshed."
     },
     {
-      "layer": "dynamic",
       "key": "authn.sms_code_max_attempts",
       "module": "authn",
       "group": "authn",
@@ -723,7 +219,6 @@
       "description": "How many wrong codes a single issued verification code tolerates before it locks and a fresh one must be requested."
     },
     {
-      "layer": "dynamic",
       "key": "authn.sms_code_ttl",
       "module": "authn",
       "group": "authn",
@@ -742,7 +237,6 @@
       "description": "How long a phone-login verification code stays valid after it is sent."
     },
     {
-      "layer": "dynamic",
       "key": "authn.sms_login",
       "module": "authn",
       "type": "bool",
@@ -759,7 +253,6 @@
       "description": "Allows signing in with a phone number and a one-time SMS code."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.dingtalk",
       "module": "authn",
       "type": "bool",
@@ -776,7 +269,6 @@
       "description": "Offers DingTalk as a sign-in channel. Requires the DingTalk application key and secret to be configured."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.dingtalk.client_id",
       "module": "authn",
       "group": "authn",
@@ -793,7 +285,6 @@
       "description": "DingTalk OAuth application key."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.dingtalk.client_secret",
       "module": "authn",
       "group": "authn",
@@ -810,7 +301,6 @@
       "description": "DingTalk OAuth application secret."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.feishu",
       "module": "authn",
       "type": "bool",
@@ -827,7 +317,6 @@
       "description": "Offers Feishu as a sign-in channel. Requires the Feishu app id and secret to be configured."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.feishu.client_id",
       "module": "authn",
       "group": "authn",
@@ -844,7 +333,6 @@
       "description": "Feishu OAuth app id."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.feishu.client_secret",
       "module": "authn",
       "group": "authn",
@@ -861,7 +349,6 @@
       "description": "Feishu OAuth app secret."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.github",
       "module": "authn",
       "type": "bool",
@@ -878,7 +365,6 @@
       "description": "Offers GitHub as a sign-in channel. Requires the GitHub client id and secret to be configured."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.github.client_id",
       "module": "authn",
       "group": "authn",
@@ -895,7 +381,6 @@
       "description": "GitHub OAuth client id."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.github.client_secret",
       "module": "authn",
       "group": "authn",
@@ -912,7 +397,6 @@
       "description": "GitHub OAuth client secret."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.google",
       "module": "authn",
       "type": "bool",
@@ -929,7 +413,6 @@
       "description": "Offers Google as a sign-in channel. Requires the Google client id and secret to be configured."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.google.client_id",
       "module": "authn",
       "group": "authn",
@@ -946,7 +429,6 @@
       "description": "Google OAuth client id."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.google.client_secret",
       "module": "authn",
       "group": "authn",
@@ -963,7 +445,6 @@
       "description": "Google OAuth client secret."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.trusted_providers",
       "module": "authn",
       "group": "authn",
@@ -980,7 +461,6 @@
       "description": "Whitespace-delimited social channels whose verified-email assertion may automatically link a new sign-in to an existing account. Empty disables automatic linking entirely."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.wechat",
       "module": "authn",
       "type": "bool",
@@ -997,7 +477,6 @@
       "description": "Offers WeChat as a sign-in channel. Requires the WeChat Open Platform appid and secret to be configured."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.wechat.client_id",
       "module": "authn",
       "group": "authn",
@@ -1014,7 +493,6 @@
       "description": "WeChat OAuth appid."
     },
     {
-      "layer": "dynamic",
       "key": "authn.social.wechat.client_secret",
       "module": "authn",
       "group": "authn",
@@ -1031,7 +509,6 @@
       "description": "WeChat OAuth secret."
     },
     {
-      "layer": "dynamic",
       "key": "authn.sso.oidc",
       "module": "authn",
       "type": "bool",
@@ -1048,7 +525,6 @@
       "description": "Allows each tenant to configure an OpenID Connect identity provider its members sign in through."
     },
     {
-      "layer": "dynamic",
       "key": "compliance.default_retention_window",
       "module": "compliance",
       "group": "compliance",
@@ -1066,7 +542,6 @@
       "description": "How long a soft-deleted (mark-deleted) row survives before the periodic retention sweep hard-deletes it."
     },
     {
-      "layer": "dynamic",
       "key": "compliance.export_delivery_expiry",
       "module": "compliance",
       "group": "compliance",
@@ -1085,7 +560,6 @@
       "description": "How long a data-export download link (minted through go/sharing) stays valid. Deliberately much shorter than a general-purpose share's own default expiry, since an export bundles a whole tenant's data."
     },
     {
-      "layer": "dynamic",
       "key": "metering.default_overage_threshold",
       "module": "metering",
       "group": "metering",
@@ -1103,7 +577,6 @@
       "description": "The default per-period usage quantity, applied to any feature with no threshold of its own, above which metering publishes an overage-threshold-crossed event. Zero means no default threshold."
     },
     {
-      "layer": "dynamic",
       "key": "metering.period_bucket_size",
       "module": "metering",
       "group": "metering",
@@ -1120,7 +593,6 @@
       "description": "The calendar bucket real-time usage counters and usage-summary rows reset on: \"daily\" or \"monthly\"."
     },
     {
-      "layer": "dynamic",
       "key": "org.invitation_email",
       "module": "org",
       "type": "bool",
@@ -1140,7 +612,6 @@
       "description": "Let org deliver the invitation email itself, rather than leaving delivery to a notification module."
     },
     {
-      "layer": "dynamic",
       "key": "org.invitations",
       "module": "org",
       "type": "bool",
@@ -1157,7 +628,6 @@
       "description": "Allow members of this tenant to invite people into its organization."
     },
     {
-      "layer": "dynamic",
       "key": "pki.ca_default_validity",
       "module": "pki",
       "group": "pki",
@@ -1174,7 +644,6 @@
       "description": "Default validity period for a newly issued CA certificate (root or intermediate) when the caller does not specify one."
     },
     {
-      "layer": "dynamic",
       "key": "pki.ca_max_validity",
       "module": "pki",
       "group": "pki",
@@ -1191,7 +660,6 @@
       "description": "Maximum validity period a CA certificate may be issued for, regardless of what the caller requests."
     },
     {
-      "layer": "dynamic",
       "key": "pki.certificate_default_validity",
       "module": "pki",
       "group": "pki",
@@ -1208,7 +676,6 @@
       "description": "Default validity period for a newly issued end-entity certificate when the caller does not specify one."
     },
     {
-      "layer": "dynamic",
       "key": "pki.certificate_max_validity",
       "module": "pki",
       "group": "pki",
@@ -1225,7 +692,6 @@
       "description": "Maximum validity period an end-entity certificate may be issued for, regardless of what the caller requests."
     },
     {
-      "layer": "dynamic",
       "key": "pki.crl_distribution_point",
       "module": "pki",
       "group": "pki",
@@ -1242,7 +708,6 @@
       "description": "Default CRL distribution point URL for newly created authorities. Empty means no CRLDistributionPoints extension is written into certificates by default."
     },
     {
-      "layer": "dynamic",
       "key": "pki.crl_validity",
       "module": "pki",
       "group": "pki",
@@ -1259,7 +724,6 @@
       "description": "How long a generated CRL claims to be current (NextUpdate minus ThisUpdate) before it should be regenerated."
     },
     {
-      "layer": "dynamic",
       "key": "pki.propagation_window",
       "module": "pki",
       "group": "pki",
@@ -1276,7 +740,6 @@
       "description": "How long a newly staged pending signing key waits before the expiry scan promotes it to active."
     },
     {
-      "layer": "dynamic",
       "key": "pki.renewal_lead_time",
       "module": "pki",
       "group": "pki",
@@ -1293,7 +756,6 @@
       "description": "How far ahead of a signing key's expiry the expiry scan stages its replacement."
     },
     {
-      "layer": "dynamic",
       "key": "sharing.default_expiry",
       "module": "sharing",
       "group": "sharing",

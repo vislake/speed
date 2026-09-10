@@ -1,5 +1,6 @@
 // Command configrefgen generates this repository's committed configuration
-// reference from the live configuration schema.
+// reference from the live configuration schema and the modules' own
+// declarations.
 //
 // The reference documents two configuration layers of a speed-based
 // application:
@@ -26,31 +27,28 @@
 //     the reference app's own demo items (notes' brand/support keys and its
 //     two flags) out of the platform reference.
 //
-//   - The BOOTSTRAP layer: the process-start input resolved before the dynamic
-//     layer exists. It has two sources. The platform keys come from the
-//     modules themselves: every module that consumes process-start input
-//     declares it on the registry's bootstrap seat (pkgcore.BootstrapKey,
-//     reg.Bootstrap.Add), and this command renders those declarations as
-//     per-module key lists -- what the key protects, its format, whether it is
-//     secret material, the fallback an operator should expect -- straight from
-//     the census, never from a hand-kept copy. The reference app's own
-//     variables come from the app: the inventory is walked out of its source
-//     (bootstrap.go), and the per-variable facts (type, default, whether the
-//     value is a secret, what it configures) come from a curated table kept
-//     honest by a coverage gate -- every environment variable the app's source
-//     reads must appear in the table and every table entry must be read, or
-//     the generator fails. The two sides meet in one transitional bridge
-//     (platformEnvNames): the app still reads its variables directly, so the
-//     variables must still be listed, while the keys they carry are the
-//     modules' own contracts, and a pair that disagrees fails the generator.
-//     A module that consumes no process-start input declares no keys; the
-//     reference says so, rather than filling the gap with a placeholder.
+//   - The BOOTSTRAP layer: the process-start input resolved once, before the
+//     dynamic layer exists. Its keys come from the modules themselves: every
+//     module that consumes process-start input declares it on the registry's
+//     bootstrap seat (pkgcore.BootstrapKey, reg.Bootstrap.Add), and this
+//     command renders those declarations -- what the key protects, its
+//     format, whether it is secret material, the fallback an operator should
+//     expect -- straight from the census the same composition produced, never
+//     from a hand-kept copy. A module that consumes no process-start input
+//     declares no keys; the reference says so, rather than filling the gap
+//     with a placeholder. The host side stays out of this reference on
+//     purpose: the variables an assembling application reads are that host's
+//     own surface, documented where the host lives (examples/reference-app's
+//     README.md, DEPLOY.md and .env.example carry the reference app's own
+//     operator text), while this repository-wide reference is the platform
+//     surface -- the declared keys and the mechanism a host drives to
+//     resolve them (go/pkgcore/config: the four-source chain, the prefix
+//     option, pinned variable names, and Verify's binding check).
 //
 // The outputs are docs/config-reference.md and docs/config-reference.json at
-// the repository root, the root .env.example (the dev-flow environment carrier
-// this repository gitignores without a committed example), config.example.json
-// (the JSON counterpart of the committed YAML config-file example, derived so
-// the pair cannot drift), and the documentation site's copy of the reference
+// the repository root, config.example.json (the JSON counterpart of the
+// committed YAML config-file example, derived so the pair cannot drift), and
+// the documentation site's copy of the reference
 // (docs/site/content.en/docs/user-guide/configuration.md). Every output is
 // deterministic and byte-identical across runs.
 //
@@ -110,17 +108,16 @@ func run(args []string) int {
 		return 1
 	}
 
-	moduleDir := filepath.Join(root, "examples", "reference-app")
-	doc, bootRows, err := buildDocument(moduleDir, snapshot.service.Describe(), snapshot.declaredKeys, snapshot.composedModules)
+	doc, err := buildDocument(snapshot.service.Describe(), snapshot.declaredKeys, snapshot.composedModules)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "configrefgen:", err)
 		return 1
 	}
 
 	if *check {
-		return checkOutputs(root, doc, bootRows)
+		return checkOutputs(root, doc)
 	}
-	return writeOutputs(root, doc, bootRows)
+	return writeOutputs(root, doc)
 }
 
 // findRepoRoot returns the nearest ancestor of the working directory that

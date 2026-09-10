@@ -1,90 +1,54 @@
 ---
 title: "Configuration reference"
-description: "Every bootstrap key and runtime configuration item a speed-based application resolves: the keys platform modules declare, the variables this repository's reference app reads, and the dynamic items an operator edits per tenant."
+description: "Every bootstrap key and runtime configuration item a speed-based application resolves: the process-start keys platform modules declare, and the dynamic items an operator edits per tenant."
 weight: 98
 ---
 # Configuration reference
 
-A speed-based application resolves configuration in two layers that never share a key. This page is generated from the modules' own declarations and the reference app's source -- never hand-written -- and a stale copy fails CI.
+A speed-based application resolves configuration in two layers that never share a key. This page is generated from the modules' own declarations -- never hand-written -- and a stale copy fails CI.
 
 ## Bootstrap configuration
 
-The bootstrap layer is the process-start input a speed-based application resolves before anything else starts. Two halves are documented here: the **platform keys**, declared by the modules that consume them on the registry's bootstrap seat (`reg.Bootstrap.Add`), and the **reference app's own variables**, the environment surface the app reads today (with `os.Getenv`; the app does not drive the loader yet). Every variable below is optional in development, falling back to the documented default that keeps `go run ./cmd/server` booting a working standalone server with zero external dependencies.
+The bootstrap layer is the process-start input a speed-based application resolves once, before anything else is wired; it has no tenant dimension and no runtime edit surface, so a change takes effect at the next start. Its keys are declared by the modules that consume them: a module states each key's contract on the registry's bootstrap seat (`reg.Bootstrap.Add`) while it registers, and never resolves the value itself -- the host does, and injects it. A module that consumes no process-start input declares nothing, which is an honest state rather than a gap.
 
-The loader mechanism behind the platform keys is `go/pkgcore/config`. A host that drives it resolves each key from four sources, highest priority first: command-line flags (`--database.dsn=…`), environment variables, an optional YAML **or JSON** config file (`WithConfigFile`; an absent file is skipped silently, a malformed one is a hard error), then the defaults already set on the host's target struct. Keys are derived from the target struct's fields: `Database.DSN` is the key `database.dsn`, the flag `--database.dsn` and the variable `SPEED_DATABASE__DSN` -- the loader's default prefix `SPEED_`, the key uppercased, and a double underscore for each level of nesting. A single underscore is not a nesting marker (`SPEED_DATABASE_DSN` resolves to nothing), and variables that match no key are ignored rather than rejected. `WithEnvPrefix` replaces the prefix for a host whose variables already carry another one (`APP_`, say), and a field may pin its exact variable name with `config:"env=PORT"` for names no derivation reaches; a pinned field reads that name and no other. Two fields resolving to one variable is refused when the target is described, because a single variable cannot feed two fields. `config.Verify(target, declared)` then checks a declared key list against the target struct, which is how a host proves its target binds the keys its modules declared.
+The mechanism a host drives to resolve the values is `go/pkgcore/config`, and this repository's own reference app exercises it for its whole bootstrap surface, so the shape below is a real consumer's resolution path rather than a document-only sketch. A host that drives the loader declares a target struct whose fields are the keys: the field `Database.DSN` is the key `database.dsn`, the flag `--database.dsn`, and -- under the loader's default prefix -- the environment variable `SPEED_DATABASE__DSN`, where a double underscore marks each level of nesting; a single underscore is never a nesting marker. `WithEnvPrefix` replaces the prefix for a host whose variables already carry another one (`APP_`, say), and a field whose variable name does not derive from its key can pin that exact name (`config:"env=PORT"`, the customary unprefixed name for the port a platform tells the process to listen on), after which the field reads that name and no other. Every key resolves from four sources, highest priority first: command-line flags, environment variables, an optional YAML or JSON config file (`WithConfigFile`; an absent file is skipped silently, a malformed one is a hard error), then the defaults already set on the target struct. A value supplied by a text source is judged as text: a field that can hold an empty value takes it, and a field with no representation for one -- a number, a bool -- refuses the load rather than quietly becoming that field's zero value. `config.Verify(target, declared)` then checks a declared key list against a target struct, every declared key mapping onto a field, which is how a host proves its target binds the keys its modules declared.
 
-| Variable | Type | Unset fallback | Secret | What it configures |
-|---|---|---|---|---|
-| `APP_DB_PATH` | string | reference-app.db |  | SQLite database file path (relative to the working directory). |
-| `APP_DEPLOYMENT_MODE` | string | standalone |  | Deployment topology: standalone (default) or distributed; constrains which seam implementations may compose. |
-| `PORT` | string | 8080 |  | HTTP listen port. |
-| `APP_AUTHN_BLIND_INDEX_KEY` | hexkey | documented non-secret development default | yes | HMAC key authn indexes users.email_index/phone_index with; must stay identical across restarts or stored indexes become unfindable. |
-| `APP_AUTHN_PII_CIPHER_KEY` | hexkey | documented non-secret development default | yes | AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets); separate from every other key. |
-| `APP_CONFIG_KEY` | hexkey | documented non-secret development default | yes | Master key the config module seals every Sensitive dynamic-configuration value with; the key that encrypts the configs table can never live in that table. |
-| `APP_NOTIFICATION_INDEX_KEY` | hexkey | documented non-secret development default | yes | HMAC key the notification module's blind indexers index encrypted contact addresses with; separate from every other key. |
-| `APP_ORG_INDEX_KEY` | hexkey | documented non-secret development default | yes | HMAC key org's blind indexer indexes invitation email addresses with; separate from APP_CONFIG_KEY (an AES key must never double as an HMAC key). |
-| `APP_PKI_LOCAL_KEY_CIPHER_KEY` | hexkey | documented non-secret development default | yes | AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with. |
-| `APP_ROOT_KEY` | hexkey | individual development defaults | yes | Single root secret from which the other six keys of this group are derived (HKDF-SHA256, one purpose string per key); an explicitly-set individual key always wins over its derivation. |
-| `APP_OBJECT_STORE_ROOT` | string | throwaway temp directory |  | Fixed local directory for the objectstore seam, the SurvivesRestart twin of the S3 composition; setting both is refused. |
-| `APP_REDIS_ADDR` | string | in-process eventbus/kv (Preset default) |  | Redis address composing real, multi-replica-safe EventBus and KVStore implementations for both seams. |
-| `APP_S3_ACCESS_KEY` | string | local-directory objectstore (Preset default) |  | S3 access key id for the objectstore seam (required with the S3 group). |
-| `APP_S3_BUCKET` | string | local-directory objectstore (Preset default) |  | S3 bucket name for the objectstore seam (required with the S3 group). |
-| `APP_S3_ENDPOINT` | string | local-directory objectstore (Preset default) |  | S3-compatible endpoint; required together with bucket/access-key/secret-key below. |
-| `APP_S3_REGION` | string | unset (ignored by S3-compatible local servers) |  | Optional S3 region, used only when the S3 group above is set. |
-| `APP_S3_SECRET_KEY` | string | local-directory objectstore (Preset default) | yes | S3 secret key for the objectstore seam (required with the S3 group). |
-| `APP_S3_USE_SSL` | bool | false |  | Whether the S3 endpoint speaks TLS (optional; plain HTTP is the local-server default). |
-| `APP_SMS_GATEWAY_URL` | string | console SMS sender (standalone) / refused boot (distributed) | yes | Endpoint the real HTTP SMS transport posts delivery requests to; the URL is where gateway credentials live. |
-| `APP_SMTP_HOST` | string | console mailer (Preset default) |  | SMTP host composing a real Mailer for the mailer seam; required together with APP_SMTP_PORT. |
-| `APP_SMTP_PASSWORD` | string | no SMTP AUTH (optional) | yes | Optional SMTP AUTH password. |
-| `APP_SMTP_PORT` | int | console mailer (Preset default) |  | SMTP port for the mailer seam (required with APP_SMTP_HOST). |
-| `APP_SMTP_USERNAME` | string | no SMTP AUTH (optional) |  | Optional SMTP AUTH username; AUTH activates only when a username is set. |
-| `APP_OTLP_ENDPOINT` | string | local exporters (stdout traces/metrics) |  | OTLP/gRPC endpoint traces and metrics are pushed to; empty keeps go/observability's local exporters. |
-| `APP_PUBLIC_ORIGIN` | string | http://localhost:<resolved PORT> |  | This deployment's own public origin, the base URL outbound mail links render when a tenant has no branded host; an unset value ships mail with unreachable localhost links. |
-| `APP_READ_FLY_CLIENT_IP` | bool | false |  | Declares the proxy is Fly's, authorizing authn to read the single-hop Fly-Client-IP header; only takes effect alongside APP_TRUSTED_PROXIES ('true' with an empty proxy list refuses boot). |
-| `APP_TRUSTED_PROXIES` | string | no trusted proxies (direct connection address recorded) |  | Comma-separated reverse-proxy addresses this deployment receives requests through; what lets session/login-history records carry the real client address. |
-| `APP_WEB_DIST` | string | no frontend served (API only) |  | Directory the server serves the app's built frontend from; unset serves no frontend at all. |
-| `APP_AI_GATEWAY_IMAGE_API_KEY` | string | no image credential row written |  | Key the images endpoint accepts; the demo value is not a secret (a local or CI-only fake provider accepts it), while a real deployment's key travels the same variable. |
-| `APP_AI_GATEWAY_IMAGE_BASE_URL` | string | no image credential row written |  | Base URL of the OpenAI-compatible images endpoint the smile-simulation pipeline posts to; set together with the API key pair. |
-| `APP_DEMO_PLATFORM_STAFF_PASSWORD` | string | no platform-staff seed |  | Gates the boot-time seed of demo-platform-staff@example.com, the rbac.SystemDomain platform administrator; deliberately separate from APP_DEMO_USERS_PASSWORD. |
-| `APP_DEMO_USERS_PASSWORD` | string | no demo-account seed |  | Gates the boot-time seed of the three demo user accounts (demo-owner/demo-reader/demo-acme-only); a passphrase only a disposable demo server should carry. |
-| `APP_DISABLE_DEMO_USER_HEADER` | string | demo identity headers read (any non-empty value disables them) |  | Kill switch closing the X-Demo-User/X-Demo-User-Id privilege-escalation hole: any non-empty value makes every route resolve its actor from the verified access token alone. |
-| `APP_DISABLE_QUEUE_WORKER` | string | queue worker started |  | Test-only: any non-empty value skips standaloneQueue.Start, so this replica never claims or executes a job itself (the distributed-mode integration proof's other-replica driver). |
-| `APP_FAIL_SELF_SERVICE_PROVISION` | int | 0 (disabled) |  | Test-and-e2e-only failure injection: a positive N fails the first N self-service provisioning attempts of each account; anything that is not a non-negative whole number refuses boot. |
+Secret materials (Sensitive above) must come from a secret store in a real deployment, never from a committed file. The Unset fallback column states what an unset key resolves to; for key materials that is a documented, recognizable, NON-SECRET development default a real deployment must override, and each declaration's own text says what its key protects and how it is isolated from every other key.
 
 ### Bootstrap keys declared by platform modules
 
-Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The declarations below are rendered from `reg.Bootstrap`; the "environment variable" column names the spelling the reference app reads the same key from today, which is the transition's bridge until the app's loader-shaped struct pins it.
+Each platform module declares the process-start keys it consumes on the registry's bootstrap seat, so the key's contract -- what it protects, why it is a separate secret, what an operator should expect when it is unset -- travels with the module instead of living in a host's own notes. The tables below are rendered from `reg.Bootstrap` itself.
 
 **authn**
 
-| Key | Format | Sensitive | Unset fallback | Environment variable in this app | What the key protects |
-|---|---|---|---|---|---|
-| `authn.blind_index_key` | hexkey | true | documented non-secret development default | `APP_AUTHN_BLIND_INDEX_KEY` | HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key. |
-| `authn.pii_cipher_key` | hexkey | true | documented non-secret development default | `APP_AUTHN_PII_CIPHER_KEY` | AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below. |
+| Key | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|
+| `authn.blind_index_key` | hexkey | true | documented non-secret development default | HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key. |
+| `authn.pii_cipher_key` | hexkey | true | documented non-secret development default | AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below. |
 
 **config**
 
-| Key | Format | Sensitive | Unset fallback | Environment variable in this app | What the key protects |
-|---|---|---|---|---|---|
-| `config.master_key` | hexkey | true | documented non-secret development default | `APP_CONFIG_KEY` | Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input. |
+| Key | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|
+| `config.master_key` | hexkey | true | documented non-secret development default | Master key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input. |
 
 **notification**
 
-| Key | Format | Sensitive | Unset fallback | Environment variable in this app | What the key protects |
-|---|---|---|---|---|---|
-| `notification.contact_index_key` | hexkey | true | documented non-secret development default | `APP_NOTIFICATION_INDEX_KEY` | HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key. |
+| Key | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|
+| `notification.contact_index_key` | hexkey | true | documented non-secret development default | HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key. |
 
 **org**
 
-| Key | Format | Sensitive | Unset fallback | Environment variable in this app | What the key protects |
-|---|---|---|---|---|---|
-| `org.invitation_email_index_key` | hexkey | true | documented non-secret development default | `APP_ORG_INDEX_KEY` | HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key. |
+| Key | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|
+| `org.invitation_email_index_key` | hexkey | true | documented non-secret development default | HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key. |
 
 **pki**
 
-| Key | Format | Sensitive | Unset fallback | Environment variable in this app | What the key protects |
-|---|---|---|---|---|---|
-| `pki.local_key_cipher_key` | hexkey | true | documented non-secret development default | `APP_PKI_LOCAL_KEY_CIPHER_KEY` | AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one. |
+| Key | Format | Sensitive | Unset fallback | What the key protects |
+|---|---|---|---|---|
+| `pki.local_key_cipher_key` | hexkey | true | documented non-secret development default | AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one. |
 
 Every other module in this reference's composition declares no bootstrap keys: `compliance`, `metering`, `sharing`. That is an honest state rather than a gap -- a module that consumes no process-start input declares nothing, and nothing asks it for a placeholder.
 
@@ -141,6 +105,6 @@ Sensitive items are encrypted at rest: the `configs` table stores `base64(cipher
 | `pki.renewal_lead_time` | item | duration | 720h0m0s | -- | false | false | pki | How far ahead of a signing key's expiry the expiry scan stages its replacement. |
 | `sharing.default_expiry` | item | duration | 720h0m0s | -- | false | false | sharing | Default share-link expiry applied when a caller does not specify one. |
 
-The owning module of each key is its dot-prefix (`authn.social.*` belongs to authn), the module whose runtime code reads the value; `Group` is the admin-console grouping the declaration carried. Feature flags are bool items whose "enabled" meaning is decided by `config.Service.IsEnabled`'s dependency walk over the flag graph. The JSON twin of this document carries each row as structured fields (`layer`, `key`, `module`, `scope`, `sensitive`, `default`, ...) plus the module declarations. Concrete example rows of the `configs` table itself -- a platform row and a tenant override for authn and sharing items, the Sensitive handling included -- live in `docs/config-row-examples.json`.
+The owning module of each key is its dot-prefix (`authn.social.*` belongs to authn), the module whose runtime code reads the value; `Group` is the admin-console grouping the declaration carried. Feature flags are bool items whose "enabled" meaning is decided by `config.Service.IsEnabled`'s dependency walk over the flag graph. The JSON twin of this document carries each row as structured fields (`key`, `module`, `scope`, `sensitive`, `default`, ...) plus the module declarations. Concrete example rows of the `configs` table itself -- a platform row and a tenant override for authn and sharing items, the Sensitive handling included -- live in `docs/config-row-examples.json`.
 
-<!-- Generated by examples/reference-app/cmd/configrefgen (go run ./cmd/configrefgen from examples/reference-app/). Do not hand-edit. Reference stats: 35 bootstrap variable(s), 6 module-declared bootstrap key(s), 42 dynamic item(s)/flag(s) (10 flag(s), 5 sensitive) across 6 declaring module(s). Drift gate: docs-check.yml runs the generator with --check. -->
+<!-- Generated by examples/reference-app/cmd/configrefgen (go run ./cmd/configrefgen from examples/reference-app/). Do not hand-edit. Reference stats: 6 module-declared bootstrap key(s), 42 dynamic item(s)/flag(s) (10 flag(s), 5 sensitive) across 6 declaring module(s). Drift gate: docs-check.yml runs the generator with --check. -->
