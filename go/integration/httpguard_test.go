@@ -13,6 +13,14 @@ import (
 	"github.com/vislake/speed/go/ratelimit"
 )
 
+// errorBody is the {code, params} envelope these tests decode the guard's
+// refusals as -- the wire shape every module's structured error converges
+// on, which is what lets one client-side decoder handle them all.
+type errorBody struct {
+	Code   string         `json:"code"`
+	Params map[string]any `json:"params,omitempty"`
+}
+
 func newTestGuard(t *testing.T, limits LayeredLimits, extract Extractor) *HTTPGuard {
 	t.Helper()
 	limiter := newTestLayeredLimiter(limits)

@@ -1,19 +1,20 @@
 package integration
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/ratelimit"
 )
 
 // errorContentType is the media type every structured error response this
-// module writes carries, matching the {code, params} envelope convention
-// go/authn and go/tenancy already document (go/authn/middleware.go's
-// errorBody).
+// module writes carries. It is deliberately the parameter-less JSON type
+// rather than the charset-carrying one: this surface's documented
+// Content-Type, set before pkgcore/httpapi's WriteError runs, which
+// preserves a caller-set type.
 const errorContentType = "application/json"
 
 // Header names HTTPGuard.Middleware sets on a denied (429) response, on top
@@ -123,28 +124,16 @@ func WithRateLimitParams(decision LayeredDecision) *apperr.Error {
 		WithParam("remaining", decision.Decision.Remaining)
 }
 
-// errorBody is the {code, params} envelope every structured error this
-// module writes over HTTP uses, matching go/authn/middleware.go's identical
-// shape byte for byte -- deliberately not a shared type imported from
-// go/authn (that would be a business-module-to-business-module import this
-// codebase's module-boundary rule forbids), but the wire shape both modules
-// converge on independently is exactly what lets one client-side error
-// decoder handle every module's structured error the same way.
-type errorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// writeAppError writes err as its structured envelope with its suggested
-// HTTP status, setting Retry-After from a "retry_after_seconds" parameter
-// when present (ErrRateLimited, via WithRateLimitParams), X-RateLimit-Reset
-// from the "reset_at_epoch" parameter writeRateLimitDenied attaches (the
-// window's reset instant as Unix seconds -- see that function's, and
+// writeAppError writes err as the coded error envelope (see
+// pkgcore/httpapi) under the error's suggested HTTP status, setting
+// Retry-After from a "retry_after_seconds" parameter when present
+// (ErrRateLimited, via WithRateLimitParams), X-RateLimit-Reset from the
+// "reset_at_epoch" parameter writeRateLimitDenied attaches (the window's
+// reset instant as Unix seconds -- see that function's, and
 // headerRateLimitReset's own, doc comments for why the header is NOT
 // Retry-After's countdown), and the remaining X-RateLimit-* quota headers
 // from "layer"/"remaining" when present. Only the code and its parameters
-// are written to the body -- an *apperr.Error's cause is never serialized,
-// matching go/authn's identical rule.
+// reach the body -- an *apperr.Error's cause is never serialized.
 func writeAppError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
 	if !ok {
@@ -165,8 +154,7 @@ func writeAppError(w http.ResponseWriter, err error) {
 	}
 
 	w.Header().Set("Content-Type", errorContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(errorBody{Code: appErr.Code, Params: appErr.Params})
+	httpapi.WriteError(w, appErr, appErr)
 }
 
 // intParam reads an int parameter from appErr.Params, reporting false when

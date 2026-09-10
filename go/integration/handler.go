@@ -8,14 +8,13 @@ import (
 
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	"github.com/vislake/speed/go/integration/api"
 )
 
-// jsonContentType is the Content-Type every response below writes, matching
-// notes', org's, storage's and notification's own handler constant of the
-// same name.
+// jsonContentType is the Content-Type every response below writes, the
+// same JSON type the coded refusals carry (see pkgcore/httpapi).
 const jsonContentType = "application/json; charset=utf-8"
 
 // Handler serves this module's spec-generated HTTP surface by implementing
@@ -621,23 +620,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeError writes err to w as a JSON {code, params} body -- the
-// spec-generated api.IntegrationError, the same structured-error envelope
-// every other module's writeError produces. An err that is not an
-// *apperr.Error -- meaning something below this handler did not classify it
-// -- is folded into ErrInternal so a caller never sees raw Go error text.
+// writeError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else -- something below this handler did not classify it -- is
+// folded into ErrInternal so a caller never sees raw Go error text either
+// way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = ErrInternal
-	}
-	envelope := api.IntegrationError{Code: &appErr.Code}
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, ErrInternal)
 }
 
 // compile-time check that *Handler implements the api.ServerInterface
