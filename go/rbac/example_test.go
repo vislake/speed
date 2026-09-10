@@ -311,6 +311,113 @@ func ExampleRequirePermissionFunc() {
 	// anon: 403
 }
 
+// ExampleGuardRoutes shows the platform's route-authorization table: a host
+// declares one decision per mounted route, GuardRoutes wraps each gated
+// route in the permission gate, and a mounted route the table does not name
+// fails the assembly rather than being served undecided -- so "we forgot"
+// and "we meant it public" can never look alike.
+func ExampleGuardRoutes() {
+	ctx := context.Background()
+
+	svc, err := newExampleService(ctx, "rbac_example_guard_routes", nil)
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer func() { _ = svc.Close() }()
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	if _, err = svc.DefineRole(tenantCtx, rbac.RoleDefinition{
+		Key:            "note-reader",
+		DescriptionKey: "rbac.role.member",
+		Permissions:    []string{"notes:read"},
+	}); err != nil {
+		fmt.Println("define:", err)
+		return
+	}
+	reader := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
+	if err = svc.AssignRole(tenantCtx, reader, "note-reader", rbac.Scope{}); err != nil {
+		fmt.Println("assign:", err)
+		return
+	}
+
+	// What the modules mounted (reg.Routes.Routes() in a real host)...
+	mounted := []pkgcore.MountedRoute{
+		{Path: "/api/v1/notes", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})},
+		{Path: "/api/v1/config/public", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})},
+	}
+	// ...and the host's decision for each.
+	guarded, err := rbac.GuardRoutes(svc, mounted, []rbac.RouteRule{
+		{Path: "/api/v1/notes", Access: pkgcore.RouteAccess{Permission: func(r *http.Request) string {
+			if r.Method == http.MethodGet {
+				return rbac.Permission("notes", "read")
+			}
+			return rbac.Permission("notes", "write")
+		}}},
+		{Path: "/api/v1/config/public", Access: pkgcore.RouteAccess{Public: true}},
+	})
+	if err != nil {
+		fmt.Println("guard:", err)
+		return
+	}
+
+	mux := http.NewServeMux()
+	pkgcore.MountRoutes(mux, guarded...)
+
+	call := func(subject *rbac.Subject, method, path string) int {
+		r := httptest.NewRequest(method, path, nil)
+		if subject != nil {
+			r = r.WithContext(rbac.WithSubject(r.Context(), *subject))
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	fmt.Println("reader GET  notes:", call(&reader, http.MethodGet, "/api/v1/notes"))
+	fmt.Println("reader POST notes:", call(&reader, http.MethodPost, "/api/v1/notes"))
+	// The public declaration is what admits the anonymous request; no
+	// Subject exists for it at all.
+	fmt.Println("anon config:", call(nil, http.MethodGet, "/api/v1/config/public"))
+
+	// A mounted route the table does not decide fails assembly.
+	undecided := []pkgcore.MountedRoute{{Path: "/api/v1/invoices", Handler: http.NotFoundHandler()}}
+	_, err = rbac.GuardRoutes(svc, append(append([]pkgcore.MountedRoute{}, mounted...), undecided...), []rbac.RouteRule{
+		{Path: "/api/v1/notes", Access: pkgcore.RouteAccess{Public: true}},
+		{Path: "/api/v1/config/public", Access: pkgcore.RouteAccess{Public: true}},
+	})
+	fmt.Println("undecided route refused:", err != nil)
+
+	// Output:
+	// reader GET  notes: 200
+	// reader POST notes: 403
+	// anon config: 200
+	// undecided route refused: true
+}
+
+// ExampleSplitPermission shows the exported splitter a consumer uses to take
+// a permission apart the way rbac's own gate does. The cut is at the LAST
+// separator, so a module naming its permissions "<module>:<entity>:<verb>"
+// round-trips through Permission exactly.
+func ExampleSplitPermission() {
+	resource, action, ok := rbac.SplitPermission("integration:apikey:read")
+	fmt.Println(resource, action, ok)
+	fmt.Println(rbac.Permission(resource, action))
+
+	// A string with no separator names no permission and is refused.
+	_, _, ok = rbac.SplitPermission("notes")
+	fmt.Println(ok)
+
+	// Output:
+	// integration:apikey read true
+	// integration:apikey:read
+	// false
+}
+
 // newExampleService performs the wiring Example already walks through,
 // with one stand-in module declaring the "notes:read" permission the
 // example grants. It keeps the example above about authorization rather
