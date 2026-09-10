@@ -660,13 +660,21 @@ specification.
 Three boundaries bind every adapter, each documented in its package doc:
 
 - **Templates.** Aliyun and Tencent have no free-text send — every message
-  instantiates an approved account template. The seam delivers
-  already-rendered text, so those two adapters map the whole message onto the
-  template's single variable: Aliyun sends `TemplateParam` as
-  `{"<TemplateParamName>": "<text>"}` (the config names the account's
-  variable, defaulting to `content`), Tencent sends a single-element
-  positional `TemplateParamSet`. The registered template must declare exactly
-  one variable; Twilio alone carries the text free-form in `Body`.
+  instantiates an approved account template, and each vendor has one
+  approved template per kind of message. Those two adapters are driven by
+  the seam's template identity: `pkgcore.SMS` carries the locale message id
+  the body was rendered from, the locale it was rendered in, and the
+  interpolation values, and each adapter's `Config.Templates` maps
+  `"<locale>/<message-id>"` to an approved template plus the variables it
+  declares (Aliyun by name, Tencent positionally). An unmapped pair, or a
+  declared variable with no value, is refused before any request — so a host
+  wiring one must register a template per (locale, message-id) pair its
+  codes can produce, with variable names matching the parameters the copy
+  references. Twilio alone carries the text free-form in `Body`. This
+  module's send carries `MessageID` = `authn.sms.verification_code` and
+  `Locale` = the locale the body was ACTUALLY rendered in — the
+  post-fallback value `renderSMSCode` reports, never the raw request-side
+  one, so an empty-locale account's code still maps.
 - **Phone forms.** The seam's contract — pass `SMS.To` through unchanged,
   never normalize — holds for all three adapters; each package doc records
   the form its vendor's API accepts (Aliyun: domestic numbers with `+`,
@@ -1143,7 +1151,7 @@ rather than trying to synchronize on the exact step boundary.
 | The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`. | Only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/internal/app/demo_users.go`'s `seedDemoUsers`, through the real composed register route, over this module's own `demoseed` helper) and grants each its org membership and rbac role per configured tenant — the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` — while an unset variable leaves only the demo header actors (`internal/app/demo_subject.go`), which carry grants but no database row and cannot sign in. The membership half is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). `Taskfile.yml`'s `seed` task remains a stub with no loader; what remains unbuilt is a Taskfile `seed` loader that generates demo data outside boot, a tooling item, not authn's. |
 | QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or a design decision this module has not made. |
 | The Aliyun/Tencent Cloud/Twilio adapters (`go/pkgcore/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent. Until an operator runs one, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
-| The Aliyun and Tencent adapters can only send through a template the operator's own account registers: Aliyun one whose single variable is named by `Config.TemplateParamName` (default `content`), Tencent one declaring exactly one positional variable; Twilio sends free text. | The seam delivers already-rendered text, and Aliyun/Tencent have no free-text send; the adapters map the whole message onto the account's template variable(s) exactly as each package doc records. The template itself is account data this codebase cannot provision or verify — a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
+| The Aliyun and Tencent adapters send only through an approved account template mapped by (locale, message id): `Config.Templates` keyed `"<locale>/<message-id>"`, each entry naming the template plus the variables it declares; Twilio sends free text. | Aliyun/Tencent have no free-text send and one approved template per message kind; the adapters map `pkgcore.SMS`'s template identity (message id, rendered locale, params) through that map exactly as each package doc records. The templates themselves are account data this codebase cannot provision or verify — a pair with no mapped template, or a mapped template missing a declared variable, is refused before any request (fail-closed, no fallback), and a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
 | `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA), which has not been made. |
 | MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow); the shipped shape is enrollment, recovery and step-up only. |
 | Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options carry; the binding is unbuilt (see the dynamic-config row above).

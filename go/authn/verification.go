@@ -344,12 +344,28 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 		return createErr
 	}
 
-	text, err := renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, int(s.smsCodeTTL/time.Minute))
+	minutes := int(s.smsCodeTTL / time.Minute)
+	text, usedLocale, err := renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, minutes)
 	if err != nil {
 		obs.FromContext(ctx).Error("sms verification code message could not be rendered", "error", err)
 		return ErrInternal.WithCause(err)
 	}
-	if err := s.sms.Send(ctx, pkgcore.SMS{To: in.Phone, Text: text}); err != nil {
+	// The message carries the render's identity -- the id it was rendered
+	// from, the locale it was ACTUALLY rendered in (usedLocale, the
+	// post-fallback value, never smsLocale's request-side answer), and the
+	// values it interpolated -- so a template-typed carrier adapter can
+	// select the account template the operator mapped for this
+	// (locale, message-id) pair.
+	if err := s.sms.Send(ctx, pkgcore.SMS{
+		To:        in.Phone,
+		Text:      text,
+		MessageID: smsVerificationCodeMessageID,
+		Locale:    usedLocale,
+		Params: map[string]string{
+			"code":    code,
+			"minutes": strconv.Itoa(minutes),
+		},
+	}); err != nil {
 		obs.FromContext(ctx).Error("sms verification code delivery failed", "error", err)
 		// A delivery failure must not answer differently from a request
 		// whose number has no account behind it. The registered branch's
@@ -712,26 +728,33 @@ func smsLocale(acceptLanguage, stored string) string {
 }
 
 // renderSMSCode composes the SMS body for a phone-login verification code
-// in locale.
+// in locale, and reports the locale it ACTUALLY rendered in.
 //
 // An unknown or empty locale falls back to DefaultLocale rather than
 // erroring -- the "never an error, fall back to the platform default" rule
 // go/config's own pre-authentication endpoints follow for the same reason:
 // an SMS already in flight cannot be retried in a different language, so
-// refusing to render it is strictly worse than defaulting.
-func renderSMSCode(locale, code string, minutes int) (string, error) {
+// refusing to render it is strictly worse than defaulting. The returned
+// usedLocale names the fallback when it applied, and the caller must carry
+// IT (never the requested value) on the SMS seam: a template-typed carrier
+// adapter maps templates by the locale the body was really rendered in, so
+// reporting an unsupported requested locale would fail a delivery the
+// render itself handled.
+func renderSMSCode(locale, code string, minutes int) (text string, usedLocale string, err error) {
 	messages, err := loadSMSLocaleMessages()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+	usedLocale = locale
 	bundle, ok := messages[locale]
 	if !ok {
+		usedLocale = DefaultLocale
 		bundle = messages[DefaultLocale]
 	}
 	template, ok := bundle[smsVerificationCodeMessageID]
 	if !ok {
-		return "", fmt.Errorf("authn: locale bundle carries no %q message", smsVerificationCodeMessageID)
+		return "", "", fmt.Errorf("authn: locale bundle carries no %q message", smsVerificationCodeMessageID)
 	}
 	replacer := strings.NewReplacer("{{.code}}", code, "{{.minutes}}", strconv.Itoa(minutes))
-	return replacer.Replace(template), nil
+	return replacer.Replace(template), usedLocale, nil
 }

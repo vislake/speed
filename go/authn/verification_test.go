@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -792,4 +794,99 @@ func TestRequestSMSCode_LanguageChain_DeliversInTheNegotiatedLanguage(t *testing
 			t.Errorf("sent SMS %q, want the platform default's %q template", sent, smsEnUSMarker)
 		}
 	})
+}
+
+// recordingSMSSender keeps every message it is asked to send, so a test can
+// assert the whole SMS the seam received -- the console sender only prints
+// the rendered text, which is precisely the half a template-typed carrier
+// adapter does NOT route by.
+type recordingSMSSender struct {
+	mu   sync.Mutex
+	sent []pkgcore.SMS
+}
+
+func (s *recordingSMSSender) Send(_ context.Context, sms pkgcore.SMS) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sent = append(s.sent, sms)
+	return nil
+}
+
+func (s *recordingSMSSender) messages() []pkgcore.SMS {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]pkgcore.SMS(nil), s.sent...)
+}
+
+// TestRequestSMSCode_SeamCarriesMessageIdentityAndParams pins the identity
+// the phone-login code's send carries on the SMS seam: the message id the
+// body was rendered from, the locale it was rendered in, and exactly the
+// two values it interpolated -- the code itself and the lifetime, whose
+// string form comes from the same constant the rendered body interpolates.
+func TestRequestSMSCode_SeamCarriesMessageIdentityAndParams(t *testing.T) {
+	t.Parallel()
+
+	sender := &recordingSMSSender{}
+	f := newServiceFixture(t, WithSMSSender(sender))
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{
+		Phone: testPhone, AcceptLanguage: "zh-CN", IP: "203.0.113.80",
+	}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+
+	msgs := sender.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("SMS sender sent %d messages, want the one verification code", len(msgs))
+	}
+	sms := msgs[0]
+	if sms.MessageID != smsVerificationCodeMessageID {
+		t.Errorf("SMS MessageID = %q, want %q", sms.MessageID, smsVerificationCodeMessageID)
+	}
+	if sms.Locale != "zh-CN" {
+		t.Errorf("SMS Locale = %q, want the requested zh-CN locale the body rendered in", sms.Locale)
+	}
+	if len(sms.Params) != 2 {
+		t.Fatalf("SMS Params = %v, want exactly code and minutes", sms.Params)
+	}
+	code := sms.Params["code"]
+	if len(code) != smsCodeDigits || !strings.Contains(sms.Text, code) {
+		t.Errorf("SMS Params[code] = %q, want the %d-digit code the rendered body carries", code, smsCodeDigits)
+	}
+	if want := strconv.Itoa(int(f.svc.smsCodeTTL / time.Minute)); sms.Params["minutes"] != want {
+		t.Errorf("SMS Params[minutes] = %q, want %q (the same lifetime the render interpolates)", sms.Params["minutes"], want)
+	}
+}
+
+// TestRequestSMSCode_EmptyStoredLocale_SeamCarriesTheRenderedFallback pins
+// the seam locale against the render's fallback, the asymmetry that makes
+// the seam value the render's own: a user whose stored locale is empty (and
+// whose request carries no language) has the body rendered in DefaultLocale,
+// and the send must therefore carry DefaultLocale -- reporting the empty
+// request-side value would make a template-typed carrier adapter fail
+// closed on a delivery the render itself handled.
+func TestRequestSMSCode_EmptyStoredLocale_SeamCarriesTheRenderedFallback(t *testing.T) {
+	t.Parallel()
+
+	sender := &recordingSMSSender{}
+	f := newServiceFixture(t, WithSMSSender(sender))
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{
+		Phone: testPhone, IP: "203.0.113.81",
+	}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+
+	msgs := sender.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("SMS sender sent %d messages, want the one verification code", len(msgs))
+	}
+	if msgs[0].Locale != DefaultLocale {
+		t.Errorf("SMS Locale = %q, want the post-fallback %q the body was actually rendered in", msgs[0].Locale, DefaultLocale)
+	}
+	if !strings.Contains(msgs[0].Text, smsEnUSMarker) {
+		t.Errorf("SMS text = %q, want the platform default's %q template rendered", msgs[0].Text, smsEnUSMarker)
+	}
 }
