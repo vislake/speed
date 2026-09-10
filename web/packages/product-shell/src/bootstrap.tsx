@@ -19,7 +19,7 @@
  * What the assembly wires, in order:
  *
  *  1. i18n -- one fresh bilingual instance over the platform defaults
- *     (?lang= URL parameter, stored choice, navigator languages, zh-CN
+ *     (?lang= URL parameter, stored choice, navigator languages, en-US
  *     last). The namespaces of the four packages the assembly itself
  *     composes register automatically -- ui-kit, layout-kit, auth-ui
  *     and product-shell's own -- because the stack it renders always
@@ -35,7 +35,11 @@
  *     reload starts anonymous by contract.
  *
  *  3. The client -- createClient over the environment's own fetch, with
- *     the session's silent refresh as the 401-refresh leg, bound into
+ *     the session's silent refresh as the 401-refresh leg and the i18n
+ *     instance as the language source (every request announces the
+ *     instance's current language through accept-language, read per
+ *     attempt, so the backend's requester-language tiers see exactly
+ *     what the frontend chain resolved), bound into
  *     the api-sdk runtime seam every generated operation calls through.
  *     All API traffic is generated-code traffic from here on.
  *
@@ -285,6 +289,13 @@ export function bootstrapSpeedApp(
     baseUrl: definition.baseUrl ?? window.location.origin,
     accessTokenStore,
     refreshAccessToken: () => session.refresh(),
+    // The frontend negotiation chain's resolved value, transported: the
+    // provider reads the instance per attempt (createClient's own
+    // contract), so a request retried after a language switch announces
+    // the language the user is looking at, and a request the backend
+    // serves as "requester is recipient" content (an SMS code, the type
+    // directory) renders in it.
+    languageProvider: () => i18n.language,
   })
   bindRequestFn(client)
 

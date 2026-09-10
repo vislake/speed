@@ -268,6 +268,28 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   to `console.error`/`console.warn` -- the browser has no structured
   log backend, so reports reach whatever sink hosts install; hosts
   replace it through `ClientOptions.reporter`.
+- **Language announcement (a transport channel, not a preference).**
+  `ClientOptions.languageProvider` supplies the language every request
+  announces as `accept-language`:
+
+  ```ts
+  const api = createClient({
+    baseUrl: '/api/v1',
+    // product-shell's bootstrap passes exactly this: the frontend
+    // negotiation chain's resolved value, read per attempt.
+    languageProvider: () => i18n.language,
+  })
+  ```
+
+  The provider is read on EVERY attempt, so a request retried after a
+  language switch announces the language the user is now looking at --
+  the same per-attempt discipline the bearer-token read observes. It
+  never overwrites a caller-supplied `accept-language` header, and a
+  null/empty answer leaves the header absent. What the header is FOR is
+  decided backend-side: the requester-language tiers of content chains
+  (an SMS code's language, a contact verification message). API
+  responses themselves are never localized -- they stay code+params for
+  the client to translate.
 
 ## Public surface
 

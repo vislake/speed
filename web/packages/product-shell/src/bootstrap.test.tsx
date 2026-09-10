@@ -26,7 +26,7 @@ import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ReactElement } from 'react'
 import { AUTH_UI_NAMESPACE } from '@speed/auth-ui'
-import { useTranslation } from '@speed/i18n'
+import { switchLanguage, useTranslation } from '@speed/i18n'
 import { LAYOUT_KIT_NAMESPACE } from '@speed/layout-kit'
 import { UI_KIT_NAMESPACE } from '@speed/ui-kit'
 import { PRODUCT_SHELL_NAMESPACE } from './resources.js'
@@ -124,6 +124,7 @@ describe('bootstrapSpeedApp', () => {
     readonly method: string
     readonly path: string
     readonly origin: string
+    readonly acceptLanguage: string | null
   }>
   let realFetch: typeof globalThis.fetch
   let realLanguages: readonly string[] | undefined
@@ -170,6 +171,7 @@ describe('bootstrapSpeedApp', () => {
           method: init?.method ?? 'GET',
           path: url.pathname,
           origin: url.origin,
+          acceptLanguage: new Headers(init?.headers).get('accept-language'),
         })
         return respond({
           method: init?.method ?? 'GET',
@@ -226,6 +228,41 @@ describe('bootstrapSpeedApp', () => {
     })
     container.remove()
     expect(container.innerHTML).toBe('')
+  })
+
+  it('announces the i18n instance language on every request, and a switch moves it', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const boot = await mountApp(container, { view: <div /> })
+
+    // The navigator leg resolved zh-CN at creation (pinned above), so
+    // the assembled client announces it -- the frontend chain's value,
+    // transported for the backend's requester-language tiers. A real
+    // operation drives the request so the whole session wiring is on
+    // the path.
+    await act(async () => {
+      await boot.session.loginWithPassword({
+        identifier: 'owner@example.test',
+        password: 'correct-horse-battery-staple',
+      })
+    })
+    expect(observed[0]?.acceptLanguage).toBe('zh-CN')
+
+    // A language switch moves what subsequent requests announce: the
+    // provider reads the instance per attempt, so nothing goes stale.
+    await act(async () => {
+      await switchLanguage(boot.i18n, 'en-US')
+      await boot.session.loginWithPassword({
+        identifier: 'owner@example.test',
+        password: 'correct-horse-battery-staple',
+      })
+    })
+    expect(observed[1]?.acceptLanguage).toBe('en-US')
+
+    await act(async () => {
+      boot.root.unmount()
+    })
+    container.remove()
   })
 
   it('registers the declared namespaces on top of the family four, and threads the assembled services through the providers in declared order', async () => {

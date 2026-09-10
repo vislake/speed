@@ -32,6 +32,15 @@ this one may issue HTTP requests itself.
   clear error when absent) and `ClientOptions.fetch` overrides it.
   Tests inject deterministic stand-ins (`test-utils/fetch-standin.ts`)
   and never touch a network.
+- **The language travels as a transport header, read per attempt.**
+  `ClientOptions.languageProvider` (the host's i18n instance via
+  product-shell's bootstrap) is read on every attempt and announced as
+  `accept-language` when set -- never a response-localization switch
+  (the backend keeps answering code+params), and never an override of a
+  caller-supplied header. The per-attempt read is the point: a retry
+  issued after a language switch must announce the language the user is
+  now looking at, the same discipline the bearer-token read observes.
+  Null/empty means "nothing to announce" and the header stays absent.
 - **Every failure rejects an `ApiError`** -- except caller
   cancellation, which rejects the raw `AbortError` (never retried,
   never wrapped). Envelope-bearing non-2xx responses surface the

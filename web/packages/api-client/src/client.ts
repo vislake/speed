@@ -256,6 +256,25 @@ export interface ClientOptions {
   retryPolicy?: RetryPolicy
   /** Structured diagnostics sink; defaults to createConsoleReporter(). */
   reporter?: Reporter
+  /**
+   * The language requests announce, as the value of the
+   * `accept-language` header: the host returns its i18n instance's
+   * current language (the frontend negotiation chain's resolved
+   * value), or null/empty for "none to announce". This is a transport
+   * channel, not a preference: the backend reads the header for the
+   * content classes whose language the requester speaks for (an SMS
+   * code's requester-language tier, a type directory's transport
+   * value), never to localize the API response itself, which stays
+   * code+params for the client to translate.
+   *
+   * Read per attempt, like the bearer token, so a retry issued after a
+   * language switch carries the language the user is now looking at.
+   * A caller-supplied `accept-language` on the request's own headers
+   * is never overwritten (the same guard the accept/content-type
+   * defaults observe): a request that names its own language -- a
+   * probe, a fixed-copy fetch -- keeps it.
+   */
+  languageProvider?: () => string | null
 }
 
 /** Statuses transient-retried on idempotent methods. */
@@ -716,6 +735,7 @@ export function createClient(options: ClientOptions): RequestFn {
     )
   }
   const reporter = options.reporter ?? createConsoleReporter()
+  const languageProvider = options.languageProvider
 
   /** One HTTP attempt: token attach, timeout abort, caller-abort
    * passthrough. Rejects raw only for caller cancellation. The
@@ -739,6 +759,18 @@ export function createClient(options: ClientOptions): RequestFn {
     }
     if (bodyText !== undefined && !headers.has('content-type')) {
       headers.set('content-type', 'application/json')
+    }
+    // The language is read per attempt through the host's provider, the
+    // same per-attempt discipline the token read below observes: a retry
+    // issued after a language switch announces the new language, and a
+    // caller-supplied accept-language is the caller's, never
+    // overwritten. Null/empty means "nothing to announce" and the
+    // header stays absent.
+    if (!headers.has('accept-language')) {
+      const language = languageProvider?.() ?? null
+      if (language !== null && language !== '') {
+        headers.set('accept-language', language)
+      }
     }
     // The token is read per attempt: a retry after a successful refresh
     // picks up the fresh token without extra plumbing. A request that

@@ -336,6 +336,71 @@ describe('request shape', () => {
     expect(recorded(standin, 1).headers.get('accept')).toBe('application/json')
   })
 
+  it('announces the language provider value and leaves the header absent for null/empty', async () => {
+    const standin = scriptedStandin(
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+    )
+    let language: string | null = 'zh-CN'
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      languageProvider: () => language,
+    })
+    await api<{ ok: boolean }>('/notes')
+    expect(recorded(standin, 0).headers.get('accept-language')).toBe('zh-CN')
+
+    language = null
+    await api<{ ok: boolean }>('/notes')
+    expect(recorded(standin, 1).headers.has('accept-language')).toBe(false)
+
+    language = ''
+    await api<{ ok: boolean }>('/notes')
+    expect(recorded(standin, 2).headers.has('accept-language')).toBe(false)
+
+    // No provider at all: nothing to announce, no header.
+    const bare = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    await bare<{ ok: boolean }>('/notes')
+    expect(recorded(standin, 3).headers.has('accept-language')).toBe(false)
+  })
+
+  it('never overwrites a caller-supplied accept-language', async () => {
+    const standin = scriptedStandin(jsonResponse(200, { ok: true }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      languageProvider: () => 'zh-CN',
+    })
+    await api<{ ok: boolean }>('/notes', {
+      headers: { 'accept-language': 'de-DE' },
+    })
+    expect(recorded(standin).headers.get('accept-language')).toBe('de-DE')
+  })
+
+  it('reads the language per attempt, so a retry carries the switched language', async () => {
+    let language = 'zh-CN'
+    const standin = scriptedStandin(
+      textResponse(503, 'Service Unavailable'),
+      jsonResponse(200, { ok: true }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      retryPolicy: zeroDelay(2),
+      languageProvider: () => language,
+    })
+    // The switch lands between the first attempt and its retry: the retry
+    // must announce the language the user is looking at NOW, not the one
+    // the request started with.
+    const pending = api<{ ok: boolean }>('/notes')
+    language = 'en-US'
+    await expect(pending).resolves.toEqual({ ok: true })
+    expect(recorded(standin, 0).headers.get('accept-language')).toBe('zh-CN')
+    expect(recorded(standin, 1).headers.get('accept-language')).toBe('en-US')
+  })
+
   it('strips trailing slashes from baseUrl and appends the path verbatim', async () => {
     const standin = scriptedStandin(jsonResponse(200, { ok: true }))
     const api = createClient({
