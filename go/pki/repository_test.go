@@ -89,7 +89,7 @@ func TestSigningKeyRepository_CreateAndFindByID(t *testing.T) {
 
 func TestSigningKeyRepository_FindByID_NotFound(t *testing.T) {
 	repo := NewSigningKeyRepository(newTestDB(t))
-	if _, err := repo.FindByID(context.Background(), "does-not-exist"); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := repo.FindByID(context.Background(), "does-not-exist"); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("FindByID(missing) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -98,7 +98,7 @@ func TestSigningKeyRepository_FindActiveByPurpose(t *testing.T) {
 	repo := NewSigningKeyRepository(newTestDB(t))
 	ctx := context.Background()
 
-	if _, err := repo.FindActiveByPurpose(ctx, "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
+	if _, err := repo.FindActiveByPurpose(ctx, "authn.access_token"); !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		t.Fatalf("FindActiveByPurpose(none yet) error = %v, want ErrNoActiveKey", err)
 	}
 
@@ -262,7 +262,7 @@ func TestSigningKeyRepository_PromoteToActive_ConcurrentCalls_ExactlyOneWinner(t
 				winners++
 				continue
 			}
-			if !apperrIs(err, ErrKeyNotFound) {
+			if !apperr.HasCode(err, ErrKeyNotFound.Code) {
 				t.Fatalf("trial %d: PromoteToActive goroutine %d error = %v, want ErrKeyNotFound for every losing call", trial, i, err)
 			}
 		}
@@ -344,7 +344,7 @@ func TestAuthorityRepository_CreateAndFindByID(t *testing.T) {
 
 func TestAuthorityRepository_FindByID_NotFound(t *testing.T) {
 	repo := NewAuthorityRepository(newTestDB(t))
-	if _, err := repo.FindByID(context.Background(), "does-not-exist"); !apperrIs(err, ErrAuthorityNotFound) {
+	if _, err := repo.FindByID(context.Background(), "does-not-exist"); !apperr.HasCode(err, ErrAuthorityNotFound.Code) {
 		t.Errorf("FindByID(missing) error = %v, want ErrAuthorityNotFound", err)
 	}
 }
@@ -523,10 +523,10 @@ func TestLocalKeyRepository_CreateFindDelete(t *testing.T) {
 	if err := repo.Delete(ctx, "keyref-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.FindByKeyRef(ctx, "keyref-1"); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := repo.FindByKeyRef(ctx, "keyref-1"); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("FindByKeyRef(after delete) error = %v, want ErrKeyNotFound", err)
 	}
-	if err := repo.Delete(ctx, "keyref-1"); !apperrIs(err, ErrKeyNotFound) {
+	if err := repo.Delete(ctx, "keyref-1"); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("Delete(already deleted) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -852,12 +852,4 @@ func TestCertificateRevocationRepository_InsertIfAbsent_NoOpsWhenRowExists(t *te
 	if rows[0].ID != "rev-1" || rows[0].RevocationReason != "compromised" {
 		t.Errorf("ledger row = {id %q, reason %q} after the no-op, want the FIRST insert's row unchanged (id rev-1, reason compromised)", rows[0].ID, rows[0].RevocationReason)
 	}
-}
-
-// apperrIs reports whether err is (a decorated instance of) want, matching
-// on Code the way every *apperr.Error sentinel in this codebase must be
-// compared -- see errors.go's own doc comment.
-func apperrIs(err error, want *apperr.Error) bool {
-	found, ok := apperr.As(err)
-	return ok && found.Code == want.Code
 }

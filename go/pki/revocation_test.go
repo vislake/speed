@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // --- Service.RevokeSigningKey ------------------------------------------------
@@ -106,7 +107,7 @@ func TestService_RevokeSigningKey_IsIdempotent(t *testing.T) {
 
 func TestService_RevokeSigningKey_UnknownKID(t *testing.T) {
 	svc := newTestService(t)
-	if _, err := svc.RevokeSigningKey(context.Background(), "does-not-exist", "reason"); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := svc.RevokeSigningKey(context.Background(), "does-not-exist", "reason"); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("RevokeSigningKey(unknown kid) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -148,7 +149,7 @@ func TestService_RevokeSigningKey_InvalidatesTheCacheAndExcludesFromReads(t *tes
 	// would give if EnsurePurpose had never been called -- because the
 	// long-TTL cache was invalidated, not merely because the TTL happened
 	// to expire (it has not: this test runs in well under an hour).
-	if _, _, _, err = svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
+	if _, _, _, err = svc.ActiveSigner(ctx, "authn.access_token"); !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		t.Errorf("ActiveSigner(after revoke) error = %v, want ErrNoActiveKey", err)
 	}
 
@@ -307,7 +308,7 @@ func TestCAService_VerifyCertificate_RevokedCertificate_Refused(t *testing.T) {
 		t.Fatalf("RevokeCertificate: %v", err)
 	}
 
-	if _, err := ca.VerifyCertificate(ctx, cert.ID); !apperrIs(err, ErrCertificateRevoked) {
+	if _, err := ca.VerifyCertificate(ctx, cert.ID); !apperr.HasCode(err, ErrCertificateRevoked.Code) {
 		t.Errorf("VerifyCertificate(revoked certificate) error = %v, want ErrCertificateRevoked", err)
 	}
 }
@@ -332,7 +333,7 @@ func TestCAService_VerifyCertificate_RevokedAuthorityInChain_Refused(t *testing.
 		t.Fatalf("seed revoked authority: %v", err)
 	}
 
-	if _, err := ca.VerifyCertificate(ctx, cert.ID); !apperrIs(err, ErrCertificateRevoked) {
+	if _, err := ca.VerifyCertificate(ctx, cert.ID); !apperr.HasCode(err, ErrCertificateRevoked.Code) {
 		t.Errorf("VerifyCertificate(revoked issuing authority) error = %v, want ErrCertificateRevoked", err)
 	}
 }

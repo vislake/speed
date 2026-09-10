@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // errBus is a pkgcore.EventBus whose Publish always fails, standing in for
@@ -175,7 +176,7 @@ func TestService_Create_EmptyScopes_NeedsNoPermissionLister(t *testing.T) {
 func TestService_Create_NonEmptyScopes_NoPermissionLister_Refused(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	_, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", Scopes: []string{"notes:read"}})
-	if !apperrIs(err, ErrPermissionListerUnavailable) {
+	if !apperr.HasCode(err, ErrPermissionListerUnavailable.Code) {
 		t.Errorf("Create error = %v, want ErrPermissionListerUnavailable", err)
 	}
 }
@@ -186,7 +187,7 @@ func TestService_Create_ScopeNotHeldByCreator_Refused(t *testing.T) {
 		CreatedBy: "user-1",
 		Scopes:    []string{"notes:read", "notes:delete"},
 	})
-	if !apperrIs(err, ErrScopeNotHeldByCreator) {
+	if !apperr.HasCode(err, ErrScopeNotHeldByCreator.Code) {
 		t.Errorf("Create error = %v, want ErrScopeNotHeldByCreator", err)
 	}
 }
@@ -194,7 +195,7 @@ func TestService_Create_ScopeNotHeldByCreator_Refused(t *testing.T) {
 func TestService_Create_EmptyCreatedBy_Refused(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	_, err := svc.Create(ctxFor(testTenant), CreateInput{})
-	if !apperrIs(err, ErrCreatedByRequired) {
+	if !apperr.HasCode(err, ErrCreatedByRequired.Code) {
 		t.Errorf("Create error = %v, want ErrCreatedByRequired", err)
 	}
 }
@@ -215,7 +216,7 @@ func TestService_Create_ExpiryBeyondMaximum_Refused(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	tooFar := fixedNow.Add(MaxAPIKeyLifetime + time.Hour)
 	_, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &tooFar})
-	if !apperrIs(err, ErrExpiryExceedsMaximum) {
+	if !apperr.HasCode(err, ErrExpiryExceedsMaximum.Code) {
 		t.Errorf("Create error = %v, want ErrExpiryExceedsMaximum", err)
 	}
 }
@@ -232,7 +233,7 @@ func TestService_Create_ExpiryInPast_Refused(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	past := fixedNow.Add(-time.Hour)
 	_, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &past})
-	if !apperrIs(err, ErrExpiryInPast) {
+	if !apperr.HasCode(err, ErrExpiryInPast.Code) {
 		t.Errorf("Create error = %v, want ErrExpiryInPast", err)
 	}
 }
@@ -241,7 +242,7 @@ func TestService_Create_ExpiryExactlyNow_Refused(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	now := fixedNow
 	_, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &now})
-	if !apperrIs(err, ErrExpiryInPast) {
+	if !apperr.HasCode(err, ErrExpiryInPast.Code) {
 		t.Errorf("Create error = %v, want ErrExpiryInPast for an ExpiresAt exactly equal to now", err)
 	}
 }
@@ -322,7 +323,7 @@ func TestService_List_ReportsRevokedAndExpired(t *testing.T) {
 func TestService_Revoke_NotFound(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 	err := svc.Revoke(ctxFor(testTenant), "does-not-exist")
-	if !apperrIs(err, ErrKeyNotFound) {
+	if !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("Revoke(missing) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -336,7 +337,7 @@ func TestService_Revoke_AlreadyRevoked_Refused(t *testing.T) {
 	if err := svc.Revoke(ctxFor(testTenant), created.ID); err != nil {
 		t.Fatalf("first Revoke: %v", err)
 	}
-	if err := svc.Revoke(ctxFor(testTenant), created.ID); !apperrIs(err, ErrKeyAlreadyRevoked) {
+	if err := svc.Revoke(ctxFor(testTenant), created.ID); !apperr.HasCode(err, ErrKeyAlreadyRevoked.Code) {
 		t.Errorf("second Revoke error = %v, want ErrKeyAlreadyRevoked", err)
 	}
 }
@@ -354,7 +355,7 @@ func TestService_Revoke_CrossTenant_NotFound(t *testing.T) {
 	}
 
 	const otherTenant pkgcore.TenantID = "tenant-2"
-	if err := svc.Revoke(ctxFor(otherTenant), created.ID); !apperrIs(err, ErrKeyNotFound) {
+	if err := svc.Revoke(ctxFor(otherTenant), created.ID); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("cross-tenant Revoke error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -409,14 +410,14 @@ func TestService_Rotate_AlreadyRevoked_Refused(t *testing.T) {
 	if err := svc.Revoke(ctxFor(testTenant), created.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := svc.Rotate(ctxFor(testTenant), created.ID); !apperrIs(err, ErrKeyAlreadyRevoked) {
+	if _, err := svc.Rotate(ctxFor(testTenant), created.ID); !apperr.HasCode(err, ErrKeyAlreadyRevoked.Code) {
 		t.Errorf("Rotate(already revoked) error = %v, want ErrKeyAlreadyRevoked", err)
 	}
 }
 
 func TestService_Rotate_NotFound(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
-	if _, err := svc.Rotate(ctxFor(testTenant), "does-not-exist"); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := svc.Rotate(ctxFor(testTenant), "does-not-exist"); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("Rotate(missing) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -434,7 +435,7 @@ func TestService_Rotate_ScopeNoLongerHeld_Refused(t *testing.T) {
 
 	// ...but has since lost it by the time Rotate is called.
 	svc.permissions = alwaysHeld()
-	if _, rotateErr := svc.Rotate(ctxFor(testTenant), created.ID); !apperrIs(rotateErr, ErrScopeNotHeldByCreator) {
+	if _, rotateErr := svc.Rotate(ctxFor(testTenant), created.ID); !apperr.HasCode(rotateErr, ErrScopeNotHeldByCreator.Code) {
 		t.Errorf("Rotate error = %v, want ErrScopeNotHeldByCreator", rotateErr)
 	}
 
@@ -735,7 +736,7 @@ func TestService_Create_ConfiguredLifetime_MovesDefaultAndCeilingTogether(t *tes
 	// Ceiling: a requested expiry inside the package default's one-year
 	// horizon but past the configured lifetime is refused.
 	beyond := fixedNow.Add(60 * 24 * time.Hour)
-	if _, ceErr := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &beyond}); !apperrIs(ceErr, ErrExpiryExceedsMaximum) {
+	if _, ceErr := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", ExpiresAt: &beyond}); !apperr.HasCode(ceErr, ErrExpiryExceedsMaximum.Code) {
 		t.Errorf("Create with an expiry beyond the configured lifetime = %v, want ErrExpiryExceedsMaximum", ceErr)
 	}
 

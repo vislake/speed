@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/pki/api"
 )
@@ -101,7 +102,7 @@ func TestHandler_PkiRevokeSigningKey_Success(t *testing.T) {
 		t.Errorf("response Status = %v, want %q", resp.Status, SigningKeyStatusRevoked)
 	}
 
-	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
+	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		t.Errorf("ActiveSigner(after HTTP revoke) error = %v, want ErrNoActiveKey", err)
 	}
 }

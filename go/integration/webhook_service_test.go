@@ -12,6 +12,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // alwaysAllowURL is a WithWebhookURLValidator override that accepts any URL
@@ -95,7 +96,7 @@ func TestService_CreateWebhookSubscription_EmptyCreatedBy_Refused(t *testing.T) 
 	_, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
 		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"},
 	})
-	if !apperrIs(err, ErrCreatedByRequired) {
+	if !apperr.HasCode(err, ErrCreatedByRequired.Code) {
 		t.Errorf("error = %v, want ErrCreatedByRequired", err)
 	}
 }
@@ -105,7 +106,7 @@ func TestService_CreateWebhookSubscription_EmptyURL_Refused(t *testing.T) {
 	_, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
 		CreatedBy: "user-1", EventTypes: []string{"test.thing.happened"},
 	})
-	if !apperrIs(err, ErrWebhookURLRequired) {
+	if !apperr.HasCode(err, ErrWebhookURLRequired.Code) {
 		t.Errorf("error = %v, want ErrWebhookURLRequired", err)
 	}
 }
@@ -115,7 +116,7 @@ func TestService_CreateWebhookSubscription_EmptyEventTypes_Refused(t *testing.T)
 	_, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
 		CreatedBy: "user-1", URL: "https://example.com/hook",
 	})
-	if !apperrIs(err, ErrEventTypesRequired) {
+	if !apperr.HasCode(err, ErrEventTypesRequired.Code) {
 		t.Errorf("error = %v, want ErrEventTypesRequired", err)
 	}
 }
@@ -125,7 +126,7 @@ func TestService_CreateWebhookSubscription_UnknownEventType_Refused(t *testing.T
 	_, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
 		CreatedBy: "user-1", URL: "https://example.com/hook", EventTypes: []string{"no.such.type"},
 	})
-	if !apperrIs(err, ErrWebhookEventTypeUnknown) {
+	if !apperr.HasCode(err, ErrWebhookEventTypeUnknown.Code) {
 		t.Errorf("error = %v, want ErrWebhookEventTypeUnknown", err)
 	}
 }
@@ -139,7 +140,7 @@ func TestService_CreateWebhookSubscription_BlockedURL_Refused(t *testing.T) {
 	_, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
 		CreatedBy: "user-1", URL: "http://127.0.0.1/hook", EventTypes: []string{"test.thing.happened"},
 	})
-	if !apperrIs(err, ErrWebhookURLBlocked) {
+	if !apperr.HasCode(err, ErrWebhookURLBlocked.Code) {
 		t.Errorf("error = %v, want ErrWebhookURLBlocked", err)
 	}
 }
@@ -185,7 +186,7 @@ func TestService_UpdateWebhookSubscription_EmptyEventTypesSlice_Refused(t *testi
 	_, err = svc.UpdateWebhookSubscription(ctxFor(testTenant), UpdateWebhookSubscriptionInput{
 		ID: created.ID, EventTypes: []string{},
 	})
-	if !apperrIs(err, ErrEventTypesRequired) {
+	if !apperr.HasCode(err, ErrEventTypesRequired.Code) {
 		t.Errorf("error = %v, want ErrEventTypesRequired", err)
 	}
 }
@@ -238,7 +239,7 @@ func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *test
 		}()
 		wg.Wait()
 
-		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !apperrIs(err, dbkit.ErrRecordNotFound) {
+		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !dbkit.IsRecordNotFound(err) {
 			t.Fatalf("iteration %d: the subscription is readable as live after a concurrent update+delete (err = %v) -- the delete did not win", i, err)
 		}
 	}
@@ -333,11 +334,11 @@ func TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins(t *tes
 		if !deleteSucceeded {
 			t.Fatalf("iteration %d: the delete reported no success", i)
 		}
-		if restoreErr != nil && !apperrIs(restoreErr, ErrWebhookSubscriptionNotFound) {
+		if restoreErr != nil && !apperr.HasCode(restoreErr, ErrWebhookSubscriptionNotFound.Code) {
 			t.Fatalf("iteration %d RestoreWebhookSubscription: %v", i, restoreErr)
 		}
 
-		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !apperrIs(err, dbkit.ErrRecordNotFound) {
+		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !dbkit.IsRecordNotFound(err) {
 			t.Fatalf("iteration %d: the subscription is readable as live after the restore's write raced a delete that reported success (err = %v) -- the restore resurrected the deleted row", i, err)
 		}
 	}
@@ -515,7 +516,7 @@ func TestService_RestoreWebhookSubscription_PauseWriteFailure_LeavesNoRestoredAc
 func TestService_UpdateWebhookSubscription_NotFound_Refused(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 	_, err := svc.UpdateWebhookSubscription(ctxFor(testTenant), UpdateWebhookSubscriptionInput{ID: "no-such-id"})
-	if !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound", err)
 	}
 }
@@ -529,7 +530,7 @@ func TestService_UpdateWebhookSubscription_CrossTenant_NotFound(t *testing.T) {
 		t.Fatalf("CreateWebhookSubscription: %v", err)
 	}
 	_, err = svc.UpdateWebhookSubscription(ctxFor("tenant-other"), UpdateWebhookSubscriptionInput{ID: created.ID})
-	if !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound (cross-tenant indistinguishable from absent)", err)
 	}
 }
@@ -633,7 +634,7 @@ func TestService_DeleteWebhookSubscription_RemovesIt(t *testing.T) {
 	if len(list) != 0 {
 		t.Errorf("len(list) = %d after delete, want 0", len(list))
 	}
-	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("second delete error = %v, want ErrWebhookSubscriptionNotFound", err)
 	}
 }
@@ -756,7 +757,7 @@ func TestService_RestoreWebhookSubscription_ForcesActiveFalse_EvenIfActiveAtDele
 // go/org's TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound.
 func TestService_RestoreWebhookSubscription_UnknownID_ReturnsNotFound(t *testing.T) {
 	_, svc := newWebhookTestService(t)
-	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), "no-such-id"); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), "no-such-id"); !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound", err)
 	}
 }
@@ -773,7 +774,7 @@ func TestService_RestoreWebhookSubscription_LiveSubscription_ReturnsNotFound(t *
 	if err != nil {
 		t.Fatalf("CreateWebhookSubscription: %v", err)
 	}
-	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound", err)
 	}
 }
@@ -794,7 +795,7 @@ func TestService_RestoreWebhookSubscription_Twice_SecondCallReturnsNotFound(t *t
 	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
 		t.Fatalf("first RestoreWebhookSubscription: %v", err)
 	}
-	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("second RestoreWebhookSubscription error = %v, want ErrWebhookSubscriptionNotFound", err)
 	}
 }
@@ -814,7 +815,7 @@ func TestService_RestoreWebhookSubscription_CrossTenant_NotFound(t *testing.T) {
 	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
 		t.Fatalf("DeleteWebhookSubscription: %v", err)
 	}
-	if err := svc.RestoreWebhookSubscription(ctxFor("tenant-other"), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if err := svc.RestoreWebhookSubscription(ctxFor("tenant-other"), created.ID); !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound (cross-tenant indistinguishable from absent)", err)
 	}
 }

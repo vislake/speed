@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -88,7 +90,7 @@ func TestService_EnsurePurpose_Idempotent(t *testing.T) {
 
 func TestService_ActiveSigner_NoActiveKey(t *testing.T) {
 	svc := newTestService(t)
-	if _, _, _, err := svc.ActiveSigner(context.Background(), "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
+	if _, _, _, err := svc.ActiveSigner(context.Background(), "authn.access_token"); !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		t.Errorf("ActiveSigner(no key ever created) error = %v, want ErrNoActiveKey", err)
 	}
 }
@@ -168,7 +170,7 @@ func TestService_ActiveSigner_KeyPastNotAfterIsRefused(t *testing.T) {
 	// past its NotAfter must not keep signing just because the scan job has
 	// not run yet.
 	svc.now = func() time.Time { return key.NotAfter.Add(time.Nanosecond) }
-	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
+	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		t.Fatalf("ActiveSigner just past NotAfter error = %v, want ErrNoActiveKey (regression: an expired key must not sign)", err)
 	}
 }
@@ -192,7 +194,7 @@ func TestService_ActiveSigner_KeyBeforeNotBeforeIsRefused(t *testing.T) {
 		t.Fatalf("seed future-dated active key: %v", err)
 	}
 
-	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(err, ErrNoActiveKey) {
+	if _, _, _, err := svc.ActiveSigner(ctx, "authn.access_token"); !apperr.HasCode(err, ErrNoActiveKey.Code) {
 		t.Fatalf("ActiveSigner before NotBefore error = %v, want ErrNoActiveKey", err)
 	}
 }
@@ -288,7 +290,7 @@ func TestService_EnsurePurpose_ReplacesAnExpiredActiveKeyWhenNothingIsStaged(t *
 	// expired. ActiveSigner must refuse (an expired active key must not keep
 	// signing)...
 	svc.now = func() time.Time { return base.Add(2 * 365 * 24 * time.Hour) }
-	if _, _, _, errAtExpiry := svc.ActiveSigner(ctx, "authn.access_token"); !apperrIs(errAtExpiry, ErrNoActiveKey) {
+	if _, _, _, errAtExpiry := svc.ActiveSigner(ctx, "authn.access_token"); !apperr.HasCode(errAtExpiry, ErrNoActiveKey.Code) {
 		t.Fatalf("ActiveSigner past the key's NotAfter error = %v, want ErrNoActiveKey (regression: an expired key must not sign)", errAtExpiry)
 	}
 

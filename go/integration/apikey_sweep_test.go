@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // seedAPIKey inserts one API key row (with its hash-index row, exactly like
@@ -87,7 +88,7 @@ func TestService_SweepExpiredAPIKeys_RemovesOnlyTheTenantsExpiredKeys(t *testing
 		// The pair went together: a swept key's hash-index row must no
 		// longer resolve a tenant (see deleteWithHashIndex's doc comment).
 		_, err := svc.repo.tenantForHash(context.Background(), hashes[id])
-		if !apperrIs(err, ErrAuthenticationFailed) {
+		if !apperr.HasCode(err, ErrAuthenticationFailed.Code) {
 			t.Errorf("hash-index row of swept key %q still resolves a tenant (err = %v)", id, err)
 		}
 	}
@@ -107,7 +108,7 @@ func TestService_SweepExpiredAPIKeys_RemovesOnlyTheTenantsExpiredKeys(t *testing
 
 func TestService_SweepExpiredAPIKeys_NoTenantInContext_Refused(t *testing.T) {
 	svc := attachedService(t)
-	if err := svc.SweepExpiredAPIKeys(context.Background()); !apperrIs(err, ErrInternal) {
+	if err := svc.SweepExpiredAPIKeys(context.Background()); !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("SweepExpiredAPIKeys without a tenant = %v, want ErrInternal", err)
 	}
 }
@@ -177,7 +178,7 @@ func TestService_EnqueueAPIKeyExpirySweep_WindowKey_CollapsesSameWindow_OpensNex
 func TestService_EnqueueAPIKeyExpirySweep_NoTenantInContext_Fails(t *testing.T) {
 	fq := &fakeQueue{}
 	svc := attachedService(t, WithWebhookQueue(fq))
-	if err := svc.EnqueueAPIKeyExpirySweep(context.Background()); !apperrIs(err, ErrInternal) {
+	if err := svc.EnqueueAPIKeyExpirySweep(context.Background()); !apperr.HasCode(err, ErrInternal.Code) {
 		t.Errorf("EnqueueAPIKeyExpirySweep without a tenant = %v, want ErrInternal", err)
 	}
 	if len(fq.tasks) != 0 {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func fixedTransform(data json.RawMessage) EventTransform {
@@ -38,7 +39,7 @@ func TestEventMapping_Validate_MissingFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := tt.mutate(valid)
 			err := m.validate()
-			if !apperrIs(err, ErrInvalidEventMapping) {
+			if !apperr.HasCode(err, ErrInvalidEventMapping.Code) {
 				t.Errorf("validate() = %v, want ErrInvalidEventMapping", err)
 			}
 		})
@@ -51,7 +52,7 @@ func TestBuildEventMappingIndex_DuplicateInternalType_Refused(t *testing.T) {
 		{InternalType: "org.member.joined", PublicType: "org.member.joined_v2", PublicVersion: "v1", Transform: fixedTransform(nil)},
 	}
 	_, err := buildEventMappingIndex(mappings)
-	if !apperrIs(err, ErrDuplicateEventMapping) {
+	if !apperr.HasCode(err, ErrDuplicateEventMapping.Code) {
 		t.Errorf("buildEventMappingIndex() error = %v, want ErrDuplicateEventMapping", err)
 	}
 }
@@ -77,7 +78,7 @@ func TestBuildEventMappingIndex_DistinctInternalTypesSamePublicType_Allowed(t *t
 
 func TestBuildEventMappingIndex_InvalidMapping_Refused(t *testing.T) {
 	_, err := buildEventMappingIndex([]EventMapping{{InternalType: "x"}})
-	if !apperrIs(err, ErrInvalidEventMapping) {
+	if !apperr.HasCode(err, ErrInvalidEventMapping.Code) {
 		t.Errorf("buildEventMappingIndex() error = %v, want ErrInvalidEventMapping", err)
 	}
 }

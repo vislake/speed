@@ -6,15 +6,6 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// apperrIs reports whether err is (a decorated instance of) want, matching
-// on Code -- the convention this module's own errors.go doc comment
-// documents (every builder-derived error must be compared by Code, never by
-// identity), mirroring go/pki/repository_test.go's identical helper.
-func apperrIs(err error, want *apperr.Error) bool {
-	found, ok := apperr.As(err)
-	return ok && found.Code == want.Code
-}
-
 // TestErrors_EveryVarIsAnAppErrorWithTheModulePrefix proves every exported
 // error var in this module's index (errors.go) is a genuine *apperr.Error
 // (or, for ErrRateLimited, a struct literal of that same type) whose Code

@@ -37,7 +37,7 @@ func TestValidateWebhookURL_PrivateIPLiteral_Blocked(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ValidateWebhookURL(%q) = nil, want a refusal", u)
 			}
-			if !apperrIs(err, ErrWebhookURLBlocked) {
+			if !apperr.HasCode(err, ErrWebhookURLBlocked.Code) {
 				t.Fatalf("ValidateWebhookURL(%q) error = %v, want ErrWebhookURLBlocked", u, err)
 			}
 		})
@@ -106,21 +106,21 @@ func TestValidateWebhookURL_PublicIPLiteral_Allowed(t *testing.T) {
 
 func TestValidateWebhookURL_DisallowedScheme_Refused(t *testing.T) {
 	err := ValidateWebhookURL(context.Background(), "ftp://example.com/hook")
-	if !apperrIs(err, ErrWebhookURLInvalid) {
+	if !apperr.HasCode(err, ErrWebhookURLInvalid.Code) {
 		t.Fatalf("error = %v, want ErrWebhookURLInvalid", err)
 	}
 }
 
 func TestValidateWebhookURL_Malformed_Refused(t *testing.T) {
 	err := ValidateWebhookURL(context.Background(), "://not a url")
-	if !apperrIs(err, ErrWebhookURLInvalid) {
+	if !apperr.HasCode(err, ErrWebhookURLInvalid.Code) {
 		t.Fatalf("error = %v, want ErrWebhookURLInvalid", err)
 	}
 }
 
 func TestValidateWebhookURL_NoHost_Refused(t *testing.T) {
 	err := ValidateWebhookURL(context.Background(), "https:///hook")
-	if !apperrIs(err, ErrWebhookURLInvalid) {
+	if !apperr.HasCode(err, ErrWebhookURLInvalid.Code) {
 		t.Fatalf("error = %v, want ErrWebhookURLInvalid", err)
 	}
 }

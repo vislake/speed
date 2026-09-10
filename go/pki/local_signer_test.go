@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func TestLocalSigner_GenerateKey_RejectsUnsupportedAlgorithm(t *testing.T) {
 	signer := NewLocalSigner(newTestDB(t))
 	_, _, err := signer.GenerateKey(context.Background(), "ecdsa-p256")
-	if !apperrIs(err, ErrAlgorithmUnsupportedBySigner) {
+	if !apperr.HasCode(err, ErrAlgorithmUnsupportedBySigner.Code) {
 		t.Fatalf("GenerateKey(unsupported) error = %v, want ErrAlgorithmUnsupportedBySigner", err)
 	}
 }
@@ -72,7 +74,7 @@ func TestLocalSigner_SignAndPublic_RoundTrip(t *testing.T) {
 
 func TestLocalSigner_Sign_UnknownKeyRef(t *testing.T) {
 	signer := NewLocalSigner(newTestDB(t))
-	if _, err := signer.Sign(context.Background(), "does-not-exist", []byte("x")); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := signer.Sign(context.Background(), "does-not-exist", []byte("x")); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("Sign(unknown keyRef) error = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -88,7 +90,7 @@ func TestLocalSigner_Destroy_RemovesTheKey(t *testing.T) {
 	if err := signer.Destroy(ctx, keyRef); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	if _, err := signer.Public(ctx, keyRef); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := signer.Public(ctx, keyRef); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("Public(after Destroy) error = %v, want ErrKeyNotFound", err)
 	}
 }

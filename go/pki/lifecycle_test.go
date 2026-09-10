@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // newTestServiceWithClock returns a Service like newTestService, but with a
@@ -471,7 +472,7 @@ func TestService_PromoteNow_PropagationWindowNotElapsed(t *testing.T) {
 		t.Fatalf("seed pending key: %v", err)
 	}
 
-	if _, err := svc.PromoteNow(ctx, "authn.access_token", time.Hour); !apperrIs(err, ErrPropagationWindowNotElapsed) {
+	if _, err := svc.PromoteNow(ctx, "authn.access_token", time.Hour); !apperr.HasCode(err, ErrPropagationWindowNotElapsed.Code) {
 		t.Errorf("PromoteNow(window not elapsed) error = %v, want ErrPropagationWindowNotElapsed", err)
 	}
 	if len(rec.events) != 0 {
@@ -557,7 +558,7 @@ func TestService_PromoteNow_PromotesPastTheWindow_AndDemotesThePrevious(t *testi
 // ErrPropagationWindowNotElapsed -- there is nothing to wait out.
 func TestService_PromoteNow_NoPendingKey_ErrKeyNotFound(t *testing.T) {
 	svc := newTestService(t)
-	if _, err := svc.PromoteNow(context.Background(), "authn.access_token", time.Hour); !apperrIs(err, ErrKeyNotFound) {
+	if _, err := svc.PromoteNow(context.Background(), "authn.access_token", time.Hour); !apperr.HasCode(err, ErrKeyNotFound.Code) {
 		t.Errorf("PromoteNow(no pending key) error = %v, want ErrKeyNotFound", err)
 	}
 }

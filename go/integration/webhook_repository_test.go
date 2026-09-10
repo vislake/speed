@@ -162,7 +162,7 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 	if matched {
 		t.Fatal("updateFields matched a mark-deleted row")
 	}
-	if _, findErr := repo.FindByID(ctx, "sub-1"); !apperrIs(findErr, dbkit.ErrRecordNotFound) {
+	if _, findErr := repo.FindByID(ctx, "sub-1"); !dbkit.IsRecordNotFound(findErr) {
 		t.Errorf("FindByID after delete+updateFields = %v, want not found (the row must stay deleted)", findErr)
 	}
 
@@ -260,7 +260,7 @@ func TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLan
 	if matched {
 		t.Fatal("the guarded flip matched a row that was mark-deleted again -- the write resurrected the deletion")
 	}
-	if _, findErr := repo.FindByID(ctx, row.ID); !apperrIs(findErr, dbkit.ErrRecordNotFound) {
+	if _, findErr := repo.FindByID(ctx, row.ID); !dbkit.IsRecordNotFound(findErr) {
 		t.Errorf("FindByID after the guarded flip = %v, want not found (the row must stay deleted)", findErr)
 	}
 }

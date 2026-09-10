@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func newTestRegistry(t *testing.T) *pkgcore.Registry {
@@ -142,7 +143,7 @@ func TestModule_Register_DuplicateEventMapping_Refused(t *testing.T) {
 	dup := EventMapping{InternalType: "x", PublicType: "y", PublicVersion: "v1", Transform: fixedTransform(nil)}
 	m := NewModule(newTestDB(t), WithEventMapping(dup, dup))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); !apperrIs(err, ErrDuplicateEventMapping) {
+	if err := m.Register(reg); !apperr.HasCode(err, ErrDuplicateEventMapping.Code) {
 		t.Errorf("Register error = %v, want ErrDuplicateEventMapping", err)
 	}
 }
@@ -176,7 +177,7 @@ func TestModule_Attach_SecondCall_Refused(t *testing.T) {
 	if _, err := m.Attach(reg); err != nil {
 		t.Fatalf("first Attach: %v", err)
 	}
-	if _, err := m.Attach(reg); !apperrIs(err, ErrAlreadyAttached) {
+	if _, err := m.Attach(reg); !apperr.HasCode(err, ErrAlreadyAttached.Code) {
 		t.Errorf("second Attach error = %v, want ErrAlreadyAttached", err)
 	}
 }

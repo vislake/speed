@@ -225,7 +225,7 @@ func TestCAService_ExportAuthorityChainJWKS_RootOnly(t *testing.T) {
 
 func TestCAService_ExportAuthorityChainJWKS_AuthorityNotFound(t *testing.T) {
 	ca := newTestCAService(t)
-	if _, err := ca.ExportAuthorityChainJWKS(context.Background(), "does-not-exist"); !apperrIs(err, ErrAuthorityNotFound) {
+	if _, err := ca.ExportAuthorityChainJWKS(context.Background(), "does-not-exist"); !apperr.HasCode(err, ErrAuthorityNotFound.Code) {
 		t.Errorf("ExportAuthorityChainJWKS(missing authority) error = %v, want ErrAuthorityNotFound", err)
 	}
 }

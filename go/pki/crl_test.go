@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // parseCRLPEM reverses encodeCRLPEM, for tests that need to inspect the
@@ -206,7 +207,7 @@ func TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber(t *tes
 
 func TestCAService_GenerateCRL_AuthorityNotFound(t *testing.T) {
 	ca := newTestCAService(t)
-	if _, err := ca.GenerateCRL(context.Background(), "does-not-exist", 0); !apperrIs(err, ErrAuthorityNotFound) {
+	if _, err := ca.GenerateCRL(context.Background(), "does-not-exist", 0); !apperr.HasCode(err, ErrAuthorityNotFound.Code) {
 		t.Errorf("GenerateCRL(missing authority) error = %v, want ErrAuthorityNotFound", err)
 	}
 }
@@ -230,7 +231,7 @@ func TestCAService_GenerateCRL_WrapsSignerFailureAsErrSignerUnavailable(t *testi
 	}
 
 	failing.fail = true
-	if _, err := ca.GenerateCRL(ctx, root.ID, 0); !apperrIs(err, ErrSignerUnavailable) {
+	if _, err := ca.GenerateCRL(ctx, root.ID, 0); !apperr.HasCode(err, ErrSignerUnavailable.Code) {
 		t.Errorf("GenerateCRL(signer failing) error = %v, want ErrSignerUnavailable", err)
 	}
 }

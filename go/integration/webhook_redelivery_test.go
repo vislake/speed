@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // deadLetterPendingDelivery turns the freshly created pending delivery row
@@ -131,7 +132,7 @@ func TestService_RedeliverWebhookDelivery_NotFound_Refused(t *testing.T) {
 	fq := &fakeQueue{}
 	_, svc := newWebhookTestService(t, WithWebhookQueue(fq))
 
-	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), "no-such-delivery"); !apperrIs(err, ErrWebhookDeliveryNotFound) {
+	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), "no-such-delivery"); !apperr.HasCode(err, ErrWebhookDeliveryNotFound.Code) {
 		t.Errorf("redeliver of an unknown id = %v, want ErrWebhookDeliveryNotFound", err)
 	}
 
@@ -140,7 +141,7 @@ func TestService_RedeliverWebhookDelivery_NotFound_Refused(t *testing.T) {
 	subID, _ := createTestSubscription(t, otherSvc, "https://example.com/hook")
 	dead := deadLetterPendingDelivery(t, otherSvc, subID)
 	const otherTenant pkgcore.TenantID = "tenant-2"
-	if err := otherSvc.RedeliverWebhookDelivery(ctxFor(otherTenant), dead.ID); !apperrIs(err, ErrWebhookDeliveryNotFound) {
+	if err := otherSvc.RedeliverWebhookDelivery(ctxFor(otherTenant), dead.ID); !apperr.HasCode(err, ErrWebhookDeliveryNotFound.Code) {
 		t.Errorf("cross-tenant redeliver = %v, want ErrWebhookDeliveryNotFound", err)
 	}
 	if len(fq.tasks) != 0 {
@@ -170,7 +171,7 @@ func TestService_RedeliverWebhookDelivery_OnlyDeadLetter_Refused(t *testing.T) {
 			}
 
 			err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), delivery.ID)
-			if !apperrIs(err, ErrWebhookDeliveryNotDeadLetter) {
+			if !apperr.HasCode(err, ErrWebhookDeliveryNotDeadLetter.Code) {
 				t.Errorf("redeliver of a %q delivery = %v, want ErrWebhookDeliveryNotDeadLetter", state, err)
 			}
 			if len(fq.tasks) != 0 {
@@ -189,7 +190,7 @@ func TestService_RedeliverWebhookDelivery_SubscriptionDeleted_Refused(t *testing
 	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), subID); err != nil {
 		t.Fatalf("DeleteWebhookSubscription: %v", err)
 	}
-	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), dead.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), dead.ID); !apperr.HasCode(err, ErrWebhookSubscriptionNotFound.Code) {
 		t.Errorf("redeliver after the subscription's deletion = %v, want ErrWebhookSubscriptionNotFound", err)
 	}
 	if len(fq.tasks) != 0 {
@@ -207,7 +208,7 @@ func TestService_RedeliverWebhookDelivery_SubscriptionInactive_Refused(t *testin
 	if _, err := svc.UpdateWebhookSubscription(ctxFor(testTenant), UpdateWebhookSubscriptionInput{ID: subID, Active: &inactive}); err != nil {
 		t.Fatalf("UpdateWebhookSubscription: %v", err)
 	}
-	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), dead.ID); !apperrIs(err, ErrWebhookSubscriptionInactive) {
+	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), dead.ID); !apperr.HasCode(err, ErrWebhookSubscriptionInactive.Code) {
 		t.Errorf("redeliver to a paused subscription = %v, want ErrWebhookSubscriptionInactive", err)
 	}
 	if len(fq.tasks) != 0 {
@@ -349,7 +350,7 @@ func TestService_RedeliverWebhookDelivery_CycleKeyedIdempotency(t *testing.T) {
 
 	// A same-cycle repeat while the row is already pending is refused -- the
 	// state flip is the double-click protection.
-	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), dead.ID); !apperrIs(err, ErrWebhookDeliveryNotDeadLetter) {
+	if err := svc.RedeliverWebhookDelivery(ctxFor(testTenant), dead.ID); !apperr.HasCode(err, ErrWebhookDeliveryNotDeadLetter.Code) {
 		t.Errorf("same-cycle redelivery = %v, want ErrWebhookDeliveryNotDeadLetter", err)
 	}
 	if len(fq.tasks) != 1 {

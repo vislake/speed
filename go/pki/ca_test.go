@@ -130,7 +130,7 @@ func TestCAService_CreateIntermediateCA_UnknownParent(t *testing.T) {
 		Subject:  pkix.Name{CommonName: "orphan"},
 		NotAfter: time.Now().Add(time.Hour),
 	})
-	if !apperrIs(err, ErrAuthorityNotFound) {
+	if !apperr.HasCode(err, ErrAuthorityNotFound.Code) {
 		t.Errorf("CreateIntermediateCA(unknown parent) error = %v, want ErrAuthorityNotFound", err)
 	}
 }
@@ -330,7 +330,7 @@ func TestCAService_CreateIntermediateCA_RevokedParent_Refused(t *testing.T) {
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
-	if !apperrIs(err, ErrAuthorityRevoked) {
+	if !apperr.HasCode(err, ErrAuthorityRevoked.Code) {
 		t.Errorf("CreateIntermediateCA(revoked parent) error = %v, want ErrAuthorityRevoked", err)
 	}
 }
@@ -351,7 +351,7 @@ func TestCAService_IssueCertificate_RevokedAuthority_Refused(t *testing.T) {
 		Subject:  pkix.Name{CommonName: "another leaf"},
 		NotAfter: time.Now().Add(time.Hour),
 	})
-	if !apperrIs(err, ErrAuthorityRevoked) {
+	if !apperr.HasCode(err, ErrAuthorityRevoked.Code) {
 		t.Errorf("IssueCertificate(revoked authority) error = %v, want ErrAuthorityRevoked", err)
 	}
 }

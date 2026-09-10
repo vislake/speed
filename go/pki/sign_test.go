@@ -92,7 +92,7 @@ func TestCAService_SignCertificate_RevokedCertificate_Refused(t *testing.T) {
 		t.Fatalf("RevokeCertificate: %v", err)
 	}
 
-	if _, err := ca.SignCertificate(ctx, cert.ID, []byte("message")); !apperrIs(err, ErrCertificateRevoked) {
+	if _, err := ca.SignCertificate(ctx, cert.ID, []byte("message")); !apperr.HasCode(err, ErrCertificateRevoked.Code) {
 		t.Errorf("SignCertificate(revoked certificate) error = %v, want ErrCertificateRevoked", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestCAService_SignCertificate_RevokedAuthorityInChain_Refused(t *testing.T)
 		t.Fatalf("seed revoked authority: %v", err)
 	}
 
-	if _, err := ca.SignCertificate(ctx, cert.ID, []byte("message")); !apperrIs(err, ErrCertificateRevoked) {
+	if _, err := ca.SignCertificate(ctx, cert.ID, []byte("message")); !apperr.HasCode(err, ErrCertificateRevoked.Code) {
 		t.Errorf("SignCertificate(revoked issuing authority) error = %v, want ErrCertificateRevoked", err)
 	}
 }
