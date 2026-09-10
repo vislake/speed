@@ -42,12 +42,23 @@ name: go-module-ci
 #                                coverage, excluding generated files
 #                                (.gen.go -- the census is hand-written
 #                                code only), and fails when the measured
-#                                total sits more than the 0.15-point
+#                                total sits more than the size-calibrated
 #                                tolerance below either bound -- the 80%
 #                                floor (the 2026-09 product decision) or
 #                                the committed tools/coverage-baselines.json
 #                                row (the no-decline rule, which predates
-#                                the floor and survives it). A module
+#                                the floor and survives it). The tolerance
+#                                is the wider of 0.15 points and the points
+#                                two statements are worth in the module
+#                                under measurement (2 * 100 / statements)
+#                                -- a 2-statement floor that keeps the
+#                                jitter budget size-invariant, absorbing
+#                                statement-granular scheduling noise in
+#                                small modules while the 0.15-point main
+#                                tolerance governs the larger ones -- and
+#                                a failure names the effective tolerance
+#                                and the census it was calibrated against.
+#                                A module
 #                                outside the gated set (a new go/ module
 #                                not yet added to the tool's list) prints
 #                                a notice and passes; the baseline file's
