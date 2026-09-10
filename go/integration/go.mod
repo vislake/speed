@@ -2,6 +2,19 @@ module github.com/vislake/speed/go/integration
 
 go 1.26.0
 
+// apperr.HasCode (and, where the module decodes event payloads,
+// pkgcore's payload helpers) is not in a released pkgcore version yet, so
+// this module resolves pkgcore from the sibling checkout. A replace
+// directive in a dependency is ignored by consumers, so this affects this
+// module's own standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
+// dbkit.IsRecordNotFound is not in a released dbkit version yet, so this
+// module resolves dbkit from the sibling checkout. A replace directive in
+// a dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/dbkit => ../dbkit
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/oapi-codegen/runtime v1.7.0

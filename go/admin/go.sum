@@ -210,8 +210,6 @@ github.com/vislake/speed/go/observability v0.0.1 h1:Bkt6TEUDVTGuwlUwtHRDx+Ey6UaA
 github.com/vislake/speed/go/observability v0.0.1/go.mod h1:1xrda4IsEVgWJ5XwJlQ0ggG1ta//I4Ui6lMFXEnLRyQ=
 github.com/vislake/speed/go/org v0.0.1 h1:3wWBAZXdF8y+lQ9JJgM5PcoWMp9VuenIR6yiFuAtuU4=
 github.com/vislake/speed/go/org v0.0.1/go.mod h1:wTfFF27jI9PqqSxkn/k9F7CFx1/USfzzzUEp4U9XzMA=
-github.com/vislake/speed/go/pkgcore v0.0.1 h1:2SQU+uzhTENHh6+gQY60USBCPxG+rMnZpxjenbzdUBc=
-github.com/vislake/speed/go/pkgcore v0.0.1/go.mod h1:vC1fF+15XCz7MuEoks1wZNj9NyDzprlkS2x5Mtuyf3k=
 github.com/vislake/speed/go/ratelimit v0.0.1 h1:ZPozStmxdbizwScnOhmCIx+pi38cva0IoyCXXkUqqd4=
 github.com/vislake/speed/go/ratelimit v0.0.1/go.mod h1:MPWm0Il7uBkuu5lJqaCBIieF/pnXqyYSVbZKGL67fD0=
 github.com/vislake/speed/go/rbac v0.0.1 h1:v/uswSyTp742O2cmkmmwE+BVNi9ulk74OhzbINGuV2E=
