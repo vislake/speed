@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
 
@@ -120,8 +121,7 @@ func (h *Handler) AdminCreateTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AdminCreateTenantRequest
-	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
+	if !httpapi.DecodeJSON(w, r, 0, &req, ErrRequestBodyInvalid) {
 		return
 	}
 	t := &Tenant{TenantID: req.TenantID, CreatedBy: callerID}
@@ -156,8 +156,7 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	var req api.AdminUpdateTenantRequest
-	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
+	if !httpapi.DecodeJSON(w, r, 0, &req, ErrRequestBodyInvalid) {
 		return
 	}
 	patch := TenantPatch{DisplayName: req.DisplayName, Notes: req.Notes, SuspendedReason: req.SuspendedReason}
@@ -289,8 +288,7 @@ func (h *Handler) AdminStartImpersonation(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req api.AdminStartImpersonationRequest
-	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
+	if !httpapi.DecodeJSON(w, r, 0, &req, ErrRequestBodyInvalid) {
 		return
 	}
 	locale := ""
@@ -528,8 +526,7 @@ func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req api.AdminExportAuditEventsRequest
-	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
+	if !httpapi.DecodeJSON(w, r, 0, &req, ErrRequestBodyInvalid) {
 		return
 	}
 	jobID, err := h.exportSvc.Enqueue(r.Context(), req.TenantID, callerID)
@@ -584,8 +581,7 @@ func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AdminDefineRoleRequest
-	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
+	if !httpapi.DecodeJSON(w, r, 0, &req, ErrRequestBodyInvalid) {
 		return
 	}
 	def := rbac.RoleDefinition{Key: req.Key, Permissions: req.Permissions}
@@ -614,8 +610,7 @@ func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var req api.AdminCreateRoleBindingRequest
-	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
+	if !httpapi.DecodeJSON(w, r, 0, &req, ErrRequestBodyInvalid) {
 		return
 	}
 	nodeID := ""
@@ -779,19 +774,12 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// writeError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code and status,
+// anything else is folded into errInternal so a caller never sees raw Go
+// error text either way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = errInternal
-	}
-	envelope := api.AdminError{Code: &appErr.Code}
-	if appErr.Params != nil {
-		params := appErr.Params
-		envelope.Params = &params
-	}
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, errInternal)
 }
 
 // compile-time check that *Handler satisfies api.ServerInterface.
