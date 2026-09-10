@@ -919,7 +919,10 @@ step (catalogued above) run in fast-check's repo-checks job (every pull
 request and every push to main, `.github/workflows/fast-check.yml`);
 `python3 tools/check_i18n_keys.py` plus `python3 tools/check_docs_site.py`
 plus `python3 tools/check_markdown_examples.py` (after a pinned Go
-install, `./.github/actions/setup-go-env`) run in the docs-check pipeline
+install, `./.github/actions/setup-go-env`) plus the platform-error
+bundle's suite and drift gate (`python3 tools/test_gen_platform_error_bundle.py`
+then `python3 tools/gen_platform_error_bundle.py --check`) run in the
+docs-check pipeline
 (`.github/workflows/docs-check.yml`), whose pull_request path filter fires
 on PRs touching documentation, i18n resources, or the two modules
 (`go/dbkit`, `go/ratelimit`) a markdown example currently claims to
