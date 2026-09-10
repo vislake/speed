@@ -188,8 +188,8 @@
 | 61 | 实现 | `go/notification/sms.go` | SMS 未成为 pkgcore seam | 闭:`3f06333f`(feat(pkgcore): add the shared SMS seam)。SMS 现为 pkgcore 共享 seam(根包 `SMS`/`SMSSender` 契约 + console/http-gateway 发送器);carrier 适配器移入 `pkgcore/sms/`,authn 与 notification 消费方切换随 `87364ed4`/`7be42b46`。刻意无内核座位(无 registry/preset/capability 条目):两消费方均经各自 WithSMSSender 注入并自带接线期约束,`pkgcore.SMSSender` doc 记录该形状 |
 | 63 | ROADMAP | `go/authn/mfa.go` | RequireStepUp 无 MFA 账户无密码重输回退 | RequireStepUp 无密码回退需安全设计决策(证明有效期/与 MFA 组合) |
 | 82 | ROADMAP | `docs/internal/17-risks.md` | 数据分域表第五类取舍未定 | 数据分域表第五类取舍 wait-for-trigger 开放裁决 |
-| 87 | ROADMAP | `docs/internal/03-deployment-modes.md` | preset 参数通道与配置文件逐项覆盖层未落地 | preset per-implementation 参数通道+config-file override 层;无调用方,设计未动 |
-| 96 | ROADMAP | `CLAUDE.md` | preset 层逐实现参数通道与配置文件覆盖层 | preset per-implementation 参数通道+config-file override 层;无调用方,设计未动 |
+| 87 | ROADMAP | `docs/internal/03-deployment-modes.md` | preset 参数通道与配置文件逐项覆盖层未落地 | 闭:`c7aeafd9`(feat(pkgcore)!: carry configuration through the preset channel)。`Preset` 现为 `map[string]SeamPreset`(实现名+`Config`),`resolveKernelSeam` 把条目 `Config` 交给 `Registration.New`;`Preset.With` 提供逐项覆盖(返回副本);03 的状态段与四个实现条目的模板句同步改写,三条路径分工写入正文 |
+| 96 | ROADMAP | `CLAUDE.md` | preset 层逐实现参数通道与配置文件覆盖层 | 闭:`c7aeafd9`(同 87)。机制随同批落地;`CLAUDE.md` 正文不描述 preset 形状,无需改动 |
 | 104 | ROADMAP | `go/ai-gateway/AGENTS.md` | Known limitations 全节(无动态路由、凭据面无轮换/过期、SQLITE_BUSY WARN 消除需 derive-gate 事务形变、崩溃窗口等) | 聚合项各含自载裁决/触发(SQLITE_BUSY 消除需 go/storage derive-gate 事务形变) |
 | 121 | BLOCKED | `docs/internal/22-pki.md` | X.509 到期驱动续期/轮转与证书事件未实现 | 无真实消费者前提已闭(66c81ee9/e0f4e691);到期驱动续期/轮转仍未建,宿主自管到期为现状,机制待真实到期需求 |
 | 123 | BLOCKED | `docs/internal/05-identity-and-access.md` | Repository[T].WithinSubtree 未落地 | Repository[T].WithinSubtree 反投机:等真实查询形状消费者(现消费方自拼谓词) |
@@ -424,7 +424,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 50 | `go/authn/service.go` | 注册重复标识符的枚举oracle未闭合 | authn 注册枚举 oracle=诚实立场已记录;闭合需 check-your-inbox 产品 UX 决策+未实现投递流 |
 | 51 | `go/observability/redact.go` | 红线决策追踪未实现(有意保持静默) | redact.go 红线决策追踪=by deliberate choice 已记录 |
 | 52 | `go/storage/AGENTS.md` | storage fragment 无前端 SDK 表面 | storage fragment 无前端 SDK 面=recorded design,记录准确 |
-| 53 | `go/pkgcore/preset.go` | Preset 层无 per-implementation 参数通道 | preset.go 参数通道=记录即现状(With* 注入为刻意边界) |
+| 53 | `go/pkgcore/preset.go` | Preset 层无 per-implementation 参数通道 | 闭:`c7aeafd9`:`Preset` 为 `map[string]SeamPreset`(实现名+`Config`),参数随条目到达 `Registration.New`;`Preset.With` 逐项覆盖;`With*` 注入保留为共享资源/测试 double/typed 配置路径 |
 | 54 | `go/billing/AGENTS.md` | 多并发订阅模型未实现 | billing 多并发订阅=范围声明准确(A later round, if ever needed) |
 | 55 | `web/packages/api-client/src/react.ts` | config-hook auto-polling / window-focus revalidation | react.ts 无轮询=记录即结论(refresh() 为显式再验证杠杆) |
 | 56 | `go/admin/AGENTS.md` | audit 查询与 send-record 搜索分页为应用层切片/逐租户 limit | admin AGENTS 分页=记录准确(继承 compliance.AuditQuery 无分页/D10 逐租户 limit) |
