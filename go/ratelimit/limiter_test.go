@@ -381,7 +381,7 @@ func TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched(t *testing.T) {
 	if !errors.As(err, &appErr) {
 		t.Fatalf("err = %v, want an *apperr.Error to match on its code", err)
 	}
-	if appErr.Code != "ratelimit.rate_one_unsupported" {
+	if !apperr.HasCode(err, "ratelimit.rate_one_unsupported") {
 		t.Fatalf("apperr code = %q, want %q", appErr.Code, "ratelimit.rate_one_unsupported")
 	}
 	if dec != (Decision{}) {

@@ -352,7 +352,7 @@ func TestPasswordPolicy_TooShortCarriesTheLimit(t *testing.T) {
 	if !ok {
 		t.Fatalf("Validate() error = %v, want an *apperr.Error", err)
 	}
-	if appErr.Code != ErrPasswordTooShort.Code {
+	if !apperr.HasCode(err, ErrPasswordTooShort.Code) {
 		t.Fatalf("code = %q, want %q", appErr.Code, ErrPasswordTooShort.Code)
 	}
 	if got := appErr.Params["min_length"]; got != 14 {

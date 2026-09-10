@@ -294,7 +294,7 @@ func TestService_Login_DoesNotDistinguishFailureCauses(t *testing.T) {
 			if !ok {
 				t.Fatalf("Login() error = %v, want an *apperr.Error", loginErr)
 			}
-			if appErr.Code != ErrInvalidCredentials.Code {
+			if !apperr.HasCode(loginErr, ErrInvalidCredentials.Code) {
 				t.Fatalf("code = %q, want %q for every failure cause", appErr.Code, ErrInvalidCredentials.Code)
 			}
 			if appErr.Status != ErrInvalidCredentials.Status {
@@ -386,7 +386,7 @@ func TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword(t *testi
 	if wrongTenantErr == nil {
 		t.Fatal("Login(correct password, requested tenant without membership) succeeded")
 	}
-	if appErr, ok := asAppError(wrongTenantErr); !ok || appErr.Code != ErrInvalidCredentials.Code {
+	if !apperr.HasCode(wrongTenantErr, ErrInvalidCredentials.Code) {
 		t.Fatalf("wrong-tenant login error = %v, want %q", wrongTenantErr, ErrInvalidCredentials.Code)
 	}
 
