@@ -1,22 +1,17 @@
 package rbac
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
 // permissionSeparator is the single character that divides a permission
 // string's two halves, "<resource>:<action>" -- the naming convention
 // Permission composes.
 const permissionSeparator = ":"
-
-// authzErrorContentType is the Content-Type the middleware sets on every
-// response it writes itself, matching go/tenancy's Middleware so a client
-// parses one error shape across the whole fixed chain.
-const authzErrorContentType = "application/json; charset=utf-8"
 
 // MiddlewareOption configures RequirePermission and RequirePermissionFunc.
 type MiddlewareOption func(*middlewareConfig)
@@ -214,23 +209,12 @@ func splitPermission(permission string) (resource, action string, ok bool) {
 	return resource, action, true
 }
 
-// authzErrorBody is the JSON shape the middleware writes, the {code,
-// params} structured-error convention and the same body go/tenancy's
-// Middleware produces.
-type authzErrorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// writeAuthzError writes appErr to w as that JSON body, at the status its
-// apperr constructor pre-filled. The localized prose is never written:
-// the API returns a code plus parameters and the client resolves it
-// against locales/{zh-CN,en-US}.toml.
+// writeAuthzError writes appErr to w as the coded error envelope (see
+// pkgcore/httpapi), at the status its apperr constructor pre-filled. The
+// localized prose is never written: the API returns a code plus
+// parameters and the client resolves it against locales/{zh-CN,en-US}.toml.
+// A typed *apperr.Error is always coded, so the fallback (used only for a
+// non-*apperr.Error) is the value itself.
 func writeAuthzError(w http.ResponseWriter, appErr *apperr.Error) {
-	w.Header().Set("Content-Type", authzErrorContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(authzErrorBody{
-		Code:   appErr.Code,
-		Params: appErr.Params,
-	})
+	httpapi.WriteError(w, appErr, appErr)
 }

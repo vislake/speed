@@ -64,6 +64,19 @@ func serve(mw func(http.Handler) http.Handler, r *http.Request) (*httptest.Respo
 	return rec, next
 }
 
+// authzErrorContentType is the Content-Type these tests pin on the
+// middleware's refusals: the parameter-carrying JSON type the whole fixed
+// middleware chain answers with, so a client parses one error shape across
+// it.
+const authzErrorContentType = "application/json; charset=utf-8"
+
+// authzErrorBody is the {code, params} refusal envelope these tests decode
+// the middleware's responses as.
+type authzErrorBody struct {
+	Code   string         `json:"code"`
+	Params map[string]any `json:"params,omitempty"`
+}
+
 // decodeErrorBody reads the {code, params} body the middleware writes.
 func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) authzErrorBody {
 	t.Helper()
