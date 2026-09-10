@@ -2,21 +2,21 @@ package flowtests
 
 // tenant_config_reader_flow_test.go is the mandatory-first-consumer proof
 // for the two host adapters over go/config that internal/app/server.go's
-// real BuildServer wires: the app's own SharingConfigReader and
-// compliance's own compliance.NewConfigReader over the config module's
-// lazy Handle. It drives them against a real go/config Service, a
-// real go/sharing Service and a real go/compliance.ExportService, all
-// composed through the same pkgcore.NewKernel().Bootstrap +
-// Module.Attach sequence BuildServer itself uses. The tenant-configured
-// default expiry applies when the tenant has configured one; a tenant
-// that has not still gets the module's own fixed default when no tenant
-// row overrides it.
+// real BuildServer wires: app.ShareExpiryReader (the platform's
+// composition toolkit) and compliance's own compliance.NewConfigReader,
+// both over the config module's lazy Handle. It drives them against a
+// real go/config Service, a real go/sharing Service and a real
+// go/compliance.ExportService, all composed through the same
+// pkgcore.NewKernel().Bootstrap + Module.Attach sequence BuildServer
+// itself uses. The tenant-configured default expiry applies when the
+// tenant has configured one; a tenant that has not still gets the
+// module's own fixed default when no tenant row overrides it.
 //
 // This file reaches these Service-level operations directly rather than
 // through the composed HTTP stack buildTestServer wires (the precedent
 // sharing_flow_test.go's secondSharingService set), because what is
 // under test is the reader wiring itself: the SAME
-// SharingConfigReader/compliance.NewConfigReader combinations production
+// ShareExpiryReader/compliance.NewConfigReader combinations production
 // code uses, composed with the real services, not an unwired
 // *sharing.Service/*compliance.Module stand-in.
 
@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/examples/reference-app/internal/app"
+	speedbridges "github.com/vislake/speed/go/app/bridges"
 
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/config"
@@ -52,9 +52,10 @@ type tenantConfigReaderHarness struct {
 // newTenantConfigReaderHarness boots a minimal, self-contained composition
 // of go/config, go/sharing and go/compliance over a real, freshly migrated
 // SQLite database -- config.NewModule, sharing.NewModule (wired with
-// SharingConfigReader) and compliance.NewModule (wired with
+// speedbridges.ShareExpiryReader over the config module's lazy Handle) and
+// compliance.NewModule (wired with
 // compliance.WithSharing over that same sharing.Service, and with
-// compliance.NewConfigReader over the config module's lazy Handle)
+// compliance.NewConfigReader over the same handle)
 // registered through one real
 // pkgcore.NewKernel().Bootstrap call, then config.Module.Attach -- the
 // exact ordering BuildServer itself uses (config's own *config.Service is
@@ -66,18 +67,16 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 	db := dbtest.NewSQLite(t)
 
 	// configService is filled by configModule.Attach below (nil until
-	// then); SharingConfigReader holds a pointer to this variable,
-	// dereferenced lazily, because a construction-time Option cannot
-	// capture a *config.Service that does not exist yet
-	// (internal/app/server.go's own doc comment). Compliance's reader
-	// needs none of that indirection: it wraps configModule.Handle()
-	// (captured below), which exists from construction and reports the
-	// config module's coded not-attached refusal until Attach has run.
+	// then). Both host adapters read through the config module's lazy
+	// Handle, which exists from construction and reports the config
+	// module's coded not-attached refusal until Attach has run -- a
+	// construction-time Option cannot capture the *config.Service itself,
+	// which does not exist yet.
 	var configService *config.Service
 
 	configModule := config.NewModule(db)
 	sharingModule := sharing.NewModule(db,
-		sharing.WithTenantConfigReader(app.SharingConfigReader{Service: &configService}),
+		sharing.WithTenantConfigReader(speedbridges.ShareExpiryReader{Handle: configModule.Handle()}),
 	)
 	standaloneQueue := jobs.NewStandaloneQueue(db)
 	t.Cleanup(func() {
@@ -148,7 +147,7 @@ func setTenantDurationConfig(t *testing.T, cfg *config.Service, tenant pkgcore.T
 }
 
 // TestTenantConfigReader_Sharing_ConfiguredTenant_UsesConfiguredExpiry
-// proves SharingConfigReader genuinely resolves a tenant's configured
+// proves speedbridges.ShareExpiryReader genuinely resolves a tenant's configured
 // sharing.default_expiry override -- written through go/config's real Set
 // path -- into the expiry sharing.Service.Create actually mints, rather
 // than always falling back to the module's own fixed 30-day default.
@@ -177,7 +176,7 @@ func TestTenantConfigReader_Sharing_ConfiguredTenant_UsesConfiguredExpiry(t *tes
 // TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault
 // proves the inverse: a tenant that never configured sharing.default_expiry
 // still gets the module's own fixed 30-day default, unchanged from before
-// the default shape -- SharingConfigReader wired but reporting "unconfigured"
+// the default shape -- ShareExpiryReader wired but reporting "unconfigured"
 // behaves exactly as if it were never wired at all.
 func TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault(t *testing.T) {
 	h := newTenantConfigReaderHarness(t)

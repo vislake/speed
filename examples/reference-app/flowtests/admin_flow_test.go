@@ -710,8 +710,8 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// Suspension freezes the tenant's business data plane, not its
 	// members' account plane: authn's self-service subtree (login,
 	// /me, session and credential management) is mounted outside
-	// tenancy.Middleware -- the chain shape internal/app/server.go's AuthnAPIPath
-	// doc comment records -- so this suspended tenant's
+	// tenancy.Middleware -- the chain shape go/app/kernel.go's AuthnAPIPath doc
+	// comment records -- so this suspended tenant's
 	// already-authenticated member still reaches it. /me with the
 	// pre-suspension ownerToken is the self-service read that must keep
 	// answering 200 while the org route above refuses: nothing on

@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
+	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -60,7 +60,7 @@ import (
 // a mounted path has no declared decision. The two excepted paths are
 // decided by the same table (admin gated, authn public) and keep being
 // covered by its exhaustiveness check; only the DESTINATION of the
-// resulting handler differs. hostcore.AuthnAPIPath stays in use as the
+// resulting handler differs. speedapp.AuthnAPIPath stays in use as the
 // route table's own name for authn's mount point (demo/demo_subject.go's rules).
 func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps demo.OrgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnRoutes []pkgcore.MountedRoute, err error) {
 	guarded, err := rbac.GuardRoutes(az, reg.Routes.Routes(), demo.DemoRouteRules(az, orgDeps, demoHeaderDisabled))
@@ -79,7 +79,7 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", demo.AdminRoutePath)
 	}
 	if len(authnRoutes) == 0 {
-		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", hostcore.AuthnAPIPath)
+		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", speedapp.AuthnAPIPath)
 	}
 	return adminHandler, authnRoutes, nil
 }

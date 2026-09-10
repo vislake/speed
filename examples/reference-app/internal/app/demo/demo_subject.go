@@ -22,8 +22,8 @@ import (
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
 
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
+	speedapp "github.com/vislake/speed/go/app"
 )
 
 // This file holds everything this example needs to demonstrate rbac end to
@@ -319,7 +319,7 @@ func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDis
 		// a deliberately ungated surface, while an anonymous request to
 		// any other operation is refused with authn's own coded
 		// authn.authentication_required.
-		{Path: hostcore.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}},
+		{Path: speedapp.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}},
 
 		// The config module's two pre-auth endpoints are public for the
 		// same reason they are allowlisted in tenancy.Middleware (see

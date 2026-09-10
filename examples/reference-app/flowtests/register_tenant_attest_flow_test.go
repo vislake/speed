@@ -20,7 +20,7 @@ import (
 //
 // The chain that made it a common case was this host's own composition
 // as it stood before authn's subtree moved outside the tenancy chain
-// (internal/app/server.go's AuthnAPIPath doc comment records that move): authn's
+// (go/app/kernel.go's AuthnAPIPath doc comment records that move): authn's
 // pre-auth routes then sat inside the authn+tenancy middleware chain,
 // under internal/app/server.go's authnPreAuthAllowlist, and go/tenancy.WithAllowlist
 // only exempted a route from the 403 when tenant RESOLUTION FAILED -- it

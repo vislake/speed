@@ -25,6 +25,9 @@ import (
 
 	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	speedapp "github.com/vislake/speed/go/app"
+	speedbridges "github.com/vislake/speed/go/app/bridges"
+	speedchain "github.com/vislake/speed/go/app/chain"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/compliance"
@@ -88,7 +91,6 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	demomodule "github.com/vislake/speed/examples/reference-app/internal/demo"
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
@@ -106,38 +108,13 @@ const (
 
 // The host-neutral kernel this app shares with every generated project --
 // the pre-auth allowlist entries, authn's mount path, the mounted-route
-// label seed, the timeout constants and the serve/graceful-shutdown
-// lifecycle -- lives in internal/hostcore, byte-identical to the copy
-// `saasctl new` embeds (tools/check_host_core_parity.py enforces the
-// equality). The liveness routes themselves are the platform's now
-// (obs.MountLiveness and its paths), as is the module-route mounting rule
-// (pkgcore.MountRoutes), so both hosts call the platform rather than
-// restating either. What this file keeps is the host-specific half:
-// ServerConfig's defaults above, this app's own composition (BuildServer),
-// and its host-owned route guards and demo identity layer.
-
-// The host's feature gate is one config-module read adapted to org's and
-// authn's identically shaped FeatureGate seams. Both modules must be part
-// of the single Kernel.Bootstrap call -- so their permissions, audit
-// actions, events and routes are declared there -- while the
-// *config.Service is only produced by configModule.Attach, strictly after
-// Bootstrap returns. The wiring therefore takes the config module's lazy
-// Handle (configModule.Handle(), captured where the config module is
-// built) and adapts its IsEnabled method value through each module's own
-// FeatureGateFunc: the handle resolves the Service per call, and reports
-// the config module's own not-attached refusal in the window before
-// Attach, so a read in that window fails closed instead of panicking on a
-// nil *config.Service.
-//
-// The double assertion below is the compile-time proof that the two seams
-// really are one shape: the same config.Handle read adapts to both, which
-// is why the host needs no hand-written gate type of its own. (The nil
-// receiver is never called; building a method value on it proves the
-// conversion, and a nil handle fails closed anyway.)
-var (
-	_ org.FeatureGate   = org.FeatureGateFunc((*config.Handle)(nil).IsEnabled)
-	_ authn.FeatureGate = authn.FeatureGateFunc((*config.Handle)(nil).IsEnabled)
-)
+// label seed, the timeout constants, the serve/graceful-shutdown
+// lifecycle and the fixed middleware chain -- lives in
+// github.com/vislake/speed/go/app, the platform's composition toolkit
+// (go/app/AGENTS.md carries its charter). What this file keeps is the
+// host-specific half: ServerConfig's defaults above, this app's own
+// composition (BuildServer), and its host-owned route guards and demo
+// identity layer.
 
 // SocialChannelFlagKey maps a configured social provider's Name() to the
 // feature-flag key go/authn gates that channel under -- the host-side
@@ -260,34 +237,6 @@ func OrgSubtreeResolverFor(scope org.Scope) rbac.SubtreeResolverFunc {
 		return path, true, nil
 	}
 }
-
-// SharingConfigReader adapts a *config.Service that is filled in AFTER
-// this app's sharing.Module is constructed into sharing.TenantConfigReader,
-// read lazily: configModule.Attach (which produces the real
-// *config.Service) runs strictly after Kernel.Bootstrap returns, and
-// sharing.Module must already be part of that same Bootstrap call, so
-// sharing.WithTenantConfigReader has to receive something today that
-// becomes live only later. Holding a pointer to the configService
-// variable, and dereferencing it only when ShareDefaultExpiry is actually
-// called (during a real request, long after BuildServer has finished
-// wiring), sidesteps the ordering problem. Compliance's own
-// export-delivery reader needs none of this: compliance ships
-// NewConfigReader over the config module's Handle, so this app wires that
-// one directly.
-type SharingConfigReader struct{ Service **config.Service }
-
-// ShareDefaultExpiry implements sharing.TenantConfigReader.
-func (r SharingConfigReader) ShareDefaultExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
-	svc := *r.Service
-	if svc == nil {
-		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
-	}
-	return svc.TenantDuration(ctx, sharing.ConfigDefaultExpiry, tenant)
-}
-
-// compile-time check that SharingConfigReader satisfies
-// sharing.TenantConfigReader.
-var _ sharing.TenantConfigReader = SharingConfigReader{}
 
 // ServerConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
@@ -838,7 +787,7 @@ func (b *serverBuild) cleanup() error {
 		// in-flight jobs to finish, bounded by the same timeout that
 		// bounds HTTP graceful shutdown. Close is idempotent, so an
 		// error path that runs before Start is ever called is safe.
-		queueCtx, cancel := context.WithTimeout(context.Background(), hostcore.ShutdownTimeout)
+		queueCtx, cancel := context.WithTimeout(context.Background(), speedapp.ShutdownTimeout)
 		keepErr(b.standaloneQueue.Close(queueCtx))
 		cancel()
 	}
@@ -1102,7 +1051,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 
 	b.orgModule = org.NewModule(b.db,
 		org.WithEmailIndexer(b.orgIndexer),
-		org.WithFeatureGate(org.FeatureGateFunc(configHandle.IsEnabled)),
+		org.WithFeatureGate(speedbridges.OrgFeatureGate(configHandle)),
 		// principalFallback serves org's browser-shaped callers:
 		// org's two caller-scoped endpoints also serve the team surface's
 		// signed-in owner, whose requests carry a bearer
@@ -1256,18 +1205,19 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 		authn.WithTrustedProxies(cfg.TrustedProxies...),
 		// The feature gate that makes authn's eight declared feature flags
 		// (authn.password_login, authn.sms_login, the five authn.social.*
-		// channels, authn.sso.oidc) effective at request time: the same
-		// config-module handle org's own gate above is adapted from --
-		// authn.FeatureGate is org.FeatureGate's identical declaration, and
-		// the handle's reads report the config module's own not-attached
-		// refusal until configModule.Attach has run (after Bootstrap
-		// returns). Without it this app's flags would be declarations with
-		// no enforcement: a row disabling authn.password_login would hide
-		// the login form while the password endpoint kept issuing tokens.
-		// The channels this host assembles through
-		// cfg.SocialProviders are opened at the system tier after Attach by
-		// openConfiguredAuthnChannels, since their flags default OFF.
-		authn.WithFeatureGate(authn.FeatureGateFunc(configHandle.IsEnabled)),
+		// channels, authn.sso.oidc) effective at request time:
+		// speedbridges.AuthnFeatureGate adapts the same config-module handle
+		// org's own gate above is adapted from -- authn.FeatureGate is
+		// org.FeatureGate's identical declaration, and the handle's reads
+		// report the config module's own not-attached refusal until
+		// configModule.Attach has run (after Bootstrap returns). Without it
+		// this app's flags would be declarations with no enforcement: a row
+		// disabling authn.password_login would hide the login form while
+		// the password endpoint kept issuing tokens. The channels this host
+		// assembles through cfg.SocialProviders are opened at the system
+		// tier after Attach by openConfiguredAuthnChannels, since their
+		// flags default OFF.
+		authn.WithFeatureGate(speedbridges.AuthnFeatureGate(configHandle)),
 	}
 	// The per-header vendor opt-in (APP_READ_FLY_CLIENT_IP), conditional on the
 	// deployment declaration: cfg.ReadFlyClientIP's 'true' declares this
@@ -1404,14 +1354,14 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// composition is entirely this app's own, the same way every other
 	// no-import-edge seam in this file (the feature-gate adapters,
 	// DemoOrgSubjectResolverFor, ...) is wired. WithTenantConfigReader wires
-	// SharingConfigReader (defined above, alongside the feature gates), so a
-	// tenant's own sharing.default_expiry override -- once config.Service
-	// exists, after Attach below -- actually governs Service.Create's
-	// resolved expiry instead of always falling back to
-	// defaultShareExpiry.
+	// speedbridges.ShareExpiryReader over the config module's lazy Handle
+	// (configHandle, captured above), so a tenant's own
+	// sharing.default_expiry override -- once config.Service exists, after
+	// Attach below -- actually governs Service.Create's resolved expiry
+	// instead of always falling back to defaultShareExpiry.
 	b.sharingModule = sharing.NewModule(b.db,
 		sharing.WithResourceResolver(&storageSharingResolver{svc: b.storageModule.ObjectService(), attest: b.attestationService}),
-		sharing.WithTenantConfigReader(SharingConfigReader{Service: &b.configService}),
+		sharing.WithTenantConfigReader(speedbridges.ShareExpiryReader{Handle: configHandle}),
 	)
 
 	// integrationModule is the reference app's mandatory first consumer of
@@ -1583,20 +1533,15 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// WithEntitlements wires
 	// billingModule.Entitlements() -- the real billing.EntitlementsService
 	// constructed above -- onto go/ai-gateway's optional, structurally-
-	// typed Entitlements seam, so BOTH halves of this one Gateway instance
-	// (Chat for consult, GenerateImage for smilesim; they share the very
-	// same *aigateway.Gateway) gate every request on the calling tenant's
-	// subscription before any provider is reached, exactly go/ai-gateway's
-	// own checkEntitlement design: key "model:"+logicalModel, requested 1,
-	// denial answered with ErrEntitlementDenied before the provider sees
-	// the call. The adapter is an aigateway.EntitlementsFunc closure rather
-	// than a direct assignment because the two modules' Decision types are
-	// distinct named types (billing.Decision vs aigateway.Decision) -- the
-	// exact no-adapter-to-write claim go/ai-gateway/seams.go's own doc
-	// comment makes is a deliberate simplification that does not compile;
-	// the closure shape below is that file's own documented example,
-	// verbatim. An unwired seam (nil) would let every request through; a
-	// wired one judged against an empty database would deny everything --
+	// typed Entitlements seam through speedbridges.Entitlements, so BOTH halves
+	// of this one Gateway instance (Chat for consult, GenerateImage for
+	// smilesim; they share the very same *aigateway.Gateway) gate every
+	// request on the calling tenant's subscription before any provider is
+	// reached, exactly go/ai-gateway's own checkEntitlement design: key
+	// "model:"+logicalModel, requested 1, denial answered with
+	// ErrEntitlementDenied before the provider sees the call. An unwired
+	// seam (nil) would let every request through; a wired one judged
+	// against an empty database would deny everything --
 	// SeedDemoEntitlements (boot, below) is what keeps the seeded demo
 	// tenants on the allowed side from the very first request.
 	// gatewayEntitlements is the ONE adapter instance this app's gateway
@@ -1610,38 +1555,27 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 	// internal/smilesim/service.go's Simulate doc comment). The two must
 	// answer through the very same seam, or the pre-flight and the
 	// gateway's re-check could disagree about the same state.
-	b.gatewayEntitlements = aigateway.EntitlementsFunc(
-		func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
-			decision, checkErr := b.billingModule.Entitlements().Check(ctx, featureKey, requested)
-			if checkErr != nil {
-				return aigateway.Decision{}, checkErr
-			}
-			return aigateway.Decision{Allowed: decision.Allowed, Reason: string(decision.Reason)}, nil
-		},
-	)
+	b.gatewayEntitlements = speedbridges.Entitlements(b.billingModule.Entitlements())
 
 	// WithUsageRecorder is the metering half of this round's D9 wiring: it
 	// hands go/metering's analytics-grade Recorder to the SAME Gateway
-	// instance both halves above run on, so every successful Chat/ChatStream
-	// call records its token usage automatically -- docs/internal/
-	// 08-ai-gateway.md's rule that AI metering is a built-in behavior
-	// needing no manual reporting (image generation records the same way,
-	// through the job handler go/ai-gateway registers). The adapter is an
-	// aigateway.UsageRecorderFunc closure because the two modules' UsageEvent
-	// types are distinct named types (ai-gateway deliberately never imports
-	// go/metering -- see go/ai-gateway/seams.go's UsageEvent doc comment);
-	// the closure below is that file's own documented example, verbatim.
-	// meteringModule.Recorder() is the analytics-grade (fail-open) tier, the
-	// only tier this seam's Record(ctx, event) shape can carry: the
-	// billing-grade Enqueue path demands the caller's own transaction
-	// handle, which a recorder callback has no room for (go/metering/
-	// recorder.go's own Recorder doc comment). The events it buffers are
-	// folded into real metering_usage_summaries rows by the recorder's
-	// background flush loop once meteringModule.Start runs below, and
-	// admin's D9 dashboard (adminModule's WithMetering wiring, below) reads
-	// those rows back per tenant. The one feature this seam reports --
-	// "ai.chat_tokens" -- is recorded through this tier alone, never also
-	// through the billing-grade Enqueue path, per go/metering/recorder.go's
+	// instance both halves above run on through speedbridges.UsageRecorder, so
+	// every successful Chat/ChatStream call records its token usage
+	// automatically -- docs/internal/08-ai-gateway.md's rule that AI
+	// metering is a built-in behavior needing no manual reporting (image
+	// generation records the same way, through the job handler
+	// go/ai-gateway registers). meteringModule.Recorder() is the
+	// analytics-grade (fail-open) tier, the only tier this seam's
+	// Record(ctx, event) shape can carry: the billing-grade Enqueue path
+	// demands the caller's own transaction handle, which a recorder
+	// callback has no room for (go/metering/recorder.go's own Recorder doc
+	// comment). The events it buffers are folded into real
+	// metering_usage_summaries rows by the recorder's background flush
+	// loop once meteringModule.Start runs below, and admin's D9 dashboard
+	// (adminModule's WithMetering wiring, below) reads those rows back per
+	// tenant. The one feature this seam reports -- "ai.chat_tokens" -- is
+	// recorded through this tier alone, never also through the
+	// billing-grade Enqueue path, per go/metering/recorder.go's
 	// one-feature-one-tier rule.
 	meteringUsageRecorder := b.meteringModule.Recorder()
 	b.aiGatewayModule = aigateway.NewModule(b.db,
@@ -1649,17 +1583,7 @@ func (b *serverBuild) buildModules(ctx context.Context, cfg ServerConfig) error 
 		aigateway.WithModelRoute(smilesim.LogicalModel, aigateway.ProviderOpenAICompatibleImage, "dall-e-3"),
 		aigateway.WithImageGeneration(b.standaloneQueue, b.storageModule.ObjectService()),
 		aigateway.WithEntitlements(b.gatewayEntitlements),
-		aigateway.WithUsageRecorder(aigateway.UsageRecorderFunc(
-			func(ctx context.Context, event aigateway.UsageEvent) error {
-				return meteringUsageRecorder.Record(ctx, metering.UsageEvent{
-					TenantID:       event.TenantID,
-					Feature:        event.Feature,
-					Quantity:       event.Quantity,
-					IdempotencyKey: event.IdempotencyKey,
-					Metadata:       event.Metadata,
-				})
-			},
-		)),
+		aigateway.WithUsageRecorder(speedbridges.UsageRecorder(meteringUsageRecorder)),
 	)
 
 	// complianceModule is the reference app's first consumer of
@@ -2265,7 +2189,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 		return mountErr
 	}
 
-	// hostcore.RegisterMountedRoutes hands every obs.Middleware this
+	// speedapp.RegisterMountedRoutes hands every obs.Middleware this
 	// process later constructs this app's REAL route table -- obs's two
 	// liveness paths (which no module registered) and every route
 	// mountModuleRoutes just mounted on mux -- so the route-label limiter
@@ -2277,7 +2201,7 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// traffic -- not after the server starts listening. Last registration
 	// wins, and every BuildServer call registers the same table, so the
 	// repeated calls this package's tests make are idempotent in effect.
-	hostcore.RegisterMountedRoutes(b.reg)
+	speedapp.RegisterMountedRoutes(b.reg)
 
 	// WireDemoNotification adds the reference app's demo glue on top of the
 	// mounted module routes: the subscription that turns notes' note-created
@@ -2478,122 +2402,50 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 	// it does returns an error.
 	wireIntegrationAuthenticated(mux, b.integrationModule, b.reg.KVStore())
 
-	// The middleware chain: authn.Middleware(verifier) FIRST, then
-	// tenancy.Middleware(authn.NewPrincipalResolver()). Running authn
-	// first verifies the token exactly once: a tenancy.Resolver's signature
-	// (Resolve(*http.Request)
-	// (pkgcore.TenantID, error)) cannot hand a verified JWT's claims to
-	// anything downstream, so running tenancy first would force verifying
-	// every token twice over two code paths free to drift. Running
-	// authn.Middleware first verifies once; NewPrincipalResolver then just
-	// reads the already-verified Principal out of the request context.
+	// The middleware chain: speedchain.Chain owns the fixed order --
+	// authn.Middleware(verifier) outermost (the only order that verifies
+	// a token exactly once; go/app/chain/chain.go carries the full
+	// reasoning), the impersonation decorator, then tenancy with the
+	// pre-auth allowlist -- and dispatches the two structurally exempt
+	// branches (admin's own route, excluded from ordinary tenant
+	// resolution and identity substitution per mountModuleRoutes' own doc
+	// comment, and the authn subtree that function split out) straight
+	// from authn's output. This call supplies the host-specific half of
+	// chain.Config: the admin branch and its impersonation decorator,
+	// admin's tenant status gate, and the three pre-auth entries below.
 	//
-	// Session revocation rides on the same call with no extra option: this
+	// Session revocation rides on the verifier with no extra option: this
 	// app selects immediate revocation in authnOpts above
 	// (WithRevocationMode(RevocationModeImmediate)), the Service attaches
 	// its SessionManager as the revocation source of the verifier
 	// Service().Verifier() hands out, and authn.Middleware consults that
-	// source on every request whose token verifies -- so the plain
-	// Middleware(verifier) call below is exactly the enforced composition,
-	// not a silently unenforced one: drop the option and the revocation
-	// source is a stored list nothing consults.
-	//
-	// The consequence that matters here: authn.Middleware is OPTIONAL
-	// auth (a missing token proceeds with no Principal; an invalid one
-	// 401s immediately), so tenancy.Middleware's own fail-closed default
-	// -- refuse a request whose (method, path) is not on the allowlist AND
-	// whose resolver failed -- is what makes EVERY route this app mounts
-	// require a valid Principal by default, with NO extra wrapping needed
-	// per route: an unauthenticated request to the notes API gets 403
-	// (tenant unresolved, because there is no Principal to read a tenant
-	// from), failing closed like every other unresolvable request. The routes
-	// listed in the allowlist below are the ONLY ones that work with no
-	// Principal at all -- this chain never even sees authn's own subtree,
-	// which topMux dispatches straight from authn.Middleware's output the
-	// way it does admin's (hostcore.AuthnAPIPath's own doc comment has the
-	// why): healthz and metrics (their constants' doc comments above),
-	// config's two pre-auth display endpoints (still gated by their own
-	// internal DomainResolver, see configModule's wiring above -- entirely
-	// independent of this outer middleware), and the three routes that
-	// resolve their own tenant server-side once this middleware lets them
-	// through, sharing.PathAccess, IntegrationWhoamiPath and OrgAcceptPath,
-	// each with its own entry comment right below.
-	//
-	// Both GET and HEAD are allowlisted for healthz/metrics, not GET
-	// alone: net/http's ServeMux automatically serves HEAD from a
-	// registered "GET "+path pattern (Go's long-standing GET-implies-HEAD
-	// convenience), but tenancy.Middleware does NOT extend WithAllowlist's
-	// exemption the same way -- its own doc comment says so explicitly.
-	// Allowlisting GET alone would leave HEAD one middleware change away
-	// from a 403 the moment anything probes it with HEAD instead of GET.
-	// admin.ImpersonationMiddleware sits between authn.Middleware and
-	// tenancy.Middleware (see pipeline.go's own doc comment): it never
-	// reorders this chain, it reads the real, already-verified
-	// authn.Principal authn.Middleware just installed, and -- only when
-	// the request carries a valid X-Admin-Impersonation grant id -- it
-	// substitutes a Principal naming the impersonation target for
-	// everything downstream, including tenancy.Middleware's own tenant
-	// resolution. A request with no such header, or an invalid one, is
-	// unaffected: this decorator is a no-op for every route notes/org/
-	// storage/etc. serve unless an operator has actually started an
-	// impersonation session.
-	//
-	// admin's OWN mounted route is deliberately excluded from that branch
-	// entirely -- topMux below dispatches it straight from
-	// authn.Middleware's own output, through the admin entry's
-	// adminSubjectResolver (demo/demo_admin.go) and nothing else -- what
-	// mountModuleRoutes' own doc comment explains: admin's five
-	// permissions are evaluated in rbac.SystemDomain against the CALLER'S
-	// OWN real, unsubstituted Principal, regardless of whichever tenant
-	// their session happens to be currently scoped to and regardless of
-	// any impersonation grant that may be active on the request -- neither
-	// tenancy.Middleware's tenant resolution nor
-	// admin.ImpersonationMiddleware's identity substitution has anything
-	// to contribute to that decision, and letting either run first was a
-	// real privilege-escalation gap found in review (an ordinary tenant's
-	// own Owner role, or an impersonated identity, could otherwise reach
-	// admin's console purely because rbac.BuiltinRoleOwner and the shared
-	// global permission catalog carry no domain partitioning of their
-	// own).
-	//
-	// authn's OWN mounted route is deliberately excluded from this branch
-	// for its own structural reason: authn's whole HTTP surface must never
-	// sit downstream of tenancy.Middleware (its routes resolve the tenant
-	// from the Principal's own claim, per operation; go/authn/AGENTS.md's
-	// "authn's own routes never sit downstream of tenancy.Middleware"
-	// section), and its pre-auth half -- enterprise OIDC's dynamically
-	// named "oidc:<tenant>" login-start path included -- cannot be
-	// expressed by tenancy.WithAllowlist's exact (method, path) matching at
-	// all (see hostcore.AuthnAPIPath's own doc comment). topMux therefore
-	// dispatches hostcore.AuthnAPIPath straight from authn.Middleware's own
-	// output, the same
-	// shape AdminRoutePath gets above -- with the deliberate difference
-	// that authn's branch is UNGATED: it sits behind authn.Middleware's
-	// optional verification and nothing else, because authn's Handler
-	// itself is the per-operation authority on who may call what
-	// (requirePrincipal), and any rbac gate ahead of it would refuse the
-	// sign-in flow this app exists to demonstrate. Neither
-	// tenancy.Middleware's tenant resolution nor
-	// admin.ImpersonationMiddleware's identity substitution runs on this
-	// branch: authn operations never read a middleware-injected tenant, and
-	// an impersonation grant must never substitute an authn operation's
-	// caller identity -- authn is the layer that MINTED the identities
-	// impersonation substitutes between.
-	restOfAppChain := admin.ImpersonationMiddleware(b.adminModule.Impersonation())(
-		tenancy.Middleware(authn.NewPrincipalResolver(), append(hostcore.PreAuthAllowlist(),
-			// tenancy.WithTenantStatusResolver is D4's enforcement seam
-			// (docs/internal/23-admin.md, go/tenancy/tenant_status.go):
-			// admin's own tenant ledger (*admin.TenantService, D3)
-			// implements tenancy.TenantStatusResolver structurally --
-			// admin is its one real implementer, but the interface itself
-			// does not know admin exists, the identical no-import-in-
-			// either-direction shape org.FeatureGate/rbac.SubtreeResolver
-			// already use. This is what turns "an operator marked a
-			// tenant suspended in admin's console" into every OTHER
-			// route (notes, storage, org, ...) actually refusing that
-			// tenant's requests on the very next one, rather than being
-			// a ledger fact nothing downstream ever consults.
-			tenancy.WithTenantStatusResolver(b.adminModule.Tenants()),
+	// source on every request whose token verifies -- so the verifier
+	// handed to Chain here is exactly the enforced composition, not a
+	// silently unenforced one: drop the option and the revocation source
+	// is a stored list nothing consults.
+	chainHandler, chainErr := speedchain.Chain(speedchain.Config{
+		Verifier:    b.authnModule.Service().Verifier(),
+		Protected:   mux,
+		AuthnRoutes: authnRoutes,
+		AdminRoutes: []pkgcore.MountedRoute{{Path: demo.AdminRoutePath, Handler: adminHandler}},
+		// admin.ImpersonationMiddleware is this host's own decorator for
+		// the chain's impersonation seat (chain.Config.Impersonation):
+		// only this app has an admin module to build one from.
+		Impersonation: admin.ImpersonationMiddleware(b.adminModule.Impersonation()),
+		// tenancy.WithTenantStatusResolver is D4's enforcement seam
+		// (docs/internal/23-admin.md, go/tenancy/tenant_status.go):
+		// admin's own tenant ledger (*admin.TenantService, D3)
+		// implements tenancy.TenantStatusResolver structurally --
+		// admin is its one real implementer, but the interface itself
+		// does not know admin exists, the identical no-import-in-
+		// either-direction shape org.FeatureGate/rbac.SubtreeResolver
+		// already use. This is what turns "an operator marked a
+		// tenant suspended in admin's console" into every OTHER
+		// route (notes, storage, org, ...) actually refusing that
+		// tenant's requests on the very next one, rather than being
+		// a ledger fact nothing downstream ever consults.
+		TenantStatusResolver: b.adminModule.Tenants(),
+		ExtraAllowlist: []tenancy.MiddlewareOption{
 			// sharing.PathAccess is the one genuinely public, unauthenticated
 			// route this app mounts: an anonymous visitor holding a bearer
 			// share token carries no Principal and therefore no tenant claim
@@ -2633,20 +2485,12 @@ func (b *serverBuild) mountAppRoutes(ctx context.Context, cfg ServerConfig) erro
 			// refuses an unidentifiable acceptor with org.subject_unresolved,
 			// and authn.Middleware still 401s a genuinely invalid bearer.
 			tenancy.WithAllowlist(http.MethodPost, demo.OrgAcceptPath),
-		)...)(mux),
-	)
-
-	topMux := http.NewServeMux()
-	// pkgcore.MountRoutes registers both branches at their exact paths and
-	// below them; see its own doc comment for why the dual registration is
-	// the only correct shape. authnRoutes is what authn.ExemptSubtree split
-	// out of the module route set (mountModuleRoutes above): the module's
-	// own subtree, carried here with its mount path attached.
-	topMuxBranches := append([]pkgcore.MountedRoute{{Path: demo.AdminRoutePath, Handler: adminHandler}}, authnRoutes...)
-	pkgcore.MountRoutes(topMux, topMuxBranches...)
-	topMux.Handle("/", restOfAppChain)
-
-	b.handler = authn.Middleware(b.authnModule.Service().Verifier())(topMux)
+		},
+	})
+	if chainErr != nil {
+		return chainErr
+	}
+	b.handler = chainHandler
 	return nil
 }
 

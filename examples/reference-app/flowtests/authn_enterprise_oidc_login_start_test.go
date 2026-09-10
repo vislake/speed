@@ -1,8 +1,8 @@
 package flowtests
 
 // authn_enterprise_oidc_login_start_test.go pins the closure of the
-// enterprise-OIDC login-start gap AuthnAPIPath's own doc comment in
-// internal/app/server.go records (the CONFIRMED GAP the composition fix below closes):
+// enterprise-OIDC login-start gap AuthnAPIPath's own doc comment
+// (go/app/kernel.go) records (the CONFIRMED GAP the composition fix below closes):
 // an anonymous request to /api/v1/authn/social/oidc:<tenant>/authorize --
 // the login-start step of a tenant that configured enterprise OIDC -- must
 // reach authn's own Handler instead of being refused by

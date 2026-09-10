@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
+	speedapp "github.com/vislake/speed/go/app"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore/probe"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
-	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 )
 
 // healthcheckArg is the first os.Args element that diverts main into
@@ -219,13 +219,13 @@ func run(baseCtx context.Context) error {
 	// span and is counted here, including ones the inner chain goes on to
 	// reject with 401/403, which matters for spotting a flood of them.
 	//
-	// hostcore.ServeUntilShutdown owns the whole serve-and-drain sequence
+	// app.ServeUntilShutdown owns the whole serve-and-drain sequence
 	// (the obs.Middleware wrap included, at exactly this position) plus
 	// the server's ReadHeaderTimeout/ShutdownTimeout values, so this
-	// process shell and a generated project's run byte-identically on the
-	// host-neutral half: see its doc comment for the BaseContext/baseCtx
+	// process shell and a generated project's run share the host-neutral
+	// half: see its doc comment for the BaseContext/baseCtx
 	// reasoning this call's arguments carry.
-	return hostcore.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "reference-app", string(cfg.DeploymentMode))
+	return speedapp.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "reference-app", string(cfg.DeploymentMode))
 }
 
 // runHealthcheck probes this same server's own liveness endpoint over
