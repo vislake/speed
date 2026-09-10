@@ -622,6 +622,7 @@ func TestModule_Options(t *testing.T) {
 		WithMaxDepth(3),
 		WithInvitationTTL(time.Hour),
 		WithMailFrom(testMailFrom),
+		WithReplyTo(testMailReplyTo),
 		WithInvitationLinkBuilder(testLinkBuilder),
 	)
 	if m.emailIndexer != indexer || m.invites.indexer != indexer {
@@ -638,6 +639,9 @@ func TestModule_Options(t *testing.T) {
 	}
 	if m.invites.from != testMailFrom {
 		t.Errorf("invites.from = %q, want %q", m.invites.from, testMailFrom)
+	}
+	if m.invites.replyTo != testMailReplyTo {
+		t.Errorf("invites.replyTo = %q, want %q", m.invites.replyTo, testMailReplyTo)
 	}
 
 	// Nonsense values are ignored rather than stored: a tree that cannot

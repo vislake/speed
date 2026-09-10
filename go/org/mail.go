@@ -68,6 +68,9 @@ type InvitationLinkBuilder func(ctx context.Context, token string) (string, erro
 type invitationMailData struct {
 	// to is the recipient address.
 	to string
+	// replyTo is the optional Reply-To address; empty writes no Reply-To
+	// header, leaving any transport-level default to apply.
+	replyTo string
 	// nodeName is the display name of the node the invitee is being invited
 	// into, so the message says what they are joining.
 	nodeName string
@@ -119,6 +122,7 @@ func renderInvitationMail(catalog *i18n.Catalog, from string, data invitationMai
 	return pkgcore.Mail{
 		From:    from,
 		To:      []string{data.to},
+		ReplyTo: data.replyTo,
 		Subject: subject,
 		Text:    text,
 		HTML:    htmlBody,

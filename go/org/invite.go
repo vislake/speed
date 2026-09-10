@@ -152,6 +152,12 @@ type InviteService struct {
 	// link.
 	from string
 
+	// replyTo is the optional Reply-To address of the invitation email
+	// (WithReplyTo): where a reply to the invitation lands, so the invitee
+	// is not replying into a no-reply sender. Empty -- the default -- writes
+	// no Reply-To header.
+	replyTo string
+
 	// emailEnabled is the org.invitation_email flag's declared default,
 	// which WithInvitationEmailDisabled flips. A tenant override through
 	// gate wins over it.
@@ -667,6 +673,7 @@ func (s *InviteService) deliver(ctx context.Context, invitation *Invitation, nod
 	}
 	mail, err := renderInvitationMail(s.catalog(), s.from, invitationMailData{
 		to:        invitation.Email,
+		replyTo:   s.replyTo,
 		nodeName:  nodeName,
 		acceptURL: acceptURL,
 		locale:    invitation.Locale,

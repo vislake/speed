@@ -375,6 +375,20 @@ func WithMailFrom(from string) Option {
 	return func(m *Module) { m.invites.from = from }
 }
 
+// WithReplyTo sets the Reply-To address of the invitation email, so a reply
+// to the invitation lands in an inbox the host reads instead of the no-reply
+// sender. It is OPTIONAL and independent of WithMailFrom: without it (or
+// with an empty value) the invitation carries no Reply-To header.
+//
+// The value is module-level configuration, not per-invitation: the natural
+// reply target a person would name -- the inviter -- is not reachable from
+// here. Invitation carries only InviterUserID, no address, and org resolves
+// addresses through no cross-module read (go/org never imports authn), so
+// the host names the address instead.
+func WithReplyTo(replyTo string) Option {
+	return func(m *Module) { m.invites.replyTo = replyTo }
+}
+
 // WithInvitationLinkBuilder injects the function that turns an invitation
 // token into the URL the invitee clicks. Only the host knows its own public
 // address, and in a multi-tenant deployment which host name belongs to the

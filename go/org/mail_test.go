@@ -18,6 +18,7 @@ import (
 func testMailData(locale string) invitationMailData {
 	return invitationMailData{
 		to:        "ada@example.test",
+		replyTo:   testMailReplyTo,
 		nodeName:  "Downtown Clinic",
 		acceptURL: testLinkBase + "a-token",
 		locale:    locale,
@@ -38,6 +39,9 @@ func TestRenderInvitationMail_RendersEachSupportedLocale(t *testing.T) {
 		}
 		if mail.From != testMailFrom || len(mail.To) != 1 || mail.To[0] != "ada@example.test" {
 			t.Errorf("headers = From %q To %v, want %q and the invitee", mail.From, mail.To, testMailFrom)
+		}
+		if mail.ReplyTo != testMailReplyTo {
+			t.Errorf("ReplyTo = %q, want the data's %q", mail.ReplyTo, testMailReplyTo)
 		}
 		for _, body := range []string{mail.Text, mail.HTML} {
 			if !strings.Contains(body, testLinkBase+"a-token") {

@@ -140,6 +140,7 @@ func newTestModule(t *testing.T) (*Module, *testHost) {
 	m := NewModule(newInvitationTestDB(t),
 		WithEmailIndexer(newTestEmailIndexer(t)),
 		WithMailFrom(testMailFrom),
+		WithReplyTo(testMailReplyTo),
 		WithInvitationLinkBuilder(testLinkBuilder),
 	)
 	m.attach(host)

@@ -174,7 +174,7 @@ Feature **flags** are different, and org does declare two: a flag is a boolean, 
 | Signature | Purpose |
 |---|---|
 | `func NewModule(db *gorm.DB, opts ...Option) *Module` | Constructs the module. Performs no I/O; the host opens and migrates `db` before `Bootstrap` |
-| `WithEmailIndexer` / `WithFeatureGate` / `WithMaxDepth` / `WithInvitationTTL` / `WithMailFrom` / `WithInvitationLinkBuilder` / `WithInvitationEmailDisabled` | The host wiring. See "Two wirings are required at boot" for the two that are not optional |
+| `WithEmailIndexer` / `WithFeatureGate` / `WithMaxDepth` / `WithInvitationTTL` / `WithMailFrom` / `WithReplyTo` / `WithInvitationLinkBuilder` / `WithInvitationEmailDisabled` | The host wiring. See "Two wirings are required at boot" for the two that are not optional; `WithReplyTo` is optional -- module-level configuration (the inviter's own address is not reachable here), empty writes no Reply-To header |
 | `func (m *Module) Tree() *TreeService` | The tree runtime. Returns the same service on every call |
 | `func (m *Module) Members() *MemberService` | The roster runtime |
 | `func (m *Module) Invitations() *InviteService` | The invitation runtime |

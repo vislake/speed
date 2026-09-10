@@ -32,6 +32,8 @@ var testEncryptionKey = []byte("org-test-email-cipher-key-32byte")
 const (
 	// testMailFrom is the sender address the test module is wired with.
 	testMailFrom = "invitations@example.test"
+	// testMailReplyTo is the Reply-To address the test module is wired with.
+	testMailReplyTo = "team@example.test"
 	// testLinkBase is the prefix testLinkBuilder builds accept URLs on.
 	testLinkBase = "https://tenant-a.example.test/invitations/accept?token="
 )

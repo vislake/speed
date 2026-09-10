@@ -103,6 +103,9 @@ func TestInviteService_Invite_CreatesStoresAndSends(t *testing.T) {
 	if sent[0].From != testMailFrom {
 		t.Errorf("message From = %q, want %q", sent[0].From, testMailFrom)
 	}
+	if sent[0].ReplyTo != testMailReplyTo {
+		t.Errorf("message ReplyTo = %q, want the wired %q", sent[0].ReplyTo, testMailReplyTo)
+	}
 	if !strings.Contains(sent[0].Text, testLinkBase+result.Token) {
 		t.Error("the message body does not carry the accept link")
 	}
