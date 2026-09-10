@@ -26,6 +26,8 @@
 **前端**
 - 新增 `@speed/i18n` 包（位于 `api-client` 同层），封装 `react-i18next` 实例创建、语言检测、懒加载与 MUI locale 联动（切到英文时 MUI 组件的内置文案也要跟着变，`@mui/material/locale` 的 `zhCN`/`enUS`）。
 - **每个 UI 包自带自己的 `locales/{zh-CN,en-US}.json`，用包名作为 namespace**（`auth`、`billing`、`tenancy`…），注册到宿主应用的同一个 i18n 实例。业务项目可通过覆盖同名 key 定制任意文案，不需要 fork 组件。
+- **平台错误文案包（`platform-errors`）由后端目录机械生成，不人工维护第二份**：`tools/gen_platform_error_bundle.py` 取「apperr census ∩ 各 Go 模块 `locales/*.toml` 的 id」生成 `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json`（键形 = 顶层 `errors` + 平面点号码键，即既有 `t('errors.'+code)` 的 leaf path；`{{.name}}` 规范化为 i18next 的 `{{name}}`；复数表拆为 `_one/_other` 并在语言间取并集补齐，任何其他 `{{...}}` 形态直接拒跑）。过滤器是结构性的、无名单：邀请邮件、通知模板、SMS、默认工作区名、seed 等纯后端内容条目只因没有对应错误码而天然不入包，前端对这部分继续走各自兜底；有码无目录文案的条目同样不入包（前端仍走自身兜底），这一点在 `web/packages/i18n/README.md` 与 `tools/README.md` 写明。宿主在 `@speed/i18n/platform-errors` 子路径注册该包，并以 `createI18n` 的 `fallbackNamespaces` 把它设为实例的兜底命名空间——命名空间兜底、同语言解析，不引入跨语言回落；四个框架包现行「白名单码 + `errors.unknown`」解析器零改动，白名单码仍由自家 ns 命中，覆盖层按设计不介入。`product-shell` 的 `bootstrapSpeedApp` 已自动注册并开启兜底；`docs-check.yml` 挂生成器单测（含「内容条目不得入包」红线）与 `--check` 漂移门。
+- **后续方向（未实施）**：框架包 resolver 改为 `exists('errors.'+code, {ns: [自有, PLATFORM_ERRORS_NAMESPACE]})` 并把 `ApiError.params` 透传给 `t()`（包内带插值的条目占相当比例，不透传会渲染空位），白名单随之逐码收缩；codes-alignment 的方向一改为 `GO_PINNED ⊆ 白名单 ∪ bundle`。前提已具备：框架包现行白名单码均有平台文案，缺的是逐码的措辞取舍与 28 条 app module 码的归属决定（补 app 模块 TOML 或显式豁免登记）。
 - 硬性规则：UI 包内**禁止出现中英文字面量文案**，CI 加 lint 规则扫描 JSX 中的裸文本节点。
 - 日期、数字、货币格式一律用 `Intl.DateTimeFormat` / `Intl.NumberFormat`，不手写格式化；货币展示要同时正确处理 CNY 与 USD 的符号位置和小数位。
 - 布局注意：德语/英语文案普遍比中文长 30%~50%，`ui-kit` 组件不得依赖固定宽度容纳文案，Storybook 里为每个组件提供中英双语 story 以便及早发现截断。

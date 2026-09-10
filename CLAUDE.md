@@ -152,6 +152,7 @@ Every rule below is enforced by code review, and by CI where the tooling for it 
 - **Do not hardcode user-facing text**, in any language. UI packages must contain no bare text nodes; Go returns structured error codes.
 - New text **must** ship with both `zh-CN` and `en-US` resources. The backend half of that rule is enforced in code rather than CI: `pkgcore/i18n`'s `Builder.AddModule` fails a module whose language files' id sets differ (`ErrParityMismatch`) while `Kernel.Bootstrap` merges its catalog. `tools/check_i18n_keys.py` checks the same key-set parity over the raw files; the docs-check pipeline runs it on every PR touching documentation or i18n resources.
 - Backend-generated content (emails, invoices, notifications) renders in the **recipient's** locale, not the operator's UI language.
+- **Do not hand-write frontend copy for a backend error code.** The client half of a module's catalog is generated: `tools/gen_platform_error_bundle.py` derives `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` from the Go modules' `locales/*.toml` catalogs intersected with the apperr census, and the docs-check pipeline `--check`s it. Run the generator whenever a catalog or an apperr code changes. Backend-only content ids (invitation emails, notification templates, SMS bodies, seed copy) are excluded by that filter and stay out of the client bundle, which is what `@speed/i18n/platform-errors`' tests pin.
 
 ### Database and migrations
 

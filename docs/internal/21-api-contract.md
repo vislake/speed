@@ -86,6 +86,8 @@ ApiError:
 
 统一 schema 让生成的客户端能做统一错误处理（401 刷新、429 退避、错误码 → i18n 文案映射），而不是每个接口各写一套。**`message` 字段明确标注不得直接展示**——展示文案一律由前端按 `code` 查 i18n 资源。
 
+**前端文案的来源与生成**：`code` 是唯一查找键，文案来自两层——各 UI 包自己的 `locales/*.json`（覆盖本包白名单码，未知码落 `errors.unknown`），以及由后端模块目录机械生成的平台错误文案包（`tools/gen_platform_error_bundle.py` 取 apperr census ∩ `locales/*.toml` 生成 `web/packages/i18n/src/platform-errors/locales/*.json`，随 `@speed/i18n` 的 `./platform-errors` 子路径发布，作为宿主实例的兜底命名空间；见 11-cross-cutting 的国际化一节）。生成器把 Go 模板占位符 `{{.name}}` 规范化为 i18next 的 `{{name}}`，并在语言间补齐复数形式；把 `ApiError.params` 的键透传给 `t()` 以填写这些占位符是纯前端的后续工作，当前解析器不传参。
+
 ## OpenAPI 覆盖不到的部分
 
 必须显式列出并单独文档化，避免"以为都覆盖了"：
