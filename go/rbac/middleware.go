@@ -126,14 +126,14 @@ func RequirePermissionFunc(az Authorizer, permissionFor func(*http.Request) stri
 			// gate refusing an unauthorized user, and nothing would ever
 			// point at the wiring. ErrServiceNotAttached names it.
 			if az == nil || permissionFor == nil {
-				writeAuthzError(w, ErrServiceNotAttached)
+				WriteAuthzError(w, ErrServiceNotAttached)
 				return
 			}
 
 			permission := permissionFor(r)
-			resource, action, ok := splitPermission(permission)
+			resource, action, ok := SplitPermission(permission)
 			if !ok {
-				writeAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
+				WriteAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
 				return
 			}
 
@@ -155,7 +155,7 @@ func RequirePermissionFunc(az Authorizer, permissionFor func(*http.Request) stri
 				// distinguish "malformed identity" from "no identity",
 				// which is precisely how the fail-closed doc comment above
 				// wants every unusable-subject case to look.
-				writeAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
+				WriteAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
 				return
 			}
 
@@ -167,11 +167,11 @@ func RequirePermissionFunc(az Authorizer, permissionFor func(*http.Request) stri
 				// response. rbac does not log it either: the 5xx this
 				// writes is recorded by the host's own observability
 				// middleware.
-				writeAuthzError(w, ErrStorage)
+				WriteAuthzError(w, ErrStorage)
 				return
 			}
 			if !allowed {
-				writeAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
+				WriteAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
 				return
 			}
 
@@ -191,30 +191,51 @@ func RequirePermissionFunc(az Authorizer, permissionFor func(*http.Request) stri
 	}
 }
 
-// splitPermission is the inverse of Permission: it divides
-// "<resource>:<action>" at its FIRST separator and reports whether the
-// result is well-formed, meaning both halves are non-empty and neither
-// contains a further separator.
+// SplitPermission is the exported inverse of Permission: it divides a
+// permission string at its LAST separator and reports whether the result is
+// well-formed, meaning both halves are non-empty. It is the split rbac's own
+// gate applies before it asks the Authorizer, exported so that a consumer
+// taking a permission apart -- a route-table selector deriving resource and
+// action from a module's own constants, say -- divides the string exactly
+// the way the check that will evaluate it does.
 //
-// It is strict because it guards a gate. "notes:" , ":read", "notes" and
-// "a:b:c" all name a permission no module could have declared through
-// Permission, so treating any of them as a near-miss and guessing would
-// turn a typo in a route table into an unguarded route. They are refused,
-// and the caller denies.
-func splitPermission(permission string) (resource, action string, ok bool) {
-	resource, action, found := strings.Cut(permission, permissionSeparator)
-	if !found || resource == "" || action == "" || strings.Contains(action, permissionSeparator) {
+// The cut is at the LAST separator because a resource half may itself be
+// multi-segment: a module with more than one gated entity names its
+// permissions "<module>:<entity>:<verb>" (go/integration's
+// "integration:apikey:read" splits into resource "integration:apikey" and
+// action "read"), and Permission(resource, action) reproduces the input
+// exactly for every string this function accepts.
+//
+// It is strict because it guards a gate: "notes:", ":read" and "notes" name
+// permissions no module could have declared through Permission, so treating
+// any of them as a near-miss and guessing would turn a typo in a route table
+// into an unguarded route. They are refused, and the caller denies. A string
+// carrying more separators than the naming convention uses is NOT refused:
+// it splits the same way and names a permission no module declared, which
+// the grant catalog rejects at grant time and the check denies at request
+// time -- the fail-closed outcome an unknown permission always gets.
+func SplitPermission(permission string) (resource, action string, ok bool) {
+	idx := strings.LastIndex(permission, permissionSeparator)
+	if idx <= 0 || idx == len(permission)-1 {
 		return "", "", false
 	}
-	return resource, action, true
+	return permission[:idx], permission[idx+1:], true
 }
 
-// writeAuthzError writes appErr to w as the coded error envelope (see
+// WriteAuthzError writes appErr to w as the coded error envelope (see
 // pkgcore/httpapi), at the status its apperr constructor pre-filled. The
 // localized prose is never written: the API returns a code plus
 // parameters and the client resolves it against locales/{zh-CN,en-US}.toml.
 // A typed *apperr.Error is always coded, so the fallback (used only for a
 // non-*apperr.Error) is the value itself.
-func writeAuthzError(w http.ResponseWriter, appErr *apperr.Error) {
+//
+// It is the refusal shape RequirePermission and RequirePermissionFunc write,
+// exported so that a host layer refusing a request on rbac's behalf answers
+// with a byte-identical envelope: a scope-narrowing check layered inside the
+// permission gate (rbac's own DataScope machinery's consumer), or a handler
+// performing its own permission check. One refusal shape across the whole
+// gate stack is what keeps a caller from distinguishing which layer refused
+// it.
+func WriteAuthzError(w http.ResponseWriter, appErr *apperr.Error) {
 	httpapi.WriteError(w, appErr, appErr)
 }

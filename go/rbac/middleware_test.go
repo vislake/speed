@@ -109,10 +109,13 @@ func TestSplitPermission(t *testing.T) {
 		{name: "empty action", permission: "notes:"},
 		{name: "empty resource", permission: ":read"},
 		{name: "only a separator", permission: ":"},
-		{name: "three parts", permission: "notes:sub:read"},
+		// The multi-entity convention: the cut is at the LAST separator, so
+		// the resource half keeps its own segments.
+		{name: "three segments", permission: "integration:apikey:read", resource: "integration:apikey", action: "read", ok: true},
+		{name: "four segments", permission: "a:b:c:d", resource: "a:b:c", action: "d", ok: true},
 		// Structurally well-formed, semantically impossible: no module
 		// could have declared it, so it is split successfully and then
-		// denied by the catalog miss. splitPermission guards SHAPE, not
+		// denied by the catalog miss. SplitPermission guards SHAPE, not
 		// membership -- adding a trim here would buy nothing the frozen
 		// catalog does not already refuse, on the hot path of every
 		// request. TestRequirePermission_UndeclaredButWellFormed_Denies
@@ -121,15 +124,15 @@ func TestSplitPermission(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resource, action, ok := splitPermission(tc.permission)
+			resource, action, ok := SplitPermission(tc.permission)
 			if ok != tc.ok {
-				t.Fatalf("splitPermission(%q) ok = %v, want %v", tc.permission, ok, tc.ok)
+				t.Fatalf("SplitPermission(%q) ok = %v, want %v", tc.permission, ok, tc.ok)
 			}
 			if !tc.ok {
 				return
 			}
 			if resource != tc.resource || action != tc.action {
-				t.Fatalf("splitPermission(%q) = (%q, %q), want (%q, %q)",
+				t.Fatalf("SplitPermission(%q) = (%q, %q), want (%q, %q)",
 					tc.permission, resource, action, tc.resource, tc.action)
 			}
 		})
@@ -138,12 +141,22 @@ func TestSplitPermission(t *testing.T) {
 
 // TestSplitPermission_IsTheInverseOfPermission pins the two halves of the
 // naming convention against each other: whatever Permission composes,
-// splitPermission must take apart again, or the middleware would refuse a
-// permission a module legitimately declared.
+// SplitPermission must take apart again, or the middleware would refuse a
+// permission a module legitimately declared. The multi-segment resource
+// pairs are the "<module>:<entity>" half of the convention, which composes
+// a three-segment permission through the same one call.
 func TestSplitPermission_IsTheInverseOfPermission(t *testing.T) {
-	for _, pair := range [][2]string{{"notes", "read"}, {"billing", "manage"}, {"rbac", "read"}} {
+	pairs := [][2]string{
+		{"notes", "read"},
+		{"billing", "manage"},
+		{"rbac", "read"},
+		{"integration:apikey", "read"},
+		{"integration:webhook", "manage"},
+		{"billing:credit", "manage"},
+	}
+	for _, pair := range pairs {
 		composed := Permission(pair[0], pair[1])
-		resource, action, ok := splitPermission(composed)
+		resource, action, ok := SplitPermission(composed)
 		if !ok || resource != pair[0] || action != pair[1] {
 			t.Fatalf("Permission(%q, %q) = %q, which splits to (%q, %q, %v)",
 				pair[0], pair[1], composed, resource, action, ok)
@@ -243,9 +256,11 @@ func TestRequirePermission_IncompleteSubject_IsForbidden(t *testing.T) {
 // route-table typo case. A permission string no module could have declared
 // must close the route, not open it, and must not even reach the
 // Authorizer -- an engine asked about a name that cannot exist has nothing
-// useful to say.
+// useful to say. A string carrying more separators than the naming
+// convention uses is not in this set: it splits like any multi-segment
+// permission and is decided (and denied) like any name nobody declared.
 func TestRequirePermission_MalformedPermission_DeniesWithoutDeciding(t *testing.T) {
-	for _, permission := range []string{"", "notes", "notes:", ":read", "notes:sub:read"} {
+	for _, permission := range []string{"", "notes", "notes:", ":read", ":"} {
 		t.Run(permission, func(t *testing.T) {
 			az := &stubAuthorizer{allow: true}
 			sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
@@ -266,7 +281,7 @@ func TestRequirePermission_MalformedPermission_DeniesWithoutDeciding(t *testing.
 }
 
 // TestRequirePermission_UndeclaredButWellFormed_Denies is the other half
-// of splitPermission's shape-only contract: a permission string that parses
+// of SplitPermission's shape-only contract: a permission string that parses
 // but that no module ever declared reaches the engine and is refused there,
 // because nobody can hold what nobody declared. It denies rather than
 // erroring -- a check must never turn a request into a failure just because
