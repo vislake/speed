@@ -23,6 +23,12 @@ catalog) and is non-negotiable here.
   installed) are pinned by tests. Do not "helpfully" turn on fallbackLng,
   and do not register resources through raw `addResourceBundle` in
   consuming packages -- `registerNamespace` exists so validation runs.
+  Namespace fallback is the one allowed extension and is opt-in through
+  `fallbackNamespaces` (i18next's `fallbackNS`): a key the called
+  namespace lacks may resolve through another registered namespace, in the
+  same negotiated language -- never through another language, and never
+  through a namespace that does not cover the whole supported set
+  (registration refuses that). Unset, the option configures nothing.
 - **Registration is validated before it mutates, and covers the whole
   supported set with identical key sets.** Parity and coverage errors must
   keep listing actionable details (language tags, leaf paths).
@@ -85,6 +91,10 @@ catalog) and is non-negotiable here.
   the no-fallback discipline: `fallbackLng === false`, `load ===
   'currentOnly'`, `saveMissing === true`, supportedLngs extended with
   `cimode`, and a `missingKeyHandler` installed as a function.
+  `fallbackNamespaces` is the one host-facing option that reaches the
+  instance's own option surface (as `fallbackNS`); its default-state test
+  (`fallbackNS === false` when unset) is what keeps the option's absence
+  meaningful.
   `initAsync: false` is asserted nowhere -- only its observable
   consequence, an instance that is synchronously ready when createI18n
   returns, is what tests and SSR-rendered first paint rely on. Consuming

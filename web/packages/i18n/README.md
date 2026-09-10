@@ -164,6 +164,33 @@ registerNamespace(i18n, 'welcome', {
 // components: useTranslation('welcome') / t('greeting.hello')
 ```
 
+## Fallback namespaces (opt-in)
+
+A host can name namespaces i18next consults when the namespace a lookup
+names carries no such key:
+
+```ts
+const i18n = createI18n({ fallbackNamespaces: ['platform-errors'] })
+registerNamespace(i18n, 'platform-errors', platformErrorsResources)
+// t('welcome:errors.authn.invalid_credentials') resolves through
+// 'platform-errors' when the welcome bundle has no such leaf
+```
+
+The option is unset by default and an unset option configures no
+fallback namespace at all, so resolution is exactly what it was before
+the option existed. The platform-error bundle (`@speed/i18n/platform-errors`)
+is the intended value: it carries every backend error code's own text, so
+a code a package's own namespace does not cover resolves to the module
+catalog's words instead of the raw key.
+
+This is **namespace** fallback, never language fallback. Every consulted
+namespace resolves in the same negotiated language (`fallbackLng` stays
+false, `load` stays `currentOnly`), and a registered namespace always
+covers the whole supported set -- so a fallback can never supply another
+language's text. A key no consulted namespace carries still renders as
+the key itself and fires the missing-key handler; a key a fallback
+namespace answers is a hit, so the handler stays silent for it.
+
 ## Missing keys: never another language's text
 
 `createI18n` pins the guarantees on the underlying instance:

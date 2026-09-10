@@ -1,9 +1,11 @@
 /**
  * Contract tests for createI18n and switchLanguage: negotiation inputs and
- * precedence, the discipline options init pins, persistence semantics, and
- * the end-to-end proof that a missing key in the loaded language never
- * renders another language's text (the no-silent-fallback analogue of
- * go/pkgcore/i18n, whose catalog never falls back across languages).
+ * precedence, the discipline options init pins, the opt-in fallback
+ * namespace (namespace fallback, never language fallback), persistence
+ * semantics, and the end-to-end proof that a missing key in the loaded
+ * language never renders another language's text (the no-silent-fallback
+ * analogue of go/pkgcore/i18n, whose catalog never falls back across
+ * languages).
  *
  * CJK assertions compare against the imported fixtures; no language
  * literals live in this file.
@@ -13,14 +15,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createInstance } from 'i18next'
 import {
   createI18n,
+  registerNamespace,
   switchLanguage,
   SPEED_LOCALE_STORAGE_KEY,
+  type MissingKeyDetails,
+  type ResourceBundle,
   type StorageLike,
 } from './index'
 import { MemoryStorage } from '../test-utils/memory-storage'
-import { createTestI18n } from '../test-utils/welcome'
+import { createTestI18n, registerWelcome } from '../test-utils/welcome'
 import welcomeZh from '../test-utils/locales/welcome/zh-CN.json'
 import welcomeEn from '../test-utils/locales/welcome/en-US.json'
+import fallbackZh from '../test-utils/locales/fallback/zh-CN.json'
+import fallbackEn from '../test-utils/locales/fallback/en-US.json'
 
 /** Storage whose write always throws: persistence must stay best-effort. */
 class ThrowingWriteStorage implements StorageLike {
@@ -237,6 +244,93 @@ describe('createI18n negotiation', () => {
     // and the underlying option array reflects the runtime extension.
     expect(instance.options.supportedLngs).toEqual(['zh-CN', 'en-US', 'cimode'])
     expect(typeof instance.options.missingKeyHandler).toBe('function')
+  })
+
+  // i18next's own default is no fallback namespace; an unset option must
+  // stay indistinguishable from one that never existed.
+  it('configures no fallback namespace when fallbackNamespaces is undefined', () => {
+    const instance = createI18n({ storage: new MemoryStorage(), navigatorLanguages: [] })
+    expect(instance.options.fallbackNS).toBe(false)
+  })
+})
+
+describe('fallbackNamespaces (namespace fallback, never language fallback)', () => {
+  const FALLBACK_NAMESPACE = 'fallback-fixture'
+  const FALLBACK_ONLY_KEY = 'errors.demo.fallback_only'
+  const fixtureTexts = {
+    'zh-CN': (fallbackZh as { errors: Record<string, string> }).errors[
+      'demo.fallback_only'
+    ],
+    'en-US': (fallbackEn as { errors: Record<string, string> }).errors[
+      'demo.fallback_only'
+    ],
+  }
+  const fallbackFixtureResources: Readonly<Record<string, ResourceBundle>> = {
+    'zh-CN': fallbackZh as unknown as ResourceBundle,
+    'en-US': fallbackEn as unknown as ResourceBundle,
+  }
+
+  function createFallbackI18n(
+    options: { readonly storedLanguage?: string; readonly onMissingKey?: (details: MissingKeyDetails) => void } = {},
+  ) {
+    const storage = new MemoryStorage()
+    if (options.storedLanguage !== undefined) {
+      storage.setItem(SPEED_LOCALE_STORAGE_KEY, options.storedLanguage)
+    }
+    const instance = createI18n({
+      storage,
+      navigatorLanguages: [],
+      onMissingKey: options.onMissingKey,
+      fallbackNamespaces: [FALLBACK_NAMESPACE],
+    })
+    registerWelcome(instance)
+    registerNamespace(instance, FALLBACK_NAMESPACE, fallbackFixtureResources)
+    return instance
+  }
+
+  it('passes the namespaces through to i18next as fallbackNS', () => {
+    expect(createFallbackI18n().options.fallbackNS).toEqual([FALLBACK_NAMESPACE])
+  })
+
+  it('resolves a key the called namespace lacks through the fallback namespace', () => {
+    const instance = createFallbackI18n()
+    expect(instance.t(`welcome:${FALLBACK_ONLY_KEY}`)).toBe(fixtureTexts['en-US'])
+    expect(instance.exists(`welcome:${FALLBACK_ONLY_KEY}`)).toBe(true)
+  })
+
+  it('resolves the fallback in the current language, the same as any namespace', () => {
+    const instance = createFallbackI18n({ storedLanguage: 'zh-CN' })
+    expect(instance.language).toBe('zh-CN')
+    expect(instance.t(`welcome:${FALLBACK_ONLY_KEY}`)).toBe(fixtureTexts['zh-CN'])
+  })
+
+  it('lets the called namespace win when both carry the key', () => {
+    const instance = createFallbackI18n()
+    const ownText = 'The called namespace keeps its own words.'
+    registerNamespace(instance, 'own-holder', {
+      'zh-CN': { errors: { 'demo.fallback_only': ownText } },
+      'en-US': { errors: { 'demo.fallback_only': ownText } },
+    })
+    expect(instance.t(`own-holder:${FALLBACK_ONLY_KEY}`)).toBe(ownText)
+  })
+
+  it('does not fire the missing-key handler for a key the fallback namespace answers', () => {
+    const onMissingKey = vi.fn()
+    const instance = createFallbackI18n({ onMissingKey })
+    expect(instance.t(`welcome:${FALLBACK_ONLY_KEY}`)).toBe(fixtureTexts['en-US'])
+    expect(onMissingKey).not.toHaveBeenCalled()
+  })
+
+  it('still renders the key and fires the handler when no consulted namespace answers', () => {
+    const onMissingKey = vi.fn()
+    const instance = createFallbackI18n({ onMissingKey })
+    const nowhereKey = 'errors.demo.nowhere'
+    expect(instance.t(`welcome:${nowhereKey}`)).toBe(nowhereKey)
+    expect(onMissingKey).toHaveBeenCalledTimes(1)
+    expect(onMissingKey.mock.calls[0]?.[0]).toMatchObject({
+      key: nowhereKey,
+      namespace: 'welcome',
+    })
   })
 })
 

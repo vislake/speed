@@ -16,6 +16,11 @@
  *  - initAsync: false keeps init synchronous (v26 defers by default): the
  *    negotiated language is decided and the instance is ready by the time
  *    createI18n returns, which tests and SSR-rendered first paint rely on.
+ *  - fallbackNamespaces is opt-in and unset by default: when a host passes
+ *    it, i18next consults those namespaces (in the same negotiated
+ *    language) for a key the called namespace lacks -- the platform-errors
+ *    bundle rides this; when it is undefined, no fallbackNS is configured
+ *    and resolution is exactly what it was before the option existed.
  *
  * Every negotiable input is injectable (searchParams, storage,
  * navigatorLanguages) and the DOM is only touched through guarded reads, so
@@ -106,6 +111,24 @@ export interface CreateI18nOptions {
    * the package's visible console warning (defaultMissingKeyHandler).
    */
   readonly onMissingKey?: (details: MissingKeyDetails) => void
+  /**
+   * Namespaces i18next consults when the namespace a lookup names carries
+   * no such key (i18next's `fallbackNS`). Undefined -- the default --
+   * leaves the option unset, so resolution is exactly what it was before
+   * this option existed. The platform-error bundle is the intended value:
+   * hosts register @speed/i18n/platform-errors and pass
+   * [PLATFORM_ERRORS_NAMESPACE], so a backend error code with no text in a
+   * package's own namespace resolves to the module catalog's own words
+   * instead of the raw key.
+   *
+   * This is namespace fallback, never language fallback: every consulted
+   * namespace resolves in the same negotiated language (fallbackLng stays
+   * false and load stays "currentOnly"), so the no-silent-cross-language
+   * guarantee is untouched. A key no consulted namespace carries still
+   * renders as the key itself and fires the missing-key handler; a key a
+   * fallback namespace answers is a hit and does not.
+   */
+  readonly fallbackNamespaces?: readonly string[]
 }
 
 function readUrlLanguage(
@@ -256,6 +279,12 @@ export function createI18n(options: CreateI18nOptions = {}): I18nInstance {
     saveMissing: true,
     missingKeyHandler: missingKeyHandlerFactory(options.onMissingKey),
     initAsync: false,
+    // Omitted entirely when the host did not opt in: i18next's own default
+    // is no fallback namespace, so an unset option and an absent one are
+    // one configuration.
+    ...(options.fallbackNamespaces === undefined
+      ? {}
+      : { fallbackNS: [...options.fallbackNamespaces] }),
   })
   bindInstanceStorage(instance, storage, storageKey)
   return instance
