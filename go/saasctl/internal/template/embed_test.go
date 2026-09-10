@@ -60,10 +60,10 @@ func TestEmbeddedGoFilesStartWithBuildIgnoreLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk embedded project tree: %v", err)
 	}
-	// The shared pair plus one server.go per selection: a drift in either
+	// The shared trio plus one server.go per selection: a drift in either
 	// direction (a new template file, a removed one) is a real convention
 	// change and this count is the tripwire.
-	wantGoFiles := 2 + len(validSelectionKeys)
+	wantGoFiles := 3 + len(validSelectionKeys)
 	if goFiles != wantGoFiles {
 		t.Errorf("embedded tree holds %d .go files, want %d", goFiles, wantGoFiles)
 	}
@@ -307,7 +307,8 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 // tenancy.Middleware -- never an enumerated allowlist, which is exactly
 // the fixed-channel enumeration that failed: each authn selection's
 // server.go must mount the authn subtree on topMux directly behind
-// authn.Middleware (topMux.Handle(authnAPIPath, ...) with the tenancy
+// authn.Middleware (topMux.Handle(hostcore.AuthnAPIPath, ...) with the
+// tenancy
 // chain as the "/" fallback), route-split in mountModuleRoutes by path
 // prefix, and must NOT carry a pre-auth allowlist for authn paths at all
 // -- no authnPreAuthAllowlist function, no per-provider social entries,
@@ -324,10 +325,10 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"topMux.Handle(authnAPIPath, authnMux)",
-			"topMux.Handle(authnAPIPath+\"/\", authnMux)",
+			"topMux.Handle(hostcore.AuthnAPIPath, authnMux)",
+			"topMux.Handle(hostcore.AuthnAPIPath+\"/\", authnMux)",
 			"mountModuleRoutes(authnMux, moduleMux, reg)",
-			"strings.HasPrefix(route.Path, authnAPIPath)",
+			"strings.HasPrefix(route.Path, hostcore.AuthnAPIPath)",
 			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
 		} {
 			if !strings.Contains(server, want) {
@@ -706,8 +707,7 @@ func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 		}
 		server := string(content)
 		for _, marker := range []string{
-			"const authnAPIPath = \"/api/v1/authn\"",
-			"topMux.Handle(authnAPIPath, authnMux)",
+			"topMux.Handle(hostcore.AuthnAPIPath, authnMux)",
 			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
 		} {
 			if !strings.Contains(server, marker) {

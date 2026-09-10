@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/redis/go-redis/v9"
 
@@ -18,31 +17,21 @@ import (
 	// its other infrastructure seams compose under (see buildServer's own
 	// kernel-wiring comment below for the full reasoning).
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
-	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
 	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/tenancy"
+
+	"__APP_NAME__/internal/hostcore"
 )
 
-const (
-	// healthzPath serves the orchestrator's liveness probe. Nothing
-	// exempts it and nothing gates it: this selection has no authn module,
-	// so no Principal exists, no middleware chain wraps the mux and no
-	// tenancy allowlist exists at all (see buildServer's doc comment) -- no
-	// route in this composition has tenant resolution, so none needs an
-	// exemption from it.
-	healthzPath = "/healthz"
-
-	// metricsPath is the Prometheus scrape endpoint. Like every route in
-	// this composition it is served without tenant resolution -- not
-	// exempted from any, but simply ungated, since this selection has no
-	// middleware chain at all (see healthzPath's comment and buildServer's
-	// doc comment): a scraper with no tenant to name is served like any
-	// other caller.
-	metricsPath = "/metrics"
-)
+// The liveness routes' paths and handlers, the pre-auth allowlist set
+// and the route-mounting rule are the shared host kernel's
+// (internal/hostcore), byte-identical to the reference app's copy: this
+// file names them through hostcore rather than restating them, so a
+// generated project and the reference app keep composing the same host
+// surface.
 
 // buildServer wires this project's Kernel, the modules the generator
 // selected for it, their migrations, and the handler into a single
@@ -231,12 +220,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(healthzPath, healthzHandler)
-	mux.HandleFunc(metricsPath, metricsHandler)
+	hostcore.MountLiveness(mux)
 	if err := mountModuleRoutes(mux, reg); err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("__APP_NAME__: mount module routes: %w", err)
 	}
+	// Obs route-label seeding: the shared kernel registers this host's
+	// real route table (its two liveness paths plus every module route
+	// just mounted) before obs.Middleware is constructed; see
+	// hostcore.RegisterMountedRoutes' doc comment.
+	hostcore.RegisterMountedRoutes(reg)
 
 	// The bare mux IS the handler: no authn module means no verifier and no
 	// Principal, so there is no middleware chain to wrap it in -- see
@@ -259,31 +252,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 // implicit redirect-on-missing-slash behavior.
 func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry) error {
 	for _, route := range reg.Routes.Routes() {
-		mux.Handle(route.Path, route.Handler)
-		if !strings.HasSuffix(route.Path, "/") {
-			mux.Handle(route.Path+"/", route.Handler)
-		}
+		hostcore.MountRoute(mux, route.Path, route.Handler)
 	}
 	return nil
-}
-
-// healthzHandler always returns 200 with no tenant required.
-func healthzHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
-
-// metricsHandler serves whatever obs.MetricsHandler() currently returns --
-// a real Prometheus scrape endpoint once main.go's run has called
-// obs.Init, or a 404 explaining why before that (see MetricsHandler's own
-// doc comment). It is fetched fresh on every request rather than captured
-// once when buildServer constructs the mux, so this route's behavior does
-// not depend on Init having already run by mount time: run() does call
-// Init first (see main.go), but the indirection keeps that an
-// implementation detail of main.go rather than a hidden requirement on
-// buildServer's caller -- a test that calls buildServer directly can mount
-// the route and assert on it without needing to care whether obs.Init has
-// run yet in this process, or ever will.
-func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	obs.MetricsHandler().ServeHTTP(w, r)
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	obs "github.com/vislake/speed/go/observability"
@@ -57,7 +58,7 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			req, err := http.NewRequest(method, srv.URL+app.HealthzPath, nil)
+			req, err := http.NewRequest(method, srv.URL+hostcore.HealthzPath, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}
@@ -65,12 +66,12 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 
 			resp, err := srv.Client().Do(req)
 			if err != nil {
-				t.Fatalf("%s %s (Host=%q): %v", method, app.HealthzPath, host, err)
+				t.Fatalf("%s %s (Host=%q): %v", method, hostcore.HealthzPath, host, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("%s %s (Host=%q) status = %d, want 200", method, app.HealthzPath, host, resp.StatusCode)
+				t.Fatalf("%s %s (Host=%q) status = %d, want 200", method, hostcore.HealthzPath, host, resp.StatusCode)
 			}
 		}
 	}
@@ -90,23 +91,23 @@ func (failingResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 
 func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+app.HealthzPath, app.HealthzHandler)
+	mux.HandleFunc(http.MethodGet+" "+hostcore.HealthzPath, hostcore.HealthzHandler)
 
 	// The same construction BuildServer uses: tenancy.Middleware wrapping
 	// the mux, allowlisting both GET and HEAD for HealthzPath -- see
 	// internal/app/server.go's own comment on why HEAD needs its own entry too.
 	handler := tenancy.Middleware(failingResolver{},
-		tenancy.WithAllowlist(http.MethodGet, app.HealthzPath),
-		tenancy.WithAllowlist(http.MethodHead, app.HealthzPath),
+		tenancy.WithAllowlist(http.MethodGet, hostcore.HealthzPath),
+		tenancy.WithAllowlist(http.MethodHead, hostcore.HealthzPath),
 	)(mux)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, app.HealthzPath, nil)
+		req := httptest.NewRequest(method, hostcore.HealthzPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, app.HealthzPath, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, hostcore.HealthzPath, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -115,11 +116,11 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	// RFC 9110) even though the handler wrote one, so asserting on it only
 	// for the GET request keeps this test honest about what HEAD actually
 	// guarantees.
-	req := httptest.NewRequest(http.MethodGet, app.HealthzPath, nil)
+	req := httptest.NewRequest(http.MethodGet, hostcore.HealthzPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Body.String() != "ok" {
-		t.Fatalf("GET %s body = %q, want %q", app.HealthzPath, rec.Body.String(), "ok")
+		t.Fatalf("GET %s body = %q, want %q", hostcore.HealthzPath, rec.Body.String(), "ok")
 	}
 
 	// Sanity check, proving the allowlist -- not general leniency in
@@ -156,16 +157,16 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // BuildServer may no longer need its explicit HEAD allowlist entry.
 func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+app.HealthzPath, app.HealthzHandler)
+	mux.HandleFunc(http.MethodGet+" "+hostcore.HealthzPath, hostcore.HealthzHandler)
 
-	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, app.HealthzPath))(mux)
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, hostcore.HealthzPath))(mux)
 
-	req := httptest.NewRequest(http.MethodHead, app.HealthzPath, nil)
+	req := httptest.NewRequest(http.MethodHead, hostcore.HealthzPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", app.HealthzPath, rec.Code)
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", hostcore.HealthzPath, rec.Code)
 	}
 }
 
@@ -197,7 +198,7 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			req, err := http.NewRequest(method, srv.URL+app.MetricsPath, nil)
+			req, err := http.NewRequest(method, srv.URL+hostcore.MetricsPath, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}
@@ -205,13 +206,13 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 
 			resp, err := srv.Client().Do(req)
 			if err != nil {
-				t.Fatalf("%s %s (Host=%q): %v", method, app.MetricsPath, host, err)
+				t.Fatalf("%s %s (Host=%q): %v", method, hostcore.MetricsPath, host, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode == http.StatusForbidden {
 				t.Fatalf("%s %s (Host=%q) status = %d, want anything but 403 (tenant resolution must not be required for this route)",
-					method, app.MetricsPath, host, resp.StatusCode)
+					method, hostcore.MetricsPath, host, resp.StatusCode)
 			}
 		}
 	}
@@ -249,23 +250,23 @@ func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+app.MetricsPath, app.MetricsHandler)
+	mux.HandleFunc(http.MethodGet+" "+hostcore.MetricsPath, hostcore.MetricsHandler)
 
 	// The same construction BuildServer uses: tenancy.Middleware wrapping
 	// the mux, allowlisting both GET and HEAD for MetricsPath -- see
 	// internal/app/server.go's own comment on why HEAD needs its own entry too.
 	handler := tenancy.Middleware(failingResolver{},
-		tenancy.WithAllowlist(http.MethodGet, app.MetricsPath),
-		tenancy.WithAllowlist(http.MethodHead, app.MetricsPath),
+		tenancy.WithAllowlist(http.MethodGet, hostcore.MetricsPath),
+		tenancy.WithAllowlist(http.MethodHead, hostcore.MetricsPath),
 	)(mux)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, app.MetricsPath, nil)
+		req := httptest.NewRequest(method, hostcore.MetricsPath, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, app.MetricsPath, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, hostcore.MetricsPath, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -300,16 +301,16 @@ func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // entry for MetricsPath.
 func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+app.MetricsPath, app.MetricsHandler)
+	mux.HandleFunc(http.MethodGet+" "+hostcore.MetricsPath, hostcore.MetricsHandler)
 
-	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, app.MetricsPath))(mux)
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, hostcore.MetricsPath))(mux)
 
-	req := httptest.NewRequest(http.MethodHead, app.MetricsPath, nil)
+	req := httptest.NewRequest(http.MethodHead, hostcore.MetricsPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", app.MetricsPath, rec.Code)
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", hostcore.MetricsPath, rec.Code)
 	}
 }
 

@@ -39,7 +39,6 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/notification"
-	obs "github.com/vislake/speed/go/observability"
 
 	// Blank-imported for its init() side effect: obs.Init's local
 	// exporters wire a real /metrics scrape endpoint only when a local
@@ -75,6 +74,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
@@ -88,34 +88,17 @@ const (
 	// example's own entry point must stay runnable with nothing
 	// configured.
 	DefaultSQLitePath = "reference-app.db"
-
-	// ShutdownTimeout bounds how long graceful shutdown waits for
-	// in-flight requests to finish before giving up.
-	ShutdownTimeout = 10 * time.Second
-
-	// ReadHeaderTimeout bounds how long the server waits to receive a
-	// request's headers before aborting the connection -- protects
-	// against slow-header (Slowloris-style) connections that trickle
-	// bytes to hold a socket open indefinitely.
-	ReadHeaderTimeout = 5 * time.Second
-
-	// HealthzPath is one of the routes exempted from tenant resolution, not
-	// the only one -- see BuildServer's use of tenancy.WithAllowlist. It
-	// shares that list with MetricsPath, config's two pre-auth display
-	// endpoints, sharing's and integration's self-resolving routes and
-	// org's accept-invitation route, each exempted for its own reason;
-	// BuildServer's allowlist comment enumerates them all. authn's own
-	// subtree is NOT on that list: AuthnAPIPath never sits downstream of
-	// tenancy.Middleware at all, so no allowlist entry exempts it (see
-	// that constant's own doc comment).
-	HealthzPath = "/healthz"
-
-	// MetricsPath is the standalone deployment mode's Prometheus scrape
-	// endpoint, exempted from tenant resolution for exactly the same
-	// reason HealthzPath is: a scraper (or a human's browser) has no demo
-	// Host to send and must not depend on one.
-	MetricsPath = "/metrics"
 )
+
+// The host-neutral kernel this app shares with every generated project --
+// the liveness endpoints and their pre-auth allowlist entries, the
+// route-mounting rule, the mounted-route label seed, the path/timeout
+// constants and the serve/graceful-shutdown lifecycle -- lives in
+// internal/hostcore, byte-identical to the copy `saasctl new` embeds
+// (tools/check_host_core_parity.py enforces the equality). What this file
+// keeps is the host-specific half: ServerConfig's defaults above, this
+// app's own composition (BuildServer), and its host-owned route guards
+// and demo identity layer.
 
 // DevConfigKey is the master key used when APP_CONFIG_KEY is unset. It is
 // the ascending 0x00..0x1f byte sequence -- a recognizable constant, never
@@ -1339,7 +1322,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			// in-flight jobs to finish, bounded by the same timeout that
 			// bounds HTTP graceful shutdown. Close is idempotent, so an
 			// error path that runs before Start is ever called is safe.
-			queueCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+			queueCtx, cancel := context.WithTimeout(context.Background(), hostcore.ShutdownTimeout)
 			keepErr(standaloneQueue.Close(queueCtx))
 			cancel()
 		}
@@ -2637,8 +2620,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	meteringModule.Start(ctx)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(http.MethodGet+" "+HealthzPath, HealthzHandler)
-	mux.HandleFunc(http.MethodGet+" "+MetricsPath, MetricsHandler)
+	hostcore.MountLiveness(mux)
 	orgGuardDeps := OrgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
 	adminHandler, authnHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
@@ -2646,40 +2628,19 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		return nil, nil, nil, mountErr
 	}
 
-	// obs.RegisterMountedRoutes hands every obs.Middleware this process
-	// later constructs this app's REAL route table, so the route-label
-	// limiter the middleware builds (go/observability's cardinality bound
-	// on http.route -- obs.MaxRouteLabelValues distinct values, then a
-	// fixed overflow bucket) reserves a slot for each real route BEFORE
-	// any request traffic arrives. Without the reservation the budget is
-	// first-come-first-served: an attacker sending enough distinct garbage
-	// paths right after startup fills it, and every genuine route first
-	// requested afterwards -- /api/v1/notes, /healthz -- is recorded under
-	// obs.RouteLabelOverflowValue for the life of the process, per-route
-	// metrics gone even though no bound was violated. A seeded route keeps
-	// its slot whatever garbage arrives later (RegisterMountedRoutes' own
-	// doc comment; the mechanism's behavioral proof is
-	// go/observability/middleware_test.go's
-	// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded).
-	//
-	// The table is the same one mountModuleRoutes just mounted on mux from
-	// reg.Routes.Routes() -- the pkgcore.MountedRoute values every module
-	// registered during Bootstrap -- plus this host's own two direct mux
-	// mounts above, which no module registered: /healthz and /metrics are
-	// host-level routes RegisterMountedRoutes' doc comment names as exactly
-	// the paths a host must add itself (paths the table does not name are
-	// not seeded and stay subject to the ordinary bounded behavior, so an
-	// operator's own routes would otherwise collapse right alongside the
-	// module ones). Registration is a snapshot consumed at obs.Middleware
-	// CONSTRUCTION, so it must happen here, at assembly time, before
-	// main.go's run builds the middleware that serves traffic -- not after
-	// the server starts listening. Last registration wins, and every
-	// BuildServer call registers the same table, so the repeated calls
-	// this package's tests make are idempotent in effect.
-	obs.RegisterMountedRoutes(append([]pkgcore.MountedRoute{
-		{Path: HealthzPath},
-		{Path: MetricsPath},
-	}, reg.Routes.Routes()...))
+	// hostcore.RegisterMountedRoutes hands every obs.Middleware this
+	// process later constructs this app's REAL route table -- /healthz,
+	// /metrics (which no module registered) and every route
+	// mountModuleRoutes just mounted on mux -- so the route-label limiter
+	// the middleware builds reserves a slot for each real route BEFORE any
+	// request traffic arrives; see its own doc comment for the mechanism
+	// and why the reservation matters. Registration is a snapshot consumed
+	// at obs.Middleware CONSTRUCTION, so it must happen here, at assembly
+	// time, before main.go's run builds the middleware that serves
+	// traffic -- not after the server starts listening. Last registration
+	// wins, and every BuildServer call registers the same table, so the
+	// repeated calls this package's tests make are idempotent in effect.
+	hostcore.RegisterMountedRoutes(reg)
 
 	// wireDemoNotification adds the reference app's demo glue on top of the
 	// mounted module routes: the subscription that turns notes' note-created
@@ -2904,7 +2865,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// listed in the allowlist below are the ONLY ones that work with no
 	// Principal at all -- this chain never even sees authn's own subtree,
 	// which topMux dispatches straight from authn.Middleware's output the
-	// way it does admin's (AuthnAPIPath's own doc comment below has the
+	// way it does admin's (hostcore.AuthnAPIPath's own doc comment has the
 	// why): healthz and metrics (their constants' doc comments above),
 	// config's two pre-auth display endpoints (still gated by their own
 	// internal DomainResolver, see configModule's wiring above -- entirely
@@ -2958,8 +2919,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// section), and its pre-auth half -- enterprise OIDC's dynamically
 	// named "oidc:<tenant>" login-start path included -- cannot be
 	// expressed by tenancy.WithAllowlist's exact (method, path) matching at
-	// all (see AuthnAPIPath's own doc comment). topMux therefore dispatches
-	// AuthnAPIPath straight from authn.Middleware's own output, the same
+	// all (see hostcore.AuthnAPIPath's own doc comment). topMux therefore
+	// dispatches hostcore.AuthnAPIPath straight from authn.Middleware's own
+	// output, the same
 	// shape adminRoutePath gets above -- with the deliberate difference
 	// that authn's branch is UNGATED: it sits behind authn.Middleware's
 	// optional verification and nothing else, because authn's Handler
@@ -2973,7 +2935,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	// caller identity -- authn is the layer that MINTED the identities
 	// impersonation substitutes between.
 	restOfAppChain := admin.ImpersonationMiddleware(adminModule.Impersonation())(
-		tenancy.Middleware(authn.NewPrincipalResolver(), []tenancy.MiddlewareOption{
+		tenancy.Middleware(authn.NewPrincipalResolver(), append(hostcore.PreAuthAllowlist(),
 			// tenancy.WithTenantStatusResolver is D4's enforcement seam
 			// (docs/internal/23-admin.md, go/tenancy/tenant_status.go):
 			// admin's own tenant ledger (*admin.TenantService, D3)
@@ -2987,14 +2949,6 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			// tenant's requests on the very next one, rather than being
 			// a ledger fact nothing downstream ever consults.
 			tenancy.WithTenantStatusResolver(adminModule.Tenants()),
-			tenancy.WithAllowlist(http.MethodGet, HealthzPath),
-			tenancy.WithAllowlist(http.MethodHead, HealthzPath),
-			tenancy.WithAllowlist(http.MethodGet, MetricsPath),
-			tenancy.WithAllowlist(http.MethodHead, MetricsPath),
-			tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
-			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
-			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
-			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
 			// sharing.PathAccess is the one genuinely public, unauthenticated
 			// route this app mounts: an anonymous visitor holding a bearer
 			// share token carries no Principal and therefore no tenant claim
@@ -3034,14 +2988,14 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 			// refuses an unidentifiable acceptor with org.subject_unresolved,
 			// and authn.Middleware still 401s a genuinely invalid bearer.
 			tenancy.WithAllowlist(http.MethodPost, orgAcceptPath),
-		}...)(mux),
+		)...)(mux),
 	)
 
 	topMux := http.NewServeMux()
 	topMux.Handle(adminRoutePath, adminHandler)
 	topMux.Handle(adminRoutePath+"/", adminHandler)
-	topMux.Handle(AuthnAPIPath, authnHandler)
-	topMux.Handle(AuthnAPIPath+"/", authnHandler)
+	topMux.Handle(hostcore.AuthnAPIPath, authnHandler)
+	topMux.Handle(hostcore.AuthnAPIPath+"/", authnHandler)
 	topMux.Handle("/", restOfAppChain)
 
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
@@ -3125,49 +3079,6 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	return handler, cleanup, complianceModule, nil
 }
 
-// AuthnAPIPath is authn's own HTTP mount point -- duplicated from
-// go/authn/module.go's private apiPath constant of the same value, because
-// this app's wiring, not authn's package, is what names the path: it is
-// the second of the two module subtrees this app dispatches from
-// authn.Middleware's output directly (see mountModuleRoutes' doc comment
-// and BuildServer's topMux composition), never through tenancy.Middleware.
-//
-// Why authn sits outside the tenancy chain -- the resolution of the
-// enterprise-OIDC login-start gap this file's earlier revisions recorded
-// as a CONFIRMED GAP under an authnPreAuthAllowlist that no longer exists:
-// authn's own architecture has its routes never downstream of
-// tenancy.Middleware (the tenant comes from the Principal's own claim,
-// resolved per operation by requirePrincipal, never from a tenant a
-// middleware guessed), and the tenancy layer's exact-match allowlist could
-// not express the one pre-auth channel whose path is not enumerable: the
-// enterprise-OIDC channel's provider value is "oidc:<tenant>"
-// (authn.ProviderOIDCPrefix + a tenant id), and tenants are created
-// dynamically through org's own real flow, so no literal allowlist entry
-// could ever cover a given tenant's authorize path -- while the request
-// carries no Principal at all (it is the FIRST step of a sign-in), which
-// tenancy.Middleware's fail-closed default refused with 403
-// tenancy.tenant_unresolved before authn's own OIDC logic (which resolves
-// its tenant from the provider string itself, never from ctx) ever saw it.
-// The alternative fix shape -- a pattern-matching WithAllowlist in
-// go/tenancy -- was rejected as an API addition to a shipped, frozen-API
-// module for a problem this app could solve in its own composition.
-//
-// Composing authn outside the tenancy chain therefore closes the gap for
-// EVERY tenant at once: mountModuleRoutes returns authn's handler here
-// instead of mounting it into the tenancy-guarded mux (its demoRouteGuards
-// entry stays routePublic, so the guard table still names it), topMux
-// serves the whole AuthnAPIPath subtree from authn.Middleware's own
-// output, and authn's Handler itself remains the per-operation authority
-// on whether a Principal is required (go/authn/handler.go's
-// requirePrincipal answers authn.authentication_required for a protected
-// operation reached anonymously -- the module's own coded answer, instead
-// of tenancy's 403). authn.Middleware still wraps topMux itself, so a
-// genuinely invalid bearer 401s exactly as before, and no authn operation
-// reads a tenancy-injected tenant context -- every one derives what it
-// needs from the verified Principal's own claims, which is what makes the
-// branch safe in the first place.
-const AuthnAPIPath = "/api/v1/authn"
-
 // mountModuleRoutes copies every route reg's modules mounted onto mux,
 // with TWO deliberate exceptions, each mounted by BuildServer on its own
 // topMux branch directly behind authn.Middleware and nothing else -- see
@@ -3182,7 +3093,8 @@ const AuthnAPIPath = "/api/v1/authn"
 //     ImpersonationMiddleware -- that decorator's effect is on the REST of
 //     the application's routes only"; "does NOT go through ordinary
 //     tenancy.Middleware tenant resolution").
-//   - authn's own mounted route (AuthnAPIPath): authn's HTTP surface never
+//   - authn's own mounted route (hostcore.AuthnAPIPath): authn's HTTP
+//     surface never
 //     sits downstream of tenancy.Middleware, per the module's own
 //     architecture (go/authn's routes resolve the tenant from the
 //     Principal's own claim, per operation, never from a tenant a
@@ -3194,7 +3106,7 @@ const AuthnAPIPath = "/api/v1/authn"
 //     step of a sign-in), so a tenancy.Middleware in front of it refused
 //     every such request with tenancy.tenant_unresolved before authn's own
 //     OIDC logic ever saw it -- the CONFIRMED GAP this composition closes
-//     (see AuthnAPIPath's own doc comment below). authn.Middleware still
+//     (see hostcore.AuthnAPIPath's own doc comment). authn.Middleware still
 //     runs outside everything (it wraps topMux itself), so a genuinely
 //     invalid bearer still 401s before this branch is reached; what is
 //     gone is only the tenancy layer, whose fail-closed default had no
@@ -3216,9 +3128,9 @@ const AuthnAPIPath = "/api/v1/authn"
 // POST, since a redirect is not guaranteed to preserve the method or body
 // across every client. pkgcore.MountedRoute's own doc comment says the
 // Handler "serves every request below Path", meaning it must be reachable
-// at Path itself AND at everything nested below it -- so both patterns are
-// registered explicitly here, pointing at the same Handler, instead of
-// relying on ServeMux's implicit redirect-on-missing-slash behavior.
+// at Path itself AND at everything nested below it; the dual registration
+// that satisfies that contract is the shared kernel's, so every plain
+// route below mounts through hostcore.MountRoute (see its doc comment).
 //
 // Every route also passes through GuardModuleRoute on the way out, which
 // is where rbac's permission gate is applied -- see demo_subject.go's
@@ -3238,48 +3150,17 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 			adminHandler = handler
 			continue
 		}
-		if route.Path == AuthnAPIPath {
+		if route.Path == hostcore.AuthnAPIPath {
 			authnHandler = handler
 			continue
 		}
-		mux.Handle(route.Path, handler)
-		if !strings.HasSuffix(route.Path, "/") {
-			mux.Handle(route.Path+"/", handler)
-		}
+		hostcore.MountRoute(mux, route.Path, handler)
 	}
 	if adminHandler == nil {
 		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
 	}
 	if authnHandler == nil {
-		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", AuthnAPIPath)
+		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", hostcore.AuthnAPIPath)
 	}
 	return adminHandler, authnHandler, nil
-}
-
-// HealthzHandler always returns 200 with no tenant required. It is
-// allowlisted in BuildServer above, so an orchestrator's liveness probe
-// never depends on tenant resolution succeeding.
-func HealthzHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
-
-// MetricsHandler serves whatever obs.MetricsHandler() currently returns --
-// a real Prometheus scrape endpoint once main.go's run has called
-// obs.Init, or a 404 explaining why before that (see MetricsHandler's own
-// doc comment). It is fetched fresh on every request rather than captured
-// once when BuildServer constructs the mux, so this route's behavior does
-// not depend on Init having already run by mount time: run() does call
-// Init first (see main.go), but this indirection keeps that an
-// implementation detail of main.go rather than a hidden requirement on
-// BuildServer's caller: a test that calls BuildServer directly (as
-// flowtests/server_guards_test.go's TestBuildServer_Metrics_NoTenantRequired does) can mount
-// the route and assert on it without needing to care whether obs.Init has
-// run yet in this process, or ever will -- see that test's own doc comment
-// for exactly which weaker property it falls back to proving as a result.
-// A test that instead builds its own mux around this same handler, as
-// TestMetricsAllowlist_ResolutionFailure_StillReturns200 does, is free to
-// call obs.Init itself first for a deterministic answer.
-func MetricsHandler(w http.ResponseWriter, r *http.Request) {
-	obs.MetricsHandler().ServeHTTP(w, r)
 }

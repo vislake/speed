@@ -49,3 +49,9 @@ reference-app 必须完整跑通这条链路：
 
 reference-app 是**验证工具与演示载体**，不是要做成商业产品。AI 图像管线（分割、掩膜、身份保持）只做到"能产出可信结果"即可，不做效果调优——那是业务项目的核心竞争力，不是脚手架要解决的问题。
 
+## 宿主面：共享内核与两份逐字节副本
+
+参考应用的宿主面（`cmd/server` + `internal/app`）与 `saasctl new` 生成的骨架分成两层：
+
+- **宿主中性内核**（包 `hostcore`）：存活探针端点与其挂载规则、四条预认证允许列表、挂载路由标签播种、启动与优雅停机生命周期。内核在仓库里就是**一个文件、两份逐字节一致的副本**——模板树 `go/saasctl/internal/template/project/internal/hostcore/hostcore.go`（带 build-ignore 标记，物化时剥掉，成为生成项目的 `internal/hostcore/hostcore.go`）与参考应用的 `examples/reference-app/internal/hostcore/hostcore.go`。`tools/check_host_core_parity.py` 是保证两份相同的门：副本漂移、任一宿主在副本之外重新声明内核符号、或在非测试代码里重新长出内核语句（serve 循环、`/healthz`、`/metrics`、`/api/v1/authn` 字面量），都会让它变红。改共享宿主行为＝同一变更里改两份副本；只属于一个宿主的行为不进内核，留在该宿主自己的文件里。
+- **宿主专属装配**：装配本身（`BuildServer`/`buildServer`）、中间件链上宿主自有的附加项（租户状态解析器、impersonation 装饰器、rbac/org 路由守卫、demo 身份层）、bootstrap 配置面（参考应用经 `pkgcore/config` 装载器解析，骨架仍手工解析 `APP_*`——两侧**有意不同**，机制对齐留待后续），以及全部业务路由。`SubjectResolver` 家族与 demo 身份层是两个宿主的有意不共享项，不进内核、不被强行统一。

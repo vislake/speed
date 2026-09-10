@@ -98,6 +98,14 @@ name: fast-check
 #         tools/migration_parity_exceptions.json. Its planted-drift
 #         suite (tools/test_check_migration_parity.py) runs in the same
 #         step pair below.
+#       - tools/check_host_core_parity.py -- the shared-host-kernel gate:
+#         package hostcore exists as one file carried byte-identically by
+#         the reference app and the saasctl template (the copy
+#         materialized into every generated project), and neither host
+#         may re-declare its symbols or re-grow its statements (the serve
+#         loop, the liveness/authn path literals) outside that copy. Its
+#         planted-drift suite (tools/test_check_host_core_parity.py)
+#         runs in the same step pair below.
 #       - tools/semgrep_rules/ -- the architecture-discipline semgrep
 #         ruleset: seven rules, each mapping to an 18-cicd discipline-table
 #         row (deployment-mode branching outside kernel wiring,
@@ -322,6 +330,16 @@ jobs:
         run: python3 tools/test_check_migration_parity.py
       - name: Dual-dialect migration parity check
         run: python3 tools/check_migration_parity.py
+      # Shared host kernel: package hostcore exists as one file carried
+      # byte-identically by the reference app and the saasctl template
+      # (the copy `saasctl new` materializes into generated projects), and
+      # neither host may re-declare its symbols or re-grow its statements
+      # outside that copy. The planted-drift suite runs first; then the
+      # gate over the real tree. Pure python, like the checks above.
+      - name: Host-core parity checker's planted-drift suite (tools/test_check_host_core_parity.py)
+        run: python3 tools/test_check_host_core_parity.py
+      - name: Shared host-kernel parity check (internal/hostcore copies)
+        run: python3 tools/check_host_core_parity.py
       # Semgrep into a throwaway venv: the runner has no pinned semgrep
       # and this job's toolchain setup is the Go/Node actions only. The
       # pip install is the deliberately-unpinned piece -- see the COVERAGE

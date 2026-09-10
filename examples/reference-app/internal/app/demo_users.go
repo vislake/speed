@@ -14,6 +14,8 @@ import (
 	"github.com/vislake/speed/go/rbac"
 
 	obs "github.com/vislake/speed/go/observability"
+
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 )
 
 // The three demo accounts seedDemoUsers registers when
@@ -260,7 +262,7 @@ func RegisterDemoUser(ctx context.Context, handler http.Handler, email, password
 	if err != nil {
 		return "", false, fmt.Errorf("reference-app: marshal demo register body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, AuthnAPIPath+"/register", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hostcore.AuthnAPIPath+"/register", bytes.NewReader(payload))
 	if err != nil {
 		return "", false, fmt.Errorf("reference-app: build demo register request: %w", err)
 	}

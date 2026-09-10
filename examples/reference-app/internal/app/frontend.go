@@ -78,6 +78,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 )
 
 // indexFile is the SPA fallback target and the answer for "/" itself.
@@ -216,7 +218,7 @@ func (f *frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to enumerate.
 func serverOwnedPath(p string) bool {
 	return p == "/api" || strings.HasPrefix(p, "/api/") ||
-		p == HealthzPath || p == MetricsPath
+		p == hostcore.HealthzPath || p == hostcore.MetricsPath
 }
 
 // cleanWebRel returns p's cleaned form relative to the frontend directory

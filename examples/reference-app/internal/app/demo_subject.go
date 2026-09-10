@@ -22,6 +22,7 @@ import (
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
 
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
 
@@ -346,7 +347,7 @@ var demoRouteGuards = map[string]string{
 	// comment for why authn never sits downstream of tenancy.Middleware);
 	// naming the path here through the same constant keeps the two in
 	// sync the way config's entries do.
-	AuthnAPIPath: routePublic,
+	hostcore.AuthnAPIPath: routePublic,
 	// The config module's two pre-auth endpoints, named through its own
 	// exported constants so a rename cannot drift into a silently ungated
 	// path here.

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/pkgcore"
@@ -407,7 +408,7 @@ func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T)
 		if err != nil {
 			t.Fatalf("marshal register body: %v", err)
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, app.AuthnAPIPath+"/register", bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, hostcore.AuthnAPIPath+"/register", bytes.NewReader(payload))
 		if err != nil {
 			t.Fatalf("build register request: %v", err)
 		}

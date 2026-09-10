@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 
 	obs "github.com/vislake/speed/go/observability"
 )
@@ -124,15 +125,15 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 	// fail-closed 403 (server_test.go's TestBuildServer_Unauthenticated_
 	// FailsClosed pins it). Both must still be recorded under their own
 	// route labels, not the overflow bucket.
-	healthzResp, err := client.Get(srv.URL + app.HealthzPath)
+	healthzResp, err := client.Get(srv.URL + hostcore.HealthzPath)
 	if err != nil {
-		t.Fatalf("GET %s after the garbage flood: %v", app.HealthzPath, err)
+		t.Fatalf("GET %s after the garbage flood: %v", hostcore.HealthzPath, err)
 	}
 	healthzBody, _ := io.ReadAll(healthzResp.Body)
 	_ = healthzResp.Body.Close()
 	if healthzResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s after the garbage flood: status = %d, want %d (body: %s)",
-			app.HealthzPath, healthzResp.StatusCode, http.StatusOK, healthzBody)
+			hostcore.HealthzPath, healthzResp.StatusCode, http.StatusOK, healthzBody)
 	}
 
 	const notesListPath = "/api/v1/notes"
@@ -147,27 +148,27 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 			notesListPath, notesResp.StatusCode, http.StatusForbidden)
 	}
 
-	metricsResp, err := client.Get(srv.URL + app.MetricsPath)
+	metricsResp, err := client.Get(srv.URL + hostcore.MetricsPath)
 	if err != nil {
-		t.Fatalf("GET %s: %v", app.MetricsPath, err)
+		t.Fatalf("GET %s: %v", hostcore.MetricsPath, err)
 	}
 	scrapeBody, _ := io.ReadAll(metricsResp.Body)
 	_ = metricsResp.Body.Close()
 	if metricsResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s: status = %d, want %d (body: %s)", app.MetricsPath, metricsResp.StatusCode, http.StatusOK, scrapeBody)
+		t.Fatalf("GET %s: status = %d, want %d (body: %s)", hostcore.MetricsPath, metricsResp.StatusCode, http.StatusOK, scrapeBody)
 	}
 	series := parseRequestCountSeries(t, scrapeBody)
 
 	// /healthz answered normally (200, asserted above) AND kept its own
 	// series: one request, under its own label, not the overflow bucket.
-	healthzSeries, ok := series[app.HealthzPath]
+	healthzSeries, ok := series[hostcore.HealthzPath]
 	if !ok {
 		t.Fatalf("no http.server.request.count series labeled http.route=%q in the scrape after %d garbage paths: the real route collapsed to %q (the unseeded limiter's first-come-first-served budget was exhausted before this route was ever requested). Series present: %v",
-			app.HealthzPath, garbagePaths, obs.RouteLabelOverflowValue, series)
+			hostcore.HealthzPath, garbagePaths, obs.RouteLabelOverflowValue, series)
 	}
 	if got := healthzSeries["200"]; got != 1 {
 		t.Fatalf("http.route=%q recorded %d successful requests, want exactly 1 (the one GET %s above); series: %v",
-			app.HealthzPath, got, app.HealthzPath, healthzSeries)
+			hostcore.HealthzPath, got, hostcore.HealthzPath, healthzSeries)
 	}
 
 	// The module-table half of the seed: /api/v1/notes is registered by

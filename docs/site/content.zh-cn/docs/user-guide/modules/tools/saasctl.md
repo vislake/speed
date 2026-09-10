@@ -126,9 +126,12 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 `MembershipReader`、org 的 `SubjectResolver`、config 的 resolver)
 保持未接线、失败即关闭,每个都在生成文件的 doc comment 里被点名
 为所有者的第一个任务。不同组合只差两个文件——go.mod 的 require
-集合与 `server.go` 的接线;`config.go` 逐字共享——并在生成时替换
+集合与 `server.go` 的接线;`config.go` 与共享宿主内核
+(`internal/hostcore/hostcore.go`:存活探针端点、预认证允许列表、
+路由挂载规则与启动/优雅停机生命周期)逐字共享——并在生成时替换
 两个 token:`__APP_NAME__`(module path)与 `__SPEED_ROOT__`
-(checkout 路径)。
+(checkout 路径)。宿主内核是一个文件,由参考应用与每个生成项目
+逐字节一致地携带,仓库有一道奇偶校验门保证两份副本始终相同。
 
 启动默认值:standalone 形态、SQLite `app.db`、端口 8080。
 `/healthz` 与 `/api/v1/config/public` 应答 200,注册应答 201;但骨架

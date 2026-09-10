@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +13,7 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
+	"github.com/vislake/speed/examples/reference-app/internal/hostcore"
 )
 
 // healthcheckArg is the first os.Args element that diverts main into
@@ -220,51 +219,14 @@ func run(baseCtx context.Context) error {
 	// tenant_id still reaches the span from there): every request gets a
 	// span and is counted here, including ones the inner chain goes on to
 	// reject with 401/403, which matters for spotting a flood of them.
-	instrumented := obs.Middleware(handler)
-
-	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           instrumented,
-		ReadHeaderTimeout: app.ReadHeaderTimeout,
-		// BaseContext hands baseCtx -- not ctx -- as the ancestor of every
-		// incoming request's context, so obs.FromContext(r.Context())
-		// inside a handler finds the JSON logger main attached via
-		// obs.WithLogger, in addition to the trace_id/tenant_id
-		// obs.Middleware and tenancy.Middleware each add per request.
-		// Without this, net/http defaults every request's root context to
-		// a bare context.Background(), and the logger attachment above
-		// would never reach request-handling code at all -- see run's own
-		// doc comment for why baseCtx, specifically not the signal-aware
-		// ctx, is the one to use here.
-		BaseContext: func(net.Listener) context.Context { return baseCtx },
-	}
-
-	serveErr := make(chan error, 1)
-	go func() {
-		obs.FromContext(ctx).Info("reference-app server listening", "addr", srv.Addr, "deployment_mode", string(cfg.DeploymentMode))
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- err
-			return
-		}
-		serveErr <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		obs.FromContext(ctx).Info("reference-app: shutdown signal received")
-	case err := <-serveErr:
-		if err != nil {
-			return fmt.Errorf("reference-app: serve: %w", err)
-		}
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), app.ShutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("reference-app: graceful shutdown: %w", err)
-	}
-	obs.FromContext(ctx).Info("reference-app: server stopped cleanly")
-	return nil
+	//
+	// hostcore.ServeUntilShutdown owns the whole serve-and-drain sequence
+	// (the obs.Middleware wrap included, at exactly this position) plus
+	// the server's ReadHeaderTimeout/ShutdownTimeout values, so this
+	// process shell and a generated project's run byte-identically on the
+	// host-neutral half: see its doc comment for the BaseContext/baseCtx
+	// reasoning this call's arguments carry.
+	return hostcore.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "reference-app", string(cfg.DeploymentMode))
 }
 
 // runHealthcheck probes this same server's own HealthzPath over loopback and
@@ -290,17 +252,17 @@ func runHealthcheck(ctx context.Context, port string) error {
 	// variable an operator (or this example's Dockerfile ENV) sets, resolved
 	// by the same bootstrap loader the listener's own port resolution uses,
 	// never from a request this binary serves.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+app.HealthzPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+hostcore.HealthzPath, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- see the request construction above
 	if err != nil {
-		return fmt.Errorf("request %s: %w", app.HealthzPath, err)
+		return fmt.Errorf("request %s: %w", hostcore.HealthzPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %d, want %d", app.HealthzPath, resp.StatusCode, http.StatusOK)
+		return fmt.Errorf("%s answered %d, want %d", hostcore.HealthzPath, resp.StatusCode, http.StatusOK)
 	}
 	return nil
 }

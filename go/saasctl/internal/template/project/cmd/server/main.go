@@ -10,29 +10,15 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	obs "github.com/vislake/speed/go/observability"
-)
 
-const (
-	// shutdownTimeout bounds how long graceful shutdown waits for in-flight
-	// requests to finish before giving up.
-	shutdownTimeout = 10 * time.Second
-
-	// readHeaderTimeout bounds how long the server waits to receive a
-	// request's headers before aborting the connection -- protects against
-	// slow-header (Slowloris-style) connections that trickle bytes to hold a
-	// socket open indefinitely.
-	readHeaderTimeout = 5 * time.Second
+	"__APP_NAME__/internal/hostcore"
 )
 
 // main is deliberately thin process-lifecycle glue (signal handling,
@@ -121,57 +107,14 @@ func run(baseCtx context.Context) error {
 		}
 	}()
 
-	// obs.Middleware wraps OUTSIDE the middleware wiring buildServer
-	// assembled (in authn-wiring compositions that inner chain is authn,
-	// then tenancy -- for the full chain-order reasoning see buildServer's
-	// own doc comment in server.go). Its position costs one real thing (a
-	// tenant is not yet known this far out) and buys the useful one: every
-	// request gets a span and is counted here, including ones the inner
-	// chain goes on to reject with 401/403, which matters for spotting a
-	// flood of them.
-	instrumented := obs.Middleware(handler)
-
-	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           instrumented,
-		ReadHeaderTimeout: readHeaderTimeout,
-		// BaseContext hands baseCtx -- not ctx -- as the ancestor of every
-		// incoming request's context, so obs.FromContext(r.Context())
-		// inside a handler finds the JSON logger main attached via
-		// obs.WithLogger, in addition to the trace_id/tenant_id the
-		// middleware layers add per request. Without this, net/http
-		// defaults every request's root context to a bare
-		// context.Background(), and the logger attachment above would never
-		// reach request-handling code at all -- see run's own doc comment
-		// for why baseCtx, specifically not the signal-aware ctx, is the
-		// one to use here.
-		BaseContext: func(net.Listener) context.Context { return baseCtx },
-	}
-
-	serveErr := make(chan error, 1)
-	go func() {
-		obs.FromContext(ctx).Info("__APP_NAME__ server listening", "addr", srv.Addr, "deployment_mode", string(cfg.DeploymentMode))
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- err
-			return
-		}
-		serveErr <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		obs.FromContext(ctx).Info("__APP_NAME__: shutdown signal received")
-	case err := <-serveErr:
-		if err != nil {
-			return fmt.Errorf("__APP_NAME__: serve: %w", err)
-		}
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("__APP_NAME__: graceful shutdown: %w", err)
-	}
-	obs.FromContext(ctx).Info("__APP_NAME__: server stopped cleanly")
-	return nil
+	// The serve-and-drain lifecycle -- the obs.Middleware wrap, the
+	// server's ReadHeaderTimeout/ShutdownTimeout values, the BaseContext
+	// that hands baseCtx (never the signal-derived ctx) to every request,
+	// and the graceful drain -- is the shared host kernel's
+	// (internal/hostcore), byte-identical to the reference app's copy:
+	// ServeUntilShutdown's own doc comment carries the full reasoning for
+	// each of those choices. What stays this process's own: the logger
+	// baseCtx carries, the signal context ctx, and BuildServer's
+	// composition and cleanup.
+	return hostcore.ServeUntilShutdown(ctx, baseCtx, handler, ":"+cfg.Port, "__APP_NAME__", string(cfg.DeploymentMode))
 }
