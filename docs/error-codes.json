@@ -1473,7 +1473,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrActorRequired",
       "kind": "declared",
-      "line": 62,
+      "line": 64,
       "module": "config",
       "status": 400
     },
@@ -1482,7 +1482,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrAlreadyAttached",
       "kind": "declared",
-      "line": 115,
+      "line": 117,
       "module": "config",
       "status": 500
     },
@@ -1491,7 +1491,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrAuditPublishFailed",
       "kind": "declared",
-      "line": 102,
+      "line": 104,
       "module": "config",
       "status": 500
     },
@@ -1500,7 +1500,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrCipherRequired",
       "kind": "declared",
-      "line": 93,
+      "line": 95,
       "module": "config",
       "status": 500
     },
@@ -1509,7 +1509,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrFeatureFlagDependencyCycle",
       "kind": "declared",
-      "line": 87,
+      "line": 89,
       "module": "config",
       "status": 500
     },
@@ -1518,7 +1518,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrInvalidScope",
       "kind": "declared",
-      "line": 35,
+      "line": 37,
       "module": "config",
       "status": 400
     },
@@ -1527,7 +1527,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrInvalidValue",
       "kind": "declared",
-      "line": 68,
+      "line": 70,
       "module": "config",
       "status": 400
     },
@@ -1536,16 +1536,25 @@
       "file": "go/config/errors.go",
       "ident": "ErrItemUnset",
       "kind": "declared",
-      "line": 19,
+      "line": 21,
       "module": "config",
       "status": 404
+    },
+    {
+      "code": "config.rate_limited",
+      "file": "go/config/errors.go",
+      "ident": "ErrRateLimited",
+      "kind": "declared",
+      "line": 136,
+      "module": "config",
+      "status": 429
     },
     {
       "code": "config.schema_conflict",
       "file": "go/config/errors.go",
       "ident": "ErrSchemaConflict",
       "kind": "declared",
-      "line": 80,
+      "line": 82,
       "module": "config",
       "status": 500
     },
@@ -1554,7 +1563,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrServiceNotAttached",
       "kind": "declared",
-      "line": 109,
+      "line": 111,
       "module": "config",
       "status": 500
     },
@@ -1563,7 +1572,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrStorage",
       "kind": "declared",
-      "line": 121,
+      "line": 124,
       "module": "config",
       "status": 500
     },
@@ -1572,7 +1581,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrSystemScopeRequiresSystemContext",
       "kind": "declared",
-      "line": 57,
+      "line": 59,
       "module": "config",
       "status": 403
     },
@@ -1581,7 +1590,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrTenantScopeRequiresTenant",
       "kind": "declared",
-      "line": 48,
+      "line": 50,
       "module": "config",
       "status": 400
     },
@@ -1590,7 +1599,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrTypedValueMismatch",
       "kind": "declared",
-      "line": 74,
+      "line": 76,
       "module": "config",
       "status": 400
     },
@@ -1599,7 +1608,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrUnknownFlag",
       "kind": "declared",
-      "line": 31,
+      "line": 33,
       "module": "config",
       "status": 404
     },
@@ -1608,7 +1617,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrUnknownKey",
       "kind": "declared",
-      "line": 24,
+      "line": 26,
       "module": "config",
       "status": 404
     },
@@ -1617,7 +1626,7 @@
       "file": "go/config/errors.go",
       "ident": "ErrUserScopeUnavailable",
       "kind": "declared",
-      "line": 40,
+      "line": 42,
       "module": "config",
       "status": 400
     },
