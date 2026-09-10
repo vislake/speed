@@ -189,20 +189,25 @@ type StartInput struct {
 	TargetTenantID pkgcore.TenantID
 	// Reason is the operator's required justification.
 	Reason string
-	// Locale OPTIONALLY overrides the locale the mandatory security
-	// notification renders in -- the ADMINISTRATOR's own negotiated locale
-	// is irrelevant here; backend-generated content renders in the
-	// RECIPIENT's locale. When empty (the ordinary case: most callers,
-	// including admin's own generated HTTP client, have no reason to know
-	// the target's locale), Start resolves the target's own authn.User.Locale
-	// itself (falling back to authn.DefaultLocale when the user has never
-	// chosen one) rather than letting the notification's Locale
-	// requirement -- REQUIRED for a RecipientClassUser Dispatch -- silently
-	// defeat the "mandatory" notification. A non-empty value here is
-	// trusted verbatim -- an operator who genuinely knows better than the
-	// stored profile value is not refused -- and Start's dispatch-or-refuse
-	// contract applies identically either way.
+	// Locale is the notification locale chain's highest tier: an explicit
+	// override naming the language the mandatory security notification
+	// renders in. A non-empty value is trusted verbatim -- an operator who
+	// genuinely knows better than the stored profile value is not refused
+	// -- and Start's dispatch-or-refuse contract applies identically
+	// whichever tier resolves.
 	Locale string
+
+	// RequesterLanguage is the chain's tier behind the target's stored
+	// profile: the STARTING administrator's own request language (the
+	// creating request's Accept-Language, the frontend chain's transported
+	// value), normalized by the HTTP layer against the merged catalog. It
+	// is only consulted when neither Locale nor the target's stored locale
+	// resolves -- the recipient's own value always outranks the
+	// requester's, unlike the notification the recipient never asked for.
+	// Empty means "the HTTP layer had none to offer" (no catalog attached,
+	// or a header matching nothing), and the chain continues to
+	// authn.DefaultLocale.
+	RequesterLanguage string
 }
 
 // Start opens a new impersonation grant. It refuses with
@@ -642,11 +647,14 @@ func newImpersonationNoticeOccurrenceID() (string, error) {
 // both existence and locale resolution, rather than adding a second call,
 // is deliberate (see Start's own doc comment).
 //
-// in.Locale is still trusted verbatim once the target is confirmed to
-// exist -- the target's own authn.User.Locale (falling back to
-// authn.DefaultLocale when the user has never chosen one, the same "empty
-// means not chosen yet" reading User.Locale's own doc comment gives) is
-// used only when the caller supplied none.
+// The resolution is a chain, highest tier first: in.Locale (explicit,
+// trusted verbatim once the target is confirmed to exist) -> the target's
+// own authn.User.Locale (the recipient's stored value outranks every
+// requester-supplied signal; empty means "not chosen yet", the same
+// reading User.Locale's own doc comment gives) -> in.RequesterLanguage
+// (the starting administrator's own request language, the frontend
+// chain's transported value) -> authn.DefaultLocale, the terminal tier
+// whose value is the platform default en-US.
 //
 // A target that cannot be found at all (ErrNotFound) is refused with
 // ErrImpersonationTargetNotFound rather than
@@ -681,10 +689,13 @@ func (s *ImpersonationService) resolveNotificationLocale(ctx context.Context, in
 	if in.Locale != "" {
 		return in.Locale, nil
 	}
-	if user.Locale == "" {
-		return authn.DefaultLocale, nil
+	if user.Locale != "" {
+		return user.Locale, nil
 	}
-	return user.Locale, nil
+	if in.RequesterLanguage != "" {
+		return in.RequesterLanguage, nil
+	}
+	return authn.DefaultLocale, nil
 }
 
 // onRoleBindingRevoked is the event-driven half of the automatic

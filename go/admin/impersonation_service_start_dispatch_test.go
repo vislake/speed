@@ -463,3 +463,106 @@ func TestImpersonationService_Start_NotificationRow_CarriesNoInternalParams(t *t
 		t.Fatalf("impersonation notice inbox row params %q embeds the administrator's user id, want it absent from the recipient-visible row", string(row.Params))
 	}
 }
+
+// TestImpersonationService_ResolveNotificationLocale_Chain drives the
+// notice's locale chain at the rule level: explicit Locale first, then the
+// target's stored authn.User.Locale (the recipient's own value outranks
+// every requester-supplied signal), then the starting administrator's
+// request language, then authn.DefaultLocale.
+func TestImpersonationService_ResolveNotificationLocale_Chain(t *testing.T) {
+	env := buildTestAdminModule(t)
+	svc := env.Admin.Impersonation()
+
+	neverChose := registerTestUser(t, env, "chain-never-chose@example.com", "")
+	choseEnglish := registerTestUser(t, env, "chain-chose-en@example.com", "en-US")
+
+	for _, tc := range []struct {
+		name string
+		in   StartInput
+		want string
+	}{
+		{"an explicit locale wins over everything",
+			StartInput{TargetUserID: neverChose, Locale: "zh-CN", RequesterLanguage: "en-US"}, "zh-CN"},
+		{"the target's stored locale outranks the requester language",
+			StartInput{TargetUserID: choseEnglish, RequesterLanguage: "zh-CN"}, "en-US"},
+		{"the requester language answers a target with none",
+			StartInput{TargetUserID: neverChose, RequesterLanguage: "zh-CN"}, "zh-CN"},
+		{"nothing resolves to the platform default",
+			StartInput{TargetUserID: neverChose}, authn.DefaultLocale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := svc.resolveNotificationLocale(context.Background(), tc.in)
+			if err != nil {
+				t.Fatalf("resolveNotificationLocale() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("resolved locale = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestImpersonationService_Start_RequesterLanguageTier_RendersTheNoticeInIt
+// pins the requester tier end to end through the real notification
+// pipeline: a target who never chose a language and an operator whose
+// StartInput carries one -- the mandatory notice's inbox row must render
+// in the requester's language, not the platform default.
+func TestImpersonationService_Start_RequesterLanguageTier_RendersTheNoticeInIt(t *testing.T) {
+	env := buildTestAdminModule(t)
+	env.Admin.AttachRBAC(env.RBAC)
+	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const tenant = pkgcore.TenantID("tenant-requester-tier")
+	root, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Requester Tier Co", "workspace")
+	if err != nil {
+		t.Fatalf("CreateRoot() error = %v", err)
+	}
+	targetID := registerTestUser(t, env, "requester-tier-target@example.com", "")
+	if _, addErr := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); addErr != nil {
+		t.Fatalf("Members().Add() error = %v", addErr)
+	}
+
+	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
+		AdminUserID:       "admin-requester-tier",
+		TargetUserID:      targetID,
+		TargetTenantID:    tenant,
+		Reason:            "prove the requester-language tier renders the notice",
+		RequesterLanguage: "zh-CN",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if grant.ID == "" {
+		t.Fatal("Start() returned a grant with no id")
+	}
+
+	wantTitle, err := env.Registry.Locales().Lookup("zh-CN", NotificationTypeImpersonationStarted+".in_app.title", nil)
+	if err != nil {
+		t.Fatalf("Lookup(zh-CN title) error = %v", err)
+	}
+
+	repo := notification.NewRepository(env.DB)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rows, listErr := repo.ListForRecipient(
+			pkgcore.WithTenant(context.Background(), tenant),
+			targetID, notificationGroupSecurity, 20, 0)
+		if listErr != nil {
+			t.Fatalf("ListForRecipient() error = %v", listErr)
+		}
+		for i := range rows {
+			if rows[i].TypeKey == NotificationTypeImpersonationStarted {
+				if rows[i].Title != wantTitle {
+					t.Errorf("notice title = %q, want the requester language's %q", rows[i].Title, wantTitle)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no admin.impersonation_started inbox row landed for the target within the deadline")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

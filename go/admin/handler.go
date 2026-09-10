@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/httpapi"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
 
@@ -46,7 +47,28 @@ type Handler struct {
 	roles         *RoleService
 	usage         *UsageService
 	sendRecords   *SendRecordSearchService
-	mux           *http.ServeMux
+
+	// host is the narrow view of the host registry this handler reads at
+	// request time: the merged catalog, for the impersonation start's
+	// requester-language tier (see requesterLanguage). It is attached by
+	// Register (which receives the registry), never captured here -- the
+	// catalog is nil until every module has registered. A handler built
+	// directly, without that attach, skips the tier: the chain falls
+	// through to authn.DefaultLocale exactly as it does when a request
+	// names no language the catalog serves.
+	host handlerHost
+
+	mux *http.ServeMux
+}
+
+// handlerHost is the narrow host-registry view this handler reads: the
+// merged message catalog, nothing else. Declared as its own one-method
+// interface (the same pattern notification's handlerHost,
+// deliveryHost and contactHost observe) so the handler names exactly the
+// accessor it uses, and a hand-built registry in a test satisfies it the
+// same way a bootstrapped one does.
+type handlerHost interface {
+	Locales() *i18n.Catalog
 }
 
 // NewHandler returns a Handler serving the given services' operations.
@@ -73,6 +95,24 @@ func NewHandler(tenants *TenantService, impersonation *ImpersonationService, sea
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
+}
+
+// requesterLanguage answers the request's Accept-Language against the
+// merged catalog's languages, returning "" when nothing matches -- or when
+// no catalog is attached yet. The empty answer is meaningful: it is how
+// "the requester expressed no usable preference" travels to
+// resolveNotificationLocale's chain, which continues at the next tier
+// rather than treating the empty string as a language.
+func (h *Handler) requesterLanguage(r *http.Request) string {
+	if h.host == nil {
+		return ""
+	}
+	catalog := h.host.Locales()
+	if catalog == nil {
+		return ""
+	}
+	locale, _ := i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
+	return locale
 }
 
 // callerUserID resolves the calling platform operator's user id from the
@@ -301,6 +341,12 @@ func (h *Handler) AdminStartImpersonation(w http.ResponseWriter, r *http.Request
 		TargetTenantID: pkgcore.TenantID(req.TargetTenantID),
 		Reason:         req.Reason,
 		Locale:         locale,
+		// The starting administrator's own language: the service's chain
+		// consults it only when neither the explicit override nor the
+		// target's stored locale resolved. Negotiated here because the
+		// service holds no catalog; "" (no catalog attached, or a header
+		// matching nothing) skips the tier.
+		RequesterLanguage: h.requesterLanguage(r),
 	})
 	if err != nil {
 		writeError(w, err)

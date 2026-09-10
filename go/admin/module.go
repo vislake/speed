@@ -488,6 +488,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	reg.Events.Subscribe(rbac.EventRoleChanged, m.impersonation.onRoleChanged)
 
 	m.handler = NewHandler(m.tenants, m.impersonation, m.search, m.auditSvc, m.exportSvc, m.roles, m.usage, sendRecords)
+	// The handler's optional catalog slice: hand it the registry so its
+	// impersonation-start locale negotiation can read the merged catalog
+	// at request time -- never captured earlier, because reg.Locales() is
+	// nil inside Register by design (every consumer reads it at call
+	// time). A handler built directly (no Register) keeps a nil host and
+	// skips the tier.
+	m.handler.host = reg
 	reg.Routes.Mount(apiPath, m.handler)
 	return nil
 }

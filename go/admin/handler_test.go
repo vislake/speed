@@ -61,6 +61,33 @@ func TestHandler_MalformedRequestBody_ReportsRequestBodyInvalid(t *testing.T) {
 	}
 }
 
+// TestHandler_RequesterLanguage_NegotiatesAgainstTheMergedCatalog pins the
+// handler leg of the impersonation locale chain: the request's
+// Accept-Language is answered against the merged catalog the handler's
+// attached host slice carries, a header matching nothing answers "" (the
+// chain then continues at its lower tiers), and a handler whose catalog
+// slice was never attached skips the tier entirely.
+func TestHandler_RequesterLanguage_NegotiatesAgainstTheMergedCatalog(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/impersonation", nil)
+	req.Header.Set("Accept-Language", "zh-CN, en;q=0.8")
+	if got := env.Admin.handler.requesterLanguage(req); got != "zh-CN" {
+		t.Errorf("requesterLanguage = %q, want the header's %q", got, "zh-CN")
+	}
+
+	req.Header.Set("Accept-Language", "fr-FR")
+	if got := env.Admin.handler.requesterLanguage(req); got != "" {
+		t.Errorf("requesterLanguage = %q, want \"\" for a header the catalog cannot match", got)
+	}
+
+	env.Admin.handler.host = nil
+	req.Header.Set("Accept-Language", "zh-CN")
+	if got := env.Admin.handler.requesterLanguage(req); got != "" {
+		t.Errorf("requesterLanguage with no attached catalog = %q, want \"\" (the tier is skipped)", got)
+	}
+}
+
 // TestHandler_StartImpersonation_MalformedBody_ReportsRequestBodyInvalid
 // pins the same code on the impersonation surface: the start-impersonation
 // decode failure must be reported as admin.request_body_invalid, never

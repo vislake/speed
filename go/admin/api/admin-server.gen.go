@@ -188,6 +188,7 @@ type AdminSendRecord struct {
 
 // AdminStartImpersonationRequest defines model for AdminStartImpersonationRequest.
 type AdminStartImpersonationRequest struct {
+	// Locale Explicit override of the language the target's security notification renders in, trusted verbatim when supplied. Absent, the notification's language chain continues: the target's stored language, then the requesting administrator's Accept-Language, then the platform default en-US.
 	Locale         *string `json:"locale,omitempty"`
 	Reason         string  `json:"reason"`
 	TargetTenantID string  `json:"targetTenantId"`

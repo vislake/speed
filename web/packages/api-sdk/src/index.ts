@@ -598,6 +598,7 @@ export interface AdminStartImpersonationRequest {
   targetUserId: string;
   targetTenantId: string;
   reason: string;
+  /** Explicit override of the language the target's security notification renders in, trusted verbatim when supplied. Absent, the notification's language chain continues: the target's stored language, then the requesting administrator's Accept-Language, then the platform default en-US. */
   locale?: string;
 }
 
@@ -4399,6 +4400,7 @@ export function useAdminListImpersonationGrants<TData = Awaited<ReturnType<typeo
 
 
 /**
+ * Starting a grant sends the target a mandatory security notification whose language resolves through a chain: the explicit locale field when supplied, else the target's stored language, else the requesting administrator's own Accept-Language (the frontend language chain, transported here), else the platform default en-US. Omitting locale therefore does not mean "the platform default" outright -- the chain continues to the requester's language, and only a request naming no usable language anywhere lands on the default. A notification that cannot be enqueued is a real failure: the grant is refused rather than created silently unnotified.
  * @summary Start an impersonation session.
  */
 export const adminStartImpersonation = (
