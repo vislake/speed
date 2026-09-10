@@ -8,8 +8,11 @@ platform-staff shell of the same tier is not built.
 
 The package exports `ProductShell` (and its props type) plus the
 `PRODUCT_SHELL_NAMESPACE` / `productShellResources` pair every sibling
-ships for its own namespace. The shell renders one of three branches from
-the authenticated snapshot:
+ships for its own namespace, and it ships the app-entry assembly as a
+second entry — `@speed/product-shell/bootstrap`'s `bootstrapSpeedApp`,
+which takes one declarative definition and wires the whole page
+composition (see "The app-entry assembly" below). The shell itself
+renders one of three branches from the authenticated snapshot:
 
 | Snapshot | Branch |
 | --- | --- |
@@ -134,6 +137,84 @@ session-ended screen, and a return to the sign-in view — over a real
 `@speed/api-client`, pinning every request in order, bodies included, so
 the quick start cannot drift from the API.
 
+## The app-entry assembly
+
+`@speed/product-shell/bootstrap`'s `bootstrapSpeedApp(container,
+definition)` is the one call a delivered app's main module makes: the
+app declares everything that varies in one table, and the assembly
+wires the whole entry composition a host used to hand-derive.
+
+```tsx
+import { bootstrapSpeedApp } from '@speed/product-shell/bootstrap'
+import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
+import { MY_APP_NAMESPACE, myAppResources } from './resources.js'
+import { MyServicesProvider } from './app-services.js'
+import { MyView } from './app.js'
+import { clearMyDraft } from './views/my-draft.js'
+
+bootstrapSpeedApp(document.getElementById('root')!, {
+  // The app's own namespaces. The family four the assembly composes —
+  // ui-kit, layout-kit, auth-ui and product-shell's own — register
+  // automatically, so they must not be listed here.
+  namespaces: [
+    { namespace: TENANCY_UI_NAMESPACE, resources: tenancyUiResources },
+    { namespace: MY_APP_NAMESPACE, resources: myAppResources },
+  ],
+  // Producers of app-level providers, outermost first, between the
+  // standard stack and the view; each receives the assembled session,
+  // client (as the RequestFn it is) and query client.
+  providers: [
+    ({ session, api }, children) => (
+      <MyServicesProvider session={session} api={api}>
+        {children}
+      </MyServicesProvider>
+    ),
+  ],
+  // The app's view root: your ProductShell composition (the quick
+  // start above) or any view.
+  view: <MyView />,
+  // Optional: replaces the shipped session-end default. The context
+  // hands over evictAllQueries() so an override can compose it.
+  sessionEnded: (context) => {
+    context.evictAllQueries()
+    clearMyDraft()
+  },
+})
+```
+
+What the assembly wires in that one call: a fresh bilingual i18n
+instance (`?lang=` parameter, stored choice, navigator languages,
+zh-CN last) with the family four registered; a memory access-token
+store feeding the auth-core session over the generated authn
+operations, attached before render; one `@speed/api-client` client
+over the environment's fetch with the session refresh as its
+401-refresh leg, bound into the api-sdk runtime seam; the no-retry
+query client and the session-end strategy; then the provider stack —
+I18nextProvider around `AppThemeProvider` around
+`QueryClientProvider`, then your providers around your view. It
+returns `{ root, i18n, queryClient, session }` for hosts and harnesses
+that act on the composition.
+
+**The shipped session-end default**: the moment the session ends — a
+sign-out or a silently refused refresh, the same flip — the whole
+query cache is evicted. Every row was fetched under the departing
+principal's access token and the identity-domain rows live under bare
+spec-path keys no tenant-scoped removal reaches, so nothing may
+outlive the session. A declared `sessionEnded` replaces that action
+(the context's `evictAllQueries()` is the default to compose it
+with). Two pieces are exported for hosts assembling by hand:
+`watchSessionEnd(session, queryClient, handler?)` wires the strategy
+onto your own session and query client, and `createQueryClient()`
+builds the same no-retry client outside a full bootstrap.
+
+`src/bootstrap.test.tsx` compiles and runs this composition — jsdom
+mounts of `bootstrapSpeedApp` (automatic and declared registration,
+provider order, a declared baseUrl, the default's eviction, an
+override replacing it) plus the `watchSessionEnd` transition matrix
+(sign-out evicts, a refused refresh evicts, a never-authenticated
+session and a tenant switch evict nothing) over a real session and a
+real QueryClient, so the assembly cannot drift from this section.
+
 ## Multi-tenant userMenu
 
 ProductShell has no tenant-switching code of its own; switching tenants is a
@@ -174,7 +255,9 @@ package whose strings render in the frame.
   carries the machine's own session-ended announcement; absent it, the
   shell still transfers focus and renders no raw key text), plus
   tenancy-ui's own whenever the `userMenu` composes the tenant switcher
-  (see above) — double registration throws.
+  (see above) — double registration throws. A host composing through
+  `bootstrapSpeedApp` skips the quartet: the assembly registers it and
+  the definition's `namespaces` list carries only the app's own extras.
 - Attach your session once with `attachSession` before render. Before any
   attach, and after logout, the hooks ProductShell reads fail closed to the
   anonymous snapshot, so the shell can only show the sign-in branch.
@@ -220,8 +303,11 @@ any package.
 | --- | --- |
 | `@speed/layout-kit` | The authenticated frame: `AppShell` chrome and landmarks |
 | `@speed/auth-ui` | The default session-ended screen (`SessionEndedScreen`) |
-| `@speed/auth-core` | The hooks that read the attached session's snapshot |
+| `@speed/auth-core` | The hooks that read the attached session's snapshot; the session the `./bootstrap` entry creates and attaches |
 | `@speed/i18n` | The translation hook that reads the shell's own namespace |
+| `@speed/api-client` | The `./bootstrap` entry's credential store and HTTP client |
+| `@speed/api-sdk` | The `./bootstrap` entry binds the runtime seam (`./runtime`) every generated call travels through |
+| `@speed/ui-kit` | The `./bootstrap` entry's theme provider (`AppThemeProvider`); the main entry renders it only through layout-kit |
 
 `@speed/tenancy-ui` is deliberately absent: the switcher composition in the
 quick start is host work in the `userMenu` slot, so tenancy-ui is a dev-only
@@ -232,10 +318,15 @@ Peers: `react`, `react-dom`, `@mui/material`, `@emotion/*` plus
 `react-hook-form` — the ambient MUI/React tree, never duplicated, and the
 form library the paired auth-ui sign-in family renders with (re-declared
 here, as every package whose surface pulls it in re-declares it, so a host
-sees the requirement at every level of the chain). `layout-kit` and
-`auth-ui` already pull their own concrete dependencies; product-shell adds
-nothing beyond them. No routing, state or query library is required — your
-`children` bring their own.
+sees the requirement at every level of the chain) — plus
+`@tanstack/react-query`, the library the assembly's query client comes
+from, a peer for the same reason `@speed/api-sdk` declares it: the host
+supplies the instance. The `./bootstrap` entry's own imports —
+`api-client`, `api-sdk` and `ui-kit` — are already regular dependencies
+of the main entry's deps (auth-core pulls the first two; layout-kit and
+auth-ui pull ui-kit), so no consumer installs anything new for them; the
+main entry itself adds nothing beyond its four. Routing and client-state
+libraries stay out — your `children` bring their own.
 
 ## What this shell does not do
 
@@ -255,8 +346,11 @@ nothing beyond them. No routing, state or query library is required — your
   gated-journey suite are the packaged evidence of that composition.
 - **No route matching.** Navigation selection is host-computed in
   `navItems`; product-shell never inspects the URL.
-- **No network, navigation or session calls.** Every request the composed
-  views make is a session operation through your bound api-client.
+- **No network of its own, and no session operations in the machine.**
+  Every request the composed views make is a session operation through
+  your bound api-client; the `./bootstrap` entry creates and attaches
+  the session and builds that client exactly as your main module did,
+  but issues no request and drives no login/logout/switch itself.
 
 ## Development
 
@@ -272,7 +366,10 @@ the compiled quick start above lives in `src/usage-example.test.tsx`, which
 renders the five-namespace composition — the shell quartet (`ui-kit`,
 `layout-kit`, `auth-ui` and `product-shell`'s own) plus `tenancy-ui`'s,
 whose switcher sits in the userMenu — and drives the signed-in journey
-through a tenant switch and out again. The
+through a tenant switch and out again. The app-entry assembly's suite is
+`src/bootstrap.test.tsx` — jsdom mounts of `bootstrapSpeedApp` and the
+`watchSessionEnd` transition matrix, both over the real-client rig's
+scripted responder. The
 permission-gating composition over the same frame is `src/gated-journey.test.tsx`:
 its fixture host — a view-id mini-router in `children` whose gates are
 layout-kit `RouteGuard`s fed from auth-core's `usePermission` over lists the

@@ -28,6 +28,8 @@ import { describe, expect, it } from 'vitest'
 
 const manifestPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+  readonly exports?: Readonly<Record<string, unknown>>
+  readonly dependencies?: Readonly<Record<string, string>>
   readonly peerDependencies?: Readonly<Record<string, string>>
   readonly devDependencies?: Readonly<Record<string, string>>
 }
@@ -39,5 +41,30 @@ describe('package manifest', () => {
 
   it('satisfies that peer from its own devDependencies at the workspace-pinned version', () => {
     expect(manifest.devDependencies?.['react-hook-form']).toBe('7.87.0')
+  })
+
+  it('exports the bootstrap entry as its own subpath, built from the same src', () => {
+    // The app-entry assembly ships as the "./bootstrap" subpath (the
+    // api-sdk "./runtime" pattern) so the main entry's dependency
+    // floor stays what the docs promise; the subpath must point at the
+    // dist pair the package build emits from src/bootstrap.tsx.
+    expect(manifest.exports?.['./bootstrap']).toEqual({
+      types: './dist/bootstrap.d.ts',
+      import: './dist/bootstrap.js',
+    })
+  })
+
+  it('declares the packages the bootstrap entry imports, and the query client as a host-supplied peer', () => {
+    // The bootstrap entry imports @speed/api-client (store + client),
+    // @speed/api-sdk (the runtime seam) and @speed/ui-kit (the theme
+    // provider) as regular dependencies -- all three already in the
+    // main entry's transitive closure -- and react-query as a peer:
+    // the host supplies the query library, exactly as it does for
+    // @speed/api-sdk.
+    expect(manifest.dependencies?.['@speed/api-client']).toBe('workspace:*')
+    expect(manifest.dependencies?.['@speed/api-sdk']).toBe('workspace:*')
+    expect(manifest.dependencies?.['@speed/ui-kit']).toBe('workspace:*')
+    expect(manifest.peerDependencies?.['@tanstack/react-query']).toBe('^5.0.0')
+    expect(manifest.devDependencies?.['@tanstack/react-query']).toBe('^5.62.0')
   })
 })

@@ -7,11 +7,16 @@
  * flip is user-initiated and carries no announcement). Everything else
  * on screen belongs to the sibling namespaces the host registers for the
  * views it renders anyway. The host registers this namespace exactly
- * once on its i18n instance, right after createI18n, exactly like every
- * sibling's (double registration throws, so it must never happen inside
- * a component or provider):
+ * once on its i18n instance (double registration throws, so it must
+ * never happen inside a component or provider):
  *
  *   registerNamespace(i18n, PRODUCT_SHELL_NAMESPACE, productShellResources)
+ *
+ * A host composing through this package's app-entry assembly
+ * (@speed/product-shell/bootstrap) does not write that call: the
+ * assembly registers the four family namespaces -- this one among
+ * them -- for the packages it composes, so the shell's announcement
+ * cannot go unregistered on a bootstrapped page.
  *
  * The two language files carry identical leaf key sets (registration
  * enforces that). They are imported with the JSON import attribute so

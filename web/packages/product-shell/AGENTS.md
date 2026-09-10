@@ -14,9 +14,13 @@ the one tier whose package code is allowed to consume `auth-core` hooks —
 there: the shell reads the snapshot and renders a branch; it never calls a
 session operation, never fetches, never navigates.
 
-The public surface is four names: `ProductShell` and `ProductShellProps`
-plus the `PRODUCT_SHELL_NAMESPACE` / `productShellResources` pair every
-sibling ships for its namespace. The shell renders one string of its own —
+The package ships two entries. The main entry is the view machine: four
+names — `ProductShell` and `ProductShellProps` plus the
+`PRODUCT_SHELL_NAMESPACE` / `productShellResources` pair every sibling
+ships for its namespace. The `./bootstrap` subpath is the app-entry
+assembly — `bootstrapSpeedApp` and the definition types it takes, plus
+`watchSessionEnd` and `createQueryClient` (see "The app-entry assembly"
+below). The shell renders one string of its own —
 the polite `announcements.sessionEnded` announcement of the session-ended
 flip, read from the product-shell namespace through `@speed/i18n` — and no
 other copy: every built-in string on screen in the authenticated branch
@@ -54,6 +58,47 @@ component-local state — it resets on unmount and is not a persistence
 layer; the *session's* authenticated state lives in `@speed/auth-core` and
 is the only authority the machine reads.
 
+## The app-entry assembly (the `./bootstrap` subpath)
+
+`bootstrapSpeedApp(container, definition)` is the one call a delivered
+app's main module makes: it takes the app's declarative definition —
+the app's own i18n namespaces, app-level providers, the view root, an
+optional session-end override, an optional baseUrl — and wires the
+whole entry composition a host used to hand-derive: a fresh bilingual
+i18n instance (the family's four namespaces registered automatically
+from the packages the assembly composes), the memory-token session
+attached over the generated authn operations, the one client bound
+into the api-sdk runtime seam with the session refresh as its
+401-refresh leg, the no-retry query client (`createQueryClient`, also
+exported), the session-end strategy (`watchSessionEnd`) and the
+provider stack — I18nextProvider around `AppThemeProvider` around
+`QueryClientProvider`, then the declared providers around the declared
+view. It returns the handles (root, i18n, queryClient, session).
+
+The session-end strategy is the shipped default the definition may
+override: on the authenticated -> anonymous edge — a sign-out or a
+silently refused refresh, the same flip — it evicts the whole query
+cache, because every row was fetched under the departing principal's
+access token and identity-domain rows live under bare keys no
+tenant-scoped removal reaches. A declared `sessionEnded` replaces the
+default action and receives `evictAllQueries()` in its context to
+compose it (the reference app composes it with its notes-draft
+clearing). Edges that only rotate the principal (a tenant switch) and
+sessions that were never authenticated fire nothing.
+
+Why a subpath and not the main entry: the main entry's import graph
+stays exactly what the dependency rules below promise (auth-core,
+auth-ui, layout-kit, i18n) — a platform-staff sibling shell reuses
+that floor untouched — while the assembly, whose job is driving the
+session and the client exactly as a host's main module does, imports
+what that job needs. Every package it adds is already a regular
+dependency of the main entry's own deps (auth-core depends on
+api-client and api-sdk; layout-kit and auth-ui depend on ui-kit), so
+the manifest additions cost no consumer a package it does not already
+install; react-query joins as a peer the host supplies anyway, as for
+`@speed/api-sdk`. This is the api-sdk `./runtime` pattern applied to
+the app entry.
+
 The machine is a whole-page switch, so it owns the two a11y duties a page
 swap carries, in the sibling family's shape: every branch
 flip moves focus into the branch's own container — the branches render
@@ -73,35 +118,48 @@ the branch unchanged.
 
 ## Non-negotiable rules
 
-- **Exactly one component, one decision.** Do not grow a second export,
-  a config object, a `useProductShell` hook or a routing layer into this
-  package. A change that wants to make the shell do more than branch
-  should be a `children` concern (host-owned) or a new prop on the one
-  component — and the prop must be a value or element, never a callback
-  the package invokes to learn the session, which it already reads itself.
-- **The shell reads the session, never drives it.** `useAuthState` is the
-  whole of this package's contact with auth-core. No login/logout/refresh/
-  switch calls anywhere in package code: those are event-handler
-  operations of the host-supplied children (`SignInScreen`'s forms,
-  `SignOutButton`'s click). `attachSession` stays host-side, called once
-  before render; auth-core's last-bind-wins contract means this package
-  must never attach on its own. Before any attach — and after a logout —
-  the hooks fail closed to the anonymous snapshot, so an unattached shell
-  can only ever render the sign-in branch (or nothing): that fail-closed
+- **Exactly one component, one decision — in the main entry.** Do not
+  grow a second export, a config object, a `useProductShell` hook or a
+  routing layer into the main entry. A change that wants to make the
+  shell do more than branch should be a `children` concern (host-owned)
+  or a new prop on the one component — and the prop must be a value or
+  element, never a callback the package invokes to learn the session,
+  which it already reads itself. The `./bootstrap` entry is the one
+  deliberate second surface: the host-side assembly (see the section
+  above), which exists so no app re-derives the wiring. It must not
+  grow app-shaped things either — no routing, no views, no app data —
+  only the entry composition and its shipped defaults.
+- **The shell reads the session, never drives it.** `useAuthState` is
+  the whole of the main entry's contact with auth-core. No
+  login/logout/refresh/switch calls in the machine: those are
+  event-handler operations of the host-supplied children
+  (`SignInScreen`'s forms, `SignOutButton`'s click). The
+  `./bootstrap` entry is where the assembly drives: it creates the
+  session, attaches it once before render, hands the client its
+  refresh as the 401 leg and subscribes the session-end strategy —
+  exactly the duties a host's main module performed before this entry
+  existed. Before any attach — and after a logout — the hooks fail
+  closed to the anonymous snapshot, so an unattached shell can only
+  ever render the sign-in branch (or nothing): that fail-closed
   behaviour is contract and is pinned by the suite.
-- **Dependencies stop at `auth-core`, `auth-ui`, `layout-kit` and
-  `i18n`.**
+- **The main entry's dependencies stop at `auth-core`, `auth-ui`,
+  `layout-kit` and `i18n`.**
   Everything the shell renders arrives through those four: `AppShell`
   and its frame strings through layout-kit, the ended screen through
   auth-ui, the snapshot through auth-core, and the one sentence the
   shell speaks itself — the session-ended announcement — through `i18n`,
   the single exception to the dependency floor, earned by the a11y
   duty the announcement performs: no other package edge is
-  permitted here, and `ui-kit`, `api-client` and `api-sdk` stay out —
-  an extra edge beyond i18n is how a shell quietly starts depending on
+  permitted in the main entry's import graph, and `ui-kit`,
+  `api-client` and `api-sdk` stay out of it — an extra edge beyond
+  i18n is how a shell quietly starts depending on
   machinery it must stay agnostic to — a platform-staff sibling shell on
   this same tier must be able to reuse this package's dependency floor.
-  Test-only needs go in
+  The `./bootstrap` entry imports `api-client`, `api-sdk` and `ui-kit`
+  (the assembly's own wiring), each already a regular dependency of
+  the main entry's deps, so the floor a sibling reuses — and every
+  consumer's install — is unchanged by them (see the assembly
+  section). Test-only needs go in
   `devDependencies` — the suites' `@speed/tenancy-ui` is exactly that: a
   composition partner of journey code, never of the package's own
   imports.
@@ -124,12 +182,15 @@ the branch unchanged.
   is a review error. Do not grow the `locales/` directory past the
   announcement keys: a second sentence of shell-owned copy is a product
   decision that belongs in a host slot, not in the machine.
-- **No network and no session calls in package code.** The shell adds no
-  HTTP surface of its own; the requests the composed views make are
-  session operations travelling through the host's bound api-client. If
-  a change looks like it wants to fetch or call an endpoint, that is
-  scope drift — stop and read the README's "What this shell does not do
-  (yet)" section.
+- **No network of its own in package code.** The machine renders; the
+  requests the composed views make are session operations travelling
+  through the host's bound api-client, and the `./bootstrap` entry
+  builds that client exactly as a host's main module did (over the
+  environment's fetch, credentials from the memory store, refresh
+  through the session) without issuing a request itself. If a change
+  looks like it wants to fetch or call an endpoint, that is scope
+  drift — stop and read the README's "What this shell does not do"
+  section.
 - **The public API is frozen by convention.** Lockstep versioning makes
   an exported-signature change a breaking release; extend the surface
   only intentionally. A public change ships, in one commit: the code,
@@ -158,7 +219,7 @@ must) — and
 responsive drawer needs. Bilingual assertions import the shipped sibling
 bundles relatively (`../../auth-ui/src/locales/zh-CN.json`, the
 layout-kit and tenancy-ui equivalents, and this package's own
-`../locales/zh-CN.json`) — never an inline translation. Four suites:
+`../locales/zh-CN.json`) — never an inline translation. Five suites:
 
 - `src/components/ProductShell.test.tsx` — the view machine. It drives
   real sessions over the real-client rig (a genuine `@speed/api-client`
@@ -201,6 +262,16 @@ layout-kit and tenancy-ui equivalents, and this package's own
   switch to a non-member tenant (tenancy-ui's error text, snapshot
   unchanged, retryable) and a server-side session death converging to
   the session-ended screen.
+- `src/bootstrap.test.tsx` — the app-entry assembly. jsdom mounts of
+  `bootstrapSpeedApp` over the environment fetch the client captures
+  (the family four registered automatically, the declared namespaces on
+  top, the provider fold in declared order with the assembled services,
+  a declared baseUrl honoured, the shipped session-end default evicting
+  and a declared override replacing it); plus `watchSessionEnd`'s
+  transition matrix over a real session and a real QueryClient with no
+  DOM tree — sign-out evicts every domain, a refused silent refresh
+  (session death) evicts, a never-authenticated session and a tenant
+  switch evict nothing.
 
 `test-utils/` copies auth-ui's real-client rig (same fetcher shape, same
 `jsonResponse` over genuine Response objects) and stays in lockstep with
@@ -210,8 +281,10 @@ rides along, with the token-issuing overrides a multi-tenant journey
 scripts (a switch answers with an access token and no refresh token —
 the authn API's shape). The journey suites compose tenancy-ui's
 switcher, so tenancy-ui sits in `devDependencies`, aliased to its
-sources by `tsconfig.json`'s `paths` and `vitest.config.ts`'s alias list
-(lockstep, as with every sibling); package code never imports it.
+sources by the workspace's single package map
+(`web/scripts/speed-aliases.mjs`, the source `vitest.config.ts` derives
+its alias list from) and `tsconfig.json`'s `paths`; package code never
+imports it.
 `attachSession` is module-level and last-bind-wins, so it persists across
 tests in a file: a test that needs an anonymous or specific session must
 bind one explicitly before rendering.
@@ -234,9 +307,11 @@ bind one explicitly before rendering.
   platform-shaped so the two shells can share their foundations.
 - **Browser automation.** The reference app's consumer shell
   (`examples/reference-app/web`) is a real composed consumer of this
-  package: `main.tsx`'s bootstrap registers `PRODUCT_SHELL_NAMESPACE`
-  alongside its six sibling namespaces, renders `ProductShell` as the
-  app's view machine over the real session and client composition, and
+  package: `main.tsx` hands its declarative definition to this
+  package's `bootstrapSpeedApp` (the `./bootstrap` subpath), which
+  registers the family four — `PRODUCT_SHELL_NAMESPACE` among them —
+  plus the app's declared three and renders `ProductShell` as the app's
+  view machine over the real session and client composition, and
   the server serves the production build from disk under `APP_WEB_DIST`.
   What does not exist is browser automation driving that served page —
   the e2e pipeline is a gated stub, so rendering under test harnesses

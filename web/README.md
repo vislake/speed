@@ -66,7 +66,10 @@ web/
                                              the session-ended announcement under
                                              announcements.sessionEnded, from its own
                                              bilingual product-shell namespace (a zh-CN
-                                             twin under the same key)
+                                             twin under the same key); its ./bootstrap
+                                             subpath ships the app-entry assembly
+                                             (bootstrapSpeedApp), which wires the whole page
+                                             composition from one declarative definition
     account-ui/         @speed/account-ui    -- the signed-in account-management family:
                                              sessions, sign-in history, social bindings and
                                              step-up-gated two-factor setup over the
