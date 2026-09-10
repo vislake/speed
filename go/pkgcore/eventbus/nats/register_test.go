@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -79,5 +81,40 @@ func TestBuiltinClose_StopsTheBusAndReleasesTheDialedConnection(t *testing.T) {
 	}
 	if err := closable.Publish(context.Background(), pkgcore.Event{Type: "some.event", Payload: "x"}); !errors.Is(err, ErrEventBusClosed) {
 		t.Errorf("Publish after the builtin's Close error = %v, want ErrEventBusClosed", err)
+	}
+}
+
+// TestRegistration_WrapsTheHostBuiltConnection pins the factory contract a
+// host follows on the name-registration path: the Registration carries the
+// name the host chose and the package's own exported Capabilities, and its
+// New hands back the bare bus over the host's connection -- no Close()
+// error method, so Kernel.Shutdown leaves the connection and the bus to the
+// host, the same ownership pkgcore.WithEventBus records. New ignores a
+// preset entry's Config: the deliberately broken "url" below would fail
+// connFromConfig if the factory consulted it.
+func TestRegistration_WrapsTheHostBuiltConnection(t *testing.T) {
+	conn, err := nats.Connect("127.0.0.1:1", nats.RetryOnFailedConnect(true), nats.MaxReconnects(-1))
+	if err != nil {
+		t.Fatalf("nats.Connect() error = %v, want nil (RetryOnFailedConnect keeps the connection live)", err)
+	}
+	t.Cleanup(conn.Close)
+
+	r := Registration("eventbus.nats.host", conn)
+	if r.Name != "eventbus.nats.host" {
+		t.Errorf("Registration().Name = %q, want the host-chosen name", r.Name)
+	}
+	if r.Capabilities != Capabilities {
+		t.Errorf("Registration().Capabilities = %v, want the exported constant %v", r.Capabilities, Capabilities)
+	}
+
+	impl, err := r.New(pkgcore.Config{"url": "not a url"})
+	if err != nil {
+		t.Fatalf("Registration().New() error = %v, want nil: the factory ignores the preset entry's Config", err)
+	}
+	if impl == nil {
+		t.Fatal("Registration().New() returned a nil EventBus")
+	}
+	if _, ok := impl.(interface{ Close() error }); ok {
+		t.Error("Registration().New() returned a value carrying Close() error, want the bare bus the host owns")
 	}
 }

@@ -57,6 +57,36 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *pgxpool.Pool into a
+// pkgcore.Registration a host registers on KVStoreRegistry under a name of
+// its own and references from a Preset's "kv" entry -- the name-registration
+// path for a configuration the flat pkgcore.Config cannot express: a TLS
+// configuration inside the pool's connection string, a pool shared with
+// another seam or with the application's own database access. The host keeps
+// ownership of what it built, exactly as with pkgcore.WithKVStore: New
+// returns the bare store over that pool, which carries no Close() error
+// method, so Kernel.Bootstrap records no closer for it and Kernel.Shutdown
+// never touches the pool or the store -- the host closes both when it shuts
+// down.
+//
+// name must not be "kv.postgres" itself: that name is already registered by
+// this package's init(), and SeamRegistry.Register refuses a duplicate with
+// pkgcore.ErrDuplicateImplementation. New ignores the Config a Preset entry
+// carries -- everything the store needs was decided when the host built the
+// pool -- so a preset entry naming this Registration carries nothing but
+// Implementation. The store's table still has to exist before its first
+// operation: the host calls EnsureSchema against the pool, per
+// NewKVStore's own contract.
+func Registration(name string, pool *pgxpool.Pool) pkgcore.Registration[pkgcore.KVStore] {
+	return pkgcore.Registration[pkgcore.KVStore]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.KVStore, error) {
+			return NewKVStore(pool), nil
+		},
+	}
+}
+
 // closableKVStore is the value "kv.postgres"'s registration returns: the
 // store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
 // Close() error method that releases the pool the registration built, per

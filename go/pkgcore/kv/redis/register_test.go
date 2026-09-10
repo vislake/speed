@@ -3,6 +3,8 @@ package redis
 import (
 	"testing"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -64,5 +66,37 @@ func TestBuiltinClose_ReleasesTheDialedClient(t *testing.T) {
 	}
 	if err := closable.Close(); err != nil {
 		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}
+
+// TestRegistration_WrapsTheHostBuiltClient pins the factory contract a host
+// follows on the name-registration path: the Registration carries the name
+// the host chose and the package's own exported Capabilities, and its New
+// hands back the bare store over the host's client -- no Close() error
+// method, so Kernel.Shutdown leaves the client and the store to the host,
+// the same ownership pkgcore.WithKVStore records. New ignores a preset
+// entry's Config: the deliberately broken "db" below would fail
+// clientFromConfig if the factory consulted it.
+func TestRegistration_WrapsTheHostBuiltClient(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	t.Cleanup(func() { _ = client.Close() })
+
+	r := Registration("kv.redis.host", client)
+	if r.Name != "kv.redis.host" {
+		t.Errorf("Registration().Name = %q, want the host-chosen name", r.Name)
+	}
+	if r.Capabilities != Capabilities {
+		t.Errorf("Registration().Capabilities = %v, want the exported constant %v", r.Capabilities, Capabilities)
+	}
+
+	impl, err := r.New(pkgcore.Config{"db": "not-a-number"})
+	if err != nil {
+		t.Fatalf("Registration().New() error = %v, want nil: the factory ignores the preset entry's Config", err)
+	}
+	if impl == nil {
+		t.Fatal("Registration().New() returned a nil KVStore")
+	}
+	if _, ok := impl.(interface{ Close() error }); ok {
+		t.Error("Registration().New() returned a value carrying Close() error, want the bare store the host owns")
 	}
 }

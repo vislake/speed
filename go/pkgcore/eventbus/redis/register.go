@@ -58,6 +58,33 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *redis.Client into a pkgcore.Registration
+// a host registers on EventBusRegistry under a name of its own and
+// references from a Preset's "eventbus" entry -- the name-registration path
+// for a configuration the flat pkgcore.Config cannot express: TLS material,
+// a Sentinel/Cluster topology, a client shared with another seam such as
+// kv/redis's. The host keeps ownership of what it built, exactly as with
+// pkgcore.WithEventBus: New returns the bare *EventBus over that client,
+// which carries no Close() error method, so Kernel.Bootstrap records no
+// closer for it and Kernel.Shutdown never touches the client or the bus --
+// the host closes both when it shuts down.
+//
+// name must not be "eventbus.redis" itself: that name is already registered
+// by this package's init(), and SeamRegistry.Register refuses a duplicate
+// with pkgcore.ErrDuplicateImplementation. New ignores the Config a Preset
+// entry carries -- everything the bus needs was decided when the host built
+// the client -- so a preset entry naming this Registration carries nothing
+// but Implementation.
+func Registration(name string, client *redis.Client) pkgcore.Registration[pkgcore.EventBus] {
+	return pkgcore.Registration[pkgcore.EventBus]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.EventBus, error) {
+			return NewEventBus(client), nil
+		},
+	}
+}
+
 // closableEventBus is the value "eventbus.redis"'s registration returns: the
 // bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
 // Close() error method that releases the client the registration built, per

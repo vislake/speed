@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -80,5 +82,28 @@ func TestClosableKVStoreClose_RunsTheConnectionCloser(t *testing.T) {
 
 	if err := (&closableKVStore{}).Close(); err != nil {
 		t.Errorf("Close() on a wrapper without a closer error = %v, want nil", err)
+	}
+}
+
+// TestRegistration_DeclaresTheHostsNameAndCapabilities pins the declaration
+// half of the factory contract: the name is the host's own and the
+// capabilities are the package's exported constant. New itself provisions a
+// JetStream bucket at Build time, a real round trip no hermetic unit test
+// can perform, so the host-built-connection path stops at this declaration
+// here; the full loop through a Preset and Bootstrap is proven for the
+// factory path in go/pkgcore's own unittest suite.
+func TestRegistration_DeclaresTheHostsNameAndCapabilities(t *testing.T) {
+	conn, err := nats.Connect("127.0.0.1:1", nats.RetryOnFailedConnect(true), nats.MaxReconnects(-1))
+	if err != nil {
+		t.Fatalf("nats.Connect() error = %v, want nil (RetryOnFailedConnect keeps the connection live)", err)
+	}
+	t.Cleanup(conn.Close)
+
+	r := Registration("kv.nats.host", conn, "speed-kv")
+	if r.Name != "kv.nats.host" {
+		t.Errorf("Registration().Name = %q, want the host-chosen name", r.Name)
+	}
+	if r.Capabilities != Capabilities {
+		t.Errorf("Registration().Capabilities = %v, want the exported constant %v", r.Capabilities, Capabilities)
 	}
 }

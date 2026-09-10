@@ -73,6 +73,35 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *nats.Conn and a bucket name into a
+// pkgcore.Registration a host registers on KVStoreRegistry under a name of
+// its own and references from a Preset's "kv" entry -- the name-registration
+// path for a configuration the flat pkgcore.Config cannot express: TLS
+// material, credentials minted by a callback, a connection shared with
+// another seam such as eventbus/nats's. The host keeps ownership of what it
+// built, exactly as with pkgcore.WithKVStore: New returns the bare store
+// over that connection, which carries no Close() error method, so
+// Kernel.Bootstrap records no closer for it and Kernel.Shutdown never
+// touches the connection or the store -- the host closes both when it shuts
+// down.
+//
+// New provisions the bucket through NewKVStore with a background context,
+// since Registration.New carries no context of its own (the same trade the
+// built-in registration above records): a host that needs the provisioning
+// bounded by a deadline calls NewKVStore directly with its own context and
+// wires the result with pkgcore.WithKVStore. name must not be "kv.nats"
+// itself, already registered by this package's init(); SeamRegistry.Register
+// refuses a duplicate with pkgcore.ErrDuplicateImplementation.
+func Registration(name string, conn *nats.Conn, bucket string) pkgcore.Registration[pkgcore.KVStore] {
+	return pkgcore.Registration[pkgcore.KVStore]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.KVStore, error) {
+			return NewKVStore(context.Background(), conn, bucket)
+		},
+	}
+}
+
 // closableKVStore is the value "kv.nats"'s registration returns: the store
 // itself (whose promoted methods satisfy pkgcore.KVStore) plus the Close()
 // error method that releases the connection the registration dialed, per

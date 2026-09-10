@@ -3,6 +3,8 @@ package memcached
 import (
 	"testing"
 
+	"github.com/bradfitz/gomemcache/memcache"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -51,5 +53,34 @@ func TestClientFromConfig_SplitsCommaSeparatedAddrs(t *testing.T) {
 	}
 	if client == nil {
 		t.Fatal("clientFromConfig() returned a nil client")
+	}
+}
+
+// TestRegistration_WrapsTheHostBuiltClient pins the factory contract a host
+// follows on the name-registration path: the Registration carries the name
+// the host chose and the package's own exported Capabilities, and its New
+// hands back the bare store over the host's client -- no Close() error
+// method, so Kernel.Shutdown leaves the client and the store to the host,
+// the same ownership pkgcore.WithKVStore records.
+func TestRegistration_WrapsTheHostBuiltClient(t *testing.T) {
+	client := memcache.New("127.0.0.1:1")
+
+	r := Registration("kv.memcached.host", client)
+	if r.Name != "kv.memcached.host" {
+		t.Errorf("Registration().Name = %q, want the host-chosen name", r.Name)
+	}
+	if r.Capabilities != Capabilities {
+		t.Errorf("Registration().Capabilities = %v, want the exported constant %v", r.Capabilities, Capabilities)
+	}
+
+	impl, err := r.New(pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Registration().New() error = %v, want nil", err)
+	}
+	if impl == nil {
+		t.Fatal("Registration().New() returned a nil KVStore")
+	}
+	if _, ok := impl.(interface{ Close() error }); ok {
+		t.Error("Registration().New() returned a value carrying Close() error, want the bare store the host owns")
 	}
 }

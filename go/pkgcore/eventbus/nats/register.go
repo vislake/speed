@@ -61,6 +61,33 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *nats.Conn into a pkgcore.Registration a
+// host registers on EventBusRegistry under a name of its own and references
+// from a Preset's "eventbus" entry -- the name-registration path for a
+// configuration the flat pkgcore.Config cannot express: TLS material,
+// credentials minted by a callback, a connection shared with another seam
+// such as kv/nats's. The host keeps ownership of what it built, exactly as
+// with pkgcore.WithEventBus: New returns the bare *EventBus over that
+// connection, which carries no Close() error method, so Kernel.Bootstrap
+// records no closer for it and Kernel.Shutdown never touches the connection
+// or the bus -- the host closes both when it shuts down.
+//
+// name must not be "eventbus.nats" itself: that name is already registered
+// by this package's init(), and SeamRegistry.Register refuses a duplicate
+// with pkgcore.ErrDuplicateImplementation. New ignores the Config a Preset
+// entry carries -- everything the bus needs was decided when the host
+// dialed the connection -- so a preset entry naming this Registration
+// carries nothing but Implementation.
+func Registration(name string, conn *nats.Conn) pkgcore.Registration[pkgcore.EventBus] {
+	return pkgcore.Registration[pkgcore.EventBus]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.EventBus, error) {
+			return NewEventBus(conn), nil
+		},
+	}
+}
+
 // closableEventBus is the value "eventbus.nats"'s registration returns: the
 // bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
 // Close() error method that releases the connection the registration

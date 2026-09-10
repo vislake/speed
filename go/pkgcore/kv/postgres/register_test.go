@@ -1,7 +1,10 @@
 package postgres
 
 import (
+	"context"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -55,5 +58,40 @@ func TestClosableKVStoreClose_RunsThePoolCloser(t *testing.T) {
 
 	if err := (&closableKVStore{}).Close(); err != nil {
 		t.Errorf("Close() on a wrapper without a closer error = %v, want nil", err)
+	}
+}
+
+// TestRegistration_WrapsTheHostBuiltPool pins the factory contract a host
+// follows on the name-registration path: the Registration carries the name
+// the host chose and the package's own exported Capabilities, and its New
+// hands back the bare store over the host's pool -- no Close() error
+// method, so Kernel.Shutdown leaves the pool and the store to the host, the
+// same ownership pkgcore.WithKVStore records. New ignores a preset entry's
+// Config: the empty Config below would fail poolFromConfig if the factory
+// consulted it.
+func TestRegistration_WrapsTheHostBuiltPool(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("pgxpool.New() error = %v, want nil (construction dials nothing)", err)
+	}
+	t.Cleanup(pool.Close)
+
+	r := Registration("kv.postgres.host", pool)
+	if r.Name != "kv.postgres.host" {
+		t.Errorf("Registration().Name = %q, want the host-chosen name", r.Name)
+	}
+	if r.Capabilities != Capabilities {
+		t.Errorf("Registration().Capabilities = %v, want the exported constant %v", r.Capabilities, Capabilities)
+	}
+
+	impl, err := r.New(pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Registration().New() error = %v, want nil: the factory ignores the preset entry's Config", err)
+	}
+	if impl == nil {
+		t.Fatal("Registration().New() returned a nil KVStore")
+	}
+	if _, ok := impl.(interface{ Close() error }); ok {
+		t.Error("Registration().New() returned a value carrying Close() error, want the bare store the host owns")
 	}
 }

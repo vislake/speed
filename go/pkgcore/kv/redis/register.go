@@ -55,6 +55,33 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *redis.Client into a pkgcore.Registration
+// a host registers on KVStoreRegistry under a name of its own and
+// references from a Preset's "kv" entry -- the name-registration path for a
+// configuration the flat pkgcore.Config cannot express: TLS material, a
+// Sentinel/Cluster topology, a client shared with another seam such as
+// eventbus/redis's. The host keeps ownership of what it built, exactly as
+// with pkgcore.WithKVStore: New returns the bare store over that client,
+// which carries no Close() error method, so Kernel.Bootstrap records no
+// closer for it and Kernel.Shutdown never touches the client or the store
+// -- the host closes both when it shuts down.
+//
+// name must not be "kv.redis" itself: that name is already registered by
+// this package's init(), and SeamRegistry.Register refuses a duplicate with
+// pkgcore.ErrDuplicateImplementation. New ignores the Config a Preset entry
+// carries -- everything the store needs was decided when the host built the
+// client -- so a preset entry naming this Registration carries nothing but
+// Implementation.
+func Registration(name string, client *redis.Client) pkgcore.Registration[pkgcore.KVStore] {
+	return pkgcore.Registration[pkgcore.KVStore]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.KVStore, error) {
+			return NewKVStore(client), nil
+		},
+	}
+}
+
 // closableKVStore is the value "kv.redis"'s registration returns: the store
 // itself (whose promoted methods satisfy pkgcore.KVStore) plus the Close()
 // error method that releases the client the registration built, per the

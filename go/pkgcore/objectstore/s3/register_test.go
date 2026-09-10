@@ -65,3 +65,37 @@ func TestObjectStoreFromConfig_MissingFieldReturnsErrMissingSeamConfig(t *testin
 		})
 	}
 }
+
+// TestRegistration_WrapsTheHostAssembledConfig pins the factory contract a
+// host follows on the name-registration path: the Registration carries the
+// name the host chose and the package's own exported Capabilities, and its
+// New hands back the bare store over the Config the host assembled -- no
+// Close() error method, so Kernel.Shutdown never touches it, the same
+// ownership pkgcore.WithObjectStore records. New ignores a preset entry's
+// Config: the empty Config below would fail with ErrMissingSeamConfig if
+// the factory consulted it.
+func TestRegistration_WrapsTheHostAssembledConfig(t *testing.T) {
+	r := Registration("objectstore.s3.prod", Config{
+		Endpoint:  "s3.example.com",
+		Bucket:    "objects",
+		AccessKey: "ak",
+		SecretKey: "sk",
+	})
+	if r.Name != "objectstore.s3.prod" {
+		t.Errorf("Registration().Name = %q, want the host-chosen name", r.Name)
+	}
+	if r.Capabilities != Capabilities {
+		t.Errorf("Registration().Capabilities = %v, want the exported constant %v", r.Capabilities, Capabilities)
+	}
+
+	impl, err := r.New(pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Registration().New() error = %v, want nil: the factory ignores the preset entry's Config", err)
+	}
+	if impl == nil {
+		t.Fatal("Registration().New() returned a nil ObjectStore")
+	}
+	if _, ok := impl.(interface{ Close() error }); ok {
+		t.Error("Registration().New() returned a value carrying Close() error, want the bare store the host owns")
+	}
+}

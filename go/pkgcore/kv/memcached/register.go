@@ -52,6 +52,33 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *memcache.Client into a
+// pkgcore.Registration a host registers on KVStoreRegistry under a name of
+// its own and references from a Preset's "kv" entry -- the name-registration
+// path for a configuration the flat pkgcore.Config cannot express: a
+// per-server topology assembled in code, a client shared with another
+// consumer. The host keeps ownership of what it built, exactly as with
+// pkgcore.WithKVStore: New returns the bare store over that client, which
+// carries no Close() error method, so Kernel.Bootstrap records no closer for
+// it and Kernel.Shutdown never touches the client or the store -- the host
+// closes both when it shuts down.
+//
+// name must not be "kv.memcached" itself: that name is already registered by
+// this package's init(), and SeamRegistry.Register refuses a duplicate with
+// pkgcore.ErrDuplicateImplementation. New ignores the Config a Preset entry
+// carries -- everything the store needs was decided when the host built the
+// client -- so a preset entry naming this Registration carries nothing but
+// Implementation.
+func Registration(name string, client *memcache.Client) pkgcore.Registration[pkgcore.KVStore] {
+	return pkgcore.Registration[pkgcore.KVStore]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.KVStore, error) {
+			return NewKVStore(client), nil
+		},
+	}
+}
+
 // mustRegister adds r to registry and panics if that fails. Only ever called
 // here against the one name this file controls, so a failure -- a duplicate
 // name -- is a programming error in this file, not a condition a caller

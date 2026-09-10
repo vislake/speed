@@ -59,6 +59,38 @@ func init() {
 	})
 }
 
+// Registration wraps a host-built *pgxpool.Pool into a pkgcore.Registration
+// a host registers on EventBusRegistry under a name of its own and
+// references from a Preset's "eventbus" entry -- the name-registration path
+// for a configuration the flat pkgcore.Config cannot express: a TLS
+// configuration inside the pool's connection string, a pool shared with
+// another seam or with the application's own database access. The host
+// keeps ownership of what it built, exactly as with pkgcore.WithEventBus:
+// New returns the bare *EventBus over that pool, which carries no Close()
+// error method, so Kernel.Bootstrap records no closer for it and
+// Kernel.Shutdown never touches the pool or the bus -- the host closes both
+// when it shuts down.
+//
+// replicaID carries the same cross-restart-stability requirement NewEventBus
+// documents: it must identify the replica persistently, or catch-up after a
+// reconnect reads the wrong watermark.
+//
+// name must not be "eventbus.postgres" itself: that name is already
+// registered by this package's init(), and SeamRegistry.Register refuses a
+// duplicate with pkgcore.ErrDuplicateImplementation. New ignores the Config
+// a Preset entry carries -- everything the bus needs was decided when the
+// host built the pool -- so a preset entry naming this Registration carries
+// nothing but Implementation.
+func Registration(name string, pool *pgxpool.Pool, replicaID string) pkgcore.Registration[pkgcore.EventBus] {
+	return pkgcore.Registration[pkgcore.EventBus]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.EventBus, error) {
+			return NewEventBus(pool, replicaID), nil
+		},
+	}
+}
+
 // closableEventBus is the value "eventbus.postgres"'s registration returns:
 // the bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
 // Close() error method that releases the pool the registration built, per

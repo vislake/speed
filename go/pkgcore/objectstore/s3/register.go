@@ -62,6 +62,35 @@ func init() {
 	})
 }
 
+// Registration wraps a host-assembled Config into a pkgcore.Registration a
+// host registers on ObjectStoreRegistry under a name of its own and
+// references from a Preset's "objectstore" entry -- the name-registration
+// path for this seam, where the typed configuration is the Config itself
+// (a rotated credential pair resolved in code, a region decided by a
+// discovery call) rather than a client object. The host keeps ownership of
+// what it configured, exactly as with pkgcore.WithObjectStore: New returns
+// the bare store over that Config, which carries no Close() error method,
+// so Kernel.Bootstrap records no closer for it and Kernel.Shutdown never
+// touches it -- nothing here owns a resource to release, and a
+// configuration that cannot work panics inside New with NewObjectStore's
+// own unrecoverable-wiring-error convention.
+//
+// name must not be "objectstore.s3" itself: that name is already registered
+// by this package's init(), and SeamRegistry.Register refuses a duplicate
+// with pkgcore.ErrDuplicateImplementation. The Config a Preset entry carries
+// is ignored -- everything the store needs is in this factory's own
+// argument -- so a preset entry naming this Registration carries nothing
+// but Implementation.
+func Registration(name string, cfg Config) pkgcore.Registration[pkgcore.ObjectStore] {
+	return pkgcore.Registration[pkgcore.ObjectStore]{
+		Name:         name,
+		Capabilities: Capabilities,
+		New: func(pkgcore.Config) (pkgcore.ObjectStore, error) {
+			return NewObjectStore(cfg), nil
+		},
+	}
+}
+
 // mustRegister adds r to registry and panics if that fails. It is only ever
 // called here, against the one name this file controls, so a failure -- a
 // duplicate name -- is a programming error in this file, not a condition a
