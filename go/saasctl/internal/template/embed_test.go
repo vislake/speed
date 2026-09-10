@@ -316,7 +316,12 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 // edit that reintroduces the enumeration (or drops the structural
 // dispatch) fails here before any generated project inherits the bug.
 func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
-	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
+	for key, mountCall := range map[string]string{
+		"authn+org+rbac": "mountModuleRoutes(authnMux, moduleMux, reg, rbacService)",
+		"authn+rbac":     "mountModuleRoutes(authnMux, moduleMux, reg, rbacService)",
+		"authn+org":      "mountModuleRoutes(authnMux, moduleMux, reg)",
+		"authn":          "mountModuleRoutes(authnMux, moduleMux, reg)",
+	} {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
 		content, err := fs.ReadFile(Project, path)
 		if err != nil {
@@ -326,7 +331,7 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 		server := string(content)
 		for _, want := range []string{
 			"pkgcore.MountRoutes(topMux, pkgcore.MountedRoute{Path: hostcore.AuthnAPIPath, Handler: authnMux})",
-			"mountModuleRoutes(authnMux, moduleMux, reg)",
+			mountCall,
 			"strings.HasPrefix(route.Path, hostcore.AuthnAPIPath)",
 			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
 		} {
@@ -344,6 +349,64 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 			if strings.Contains(server, stale) {
 				t.Errorf("%s: the fixed pre-auth enumeration survived: %q must not appear", path, stale)
 			}
+		}
+	}
+}
+
+// TestRBACSelectionsAdoptTheRouteTable pins the adoption of the platform's
+// route-authorization mechanism where the skeleton used to leave the gate
+// table to the owner: each rbac-bearing selection must declare its routes
+// through rbac.GuardRoutes over a routeRules table (so a mounted path with
+// no declared decision fails the build), mark the platform's pre-auth
+// surfaces public explicitly, and gate the modules that perform no
+// permission check of their own; the three selections without rbac must not
+// reference the mechanism at all (they carry no rbac dependency to gate
+// with).
+func TestRBACSelectionsAdoptTheRouteTable(t *testing.T) {
+	for _, key := range []string{"authn+org+rbac", "authn+rbac"} {
+		content, err := fs.ReadFile(Project, ProjectRoot+"/selection/"+key+"/server.go")
+		if err != nil {
+			t.Errorf("%s: %v", key, err)
+			continue
+		}
+		server := string(content)
+		for _, want := range []string{
+			"rbac.GuardRoutes(az, reg.Routes.Routes(), routeRules())",
+			"func routeRules() []rbac.RouteRule {",
+			"{Path: hostcore.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}",
+			"{Path: config.PathPublic, Access: pkgcore.RouteAccess{Public: true}}",
+			"{Path: config.PathSystemFeatures, Access: pkgcore.RouteAccess{Public: true}}",
+			"{Path: pkiAPIPath, Access: pkgcore.RouteAccess{Permission: pkiPermissionFor}}",
+		} {
+			if !strings.Contains(server, want) {
+				t.Errorf("%s: the route table adoption marker %q is missing from the template", key, want)
+			}
+		}
+	}
+
+	org, err := fs.ReadFile(Project, ProjectRoot+"/selection/authn+org+rbac/server.go")
+	if err != nil {
+		t.Fatalf("authn+org+rbac: %v", err)
+	}
+	for _, want := range []string{
+		"Access: pkgcore.RouteAccess{Permission: orgPermissionFor}",
+		"Exempt: orgAcceptInvitationRequest,",
+		"return org.PermissionRemoveMember",
+		"return org.PermissionInviteMember",
+	} {
+		if !strings.Contains(string(org), want) {
+			t.Errorf("authn+org+rbac: the org entry marker %q is missing from the template", want)
+		}
+	}
+
+	for _, key := range []string{"authn+org", "authn", "none"} {
+		content, err := fs.ReadFile(Project, ProjectRoot+"/selection/"+key+"/server.go")
+		if err != nil {
+			t.Errorf("%s: %v", key, err)
+			continue
+		}
+		if strings.Contains(string(content), "rbac.GuardRoutes") {
+			t.Errorf("%s: a selection without the rbac module references rbac.GuardRoutes", key)
 		}
 	}
 }

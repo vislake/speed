@@ -224,10 +224,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// rbac needs nothing from this host but a database: it declares its own
 	// permissions during Register and reads EVERY module's declarations
-	// once, in Attach, after Bootstrap. This skeleton mounts no protected
-	// routes, so rbac's permission gates are unused today; when the owner
-	// adds the first route that needs one, the gate belongs at mount time
-	// in mountModuleRoutes below (its doc comment says where).
+	// once, in Attach, after Bootstrap. The Attach-time Service is what
+	// mountModuleRoutes hands to rbac.GuardRoutes, which applies the route
+	// table below it: every mounted route must carry an explicit
+	// authorization decision, or the server build fails naming the route.
 	rbacModule := rbac.NewModule(db)
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
@@ -318,7 +318,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	moduleMux := http.NewServeMux()
 	obs.MountLiveness(moduleMux)
 	authnMux := http.NewServeMux()
-	if err := mountModuleRoutes(authnMux, moduleMux, reg); err != nil {
+	if err := mountModuleRoutes(authnMux, moduleMux, reg, rbacService); err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("__APP_NAME__: mount module routes: %w", err)
 	}
@@ -395,14 +395,19 @@ func attachModules(reg *pkgcore.Registry, configModule *config.Module, rbacModul
 // carries the exact-plus-subtree registration rule and the reasoning
 // behind it.
 
-// rbac's permission gate belongs at this same mount point, wrapped around
-// a route's Handler before it reaches the mux (RequirePermissionFunc's own
-// doc comment shows the shape): a route that reaches the mux ungated is
-// served ungated. This skeleton wires no protected routes, so there is no
-// gate to apply yet -- when the owner adds the first one, it goes here.
-
-func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Registry) error {
-	for _, route := range reg.Routes.Routes() {
+// rbac.GuardRoutes is where the permission gate is attached: it admits
+// every mounted route through routeRules below, wraps each gated route's
+// handler in rbac's fail-closed gate before the route reaches a mux, and
+// fails -- so this buildServer fails -- when a mounted path has no declared
+// decision or the table names a path no module mounted. A route that
+// reaches a mux from anywhere else is served ungated, which is why this
+// function is the one place routes enter this host.
+func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer) error {
+	guarded, err := rbac.GuardRoutes(az, reg.Routes.Routes(), routeRules())
+	if err != nil {
+		return err
+	}
+	for _, route := range guarded {
 		target := protectedMux
 		if strings.HasPrefix(route.Path, hostcore.AuthnAPIPath) {
 			target = authnMux
@@ -410,4 +415,65 @@ func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Regis
 		pkgcore.MountRoutes(target, route)
 	}
 	return nil
+}
+
+// routeRules declares the authorization decision for every route the
+// selected modules mount -- the table rbac.GuardRoutes refuses to serve
+// around: a mounted path it does not name, an entry no module mounted, and
+// an entry declaring neither a public decision nor a permission all fail
+// the server build, so a module added to the --with set later cannot start
+// up with an undecided route.
+//
+// The gated entries select the owning module's own permission constants
+// and let rbac's gate evaluate them through the default subject resolver --
+// the Subject an authenticating layer installs with rbac.WithSubject. This
+// skeleton wires no such layer yet, so a gated route answers 403
+// rbac.permission_denied until the owner bridges its identity source into
+// a Subject (the seam rbac.WithSubjectResolver documents) and grants
+// roles; that is deliberately the fail-closed direction. The public
+// entries are the platform's own pre-auth surfaces, declared explicitly
+// rather than left to omission.
+func routeRules() []rbac.RouteRule {
+	return []rbac.RouteRule{
+		// authn's subtree is mounted ahead of the gated mux by buildServer
+		// (see mountModuleRoutes), and authn.Handler decides per operation
+		// which of its routes require a Principal; the entry keeps the
+		// table exhaustive over what authn mounts.
+		{Path: hostcore.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}},
+		// config's two pre-auth display endpoints: a login page's brand and
+		// feature flags must render before anyone has signed in.
+		{Path: config.PathPublic, Access: pkgcore.RouteAccess{Public: true}},
+		{Path: config.PathSystemFeatures, Access: pkgcore.RouteAccess{Public: true}},
+		// pki's handler performs no permission check of its own, so this
+		// entry gates its route on the module's own read permission -- the
+		// three read operations (both JWKS exports and the CRL fetch) are
+		// GETs, and pkiPermissionFor demands nothing of every other
+		// method, which DENIES. The two revoke operations are deliberately
+		// not opened here: gating them correctly requires the
+		// platform-domain evaluation the signing-key half's permission
+		// contract mandates (a subject resolver pinning rbac.SystemDomain,
+		// go/pki/AGENTS.md), and the owner adds that resolver and the
+		// revoke permissions together -- never the permissions first,
+		// because a tenant's own owner role carries every permission any
+		// module declared, platform-scoped ones included.
+		{Path: pkiAPIPath, Access: pkgcore.RouteAccess{Permission: pkiPermissionFor}},
+	}
+}
+
+// pkiAPIPath is where the pki module mounts its HTTP surface (the module
+// keeps its own path constant unexported; the table's exactness check
+// turns a drift into a startup error naming the mounted path).
+const pkiAPIPath = "/api/v1/pki"
+
+// pkiPermissionFor selects the pki:* permission a request must hold: the
+// module's read permission on GET/HEAD, and nothing -- which denies -- on
+// every other method. See the pki entry's own comment for what the owner
+// adds here and in what order.
+func pkiPermissionFor(r *http.Request) string {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		return pki.PermissionRead
+	default:
+		return ""
+	}
 }
