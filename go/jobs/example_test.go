@@ -263,7 +263,7 @@ func ExampleWithEventBus() {
 }
 
 // ExampleWire demonstrates the host-side wiring call, the shape every
-// host's assembly uses after Kernel.Bootstrap: the modules have declared
+// host's own wiring uses once the assembly has returned: the modules have declared
 // their handlers on the registry (the single Handle call stands in for a
 // module's Register walking its own declarations), the host hands the whole
 // registry to Wire, and Start remains the host's own step -- a

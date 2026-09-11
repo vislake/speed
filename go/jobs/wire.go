@@ -13,7 +13,7 @@ import (
 // indexes) if they do not already exist -- the same ensureJobsSchema DDL
 // Start itself runs, which makes a later Start's own call to it a no-op.
 //
-// It is the one call a host makes after Kernel.Bootstrap -- the point at
+// It is the one call a host makes after the assembly returns -- the point at
 // which every module's Register has run and reg is complete -- and it is
 // deliberately separate from Start, which stays the host's own,
 // deployment-mode-gated step. A worker-disabled replica (see

@@ -11,8 +11,8 @@ import (
 // declaration map is written in — must be a Handler, and each is registered
 // through q.RegisterHandler, which keys the queue by the handler's own
 // Type(). It is the drain primitive Wire composes with the queue's schema
-// bootstrap; a host whose declarations do not live on a pkgcore.Registry
-// calls it directly.
+// bootstrap; a host whose declarations do not come from the registry's
+// Handlers seat calls it directly.
 //
 // Entries register in ascending job-type order, so a map carrying several
 // bad entries fails the same way on every run. An entry of any other type is

@@ -16,8 +16,8 @@ import "time"
 // is a set of facts about the Job, and what a subscriber does with them is
 // the business module's own concern (the signal-side dual of "compensation
 // belongs to the business module"; see FailureHook's doc comment for the
-// boundary between the two surfaces). jobs is not a pkgcore.Module, so it
-// does not declare this type into the registry's event catalog: the catalog
+// boundary between the two surfaces). jobs carries no module contract, so
+// it does not declare this type into the registry's event catalog: the catalog
 // is a documentation-and-mapping contract, not a precondition for
 // publishing (pkgcore.EventRegistrar.Publishes), and the type's definition
 // ships here as this exported constant plus the documentation on this file.

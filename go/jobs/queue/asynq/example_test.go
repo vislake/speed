@@ -60,10 +60,11 @@ func waitForTerminal(ctx context.Context, queue jobs.Queue, id jobs.JobID, deadl
 // type-checks this exactly like every other example here (catching a
 // signature drift immediately) WITHOUT executing it -- this package needs
 // a real Redis, which the default, non-integration test tier this file
-// belongs to must not require (see integration_test/'s own package
-// comment). The exact same shape, actually run end to end against a real
-// Redis via testcontainers-go, is integration_test/enqueue_execute_test.go's
-// TestRedisQueue_EnqueueExecuteRoundTrip.
+// belongs to must not require (see go/jobs/integration_test's own package
+// comment, redis_container_test.go). The exact same shape, actually run end
+// to end against a real Redis via testcontainers-go, is
+// go/jobs/integration_test/queue_conformance_test.go's
+// TestAsynqQueue_ConformsToQueueContract.
 func ExampleNewQueue() {
 	ctx := context.Background()
 
