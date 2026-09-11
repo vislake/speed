@@ -139,8 +139,8 @@ func TestAppendOnlyTrigger_Postgres_RejectsRawUpdateAndDelete(t *testing.T) {
 }
 
 // TestAppendOnlyTrigger_Postgres_RejectsTruncate proves the migration's
-// statement-level TRUNCATE trigger, added alongside the pre-existing
-// row-level UPDATE/DELETE pair: PostgreSQL never fires a row-level trigger
+// statement-level TRUNCATE trigger, alongside the row-level UPDATE/DELETE
+// pair: PostgreSQL never fires a row-level trigger
 // for TRUNCATE, so without a dedicated FOR EACH STATEMENT trigger bound to
 // the TRUNCATE event, a single `TRUNCATE audit_events;` would wipe every
 // row with no error and no trigger ever invoked, even with the row-level
