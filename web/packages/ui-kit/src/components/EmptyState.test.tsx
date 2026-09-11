@@ -100,7 +100,7 @@ describe('EmptyState', () => {
     // page supplies: page-has-heading-one is determinate in jsdom now
     // (see the axe helper header), so a document with no h1 fails the
     // scan instead of passing by indeterminacy. Each variant renders
-    // the way a correctly-migrated caller would -- under the page's
+    // the way a caller that sets headingLevel would -- under the page's
     // h1 and declaring the headingLevel that continues the page order;
     // the stock h6 default under a real h1 is a genuine heading-order
     // skip, which the two regression tests below pin.

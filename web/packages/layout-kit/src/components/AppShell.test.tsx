@@ -427,7 +427,7 @@ describe('AppShell', () => {
       // only scrolls to it without ever moving the assistive-tech focus
       // cursor. jsdom enforces the same focusability rule as browsers,
       // so calling .focus() directly on the target is a faithful check
-      // of the mechanism the fix relies on.
+      // of the mechanism the skip link relies on.
       main.focus()
       expect(document.activeElement).toBe(main)
     })

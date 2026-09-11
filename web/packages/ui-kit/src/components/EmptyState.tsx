@@ -23,9 +23,9 @@
  * real page -- so `headingLevel` is a required-in-spirit prop a host
  * embedding this under a real h1/h2 MUST set to the level that
  * continues the page's own order without a skip; it defaults to 'h6'
- * only to preserve the exact behavior every caller had before this prop
- * existed, not because 'h6' is usually correct. The visual size stays
- * the fixed `variant="h6"` look regardless of `headingLevel` -- MUI's
+ * for backward compatibility, not because 'h6' is usually correct.
+ * The visual size stays the fixed `variant="h6"` look regardless of
+ * `headingLevel` -- MUI's
  * `component` override is what lets the semantic level and the visual
  * style vary independently, the same split this package's other
  * multi-level headings (PageHeader's h1, a section's own h2) already
@@ -59,8 +59,7 @@ export interface EmptyStateProps {
    * The real heading element (`h1`-`h6`) the title renders as. Set this
    * to whatever level continues the real page's own heading order at
    * the point this EmptyState appears -- see this file's header comment.
-   * Defaults to 'h6', the level every caller rendered before this prop
-   * existed.
+   * Defaults to 'h6' for backward compatibility.
    */
   readonly headingLevel?: EmptyStateHeadingLevel
   /** Extra styling applied to the placeholder box. */

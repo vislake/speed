@@ -15,10 +15,10 @@
  * checks (page-has-heading-one, landmark-one-main) probe for an open
  * modal before evaluating their real question, through a visibility
  * filter that needs real geometry and, failing that,
- * `document.elementsFromPoint`. jsdom has neither, so the probe used to
- * THROW and every such check reported "incomplete" -- indeterminate,
- * never failing, no matter what the component rendered. That is how a
- * component scan rendered with no page-heading context passed by
+ * `document.elementsFromPoint`. jsdom has neither, so the probe THROWS
+ * and every such check reports "incomplete" -- indeterminate, never
+ * failing, no matter what the component rendered. A component scan
+ * rendered with no page-heading context would therefore pass by
  * indeterminacy: page-has-heading-one could never make any test fail,
  * and the isolated widget renders in this package's suites are exactly
  * that shape. The helper restores determinacy two ways: it polyfills

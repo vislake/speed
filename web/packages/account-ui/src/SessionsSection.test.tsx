@@ -91,9 +91,8 @@ const FUTURE_EXPIRY = '2099-01-01T00:00:00.000Z'
 
 /**
  * Real user agents in the shapes the server stores (the original UA
- * header of the sign-in request, verbatim -- the fixture the suite used
- * to fabricate, "Chrome/126.0.0.0 on Windows", is not a shape any real
- * browser sends) and the readable summaries the rows show instead.
+ * header of the sign-in request, verbatim) and the readable summaries
+ * the rows show instead.
  */
 const CHROME_MAC_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'

@@ -933,9 +933,9 @@ describe('DataTable', () => {
   })
 
   it('passes axe over the empty placeholder state', async () => {
-    // emptyHeadingLevel supplied, as a correctly-migrated caller would:
-    // the stock placeholder h6 under the real page h1 is a genuine
-    // heading-order skip (pinned by the two tests below).
+    // emptyHeadingLevel supplied, as a caller that sets headingLevel
+    // would: the stock placeholder h6 under the real page h1 is a
+    // genuine heading-order skip (pinned by the two tests below).
     renderTable(
       { rows: [], emptyHeadingLevel: 'h2' },
       { heading: 'Members' },
