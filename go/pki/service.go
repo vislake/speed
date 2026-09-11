@@ -215,7 +215,7 @@ func (s *Service) Close() error {
 // fresh.
 //
 // It never returns an error, for the same reason rbac's own subscriber
-// doesn't (go/rbac/service.go's onRoleBindingChanged): on the in-memory bus
+// doesn't (go/rbac/authorizer_service.go's onRoleBindingChanged): on the in-memory bus
 // this handler runs synchronously inside the publishing call, and the row
 // is already committed by the time the event is published, so a returned
 // error would make an already-successful write report failure. A payload

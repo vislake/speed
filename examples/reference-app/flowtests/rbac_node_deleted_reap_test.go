@@ -266,7 +266,7 @@ func TestOrgRBACReap_NodeDeleted_CascadeReapsEveryBinding(t *testing.T) {
 // binding scoped exactly at nodeID -- read through rbac's own public
 // Authorizer surface rather than any package-internal field, since this
 // file sits outside package rbac and Can's own tenant-wide aggregation
-// (service.go's own doc comment) cannot distinguish "reaped at this one
+// (authorizer_service.go's own doc comment) cannot distinguish "reaped at this one
 // node" from "still granted at some other scope entirely", which is
 // exactly the distinction every assertion in this file needs.
 //
