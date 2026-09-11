@@ -24,16 +24,16 @@ name: full-check
 # tail; see that job's timeout-minutes comment.
 #
 # COVERAGE -- what runs:
-#   * go-modules job: the same module matrix as fast-check through the
-#     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
-#     under -race, a workspace-context build and a GOWORK=off standalone
-#     build) -- the full matrix runs the unit tier too. Per the
-#     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs. The matrix also carries
+#   * go-modules job: the same derived module matrix as fast-check
+#     (reusable-go-module-set.yml reads the go.work use entries outside
+#     examples/ at run time, so neither caller hand-maintains a row)
+#     through the reusable go-module-ci workflow (golangci-lint, go vet,
+#     unit tests under -race, a workspace-context build and a GOWORK=off
+#     standalone build) -- the full matrix runs the unit tier too, and
+#     this file copies no legs. The matrix also carries
 #     tools/configrefgen, the repository's tool module (a go.work entry
-#     outside go/, consumer-module form): its suite is fast and
-#     container-free, so unlike the reference app's it also rides the
-#     fast per-PR matrix.
+#     outside go/): its suite is fast and container-free, so unlike the
+#     reference app's it also rides the fast per-PR matrix.
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier,
 #     run from inside the module: go test -race -tags=integration ./...
@@ -192,6 +192,15 @@ permissions:
   contents: read
 
 jobs:
+  module-set:
+    # Label gate: identical to the row jobs below, so an unlabeled,
+    # non-push PR run skips the derivation and its rows together
+    # (reported neutral, never blocking a merge).
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    # The derived module set (go.work is the membership authority),
+    # shared with fast-check and security.
+    uses: ./.github/workflows/reusable-go-module-set.yml
+
   go-modules:
     name: go-module-ci (${{ matrix.module }})
     # Label gate: pull_request runs only while the full-ci label is on the
@@ -199,35 +208,12 @@ jobs:
     # never blocking a merge); workflow_dispatch and push (every push to
     # main) both bypass the label gate and always run.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    needs: module-set
     # Timeout and runner live in the reusable workflow; the callee's
     # timeout-minutes bounds each call (caller jobs may not set their own).
     strategy:
       fail-fast: false
-      matrix:
-        module:
-          - go/pkgcore
-          - go/dbkit
-          - go/tenancy
-          - go/observability
-          - go/config
-          - go/jobs
-          - go/ratelimit
-          - go/rbac
-          - go/app
-          - go/org
-          - go/authn
-          - go/saasctl
-          - go/storage
-          - go/notification
-          - go/pki
-          - go/integration
-          - go/metering
-          - go/sharing
-          - go/billing
-          - go/ai-gateway
-          - go/compliance
-          - go/admin
-          - tools/configrefgen
+      matrix: ${{ fromJSON(needs.module-set.outputs.matrix) }}
     uses: ./.github/workflows/reusable-go-module-ci.yml
     with:
       module: ${{ matrix.module }}

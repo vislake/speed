@@ -1,8 +1,9 @@
 name: go-module-ci
 # Reusable per-module Go CI, called by the pipeline orchestrators
-# (fast-check and full-check). Callers enumerate one matrix row per
-# module, so adding a module means adding one row to a caller's matrix --
-# never copying this file's legs into a workflow.
+# (fast-check and full-check) once per derived matrix row (the rows come
+# from reusable-go-module-set.yml). Adding a module means adding one
+# go.work use entry -- never a row to a caller's matrix, never copying
+# this file's legs into a workflow.
 #
 # INPUT
 # `module` is the module's directory relative to the repository root

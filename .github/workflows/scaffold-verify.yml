@@ -35,7 +35,7 @@ name: scaffold-verify
 # capacity) plus workflow_dispatch for an on-demand run. The post-release
 # trigger is deliberately still NOT wired. A real publish event exists
 # from v0.0.1 on (a release.yml dispatch pushes the go/<module>/<version>
-# tags and publishes the twelve npm packages to GitHub Packages under its
+# tags and publishes the @speed npm packages to GitHub Packages under its
 # publish job's contents: write / packages: write permissions), but
 # hooking a post-release verification gate onto that event stays deferred
 # with v1.0 (M4), per docs/internal/24-deferral-roadmap.md chapter 5.
