@@ -286,7 +286,7 @@ func withClock(now func() time.Time) Option {
 // guard every scalar With* option in this codebase carries (storage's
 // WithMaxObjectLifetime, WithUploadTTL): a ceiling of zero or less is
 // nonsense, and a value nobody can configure away by accident is a value
-// an enforcing round can trust.
+// enforcement can trust.
 func WithMaxAPIKeyLifetime(lifetime time.Duration) Option {
 	return func(m *Module) {
 		if lifetime > 0 {
