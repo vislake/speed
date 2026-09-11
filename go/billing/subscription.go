@@ -345,68 +345,39 @@ func (s *SubscriptionService) Cancel(ctx context.Context, id string) (*Subscript
 	return s.transition(ctx, id, SubscriptionStatusCanceled)
 }
 
-// maxTransitionAttempts bounds how many read-validate-write rounds one
-// transition() call may spend before giving up. Each round is one read
-// plus one guarded UPDATE; a round loses only when a concurrent transition
-// commits between the two, and burning the whole budget therefore requires
-// five consecutive, precisely-timed losses to other writers -- a livelock
-// guard against a pathological adversary, not a bound any realistic
-// two-caller race can hit (the losing side of an ordinary race reapplies
-// on its next round). Exhaustion returns a plain error rather than a
-// fabricated lifecycle answer.
-const maxTransitionAttempts = 5
-
-// transition validates and applies one lifecycle move, then publishes
-// EventSubscriptionStatusChanged best-effort -- the status change itself
+// transition validates and applies one lifecycle move -- database-
+// arbitrated through casTransition's read-validate-CAS rounds, see that
+// function's own doc comment -- then publishes
+// EventSubscriptionStatusChanged best-effort: the status change itself
 // has already committed by that point, matching the identical best-effort
 // convention go/metering's own Aggregator.publishOverageCrossed documents.
 //
-// The move is DATABASE-ARBITRATED, never a read-then-unconditional-write:
-// every round reads the row, validates the move against the status it just
-// read, and applies it with a guarded UPDATE whose WHERE carries that same
-// status (compareAndSetStatus), RowsAffected deciding the winner. This is
-// what makes Canceled genuinely terminal under concurrency: two racing
-// transitions that both validated from Active cannot both commit -- the
-// loser's guard misses (its RowsAffected is 0) because the row no longer
-// carries the status it validated from. A lost round re-reads and
-// re-attempts from the fresh status while the move stays legal, so an
-// ordinary race (e.g. Cancel losing a round to MarkPastDue) converges
-// instead of failing; the move is refused with
-// ErrInvalidSubscriptionTransition only when the fresh status genuinely
-// makes it illegal -- including any move out of Canceled, whose empty
-// entry in subscriptionTransitions no guard can ever match. Each call that
-// wins a round publishes the event exactly once, never on a re-read.
+// Canceled is genuinely terminal: subscriptionTransitions gives every move
+// out of it an empty entry, so an ordinary race (e.g. Cancel losing a
+// round to MarkPastDue) converges by re-reading and re-attempting from the
+// fresh status, while a move the fresh status genuinely makes illegal --
+// including any move out of Canceled -- is refused with
+// ErrInvalidSubscriptionTransition. Each call that wins a round publishes
+// the event exactly once, never on a re-read.
 func (s *SubscriptionService) transition(ctx context.Context, id string, to SubscriptionStatus) (*Subscription, error) {
-	for attempt := 1; attempt <= maxTransitionAttempts; attempt++ {
-		sub, err := s.Get(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		from := SubscriptionStatus(sub.Status)
-		if !subscriptionTransitions[from][to] {
-			return nil, ErrInvalidSubscriptionTransition.
-				WithParam("from", string(from)).
-				WithParam("to", string(to))
-		}
-		applied, err := s.repo.compareAndSetStatus(ctx, id, from, to)
-		if err != nil {
-			return nil, err
-		}
-		if applied {
+	return casTransition(ctx, id, string(to), transitionOps[Subscription]{
+		noun:   "subscription",
+		read:   s.Get,
+		status: func(sub *Subscription) string { return sub.Status },
+		legal: func(from, to string) bool {
+			return subscriptionTransitions[SubscriptionStatus(from)][SubscriptionStatus(to)]
+		},
+		invalid: ErrInvalidSubscriptionTransition,
+		cas: func(ctx context.Context, id, from, to string) (bool, error) {
+			return s.repo.compareAndSetStatus(ctx, id, SubscriptionStatus(from), SubscriptionStatus(to))
+		},
+		applied: func(sub *Subscription, from, to string) *Subscription {
 			// This call's own guarded UPDATE is the one that moved the row.
-			sub.Status = string(to)
-			s.publishStatusChanged(ctx, sub, from, to)
-			return sub, nil
-		}
-		// RowsAffected == 0: the row no longer carried `from` when our
-		// UPDATE ran -- a concurrent transition won this round. Loop back
-		// and re-attempt from the fresh status (attempt's re-read above
-		// happens on the next iteration), or refuse once the fresh status
-		// makes the move illegal.
-	}
-	return nil, fmt.Errorf(
-		"billing: subscription %q transition to %q did not settle after %d attempts (concurrent transitions kept winning)",
-		id, to, maxTransitionAttempts)
+			sub.Status = to
+			s.publishStatusChanged(ctx, sub, SubscriptionStatus(from), SubscriptionStatus(to))
+			return sub
+		},
+	})
 }
 
 func (s *SubscriptionService) publishStatusChanged(ctx context.Context, sub *Subscription, from, to SubscriptionStatus) {

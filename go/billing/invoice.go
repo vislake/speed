@@ -189,65 +189,47 @@ func (r *InvoiceRepository) Void(ctx context.Context, id string) (*Invoice, erro
 	return r.setStatus(ctx, id, InvoiceStatusVoid)
 }
 
+// setStatus validates and applies one invoice lifecycle move --
+// database-arbitrated through casTransition's read-validate-CAS rounds,
+// see that function's own doc comment -- and records
+// billing.invoice.transition / billing.invoice.open_dwell (metrics.go)
+// only when its own guarded UPDATE genuinely applied: a lost race applies
+// nothing and is not a transition.
+//
+// The move is validated against invoiceTransitions before the invoice's
+// Status is touched. A Void on a Paid invoice (or any other move out of a
+// terminal status) is refused with ErrInvalidInvoiceTransition, never
+// applied to the row: an invoice that recorded a settled payment is the
+// record of that settlement and must not be rewritten into a voided one,
+// and an unconditional write racing MarkPaid could do exactly that
+// silently -- setStatusIf's status guard is what makes at most one
+// transition land.
 func (r *InvoiceRepository) setStatus(ctx context.Context, id string, status InvoiceStatus) (*Invoice, error) {
-	// maxTransitionAttempts bounds how many read-validate-write rounds one
-	// transition may spend before giving up, exactly as
-	// SubscriptionService.transition's identical constant documents for
-	// subscriptions.
-	const maxTransitionAttempts = 5
-
-	for attempt := 1; attempt <= maxTransitionAttempts; attempt++ {
-		inv, err := r.FindByID(ctx, id)
-		if err != nil {
-			if dbkit.IsRecordNotFound(err) {
-				return nil, ErrInvoiceNotFound.WithParam("id", id)
+	return casTransition(ctx, id, string(status), transitionOps[Invoice]{
+		noun: "invoice",
+		read: func(ctx context.Context, id string) (*Invoice, error) {
+			inv, err := r.FindByID(ctx, id)
+			if err != nil {
+				if dbkit.IsRecordNotFound(err) {
+					return nil, ErrInvoiceNotFound.WithParam("id", id)
+				}
+				return nil, err
 			}
-			return nil, err
-		}
-		// Validate the move against the legal-transition table before the
-		// invoice's Status is touched -- the identical validation
-		// SubscriptionService.transition performs for subscriptions. A Void on
-		// a Paid invoice (or any other move out of a terminal status) is
-		// refused with ErrInvalidInvoiceTransition, never applied to the row:
-		// an invoice that recorded a settled payment is the record of that
-		// settlement and must not be rewritten into a voided one.
-		from := InvoiceStatus(inv.Status)
-		if !invoiceTransitions[from][status] {
-			return nil, ErrInvalidInvoiceTransition.
-				WithParam("from", string(from)).
-				WithParam("to", string(status))
-		}
-
-		// The move is applied by a guarded UPDATE whose WHERE carries the
-		// very status the move was validated from (setStatusIf), never by a
-		// whole-row save of the read. An unconditional write would let two
-		// racing transitions that both validated from Open both commit -- a
-		// Void landing after a MarkPaid would rewrite a settled payment's
-		// record into a voided one, silently breaking the terminal-state
-		// invariant above, with no error to either caller. The guard makes
-		// at most one transition land; a caller whose UPDATE matched zero
-		// rows has lost to a concurrent transition and loops back to
-		// re-read and re-validate from the fresh status (a move that is
-		// legal from it still converges; a move out of the terminal state
-		// the winner committed is refused on the next round).
-		applied, err := r.setStatusIf(ctx, id, from, status)
-		if err != nil {
-			return nil, err
-		}
-		if applied {
-			// billing.invoice.transition / billing.invoice.open_dwell
-			// (metrics.go): recorded only when the guarded UPDATE
-			// genuinely applied -- a lost race applies nothing and is
-			// not a transition.
-			recordInvoiceTransition(ctx, r.transitionMetric, r.openDwellMetric,
-				from, status, inv.CreatedAt)
-			inv.Status = string(status)
 			return inv, nil
-		}
-	}
-	return nil, fmt.Errorf(
-		"billing: invoice %q transition to %q did not settle after %d attempts (concurrent transitions kept winning)",
-		id, status, maxTransitionAttempts)
+		},
+		status:  func(inv *Invoice) string { return inv.Status },
+		legal:   func(from, to string) bool { return invoiceTransitions[InvoiceStatus(from)][InvoiceStatus(to)] },
+		invalid: ErrInvalidInvoiceTransition,
+		cas: func(ctx context.Context, id, from, to string) (bool, error) {
+			return r.setStatusIf(ctx, id, InvoiceStatus(from), InvoiceStatus(to))
+		},
+		applied: func(inv *Invoice, from, to string) *Invoice {
+			recordInvoiceTransition(ctx, r.transitionMetric, r.openDwellMetric,
+				InvoiceStatus(from), InvoiceStatus(to), inv.CreatedAt)
+			inv.Status = to
+			return inv
+		},
+	})
 }
 
 // setStatusIf attempts ONE guarded status transition: an UPDATE whose WHERE
