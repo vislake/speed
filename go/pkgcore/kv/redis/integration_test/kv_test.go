@@ -431,9 +431,10 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
 	clientA, clientB := startRedisClientPair(t, ctx)
 
-	// The caps argument is this implementation's declaration — register.go's
-	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
-	// own register_test.go pins the registry to return exactly those bits —
+	// The caps argument is this implementation's declaration — the component
+	// descriptor (component.go) declares MultiReplicaSafe | SurvivesRestart,
+	// and this package's own component_test.go pins the descriptor's
+	// declaration to the exported Capabilities constant —
 	// so the capability-gated suite runs the cross-instance assertions for
 	// the MultiReplicaSafe half of that declaration against the independent
 	// connection pair below.
@@ -444,8 +445,8 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 
 // TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart runs
 // the shared survives-restart protocol (kvstoretest.AssertSurvivesRestart)
-// against this implementation's real backend: the registration in
-// register.go declares pkgcore.SurvivesRestart, and this test is the
+// against this implementation's real backend: the component descriptor
+// (component.go) declares pkgcore.SurvivesRestart, and this test is the
 // verification that the declaration is real -- a value written before a
 // genuine restart of the Redis container must be readable afterwards. The
 // protocol drives the restart itself; the closures supply the pieces only
@@ -459,7 +460,8 @@ func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testin
 	container, client := startRedisPersistent(t, ctx)
 
 	// The caps argument carries the declaration this protocol verifies (the
-	// same bits register.go's init declares and register_test.go pins); the
+	// same bits the component descriptor declares and component_test.go pins
+	// to the exported Capabilities constant); the
 	// protocol refuses a call whose caps do not declare SurvivesRestart, so
 	// this run is the SurvivesRestart half of the declaration's
 	// verification, its container restart the state-holding-service restart

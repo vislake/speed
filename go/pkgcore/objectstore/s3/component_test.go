@@ -60,7 +60,7 @@ func TestComponent_ConstructsThroughTheRegistry(t *testing.T) {
 }
 
 // TestComponent_MissingRequiredSettingFailsConstruction pins the error path
-// the flat adapter already promises for this seam: a configuration missing
+// this seam promises: a configuration missing
 // one of the four required settings fails Construct with a named error
 // instead of panicking through the constructor.
 func TestComponent_MissingRequiredSettingFailsConstruction(t *testing.T) {

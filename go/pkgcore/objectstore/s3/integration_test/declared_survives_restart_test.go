@@ -3,17 +3,18 @@
 package s3_test
 
 // The SurvivesRestart half of this implementation's declaration, verified:
-// the registration in register.go declares MultiReplicaSafe | SurvivesRestart
-// (register_test.go pins the registry to return exactly those bits) and this
+// the component descriptor (component.go) declares MultiReplicaSafe |
+// SurvivesRestart (component_test.go pins the descriptor's declaration to
+// the exported Capabilities constant) and this
 // file runs the shared objectstoretest.AssertSurvivesRestart protocol — the
 // ObjectStore twin of kvstoretest.AssertSurvivesRestart — against a genuine
 // restart of the real state-holding service, the RustFS container every
 // test in this directory runs against. An object stored before the restart
 // must be readable afterwards through a fresh store over a fresh client,
-// and the restarted service must take new writes. See register.go's own doc
-// comment for what the declaration promises: the objects this store reads
-// and writes are the S3 service's own durable records, which outlive the
-// service's restart by design.
+// and the restarted service must take new writes. See construction.go's own
+// Capabilities doc comment for what the declaration promises: the objects
+// this store reads and writes are the S3 service's own durable records,
+// which outlive the service's restart by design.
 
 import (
 	"context"

@@ -23,9 +23,9 @@ import (
 // assembly; this protocol checks the declaration against the behaviour.
 //
 // caps must carry the capability bits the implementation under test
-// declares about itself — the same bits its register.go init (or the
-// host's WithObjectStore call) declares, which the package's own
-// register_test.go pins against the registry — and it must declare
+// declares about itself — the same bits its component descriptor declares
+// and its component_test.go pins to the package's exported Capabilities
+// constant — and it must declare
 // SurvivesRestart: this protocol exists to verify that bit, so a call
 // whose caps lack it is refused outright rather than run over an
 // implementation that never made the claim (a caps-less protocol call is

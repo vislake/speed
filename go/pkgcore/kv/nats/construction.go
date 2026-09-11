@@ -21,26 +21,25 @@ const defaultBucket = "speed-kv"
 // share one NATS deployment, and the JetStream KV buckets the store writes
 // to (file storage, the same configuration NewKVStore provisions and
 // adopts) outlive any one process -- exactly what the two bits mean. The
-// built-in registration below and the Registration factory a host wraps a
-// self-built connection in both declare this one exported value, so the
-// declaration a host reads off this package and the one assembly validates
-// cannot drift apart. A host injecting a hand-built store with
-// pkgcore.WithKVStore passes it as the injection's capability argument.
+// component descriptor (component.go) declares this one exported value, and
+// its component_test.go pins the descriptor's declaration to it, so the
+// bits a host reads off this package and the assembly validates cannot
+// drift apart.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 
-// closableKVStore is the value "kv.nats"'s registration returns: the store
-// itself (whose promoted methods satisfy pkgcore.KVStore) plus the Close()
-// error method that releases the connection the registration dialed, per
-// the Registration-level resource-ownership contract. A host that calls
-// NewKVStore itself gets the bare store and keeps owning its connection,
-// exactly as that constructor's own doc comment promises; only the
-// preset-built value carries the registration's closer.
+// closableKVStore is the value the "kv.nats" component's New returns: the
+// store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
+// Close() error method that releases the connection that New dialed, and
+// the component's own Close callback releases it through this method. A
+// host that calls NewKVStore itself gets the bare store and keeps owning its
+// connection, exactly as that constructor's own doc comment promises; only
+// the component-built value carries this closer.
 type closableKVStore struct {
 	pkgcore.KVStore
 	closeConn func()
 }
 
-// Close releases the connection the registration dialed.
+// Close releases the connection the component's New dialed.
 func (s *closableKVStore) Close() error {
 	if s.closeConn != nil {
 		s.closeConn()
@@ -58,10 +57,9 @@ func natsURLOrDefault(url string) string {
 	return nats.DefaultURL
 }
 
-// natsBucketOrDefault applies the bucket fallback shared by both
-// configuration channels: an empty bucket resolves to defaultBucket, so a
-// zero-configuration build and the component's own default agree on the
-// bucket a store provisions.
+// natsBucketOrDefault applies the bucket fallback: an empty bucket resolves
+// to defaultBucket, so a zero-configuration build and the component's own
+// default agree on the bucket a store provisions.
 func natsBucketOrDefault(bucket string) string {
 	if bucket != "" {
 		return bucket

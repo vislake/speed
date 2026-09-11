@@ -150,8 +150,8 @@ const (
 //
 // # SurvivesRestart: what the declaration promises and what it rests on
 //
-// This implementation registers (and WithEventBus hosts may declare)
-// SurvivesRestart because every byte the bus reads and writes — the stream
+// This implementation registers SurvivesRestart because every byte the bus
+// reads and writes — the stream
 // entries Publish appends and the consumer-group state its readers keep —
 // lives inside the Redis server, never in this process. Whether that state
 // outlives a restart of the Redis server is the server's own persistence

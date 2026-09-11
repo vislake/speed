@@ -332,9 +332,10 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
 	clientA, clientB := startMemcachedClientPair(t, ctx)
 
-	// The caps argument is this implementation's declaration — register.go's
-	// init declares MultiReplicaSafe alone (this package's register_test.go
-	// pins the registry to return exactly that bit, never SurvivesRestart) —
+	// The caps argument is this implementation's declaration — the component
+	// descriptor (component.go) declares MultiReplicaSafe alone (this
+	// package's own component_test.go pins the descriptor's declaration to
+	// the exported Capabilities constant, never SurvivesRestart) —
 	// so the capability-gated suite runs the cross-instance assertions for
 	// the MultiReplicaSafe half of that declaration against the independent
 	// dual-client pair below, and runs no restart protocol: the bit that
@@ -348,9 +349,10 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 // TestKVStore_DataDoesNotSurviveRestart_ConsistentWithItsHonestDeclaration
 // runs the mirror of the shared survives-restart protocol
 // (kvstoretest.AssertDoesNotSurviveRestart) against this implementation's
-// real backend: register.go honestly declares no SurvivesRestart --
-// Memcached is a pure in-memory cache with no persistence mechanism of any
-// kind -- and this test verifies the factual basis of that non-declaration:
+// real backend: the exported Capabilities declaration honestly carries no
+// SurvivesRestart -- Memcached is a pure in-memory cache with no persistence
+// mechanism of any kind -- and this test verifies the factual basis of that
+// non-declaration:
 // a value written before a genuine restart of the Memcached container is
 // gone afterwards. A future change that declared SurvivesRestart over this
 // backend would contradict a verified loss rather than an unexamined
@@ -360,8 +362,8 @@ func TestKVStore_DataDoesNotSurviveRestart_ConsistentWithItsHonestDeclaration(t 
 	container, hostPort := startMemcachedPersistent(t, ctx)
 
 	// The caps argument carries the declaration whose absence this protocol
-	// pins (the same MultiReplicaSafe-only bits register.go's init declares
-	// and register_test.go checks); the protocol refuses a call whose caps
+	// pins (the same MultiReplicaSafe-only bits the component descriptor
+	// declares and component_test.go checks); the protocol refuses a call whose caps
 	// declare SurvivesRestart, so this run is the negative half of the
 	// declaration's verification — the honest non-declaration's factual
 	// basis, proven against a genuine restart of the Memcached container

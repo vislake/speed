@@ -3,8 +3,7 @@ package memcached
 // component.go registers the "kv.memcached" component with pkgcore's global
 // component registration: the descriptor a composition configuration selects
 // as the "kv" module's implementation. It lives beside the implementation it
-// adapts, the same file-locality the package's own init registration
-// (register.go) keeps.
+// adapts, the same file-locality the package's own init registration keeps.
 
 import (
 	"context"
@@ -13,23 +12,20 @@ import (
 )
 
 // kvMemcachedConfig is the "kv.memcached" component's configuration schema:
-// Addrs, the comma-separated server list the flat seam Config adapter also
-// reads.
+// Addrs, the comma-separated server list.
 type kvMemcachedConfig struct {
 	Addrs string `json:"addrs"`
 }
 
 // kvMemcachedComponent is the component descriptor for "kv.memcached": the
 // Memcached store over a client built from the component's own
-// configuration, declaring the same exported Capabilities the seam
-// registration declares (honestly MultiReplicaSafe alone: Memcached has no
-// persistence mechanism of any kind, so no SurvivesRestart -- see the
-// package doc comment). Its New funnels through newClient, the shared
-// construction register.go's flat adapter also uses, so both configuration
-// channels resolve the same client (and the same "localhost:11211" fallback
-// and comma-splitting) from their two spellings of the same setting. The
-// client is built here, so the component owns it: Close releases its idle
-// pooled connections through the closable value's own Close.
+// configuration, declaring the package's exported Capabilities (honestly
+// MultiReplicaSafe alone: Memcached has no persistence mechanism of any
+// kind, so no SurvivesRestart -- see the package doc comment). Its New
+// funnels through newClient, the package's shared construction path, so the
+// same "localhost:11211" fallback and comma-splitting apply. The client is
+// built here, so the component owns it: Close releases its idle pooled
+// connections through the closable value's own Close.
 var kvMemcachedComponent = pkgcore.Component{
 	Name:         "kv.memcached",
 	Module:       "kv",

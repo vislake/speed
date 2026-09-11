@@ -94,9 +94,9 @@ type SMS struct {
 // other failure travels unwrapped, per that sentinel's own boundary.
 //
 // Unlike the four assembly-resolved seams (EventBus, KVStore, Mailer and
-// ObjectStore), SMSSender deliberately has no registry, preset or capability
-// declarations, and the assembly never resolves one: no consumer takes its SMS
-// transport from the registry -- go/authn and go/notification both receive
+// ObjectStore), SMSSender deliberately has no component descriptor and no
+// capability declaration, and the assembly never resolves one: no consumer
+// takes its SMS transport from the assembly -- go/authn and go/notification both receive
 // the sender through their own module-wiring options, and each enforces its
 // own wiring-time requirement on it (a distributed-mode authn refuses to
 // boot without an explicitly wired sender rather than defaulting to one that

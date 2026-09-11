@@ -4,7 +4,7 @@ package redis
 // component registration: the descriptor a composition configuration
 // selects as the "kv" module's implementation. It lives beside the
 // implementation it adapts, the same file-locality the package's own init
-// component registration (component.go) keeps.
+// component registration keeps.
 
 import (
 	"context"
@@ -13,9 +13,8 @@ import (
 )
 
 // kvRedisConfig is the "kv.redis" component's configuration schema, one
-// field per key a composition block may carry: Addr and Password as the
-// flat seam Config spells them, DB the numeric database index the flat
-// spelling passes as text.
+// field per key a composition block may carry: Addr, Password and DB (the
+// numeric database index).
 type kvRedisConfig struct {
 	Addr     string `json:"addr"`
 	Password string `json:"password"`
@@ -24,12 +23,11 @@ type kvRedisConfig struct {
 
 // kvRedisComponent is the component descriptor for "kv.redis": the Redis
 // store over a client built from the component's own configuration,
-// declaring the same exported Capabilities the seam registration declares.
-// Its New funnels through newClient, the shared construction register.go's
-// flat adapter also uses, so both configuration channels resolve the same
-// client (and the same "localhost:6379" fallback) from their two spellings
-// of the same settings. The client is built here, so the component owns it:
-// Close releases it through the closable value's own Close.
+// declaring the package's exported Capabilities. Its New funnels through
+// newClient, the package's shared construction path, so the same
+// "localhost:6379" fallback applies. The client is built here, so the
+// component owns it: Close releases it through the closable value's own
+// Close.
 var kvRedisComponent = pkgcore.Component{
 	Name:         "kv.redis",
 	Module:       "kv",

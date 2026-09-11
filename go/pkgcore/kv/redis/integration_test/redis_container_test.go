@@ -40,8 +40,8 @@ import (
 // eventbus/redis's own integration tier carries an identical copy of this
 // helper: the two packages' integration tiers are independent of each other
 // and neither owns a shared package worth introducing just for a dozen
-// lines (the same packaging reasoning behind register.go's duplicated
-// clientFromConfig).
+// lines (the same packaging reasoning behind the duplicated construction
+// helper each package carries).
 func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
 

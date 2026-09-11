@@ -3,8 +3,7 @@ package nats
 // component.go registers the "kv.nats" component with pkgcore's global
 // component registration: the descriptor a composition configuration selects
 // as the "kv" module's implementation. It lives beside the implementation it
-// adapts, the same file-locality the package's own init registration
-// (register.go) keeps.
+// adapts, the same file-locality the package's own init registration keeps.
 
 import (
 	"context"
@@ -13,8 +12,7 @@ import (
 )
 
 // kvNATSConfig is the "kv.nats" component's configuration schema, one field
-// per key a composition block may carry, the same settings the flat seam
-// Config adapter reads.
+// per key a composition block may carry.
 type kvNATSConfig struct {
 	URL      string `json:"url"`
 	Bucket   string `json:"bucket"`
@@ -25,12 +23,12 @@ type kvNATSConfig struct {
 
 // kvNATSComponent is the component descriptor for "kv.nats": the JetStream
 // KV store over a connection dialed from the component's own configuration,
-// declaring the same exported Capabilities the seam registration declares.
-// Its New funnels through newConn and natsBucketOrDefault, so the package's
-// URL fallback, client name and bucket fallback apply to the connection and
-// bucket it builds, and it passes its own context through to the bucket
-// provisioning. The connection is dialed in New, so the component owns it:
-// Close releases it through the closable value's own Close.
+// declaring the package's exported Capabilities. Its New funnels through
+// newConn and natsBucketOrDefault, so the package's URL fallback, client
+// name and bucket fallback apply to the connection and bucket it builds, and
+// it passes its own context through to the bucket provisioning. The
+// connection is dialed in New, so the component owns it: Close releases it
+// through the closable value's own Close.
 var kvNATSComponent = pkgcore.Component{
 	Name:         "kv.nats",
 	Module:       "kv",

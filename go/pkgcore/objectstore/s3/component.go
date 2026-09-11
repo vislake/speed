@@ -4,7 +4,7 @@ package s3
 // global component registration: the descriptor a composition configuration
 // selects as the "objectstore" module's implementation. It lives beside the
 // implementation it adapts, the same file-locality the package's own init
-// component registration (component.go) keeps.
+// component registration keeps.
 
 import (
 	"context"
@@ -14,8 +14,7 @@ import (
 
 // objectStoreS3Config is the "objectstore.s3" component's configuration
 // schema: one field per key a composition block may carry, the same seven
-// settings the flat seam Config adapter reads (UseSSL typed as a bool, the
-// same value the flat "true" spelling carries).
+// settings FromConfig's Config carries (UseSSL typed as a bool here).
 type objectStoreS3Config struct {
 	Endpoint     string `json:"endpoint"`
 	Bucket       string `json:"bucket"`
@@ -28,13 +27,11 @@ type objectStoreS3Config struct {
 
 // objectStoreS3Component is the component descriptor for "objectstore.s3":
 // the S3-compatible store over the configuration the component's own block
-// spells out, declaring the same exported Capabilities the seam
-// registration declares. Its New funnels through parseBucketLookup and
-// FromConfig, the same validation and construction the flat seam adapter
-// uses -- the four required settings, the bucket-lookup enum and the
-// scheme-less endpoint convention all come back as errors, never panics.
-// The minio-go client exposes no close, so the component owns nothing
-// closable and declares no Close, exactly as the seam registration records.
+// spells out, declaring the package's exported Capabilities. Its New funnels
+// through parseBucketLookup and FromConfig -- the four required settings,
+// the bucket-lookup enum and the scheme-less endpoint convention all come
+// back as errors, never panics. The minio-go client exposes no close, so the
+// component owns nothing closable and declares no Close.
 var objectStoreS3Component = pkgcore.Component{
 	Name:         "objectstore.s3",
 	Module:       "objectstore",

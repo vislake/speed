@@ -226,9 +226,9 @@ func payloadSequence(payload any) (int, bool) {
 // returns — two instances of one deployment, per the package doc comment —
 // satisfies the contract documented on pkgcore.EventBus. caps must carry
 // the capability bits the implementation under test declares about itself
-// — the same bits its register.go init (or the host's WithEventBus call)
-// declares, which the package's own register_test.go pins against the
-// registry — and it selects which assertions run: the single-instance
+// — the same bits its component descriptor declares and its component_test.go
+// pins to the package's exported Capabilities constant — and it selects which
+// assertions run: the single-instance
 // checks below run for every implementation, and the cross-instance checks
 // run only for one that declares MultiReplicaSafe, because an
 // implementation claiming that bit is claiming exactly that a second

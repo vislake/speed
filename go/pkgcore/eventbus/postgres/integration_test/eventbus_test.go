@@ -135,9 +135,10 @@ func TestEventBus_AssertConforms(t *testing.T) {
 	pool := startPostgresPool(t, ctx)
 
 	seq := 0
-	// The caps argument is this implementation's declaration — register.go's
-	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
-	// own register_test.go pins the registry to return exactly those bits —
+	// The caps argument is this implementation's declaration — the component
+	// descriptor (component.go) declares MultiReplicaSafe | SurvivesRestart,
+	// and this package's own component_test.go pins the descriptor's
+	// declaration to the exported Capabilities constant —
 	// and the capability-gated suite runs the cross-instance assertions for
 	// the MultiReplicaSafe half of that declaration. (The shared suite runs
 	// no EventBus restart protocol — see eventbustest's package doc comment.

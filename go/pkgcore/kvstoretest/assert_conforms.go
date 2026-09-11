@@ -32,8 +32,9 @@
 // declaration.
 //
 // AssertConforms takes those declared capability bits as its caps argument
-// (the same bits the implementation's register.go init declares and its
-// register_test.go pins), and gates its assertions on them: the
+// (the same bits the implementation's component descriptor declares and its
+// component_test.go pins to the package's exported Capabilities constant),
+// and gates its assertions on them: the
 // cross-instance assertions run only for an implementation declaring
 // MultiReplicaSafe, so a declaration is a promise the gated contract
 // verifies and an implementation declaring no bit runs the single-instance
@@ -72,8 +73,8 @@ const (
 // two instances of one deployment, per the package doc comment — satisfies
 // the contract documented on pkgcore.KVStore. caps must carry the
 // capability bits the implementation under test declares about itself — the
-// same bits its register.go init (or the host's WithKVStore call) declares,
-// which the package's own register_test.go pins against the registry — and
+// same bits its component descriptor declares and its component_test.go
+// pins to the package's exported Capabilities constant — and
 // it selects which assertions run: the single-instance checks below run for
 // every implementation, and the cross-instance checks run only for one that
 // declares MultiReplicaSafe, because an implementation claiming that bit is

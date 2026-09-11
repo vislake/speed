@@ -13,27 +13,25 @@ import (
 // Capabilities is what "eventbus.nats" declares about itself: many replicas
 // may share one NATS deployment, and the JetStream state behind the bus --
 // messages committed to file-backed streams -- outlives any one process,
-// exactly what the two bits mean. The built-in registration below and the
-// Registration factory a host wraps a self-built connection in both declare
-// this one exported value, so the declaration a host reads off this package
-// and the one assembly validates cannot drift apart. A host injecting a
-// hand-built bus through the by-type context passes it as the value's
-// capability argument.
+// exactly what the two bits mean. The component descriptor (component.go)
+// declares this one exported value, and its component_test.go pins the
+// descriptor's declaration to it, so the bits a host reads off this package
+// and the assembly validates cannot drift apart.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 
-// closableEventBus is the value "eventbus.nats"'s registration returns: the
-// bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
-// Close() error method that releases the connection the registration
-// dialed, per the Registration-level resource-ownership contract. A host
+// closableEventBus is the value the "eventbus.nats" component's New returns:
+// the bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
+// Close() error method that releases the connection that New dialed, and the
+// component's own Close callback releases it through this method. A host
 // that calls NewEventBus itself gets the bare *EventBus and keeps owning
 // its connection, exactly as that constructor's own doc comment promises;
-// only the preset-built value carries the registration's closer.
+// only the component-built value carries this closer.
 type closableEventBus struct {
 	*EventBus
 	closeConn func()
 }
 
-// Close stops the bus and then releases the connection the registration
+// Close stops the bus and then releases the connection the component's New
 // dialed.
 func (b *closableEventBus) Close() error {
 	b.EventBus.Close()

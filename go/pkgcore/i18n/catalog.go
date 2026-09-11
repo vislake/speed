@@ -312,9 +312,9 @@ func (b *Builder) Build() *Catalog {
 //
 // A Catalog is immutable after Build -- it has no mutating methods -- and
 // is therefore safe for concurrent use without a lock; the concurrency
-// smoke test exercises exactly that. Only the loader produces one,
-// which is why Registry.Locales() returns nil on a hand-built Registry,
-// mirroring Registry.ObjectStore().
+// smoke test exercises exactly that. Only the assembly produces one,
+// which is why the registry's Locales() accessor returns nil when the
+// assembly carries none, mirroring its ObjectStore().
 type Catalog struct {
 	bundle *goi18n.Bundle
 	// locals holds one go-i18n Localizer per locale this catalog ships,

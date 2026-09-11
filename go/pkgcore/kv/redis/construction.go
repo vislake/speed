@@ -14,26 +14,25 @@ import (
 // share one Redis deployment, and the key/value state the store writes
 // outlives any one process (Redis's own AOF/RDB persistence is the service
 // premise, the same one the distributed deployment mode's Redis-backed
-// event bus relies on). The built-in registration below and the Registration
-// factory a host wraps a self-built client in both declare this one exported
-// value, so the declaration a host reads off this package and the one
-// assembly validates cannot drift apart. A host injecting a hand-built store
-// through the by-type context passes it as the value's capability declaration.
+// event bus relies on). The component descriptor (component.go) declares
+// this one exported value, and its component_test.go pins the descriptor's
+// declaration to it, so the bits a host reads off this package and the
+// assembly validates cannot drift apart.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 
-// closableKVStore is the value "kv.redis"'s registration returns: the store
-// itself (whose promoted methods satisfy pkgcore.KVStore) plus the Close()
-// error method that releases the client the registration built, per the
-// Registration-level resource-ownership contract. A host that calls
-// NewKVStore itself gets the bare store and keeps owning its client,
-// exactly as that constructor's own doc comment promises; only the
-// preset-built value carries the registration's closer.
+// closableKVStore is the value the "kv.redis" component's New returns: the
+// store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
+// Close() error method that releases the client that New built, and the
+// component's own Close callback releases it through this method. A host
+// that calls NewKVStore itself gets the bare store and keeps owning its
+// client, exactly as that constructor's own doc comment promises; only the
+// component-built value carries this closer.
 type closableKVStore struct {
 	pkgcore.KVStore
 	closeClient func() error
 }
 
-// Close releases the client the registration built.
+// Close releases the client the component's New built.
 func (s *closableKVStore) Close() error {
 	if s.closeClient != nil {
 		return s.closeClient()
@@ -41,12 +40,10 @@ func (s *closableKVStore) Close() error {
 	return nil
 }
 
-// newClient builds the go-redis client for the "kv.redis" settings both
-// configuration channels resolve to: the flat pkgcore.Config adapter above
-// and the "kv.redis" component (component.go), whose typed configuration
-// carries the same three fields. The addr fallback lives here, so the two
-// channels cannot drift on it; nothing is dialed, per NewKVStore's own
-// construction contract.
+// newClient builds the go-redis client for the "kv.redis" settings the
+// component (component.go) resolves: its typed configuration carries these
+// three fields. The addr fallback lives here; nothing is dialed, per
+// NewKVStore's own construction contract.
 func newClient(addr, password string, db int) *redis.Client {
 	if addr == "" {
 		addr = "localhost:6379"

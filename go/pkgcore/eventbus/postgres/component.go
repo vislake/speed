@@ -4,7 +4,7 @@ package postgres
 // global component registration: the descriptor a composition configuration
 // selects as the "eventbus" module's implementation. It lives beside the
 // implementation it adapts, the same file-locality the package's own init
-// component registration (component.go) keeps, and carries the package's own outbox
+// component registration keeps, and carries the package's own outbox
 // migration set so a database component applies it from the component
 // itself (pkgcore's Assets) instead of a host calling a schema helper by
 // hand.
@@ -17,8 +17,8 @@ import (
 )
 
 // eventBusPostgresConfig is the "eventbus.postgres" component's
-// configuration schema, one field per key a composition block may carry,
-// the same two required settings the flat seam Config adapter reads.
+// configuration schema, one field per key a composition block may carry:
+// the two required settings, DSN and ReplicaID.
 type eventBusPostgresConfig struct {
 	DSN       string `json:"dsn"`
 	ReplicaID string `json:"replica_id"`
@@ -26,16 +26,13 @@ type eventBusPostgresConfig struct {
 
 // eventBusPostgresComponent is the component descriptor for
 // "eventbus.postgres": the outbox-backed bus over a pool built from the
-// component's own configuration, declaring the same exported Capabilities
-// the seam registration declares. Its New funnels through newPoolAndReplica,
-// the shared construction its New also uses -- passing
-// the component's own context down to pgxpool.New instead of the adapter's
-// background one -- so both channels resolve the same pool-and-replicaID
-// pair from their two spellings of the same settings. The pool is built
-// here, so the component owns it: Close releases it through the closable
-// value's own Close, which stops the bus first. Its Migrations carry the
-// package's postgres-only outbox DDL for the assembly's database component
-// to apply in the Verify stage.
+// component's own configuration, declaring the package's exported
+// Capabilities. Its New funnels through newPoolAndReplica, the package's
+// shared construction path, passing the component's own context down to
+// pgxpool.New. The pool is built here, so the component owns it: Close
+// releases it through the closable value's own Close, which stops the bus
+// first. Its Migrations carry the package's postgres-only outbox DDL for the
+// assembly's database component to apply in the Verify stage.
 var eventBusPostgresComponent = pkgcore.Component{
 	Name:         "eventbus.postgres",
 	Module:       "eventbus",

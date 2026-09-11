@@ -6,16 +6,16 @@
 //
 // # What these files are NOT
 //
-// Nothing in a running application reads this bundle. the assembly
-// feeds the merged message catalog exclusively from the REGISTERED modules'
-// Locales() embed.FS (registry.go: "each module's locale resources are
-// validated and merged before the module itself registers"), and pkgcore is
-// not a Module: it is the dependency floor the Module contract lives on,
-// with no Locales() of its own, so its files have no seat in the feeding
+// Nothing in a running application reads this bundle. The assembly
+// feeds the merged message catalog exclusively from the SELECTED
+// components' Locales embed.FS (component_assembly.go's catalog build hands
+// each selected component's bundle to one i18n.Builder), and none of
+// pkgcore's own built-in components carries a Locales bundle: pkgcore is
+// the dependency floor, so its files have no seat in the feeding
 // loop and never join the merged catalog. If pkgcore's seed messages
 // are ever missing from a catalog, the cause is not the assembly's feeding
-// loop (which feeds every registered module correctly) but this directory
-// having no wiring into any module's Locales() -- do not look in
+// loop (which feeds every selected component correctly) but this directory
+// being wired into no component's Locales -- do not look in
 // the assembly for it.
 //
 // # What these files are FOR
@@ -23,10 +23,10 @@
 // They are pkgcore's own test fixture and the canonical shape example.
 // pkgcore's suites feed them through exactly the seams a real module's
 // bundle travels: i18n's catalog tests call Builder.AddModule("pkgcore",
-// locales.FS), and registry_test.go's localeBundleModule ships them through
-// the assembly's module loop, so the machinery is exercised by
-// real embedded files and the seed messages double as the shape every
-// module's own bundle follows. That exercise happens in pkgcore's tests,
+// locales.FS), and the assembly's own tests carry them on component
+// descriptors (component_assembly_test.go's locale carriers), so the
+// machinery is exercised by real embedded files and the seed messages double
+// as the shape every module's own bundle follows. That exercise happens in pkgcore's tests,
 // not in production -- a production catalog is exercised by the modules
 // that actually render content, which is the point of those modules'
 // bundles.
@@ -49,8 +49,8 @@ import "embed"
 // FS holds pkgcore's locale files, flat at the embed root: exactly
 // zh-CN.toml and en-US.toml. It exists for pkgcore's own test suites and as
 // the shape example this doc and i18n/doc.go point at -- nothing in a
-// bootstrapped application feeds it, since pkgcore is not a Module and only
-// registered modules' Locales() bundles reach the catalog.
+// bootstrapped application feeds it, since no pkgcore component carries a
+// Locales bundle and only selected components' bundles reach the catalog.
 //
 //go:embed zh-CN.toml en-US.toml
 var FS embed.FS

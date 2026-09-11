@@ -1038,12 +1038,11 @@ func (r *ComponentRegistry) currentStage() stage {
 	return r.cur
 }
 
-// MountedRoutes returns the routes declared on the Routes seat, the same
-// reading Registry.Routes.Routes() answers on the module Registry. It is the
-// route source a middleware chain derives its partition from, so a consumer
-// that takes either registry shape (a *Registry or a *ComponentRegistry) can
-// read the mounted routes uniformly. Before the Init stage nothing has been
-// declared, so it returns nil.
+// MountedRoutes returns the routes declared on the Routes seat: the reading
+// the middleware chain derives its route partition from (go/app/chain's
+// RouteSource interface), so the chain takes a *ComponentRegistry without
+// naming it. Before the Init stage nothing has been declared, so it returns
+// nil.
 func (r *ComponentRegistry) MountedRoutes() []MountedRoute {
 	if r.Routes == nil {
 		return nil
@@ -1091,7 +1090,7 @@ func (r *ComponentRegistry) SchedulesSeat() PeriodicTaskRegistrar { return r.Sch
 
 // EventBus returns the assembled EventBus value from the by-type context --
 // the same value the Events seat subscribes on -- or nil when the assembly
-// carries none, mirroring the module Registry's nil-for-absent contract. It
+// carries none, keeping the nil-for-absent contract. It
 // is a Get sugar, so it follows the bus's own resolution rule: exactly one
 // put value assignable to EventBus is the answer.
 func (r *ComponentRegistry) EventBus() EventBus {
@@ -1102,8 +1101,8 @@ func (r *ComponentRegistry) EventBus() EventBus {
 }
 
 // KVStore returns the assembled KVStore value from the by-type context, or
-// nil when the assembly carries none, mirroring the module Registry's
-// nil-for-absent contract.
+// nil when the assembly carries none, keeping the nil-for-absent
+// contract.
 func (r *ComponentRegistry) KVStore() KVStore {
 	kv, err := Get[KVStore](r)
 	if err != nil {
@@ -1113,8 +1112,7 @@ func (r *ComponentRegistry) KVStore() KVStore {
 }
 
 // Mailer returns the assembled Mailer value from the by-type context, or nil
-// when the assembly carries none, mirroring the module Registry's
-// nil-for-absent contract.
+// when the assembly carries none, keeping the nil-for-absent contract.
 func (r *ComponentRegistry) Mailer() Mailer {
 	mailer, err := Get[Mailer](r)
 	if err != nil {
@@ -1124,8 +1122,8 @@ func (r *ComponentRegistry) Mailer() Mailer {
 }
 
 // ObjectStore returns the assembled ObjectStore value from the by-type
-// context, or nil when the assembly carries none, mirroring the module
-// Registry's nil-for-absent contract.
+// context, or nil when the assembly carries none, keeping the
+// nil-for-absent contract.
 func (r *ComponentRegistry) ObjectStore() ObjectStore {
 	store, err := Get[ObjectStore](r)
 	if err != nil {
@@ -1135,8 +1133,8 @@ func (r *ComponentRegistry) ObjectStore() ObjectStore {
 }
 
 // Locales returns the merged message catalog from the by-type context, or
-// nil when the assembly carries none, mirroring the module Registry's
-// nil-for-absent contract.
+// nil when the assembly carries none, keeping the nil-for-absent
+// contract.
 func (r *ComponentRegistry) Locales() *i18n.Catalog {
 	catalog, err := Get[*i18n.Catalog](r)
 	if err != nil {

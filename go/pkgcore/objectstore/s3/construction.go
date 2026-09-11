@@ -14,12 +14,10 @@ import (
 // Capabilities is what "objectstore.s3" declares about itself: any number of
 // replicas may address the same bucket, and the objects live inside the
 // S3-compatible service, whose durable storage outlives any one process --
-// the two claims the doc comment above spells out. The built-in registration
-// below and the Registration factory a host wraps a self-built Config in
-// both declare this one exported value, so the declaration a host reads off
-// this package and the one assembly validates cannot drift apart. A host
-// injecting a hand-built store through the by-type context passes it as the
-// injection's capability argument.
+// the two claims the doc comment above spells out. The component descriptor
+// (component.go) declares this one exported value, and its component_test.go
+// pins the descriptor's declaration to it, so the bits a host reads off this
+// package and the assembly validates cannot drift apart.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 
 // parseBucketLookup maps a Config string onto a BucketLookupType, defaulting

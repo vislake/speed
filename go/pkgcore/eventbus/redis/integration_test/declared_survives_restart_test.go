@@ -3,8 +3,9 @@
 package redis_test
 
 // The SurvivesRestart half of this implementation's declaration, verified:
-// the registration in register.go declares MultiReplicaSafe | SurvivesRestart
-// (register_test.go pins the registry to return exactly those bits), the
+// the component descriptor (component.go) declares MultiReplicaSafe |
+// SurvivesRestart (component_test.go pins the descriptor's declaration to
+// the exported Capabilities constant), the
 // shared eventbustest suite verifies the MultiReplicaSafe half, and this
 // file verifies the SurvivesRestart half against a genuine restart of the
 // state-holding service -- the Redis container itself, restarted between a

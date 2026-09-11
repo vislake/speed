@@ -21,15 +21,16 @@
 //
 // # How a catalog is built
 //
-// the assembly reads every registered module's Locales() embed.FS and
+// the assembly reads every selected component's Locales embed.FS and
 // feeds it to a Builder -- one Builder per assembly, mirroring how dbkit's
-// MigrationRegistry aggregates every module's Migrations() FS. Once every
-// module has been added, Build freezes the merge into an immutable
-// *Catalog and the assembly installs it on the Registry, reachable through
-// Registry.Locales(). A Catalog is therefore read-only by construction and
-// safe for concurrent use; only a bootstrapped Registry carries one (a
-// Registry built directly with NewRegistry has no catalog, exactly like it
-// has no ObjectStore).
+// MigrationRegistry aggregates the selected components' migration FS. Once
+// every bundle has been added, Build freezes the merge into an immutable
+// *Catalog and the assembly puts it into the by-type context, reachable
+// through the ComponentRegistry's Locales() accessor. A Catalog is therefore
+// read-only by construction and safe for concurrent use; only an assembly
+// that merged at least one bundle carries one (a registry whose assembly
+// carried no locale assets answers nil, exactly as its seam accessors do
+// for absent values).
 //
 // # The locale file contract
 //

@@ -21,9 +21,9 @@ import (
 // assembly; this protocol checks the declaration against the behaviour.
 //
 // caps must carry the capability bits the implementation under test
-// declares about itself — the same bits its register.go init (or the
-// host's WithKVStore call) declares, which the package's own
-// register_test.go pins against the registry — and it must declare
+// declares about itself — the same bits its component descriptor declares
+// and its component_test.go pins to the package's exported Capabilities
+// constant — and it must declare
 // SurvivesRestart: this protocol exists to verify that bit, so a call
 // whose caps lack it is refused outright rather than run over an
 // implementation that never made the claim (a caps-less protocol call is
@@ -54,8 +54,8 @@ import (
 // caller decides whether to run this protocol at all only through the caps
 // it passes — run it, with SurvivesRestart declared, for every
 // implementation that declares the bit, and run AssertDoesNotSurviveRestart
-// instead for one that honestly does not (kv.memcached, whose register.go
-// documents the absence; its leg runs the negative protocol against a real
+// instead for one that honestly does not (kv.memcached, whose package doc
+// comment documents the absence; its leg runs the negative protocol against a real
 // container restart) — which is what ties the declaration to a
 // verification it cannot fake.
 //

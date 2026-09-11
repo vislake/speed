@@ -468,8 +468,8 @@ func TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification(t *testing.T)
 	container, conn := startNATSConnWithContainer(t, ctx)
 
 	// The caps argument carries the declaration this protocol verifies (the
-	// same bits register.go's init declares and this file's
-	// TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities pins);
+	// same bits the component descriptor declares and this file's
+	// TestNewKVStore_ConstructsAgainstARealServer_WithCapabilities pins);
 	// the protocol refuses a call whose caps do not declare SurvivesRestart,
 	// so this run is the SurvivesRestart half of the declaration's
 	// verification, its container restart the state-holding-service restart
@@ -489,11 +489,11 @@ func TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification(t *testing.T)
 		})
 }
 
-// TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities is the
-// integration-tier counterpart of the package's own unit-level registration
-// test: with a real server reachable, Build actually succeeds, so this is
-// the one place the exact declared Capability value can be pinned end to
-// end, the way kv/redis's own register_test.go pins it without needing a
+// TestNewKVStore_ConstructsAgainstARealServer_WithCapabilities is the
+// integration-tier counterpart of the package's own unit-level capability
+// pin: with a real server reachable, NewKVStore actually succeeds, so this
+// is the one place the exact declared Capability value can be pinned end to
+// end, the way kv/redis's own component_test.go pins it without needing a
 // real server at all (go-redis's lazy client lets that test succeed with
 // nothing listening).
 func TestNewKVStore_ConstructsAgainstARealServer_WithCapabilities(t *testing.T) {
@@ -540,9 +540,10 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 		t.Fatalf("NewKVStore() on the second connection error = %v, want nil", err)
 	}
 
-	// The caps argument is this implementation's declaration — register.go's
-	// init declares MultiReplicaSafe | SurvivesRestart (pinned by
-	// TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities above) —
+	// The caps argument is this implementation's declaration — the component
+	// descriptor (component.go) declares MultiReplicaSafe | SurvivesRestart
+	// (pinned by
+	// TestNewKVStore_ConstructsAgainstARealServer_WithCapabilities above) —
 	// so the capability-gated suite runs the cross-instance assertions for
 	// the MultiReplicaSafe half of that declaration against the independent
 	// connection pair below.
