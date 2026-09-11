@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,46 @@ import (
 // this sender reads, so a misbehaving or hostile gateway cannot hold a
 // request goroutine reading an unbounded body.
 const maxSMSGatewayResponseBytes = 64 * 1024
+
+// smsHTTPComponentConfig is the "sms.http" component's configuration schema:
+// Endpoint is the operator gateway URL the sender posts to. It must be
+// non-empty, and the sender enforces the https scheme itself on every Send
+// (see NewHTTPSMSSender), so an unusable scheme surfaces as a delivery
+// failure, exactly as it does for a host-built sender.
+type smsHTTPComponentConfig struct {
+	Endpoint string `json:"endpoint"`
+}
+
+// smsHTTPComponent is the component descriptor for "sms.http", the operator
+// JSON-gateway sender a composition configuration selects as the "sms"
+// module's implementation; it registers itself from this file's init. The
+// capabilities mirror mailer.smtp's: MultiReplicaSafe (any number of
+// replicas posting to one operator gateway) and Stateless (each Send is one
+// fresh HTTP request and the struct holds only its endpoint, client and
+// guard, so a restart drops nothing it holds). Its New refuses an empty
+// endpoint -- a sender pointed at nothing can only fail every later Send --
+// and otherwise builds exactly the value NewHTTPSMSSender returns, with the
+// SSRF-guarded client and the per-Send https check that constructor
+// installs.
+var smsHTTPComponent = Component{
+	Name:         "sms.http",
+	Module:       "sms",
+	Provides:     []any{(*SMSSender)(nil)},
+	Capabilities: MultiReplicaSafe | Stateless,
+	ConfigSchema: (*smsHTTPComponentConfig)(nil),
+	New: func(_ context.Context, _ *ComponentRegistry, cfg ComponentConfig) (any, error) {
+		var c smsHTTPComponentConfig
+		if err := cfg.Decode(&c); err != nil {
+			return nil, err
+		}
+		if c.Endpoint == "" {
+			return nil, errors.New("pkgcore: sms.http: requires a non-empty \"endpoint\"")
+		}
+		return NewHTTPSMSSender(c.Endpoint), nil
+	},
+}
+
+func init() { MustRegister(smsHTTPComponent) }
 
 // httpSMSSenderConfig is an HTTP SMS sender's settings.
 type httpSMSSenderConfig struct {

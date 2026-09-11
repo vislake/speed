@@ -11,6 +11,29 @@ import (
 	"sync"
 )
 
+// mailerConsoleComponent is the component descriptor for "mailer.console",
+// the print-to-stdout mailer a composition configuration selects as the
+// "mailer" module's implementation; it registers itself from this file's
+// init. Stateless is declared (the same bit the seam registration declares):
+// each Send writes the message to the writer and returns, so a restart drops
+// nothing this implementation holds. The component prints to standard
+// output, the same writer NewConsoleMailer chooses -- the component is the
+// caller that declares the writer choice NewConsoleMailer's own contract
+// requires, and a host that wants to capture the output builds its mailer
+// itself and injects it. It takes no configuration -- ConfigSchema stays
+// nil, so a composition block carrying any key for it is refused as unknown.
+var mailerConsoleComponent = Component{
+	Name:         "mailer.console",
+	Module:       "mailer",
+	Provides:     []any{(*Mailer)(nil)},
+	Capabilities: Stateless,
+	New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+		return NewConsoleMailer(), nil
+	},
+}
+
+func init() { MustRegister(mailerConsoleComponent) }
+
 // consoleMailer is the standalone deployment mode's Mailer: it prints every
 // message to an io.Writer, standard output by default. A mutex guards the
 // writer so that concurrent Send calls cannot interleave their output.

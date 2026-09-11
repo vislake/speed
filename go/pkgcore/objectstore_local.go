@@ -11,6 +11,51 @@ import (
 	"syscall"
 )
 
+// objectStoreLocalConfig is the "objectstore.local" component's configuration
+// schema: Directory names the store root. An empty value falls back to a
+// fresh private temporary directory the component owns and removes at Close
+// (the throwaway default); a host-supplied directory is the host's data and
+// is never removed.
+type objectStoreLocalConfig struct {
+	Directory string `json:"directory"`
+}
+
+// objectStoreLocalComponent is the component descriptor for
+// "objectstore.local", the local-directory store a composition configuration
+// selects as the "objectstore" module's implementation; it registers itself
+// from this file's init. Capabilities are deliberately 0, the same
+// under-declaration the seam registration documents at length
+// (objectstore_registry.go): one registration covers both the throwaway
+// temporary-directory default and a host-supplied persistent directory, and
+// under-declaring is the safe direction -- no deployment mode requires the
+// bit, and a host with a persistent directory can inject its store directly
+// when it wants the durability banner gone. Its New funnels through
+// newLocalObjectStoreFromDirectory, the same construction the flat seam
+// adapter uses, and its Close releases the temporary directory when the
+// component created one (a host-supplied directory carries no closer).
+var objectStoreLocalComponent = Component{
+	Name:         "objectstore.local",
+	Module:       "objectstore",
+	Provides:     []any{(*ObjectStore)(nil)},
+	Capabilities: 0,
+	ConfigSchema: (*objectStoreLocalConfig)(nil),
+	New: func(_ context.Context, _ *ComponentRegistry, cfg ComponentConfig) (any, error) {
+		var c objectStoreLocalConfig
+		if err := cfg.Decode(&c); err != nil {
+			return nil, err
+		}
+		return newLocalObjectStoreFromDirectory(c.Directory)
+	},
+	Close: func(_ context.Context, _ *ComponentRegistry, instance any) error {
+		if closable, ok := instance.(interface{ Close() error }); ok {
+			return closable.Close()
+		}
+		return nil
+	},
+}
+
+func init() { MustRegister(objectStoreLocalComponent) }
+
 // localObjectStore is the standalone deployment mode's ObjectStore: a
 // directory on the local file system, one file per object, keys mapped onto
 // paths below the root. Files are written to a temporary sibling and renamed

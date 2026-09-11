@@ -94,6 +94,35 @@ A tenth name, `kv.postgres`, is registered by `kv/postgres`'s own `init()` (see 
 
 **One-step constructors for the bare-injection path.** `eventbus/redis`, `kv/redis` and `objectstore/s3` also export a one-step constructor each -- `FromAddr(addr)` for the two Redis-backed seams, `FromConfig(cfg)` for S3 -- for the host that has only an address or a typed `Config` and wants the `WithEventBus`/`WithKVStore`/`WithObjectStore` pair without hand-assembling the driver client first: one call returns the implementation the package built (over a client it built, or over the store `cfg` describes) together with the same exported `Capabilities` constant the built-in registration declares, so the host never spells capability bits out and the declaration assembly validates cannot drift from the one the constructor reports. The two Redis-backed constructors return an owned value (`eventbusredis.OwnedEventBus`, `kvredis.OwnedKVStore`) whose `Close() error` releases the client the constructor built -- the host that injected the value calls it at shutdown, since the kernel never touches an injected seam; `objectstore/s3`'s returns the bare `ObjectStore`, because the minio-go client exposes no close. An empty address or an unusable `Config` comes back as an error, never a panic, and never a silent fallback. This is not a preset selector: which implementation a seam uses stays kernel wiring, exactly as the routes above. A host that needs credentials, a database index, TLS material or one client shared across seams builds the client itself (`NewEventBus`/`NewKVStore`) or reaches for the `Registration` factory; the one-step constructors serve the host that has nothing but the address, or the typed `Config`.
 
+**Component registration** -- the second registration channel beside the seam registries, for the config-driven component assembly. Every module implementation and assembly-time step registers a `Component` descriptor from its package's `init` through `MustRegister` (a host may add its own with `Register` before creating a registry), and a `ComponentRegistry` instance seeds itself from that global registration, parses the composition configuration the host puts, and drives the seven-stage lifecycle (`Prepare` / `Construct` / `Verify` / `Init` / `Start` / `Stop` / `Close`). The descriptor -- name, lifecycle callbacks, `Requires`/`Provides` contract tokens, `Capabilities`, `ConfigSchema`, `Migrations`/`Locales`/`OpenAPISpec`, `Module` -- and the registry are documented in full on their own godoc (`component.go`, `component_registry.go`, `config.go`; runnable walkthroughs in `component_example_test.go`). Two reads matter to component packages:
+
+| Signature | Purpose |
+|---|---|
+| `func GlobalComponents() []Component` | A snapshot of the package-level global registration, in registration order: every component an imported package self-registered, plus any the host added. This is the enumeration a binary's golden component roster is pinned against (`unittest/components_test.go`); which of those components an application is made of stays a configuration question, answered per assembly by the registry |
+| `func Asset struct { Name string; Migrations, Locales embed.FS; OpenAPISpec []byte }`, `func Assets(*ComponentRegistry) []Asset` | The selected components' embedded assets in dependency order -- the sets a database component applies in Verify and a host merges (locales, OpenAPI) |
+
+Built-in component roster (the components this module's own packages self-register; the components of every other module ship with that module's packages):
+
+| Name | Module | Capabilities | Configuration keys |
+|---|---|---|---|
+| `eventbus.memory` | `eventbus` | 0 | none |
+| `eventbus.redis` | `eventbus` | `MultiReplicaSafe\|SurvivesRestart` | `addr`, `password`, `db` |
+| `eventbus.nats` | `eventbus` | `MultiReplicaSafe\|SurvivesRestart` | `url`, `token`, `user`, `password` |
+| `eventbus.postgres` | `eventbus` | `MultiReplicaSafe\|SurvivesRestart` | `dsn`, `replica_id`; carries the outbox migration set |
+| `kv.memory` | `kv` | 0 | none |
+| `kv.redis` | `kv` | `MultiReplicaSafe\|SurvivesRestart` | `addr`, `password`, `db` |
+| `kv.postgres` | `kv` | `MultiReplicaSafe\|SurvivesRestart` | `dsn`; carries the entry-table migration set |
+| `kv.memcached` | `kv` | `MultiReplicaSafe` | `addrs` (comma-separated; default `localhost:11211`) |
+| `kv.nats` | `kv` | `MultiReplicaSafe\|SurvivesRestart` | `url`, `bucket` (default `speed-kv`), `user`, `password`, `token` |
+| `mailer.console` | `mailer` | `Stateless` | none (prints to stdout) |
+| `mailer.smtp` | `mailer` | `MultiReplicaSafe\|Stateless` | `host` (required), `port` (default 587), `username`, `password`, `tls_mode`, `insecure_skip_verify`, `reply_to` |
+| `objectstore.local` | `objectstore` | 0 | `directory` (empty = a throwaway temporary directory the component removes at Close) |
+| `objectstore.s3` | `objectstore` | `MultiReplicaSafe\|SurvivesRestart` | `endpoint`, `bucket`, `access_key`, `secret_key` (all required), `region`, `use_ssl`, `bucket_lookup` |
+| `sms.console` | `sms` | `Stateless` | none (prints to stdout) |
+| `sms.http` | `sms` | `MultiReplicaSafe\|Stateless` | `endpoint` (required; https enforced per Send) |
+
+An empty configuration block (`{}` or `nil`) selects a component with its defaults; a `false` value deselects it; any key a component does not declare fails the Prepare stage with the accepted-key list. Both configuration channels -- the component block and the flat seam `Config` of the registries above -- resolve through one construction helper per package (`clientFromConfig` / `newClient` and their siblings), so the two spellings cannot drift on defaults or validation.
+
 Registrar interfaces: `RouteRegistrar`, `ConfigSchemaRegistrar`, `BootstrapRegistrar`, `FeatureRegistrar`, `PermissionRegistrar`, `JobHandlerRegistrar`, `NotificationRegistrar`, `EventRegistrar` (`Publishes` / `Published` / `Subscribe` / `Bus`), `AuditActionRegistrar`, `RetentionRegistrar` (`Add` / `Participants`), `PeriodicTaskRegistrar` (`Add` / `Declarations`).
 
 Declaration types:

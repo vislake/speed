@@ -155,7 +155,15 @@ func natsURLOrDefault(url string) string {
 // natsBucketFromConfig returns the configured JetStream KV bucket name,
 // defaulting to defaultBucket.
 func natsBucketFromConfig(cfg pkgcore.Config) string {
-	if bucket := cfg["bucket"]; bucket != "" {
+	return natsBucketOrDefault(cfg["bucket"])
+}
+
+// natsBucketOrDefault applies the bucket fallback shared by both
+// configuration channels: an empty bucket resolves to defaultBucket, so a
+// zero-configuration build and the component's own default agree on the
+// bucket a store provisions.
+func natsBucketOrDefault(bucket string) string {
+	if bucket != "" {
 		return bucket
 	}
 	return defaultBucket

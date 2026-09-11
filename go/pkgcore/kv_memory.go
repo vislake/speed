@@ -8,6 +8,25 @@ import (
 	"time"
 )
 
+// kvMemoryComponent is the component descriptor for "kv.memory", the
+// in-process store a composition configuration selects as the "kv" module's
+// implementation; it registers itself from this file's init. Capabilities
+// are honestly 0: each process gets its own private map, so the
+// implementation is neither multi-replica-safe nor restart-durable. It
+// takes no configuration -- ConfigSchema stays nil, so a composition block
+// carrying any key for it is refused as unknown.
+var kvMemoryComponent = Component{
+	Name:         "kv.memory",
+	Module:       "kv",
+	Provides:     []any{(*KVStore)(nil)},
+	Capabilities: 0,
+	New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+		return NewMemoryKVStore(), nil
+	},
+}
+
+func init() { MustRegister(kvMemoryComponent) }
+
 // KVStoreRegistry mirrors EventBusRegistry for the "kv" seam ("kv.redis"
 // registers through the kv/redis subpackage).
 var KVStoreRegistry = newBuiltinKVStoreRegistry()

@@ -418,3 +418,87 @@ func isASCII(s string) bool {
 	}
 	return true
 }
+
+// smtpComponentConfig is the "mailer.smtp" component's configuration schema:
+// one field per key a composition block may carry, decoded strictly. TLSMode
+// spells the same three modes parseSMTPTLSMode accepts ("auto", "starttls",
+// "implicit"); Port 0 means unset and resolves to the submission port.
+type smtpComponentConfig struct {
+	Host               string `json:"host"`
+	Port               int    `json:"port"`
+	Username           string `json:"username"`
+	Password           string `json:"password"`
+	TLSMode            string `json:"tls_mode"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
+	ReplyTo            string `json:"reply_to"`
+}
+
+// mailerSMTPComponent is the component descriptor for "mailer.smtp", the
+// relay-backed mailer a composition configuration selects as the "mailer"
+// module's implementation; it registers itself from this file's init. The
+// capabilities are the seam registration's own declaration, documented
+// there: MultiReplicaSafe (any number of replicas sharing one relay) and
+// Stateless (every Send dials a fresh connection and the struct holds only
+// its config, so a restart drops nothing). Its New funnels through
+// newSMTPMailerFromFields, the same validation the flat seam adapter
+// (mailer_registry.go) uses, so the two configuration channels cannot drift
+// on the required host, the port range or the line-break refusal.
+var mailerSMTPComponent = Component{
+	Name:         "mailer.smtp",
+	Module:       "mailer",
+	Provides:     []any{(*Mailer)(nil)},
+	Capabilities: MultiReplicaSafe | Stateless,
+	ConfigSchema: (*smtpComponentConfig)(nil),
+	New: func(_ context.Context, _ *ComponentRegistry, cfg ComponentConfig) (any, error) {
+		var c smtpComponentConfig
+		if err := cfg.Decode(&c); err != nil {
+			return nil, err
+		}
+		tlsMode, err := parseSMTPTLSMode(c.TLSMode)
+		if err != nil {
+			return nil, err
+		}
+		port := c.Port
+		if port == 0 { // unset: the submission port, the seam adapter's own default
+			port = defaultSMTPPort
+		}
+		return newSMTPMailerFromFields(c.Host, port, c.Username, c.Password, c.ReplyTo, tlsMode, c.InsecureSkipVerify)
+	},
+}
+
+func init() { MustRegister(mailerSMTPComponent) }
+
+// defaultSMTPPort is the submission port both configuration channels default
+// an unset port to: plaintext first, STARTTLS when advertised. It is the
+// same 587 the flat seam adapter uses.
+const defaultSMTPPort = 587
+
+// newSMTPMailerFromFields validates one SMTP mailer's resolved settings and
+// builds the mailer -- the single construction path both configuration
+// channels funnel through: the flat Config adapter (mailer_registry.go) and
+// the "mailer.smtp" component above. Host has no safe default, a port
+// outside 1..65535 is unusable and a line break in replyTo would smuggle a
+// header into the SMTP conversation, so all three are refused here as
+// errors, keeping NewSMTPMailer's own panic for an unusable configuration
+// unreachable through either channel.
+func newSMTPMailerFromFields(host string, port int, username, password, replyTo string, tlsMode SMTPTLSMode, insecureSkipVerify bool) (Mailer, error) {
+	if host == "" {
+		return nil, fmt.Errorf("pkgcore: mailer.smtp: %w: requires \"host\"", ErrMissingSeamConfig)
+	}
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("pkgcore: mailer.smtp: invalid \"port\" %d: must be in 1..65535", port)
+	}
+	if strings.ContainsAny(replyTo, "\r\n") {
+		return nil, fmt.Errorf("pkgcore: mailer.smtp: invalid \"reply_to\": must not contain a line break")
+	}
+
+	return NewSMTPMailer(SMTPConfig{
+		Host:               host,
+		Port:               port,
+		Username:           username,
+		Password:           password,
+		TLSMode:            tlsMode,
+		InsecureSkipVerify: insecureSkipVerify,
+		ReplyTo:            replyTo,
+	}), nil
+}

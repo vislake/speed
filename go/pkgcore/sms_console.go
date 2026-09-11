@@ -6,8 +6,32 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 )
+
+// smsConsoleComponent is the component descriptor for "sms.console", the
+// print-to-stdout sender a composition configuration selects as the "sms"
+// module's implementation; it registers itself from this file's init.
+// Stateless is declared for the same reason mailer.console declares it:
+// each Send writes the message to the writer and returns, so a restart
+// drops nothing. The component prints to standard output -- the component
+// is the caller that declares the writer choice NewConsoleSMSSender's own
+// contract requires, and a test or host that wants to capture the record
+// builds its sender itself. It takes no configuration -- ConfigSchema stays
+// nil, so a composition block carrying any key for it is refused as
+// unknown.
+var smsConsoleComponent = Component{
+	Name:         "sms.console",
+	Module:       "sms",
+	Provides:     []any{(*SMSSender)(nil)},
+	Capabilities: Stateless,
+	New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+		return NewConsoleSMSSender(os.Stdout), nil
+	},
+}
+
+func init() { MustRegister(smsConsoleComponent) }
 
 // consoleSMSSender is the zero-external-dependency SMSSender: it prints
 // every message to an io.Writer instead of sending anything -- the

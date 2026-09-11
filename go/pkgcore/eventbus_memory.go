@@ -8,6 +8,26 @@ import (
 	"sync"
 )
 
+// eventBusMemoryComponent is the component descriptor for "eventbus.memory",
+// the in-process bus a composition configuration selects as the "eventbus"
+// module's implementation; it registers itself from this file's init.
+// Capabilities are honestly 0: each process gets its own private fan-out, so
+// the implementation is neither multi-replica-safe nor restart-durable (see
+// the MultiReplicaSafe and SurvivesRestart doc comments in capability.go).
+// It takes no configuration -- ConfigSchema stays nil, so a composition
+// block carrying any key for it is refused as unknown.
+var eventBusMemoryComponent = Component{
+	Name:         "eventbus.memory",
+	Module:       "eventbus",
+	Provides:     []any{(*EventBus)(nil)},
+	Capabilities: 0,
+	New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+		return NewMemoryEventBus(), nil
+	},
+}
+
+func init() { MustRegister(eventBusMemoryComponent) }
+
 // EventBusRegistry is the package-level SeamRegistry every Kernel resolves
 // the "eventbus" Preset key against, pre-populated below with pkgcore's
 // in-process built-in implementation. A host registers its own
