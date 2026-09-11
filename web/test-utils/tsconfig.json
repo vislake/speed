@@ -1,0 +1,22 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["src"],
+  "compilerOptions": {
+    // The shared modules render JSX (render.tsx), so the package compiles
+    // through the automatic runtime like every DOM-facing package.
+    "jsx": "react-jsx",
+    // The workspace @speed specifiers resolve onto the siblings' live src
+    // (a sibling's dist/ is never committed and not guaranteed to exist
+    // when tests run), exactly as every consumer of this package resolves
+    // them at test time: the workspace alias map
+    // (web/scripts/speed-aliases.mjs) points vitest/vite at this same
+    // src, and this section is the typecheck-time mirror of that map.
+    "paths": {
+      "@speed/api-sdk/runtime": ["../packages/api-sdk/src/runtime.ts"],
+      "@speed/api-sdk": ["../packages/api-sdk/src/index.ts"],
+      "@speed/api-client": ["../packages/api-client/src/index.ts"],
+      "@speed/auth-core": ["../packages/auth-core/src/index.ts"],
+      "@speed/i18n": ["../packages/i18n/src/index.ts"]
+    }
+  }
+}
