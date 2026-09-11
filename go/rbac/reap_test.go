@@ -461,8 +461,8 @@ func (c *statementCounter) reset() { *c = statementCounter{} }
 // HTTP DELETE through one full revoke round trip per binding -- each
 // RevokeRole call re-resolves the role by key and re-finds the binding by
 // tuple before its delete, on top of the role id resolution the reap
-// already performed. The reap holds the very rows it enumerated, so the
-// fix revokes them by id with the role resolved once per DISTINCT role
+// already performed. The reap holds the very rows it enumerated, so
+// it revokes them by id with the role resolved once per DISTINCT role
 // per pass. Pinned by counting the statements the reap performs, never by
 // timing it: a four-binding cascade over two distinct roles must cost one
 // binding enumeration, exactly two role lookups (not eight), four
