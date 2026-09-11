@@ -78,6 +78,7 @@ type Component struct {
     Close   func(ctx context.Context, reg *ComponentRegistry, instance any) error // 释放资源
 
     Requires     []Requirement // 依赖（可选）
+    Provides     []any         // 产物将满足的接口 token（类型化 nil 指针；与消费方 Requires 同词表）——选前解析、auto-pull 与歧义校验、构造后的产物断言都读它
     Capabilities Capability    // 能力位（可选；部署模式校验用）
     ConfigSchema any           // 类型化 nil 指针（可选；nil = 不吃配置）
     BootstrapKeys []BootstrapKey // 启动期密钥材料声明（键路径＋purpose）；loader 在 Prepare 拍① 读取——先于一切构造，不受 Init 席门禁
@@ -99,6 +100,7 @@ type Requirement struct {
 ```
 
 - 依赖**只对着产物解析**，不表达组件身份；顺序与 auto-pull 都由此推导。
+- **提供面声明（`Provides`）**：组件声明其**产物**将满足哪些接口 token（与消费方的 `Requires` 同词表，类型化 nil 指针）。静态声明让选择解析、auto-pull 与单值歧义校验在 Prepare 拍② 完成；构造后装配器逐产物断言 `Provides` 全部成立——声明与实现不符即构造失败（fail-closed），声明因此不能与产物脱节。
 - 需要“Init 期服务”的组件改为依赖**提供者的产物**以获得次序，取值发生在使用时刻（`Get`）；依赖数据里没有阶段字段——阶段是程序流程，不是数据。
 - 可选依赖缺失时不阻断装配，消费方以零值运行并自行 fail closed。
 
@@ -356,7 +358,7 @@ sequenceDiagram
 
 ### 6.2 auto-pull 与 strict
 
-若某组件的依赖指向的 token 无选中提供者、且唯一可解析的已注册组件可满足 → 自动选中，并在启动日志声明；找不到或存在歧义 → 启动失败并列候选。`strict: true` 关闭 auto-pull（用于以显式清单钉死装配集的场景）。
+若某组件的依赖指向的 token 无选中提供者、且唯一可解析（按其 `Provides` 声明判定）的已注册组件可满足 → 自动选中，并在启动日志声明；找不到或存在歧义 → 启动失败并列候选。`strict: true` 关闭 auto-pull（用于以显式清单钉死装配集的场景）。
 
 ### 6.3 来源分层
 
@@ -434,7 +436,7 @@ components:
 装配器在 Prepare 的第二拍完成，全部无副作用、失败即止：
 
 1. 严格解码组合配置 → 展开选择（`false` 覆盖、auto-pull），收集 auto-selected 清单；未知组件名报拼写建议。
-2. 校验全项：依赖完整性（单值 token 在选中组件的产物中恰好一个结构匹配）、歧义、配置键（对 `ConfigSchema` 严格解码）、能力位（对照部署模式）、资产（Locale 键集奇偶、迁移集结构、方言匹配、OpenAPI 可解析）、图（Requires 建图，DFS 拓扑，环路径点名）。
+2. 校验全项：依赖完整性（单值 token 在选中组件的 `Provides` 声明中恰好一个匹配；构造后对产物断言）、歧义、配置键（对 `ConfigSchema` 严格解码）、能力位（对照部署模式）、资产（Locale 键集奇偶、迁移集结构、方言匹配、OpenAPI 可解析）、图（Requires 建图，DFS 拓扑，环路径点名）。
 3. 有序计划（成员、已解析配置、拓扑序）写入注册表——构造不在此。
 
 ### 7.2 错误目录
@@ -447,7 +449,7 @@ components:
 | `ErrMissingRequirement` | token 无提供者 | `"authn" requires authn.KeySource; candidates: pki; add "pki: {}"` |
 | `ErrAmbiguousProvider` | 单值读法遇多个提供者 | `two selected components provide pkgcore.Mailer: mailer.smtp, mailer.console; deselect one` |
 | `ErrUnknownConfigKey` | 组件配置块有未声明键 | `"mailer.smtp": unknown config key "prot" (accepted: host, port, …)` |
-| `ErrComponentFailed` | New 失败（携带回滚清单） | `"queue.standalone" failed (dial tcp …); rolled back: signer.local, objectstore.local` |
+| `ErrComponentFailed` | New 失败，或产物不满足其 `Provides` 声明（携带回滚清单） | `"queue.standalone" failed (dial tcp …); rolled back: signer.local, objectstore.local` |
 | `ErrDuplicateComponent` | 重复注册 | 注册期 panic/错误，点名名字 |
 | `ErrDependencyCycle` / `ErrCapabilityUnsatisfied` | 环 / 能力位不满足 | 环路径点名；能力位点名组件、缺失位与模式 |
 
@@ -528,6 +530,7 @@ type Component struct {
     Stop         func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Close        func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Requires       []Requirement
+    Provides       []any // 产物将满足的接口 token；与 Requires 成对
     Capabilities   Capability
     ConfigSchema   any
     BootstrapKeys  []BootstrapKey  // 启动期密钥材料声明；loader 拍① 读取（不受 Init 席门禁）
