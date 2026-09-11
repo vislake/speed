@@ -87,12 +87,16 @@ const (
 	// the assembly: the assembly compares capabilities only on the
 	// descriptors of the components a composition selects, and pki's signers
 	// are reached through go/pki's own package-level SeamRegistry[Signer]
-	// rather than a pkgcore seam; go/pki calls no equivalent check of its own
-	// -- pki.Module.WithSigner takes no Capability/requirement parameter, and
-	// SignerRegistry.Build merely returns the Capability a registration
-	// declared without comparing it to anything. A host that wires go/pki
-	// with an implementation lacking this bit where it intended to require it
-	// gets no error; the gap is recorded in go/pki's own documentation.
+	// rather than a pkgcore seam. pki carries its own equivalent check:
+	// BuildSignerRequiring (go/pki/signer_registry.go) compares the
+	// Capability a registration declared against the caller's requirement
+	// and refuses a miss with an error wrapping this package's
+	// ErrCapabilityUnsatisfied -- while SignerRegistry.Build merely returns
+	// the declared Capability without comparing it to anything, and
+	// pki.Module.WithSigner takes no Capability/requirement parameter at
+	// all. A host that injects a signer directly, or that never declares a
+	// requirement, therefore gets no check; both residuals are recorded in
+	// go/pki's own documentation.
 	KeyNeverLeavesBoundary
 )
 
