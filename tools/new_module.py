@@ -490,8 +490,8 @@ import (
 var openAPISpecYAML []byte
 
 const (
-	// moduleName is the module's pkgcore.Module.Name() and the name
-	// dbkit.MigrationRegistry keys its dependency graph on.
+	// moduleName is the module's name (the value Name() answers) and the
+	// name dbkit.MigrationRegistry keys its dependency graph on.
 	moduleName = "__NAME__"
 
 	// apiPath is the path this module's routes are mounted at. It must
@@ -531,7 +531,7 @@ type __ENTITY__CreatedPayload struct {
 	TenantID string
 }
 
-// Module implements pkgcore.Module for __NAME__.
+// Module carries the module contract for __NAME__.
 type Module struct {
 	repo    *Repository
 	handler *Handler
@@ -546,21 +546,21 @@ func NewModule(db *gorm.DB) *Module {
 	return &Module{repo: NewRepository(db)}
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module. This module depends on
+// DependsOn implements the module contract. This module depends on
 // infrastructure only, never on another business module -- an ID
 // reference plus a domain event is the contract between modules.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module.
+// Locales implements the module contract.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: this module's own OpenAPI
+// OpenAPISpec implements the module contract: this module's own OpenAPI
 // fragment, the single source of its API surface. api/__NAME__-server.gen.go
 // derives from it (see api/oapi-codegen.yaml for the pinned generator
 // run) and Handler implements the generated ServerInterface.

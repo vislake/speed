@@ -20,10 +20,10 @@ rules' living proof, in the same shape as the sibling checker suites:
     (each host's assembly core and application component): the sanctioned
     shapes there stay silent, and the same shapes in any other host file
     still fire;
-  * a re-issued engine-owned assembly call (pkgcore.NewKernel, dbkit.Open,
-    http.NewServeMux, chain.Chain under any alias, obs.Init, ...) in a
-    non-test file fires, while the sanctioned register-and-Assemble shape
-    and the same text in a test file stay silent;
+  * a re-issued engine-owned assembly call (pkgcore.NewComponentRegistry,
+    dbkit.Open, http.NewServeMux, chain.Chain under any alias, obs.Init,
+    ...) in a non-test file fires, while the sanctioned register-and-
+    Assemble shape and the same text in a test file stay silent;
   * a host's Go test-support packages (internal/testutil,
     internal/apptest) are exempt from the sentinel and call-ban scans the
     way test files are, while the same calls from any other path fire, a
@@ -181,20 +181,17 @@ class EngineOwnedCallRules(unittest.TestCase):
                 "go/saasctl/internal/template/project/cmd/server/server.go": (
                     "package main\n\n"
                     "func boot() {\n"
-                    "\treg, _ := pkgcore.NewKernel(opts...).Bootstrap(ctx, mods...)\n"
                     "\t_ = dbkit.Open(ctx, dbkit.Options{})\n"
                     "\tmux := http.NewServeMux()\n"
                     "\t_ = signal.NotifyContext(ctx, syscall.SIGINT)\n"
                     "\t_ = obs.Init(ctx)\n"
-                    "\t_ = reg\n"
+                    "\t_ = mux\n"
                     "}\n"
                 ),
             }
         )
         findings = m.scan(root)
         for label in (
-            "pkgcore.NewKernel",
-            ".Bootstrap(",
             "dbkit.Open",
             "http.NewServeMux",
             "signal.NotifyContext",
@@ -245,8 +242,8 @@ class EngineOwnedCallRules(unittest.TestCase):
 
     def test_a_longer_package_name_ending_in_the_selector_stays_silent(self):
         # Business-path file: the banned selectors' lookbehind precision is
-        # what this pins (myobs.Init is not obs.Init; xpkgcore.NewKernel is
-        # not pkgcore.NewKernel). It lives outside the composition paths
+        # what this pins (myobs.Init is not obs.Init; xjobs.Wire is not
+        # jobs.Wire). It lives outside the composition paths
         # because the component-assembly bans do fire on any .Init(
         # inside them, which the component-assembly class pins separately.
         root = make_tree(
@@ -255,7 +252,7 @@ class EngineOwnedCallRules(unittest.TestCase):
                     "package notes\n\n"
                     "func boot() {\n"
                     "\t_ = myobs.Init(ctx)\n"
-                    "\t_ = xpkgcore.NewKernel()\n"
+                    "\t_ = xjobs.Wire(q, reg)\n"
                     "}\n"
                 ),
             }
@@ -268,7 +265,6 @@ class EngineOwnedCallRules(unittest.TestCase):
                 "examples/reference-app/flowtests/probe_test.go": (
                     "package flowtests\n\n"
                     "func TestProbe(t *testing.T) {\n"
-                    "\t_ = pkgcore.NewKernel()\n"
                     "\tmux := http.NewServeMux()\n"
                     "\t_ = mux\n"
                     "}\n"

@@ -201,8 +201,6 @@ HOST_COMPOSITION_PATHS = (
 #         instance while the set itself is assembled on the registry the
 #         engine's RunAssembly owns. Any other host file still fires.
 HOST_COMPOSITION_CALL_BANS = (
-    ("pkgcore.NewKernel", r"(?<![A-Za-z0-9_.])pkgcore\.NewKernel\(", "tree", ()),
-    (".Bootstrap(", r"\.Bootstrap\(", "tree", ()),
     (
         "pkgcore.NewComponentRegistry",
         r"(?<![A-Za-z0-9_.])pkgcore\.NewComponentRegistry\(",
