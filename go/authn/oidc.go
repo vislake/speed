@@ -670,11 +670,10 @@ func (s *SSOService) Callback(ctx context.Context, in SSOCallbackInput) (*Social
 	// "oidc:<tenant>" provider name an identity row would be stored under,
 	// so an over-long one is refused with the named error here rather than
 	// left to break the identity write with a raw 22001 on PostgreSQL.
-	// Under the fixed code paths this is unreachable -- SaveConfig and
-	// AuthorizeURL both refuse such a tenant before a flow can start -- and
-	// it exists so a state record issued outside those gates answers the
-	// same named refusal instead of a random database error. See
-	// validateSSOTenantID.
+	// Unreachable through the normal flow -- SaveConfig and AuthorizeURL
+	// both refuse such a tenant before a flow can start -- and it exists
+	// so a state record issued outside those gates answers the same named
+	// refusal instead of a random database error. See validateSSOTenantID.
 	if err := validateSSOTenantID(in.TenantID); err != nil {
 		return nil, err
 	}
