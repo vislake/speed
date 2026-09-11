@@ -1,6 +1,7 @@
 package org
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"testing"
@@ -37,6 +38,20 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
+// testInvitationLinkBuilder is the host-policy value New picks up for the
+// invitation link: only a host knows its own public address.
+func testInvitationLinkBuilder(_ context.Context, token string) (string, error) {
+	return "https://example.com/invitations/" + token, nil
+}
+
+// testBootstrapMaterial is the module's own declared key material, the shape
+// the loader resolves and publishes before anything is constructed.
+func testBootstrapMaterial() *pkgcore.BootstrapMaterial {
+	return pkgcore.NewBootstrapMaterial([]pkgcore.BootstrapMaterialEntry{
+		{KeyPath: bootstrapKeyDecl.Key, Value: bytes.Repeat([]byte{0x2f}, 32)},
+	})
+}
+
 // TestComponentAssemblesThroughRegistry drives the registered descriptor
 // through the assembly's stages the way a host would: selection from a
 // composition configuration (every schema field set), construction from the
@@ -52,6 +67,13 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	}
 	reg.Put(FeatureGateFunc(func(context.Context, string) (bool, error) { return true, nil }))
 	reg.Put(SubjectResolverFunc(func(*http.Request) (string, bool) { return "user-1", true }))
+	// The Init callback installs the module's UserCreated subscription
+	// during the assembly's Init stage, so the assembly carries the bus it
+	// lands on; New reads the module's declared key material, so the
+	// assembly carries the loader-published source.
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(testBootstrapMaterial())
+	reg.Put(testInvitationLinkBuilder)
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"deployment": "standalone",
 		"components": map[string]any{
@@ -80,12 +102,41 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 		}
 	}
 
+	// The Init stage ran the descriptor's Init callback -- the module's one
+	// declaration entry point -- so every declaration landed in the
+	// assembly's own seats and the UserCreated subscription was installed
+	// on the assembly's own bus.
+	assertContainsAll(t, reg.Permissions.Permissions(), []string{
+		PermissionRead, PermissionManage, PermissionInviteMember, PermissionRemoveMember,
+	})
+	assertContainsAll(t, reg.AuditActions.Actions(), []string{
+		AuditActionNodeCreate, AuditActionNodeUpdate,
+		AuditActionMemberCreate, AuditActionMemberUpdate,
+		AuditActionInvitationCreate, AuditActionInvitationUpdate,
+	})
+	var flags []string
+	for _, flag := range reg.Features.Flags() {
+		flags = append(flags, flag.Key)
+	}
+	assertContainsAll(t, flags, []string{FeatureInvitations, FeatureInvitationEmail})
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	assertContainsAll(t, types, []string{EventNodeCreated, EventMemberInvited, EventMemberJoined, EventMemberRemoved})
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
+
 	module, err := pkgcore.Get[*Module](reg)
 	if err != nil {
 		t.Fatalf("the assembled product is not reachable: %v", err)
 	}
 	if module == nil {
 		t.Fatal("the assembled product is nil")
+	}
+	if module.handler == nil {
+		t.Error("the module's HTTP handler was not built by Init")
 	}
 	if names := pkgcore.MemberNames(reg, moduleName); len(names) != 1 || names[0] != moduleName {
 		t.Fatalf("MemberNames = %v, want [%s]", names, moduleName)
