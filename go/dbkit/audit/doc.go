@@ -1,8 +1,8 @@
 // Package audit is the persistence and declarative-collection home of the
 // audit trail: the AuditEvent model, its dual-dialect migrations,
 // Repository (the append-only accessor that stores and reads events back),
-// Emit (the explicit collection mechanism), and Module (the pkgcore.Module
-// persister that turns published events into stored rows). The
+// Emit (the explicit collection mechanism), and Module (the persister that
+// turns published events into stored rows, carrying the module contract). The
 // complementary automatic-collection mechanism -- the GORM write-capture
 // plugin -- lives one level up, in go/dbkit itself (audit_capture.go),
 // since it has to be wired into dbkit.Open.
@@ -22,7 +22,7 @@
 //     go/compliance for the closest read surface, AuditQuery, and its
 //     formatted CSV/JSON report export).
 //   - The explicit collection mechanism Emit (emit.go) and the
-//     pkgcore.Module persister (module.go) that subscribes to both
+//     module-contract persister (module.go) that subscribes to both
 //     collection mechanisms' events -- dbkit's own automatic GORM
 //     write-capture plugin (go/dbkit/audit_capture.go, one level up) and
 //     this package's own Emit -- plus tenancy's

@@ -199,8 +199,8 @@ type AuditEvent struct {
 	OnBehalfOfDisplayName *string `gorm:"column:on_behalf_of_display_name;size:255"`
 
 	// Action is the audit action string. Every one of the three paths that
-	// produces a record validates it against the host's registered
-	// pkgcore.Registry.AuditActions enumeration before this row exists --
+	// produces a record validates it against the host registry's
+	// AuditActions seat enumeration before this row exists --
 	// never here, since Repository has no registrar of its own to check
 	// against: Emit refuses an undeclared Input.Action at emission
 	// (ErrActionNotRegistered, emit.go); Module's write-captured subscriber

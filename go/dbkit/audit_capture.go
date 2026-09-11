@@ -27,8 +27,8 @@ const auditCapturePluginName = "dbkit:audit_capture"
 // "<module>.<entity>.<action>" convention (backend coding standard §8).
 // Its Payload is a WriteCapturedEvent.
 //
-// dbkit itself is not a pkgcore.Module and so has no Register method of its
-// own to declare this event on a Registry's EventRegistrar — the audit
+// dbkit itself carries no module contract and so has no Register method of
+// its own to declare this event on the registry's Events seat — the audit
 // persister module (go/dbkit/audit's Module) declares it on dbkit's behalf,
 // since that module is this event's one real subscriber.
 const EventWriteCaptured = "dbkit.write.captured"

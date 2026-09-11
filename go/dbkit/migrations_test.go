@@ -20,10 +20,10 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// fakeModule is a minimal pkgcore.Module used only by this test file. Only
+// fakeModule is a minimal module used only by this test file. Only
 // Name, DependsOn and Migrations are ever read by MigrationRegistry;
-// Locales, OpenAPISpec and Register exist solely to satisfy the interface
-// and are never exercised here.
+// Locales, OpenAPISpec and Register exist solely to satisfy the module
+// contract and are never exercised here.
 type fakeModule struct {
 	name       string
 	dependsOn  []string

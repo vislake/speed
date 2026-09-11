@@ -27,7 +27,7 @@ import (
 // fakeAuditModule feeds audit's own embedded migrations to
 // dbkit.MigrationRegistry -- the identical, by-now-repeated-three-times
 // (dbkit/audit/repository_test.go, go/compliance/module_test.go, here)
-// minimal pkgcore.Module a test needs to drive MigrationRegistry.Apply;
+// minimal module a test needs to drive MigrationRegistry.Apply;
 // only Name and Migrations are ever read here.
 type fakeAuditModule struct{}
 

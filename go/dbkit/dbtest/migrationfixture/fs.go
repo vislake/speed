@@ -6,7 +6,7 @@
 // directly inside a _test.go file, because a //go:embed directive's patterns
 // are resolved relative to the directory of the .go file that carries it:
 // for Migrations to expose "postgres" and "sqlite" at the root of its
-// embed.FS -- the layout every pkgcore.Module's Migrations() is expected to
+// embed.FS -- the layout every module's Migrations() is expected to
 // have, and the layout dbkit.MigrationRegistry.Apply reads -- the embedding
 // file has to live in the one directory where those two names are its own
 // immediate children. (go/dbkit/internal/migrationfixture's basemodule and

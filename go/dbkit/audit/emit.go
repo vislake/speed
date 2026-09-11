@@ -177,8 +177,8 @@ type RecordedEvent struct {
 //
 // The nil-seat decision is the caller half's other obligation, settled
 // BEFORE Emit is ever called: what a caller whose audit wiring is missing
-// -- a nil EventBus or a nil registrar, the shape of a host that assembled
-// the module by hand rather than through a full Kernel.Bootstrap -- does
+// -- a nil EventBus or a nil registrar, the shape a host that wired the
+// module by hand, outside the assembly, leaves behind -- does
 // with the operation it was about to record. (The guard itself is
 // mandatory either way: Emit dereferences both seats, so a nil seat means
 // Emit cannot be called at all; the question is only what the caller does

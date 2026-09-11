@@ -25,13 +25,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// fakeAuditModule is a minimal pkgcore.Module used only by this package's
+// fakeAuditModule is a minimal module used only by this package's
 // own tests, to feed the package's embedded migrations to
 // dbkit.MigrationRegistry without depending on the persister
-// pkgcore.Module (see doc.go). Only Name and Migrations are ever read by
+// Module (see doc.go). Only Name and Migrations are ever read by
 // MigrationRegistry.Apply here; DependsOn, Locales, OpenAPISpec and
-// Register exist solely to satisfy the interface, mirroring dbkit's own
-// migrations_test.go fakeModule.
+// Register exist solely to satisfy the module contract, mirroring dbkit's
+// own migrations_test.go fakeModule.
 type fakeAuditModule struct{}
 
 func (fakeAuditModule) Name() string                              { return "audit" }

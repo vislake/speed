@@ -1,5 +1,5 @@
 // Package derivedmodule embeds the SQL migration fixtures for
-// migrations_test.go's "derived" fake pkgcore.Module, which declares
+// migrations_test.go's "derived" fake module, which declares
 // DependsOn: []string{"base"}. Its migrations deliberately write into a
 // table basemodule's migrations own, so that MigrationRegistry.Apply
 // applying "base" before "derived" is something a test can observe as a

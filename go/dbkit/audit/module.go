@@ -18,7 +18,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// moduleName is Module's pkgcore.Module.Name().
+// moduleName is Module's module name, the value Name() answers.
 const moduleName = "audit"
 
 // tenancySystemContextEnteredEventType mirrors go/tenancy's
@@ -33,14 +33,14 @@ const moduleName = "audit"
 // tenancytest.AssertNotTenantScoped). Subscribing by the bare string keeps
 // the cycle out, and decodeSystemContextEntered, below, reads the payload
 // structurally instead of importing tenancy.SystemContextEnteredEvent's
-// concrete type. Whether tenancy ever gains its own pkgcore.Module --
-// which would let it declare the action on its own behalf -- does not
-// change this package's shape.
+// concrete type. Whether tenancy ever grows a module of its own to carry
+// the contract -- which would let it declare the action on its own
+// behalf -- does not change this package's shape.
 const tenancySystemContextEnteredEventType = "tenancy.system_context.entered"
 
 // AuditActionSystemContextEntered is registered on the host's
 // AuditActionRegistrar by Register, on tenancy's behalf, since go/tenancy
-// has no pkgcore.Module of its own to declare its audit-action
+// has no module of its own to declare its audit-action
 // vocabulary. It names the
 // same string tenancySystemContextEnteredEventType does; the two are kept
 // as separate constants because they answer different questions (an audit
@@ -49,7 +49,7 @@ const tenancySystemContextEnteredEventType = "tenancy.system_context.entered"
 // distinction.
 const AuditActionSystemContextEntered = tenancySystemContextEnteredEventType
 
-// Module implements pkgcore.Module: the persister that subscribes to both
+// Module carries the module contract: the persister that subscribes to both
 // collection mechanisms' published events (dbkit.EventWriteCaptured,
 // EventRecorded) plus tenancy's EventSystemContextEntered, normalizes
 // each into an AuditEvent, and stores it through Repository.Insert.
@@ -84,29 +84,31 @@ func New(db *gorm.DB) *Module {
 	return &Module{repo: NewRepository(db)}
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module. Module depends on nothing: it
-// subscribes to events other modules publish, but a pkgcore.Module's
+// DependsOn implements the module contract. Module depends on nothing: it
+// subscribes to events other modules publish, but a module's
 // DependsOn only orders migrations and registration, and Module's own
 // subscriptions are valid to install regardless of registration order (a
 // subscription installed before its publisher registers, or after, both
 // work identically -- see pkgcore's EventRegistrar doc comment).
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module: Module ships no user-facing messages
-// (no query/report API exists), so it contributes an empty file set.
+// Locales implements the module contract: Module ships no user-facing
+// messages (no query/report API exists), so it contributes an empty file
+// set.
 func (m *Module) Locales() embed.FS { return embed.FS{} }
 
-// OpenAPISpec implements pkgcore.Module: nil. Module mounts no HTTP route.
+// OpenAPISpec implements the module contract: nil. Module mounts no HTTP route.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
-// Register implements pkgcore.Module. Per the interface's contract ("It
-// must not perform I/O; it only declares"), it declares Module's one
+// Register implements the module contract. Per that contract's own rule
+// ("It declares; the assembly decides when anything runs"), it declares
+// Module's one
 // published event type, the audit action it records on tenancy's behalf,
 // and installs its three subscriptions -- and it captures the host's
 // AuditActionRegistrar on the Module, the registrar onWriteCaptured's

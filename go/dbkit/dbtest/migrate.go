@@ -12,10 +12,10 @@ import (
 // Migration declares one module's embedded migration set for Migrate: the
 // module name dbkit.MigrationRegistry records the set's files under, and
 // the embed.FS carrying them in the "<dialect>/*.sql" layout every
-// pkgcore.Module's Migrations() is expected to have (see
+// module's Migrations() is expected to have (see
 // MigrationRegistry's own doc comment).
 //
-// It is deliberately a small data type rather than a pkgcore.Module: the
+// It is deliberately a small data type rather than a module: the
 // registry consumes modules, but a test that only needs a schema rarely has
 // the real module to hand -- constructing one usually needs seams and
 // services the test is not exercising, and inside the module's own test
@@ -24,7 +24,7 @@ import (
 // dependencies, which is all a test database needs: a name and a file tree.
 type Migration struct {
 	// Module is the name the set's files are recorded under in
-	// schema_migrations, exactly as a registered pkgcore.Module's Name()
+	// schema_migrations, exactly as a registered module's Name()
 	// would be.
 	Module string
 	// FS is the module's migration tree, holding <dialect>/*.sql files

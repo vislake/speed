@@ -75,8 +75,9 @@ type Options struct {
 	// The zero value, nil, installs no capture at all: the option is
 	// additive, and a call site that does not set it gets a connection
 	// with no write-capture plugin. A host wires reg.EventBus() here, with
-	// the audit persister module (go/dbkit/audit) in its module set, and
-	// the same bus handed to Kernel.Bootstrap.
+	// the audit persister module (go/dbkit/audit) among the selected
+	// components, so the capture plugin and the persister share the one bus
+	// the assembly resolved.
 	AuditBus pkgcore.EventBus
 
 	// AuditModels, when non-empty, restricts the write-capture plugin to

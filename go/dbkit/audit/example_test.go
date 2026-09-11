@@ -16,9 +16,9 @@ import (
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
-// exampleAuditModule is the minimal pkgcore.Module shape needed to feed
+// exampleAuditModule is the minimal module shape needed to feed
 // audit's embedded migrations to a dbkit.MigrationRegistry. A real host
-// gets this for free from the pkgcore.Module the audit persister exposes;
+// gets this for free from the *Module the audit persister exposes;
 // this stand-in keeps the example self-contained.
 type exampleAuditModule struct{}
 
@@ -87,7 +87,7 @@ func Example() {
 
 // ExampleEmit shows the collection half of the design end to end: a
 // business module registers its qualified action name on
-// pkgcore.ComponentRegistry.AuditActions, wires audit.New's pkgcore.Module (the
+// pkgcore.ComponentRegistry.AuditActions, wires audit.New's *Module (the
 // persister) into the same registry, then records an impersonated action
 // (an Actor together with the OnBehalfOf administrator behind it) through
 // Emit rather than writing to Repository directly. Emit publishes an

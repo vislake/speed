@@ -45,7 +45,7 @@ func TestIsRetryableConflict_SyntheticErrors(t *testing.T) {
 
 // TestIsRetryableConflict_RealSQLiteBusy forces a genuine SQLITE_BUSY out of
 // two real connections to the same file -- the identical two-connection
-// contending-writer rig go/dbkit/dialect/sqlite/busy_timeout_test.go's own
+// contending-writer rig go/dbkit/dialect/sqlite/dialect_sqlite_test.go's own
 // TestSQLiteBusyTimeout_HoldBeyondTheTimeoutFailsBounded uses, with a near-
 // zero busy_timeout here so the test does not have to wait out the real
 // 5-second default -- and proves IsRetryableConflict recognizes the actual

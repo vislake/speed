@@ -38,7 +38,7 @@ import (
 // shape collides reliably.
 const migrationLockReplicaCount = 20
 
-// migrationLockFakeModule is a minimal pkgcore.Module, local to this file,
+// migrationLockFakeModule is a minimal module, local to this file,
 // used only to drive MigrationRegistry.Apply with a real migration file
 // (basemodule's) against a real database. It mirrors the parent package's
 // own unit-tier fakeModule (migrations_test.go) exactly, redeclared here

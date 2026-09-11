@@ -155,7 +155,8 @@ func TestModule_OnWriteCaptured_PersistsAuditEvent(t *testing.T) {
 func TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent(t *testing.T) {
 	// Round-trips a WriteCapturedEvent through encoding/json the way the
 	// distributed EventBus's Redis Streams transport actually would
-	// (pkgcore/redis_eventbus.go: json.Marshal on publish, json.Unmarshal
+	// (go/pkgcore/eventbus/redis/eventbus.go: json.Marshal on publish,
+	// json.Unmarshal
 	// into interface{} on delivery), proving writeCapturedFromWire's
 	// map[string]any branch against real JSON semantics rather than a
 	// hand-built map.
