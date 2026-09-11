@@ -47,7 +47,7 @@
 // genuinely reports handler failures (the in-memory bus reports every one,
 // being the only shape in which every handler runs on the publisher's own
 // goroutine), that behavior is the implementation's own, verified by its
-// own tests (pkgcore's eventbus_test.go) rather than asserted here as a
+// own tests (pkgcore's memory_eventbus_test.go) rather than asserted here as a
 // property every implementation must share, and the suite's own acceptance
 // test pins that an implementation which cannot report is still accepted.
 //
@@ -434,7 +434,7 @@ func assertConforms(t *testing.T, caps pkgcore.Capability, factory func() (pkgco
 			// continuation: the failing handler did not stop the handler
 			// registered after it. (An implementation's own reporting
 			// behavior is verified by its own tests; the in-memory bus's
-			// error-joining is pinned in pkgcore's eventbus_test.go.)
+			// error-joining is pinned in pkgcore's memory_eventbus_test.go.)
 			t.Logf("Publish reported the failing handler (%v): reporting is this implementation's own property, exercised but not required", err)
 		}
 

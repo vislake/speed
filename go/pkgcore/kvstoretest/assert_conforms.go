@@ -61,7 +61,7 @@ import (
 
 // conformShortTTL and conformExpiryWait size the expiry check: long enough
 // to survive ordinary scheduling jitter under -race, short enough to keep
-// the suite fast, with the same 5x margin go/pkgcore's own kv_test.go uses
+// the suite fast, with the same 5x margin go/pkgcore's own memory_kvstore_test.go uses
 // for the identical reason.
 const (
 	conformShortTTL   = 25 * time.Millisecond

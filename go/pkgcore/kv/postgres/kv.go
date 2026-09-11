@@ -59,7 +59,8 @@ const (
 	kvNoExpiry time.Duration = 0
 
 	// kvFloatFormat/kvFloatPrecisionShortest/kvFloatBitSize mirror
-	// pkgcore.kv.go's own unexported constants of the identical name and
+	// pkgcore.memory_kvstore.go's own unexported constants of the identical
+	// name and
 	// value byte for byte (this package cannot import them: they are
 	// unexported in a different package) -- 'g' with a precision of -1
 	// asks strconv for the shortest decimal text that parses back to the
