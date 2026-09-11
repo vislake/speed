@@ -44,7 +44,7 @@ must-not-drop data into one row no reader can attribute.
 
 What it is **not**: no Plan/Feature/Entitlement model, credits or
 quota enforcement (that is `go/billing`'s domain — billing's
-`UsageReader` seam is satisfied structurally by `*metering.Aggregator`
+`UsageReader` module is satisfied structurally by `*metering.Aggregator`
 for quota judging); no HTTP surface or OpenAPI fragment (it is a
 Go-level API business modules call in-process); no distributed
 aggregation backend — the in-process one is the shipped one.

@@ -24,7 +24,7 @@ product question:
   credits ledger for pay-per-use. The design question: how to make
   "charge for something" safe to build on — database-arbitrated
   balances, idempotent settlement, and payment channels kept strictly
-  behind a seam.
+  behind a module.
 - **ai-gateway** — one vendor-agnostic door to LLM and image-generation
   endpoints. The design question: how to abstract every vendor without
   freezing the abstraction, and where to draw the line between the
@@ -44,13 +44,13 @@ product question:
 Read together, the five pages carry one continuous design story. The
 first two — billing and ai-gateway — sit on the same dependency tier
 and share the group's core discipline: same-tier modules never import
-each other, so their connections are structurally-typed seams
+each other, so their connections are structurally-typed module interfaces
 (`billing`'s `Entitlements.Check` judgment and `metering`'s usage
 recording reach ai-gateway's call path as mirror-shaped interfaces,
 never as imports — the two pages explain why each side is shaped to
 fit). compliance sits directly above them and *may* import what it
 orchestrates — including a real `go/sharing` import for export
-delivery, the deliberate contrast with the seam discipline below it.
+delivery, the deliberate contrast with the module discipline below it.
 admin sits at the very top and is the group's one sanctioned
 exception: it imports the concrete packages of every module below it
 directly, because it is the operations face over all of them. The
@@ -74,10 +74,10 @@ claim is verifiable against the original.
 - [billing](/docs/developer-docs/modules/capabilities/billing/) —
   the commerce domain model, the credits ledger's reserve/confirm/
   refund and single-statement arbitration, and the payment-gateway
-  seam.
+  module.
 - [ai-gateway](/docs/developer-docs/modules/capabilities/ai-gateway/) —
   vendor-agnostic chat and image providers, the async-only image
-  pipeline, and the structural seams that keep it independent of the
+  pipeline, and the structural module interfaces that keep it independent of the
   tier it shares with billing.
 - [sharing](/docs/developer-docs/modules/capabilities/sharing/) —
   the five mandatory rules of a public share link, token-first tenant

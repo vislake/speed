@@ -1,7 +1,7 @@
 ---
 title: app
 weight: 1
-description: "The application assembly layer: the loader that resolves configuration and composition, the seven-stage component drive, the fixed middleware chain, and the no-import seam bridges every host boot composes through."
+description: "The application assembly layer: the loader that resolves configuration and composition, the seven-stage component drive, the fixed middleware chain, and the no-import bridges every host boot composes through."
 ---
 
 # app
@@ -70,14 +70,14 @@ has no HTTP face of its own.
 |---|---|---|
 | `go/app` (root) | the engine: loader, driver, `RunAssembly`, the observability component, the shared HTTP helpers | every composition |
 | `go/app/chain` | the fixed middleware chain: `chain.Standard` (registry-derived) and `chain.Chain` (custom layouts) | hosts that compose a chain |
-| `go/app/bridges` | the no-import seam bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` | hosts that wire those modules |
+| `go/app/bridges` | the no-import bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` | hosts that wire those modules |
 
 The split is by dependency cost, not by taste: a bare consumer of the
 root package pays the root's closure — 36 `// indirect` entries,
 including the GORM stack `config` pulls — so the root never imports the
 chain's or the bridges' participants; the chain's closure is bounded by
 the chain's own participants (authn and rbac included); the bridges are
-paid only by hosts that wire the modules on both ends of a seam.
+paid only by hosts that wire the modules on both ends of a bridge.
 
 ## Wiring it in
 
@@ -186,7 +186,7 @@ supplies the business half through options: `WithAdminPrefix`,
 `chain.Chain`/`chain.Config` directly instead — and a selection with no
 authn module composes no chain at all.
 
-## The seam bridges
+## The bridges
 
 Two modules can be structurally compatible without either being able to
 import the other — their named types differ just enough that a direct
@@ -195,10 +195,10 @@ adapter per pair, so each host writes the wiring as one call:
 
 | Bridge | Connects | Wire it as |
 |---|---|---|
-| `Entitlements` | billing's entitlement check → ai-gateway's entitlements seam | `aigateway.WithEntitlements(bridges.Entitlements(billingModule.Entitlements()))` |
-| `UsageRecorder` | metering's analytics recorder → ai-gateway's usage seam | `aigateway.WithUsageRecorder(bridges.UsageRecorder(meteringModule.Recorder()))` |
-| `OrgFeatureGate` | config's lazy handle → org's feature-gate seam | `org.WithFeatureGate(bridges.OrgFeatureGate(configModule.Handle()))` |
-| `AuthnFeatureGate` | config's lazy handle → authn's feature-gate seam | `authn.WithFeatureGate(bridges.AuthnFeatureGate(configModule.Handle()))` |
+| `Entitlements` | billing's entitlement check → ai-gateway's entitlements module | `aigateway.WithEntitlements(bridges.Entitlements(billingModule.Entitlements()))` |
+| `UsageRecorder` | metering's analytics recorder → ai-gateway's usage module | `aigateway.WithUsageRecorder(bridges.UsageRecorder(meteringModule.Recorder()))` |
+| `OrgFeatureGate` | config's lazy handle → org's feature-gate module | `org.WithFeatureGate(bridges.OrgFeatureGate(configModule.Handle()))` |
+| `AuthnFeatureGate` | config's lazy handle → authn's feature-gate module | `authn.WithFeatureGate(bridges.AuthnFeatureGate(configModule.Handle()))` |
 | `ShareExpiryReader` | config's lazy handle → sharing's tenant-config reader | `sharing.WithTenantConfigReader(bridges.ShareExpiryReader{Handle: configModule.Handle()})` |
 
 The three feature-gate bridges exist for the same ordering reason:

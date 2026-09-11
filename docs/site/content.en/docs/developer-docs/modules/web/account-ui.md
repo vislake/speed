@@ -24,7 +24,7 @@ the sibling discipline:
 
 - **Reads go through the generated react-query hooks of
   `@speed/api-sdk` over the host's QueryClient**; writes through the
-  same seam's generated mutations. Nothing here attaches a session,
+  same binding's generated mutations. Nothing here attaches a session,
   navigates or touches the network directly.
 - **The session arrives as a prop exactly where a session operation
   exists that the generated surface cannot express** — the

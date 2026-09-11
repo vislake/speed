@@ -10,7 +10,7 @@ ai-gateway is speed's AI gateway: one abstraction layer over every LLM
 and image-generation vendor. Business code calls the `Gateway` facade —
 synchronous `Chat`/`ChatStream`, or async-only `GenerateImage` — and
 never a vendor SDK; providers register behind `ChatProvider`/
-`ImageProvider` seams, and tenants bring their own keys through a
+`ImageProvider` module interfaces, and tenants bring their own keys through a
 scope-tiered credential store.
 
 ## What it is for
@@ -31,7 +31,7 @@ vendor model at construction time; an unrouted key is
 `CredentialScopeTenant`, tenant override down to platform default —
 with the API key encrypted at rest. **The image surface.**
 `ImageProvider` (`TextToImage`/`ImageToImage`/`Inpaint`) mirrors the
-chat seam with its own default and registry; `Gateway.GenerateImage`
+chat module with its own default and registry; `Gateway.GenerateImage`
 has *no* synchronous counterpart — it validates, checks entitlements,
 enqueues one `jobs` task and returns its `JobID` immediately. The job
 handler is the single place storage I/O happens, and the caller reads
@@ -91,7 +91,7 @@ a chat-only gateway built without it registers no job handler, and
 credential namespaces are shared between the two halves — pick
 non-colliding logical prefixes (`chat:`, `image:`). Both
 `Entitlements` and `UsageRecorder` are structurally-typed, optional
-seams satisfied by `billing.EntitlementsService` and
+module interfaces satisfied by `billing.EntitlementsService` and
 `metering.Recorder` with no import edge. Tenant BYOK credentials are
 written over HTTP — `PUT /api/v1/ai-gateway/credentials/{provider}/tenant`
 (gated `ai-gateway:write`) or `.../platform`
@@ -139,12 +139,12 @@ metadata only, never the key.
 - No progress reporting during an image job (one vendor call has no
   natural intermediate point), and no surface to discover which logical
   keys are routed short of attempting a call.
-- `UsageRecorder` is the analytics-grade, fail-open seam; a host that
+- `UsageRecorder` is the analytics-grade, fail-open module; a host that
   charges for AI usage follows the reference app's smilesim shape
   (reserve credits before enqueueing, settle at the job's terminal
   status, with durable reservation bookkeeping underneath).
 
 ### Source
 
-- [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md) — the authoritative document (provider seams, credential store, async pipeline, SSRF posture, limitations)
+- [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md) — the authoritative document (provider modules, credential store, async pipeline, SSRF posture, limitations)
 - Related pages: [billing](/docs/user-guide/modules/capabilities/billing/), [metering](/docs/user-guide/modules/services/metering/), [storage](/docs/user-guide/modules/services/storage/), the domain guide [Storage, sharing and AI](/docs/user-guide/domains/storage-sharing-and-ai/)

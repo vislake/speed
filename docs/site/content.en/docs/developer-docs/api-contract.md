@@ -70,7 +70,7 @@ them into the app's own merged document
 (`examples/reference-app/web/app-openapi.yaml`) and generates the
 app-owned SDK the app web host imports — the shape a delivered consumer
 project uses for its own fragments. The two SDKs (platform and
-app-owned) ride the same binding seam and the same QueryClient.
+app-owned) ride the same binding and the same QueryClient.
 
 ## Compilation is the gate
 
@@ -86,7 +86,7 @@ The frontend half works the same way in the other direction.
 Regenerating the SDK changes types; type-check failures then enumerate
 every call site the contract change touches. The generated SDK ships
 no HTTP of its own: every generated call adapts through the package's
-single hand-written seam (`runtime.ts`'s `bindRequestFn`), which the
+single hand-written binding (`runtime.ts`'s `bindRequestFn`), which the
 host binds once at bootstrap to its `@speed/api-client` instance —
 last bind wins — so generated code inherits the client's
 authentication, retry and error handling without knowing any of it
@@ -150,5 +150,5 @@ server as an ordinary three-step protocol, fully expressible.
   the merged platform document.
 - [redocly.yaml](https://github.com/vislake/speed/blob/main/redocly.yaml) —
   the merge and naming-lint rules.
-- [api-sdk runtime seam](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/src/runtime.ts) —
-  the single hand-written binding seam.
+- [api-sdk runtime binding](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/src/runtime.ts) —
+  the single hand-written binding.

@@ -118,16 +118,16 @@ enforced by code review and, where tooling exists, by CI.
   the `tenancytest.AssertIsolated` suite; identity and platform tables
   run `AssertNotTenantScoped`. Neither class bypasses through a raw
   `*gorm.DB`.
-- **New infrastructure dependencies bring implementations.** A new seam
+- **New infrastructure dependencies bring implementations.** A new module
   ships at least one implementation with zero external dependencies;
-  every implementation declares its capabilities and passes the seam's
+  every implementation declares its capabilities and passes the module's
   contract test suite.
 - **External-contact messaging goes through consent.** Sending to
   unverified addresses is refused; the verification message is the sole
   exception, rate limited.
 - **Dependencies carry justification and measured cost.** A new
   third-party dependency needs a reason and alternatives evaluation in
-  the PR; a built-in seam implementation also reports the
+  the PR; a built-in component implementation also reports the
   `// indirect` count a bare consumer pays.
 
 ## Documentation duties

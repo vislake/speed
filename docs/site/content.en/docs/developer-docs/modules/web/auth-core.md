@@ -150,4 +150,4 @@ on failure and `refresh()`'s resolve-don't-reject semantics.
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — "Session state: memory only" is this package's section
 - The Go side of the surface it drives: [authn](/docs/developer-docs/modules/identity/authn/) — the module whose generated operations and token contract shape this session
 - How to use it: [auth-core in the user guide](/docs/user-guide/modules/web/auth-core/)
-- The rest of the web HTTP group: [api-client](/docs/developer-docs/modules/web/api-client/) — the transport, token store and refresh seam; [api-sdk](/docs/developer-docs/modules/web/api-sdk/) — the generated operations and the `credentialless` refresh mutator
+- The rest of the web HTTP group: [api-client](/docs/developer-docs/modules/web/api-client/) — the transport, token store and refresh option; [api-sdk](/docs/developer-docs/modules/web/api-sdk/) — the generated operations and the `credentialless` refresh mutator

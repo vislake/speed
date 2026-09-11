@@ -25,7 +25,7 @@ declarative definition — it creates the i18n instance (the four
 composed packages' namespaces auto-registered, the platform error
 bundle named as fallback), attaches the auth-core session over a
 memory access-token store, builds the api-client over the
-generated-operation runtime seam with the session's refresh leg and the
+generated-operation runtime binding with the session's refresh leg and the
 instance's per-attempt language provider, and mounts the theme and
 query-client provider stack around your `view`. The main entry keeps
 the component package's dependency floor; the subpath is where the
@@ -150,4 +150,4 @@ the quick start cannot drift from the API.
 
 - The frontend layers: [Building the frontend](/docs/user-guide/domains/frontend-building/)
 - Related package pages: [auth-ui](/docs/user-guide/modules/web/auth-ui/) (the sign-in family and default ended screen), [tenancy-ui](/docs/user-guide/modules/web/tenancy-ui/) (the `userMenu` switcher)
-- Sibling packages with their own pages in this group: `@speed/layout-kit` (the `AppShell` frame and `RouteGuard`), `@speed/auth-core` (the session hooks), `@speed/ui-kit` (theme), `@speed/i18n` (the instance and namespace helpers its exports are typed against), `@speed/api-client` (the client the `./bootstrap` subpath assembles) and `@speed/api-sdk` (the generated operations and the runtime seam `./bootstrap` binds)
+- Sibling packages with their own pages in this group: `@speed/layout-kit` (the `AppShell` frame and `RouteGuard`), `@speed/auth-core` (the session hooks), `@speed/ui-kit` (theme), `@speed/i18n` (the instance and namespace helpers its exports are typed against), `@speed/api-client` (the client the `./bootstrap` subpath assembles) and `@speed/api-sdk` (the generated operations and the runtime binding `./bootstrap` binds)

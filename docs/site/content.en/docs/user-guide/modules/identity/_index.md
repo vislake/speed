@@ -26,11 +26,11 @@ libraries you compose, never an application you run.
 
 None of the three imports another; that absence is the design. authn
 never imports org: membership is asked through the host's
-`MembershipReader` seam, which org's roster is the canonical
+`MembershipReader` module, which org's roster is the canonical
 implementation of. rbac never imports authn: authorization knows
 exactly one thing about identity, `Subject{TenantID, UserID}`, and
 whoever authenticates assembles it. rbac never imports org: a node's
-place in the tree is asked through the `SubtreeResolver` seam the host
+place in the tree is asked through the `SubtreeResolver` module the host
 implements over org's read-only `Scope` view. org never imports authn:
 it learns that a user exists from the `authn.user.created` event. The
 composing host is the only place all three names appear together.

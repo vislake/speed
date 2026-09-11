@@ -138,7 +138,7 @@ section.
 - **A new infrastructure dependency ships at least one
   zero-external-dependency implementation** (usable in a
   single-process composition and as a test double), **and every
-  implementation declares its capabilities and passes that seam's
+  implementation declares its capabilities and passes that module's
   contract test suite** (`eventbustest.AssertConforms`,
   `kvstoretest.AssertConforms`, …) — the only defence against
   semantic drift between N implementations, a surface that grows as
@@ -198,7 +198,7 @@ section.
   failing before the fix, passing after. A test that passes on the
   unfixed code does not count; where that is impossible, the reason
   and follow-up are stated.
-- **The dual matrices run in CI**: each seam's contract suite against
+- **The dual matrices run in CI**: each module's contract suite against
   each implementation, and each module's migrations and repositories
   against both SQL dialects. The unit tier needs no containers — the
   in-process implementations double as test doubles.

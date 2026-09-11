@@ -39,7 +39,7 @@ When membership is scoped to structure: multi-level organizations
 whose members see and act on their subtree, rosters read back scoped,
 invitations as the joining path. It is also the canonical
 implementation behind `authn`'s `MembershipReader` and `rbac`'s
-`SubtreeResolver` seams. A flat "organization" works too: one root,
+`SubtreeResolver` modules. A flat "organization" works too: one root,
 memberships beneath it.
 
 ## Wiring and minimal use
@@ -128,6 +128,6 @@ unwired.
 
 ## Source
 
-- [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md) — the authoritative document (tree shape, invitations, seams, concurrency, rules)
+- [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md) — the authoritative document (tree shape, invitations, modules, concurrency, rules)
 - HTTP fragment: [go/org/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/org/api/openapi.yaml)
 - Related: the domain guides [Identity and access](/docs/user-guide/domains/identity-access/) and [Tenancy and organizations](/docs/user-guide/domains/tenancy-and-org/), and the group pages [authn](/docs/user-guide/modules/identity/authn/) and [rbac](/docs/user-guide/modules/identity/rbac/)

@@ -33,7 +33,7 @@ Deliberately out of scope, each with its owner and reason:
 - Revoking a removed member's sessions — `authn`; org publishes
   `org.member.removed`, and reaching into session state is what the
   event exists to avoid.
-- A real `SubjectResolver` — `authn`; org ships the seam and a
+- A real `SubjectResolver` — `authn`; org ships the module interface and a
   fail-closed default (401 when unwired).
 - Dynamic-config schema — none at all: its bounds are constants,
   overridable through options. Declaring a schema org would silently
@@ -197,7 +197,7 @@ attested by the host's `SubjectResolver`, which fails closed when
 unwired — a mailbox token does not prove ownership of the address
 behind it.
 
-## The authn subscription and the no-import seams
+## The authn subscription and the no-import module interfaces
 
 `authn.user.created` is org's one coordination point with authn, and
 its string name appears in exactly one place. org subscribes —
@@ -213,7 +213,7 @@ types only, so a consumer declares the identical method set in its
 own package and accepts org's implementation structurally — rbac
 never learns what an `OrgNode` is, since a method returning
 `[]OrgNode` would destroy the property. `FeatureGate` is the same
-trick pointed at config's `IsEnabled`; `SubjectResolver` is the seam
+trick pointed at config's `IsEnabled`; `SubjectResolver` is the module interface
 the authenticating side fills.
 
 ## Trade-offs worth knowing
@@ -243,6 +243,6 @@ context, never from the surface.
 
 ## Related pages
 
-- [Identity group design](/docs/developer-docs/modules/identity/) — the group hub; [authn design](/docs/developer-docs/modules/identity/authn/) — the seam org's roster answers; [rbac design](/docs/developer-docs/modules/identity/rbac/) — the grants org's tree scopes and the reaps org's events drive
+- [Identity group design](/docs/developer-docs/modules/identity/) — the group hub; [authn design](/docs/developer-docs/modules/identity/authn/) — the module org's roster answers; [rbac design](/docs/developer-docs/modules/identity/rbac/) — the grants org's tree scopes and the reaps org's events drive
 - [Architecture](/docs/developer-docs/architecture/) — data domains and the no-import discipline
 - User guide: [org module](/docs/user-guide/modules/identity/org/), [identity and access domain](/docs/user-guide/domains/identity-access/), [identity modules](/docs/user-guide/modules/identity/)

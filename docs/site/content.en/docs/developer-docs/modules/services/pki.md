@@ -1,7 +1,7 @@
 ---
 title: pki
 weight: 3
-description: "Design of go/pki: key material that needs a lifecycle — signing keys and X.509 certificates — behind a Signer seam authn consumes through KeySource with no import edge, the pending-to-retired-to-revoked state machine, and tenant-scoped certificate data."
+description: "Design of go/pki: key material that needs a lifecycle — signing keys and X.509 certificates — behind a Signer module authn consumes through KeySource with no import edge, the pending-to-retired-to-revoked state machine, and tenant-scoped certificate data."
 ---
 
 # pki
@@ -33,7 +33,7 @@ housing it there would be circular. The module ships a
 `Component` descriptor like any business module.
 
 Inside, two layers with one boundary: the **key-lifecycle layer**
-(the `Signer` seam, the state machine, the expiry scan) and the
+(the `Signer` module, the state machine, the expiry scan) and the
 **X.509 layer** (CA issuance, certificates, CRLs) built on top of it —
 a certificate is a key with a lifecycle plus an identity statement
 signed by a CA. `authn` consumes the first layer and must never see
@@ -41,9 +41,9 @@ the second: JWT verification needs only public keys and a kid, and
 certificate parsing and chain validation would be pure attack surface
 for it.
 
-## The Signer seam: signing operations, never key extraction
+## The Signer module: signing operations, never key extraction
 
-The seam's defining decision is its shape: `Signer` exposes
+The module's defining decision is its shape: `Signer` exposes
 `GenerateKey` / `Sign` / `Public` / `Destroy` — operations — and no way
 to read a private key back out. A `Protect`/`Unprotect` design would
 force the plaintext key through this process's memory and defeat the
@@ -156,7 +156,7 @@ matches the attested digest.
   is the consumer's credential lifetime. Splitting the two is the only
   way the arithmetic can be right, since only the consumer holds both
   numbers.
-- **Structural seam over import.** `authn` declares `KeySource` with
+- **Structural module over import.** `authn` declares `KeySource` with
   stdlib-only types and zero pki imports; pki's `Service` satisfies it
   structurally, pinned by a compile-time shape assertion kept in the
   module itself. The cost — a future signature change fails to
@@ -177,7 +177,7 @@ matches the attested digest.
 - X.509 layer: `CreateRootCA` / `CreateIntermediateCA` /
   `IssueCertificate` / `SignCertificate` / `VerifyCertificate` /
   `RevokeCertificate` / `GenerateCRL`.
-- `Signer` seam: `signer.local`, and the registered names of the
+- `Signer` module: `signer.local`, and the registered names of the
   `vault` / `kmsaws` subpackages, each in envelope and direct-sign
   variants with their declared capabilities.
 - HTTP: five operations under `/api/v1/pki` (revoke signing key,
@@ -197,5 +197,5 @@ matches the attested digest.
 ## Related pages
 
 - [Platform services](/docs/developer-docs/modules/services/) group overview; siblings [storage](/docs/developer-docs/modules/services/storage/), [notification](/docs/developer-docs/modules/services/notification/), [integration](/docs/developer-docs/modules/services/integration/), [metering](/docs/developer-docs/modules/services/metering/)
-- [Architecture](/docs/developer-docs/architecture/) — the `KeySource` seam, the middleware chain, the module graph
+- [Architecture](/docs/developer-docs/architecture/) — the `KeySource` module, the middleware chain, the module graph
 - Usage: [pki in the user guide](/docs/user-guide/modules/services/pki/), the [identity and access domain page](/docs/user-guide/domains/identity-access/) (how the reference app wires pki as authn's key source)

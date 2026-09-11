@@ -121,10 +121,10 @@ shipped default.
 - **No fetching, no business state, no validation rules.** Upload
   validation and transfer are host code — ui-kit ships no upload
   endpoint; a real host's transport typically calls a generated
-  storage operation through the api-sdk seam. Backend error codes
+  storage operation through the api-sdk binding. Backend error codes
   render verbatim unless they are ui-kit keys; there is no code-to-text
   resolver or generated-type validation — the error-text contract is
-  the seam.
+  the interface.
 - **The host owns the heading order.** The stock `'h6'` default only
   preserves old behaviour — pass `headingLevel` (and DataTable's
   `emptyHeadingLevel`) explicitly on real pages.

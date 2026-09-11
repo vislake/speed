@@ -65,11 +65,11 @@ sign-in keep working. Failure answers `tenancy.tenant_unresolved`
 echoed into the response.
 
 Optional and off by default: `WithTenantStatusResolver` wires a
-`TenantStatusResolver` seam so a resolved tenant's suspended status
+`TenantStatusResolver` module so a resolved tenant's suspended status
 actually refuses requests (`tenancy.tenant_suspended`), a failing
 `Status` call refusing closed with `tenancy.tenant_status_unavailable`
 — an unreachable status source is an outage, never "no news is good
-news". The seam is structurally typed; `admin`'s tenant ledger is its
+news". The module interface is structurally typed; `admin`'s tenant ledger is its
 first real implementer.
 
 ## The audited escape hatch

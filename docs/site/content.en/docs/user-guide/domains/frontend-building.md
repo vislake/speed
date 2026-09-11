@@ -1,7 +1,7 @@
 ---
 title: Building the frontend
 weight: 8
-description: Composing a frontend from the @speed npm packages — the package layers, the single HTTP seam, the session family, and the shell that puts them together.
+description: Composing a frontend from the @speed npm packages — the package layers, the single HTTP binding, the session family, and the shell that puts them together.
 ---
 
 # Building the frontend
@@ -43,7 +43,7 @@ flowchart BT
   envelope's code. No other package performs HTTP of its own.
 - **Generated surface** — `@speed/api-sdk` is the generated typed
   client of the merged API document, bound to your client through one
-  hand-written seam (`bindRequestFn`), with react-query hooks on the
+  hand-written binding (`bindRequestFn`), with react-query hooks on the
   shared QueryClient.
 - **Session and identity** — `@speed/auth-core` is a headless session
   state machine (access token in the store, refresh token only in the
@@ -153,7 +153,7 @@ const accessTokenStore = createMemoryAccessTokenStore()
 const session = createAuthSession(accessTokenStore)
 attachSession(session)
 
-// 3. The app's one HTTP client, bound into the generated SDK's seam.
+// 3. The app's one HTTP client, bound into the generated SDK's binding.
 bindRequestFn(
   createClient({
     baseUrl: window.location.origin,

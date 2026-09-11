@@ -51,7 +51,7 @@ Dependencies flow strictly bottom-up:
 
 ```mermaid
 graph BT
-    pkgcore["pkgcore<br/>assembly contract, seams, registry, tenant context"]
+    pkgcore["pkgcore<br/>assembly contract, modules, registry, tenant context"]
     dbkit["dbkit<br/>dual-dialect DB, migrations, Repository, encryption"]
     obs["observability<br/>OTel, middleware, structured logging"]
     tenancy["tenancy<br/>resolution middleware, plugin, isolation suites"]
@@ -100,14 +100,14 @@ graph BT
     billing --> jobs
     ai --> jobs
     ai --> storage
-    ai -.->|"Entitlements seam"| billing
-    ai -.->|"UsageRecorder seam"| metering
+    ai -.->|"Entitlements module"| billing
+    ai -.->|"UsageRecorder module"| metering
     sharing --> tenancy
     sharing --> ratelimit
-    sharing -.->|"ResourceResolver seam"| storage
+    sharing -.->|"ResourceResolver module"| storage
     integ --> jobs
     integ --> ratelimit
-    integ -.->|"MembershipChecker seam"| org
+    integ -.->|"MembershipChecker module"| org
     comp --> tenancy
     comp --> jobs
     comp --> storage
@@ -154,7 +154,7 @@ Two things are independent; conflating them is a design error:
 - **Deployment mode** — how many replicas this runs as, and which
   external facilities it may rely on.
 - **Implementation composition** — which implementation each
-  infrastructure seam uses.
+  infrastructure module uses.
 
 The counter-example: a single-process deployment talking to real
 Stripe, real SMTP and real S3 is the ordinary production shape of a
@@ -163,7 +163,7 @@ Mailpit and a payment sandbox in staging. Real or fake is an
 environment-and-credentials question, not a replica-count question.
 
 Consequently, **the deployment mode does not select implementations —
-it only constrains them.** Every infrastructure seam in `pkgcore`
+it only constrains them.** Every infrastructure module in `pkgcore`
 (`KVStore`, `EventBus`, `Mailer`, `ObjectStore`) is an interface with
 N implementations, N ≥ 1 — never a fixed two. Each component declares
 the capabilities of the implementation it provides:

@@ -29,7 +29,7 @@ pair. The defining contract:
 - **Nothing here consumes the auth-core hooks, reads or persists
   session state, navigates, or touches the network directly.** Every
   request is a session operation over the client the host bound into
-  the shared seam, and a successful sign-in fires `onSignedIn` exactly
+  the shared binding, and a successful sign-in fires `onSignedIn` exactly
   once — everything that happens next is the host's, and host
   callbacks run only after the operation settled.
 - **A failed submit changes nothing on the session** and renders one

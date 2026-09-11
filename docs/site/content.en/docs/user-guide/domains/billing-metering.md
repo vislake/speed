@@ -39,7 +39,7 @@ decision about the cost of a lost record:
 Both feed the same in-process `Aggregator`: real-time counters,
 database-backed summary rows, and overage-threshold events. The
 `billing` module's quota judgment reads the *real-time* counter through
-the `UsageReader` seam — never a summary table, which would let an
+the `UsageReader` module — never a summary table, which would let an
 over-quota request through on aggregation delay.
 
 ## Billing: entitlements and the credits ledger
@@ -245,7 +245,7 @@ Three contract facts this walk demonstrates: the
 `PreDeduct`/`Confirm`/`Refund` trio is keyed and idempotent, so a
 replayed settlement converges on the first call's row instead of
 deducting twice; the quota decision reads the real-time counter through
-the `UsageReader` seam, so overage cannot slip past on aggregation
+the `UsageReader` module, so overage cannot slip past on aggregation
 delay; and a billing-grade usage record is written in *your*
 transaction, so it can never be silently dropped the way a
 fire-and-forget analytics record may be. (The analytics tier is the

@@ -36,7 +36,7 @@ boundary follows the sibling discipline:
   tenant is ever a prop or a header.
 - **No session layer of its own.** The store holds the bearer token
   the host's sign-in flow planted; a host with a session layer passes
-  its refresh through the client's `refreshAccessToken` seam. A
+  its refresh through the client's `refreshAccessToken` option. A
   refused read surfaces its own code.
 - **Generated hooks only.** Reads go through the react-query hooks
   generated into `@speed/api-sdk` over the host's QueryClient — the

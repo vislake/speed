@@ -133,7 +133,7 @@ composing its own gate glue.
 ## Boundaries and pitfalls
 
 - Do not import `authn` or `org` to learn facts about a user or a
-  node — the seams exist so the engine stays reusable by any host
+  node — the module interfaces exist so the engine stays reusable by any host
   that authenticates differently.
 - No wildcard grammar, no role-to-role inheritance, no editing a role
   after creation; the cache TTL is an option, deliberately not a
@@ -145,6 +145,6 @@ composing its own gate glue.
 
 ## Source
 
-- [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md) — the authoritative document (decision surface, cache, seams, rules)
+- [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md) — the authoritative document (decision surface, cache, modules, rules)
 - Related: the domain guide [Identity and access](/docs/user-guide/domains/identity-access/), and the group pages [authn](/docs/user-guide/modules/identity/authn/) and [org](/docs/user-guide/modules/identity/org/)
 

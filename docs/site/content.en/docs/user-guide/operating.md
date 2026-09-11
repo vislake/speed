@@ -20,11 +20,11 @@ project itself.
 generated project runs in; the default is `standalone`.
 
 - **Standalone** — one process, one SQLite file, every infrastructure
-  seam (event bus, KV store, mailer, object store) on its in-process
+  module (event bus, KV store, mailer, object store) on its in-process
   implementation. Zero external dependencies; what local development
   and small single-machine installs run.
 - **Distributed** — the same binary, run as multiple replicas. The
-  seams that must be shared across replicas compose real
+  modules that must be shared across replicas compose real
   implementations from the environment: `APP_REDIS_ADDR` wires a real
   Redis-backed event bus and KV store, the `APP_S3_*` group an
   S3-compatible object store, the `APP_SMTP_*` pair a real mailer, and

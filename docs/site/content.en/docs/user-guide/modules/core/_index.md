@@ -29,7 +29,7 @@ flowchart TB
 The pages below follow that order:
 
 - [pkgcore](./pkgcore/) — the dependency floor: the wiring contract,
-  tenant context, the infrastructure seam interfaces, structured
+  tenant context, the infrastructure module interfaces, structured
   errors and the message catalog.
 - [dbkit](./dbkit/) — dual-dialect data access: the mandatory
   tenant-scoped `Repository[T]`, migrations, encryption and blind
@@ -63,7 +63,7 @@ declared,
 is a pure library. Each page's "Wiring and minimal use" section shows
 which shape applies.
 
-The in-process implementations of the infrastructure seams (the memory
+The in-process implementations of the infrastructure modules (the memory
 `KVStore` and `EventBus`, the console mailer, the local object store)
 double as test doubles, which is why module suites across the platform
 need no external services in their default test run.

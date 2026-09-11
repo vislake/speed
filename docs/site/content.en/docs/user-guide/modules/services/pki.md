@@ -1,6 +1,6 @@
 ---
 title: pki
-description: "Key material with a lifecycle: Ed25519 signing keys and an internal X.509 CA — generation, rotation, revocation and CRLs behind a signer seam that never exposes a private key."
+description: "Key material with a lifecycle: Ed25519 signing keys and an internal X.509 CA — generation, rotation, revocation and CRLs behind a signer module that never exposes a private key."
 weight: 3
 ---
 
@@ -8,7 +8,7 @@ weight: 3
 
 pki is speed's key-material module: signing keys and X.509
 certificates that need a lifecycle — generation, rotation, revocation
-— owned by the platform behind a `Signer` seam that never exposes a
+— owned by the platform behind a `Signer` module that never exposes a
 private key.
 
 ## What it is for
@@ -28,7 +28,7 @@ cadence your host schedules — never its own. `Signer` exposes
 operations (`GenerateKey`, `Sign`, `Public`, `Destroy`), never a way
 to read a private key back out; `LocalSigner` is the zero-dependency
 implementation, and `go/pki/signer/vault` and `go/pki/signer/kmsaws`
-implement the same seam against Vault Transit and AWS KMS, each
+implement the same module interface against Vault Transit and AWS KMS, each
 registering two names — envelope mode (key encrypted externally,
 decrypted locally to sign) and direct-sign mode (key never leaves the
 boundary, declared through `pkgcore.KeyNeverLeavesBoundary`) — so a
@@ -57,7 +57,7 @@ cross-deployment CA federation, no generic "export private key" API.
 
 You sign something with keys that must rotate and be revocable —
 authn consumes the key-lifecycle layer through its structurally
-satisfied `KeySource` seam, and any other signing need (content
+satisfied `KeySource` module, and any other signing need (content
 attestation, document signing) fits the same shape. You need an
 internal CA to issue certificates whose revocation is provable to
 verifiers. Your threat model demands key material that never enters
@@ -138,5 +138,5 @@ provider subpackage first).
 
 ### Source
 
-- [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md) — the authoritative document (signer seam, lifecycle, X.509 layer, residuals, limitations)
+- [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md) — the authoritative document (signer module, lifecycle, X.509 layer, residuals, limitations)
 - Related pages: [Platform services](../), [storage](../storage/)

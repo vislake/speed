@@ -19,7 +19,7 @@ and call.
 The module owns **metadata, not bytes** — and not the store either.
 Bytes sit in the host's `ObjectStore` (a local directory in standalone
 deployments, S3-compatible storage in distributed ones; the module
-never knows which), resolved through the assembly's seam. What the module
+never knows which), resolved through the assembly's composition. What the module
 owns is the story of one object: what the uploader declared before any
 bytes arrived, what the pipeline established once the bytes were in,
 and where the object stands in its lifecycle.
@@ -158,7 +158,7 @@ and starve everything after it — and a partial pass reports
 - **Per-object serialization is process-local.** Upload and Complete
   serialize per object through an in-process lock map; two replicas of
   a distributed deployment share the store but not the lock. The
-  `ObjectStore` seam carries no compare-and-swap, so the multi-replica
+  `ObjectStore` module carries no compare-and-swap, so the multi-replica
   interleaving is a documented residue rather than a pretended-away
   guarantee.
 - **Host-scheduled sweeps.** Retention enforcement depends on the
@@ -193,5 +193,5 @@ and starve everything after it — and a partial pass reports
 ## Related pages
 
 - [Platform services](/docs/developer-docs/modules/services/) group overview; siblings [notification](/docs/developer-docs/modules/services/notification/), [pki](/docs/developer-docs/modules/services/pki/), [integration](/docs/developer-docs/modules/services/integration/), [metering](/docs/developer-docs/modules/services/metering/)
-- [Architecture](/docs/developer-docs/architecture/) — the seam interfaces and capability validation
+- [Architecture](/docs/developer-docs/architecture/) — the module interfaces and capability validation
 - Usage: [storage in the user guide](/docs/user-guide/modules/services/storage/), the [storage, sharing and AI domain page](/docs/user-guide/domains/storage-sharing-and-ai/), and the [jobs queue](/docs/user-guide/modules/core/jobs/) its asynchronous half runs on

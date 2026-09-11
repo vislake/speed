@@ -27,7 +27,7 @@ flowchart LR
 ## storage: bytes never touch your database
 
 `storage` keeps metadata in tenant-scoped tables and sends the bytes
-through the `ObjectStore` seam, under keys the module itself
+through the `ObjectStore` module, under keys the module itself
 derives — never keys you supply. The upload lifecycle is a three-step
 protocol:
 
@@ -67,7 +67,7 @@ actual bytes, and rate limiting guards both creation and access.
 
 `ai-gateway` is vendor-agnostic by construction: every provider
 implements `ChatProvider` (`Chat` / `ChatStream`), registered by name
-on the module's own seam registry; the default implementation is
+on the module's own component registry; the default implementation is
 OpenAI-compatible,
 so most vendors need no adapter at all. Chat is synchronous by
 default. Image generation is async-only: `Gateway.GenerateImage`
@@ -76,7 +76,7 @@ runs inside an HTTP request. Provider credentials are BYOK, stored
 encrypted at rest in scope tiers (platform and tenant), writable
 through the credential HTTP surface, and the tenant-writable base URL
 is SSRF-guarded at dial time. Usage recording and entitlement checks
-are optional structural seams your host can wire to `metering` and
+are optional structural module interfaces your host can wire to `metering` and
 `billing`.
 
 ## Complete example: a patient photo's journey — upload, derive, share

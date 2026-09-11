@@ -11,7 +11,7 @@ The seven modules of the core group are the dependency floor of every
 speed-based binary. The division of labour, in one sentence each:
 
 - **pkgcore** — the assembly contract (`ComponentRegistry`/`Component`),
-  the infrastructure seam interfaces with their N implementations and
+  the infrastructure module interfaces with their N implementations and
   capability declarations, the tenant-context primitives, structured
   errors and the message catalog. It imports no other speed module.
 - **dbkit** — the dual-dialect data-access layer: the safety-wrapped
@@ -38,7 +38,7 @@ speed-based binary. The division of labour, in one sentence each:
 
 ```mermaid
 flowchart TB
-    PK["pkgcore<br/>contract, seams, tenant context"] --> DB["dbkit<br/>data access, Repository"]
+    PK["pkgcore<br/>contract, modules, tenant context"] --> DB["dbkit<br/>data access, Repository"]
     PK --> OB["observability<br/>telemetry, logging"]
     PK --> RL["ratelimit<br/>rate limiting"]
     DB --> TN["tenancy<br/>resolution, audit wrapper"]

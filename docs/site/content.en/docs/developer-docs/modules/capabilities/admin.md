@@ -20,7 +20,7 @@ nothing depends on it. That position gives it the
 freedom to reach almost everything below, and it is also its one
 hard boundary: it must not introduce any concept other modules would
 have to know about to coexist with it. Whatever admin needs downstream
-is a pure, additive increment — an optional seam or a new method —
+is a pure, additive increment — an optional module or a new method —
 that changes nothing for a host without admin. It renders
 the declarative registries other modules already maintain —
 permissions, configuration schema, notification types — never a second
@@ -33,10 +33,10 @@ enter the console" is an ordinary `admin:*` permission like any other
 
 This is also the module whose shape is the group's one sanctioned
 exception: it imports the concrete packages of every module below it
-directly, rather than through structurally-typed no-import seams.
-Same-tier seams keep sibling modules from coupling; admin has no
+directly, rather than through structurally-typed no-import module interfaces.
+Same-tier module interfaces keep sibling modules from coupling; admin has no
 siblings — it is the operator's console over everything beneath, and
-forcing it through seams would only hide what it is. The exceptions
+forcing it through module interfaces would only hide what it is. The exceptions
 that *do* hold are the security ones: no cross-module
 foreign keys, and every cross-tenant read goes through the audited
 system-context wrapper plus the downstream module's own existing
@@ -65,7 +65,7 @@ active row) and manual operator registration before any business data
 exists. The ledger records; it does not gate. What gives it teeth is a
 separate, default-off mechanism:
 
-**Suspension works through an optional seam in tenancy, not an admin
+**Suspension works through an optional module in tenancy, not an admin
 route.** `tenancy.Middleware` gained a `TenantStatusResolver` option —
 a structurally-typed interface whose default absence changes nothing —
 and admin's `TenantService` is its one real implementer. Once a host
@@ -169,7 +169,7 @@ of its own. Wiring is honest about necessity: five `With*` options
 missing — `WithMetering`/`WithBilling` are optional because a host
 without a
 metering dimension should not stand up two modules just to boot — and
-the rbac seam arrives through a distinct post-assembly `AttachRBAC`
+the rbac module interface arrives through a distinct post-assembly `AttachRBAC`
 call, because rbac's permission catalog may only freeze after every
 module has registered. Impersonation grants cannot be born before that
 attach runs; until then the service fails closed, loudly rather than

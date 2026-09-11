@@ -27,7 +27,7 @@ drawn with the same discipline on every side:
   question.
 - **No memberships, no organization tree.** "Is this user an active
   member of this tenant" is asked through the host-injected
-  `MembershipReader` seam (org's roster is the canonical
+  `MembershipReader` module (org's roster is the canonical
   implementation); an absent reader refuses rather than allows.
 - **No messaging beyond verification codes** — the security rules'
   one synchronous exception. SAML, WebAuthn/passkeys and the
@@ -77,16 +77,16 @@ attributes, where nothing this module controls can redact it) and
 **no permissions** (they would freeze at issuance).
 
 - `Signer`/`Verifier` resolve keys on every `Issue`/`Verify` call
-  from a `KeySource` seam rather than holding a fixed key set.
+  from a `KeySource` module rather than holding a fixed key set.
   `WithKeySource` is the one, mandatory injection point — the deleted
   static-key `KeySet` API has no back-compat path: a fallback key
   path would be a second way to sign tokens.
-- The seam is satisfied structurally by `go/pki`'s `Service`, with no
+- The module interface is satisfied structurally by `go/pki`'s `Service`, with no
   import edge in either direction. pki owns the key-lifecycle state
   machine (`pending → active → retiring → retired`) behind it, driven
   by its own expiry scan; authn only consumes keys.
 
-The seam exists because a long-lived signing key is a single point
+The module interface exists because a long-lived signing key is a single point
 of failure: leaked, it forges tokens nobody can tell apart. The
 lifecycle retires keys on schedule and every replica reads the same
 key rows, so rotation needs no coordinated redeploy. Verification
@@ -224,6 +224,6 @@ tenant some act inside comes from the token's own claim.
 
 ## Related pages
 
-- [Identity group design](/docs/developer-docs/modules/identity/) — the group hub; [org design](/docs/developer-docs/modules/identity/org/) — the membership answers behind authn's seam; [rbac design](/docs/developer-docs/modules/identity/rbac/) — the authorization side that never imports this module
+- [Identity group design](/docs/developer-docs/modules/identity/) — the group hub; [org design](/docs/developer-docs/modules/identity/org/) — the membership answers behind authn's module; [rbac design](/docs/developer-docs/modules/identity/rbac/) — the authorization side that never imports this module
 - [Architecture](/docs/developer-docs/architecture/) — the middleware order and wiring contract
 - User guide: [authn module](/docs/user-guide/modules/identity/authn/), [identity and access domain](/docs/user-guide/domains/identity-access/), [identity modules](/docs/user-guide/modules/identity/)

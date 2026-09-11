@@ -49,7 +49,7 @@ reference app before it counts as done.
 
 ```mermaid
 graph BT
-    floor["core floor<br/>assembly contract and infrastructure seams<br/>(pkgcore, dbkit, tenancy, observability, config, jobs, ratelimit)"]
+    floor["core floor<br/>assembly contract and infrastructure modules<br/>(pkgcore, dbkit, tenancy, observability, config, jobs, ratelimit)"]
     storage["storage"]
     notification["notification"]
     pki["pki"]
@@ -65,10 +65,10 @@ graph BT
     pki --> floor
     integration --> floor
     metering --> floor
-    authn -.->|"KeySource seam, no import"| pki
+    authn -.->|"KeySource module, no import"| pki
     billing --> metering
-    ai -.->|"UsageRecorder seam"| metering
-    sharing -.->|"ResourceResolver seam"| storage
+    ai -.->|"UsageRecorder module"| metering
+    sharing -.->|"ResourceResolver module"| storage
 ```
 
 `storage`, `notification` and `pki` sit on the tier directly above the
@@ -78,11 +78,11 @@ drives key rotation. `integration` and `metering` stand apart by
 design: integration lives high in the graph because it turns *other*
 modules' domain events into webhooks and cannot import them, and
 metering sits low because `billing` — a module above it — reads its
-summaries through a structural seam to judge quotas.
+summaries through a structural module interface to judge quotas.
 
 None of the five imports another. The collaborations between them, and
 with modules of other groups, are deliberately host-wired or
-import-free seams:
+import-free module interfaces:
 
 - `authn` never imports `pki`; it declares the `KeySource` interface
   itself and `pki`'s `Service` satisfies it structurally (see the
@@ -97,7 +97,7 @@ import-free seams:
   across module boundaries; `go/integration` itself imports neither
   the event-emitting modules nor the platform registry.
 - `storage`'s queue is host-wired; `metering`'s transport into
-  `ai-gateway` is the optional `UsageRecorder` seam, not an import.
+  `ai-gateway` is the optional `UsageRecorder` module, not an import.
 
 The per-page stories below develop why each of these boundaries exists
 — the cost of the alternative is the reason, not a style preference.

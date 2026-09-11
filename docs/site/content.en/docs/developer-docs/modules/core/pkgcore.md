@@ -1,7 +1,7 @@
 ---
 title: "pkgcore: the assembly contract and the dependency floor"
 weight: 1
-description: "Why pkgcore owns the module/component assembly contract, the seam interfaces with capability-declaring implementations, the tenant-context primitives and the message catalog — and nothing else."
+description: "Why pkgcore owns the module/component assembly contract, the module interfaces with capability-declaring implementations, the tenant-context primitives and the message catalog — and nothing else."
 ---
 
 # pkgcore: the assembly contract and the dependency floor
@@ -9,12 +9,12 @@ description: "Why pkgcore owns the module/component assembly contract, the seam 
 pkgcore is the module every other Go module imports and no other speed
 module is imported by. It owns seven concerns and nothing else: the
 module/component assembly contract, the tenant-context
-primitives, the infrastructure seam interfaces (`KVStore`, `EventBus`,
+primitives, the infrastructure module interfaces (`KVStore`, `EventBus`,
 `Mailer`, `ObjectStore`) with each one's in-process or stdlib-backed
 implementation, the capability and component-registry
 machinery the assembly resolves and validates compositions through,
 the merged message catalog, the
-`DeploymentMode` enumeration, and the per-seam conformance suites.
+`DeploymentMode` enumeration, and the per-module conformance suites.
 Three subpackages (`apperr`, `config`, `i18n`) and a family of
 implementation subpackages (the Redis-, PostgreSQL-, NATS-, S3- and
 Memcached-backed ones) carry the rest.
@@ -36,16 +36,16 @@ no business behaviour. The boundary list is explicit:
 - **No third-party dependency in the root package.** Everything a
   subpackage needs (go-redis, pgx, nats.go, minio-go, gomemcache)
   lives behind that subpackage's own constructor, and no SDK type ever
-  crosses a seam interface.
-- **The SMS transport resolves through the composition, not a seam
+  crosses a module interface.
+- **The SMS transport resolves through the composition, not a
   registry**: `sms.console` and `sms.http` are components whose product
-  is the `SMSSender` seam, and consuming components declare it as a
+  is the `SMSSender` module, and consuming components declare it as a
   requirement — notification requires one, authn takes it optionally —
   so the transport follows the same component selection as everything
   else.
-- **Out of the seam contract's reach**: presigned URLs, object
+- **Out of the module contract's reach**: presigned URLs, object
   metadata, EXIF stripping, MIME sniffing and retention all belong to
-  `go/storage`, the contract's first real consumer — the seam
+  `go/storage`, the contract's first real consumer — the module contract
   deliberately ends at raw bytes, because presigning is a capability
   only the S3-backed store could satisfy and the interface is designed
   against the weaker side.
@@ -86,9 +86,9 @@ merge).
 
 Two axes are kept rigorously orthogonal, and pkgcore is where the
 distinction is enforced. **Deployment mode** declares topology — how
-many replicas may run, and therefore which capabilities each seam's
+many replicas may run, and therefore which capabilities each module's
 implementation must have. **Implementation composition** decides which
-implementation each seam actually uses. The mode never selects an
+implementation each module actually uses. The mode never selects an
 implementation; it only constrains one. The counter-example that makes
 the separation load-bearing: a single-process deployment talking to
 real SMTP, real S3 and a real payment gateway is the ordinary
@@ -102,7 +102,7 @@ names no loss for it — plus `KeyNeverLeavesBoundary`, declared by
 go/pki's `Signer` implementations through their own registry and
 deliberately not compared by the assembly's capability validation),
 each mode declares what it requires
-(distributed requires `MultiReplicaSafe` on every shared-state seam;
+(distributed requires `MultiReplicaSafe` on every shared-state module;
 standalone requires nothing), and the assembly's Prepare stage is the
 one place that compares the two sets, per component. A composition
 that cannot run in
@@ -131,7 +131,7 @@ there being nothing to branch on.
 flowchart TD
     Host[Host application] --> Opts["the composition configuration<br/>deployment key · components block · per-component config"]
     Opts --> Boot[app.Assemble<br/>plan components, construct in dependency order, validate capabilities]
-    Boot --> Resolve["Resolve every seam<br/>selected component, host-injected value"]
+    Boot --> Resolve["Resolve every module<br/>selected component, host-injected value"]
     Resolve --> Check{"Capabilities satisfy<br/>declared mode's requirements"}
     Check -->|yes| Run[Startup proceeds<br/>the host's steps read the assembled registry]
     Check -->|no| Fail["Startup fails: ErrCapabilityUnsatisfied<br/>naming the component, the missing capabilities and the mode"]
@@ -176,7 +176,7 @@ implementation**: `KVStore` exposes no server-side scripting, no
 pipelines, no data types only Redis could satisfy — the atomic
 operations it does expose (`IncrByFloat`, `IncrByFloatWithTTL`,
 `CompareAndSwap`) are semantics every backend can make atomic. And
-**every implementation must pass that seam's conformance suite**
+**every implementation must pass that module's conformance suite**
 (`eventbustest.AssertConforms`, `kvstoretest.AssertConforms`,
 `mailertest.AssertConforms`, `objectstoretest.AssertConforms`), each
 capability-gated — a declaration is a promise the suite verifies: the
@@ -213,7 +213,7 @@ platform need no containers.
 The frozen contracts consumers build against: the `Component`
 descriptor and the `ComponentRegistry` seats; the `Requires`/`Provides`
 resolution, the seven-stage lifecycle and `app.Assemble`/`app.Shutdown`
-semantics; the seam interfaces and their
+semantics; the module interfaces and their
 observable semantics (TTL expiry rules, `IncrByFloat` never extending
 a live key's expiry, capability bits); the built-in implementation
 names on the package-level global registration; the tenant-context

@@ -55,7 +55,7 @@ happens to it over time:
   defaults to the configured lifetime and a request beyond it is
   refused, never silently clamped. Rotation is create-new plus
   revoke-old; the two writes are deliberately not one transaction
-  (there is no cross-call transaction seam in the repository layer),
+  (there is no cross-call transaction boundary in the repository layer),
   so a mid-way failure leaves two live keys — a safe-direction
   surplus, reported to the caller, never a lockout.
 

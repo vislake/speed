@@ -1,7 +1,7 @@
 ---
 title: ai-gateway
 weight: 2
-description: "Why ai-gateway is shaped this way — vendor-agnostic chat and image provider registries, the async-only image pipeline with storage I/O confined to the job handler, encrypted BYOK credentials with SSRF guards, and the structural seams that keep it free of imports from the tier it shares with billing."
+description: "Why ai-gateway is shaped this way — vendor-agnostic chat and image provider registries, the async-only image pipeline with storage I/O confined to the job handler, encrypted BYOK credentials with SSRF guards, and the structural module interfaces that keep it free of imports from the tier it shares with billing."
 ---
 
 # ai-gateway
@@ -27,7 +27,7 @@ dependency tier as billing and metering, so it cannot import either —
 a host that charges for AI usage does so through `go/billing`'s
 reserve/confirm lifecycle around the gateway call (the reference
 app's smilesim service is the shipped shape), and this module's
-usage-reporting seam stays analytics-grade by that same boundary.
+usage-reporting interface stays analytics-grade by that same boundary.
 
 ## Abstracting every vendor without freezing the abstraction
 
@@ -44,7 +44,7 @@ OpenAI-compatible wire schema over stdlib `net/http` and
 `httptest` endpoint and carry zero third-party dependencies into a
 consumer's `go.sum`. Each provider family has its own
 `pkgcore.SeamRegistry`, with the built-ins self-registered — the same
-`database/sql`-style registry shape every infrastructure seam in this
+`database/sql`-style registry shape every infrastructure module in this
 codebase uses, resolved fresh on every call so a changed credential is
 picked up without cache invalidation.
 
@@ -144,12 +144,12 @@ gateway is a legitimate platform default. And a refusal reached through
 DNS never echoes the resolved address — that would make the refusal an
 internal-DNS reconnaissance oracle.
 
-## The structural seams, and why no import is possible
+## The structural module interfaces, and why no import is possible
 
 `Entitlements` and `UsageRecorder` are optional, structurally-typed
-seams that mirror the real shapes of `billing.EntitlementsService.Check`
+module interfaces that mirror the real shapes of `billing.EntitlementsService.Check`
 and `metering.Recorder.Record` — a host with both wired satisfies them
-with a one-line closure. The seams exist precisely
+with a one-line closure. They exist precisely
 because billing and metering sit on ai-gateway's *own tier*, where an
 import edge in either direction is forbidden by the module-boundary
 discipline: the same-tier rule that makes compliance's direct

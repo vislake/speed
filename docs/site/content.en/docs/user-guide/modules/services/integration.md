@@ -24,7 +24,7 @@ predecessor; `Revoke` marks; `Authenticate` resolves a presented raw
 key to its owning tenant from the hash alone, refusing with one
 outward-identical `ErrAuthenticationFailed`. Scopes are frozen at
 issuance (validated against the creator's current permissions through
-the `PermissionLister` seam) and never re-derived.
+the `PermissionLister` module) and never re-derived.
 `LayeredLimiter` composes global/tenant/key rate-limit layers;
 `HTTPGuard` translates a denial into a 429 with `Retry-After` and
 `X-RateLimit-*` headers. `AuthMiddleware` transports `Authenticate`
@@ -122,7 +122,7 @@ builds the `Service` right after it — both run inside the component's
 - Delivery is not exactly-once on the send side: the
   crash-after-accept window re-sends; a delivery's payload is computed
   once at fan-out, so a retry never picks up a mapping fix.
-- The two override seams (`WithWebhookURLValidator`,
+- The two override options (`WithWebhookURLValidator`,
   `WithWebhookHTTPClient`) exist for offline tests only — a
   production host must never wire them.
 - Coded errors: see the [error code
@@ -132,5 +132,5 @@ builds the `Service` right after it — both run inside the component's
 
 ### Source
 
-- [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md) — the authoritative document (key lifecycle, seams, webhook pipeline, adjudications, limitations)
+- [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md) — the authoritative document (key lifecycle, modules, webhook pipeline, adjudications, limitations)
 - Related pages: [Platform services](../), [pki](../pki/), [notification](../notification/)

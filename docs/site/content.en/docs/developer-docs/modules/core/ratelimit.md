@@ -121,7 +121,7 @@ shape that keeps it a primitive rather than a product:
   "once per day" cannot be honoured literally, so it is refused before
   the store is ever touched, in the safe direction, rather than
   delivered as a lockout that appears a day after first use.
-- **The whole seam is one interface and one decision.** `Limiter` has
+- **The whole module is one interface and one decision.** `Limiter` has
   exactly `Allow(ctx, key, limit)`; every call records a hit; there is
   no "check without recording" mode. `Decision.Remaining` is a
   weighted approximation, documented as not an exact countdown, and

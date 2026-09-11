@@ -36,7 +36,7 @@ package page below returns to. The division of labour, in layer order:
   retries, every failure normalized into one `ApiError`. And
   `@speed/api-sdk`, the generated typed surface of the merged API
   document, which performs no HTTP of its own — every call adapts
-  through the one `bindRequestFn` seam onto that client.
+  through the one `bindRequestFn` binding onto that client.
 - **Session and identity** — `@speed/auth-core`, the memory-only
   session state machine over the generated authn surface;
   `@speed/auth-ui`, the sign-in family; `@speed/account-ui`, the

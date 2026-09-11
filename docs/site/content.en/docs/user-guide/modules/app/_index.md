@@ -1,7 +1,7 @@
 ---
 title: Assembly layer
 weight: 5
-description: "The one module above every other group — go/app: the loader, the seven-stage component drive, the fixed middleware chain and the no-import seam bridges every host's boot composes through."
+description: "The one module above every other group — go/app: the loader, the seven-stage component drive, the fixed middleware chain and the no-import bridges every host's boot composes through."
 bookCollapseSection: true
 ---
 
@@ -15,5 +15,5 @@ seven-stage component drive, the shutdown sequence and the HTTP
 helpers), while the host keeps the policy (which components compose,
 which values configure them, its routes and its listener). It is also
 the module every host's `cmd/server` imports — see
-[the app page](./app/) for wiring, the middleware chain, the seam
-bridges and the known limitations.
+[the app page](./app/) for wiring, the middleware chain, the bridges
+and the known limitations.

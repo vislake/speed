@@ -1,7 +1,7 @@
 ---
 title: "@speed/api-client"
 weight: 5
-description: "The frontend's single home of hand-written HTTP — createClient: injectable fetch, a memory-only access-token store, silent single-flight 401 refresh, conservative transient retries, ApiError normalisation and the reporter seam."
+description: "The frontend's single home of hand-written HTTP — createClient: injectable fetch, a memory-only access-token store, silent single-flight 401 refresh, conservative transient retries, ApiError normalisation and the reporter interface."
 ---
 
 # @speed/api-client
@@ -28,7 +28,7 @@ It is not a session layer: the refresh token never enters this
 package — the authn API returns it in the token-issuing response body
 and sets no refresh cookie — so a session layer such as
 [@speed/auth-core](/docs/user-guide/modules/web/auth-core/) holds it
-in a closure and drives the refresh operation through the seam this
+in a closure and drives the refresh operation through the refresh option this
 package only defines.
 
 ## When to use it
@@ -90,7 +90,7 @@ and `bindRequestFn` is a last-bind-wins single binding.
   with `isApiError`; `isTransportFailure` answers whether the request
   never completed — its `status` is 0, the one status no HTTP response
   can carry, so the answer is not forgeable.
-- **Bearer auth without a storage API.** The `AccessTokenStore` seam
+- **Bearer auth without a storage API.** The `AccessTokenStore` interface
   is two synchronous methods (`get`/`set`); the memory implementation
   is the only one shipped. The token is re-read before every attempt,
   so a retried request carries the fresh token. A request can declare
@@ -124,7 +124,7 @@ and `bindRequestFn` is a last-bind-wins single binding.
   `AbortError`, so query layers keep standard cancellation semantics.
   The per-attempt timeout covers the response body, and the backoff
   sleep races your signal.
-- **Structured reporting.** The `Reporter` seam receives a constant
+- **Structured reporting.** The `Reporter` interface receives a constant
   English message plus snake_case attributes; the default console sink
   is a stopgap, replaced through `ClientOptions.reporter`.
 - **The config hooks** live at the isolated `./react` subpath, keeping

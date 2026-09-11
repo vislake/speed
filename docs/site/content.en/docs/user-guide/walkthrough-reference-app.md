@@ -9,12 +9,12 @@ description: Boot the reference app and drive sign-in, permissions and tenant is
 `examples/reference-app` is speed's mandatory first consumer: an
 AI smile-simulation platform whose composition configuration selects
 more than forty components — the platform modules, the built-in
-in-process seam implementations and the host's own step and wiring
+in-process component implementations and the host's own step and wiring
 components — drawn together by one `app.Assemble` drive, with a demo
 identity layer seeded at boot. It is also the fastest way to feel what a
 composed speed product does over the wire. This walkthrough runs it in
 the standalone deployment mode — one process, one SQLite file, every
-infrastructure seam in-process, zero external dependencies — and drives
+infrastructure module in-process, zero external dependencies — and drives
 sign-in, permissions and tenant isolation with real HTTP requests.
 
 ## 1. Boot the app with demo accounts

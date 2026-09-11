@@ -252,7 +252,7 @@ then run `go mod tidy` and `go run .` with `GOWORK=off` (the checkout's own
 dependencies once.
 
 **Expected result.** The program prints the seven stdout lines below; the
-assembly's own capability-validation log lines (the in-memory seams'
+assembly's own capability-validation log lines (the in-memory components'
 `WARN` lines included) go to stderr first:
 
 ```

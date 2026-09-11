@@ -1,7 +1,7 @@
 ---
 title: billing
 weight: 1
-description: "Why billing is shaped this way — the commerce domain model, the credits ledger's reserve/confirm/refund and single-statement arbitration, the payment-gateway seam that keeps channels out of the domain, and what the module deliberately does not ship."
+description: "Why billing is shaped this way — the commerce domain model, the credits ledger's reserve/confirm/refund and single-statement arbitration, the payment-gateway module that keeps channels out of the domain, and what the module deliberately does not ship."
 ---
 
 # billing
@@ -42,7 +42,7 @@ whose lifecycle is driven by a plain Go call**, plus a second,
 parallel mode, the credits ledger, that domestic pay-per-use products
 actually run on. The UI never sees the channel. Each provider adapter
 normalizes its own webhook vocabulary into one `NormalizedEvent`
-shape, so differences are confined behind the seam.
+shape, so differences are confined behind the module.
 
 Two webhook truths shape the payment half. Callbacks are *untrusted*:
 their content is only a trigger to go re-query the channel's
@@ -56,7 +56,7 @@ Why a durable ledger row rather than an in-memory seen-set? A restarted
 replica must still refuse the redelivery — the memory of a processed
 event is platform data, not process state.
 
-## The payment-gateway seam: mirroring pki's SignerRegistry
+## The payment-gateway module: mirroring pki's SignerRegistry
 
 `PaymentGateway` and `PaymentGatewayRegistry` live in billing's *root*
 package, and the three real implementations live in leaf subpackages
@@ -71,7 +71,7 @@ dependency isolation reaches `go.mod`/`go.sum` (the measured-cost
 discipline of this codebase's subpackage rule), and depguard rules keep
 each provider SDK confined to its own leaf, so `stripe-go` cannot
 creep into `gateway/alipay` any more than into the root. Why the
-interface in the root rather than the subpackage? If the seam lived
+interface in the root rather than the subpackage? If the module interface lived
 under `gateway`, billing's own domain code would have to import
 `gateway` to name it — the exact edge through which
 `stripe.Subscription`-shaped types leak into a domain model over time.
@@ -118,7 +118,7 @@ mechanism, so a per-model access gate needs no second switch system.
 A quota decision reads the **real-time counter**, never a summary
 table — aggregation delay would let an over-quota request through. The
 counter arrives through the small `UsageReader` interface (billing
-never imports metering; both sit where a structural seam is the only
+never imports metering; both sit where a structural module interface is the only
 legal connection), and a quota check with no reader wired fails closed
 with a coded configuration error — never a panic, never a guessed
 allowance that would fail open for an over-quota tenant.
@@ -167,7 +167,7 @@ precedent.
 
 The module's public API is the domain types, `Entitlements.Check`,
 `CreditService`'s `Grant`/`PreDeduct`/`Confirm`/`Refund`/`Expire`/
-`Balance`/`Transactions`, the `PaymentGateway` seam and registry, and
+`Balance`/`Transactions`, the `PaymentGateway` module and registry, and
 the read-only HTTP fragment — the surface the reference app and the
 audit trail pin. What is not frozen is what has no real caller yet:
 the payment-gateway lifecycle and the quota/`UsageReader` judgment
@@ -180,6 +180,6 @@ may still reshape.
 
 ## Related
 
-- [Capabilities group](/docs/developer-docs/modules/capabilities/) and the [module design story's](/docs/developer-docs/modules/capabilities/ai-gateway/) same-tier seam discipline
+- [Capabilities group](/docs/developer-docs/modules/capabilities/) and the [module design story's](/docs/developer-docs/modules/capabilities/ai-gateway/) same-tier module discipline
 - Usage: [billing](/docs/user-guide/modules/capabilities/billing/), [ai-gateway](/docs/user-guide/modules/capabilities/ai-gateway/)
 - Foundations: [architecture](/docs/developer-docs/architecture/), [design principles](/docs/developer-docs/design-principles/)

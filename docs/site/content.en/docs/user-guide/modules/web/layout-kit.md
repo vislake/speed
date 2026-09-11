@@ -36,7 +36,7 @@ sources.
   coupling. The three states
   are mutually exclusive by construction — no separate loading flag
   could disagree with allowed. `onDenied` fires exactly once per
-  transition *into* `'denied'` — the seam for a host's router
+  transition *into* `'denied'` — the callback for a host's router
   redirect or telemetry call, decoupled from render.
 
 Not a router, not an auth gate, not a navigation system. AppShell

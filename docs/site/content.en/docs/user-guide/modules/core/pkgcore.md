@@ -1,7 +1,7 @@
 ---
 title: pkgcore
 weight: 1
-description: "The dependency floor — the module/component assembly contract, tenant context, the infrastructure seam interfaces, structured errors and the merged message catalog."
+description: "The dependency floor — the module/component assembly contract, tenant context, the infrastructure module interfaces, structured errors and the merged message catalog."
 ---
 
 # pkgcore
@@ -14,13 +14,13 @@ module/component assembly contract — every module implementation ships
 a `Component` descriptor whose `Init` callback runs one
 `Register(reg *pkgcore.ComponentRegistry)` declaration body; tenant
 context plus the raw system-context marker;
-the infrastructure seam interfaces `KVStore`, `EventBus`, `Mailer` and
+the infrastructure module interfaces `KVStore`, `EventBus`, `Mailer` and
 `ObjectStore` with the in-process implementations that double as test
 doubles; the component-registry and capability machinery
 the assembly resolves and validates compositions through; the merged backend message catalog;
 the `DeploymentMode` enumeration; and the conformance suites
 (`eventbustest`, `kvstoretest`, `mailertest`, `objectstoretest`) every
-implementation of a seam must pass. Subpackages add `apperr` (the
+implementation of a module must pass. Subpackages add `apperr` (the
 structured error every module returns), `config` (the bootstrap loader
 for flags/env/file — startup values only) and `i18n` (rendering
 backend-generated content in the recipient's locale). Database access,
@@ -143,11 +143,11 @@ client must not see.
   catalog, each nil when the assembly carries none. `EventBus()` is the
   bus behind the registrar, where the host publishes into what modules
   subscribed to.
-- **Seams and capabilities** — each seam interface is designed
+- **Modules and capabilities** — each module interface is designed
   against the weakest registered implementation (no server-side
   scripting on `KVStore`), and implementations declare their capability
   bits: `MultiReplicaSafe`/`SurvivesRestart`/`Stateless` on the four
-  infrastructure seams the assembly validates, plus
+  infrastructure modules the assembly validates, plus
   `KeyNeverLeavesBoundary` on go/pki's `Signer` implementations, which
   declare it through their own registry — a bit the assembly does not
   compare against a requirement (the gap go/pki's docs record).
@@ -181,7 +181,7 @@ client must not see.
   it — never as a new descriptor callback; `Register` must not perform
   I/O, and a registrar error is never a merge — duplicate keys fail
   registration.
-- Do not write mocks for the seams: `NewMemoryKVStore`,
+- Do not write mocks for the modules: `NewMemoryKVStore`,
   `NewMemoryEventBus`, `NewConsoleMailer` and `NewLocalObjectStore`
   are the doubles, and the conformance suites are the mandatory check
   for any implementation you register yourself.

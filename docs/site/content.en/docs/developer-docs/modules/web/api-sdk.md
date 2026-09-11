@@ -1,7 +1,7 @@
 ---
 title: "@speed/api-sdk: the generated half of the API contract"
 weight: 6
-description: "Why the frontend typed surface is orval-generated from the merged document: the one hand-written transport seam (bindRequestFn), the pinned generator never entering the lockfile, the credential-less refresh mutator, platform merge membership, and why generated code carries no tenant concept and no i18n resources."
+description: "Why the frontend typed surface is orval-generated from the merged document: the one hand-written transport binding (bindRequestFn), the pinned generator never entering the lockfile, the credential-less refresh mutator, platform merge membership, and why generated code carries no tenant concept and no i18n resources."
 ---
 
 # @speed/api-sdk: the generated half of the API contract
@@ -11,8 +11,8 @@ participates in compilation; this package is the frontend half of the
 same discipline. Operation functions, TanStack Query hooks and response
 models are orval output from the merged OpenAPI document, every HTTP
 call they make is routed through `@speed/api-client`, and nothing here
-is hand-written except one seam file. This page explains the design of
-that all-generated surface and of the seam; the regeneration mechanics
+is hand-written except one binding file. This page explains the design of
+that all-generated surface and of the binding; the regeneration mechanics
 live on the [API contract](/docs/developer-docs/api-contract/) page,
 and how to consume the package is the [api-sdk usage page](/docs/user-guide/modules/web/api-sdk/).
 
@@ -56,7 +56,7 @@ same reasoning forbids a second hand-written file in `src/` as a bridge
 over generation gaps — tooling problems are fixed in tooling (the fixup
 below), never in shipped source.
 
-## Design: why the transport seam is one file and one bind
+## Design: why the transport binding is one file and one bind
 
 Generated code must not know how a host wires its HTTP transport —
 base URL, token store, refresh, retry, timeout, reporter are entirely
@@ -108,7 +108,7 @@ per-module.
 
 ## Stable surface
 
-The frozen parts are the seams and the process, not the file list:
+The frozen parts are the bindings and the process, not the file list:
 the `./runtime` subpath (`bindRequestFn`, the `speedRequest` mutator,
 the `speedRequestCredentialless` override) is hand-written and stable;
 the DO-NOT-EDIT boundary is a contract — `src/index.ts` is whatever
@@ -127,4 +127,4 @@ compose against.
 - [The API contract](/docs/developer-docs/api-contract/) — the spec-first discipline, generation legs and porcelain gates this package is the frontend half of
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — where the generated packages sit in the layers
 - How to use it: [api-sdk in the user guide](/docs/user-guide/modules/web/api-sdk/)
-- The rest of the web HTTP group: [api-client](/docs/developer-docs/modules/web/api-client/) — the transport behind the seam; [auth-core](/docs/developer-docs/modules/web/auth-core/) — the first in-workspace compile consumer of the generated authn surface
+- The rest of the web HTTP group: [api-client](/docs/developer-docs/modules/web/api-client/) — the transport behind the binding; [auth-core](/docs/developer-docs/modules/web/auth-core/) — the first in-workspace compile consumer of the generated authn surface

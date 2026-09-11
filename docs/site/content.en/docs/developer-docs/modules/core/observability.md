@@ -35,7 +35,7 @@ own those domains, and each has instrumented its own row.
 - **The root package stays free of the exporter SDKs.** Both exporter
   families live in own subpackages, blank-imported for their `init`
   side effect — the `database/sql` driver pattern applied with a single
-  registration slot per seam, since this package ships exactly one
+  registration slot per module, since this package ships exactly one
   implementation of each. A logger-only consumer never inherits the
   gRPC/protobuf or Prometheus dependency trees, and the depguard rules
   exempt only the owning subpackages, so an edit importing either SDK

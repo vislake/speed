@@ -34,7 +34,7 @@ the registry's retention seat (`reg.RetentionSeat()`):
   they already completed.
 - **`ExportService.Export(tenant)`** — gathers every participant's
   `Export` data into one storable `ExportManifest`, stores it through
-  the `ObjectStore` seam, and delivers it by minting a 24-hour,
+  the `ObjectStore` module, and delivers it by minting a 24-hour,
   single-view, no-password `go/sharing` share (`Sensitive: true`),
   returning the object key, manifest and the share's token.
 - **`AuditQuery`** — tenant-scoped `Query` (or system-context-gated
@@ -113,7 +113,7 @@ owners that register no participant yet.
   irreversible operation destroyed.
 - **An export is one whole tenant, never one subject**, delivered as a
   credentialed one-time handoff: single-view, no password, 24-hour
-  expiry (tenant-tunable through the export-delivery reader seam,
+  expiry (tenant-tunable through the export-delivery reader module,
   clamped to the `go/sharing` ceiling). A failed delivery deletes the
   stored manifest; a delivered one is reaped by the module's own
   `compliance.export_manifests` participant once past the retention

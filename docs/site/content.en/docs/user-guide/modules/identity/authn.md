@@ -9,7 +9,7 @@ description: "Authentication — who a caller is, never what they may do: accoun
 authn is speed's authentication module: it decides **who a caller is —
 never what they may do**. Accounts, sign-in, sessions, tokens and MFA
 live here; every "may they?" question belongs to `rbac`, and the
-membership facts authn re-verifies arrive through a host seam, with
+membership facts authn re-verifies arrive through a host module, with
 `org` the canonical implementation behind it.
 
 ## What it is for
@@ -25,12 +25,12 @@ several tenants. The per-tenant half of the relationship is the
   each stored hash (PHC), so raising the cost is a configuration
   change, never a migration.
 - **Access tokens** — Ed25519 EdDSA-signed, keys resolved on every
-  `Issue`/`Verify` through a `KeySource` seam that `*pki.Service`
+  `Issue`/`Verify` through a `KeySource` module that `*pki.Service`
   satisfies structurally, no import edge in either direction.
 - **Refresh rotation** — single-use tokens, stored hashed; a replay
   revokes the whole family and its session.
 - **Phone-plus-SMS-code sign-in** — numbers encrypted at rest and
-  blind-indexed, delivered over pkgcore's shared SMS seam.
+  blind-indexed, delivered over pkgcore's shared SMS module.
 - **Social sign-in** — Google, GitHub, WeChat, DingTalk and Feishu,
   plus per-tenant enterprise OIDC.
 - **MFA** — TOTP on the standard library only (RFC 4226/6238
@@ -139,6 +139,6 @@ wrapper.
 
 ## Source
 
-- [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md) — the authoritative document (rules, seams, known limitations)
+- [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md) — the authoritative document (rules, modules, known limitations)
 - HTTP fragment: [go/authn/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/authn/api/openapi.yaml)
 - Related: the domain guide [Identity and access](/docs/user-guide/domains/identity-access/), the middleware's other half [tenancy](/docs/user-guide/modules/core/tenancy/), the key source [pki](/docs/user-guide/modules/services/pki/), and the group pages [rbac](/docs/user-guide/modules/identity/rbac/) and [org](/docs/user-guide/modules/identity/org/)

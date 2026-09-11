@@ -147,7 +147,7 @@ is the real consumer of this surface.
 ## Export: gather, store, deliver through sharing
 
 `ExportService.Export` gathers every participant's data into one
-manifest, stores it through the ObjectStore seam, and hands it off
+manifest, stores it through the ObjectStore module, and hands it off
 through a `SharingCreator` — typically a real `go/sharing.Service` —
 which mints a **24-hour, single-view, passwordless** share. The direct
 `go/sharing` import is the architectural contrast that makes the

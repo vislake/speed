@@ -20,7 +20,7 @@ The module is a **leaf of the dependency graph**, and that fact drives
 almost everything below. It never imports `authn`, `rbac` or `org`: a
 user is an opaque id learned from an authenticated caller or a domain
 event; a user's addresses are identity data the host resolves through
-the `UserAddressResolver` seam at send time, never rows here. And
+the `UserAddressResolver` module at send time, never rows here. And
 business modules never import `notification` either — they publish
 domain events, and the *host* subscribes and calls
 `Deliveries().Dispatch`, deciding which events become which
@@ -148,7 +148,7 @@ flowchart TD
     W["worker rebuilds tenant context from the job"]
     W --> R["send-time rechecks:<br/>preferences, consent, addresses, live taxonomy"]
     R --> X["copy rendered for the recipient's locale<br/>from the merged catalog"]
-    X --> C["channel legs: inbox row, email via the Mailer seam,<br/>SMS via the pkgcore SMSSender seam"]
+    X --> C["channel legs: inbox row, email via the Mailer module,<br/>SMS via the pkgcore SMSSender module"]
     C --> S["one send_records row per attempted channel"]
     Ev --> H --> D
     R -->|"refused or skipped"| S
@@ -167,7 +167,7 @@ flowchart TD
   deliveries are dispatched as rendered. Replay dedupe collapses an
   identical re-dispatch, and a deliberate resend carries a fresh
   occurrence marker.
-- **Seam-based addresses over identity tables.** A user-recipient's
+- **Host-resolved addresses over identity tables.** A user-recipient's
   verification is delegated to the host by contract — the resolver
   must return the host's verified addresses. The asymmetry is stated:
   the never-send-to-unverified-addresses rule is enforced in code on
@@ -196,5 +196,5 @@ flowchart TD
 ## Related pages
 
 - [Platform services](/docs/developer-docs/modules/services/) group overview; siblings [storage](/docs/developer-docs/modules/services/storage/), [pki](/docs/developer-docs/modules/services/pki/), [integration](/docs/developer-docs/modules/services/integration/), [metering](/docs/developer-docs/modules/services/metering/)
-- [Architecture](/docs/developer-docs/architecture/) — the middleware chain, the message catalog, the SMS seam
+- [Architecture](/docs/developer-docs/architecture/) — the middleware chain, the message catalog, the SMS module
 - Usage: [notification in the user guide](/docs/user-guide/modules/services/notification/), the [jobs and notifications domain page](/docs/user-guide/domains/jobs-and-notifications/), the [jobs queue](/docs/user-guide/modules/core/jobs/) its deliveries run on

@@ -20,7 +20,7 @@ policy belongs to the host**:
 - Here: the loader (the configuration load and the composition plan),
   the stage driver, the shutdown sequence, the HTTP helpers the engine
   and its consumers share (`AuthnAPIPath`, the serve timeouts,
-  `PreAuthAllowlist`), the fixed middleware chain and the seam bridges.
+  `PreAuthAllowlist`), the fixed middleware chain and the bridges.
 - With the host: which components compose the application, which values
   they are configured with, which seeds it writes, which keys the host's
   own configuration target declares, what its routes and rules are.

@@ -29,7 +29,7 @@ Any operation that must not run synchronously inside an HTTP request —
 long-running work, work that should retry, work that happens after the
 response is already sent — goes through a `jobs.Queue`. The queue is a
 small portable contract (`Enqueue` / `Get` / `Cancel`) with two
-implementations behind one seam: `StandaloneQueue` (SQLite-backed, the
+implementations behind one module: `StandaloneQueue` (SQLite-backed, the
 single-process deployment) and `go/jobs/queue/asynq`'s Redis-backed
 `asynq.Queue` (the distributed deployment). Your code speaks only to
 the `Queue` interface; which implementation runs is an assembly

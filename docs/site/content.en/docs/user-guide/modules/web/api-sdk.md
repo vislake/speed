@@ -1,7 +1,7 @@
 ---
 title: "@speed/api-sdk"
 weight: 6
-description: "The generated typed surface of the merged API document — orval output bound to the host's client through one hand-written seam (bindRequestFn), react-query hooks over the shared QueryClient, no tenant concept and no i18n resources."
+description: "The generated typed surface of the merged API document — orval output bound to the host's client through one hand-written binding (bindRequestFn), react-query hooks over the shared QueryClient, no tenant concept and no i18n resources."
 ---
 
 # @speed/api-sdk
@@ -18,7 +18,7 @@ carries the pinned orval version: tool drift between the generator and
 the committed artifact shows up as a diff in the header itself.
 
 What it is not: it performs no HTTP of its own. Every generated call
-routes through the package's single hand-written seam — `src/runtime.ts`,
+routes through the package's single hand-written binding — `src/runtime.ts`,
 exported as the `@speed/api-sdk/runtime` subpath — which adapts orval's
 axios-shaped calls onto the `@speed/api-client` request function your
 host bound once at bootstrap.
@@ -31,7 +31,7 @@ never hand-write a call for anything a spec fragment covers (the
 `speed/no-direct-http` rule of [@speed/api-client](/docs/user-guide/modules/web/api-client/)
 enforces that). The package is also the compile-time floor for
 in-workspace consumers: [@speed/auth-core](/docs/user-guide/modules/web/auth-core/) drives the
-generated authn session surface through this seam, and the account
+generated authn session surface through this binding, and the account
 component family renders generated hooks into a component tree.
 
 Your own application's API is not here. The reference app's notes,
@@ -69,7 +69,7 @@ bindRequestFn(
 the authn session-refresh request credential-less (`omitAccessToken`),
 so it carries no `Authorization` header and its 401 stays terminal
 under the client's bearer-only refresh rule instead of re-entering the
-refresh path. The app-owned SDK's own seam re-exports this subpath, so
+refresh path. The app-owned SDK's own binding re-exports this subpath, so
 one `bindRequestFn` call serves both generated surfaces.
 
 Regeneration runs `pnpm dlx orval@8.17.0 --config orval.config.ts`

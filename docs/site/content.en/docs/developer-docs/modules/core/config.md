@@ -182,7 +182,7 @@ flowchart LR
 
 ## Stable surface
 
-The Register/Attach seam (`ErrAlreadyAttached`, `ErrCipherRequired`,
+The Register/Attach interface (`ErrAlreadyAttached`, `ErrCipherRequired`,
 `ErrServiceNotAttached`), `Service`'s read/write surface (`Get`,
 `GetTyped`, `Set`, `Watch`, `IsEnabled`, `EnabledFlags`,
 `PublicSnapshot`, `Refresh`, `Close`), the scope vocabulary and its

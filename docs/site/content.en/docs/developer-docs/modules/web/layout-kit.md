@@ -89,7 +89,7 @@ letting a host whose own heading precedes the gate continue the page's
 order without a skip. `onDenied` fires exactly once per transition
 *into* `denied` — a `useEffect` keyed on status with a guard, so a
 re-render that leaves the status at `denied` does not re-fire — the
-seam for a host's redirect or telemetry, fully decoupled from render.
+callback for a host's redirect or telemetry, fully decoupled from render.
 
 The consumers prove the value-in contract: the reference app derives
 the gate's status from the served notes query — a refused read (403)
@@ -104,7 +104,7 @@ flowchart LR
     G -->|allowed| Ch["children"]
     G -->|pending| P["pendingFallback<br/>or labelled spinner"]
     G -->|denied| D["deniedFallback<br/>or ui-kit EmptyState noPermission<br/>at the host's headingLevel"]
-    G -.->|"once per transition into denied"| O["onDenied<br/>redirect / telemetry seam"]
+    G -.->|"once per transition into denied"| O["onDenied<br/>redirect / telemetry callback"]
 ```
 
 ## Stable surface

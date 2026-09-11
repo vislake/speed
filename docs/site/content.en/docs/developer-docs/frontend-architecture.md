@@ -1,7 +1,7 @@
 ---
 title: Frontend architecture
 weight: 3
-description: "How the frontend half of speed is structured — the package layers from design tokens to assembly shells, why each boundary exists, the one hand-written HTTP seam, the memory-only session design, and how the packages map onto backend modules."
+description: "How the frontend half of speed is structured — the package layers from design tokens to assembly shells, why each boundary exists, the one hand-written HTTP binding, the memory-only session design, and how the packages map onto backend modules."
 ---
 
 # Frontend architecture
@@ -104,7 +104,7 @@ enforcement does. The same logic separates `api-client` from
 regeneration (its header says DO NOT EDIT), so the hand-written
 runtime must live in its own package that regeneration never touches.
 Generated code performs no HTTP of its own: every call adapts through
-the package's single hand-written seam (`bindRequestFn`), which the
+the package's single hand-written binding (`bindRequestFn`), which the
 host binds once at bootstrap to its own client, last bind wins — one
 binding gives every generated call the same authentication, retry and
 error semantics. The reference app's web host proves the composition
@@ -187,7 +187,7 @@ split). By surface:
 The [building the frontend](/docs/user-guide/domains/frontend-building/)
 domain guide covers the composition steps; the reference app's web
 host (`examples/reference-app/web`) composes every host contract at
-once — namespaces, session, client, seam binding, view machine — and
+once — namespaces, session, client, SDK binding, view machine — and
 the app's suites pin the result.
 
 ## Source

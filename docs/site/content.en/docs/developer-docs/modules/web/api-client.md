@@ -9,7 +9,7 @@ description: "Why api-client is the frontend's only hand-written HTTP layer: inj
 Every request the frontend makes — the generated calls of `@speed/api-sdk`,
 the operations of the `@speed/auth-core` session, a host's own config
 reads — travels through one request function built by one `createClient`
-call. This page explains the design decisions behind that single seam and
+call. This page explains the design decisions behind that single entry point and
 the threats each one answers; how to drive it day to day is the [api-client
 usage page](/docs/user-guide/modules/web/api-client/) in the user guide.
 
@@ -59,7 +59,7 @@ codes.
 ## Design: why the bearer token lives in memory
 
 An access token in `localStorage` is a credential an XSS walks away
-with. The token store is a plain two-method seam (`get` / `set`); the
+with. The token store is a plain two-method interface (`get` / `set`); the
 memory implementation is the only one the package ships, and no
 storage API exists here at all. Two consequences follow. The token is
 re-read before every attempt, so a retry after a refresh carries the
@@ -72,7 +72,7 @@ The refresh token is not this package's business either: the authn API
 returns it in the token-issuing response bodies and sets no refresh
 cookie, so the session layer (`@speed/auth-core`) holds it in its
 closure and drives the refresh operation. `api-client` only defines
-the seam: `refreshAccessToken?: () => Promise<boolean>`.
+the option: `refreshAccessToken?: () => Promise<boolean>`.
 
 The same per-attempt read governs one non-credential header:
 `ClientOptions.languageProvider` supplies `accept-language`'s value
@@ -130,7 +130,7 @@ predicate; the reserved `ERROR_CODE_NETWORK` / `ERROR_CODE_TIMEOUT` /
 `ERROR_CODE_PROTOCOL` constants and `httpErrorCode(status)`; the
 `AccessTokenStore` type and `createMemoryAccessTokenStore()`; the
 `RetryPolicy` type, the frozen `DEFAULT_RETRY_POLICY` and the pure
-`retryDelayMs` / `retryAfterDelayMs` helpers; the `Reporter` seam with
+`retryDelayMs` / `retryAfterDelayMs` helpers; the `Reporter` interface with
 its console-backed default; the two pre-auth config fetchers
 (`fetchPublicConfig` / `fetchSystemFeatures` over
 `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH`, hand-kept in sync with
@@ -150,5 +150,5 @@ defaulting to `false` while loading or on error, never throwing.
 
 - [Frontend architecture](/docs/developer-docs/frontend-architecture/) — the layer survey this page hangs off; "One hand-written HTTP home" is this package's section
 - How to use it: [api-client in the user guide](/docs/user-guide/modules/web/api-client/)
-- The rest of the web HTTP group: [api-sdk](/docs/developer-docs/modules/web/api-sdk/) — the generated surface that calls through this seam; [auth-core](/docs/developer-docs/modules/web/auth-core/) — the session layer that fills the refresh seam
+- The rest of the web HTTP group: [api-sdk](/docs/developer-docs/modules/web/api-sdk/) — the generated surface that calls through this binding; [auth-core](/docs/developer-docs/modules/web/auth-core/) — the session layer that supplies the refresh function
 - The Go side of the two config fetchers: [config](/docs/developer-docs/modules/core/config/)

@@ -31,7 +31,7 @@ The tier is one step above auth-ui's, on the generated-hooks side of
 the api-sdk contract: **reads go through the `@tanstack/react-query`
 hooks generated into `@speed/api-sdk` over the host's QueryClient**,
 and writes through the generated mutations over the same
-`bindRequestFn` seam — nothing here reads storage, attaches a session,
+`bindRequestFn` binding — nothing here reads storage, attaches a session,
 navigates or touches the network directly. Two sections take the
 `@speed/auth-core` session as a prop, each for exactly one session
 operation (`SocialBindingsSection` for the add area's authorize-URL

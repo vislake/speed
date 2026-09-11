@@ -18,8 +18,8 @@ the module's surface; this page covers why it is shaped the way it is.
 The module's job is deliberately narrow: resolve a bearer token into
 one resource and hand its bytes to a viewer the platform has never
 authenticated. Everything else is somebody else's. sharing holds no
-resource bytes of its own — the `ResourceResolver` seam (a
-structurally-typed, no-import seam, because the resolver is
+resource bytes of its own — the `ResourceResolver` module interface (a
+structurally-typed, no-import interface, because the resolver is
 typically the host's own `go/storage` composition) turns a granted
 share into actual content. It builds no generic sensitivity
 classifier — a create call simply declares `Sensitive: true` or not.

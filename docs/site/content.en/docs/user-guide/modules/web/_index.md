@@ -31,7 +31,7 @@ The packages are layered, and the layer order is the dependency order:
   silent single-flight 401 refresh, conservative transient retries,
   every failure normalized into one `ApiError`. `@speed/api-sdk` is
   the generated typed surface of the merged API document, calling
-  through that client via the one `bindRequestFn` seam. Neither carries
+  through that client via the one `bindRequestFn` binding. Neither carries
   i18n resources or a tenant header — tenant context travels inside
   the access token.
 - **Session and identity** — `@speed/auth-core` is the headless
@@ -52,7 +52,7 @@ boundaries.
 
 - **HTTP happens in exactly one place.** `api-client` is the only
   package that performs HTTP of its own; the generated SDK routes
-  through its `RequestFn` seam, and component packages never touch the
+  through its `RequestFn` interface, and component packages never touch the
   network at all — every interaction reports through a callback or a
   session operation. The workspace's `speed/no-direct-http` ESLint
   rule enforces the claim: a direct `fetch`/`XMLHttpRequest`/`axios`

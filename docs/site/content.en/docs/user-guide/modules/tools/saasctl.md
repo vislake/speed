@@ -112,7 +112,7 @@ from; an explicit `APP_DB_PATH` wins, a relative one anchored the same
 way. Refusals name their reason: no speed requires, a file without a
 `schema_migrations` ledger, a path that is not a regular file. Both
 deployment modes are accepted — the project's database speaks SQLite
-under either; the mode changes seams, never the dialect. Run to
+under either; the mode changes components, never the dialect. Run to
 completion before booting any replica: the shared SQLite file does not
 take kindly to concurrent writers.
 
@@ -148,7 +148,7 @@ materialising, tidying and building it against a real speed checkout,
 then converting the paths back to tokens — and mirrors the reference
 app's `cmd/server` shape with every demo-specific piece removed (no
 notes module, no demo tenants, grants, membership store or seeded
-data). The host seams (authn's `MembershipReader`, org's
+data). The host modules (authn's `MembershipReader`, org's
 `SubjectResolver`, the config resolver) stay unwired and fail closed,
 each named by a doc comment as the owner's first task. Selections
 differ in two files only — the go.mod require set and `server.go`'s

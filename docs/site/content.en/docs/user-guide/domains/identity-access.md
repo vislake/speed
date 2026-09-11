@@ -43,7 +43,7 @@ middleware, and the tenant never comes from a request header.
    them in the assembly's `Verify` stage; the app's boot-time comments
    in `examples/reference-app/cmd/server/server.go` walk the exact
    wiring order.
-2. **Give authn its mandatory seams.** `authn.NewModule` validates
+2. **Give authn its mandatory modules.** `authn.NewModule` validates
    options eagerly: a `KeySource` (pki's `Service` satisfies it) and a
    blind-index key are required — there is no safe default for either —
    and a `MembershipReader` answers "is this user a member of this
@@ -99,7 +99,7 @@ one runnable program. A user registers and signs in with a password;
 `pki` module; and a notes handler sits behind `tenancy.Middleware` plus an
 `rbac` gate, so a member holding the `note-reader` role can list notes but
 cannot write one. Everything is self-contained — in-memory SQLite and the
-in-process seams — with every symbol taken from the modules' real APIs
+in-process components — with every symbol taken from the modules' real APIs
 (the same wiring their own example suites run).
 
 ```go
@@ -295,7 +295,7 @@ request never reaches the gate — `tenancy.Middleware` fails closed with
 is answered by `authn.Middleware` itself with `401` and the
 `authn.token_invalid` envelope. (A composed deployment also logs the
 assembly's capability-validation warnings — the `WARN` lines that the
-in-memory seams do not survive a restart — to stderr before its stdout
+in-memory components do not survive a restart — to stderr before its stdout
 lines; this hand-wired program drives the declaration window directly
 and writes nothing to stderr.)
 

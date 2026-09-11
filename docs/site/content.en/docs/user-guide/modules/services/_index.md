@@ -31,7 +31,7 @@ The group is ordered by dependency, as the left navigation shows:
 `storage`, `notification` and `pki` sit directly on the core group's
 `jobs`/`tenancy` tier; `integration` and `metering` build on top. All
 five expect a working core group underneath — a `ComponentRegistry` with the
-infrastructure seams resolved, a `jobs.Queue` for asynchronous work —
+infrastructure modules resolved, a `jobs.Queue` for asynchronous work —
 so read the core group's pages first if you are assembling a host from
 scratch, then the [Quickstart](/docs/user-guide/quickstart/), which generates a
 starter project that already wires most of the floor.

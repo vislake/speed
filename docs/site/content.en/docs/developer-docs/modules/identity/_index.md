@@ -50,7 +50,7 @@ Go import edge runs between `authn`, `rbac` and `org` — in either
 direction — and the absence is the design, not an accident of
 packaging. Each missing edge has its own reason, and each
 collaboration that the edge would have carried crosses the boundary
-through a host-injected seam instead:
+through a host-injected module instead:
 
 - **`rbac` never imports `authn`.** Authorization knows exactly one
   thing about identity — `Subject{TenantID, UserID}` — and whoever
@@ -61,12 +61,12 @@ through a host-injected seam instead:
   classic way an access-control layer becomes untestable and
   unreusable.
 - **`authn` never imports `org`.** Membership is asked through the
-  host-injected `MembershipReader` seam, which org's roster is the
+  host-injected `MembershipReader` module, which org's roster is the
   canonical implementation of. An absent reader means **refuse, never
   allow**: the tenant a token is minted for is the most exploited
   horizontal-privilege entry point in a multi-tenant product, so the
   question is asked at every sign-in and re-asked at every refresh,
-  through a seam that fails closed.
+  through a module that fails closed.
 - **`org` never imports `authn`.** It learns of a new user through the
   `authn.user.created` event — known by its string name alone, its
   payload probed through a JSON round trip, never its publisher's
@@ -79,17 +79,17 @@ through a host-injected seam instead:
   declares the identical method set in its own package and accepts
   `*ScopeService` structurally. No `OrgNode` type ever crosses the
   boundary.
-- **`authn` reaches `pki` the same way.** Its `KeySource` seam is
+- **`authn` reaches `pki` the same way.** Its `KeySource` module is
   declared here and satisfied structurally by `go/pki`'s `Service` —
   no import edge in either direction; the host wires them at assembly
   (see the authn design page's token section).
 
-The pattern is one technique applied at every edge: a seam interface
+The pattern is one technique applied at every edge: a module interface
 whose signatures use only standard-library types, declared by the
 consuming module, implemented by the producing one, wired by the
 host — the one place two package names appear together. In the
-reference app, the demo identity layer fills the same seams a real
-consumer fills with the real modules, which is exactly why the seams
+reference app, the demo identity layer fills the same module interfaces a real
+consumer fills with the real modules, which is exactly why they
 exist.
 
 ```mermaid
@@ -100,9 +100,9 @@ flowchart LR
     P[pki<br/>signing-key lifecycle]
 
     A -->|Principal, Subject| R
-    O -.->|membership answers, via host MembershipReader seam| A
-    O -.->|node paths, via host SubtreeResolver seam| R
-    P -.->|keys, via KeySource seam| A
+    O -.->|membership answers, via host MembershipReader module| A
+    O -.->|node paths, via host SubtreeResolver module| R
+    P -.->|keys, via KeySource module| A
     A -.->|publishes authn.user.created| O
     O -.->|publishes org.member.removed / org.node.deleted / ...restored| R
 ```

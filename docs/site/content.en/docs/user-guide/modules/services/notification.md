@@ -24,7 +24,7 @@ lives in the declaring module's own bilingual locale bundles under the
 delivery in the recipient's locale. The module's own tables hold no
 identity data: a user is an opaque id, and a user recipient's
 outbound addresses are read at send time through the host's
-`UserAddressResolver` seam.
+`UserAddressResolver` module.
 
 Delivery is asynchronous by construction. `Dispatch` validates and
 enqueues one job per recipient per channel; the worker rebuilds tenant
@@ -59,7 +59,7 @@ Six options are required — `Register` fails with its own named
 
 ```go
 m := notification.NewModule(db,
-    notification.WithSMSSender(pkgcore.NewConsoleSMSSender()), // pkgcore's SMS seam — console, HTTP gateway, or a carrier adapter
+    notification.WithSMSSender(pkgcore.NewConsoleSMSSender()), // pkgcore's SMS module — console, HTTP gateway, or a carrier adapter
     notification.WithMailFrom("no-reply@example.com"),
     notification.WithContactEmailIndexer(emailIndexer),   // dbkit.NewBlindIndexer over notification.AddressIndexColumn
     notification.WithContactPhoneIndexer(phoneIndexer),   // index keys must differ from the cipher key
@@ -129,5 +129,5 @@ create/verify/resend) plus the hand-mounted stream.
 
 ### Source
 
-- [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md) — the authoritative document (delivery pipeline, consent machine, host seams, rules, not-implemented list)
+- [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md) — the authoritative document (delivery pipeline, consent machine, host modules, rules, not-implemented list)
 - Related pages: [Platform services](../), the domain guide [Jobs and notifications](../../../domains/jobs-and-notifications/)

@@ -37,7 +37,7 @@ for a channel webhook that never arrives.
 
 What it is **not**: it is not metering — no usage collection lives here,
 and quota judgment reads `go/metering`'s real-time counter through the
-small `UsageReader` seam, never a summary table (which has aggregation
+small `UsageReader` module, never a summary table (which has aggregation
 delay). No inbound-webhook HTTP endpoint is mounted, so no live
 `PaymentEvent` drives a `Subscription` transition. No scheduled credit
 expiry ships — the mechanism exists, the sweep is product policy plus a

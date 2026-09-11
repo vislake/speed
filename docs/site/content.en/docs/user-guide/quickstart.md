@@ -41,7 +41,7 @@ from it. `saasctl` runs straight from the checkout with `go run`.
 
 `saasctl` is speed's consumer-facing CLI: it materializes a bootable
 starter project from an embedded template tree of real files, with
-every demo-specific piece removed. Its host seams (authn's
+every demo-specific piece removed. Its host modules (authn's
 `MembershipReader`, org's `SubjectResolver`, the config resolver) are
 left unwired and fail closed, each named by a doc comment as your
 first task.
@@ -121,7 +121,7 @@ From the moment the skeleton boots, `/healthz` and
 succeed on the skeleton as shipped: it has no membership store, authn
 re-verifies membership through the host-injected `MembershipReader`
 on every sign-in, and a nil reader fails closed — login answers 401
-`authn.invalid_credentials` either way. Wiring that seam is the
+`authn.invalid_credentials` either way. Wiring that module is the
 generated code's named first task.
 
 ## Running Go commands in this repository

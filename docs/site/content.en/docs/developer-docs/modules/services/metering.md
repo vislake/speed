@@ -19,7 +19,7 @@ usage recording, aggregation and an overage-threshold-crossing event —
 and deliberately none of the Plan/Feature/Entitlement domain model,
 credits, or quota enforcement. Those live in `go/billing`, which sits
 above metering in the module graph and imports it: billing's
-`UsageReader` seam is satisfied structurally by metering's
+`UsageReader` module is satisfied structurally by metering's
 `Aggregator`, and quota decisions read real-time usage counts through
 it. "Zero usage" must never fail open for an over-quota tenant, so an
 unwired reader is a coded error, never a guessed allowance.
@@ -163,7 +163,7 @@ the moment its window opens whatever the arrival rate.
 - The single published event
   (`metering.overage_threshold.crossed`), the declared config items,
   and the bilingual error catalog under `metering.*`.
-- Consumed in the reference app: the `ai-gateway` usage-recorder seam
+- Consumed in the reference app: the `ai-gateway` usage-recorder module
   feeds the analytics tier on every successful AI call, and the
   admin usage-summary endpoint reads the resulting rows; `go/billing`
   is metering's first consumer through the structurally-typed

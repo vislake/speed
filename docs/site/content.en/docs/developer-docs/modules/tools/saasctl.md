@@ -69,7 +69,7 @@ and the two always ship at the same version.
 The tree mirrors the reference app's `cmd/server` shape minus every
 demo-specific piece — no notes module, no demo tenants, grants,
 membership store or seeded data. Copying the reference app verbatim
-would inherit its toy identity layer, so the host seams (authn's
+would inherit its toy identity layer, so the host modules (authn's
 `MembershipReader`, org's `SubjectResolver`, the config resolver) stay
 unwired and fail closed, doc comments naming each as the owner's
 first task. The honest consequence is stated, not papered over: with
@@ -133,7 +133,7 @@ converge. The CLI twin exists because operators need the schema
 before any process runs — first boot, provisioning, CI. Refusals name their
 reason: no speed requires suggests not a generated project; a
 ledgerless existing database is refused with repair guidance. Both deployment modes are accepted — distributed mode
-changes which seams compose real implementations, never which dialect
+changes which components compose real implementations, never which dialect
 the project's database speaks. The shared-SQLite-file hazard is
 answered with a usage contract: run `migrate` to completion before
 booting any replica.

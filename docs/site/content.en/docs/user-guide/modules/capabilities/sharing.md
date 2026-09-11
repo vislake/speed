@@ -10,7 +10,7 @@ sharing is speed's public-share module: a controlled entry point that
 lets an unauthenticated external visitor view one internal resource —
 a patient viewing their own simulation result, a customer viewing a
 report, an anonymous one-time result page. The module holds no bytes:
-a share names a `ResourceRef`, and the host's `ResourceResolver` seam
+a share names a `ResourceRef`, and the host's `ResourceResolver` module
 turns a granted share into actual content.
 
 ## What it is for

@@ -96,7 +96,7 @@ codebase's own history records as a mistake it used to make:
 - **Deployment mode** — how many replicas this runs as, and therefore
   which implementations are *permissible*.
 - **Implementation composition** — which implementation each
-  infrastructure seam (`EventBus`, `KVStore`, `Mailer`, `ObjectStore`)
+  infrastructure module (`EventBus`, `KVStore`, `Mailer`, `ObjectStore`)
   actually uses.
 
 The deployment mode does not select an implementation — it only
