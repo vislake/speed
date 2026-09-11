@@ -171,17 +171,21 @@ name: fast-check
 #
 # DELIBERATELY NOT WIRED HERE -- checks whose tooling or venue lies
 # elsewhere (wiring them here would be fake checks or budget waste):
-#   * oasdiff and Playwright e2e: that tooling does not exist yet (the
-#     gated pipeline stubs in this directory -- e2e, nightly -- carry
-#     the plans; security.yml is live and release.yml is its own live
-#     pipeline, dispatched manually). Spec merging and the redocly
-#     naming lint are real, but they run in the API-contract pipeline,
-#     not here. The ESLint foundation is wired: speed/no-literal-text
-#     and speed/no-direct-http fire in every npm-packages lint leg and
-#     have their own unit tests in the repo-checks job. The react-hooks
-#     plugin does not exist yet. i18n key-parity wiring runs in
-#     docs-check on doc/i18n-touching PRs -- deliberately not here, so
-#     this fast per-PR check stays under its 8-minute budget.
+#   * oasdiff: that tooling does not exist yet. Playwright e2e exists --
+#     it has its own pipeline (e2e.yml: a daily schedule plus
+#     workflow_dispatch) and deliberately does not run here: it is not
+#     a per-PR leg, so wiring it in would blow this fast check's
+#     8-minute budget. The nightly pipeline remains a gated stub
+#     carrying its own plan; security.yml is live and release.yml is
+#     its own live pipeline, dispatched manually. Spec merging and the
+#     redocly naming lint are real, but they run in the API-contract
+#     pipeline, not here. The ESLint foundation is wired:
+#     speed/no-literal-text and speed/no-direct-http fire in every
+#     npm-packages lint leg and have their own unit tests in the
+#     repo-checks job. The react-hooks plugin does not exist yet. i18n
+#     key-parity wiring runs in docs-check on doc/i18n-touching PRs --
+#     deliberately not here, so this fast per-PR check stays under its
+#     8-minute budget.
 #   * reference-app lint and unit suite: the reference app runs its
 #     golangci-lint leg and unit suite in full-check's reference-app job
 #     (full-ci-labeled PRs), keeping this per-PR check on its budget. Its

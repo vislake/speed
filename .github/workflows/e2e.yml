@@ -1,38 +1,166 @@
 name: e2e
-# STUB -- not implemented. Triggered runs fail loudly at the guard step
-# below; nothing in this pipeline can pass silently.
+# PURPOSE: the reference-app's browser-level end-to-end suite on real
+# runners -- daily and on demand now, wired to merge to main once its
+# first dispatched run is green (TRIGGER below). A real browser drives
+# the real web host against a real, freshly booted reference-app server
+# (standalone deployment mode, SQLite, zero external dependencies), and
+# reaches the smile-simulation vendor through the suite's own
+# deterministic fake image endpoint -- no live provider credential is
+# involved anywhere; real vendor calls happen only during milestone
+# acceptance and demos. Target duration and the eventual merge-time
+# guarantee are docs/internal/18-cicd.md's pipeline table (the e2e row).
 #
-# PURPOSE: reference-app end-to-end tests with Playwright -- run on
-# merge to main and daily, target under 20 minutes, with recorded and
-# replayed AI responses, so real provider calls happen only during
-# milestone acceptance and demos.
+# WHAT EXISTS: the suite (24 specs plus the shared test-utils under
+# examples/reference-app/web/e2e), its Playwright config with three
+# projects (chromium, webkit, ipad), the fake image provider, and the
+# app's vite dev server the config boots beside the Go server.
+# Selection counts, measured with `--list`: the default tier selects 72
+# tests (24 per project), the @budget tier 93 (31 per project), and
+# `pnpm test:e2e:pending` selects none. e2e/README.md is the authority
+# on what each tier means and on the constraints below.
 #
-# WHAT EXISTS: no e2e suite -- no Playwright config, no e2e/ directory,
-# no test doubles for provider calls, and no browser-driven frontend
-# (the web/ workspace ships libraries only, with no application shell
-# and no Playwright or e2e tooling anywhere). The reference-app server
-# itself runs and its Go module is unit-tested, but nothing exercises it
-# end to end.
+# COVERAGE -- what runs, and why it is shaped this way:
+#   * three matrix rows, one per Playwright project (chromium, webkit,
+#     ipad); every row runs the default tier and then the @budget tier.
+#     One engine per invocation is a correctness constraint, not
+#     tidiness: all three engines in one invocation share one server
+#     process and that server's in-memory rate-limit counters, and the
+#     registering specs draw on go/authn's ten-registrations-per-hour
+#     per-IP limit -- the third engine is answered 429 (e2e/README.md,
+#     "One engine per invocation, and why pacing cannot fix it"). A row
+#     per engine gives each its own server process and its own
+#     counters, and the rows run in parallel so the wall clock is one
+#     row's.
+#   * both tiers in every row: the two invocations together run every
+#     gate expected to pass, and each invocation boots its own server,
+#     which is exactly what resets the counters @budget's separate
+#     invocation depends on.
+#   * @pending is never invoked here: it selects zero tests today, and
+#     its gates are acceptance criteria for surfaces not yet built, so
+#     a red would express no product fact. @deployment is not invoked
+#     either -- without E2E_BASE_URL those gates skip themselves, which
+#     is why a default-tier run reports a few skipped tests.
 #
-# TRIGGER: workflow_dispatch only. A scheduled stub would only produce
-# daily noise, so the push-to-main and daily triggers are not enabled.
+# TRIGGER: workflow_dispatch and a daily schedule at 04:23 UTC, offset
+# from scaffold-verify's 03:00 and security's 05:37 so the three do not
+# contend for runner capacity. The push-to-main trigger is deliberately
+# NOT enabled: its first run would be this pipeline's first run on a
+# real runner -- a cold Go build cache, a browser download and an apt
+# dependency install all first encountered there -- and the repository
+# opens a push trigger under its own recorded argument. That argument
+# is a dispatched run on this file that went green; until that exists,
+# the daily schedule is the standing coverage and workflow_dispatch
+# serves on-demand and milestone runs.
+#
+# BUDGET: target under 20 minutes; every job carries timeout-minutes 30
+# as a hang ceiling, not a target. A row spends 4-6 minutes in setup
+# (Go toolchain, workspace install, browser download with its apt
+# dependencies), 1-4 minutes on the pre-build (cold Go build cache),
+# and minutes rather than seconds in the two tiers: the default tier's
+# local pure test time is about twenty-five seconds (e2e/README.md), a
+# runner runs slower, and @budget spends part of its time waiting on
+# the sign-in budget. The three rows run in parallel, so the pipeline's
+# wall clock is one row plus queueing.
+#
+# NO WORKFLOW-LEVEL ENVIRONMENT IS NEEDED, and none is set: the config
+# picks its own random ports and run-unique SQLite, login-ledger and
+# server-log paths under the OS temp directory; the demo passphrase and
+# the fake provider's key are fixed non-secret values the config
+# injects itself; and GitHub sets CI=true (the github + list reporters,
+# forbidOnly). Fixed ports were a measured hazard in this suite (two
+# worktrees adopting each other's server); CI must not reintroduce one.
+# Caches ride the two setup actions: setup-go-env restores the Go
+# module and build caches keyed on the go.sum files (the same key
+# family fast-check and full-check fill), setup-node-env the pnpm
+# store keyed on web/pnpm-lock.yaml. Playwright's browser download is
+# deliberately not cached (a later optional optimization, not
+# correctness).
+#
+# NOTHING CAN PASS SILENTLY -- the property the stub predecessor
+# existed to state, now carried by the real steps: no step tolerates
+# its own failure, and no command's exit code is erased by a fallback;
+# no retry count is handed to Playwright (the suite's retries: 0 is a
+# deliberate decision -- every flake in its history was a gate defect,
+# and a retry hides exactly those); an empty selection exits non-zero
+# (measured: `playwright test --grep @pending` prints "No tests found"
+# and exits 1), so a renamed or retagged suite reddens this pipeline
+# instead of passing empty. A failed run uploads its test-results --
+# traces retained on failure and failure screenshots -- for 7 days.
+#
+# COST: every run pays three concurrent rows of roughly ten
+# runner-minutes each. No path filtering, matching fast-check's call
+# that the set is small enough to run everything on every trigger; if
+# that changes, a paths filter is a caller-side change. The concurrency
+# group cancels in-progress runs on the same ref, so a run triggered
+# while a scheduled run is still going cancels the scheduled one --
+# expected, not a bug.
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * *"
+
+concurrency:
+  group: e2e-${{ github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   e2e:
-    name: reference-app e2e (stub guard -- not implemented yet)
+    name: e2e (${{ matrix.project }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: chromium
+            browser: chromium
+          - project: webkit
+            browser: webkit
+          # The iPad device's default engine is webkit, so this row
+          # reuses that browser download.
+          - project: ipad
+            browser: webkit
     steps:
-      - name: Stub guard
-        run: |
-          echo "error: the e2e pipeline is not implemented. This failing run"
-          echo "is its stub guard, so the pipeline can never pass silently."
-          echo "Wire the reference-app Playwright suite when the roadmap M4"
-          echo "e2e item lands."
-          exit 1
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Go toolchain and module/build caches
+        uses: ./.github/actions/setup-go-env
+      - name: Set up pinned Node.js, pnpm and the pnpm store cache
+        uses: ./.github/actions/setup-node-env
+      - name: Install workspace dependencies (frozen lockfile)
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Install the row's browser with its system dependencies
+        # --with-deps installs the shared libraries and fonts the
+        # browser needs on the runner (apt), so no separate font step
+        # exists.
+        working-directory: examples/reference-app/web
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      - name: Pre-build the reference-app server
+        # Moves the cold Go compile out of the config's webServer
+        # timeout (300 s) into its own visible step, and warms the
+        # build cache for the specs that boot their own servers via
+        # `go run` during the test run (e2e/test-utils/servers.ts).
+        working-directory: examples/reference-app
+        run: go build ./cmd/server
+      - name: Default tier
+        working-directory: examples/reference-app/web
+        run: pnpm test:e2e --project=${{ matrix.project }}
+      - name: "@budget tier"
+        working-directory: examples/reference-app/web
+        run: pnpm test:e2e:budget --project=${{ matrix.project }}
+      - name: Upload test results
+        # !cancelled() rather than failure(): a cancelled run's partial
+        # traces are as worth keeping as a failed run's, and on success
+        # the directory may not exist (if-no-files-found: ignore).
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: e2e-test-results-${{ matrix.project }}
+          path: examples/reference-app/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

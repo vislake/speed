@@ -51,7 +51,10 @@ name: npm-package-ci
 #                    statements and 80% branches over the package's own
 #                    src/** -- and a package below either fails its job
 #                    (vitest exits non-zero on a missed threshold). No
-#                    e2e or component-preview legs exist (see
+#                    e2e or component-preview leg runs here (the
+#                    reference-app e2e suite lives in its own pipeline,
+#                    e2e.yml, and is not a per-package leg; the
+#                    component-preview leg does not exist yet -- see
 #                    DELIBERATELY NOT WIRED below); a package's tests
 #                    are its only runtime checks.
 #   4. pnpm build     emits dist/ via each package's project build. The

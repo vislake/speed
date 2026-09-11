@@ -52,9 +52,9 @@ name: docker-image-ci
 # credential). Each run leaves behind three real, architecture- and
 # run-scoped CI proof tags (`<tag>-amd64`, `<tag>-arm64`, the plain
 # `<tag>` manifest list) in this repository's GHCR packages, not a
-# release artifact. e2e, release and nightly -- the reusable workflow's
-# eventual real callers -- remain gated stubs in their own right; this
-# file is the one live caller of the reusable build.
+# release artifact. e2e and release are live pipelines in their own
+# right that do not call the reusable build; nightly remains a gated
+# stub. This file is the one live caller of the reusable build.
 #
 # Flat under .github/workflows/, never a subdirectory: GitHub Actions
 # discovers workflows only directly under .github/workflows/.

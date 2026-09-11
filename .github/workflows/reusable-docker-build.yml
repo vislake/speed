@@ -57,12 +57,13 @@ name: docker-build
 #     proof purposes only, nothing here is a versioned release artifact,
 #     and versioned release publishing under the lockstep lifecycle is
 #     not wired (release.yml's own header).
-#   * No caller wires this into e2e/release/nightly yet -- those three
-#     stay gated stubs in their own right (see each file's own header).
-#     The only live caller is docker-image-ci.yml, which runs this
-#     reusable automatically on every build-input change (that file's
-#     own path set) and on manual dispatch, proving this reusable
-#     genuinely works end to end.
+#   * No caller wires this into e2e/release/nightly yet -- e2e and
+#     release are live pipelines in their own right (neither calls this
+#     reusable), and nightly remains a gated stub (see each file's own
+#     header). The only live caller is docker-image-ci.yml, which runs
+#     this reusable automatically on every build-input change (that
+#     file's own path set) and on manual dispatch, proving this
+#     reusable genuinely works end to end.
 #   * trivy image scanning (security.yml's own DEFERRED note) still has
 #     nothing to scan routinely -- this workflow builds an image only on
 #     a build-input change or manual dispatch, not on every PR, so it
