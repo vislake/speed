@@ -8,6 +8,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -42,13 +43,16 @@ type integrationComponentConfig struct {
 // reduced-but-legal wiring on the host path (no enqueue, no cosmetic
 // creator flag, and a closed own-identity path respectively).
 //
-// Init is deliberately not declared: declaration (the module's Register
-// call) is made today by the host's bootstrap path, and the runtime Service
-// is built by the host's Attach, not by this descriptor.
+// Init runs the module's one declaration entry point, Register, then Attach
+// -- the runtime Service's construction over the module's freshly declared
+// surface: Attach installs no declarations of its own, and it reads the
+// same assembly values Register handed the module's handlers, so it can run
+// nowhere but the Init stage. The returned *Service is put into the by-type
+// context, where a consumer requires and reads it after the assembly.
 var integrationComponent = pkgcore.Component{
 	Name:         "integration",
 	Module:       "integration",
-	Provides:     []any{(*Module)(nil)},
+	Provides:     []any{(*Module)(nil), (*Service)(nil)},
 	Capabilities: pkgcore.MultiReplicaSafe,
 	ConfigSchema: (*integrationComponentConfig)(nil),
 	Requires: []pkgcore.Requirement{
@@ -81,6 +85,21 @@ var integrationComponent = pkgcore.Component{
 			opts = append(opts, WithSubjectResolver(subject))
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("integration: component init got a %T instance, want *integration.Module", instance)
+		}
+		if err := m.Register(reg); err != nil {
+			return err
+		}
+		svc, err := m.Attach(reg)
+		if err != nil {
+			return err
+		}
+		reg.Put(svc)
+		return nil
 	},
 }
 
