@@ -123,8 +123,8 @@ describe('RouteGuard', () => {
       // The denied gate replaces the page content it guards, so the
       // default composition's title is the page's own heading -- an
       // h1, the same page-level default the sibling whole-page
-      // placeholder (auth-ui's SessionEndedScreen) chose. Pre-fix the
-      // stock h6 rendered a heading level no page can start at.
+      // placeholder (auth-ui's SessionEndedScreen) chose. The stock h6
+      // would render a heading level no page can start at.
       const { getByRole } = renderWithProviders(<RouteGuard status="denied" />)
       expect(
         getByRole('heading', { level: 1, name: uiKitZhCN.emptyState.noPermission.title }),

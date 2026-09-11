@@ -603,12 +603,10 @@ describe('FileUploader', () => {
 
     it('announces a row the host appends already failed, with no uploading phase ever rendered (P2-7 regression)', () => {
       // The upload failed so fast the host never committed an uploading
-      // row for it: the failed row is appended directly. The old
-      // announcement condition waited for an uploading -> settle
-      // transition, so an appended settled row was skipped exactly like a
-      // mount-seeded one -- the code over-applied the comment's
-      // mount-time-only exemption. Appending an uploading row still
-      // announces nothing.
+      // row for it: the failed row is appended directly. An appended
+      // settled row is still a settle and announces; the quiet cases are
+      // exactly the mount-seeded rows and the rows appended as
+      // `uploading`. Appending an uploading row still announces nothing.
       const view = renderHarness({
         rows: [uploadingRow('r1', 'a.jpg')],
       })
