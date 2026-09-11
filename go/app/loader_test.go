@@ -135,14 +135,15 @@ func TestLoad_BuiltinDefaultsStandWhenNothingSuppliesValues(t *testing.T) {
 
 // TestLoad_ReadsTheQ8EnvSpelling pins the environment spelling: a component
 // name's dots are underscored, and each nesting level is the double
-// underscore.
+// underscore. The mailer.smtp name is the built-in pkgcore ships, so the
+// registry needs no probe for it.
 func TestLoad_ReadsTheQ8EnvSpelling(t *testing.T) {
 	t.Setenv("TEST_COMPOSITION__COMPONENTS__MAILER_SMTP__HOST", "mail.example.com")
 	t.Setenv("TEST_COMPOSITION__COMPONENTS__MAILER_SMTP__PORT", "587")
 
 	var host testHostConfig
 	host.PlatformConfig = testPlatformConfig()
-	reg := loaderTestRegistry(t, probeComponent("mailer.smtp"))
+	reg := loaderTestRegistry(t)
 
 	if err := Load(context.Background(), reg, LoadSpec{
 		Host:     &host,
@@ -165,11 +166,13 @@ func TestLoad_ReadsTheQ8EnvSpelling(t *testing.T) {
 
 // TestLoad_ReadsTheQ8FlagSpelling pins the command-line spelling: the
 // component name keeps its literal dots, matched by longest registered
-// prefix, and a bare selection value reads as its boolean.
+// prefix, and a bare selection value reads as its boolean. The mailer.smtp
+// name is the built-in pkgcore ships; only the bare "mailer" name needs a
+// probe.
 func TestLoad_ReadsTheQ8FlagSpelling(t *testing.T) {
 	var host testHostConfig
 	host.PlatformConfig = testPlatformConfig()
-	reg := loaderTestRegistry(t, probeComponent("mailer"), probeComponent("mailer.smtp"))
+	reg := loaderTestRegistry(t, probeComponent("mailer"))
 
 	args := []string{
 		"--composition.components.mailer.smtp.host=mail.example.com",
