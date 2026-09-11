@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -10,16 +9,9 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/ratelimit"
 )
-
-// errorBody is the {code, params} envelope these tests decode the guard's
-// refusals as -- the wire shape every module's structured error converges
-// on, which is what lets one client-side decoder handle them all.
-type errorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
 
 func newTestGuard(t *testing.T, limits LayeredLimits, extract Extractor) *HTTPGuard {
 	t.Helper()
@@ -117,10 +109,7 @@ func TestHTTPGuard_Middleware_Denied_Returns429WithHeaders(t *testing.T) {
 		t.Errorf("Content-Type = %q, want %q", rec.Header().Get("Content-Type"), errorContentType)
 	}
 
-	var body errorBody
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
+	body := testkit.DecodeErrorBody(t, rec.Body)
 	if body.Code != ErrRateLimited.Code {
 		t.Errorf("body.Code = %q, want %q", body.Code, ErrRateLimited.Code)
 	}
@@ -155,10 +144,7 @@ func TestWriteAppError_NonAppError_WritesInternal(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	var body errorBody
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
+	body := testkit.DecodeErrorBody(t, rec.Body)
 	if body.Code != ErrInternal.Code {
 		t.Errorf("body.Code = %q, want %q", body.Code, ErrInternal.Code)
 	}

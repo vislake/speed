@@ -51,6 +51,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // aiGatewayCredentialRequest issues method against an ai-gateway
@@ -276,13 +277,7 @@ func assertAIGatewayCredentialRefused(t *testing.T, resp *http.Response, what st
 	if err != nil {
 		t.Fatalf("%s: read body: %v", what, err)
 	}
-	var out struct {
-		Code   string         `json:"code"`
-		Params map[string]any `json:"params"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("%s: decoding %s: %v", what, raw, err)
-	}
+	out := testkit.DecodeErrorBody(t, bytes.NewReader(raw))
 	if resp.StatusCode != wantStatus {
 		t.Fatalf("%s: status = %d, want %d; body = %s", what, resp.StatusCode, wantStatus, raw)
 	}

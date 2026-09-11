@@ -2,12 +2,13 @@ package rbac
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // stubAuthorizer is an Authorizer whose answers are dictated by the test,
@@ -69,23 +70,6 @@ func serve(mw func(http.Handler) http.Handler, r *http.Request) (*httptest.Respo
 // middleware chain answers with, so a client parses one error shape across
 // it.
 const authzErrorContentType = "application/json; charset=utf-8"
-
-// authzErrorBody is the {code, params} refusal envelope these tests decode
-// the middleware's responses as.
-type authzErrorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// decodeErrorBody reads the {code, params} body the middleware writes.
-func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) authzErrorBody {
-	t.Helper()
-	var body authzErrorBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decoding the error body %q: %v", rec.Body.String(), err)
-	}
-	return body
-}
 
 // requestWithSubject returns a GET request carrying sub the way the
 // authenticating side installs it.
@@ -195,7 +179,7 @@ func TestRequirePermission_SubjectLacksIt_IsForbidden(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	body := decodeErrorBody(t, rec)
+	body := testkit.DecodeErrorBody(t, rec.Body)
 	if body.Code != ErrPermissionDenied.Code {
 		t.Fatalf("code = %q, want %q", body.Code, ErrPermissionDenied.Code)
 	}
@@ -225,7 +209,7 @@ func TestRequirePermission_NoSubject_IsForbiddenNotAServerError(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	if code := decodeErrorBody(t, rec).Code; code != ErrPermissionDenied.Code {
+	if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrPermissionDenied.Code {
 		t.Fatalf("code = %q, want %q -- a missing subject must not be distinguishable from a denial", code, ErrPermissionDenied.Code)
 	}
 }
@@ -299,7 +283,7 @@ func TestRequirePermission_UndeclaredButWellFormed_Denies(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d -- an undeclared permission must deny, not error", rec.Code, http.StatusForbidden)
 	}
-	if code := decodeErrorBody(t, rec).Code; code != ErrPermissionDenied.Code {
+	if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrPermissionDenied.Code {
 		t.Fatalf("code = %q, want %q", code, ErrPermissionDenied.Code)
 	}
 }
@@ -319,7 +303,7 @@ func TestRequirePermission_AuthorizerError_IsAServerErrorAndStillBlocks(t *testi
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	body := decodeErrorBody(t, rec)
+	body := testkit.DecodeErrorBody(t, rec.Body)
 	if body.Code != ErrStorage.Code {
 		t.Fatalf("code = %q, want %q", body.Code, ErrStorage.Code)
 	}
@@ -344,7 +328,7 @@ func TestRequirePermission_NilAuthorizer_ReportsWiringNotDenial(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	if code := decodeErrorBody(t, rec).Code; code != ErrServiceNotAttached.Code {
+	if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrServiceNotAttached.Code {
 		t.Fatalf("code = %q, want %q", code, ErrServiceNotAttached.Code)
 	}
 }
@@ -354,7 +338,7 @@ func TestRequirePermissionFunc_NilPermissionFunc_ReportsWiringNotDenial(t *testi
 
 	rec, _ := serve(RequirePermissionFunc(&stubAuthorizer{allow: true}, nil), requestWithSubject(sub))
 
-	if code := decodeErrorBody(t, rec).Code; code != ErrServiceNotAttached.Code {
+	if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrServiceNotAttached.Code {
 		t.Fatalf("code = %q, want %q", code, ErrServiceNotAttached.Code)
 	}
 }
@@ -539,7 +523,7 @@ func TestRequirePermission_ResolverOkWithInvalidSubject_IsForbiddenNotAServerErr
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want %d (the refusal must not surface as a %d)", rec.Code, http.StatusForbidden, http.StatusInternalServerError)
 			}
-			if code := decodeErrorBody(t, rec).Code; code != ErrPermissionDenied.Code {
+			if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrPermissionDenied.Code {
 				t.Fatalf("code = %q, want %q", code, ErrPermissionDenied.Code)
 			}
 		})

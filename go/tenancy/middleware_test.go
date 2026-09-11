@@ -2,7 +2,6 @@ package tenancy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // stubResolver is a Resolver test double whose behavior is fixed at
@@ -37,14 +37,6 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.called = true
 	h.sawTenant, h.sawTenantOK = pkgcore.TenantFromContext(r.Context())
 	w.WriteHeader(http.StatusOK)
-}
-
-// tenantErrorBody is the {code, params} refusal envelope these tests decode
-// Middleware's responses as: the machine-readable code is the API's
-// contract, and the client resolves its text against its own catalog.
-type tenantErrorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
 }
 
 func TestMiddleware_Success_InjectsResolvedTenantIntoContext(t *testing.T) {
@@ -154,10 +146,7 @@ func TestMiddleware_ResolutionFailure(t *testing.T) {
 				t.Errorf("downstream saw tenant %q, want none: a failed resolution must never reach a handler with a tenant set", handler.sawTenant)
 			}
 			if tt.wantStatus == http.StatusForbidden {
-				var body tenantErrorBody
-				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-					t.Fatalf("decoding error body: %v", err)
-				}
+				body := testkit.DecodeErrorBody(t, rec.Body)
 				if body.Code != ErrTenantUnresolved.Code {
 					t.Errorf("error code = %q, want %q", body.Code, ErrTenantUnresolved.Code)
 				}
@@ -465,10 +454,7 @@ func TestMiddleware_TenantStatusResolver_SuspendedTenant_RefusesWithCodedError(t
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	var body tenantErrorBody
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decoding error body: %v", err)
-	}
+	body := testkit.DecodeErrorBody(t, rec.Body)
 	if body.Code != ErrTenantSuspended.Code {
 		t.Errorf("error code = %q, want %q", body.Code, ErrTenantSuspended.Code)
 	}
@@ -493,10 +479,7 @@ func TestMiddleware_TenantStatusResolver_StatusCallFails_FailsClosed(t *testing.
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	var body tenantErrorBody
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decoding error body: %v", err)
-	}
+	body := testkit.DecodeErrorBody(t, rec.Body)
 	if body.Code != ErrTenantStatusUnavailable.Code {
 		t.Errorf("error code = %q, want %q", body.Code, ErrTenantStatusUnavailable.Code)
 	}
@@ -570,10 +553,7 @@ func TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed(t *testing.
 			if rec.Code != http.StatusForbidden {
 				t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 			}
-			var body tenantErrorBody
-			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-				t.Fatalf("decoding error body: %v", err)
-			}
+			body := testkit.DecodeErrorBody(t, rec.Body)
 			if body.Code != ErrTenantSuspended.Code {
 				t.Errorf("error code = %q, want %q", body.Code, ErrTenantSuspended.Code)
 			}
@@ -659,10 +639,7 @@ func TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceed
 				}
 				return
 			}
-			var body tenantErrorBody
-			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-				t.Fatalf("decoding error body: %v", err)
-			}
+			body := testkit.DecodeErrorBody(t, rec.Body)
 			if body.Code != tt.wantCode {
 				t.Errorf("error code = %q, want %q", body.Code, tt.wantCode)
 			}
@@ -727,10 +704,7 @@ func TestMiddleware_TenantStatusResolver_StatusCallFails_AllowlistedPath_Proceed
 				}
 				return
 			}
-			var body tenantErrorBody
-			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-				t.Fatalf("decoding error body: %v", err)
-			}
+			body := testkit.DecodeErrorBody(t, rec.Body)
 			if body.Code != ErrTenantStatusUnavailable.Code {
 				t.Errorf("error code = %q, want %q", body.Code, ErrTenantStatusUnavailable.Code)
 			}

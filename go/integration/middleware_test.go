@@ -1,29 +1,25 @@
 package integration
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/ratelimit"
 )
 
-// assertErrorEnvelope decodes rec's body as this module's own errorBody
-// envelope (httpguard.go) and requires status and code to match, mirroring
+// assertErrorEnvelope decodes rec's body as the {code, params} envelope
+// (httpguard.go) and requires status and code to match, mirroring
 // httpguard_test.go's own inline assertion shape.
 func assertErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) {
 	t.Helper()
 	if rec.Code != wantStatus {
 		t.Fatalf("status = %d, want %d (body %q)", rec.Code, wantStatus, rec.Body.String())
 	}
-	var body errorBody
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
-	}
-	if body.Code != wantCode {
+	if body := testkit.DecodeErrorBody(t, rec.Body); body.Code != wantCode {
 		t.Errorf("body.Code = %q, want %q", body.Code, wantCode)
 	}
 }

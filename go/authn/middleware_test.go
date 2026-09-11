@@ -2,7 +2,6 @@ package authn
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -63,24 +63,6 @@ func observingHandler(out *observed) http.Handler {
 		out.tenant, out.tenantExists = pkgcore.TenantFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-}
-
-// errorBody is the {code, params} refusal envelope these tests decode the
-// middleware's responses as: the machine-readable code is the API's
-// contract, and the client resolves its text against its own catalog.
-type errorBody struct {
-	Code   string         `json:"code"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// decodeErrorBody reads the {code, params} envelope out of a response.
-func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
-	t.Helper()
-	var body errorBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode the error body %q: %v", rec.Body.String(), err)
-	}
-	return body
 }
 
 // TestMiddleware_OptionalAuthentication covers the three cases that are
@@ -159,7 +141,7 @@ func TestMiddleware_OptionalAuthentication(t *testing.T) {
 				t.Fatalf("handler called = %v, want %v", out.called, tc.wantCalled)
 			}
 			if tc.wantCode != "" {
-				if got := decodeErrorBody(t, rec).Code; got != tc.wantCode {
+				if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != tc.wantCode {
 					t.Errorf("error code = %q, want %q", got, tc.wantCode)
 				}
 				return
@@ -222,7 +204,7 @@ func TestRequireAuthenticated(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 		}
-		if got := decodeErrorBody(t, rec).Code; got != ErrAuthenticationRequired.Code {
+		if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != ErrAuthenticationRequired.Code {
 			t.Errorf("error code = %q, want %q", got, ErrAuthenticationRequired.Code)
 		}
 		if out.called {
@@ -300,7 +282,7 @@ func TestMiddleware_RevocationChecker(t *testing.T) {
 			if out.called {
 				t.Error("the handler ran despite the revocation outcome")
 			}
-			if got := decodeErrorBody(t, rec).Code; got != tc.wantCode {
+			if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != tc.wantCode {
 				t.Errorf("error code = %q, want %q", got, tc.wantCode)
 			}
 		})
@@ -425,7 +407,7 @@ func TestComposedChain_AuthnThenTenancy(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want %d from tenancy.Middleware", rec.Code, http.StatusForbidden)
 		}
-		if got := decodeErrorBody(t, rec).Code; got != "tenancy.tenant_unresolved" {
+		if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != "tenancy.tenant_unresolved" {
 			t.Errorf("error code = %q, want tenancy's own unresolved-tenant code", got)
 		}
 		if out.called {
@@ -462,7 +444,7 @@ func TestComposedChain_AuthnThenTenancy(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 		}
-		if got := decodeErrorBody(t, rec).Code; got != ErrTokenInvalid.Code {
+		if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != ErrTokenInvalid.Code {
 			t.Errorf("error code = %q, want %q", got, ErrTokenInvalid.Code)
 		}
 	})
@@ -534,7 +516,7 @@ func TestMiddleware_ServiceVerifier_ImmediateMode_RefusesTheRevokedSessionsAcces
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("request after the logout status = %d, want %d (body %q)", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
-	if got := decodeErrorBody(t, rec).Code; got != ErrSessionRevoked.Code {
+	if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != ErrSessionRevoked.Code {
 		t.Errorf("error code = %q, want %q", got, ErrSessionRevoked.Code)
 	}
 }

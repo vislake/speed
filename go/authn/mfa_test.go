@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/totp"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -547,7 +548,7 @@ func TestRequireStepUp_RefusesSessionWithoutSecondFactor(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	if got := decodeErrorBody(t, rec).Code; got != ErrStepUpRequired.Code {
+	if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != ErrStepUpRequired.Code {
 		t.Errorf("error code = %q, want %q", got, ErrStepUpRequired.Code)
 	}
 }
@@ -585,7 +586,7 @@ func TestRequireStepUp_RefusesUnauthenticatedRequest(t *testing.T) {
 	if out.called {
 		t.Errorf("RequireStepUp let an unauthenticated request through")
 	}
-	if got := decodeErrorBody(t, rec).Code; got != ErrAuthenticationRequired.Code {
+	if got := testkit.DecodeErrorBody(t, rec.Body).Code; got != ErrAuthenticationRequired.Code {
 		t.Errorf("error code = %q, want %q", got, ErrAuthenticationRequired.Code)
 	}
 }

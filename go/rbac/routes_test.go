@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // contains is a local shorthand for the message assertions below.
@@ -232,7 +233,7 @@ func TestGuardRoutes_GatedRoute_RefusesAndAdmitsThroughTheOneGate(t *testing.T) 
 			if tc.allow {
 				return
 			}
-			if code := decodeErrorBody(t, rec).Code; code != ErrPermissionDenied.Code {
+			if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrPermissionDenied.Code {
 				t.Fatalf("code = %q, want %q", code, ErrPermissionDenied.Code)
 			}
 			if guardedRoute(t, guarded, "/api/v1/notes").Access.Permission == nil {
@@ -301,7 +302,7 @@ func TestGuardRoutes_AuthorizerError_KeepsTheGatesServerErrorShape(t *testing.T)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	if code := decodeErrorBody(t, rec).Code; code != ErrStorage.Code {
+	if code := testkit.DecodeErrorBody(t, rec.Body).Code; code != ErrStorage.Code {
 		t.Fatalf("code = %q, want %q", code, ErrStorage.Code)
 	}
 }
