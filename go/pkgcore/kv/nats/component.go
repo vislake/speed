@@ -26,15 +26,11 @@ type kvNATSConfig struct {
 // kvNATSComponent is the component descriptor for "kv.nats": the JetStream
 // KV store over a connection dialed from the component's own configuration,
 // declaring the same exported Capabilities the seam registration declares.
-// Its New funnels through newConn and natsBucketOrDefault, the shared
-// construction register.go's flat adapter also uses, so both configuration
-// channels resolve the same connection (same URL fallback, same client name)
-// and the same bucket fallback from their two spellings of the same
-// settings. The dial happens here, as connFromConfig's own doc comment
-// explains; unlike the flat adapter, the component passes its own context
-// through to the bucket provisioning. The connection is dialed here, so the
-// component owns it: Close releases it through the closable value's own
-// Close.
+// Its New funnels through newConn and natsBucketOrDefault, so the package's
+// URL fallback, client name and bucket fallback apply to the connection and
+// bucket it builds, and it passes its own context through to the bucket
+// provisioning. The connection is dialed in New, so the component owns it:
+// Close releases it through the closable value's own Close.
 var kvNATSComponent = pkgcore.Component{
 	Name:         "kv.nats",
 	Module:       "kv",

@@ -43,13 +43,10 @@ func (b *closableEventBus) Close() error {
 	return nil
 }
 
-// newConn dials the *nats.Conn for the "eventbus.nats" settings both
-// configuration channels resolve to: the flat pkgcore.Config adapter above
-// and the "eventbus.nats" component (component.go), whose typed
-// configuration carries the same four fields. The url fallback and the
-// retry posture live here, so the two channels cannot drift on them; this
-// is the connection dial nats.Connect performs synchronously, as
-// connFromConfig's own doc comment explains.
+// newConn dials the *nats.Conn for the "eventbus.nats" settings the
+// "eventbus.nats" component (component.go) resolves. The url fallback and
+// the retry posture live here; this is the connection dial nats.Connect
+// performs synchronously.
 func newConn(url, token, user, password string) (*nats.Conn, error) {
 	if url == "" {
 		url = nats.DefaultURL

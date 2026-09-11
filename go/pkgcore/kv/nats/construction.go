@@ -69,32 +69,10 @@ func natsBucketOrDefault(bucket string) string {
 	return defaultBucket
 }
 
-// connFromConfig builds and connects the *nats.Conn "kv.nats" adapts onto
-// NewKVStore. Unlike kv/redis's clientFromConfig, which builds a client
-// without dialing (go-redis connects lazily), nats.Connect dials
-// synchronously, so this call is where the builtin seam's one real network
-// round trip at construction happens -- credentials, if any, come from cfg;
-// a host that needs a TLS config, a custom dial timeout, or any other
-// *nats.Option this narrow cfg map cannot express bypasses the preset layer
-// entirely with pkgcore.WithKVStore(natskv.NewKVStore(ctx, conn, bucket)).
-//
-// eventbus/nats, if and when it lands, is expected to carry its own copy of
-// an equivalent helper rather than share this one: the two packages are
-// independent implementations of different seams, and neither owns the
-// other, so duplicating a dozen lines is cheaper than inventing a third
-// package for both to depend on (the same deliberate duplication
-// kv/redis's own clientFromConfig comment argues for its eventbus/redis
-// counterpart).
-func connFromConfig(cfg pkgcore.Config) (*nats.Conn, error) {
-	return newConn(cfg["url"], cfg["user"], cfg["password"], cfg["token"])
-}
-
-// newConn dials the *nats.Conn for the "kv.nats" settings both configuration
-// channels resolve to: the flat pkgcore.Config adapter above and the
-// "kv.nats" component (component.go), whose typed configuration carries the
-// same four fields. The url fallback and the client name live here, so the
-// two channels cannot drift on them; this is the one real network round
-// trip at construction, as connFromConfig's own doc comment explains.
+// newConn dials the *nats.Conn for the "kv.nats" settings the "kv.nats"
+// component (component.go) resolves. The url fallback and the client name
+// live here; nats.Connect dials synchronously, so this is the one real
+// network round trip at construction.
 func newConn(url, user, password, token string) (*nats.Conn, error) {
 	url = natsURLOrDefault(url)
 

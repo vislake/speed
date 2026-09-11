@@ -25,13 +25,11 @@ type eventBusNATSConfig struct {
 // eventBusNATSComponent is the component descriptor for "eventbus.nats":
 // the JetStream-backed bus over a connection dialed from the component's own
 // configuration, declaring the same exported Capabilities the seam
-// registration declares. Its New funnels through newConn, the shared
-// construction register.go's flat adapter also uses, so both configuration
-// channels resolve the same connection (same URL fallback, same
-// retry-on-failed-connect posture -- the dial happens here, as that helper's
-// doc comment explains). The connection is dialed here, so the component
-// owns it: Close releases it through the closable value's own Close, which
-// stops the bus first.
+// registration declares. Its New funnels through newConn, which applies the
+// package's URL fallback and retry-on-failed-connect posture to the
+// connection it dials. The connection is dialed here, so the component owns
+// it: Close releases it through the closable value's own Close, which stops
+// the bus first.
 var eventBusNATSComponent = pkgcore.Component{
 	Name:         "eventbus.nats",
 	Module:       "eventbus",

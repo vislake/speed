@@ -949,35 +949,6 @@ func TestValidateFeatureGraph_UnwiredRegistry_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam pins the startup
-// banner's standalone-preset shape: a resolved seam whose implementation
-// keeps state
-// without declaring SurvivesRestart warns once, naming the seam, while a
-// Stateless implementation is skipped -- mailer.console hands each message
-// to its writer and keeps nothing, so a restart drops nothing it holds and a
-// banner over it would be vacuous. The default standalone bootstrap
-// therefore prints exactly three warnings (eventbus.memory, kv.memory,
-// objectstore.local) and never one for the mailer.
-//
-// The slog default logger is process-global, so the test swaps it for a
-// capture handler and restores it on the way out. It must not run in
-// parallel with another test that bootstraps a Kernel; the package's
-// t.Parallel tests only resume after every sequential test has finished, so
-// this one never overlaps them.
-// accumulatingMailer is a deliberately stateful Mailer for the Bootstrap
-// warning tests below: every Send increments a counter the struct holds, the
-// minimal shape of state a process restart would drop. The built-in
-// mailers hold nothing across calls, which is exactly the distinction the
-// Stateless bit exists to draw (see Stateless's own doc comment).
-type accumulatingMailer struct {
-	sent int
-}
-
-func (m *accumulatingMailer) Send(ctx context.Context, mail Mail) error {
-	m.sent++
-	return nil
-}
-
 func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 	const goroutines = 8
 
