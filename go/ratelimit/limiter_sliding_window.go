@@ -105,7 +105,7 @@ func New(store pkgcore.KVStore) Limiter {
 // boundary could otherwise get up to 2x the intended rate through (half
 // against each window's independent, unshared quota). See
 // TestAllow_SlidingWindow_BoundaryBurst_IsSmoothed in
-// sliding_window_limiter_test.go for a case that would fail under a naive
+// limiter_sliding_window_test.go for a case that would fail under a naive
 // fixed-window implementation.
 //
 // Allowed is whether weighted, after this call's own increment, is still
@@ -148,7 +148,7 @@ func New(store pkgcore.KVStore) Limiter {
 // formula. Avoiding it would need a different, unimplemented algorithm
 // (increment only on an allowed call), not a correction to this one.
 // TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow in
-// sliding_window_limiter_test.go pins the Rate >= 2 shape down
+// limiter_sliding_window_test.go pins the Rate >= 2 shape down
 // deterministically,
 // independent of intra-window timing, and
 // TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched pins the
@@ -184,7 +184,7 @@ func New(store pkgcore.KVStore) Limiter {
 //
 // TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost and
 // TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
-// in sliding_window_limiter_test.go pin this down: the former reproduces the
+// in limiter_sliding_window_test.go pin this down: the former reproduces the
 // two-call
 // interleaving deterministically (it fails against a two-call
 // implementation and passes against this one, since the vulnerable call is
@@ -226,7 +226,7 @@ const (
 
 	// floatEncodingBitSize mirrors pkgcore's own (unexported)
 	// KVStore.IncrByFloat numeric encoding width (see
-	// go/pkgcore/memory_kvstore.go's kvFloatBitSize): the width
+	// go/pkgcore/kv_memory.go's kvFloatBitSize): the width
 	// readWindowCount parses a stored window
 	// counter's value with.
 	floatEncodingBitSize = 64
