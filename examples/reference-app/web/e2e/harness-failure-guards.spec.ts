@@ -7,11 +7,18 @@
  * own report that its network process crashed. Without those branches a
  * dead browser is reported as whatever control the journey happened to
  * be missing -- a red that reads like a product defect and invites a
- * fix to the gate instead. This spec pins the two branches a journey
- * cannot otherwise prove cheaply:
+ * fix to the gate instead. The sign-in wait (awaitSignInAnswer) races
+ * its own set of answers, and the one it stops on that no healthy
+ * server can produce is the surface's generic fallback -- the text a
+ * response outside the client's mapped error codes degrades to. A wait
+ * blind to that answer sits until the whole test budget is spent and
+ * reports a timeout. This spec pins the three branches a journey cannot
+ * otherwise prove cheaply:
  *
  *   - the crash branch must NAME the crash it observed, not leave the
  *     missing control as the whole story;
+ *   - the sign-in wait must stop on an answer the surface cannot name,
+ *     and say so, rather than wait on a frame that answer rules out;
  *   - the enabled-state sibling must be satisfied by ENABLEMENT, not by
  *     visibility: a control that is on screen but disabled (the
  *     case-create submit before its photo's upload settles) is exactly
@@ -20,11 +27,14 @@
  *
  * Nothing here touches the product: no navigation, no server surface,
  * no sign-in, so the spec runs in the default tier on every engine
- * without spending the login budget. What it drives is a blank page and
- * the console messages a dying browser prints.
+ * without spending the login budget. What it drives is a blank page, a
+ * fabricated alert, and the console messages a dying browser prints.
  */
 import { expect, test } from '@playwright/test'
+import { DEMO_READER } from './test-utils/accounts.js'
 import {
+  AUTH_ERROR_TEXT,
+  awaitSignInAnswer,
   expectEnabledWhileSignedIn,
   expectWhileSignedIn,
 } from './test-utils/journeys.js'
@@ -58,6 +68,37 @@ test('a wait stopped by a browser crash names the crash, not the missing control
     failure?.message,
     'the crash must be named by the wait it stopped, not left as a missing control',
   ).toContain('Network process crashed')
+})
+
+test('a sign-in answered with an unnameable error names that answer, not the missing frame', async ({
+  page,
+}) => {
+  // A page shaped like the sign-in surface after a submission the
+  // client could not name: the fallback alert is up, the frame this
+  // wait is looking for can never come, and no healthy server produces
+  // this state. No navigation, no server, no sign-in -- the same
+  // reasoning the crash case above states.
+  await page.setContent(`<div role="alert">${AUTH_ERROR_TEXT.genericFallback}</div>`)
+  // The deadline is this spec's own, not the wait's: against a helper
+  // blind to the fallback the wait would stay pending (in a journey,
+  // until the test budget ends), so the race is what turns that
+  // blindness into a red here rather than a hang.
+  const outcome = await Promise.race([
+    awaitSignInAnswer(page, DEMO_READER).then(
+      () => new Error('the unnameable answer settled as a signed-in frame'),
+      (rejection: unknown) => rejection as Error,
+    ),
+    new Promise<Error>((resolve) => {
+      setTimeout(
+        () => resolve(new Error('the unnameable answer settled nothing: still waiting on a frame')),
+        3_000,
+      )
+    }),
+  ])
+  expect(
+    outcome.message,
+    'the wait must name the answer it saw rather than keep waiting on the frame that answer rules out',
+  ).toContain(AUTH_ERROR_TEXT.genericFallback)
 })
 
 test('the enabled guard is satisfied by enablement, not by visibility', async ({ page }) => {

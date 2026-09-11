@@ -327,20 +327,43 @@ export async function submitPasswordSignIn(
 export async function signInAs(page: Page, account: DemoAccount): Promise<void> {
   await visitSignIn(page)
   await submitPasswordSignIn(page, account.email, account.password)
+  await awaitSignInAnswer(page, account)
+}
 
-  // Wait for whichever settles first: the frame, or a refusal. Waiting
-  // only for the frame turned every refused sign-in into "Sign out is not
-  // visible after 10s", which says nothing about why -- and against a
-  // real deployment the why is almost always mundane: the seeded accounts
-  // were registered with whatever APP_DEMO_USERS_PASSWORD that deployment
-  // was given, while this suite defaults to its own local one. Racing the
-  // two outcomes is what lets the failure name its own cause.
-  //
-  // The frame is identified by the sign-out control rather than a nav
-  // link, because below the md breakpoint AppShell collapses its
-  // navigation behind the menu button and no nav link is in the DOM
-  // until a person opens the drawer -- a nav-based check would work only
-  // on wide screens.
+/**
+ * Waits for the submitted sign-in attempt to answer, and names the
+ * answer when it is not the signed-in frame.
+ *
+ * The attempt is split in two -- submitPasswordSignIn sends it, this
+ * reads the answer -- so harness-failure-guards.spec.ts can drive the
+ * branches below against a page it controls, with no server and no
+ * login budget. Four answers settle the wait: the frame (success), the
+ * invalid-credentials refusal, the rate-limit refusal, and the generic
+ * fallback the surface renders for any code it cannot name. Racing the
+ * outcome (rather than waiting on the frame alone) is what lets the
+ * failure name its own cause -- against a real deployment the why is
+ * almost always mundane (the seeded accounts were registered with
+ * whatever APP_DEMO_USERS_PASSWORD that deployment was given, while
+ * this suite defaults to its own local one), and a bare 60-second
+ * timeout names nothing.
+ *
+ * The fallback is raced because it is an ANSWER, not noise: the moment
+ * it renders, the attempt is over, so a wait that ignored it would sit
+ * until the whole test budget was spent and report a timeout -- beside
+ * the fixture teardown's "Target page, context or browser has been
+ * closed", which reads like a browser event and is not one. What the
+ * answer actually was (typically a 5xx -- the server folding an
+ * unmapped internal failure into its error envelope) is in the trace's
+ * network log for this request, and the cause behind it in the run's
+ * server output.
+ *
+ * The frame is identified by the sign-out control rather than a nav
+ * link, because below the md breakpoint AppShell collapses its
+ * navigation behind the menu button and no nav link is in the DOM
+ * until a person opens the drawer -- a nav-based check would work only
+ * on wide screens.
+ */
+export async function awaitSignInAnswer(page: Page, account: DemoAccount): Promise<void> {
   const frame = page.getByRole('button', { name: SESSION_TEXT.signOut })
   const refusal = page
     .getByRole('alert')
@@ -355,24 +378,42 @@ export async function signInAs(page: Page, account: DemoAccount): Promise<void> 
   const rateLimited = page
     .getByRole('alert')
     .filter({ hasText: AUTH_ERROR_TEXT.rateLimited })
+  const unnameable = page
+    .getByRole('alert')
+    .filter({ hasText: AUTH_ERROR_TEXT.genericFallback })
   await Promise.race([
     frame.waitFor({ state: 'visible' }).catch(() => undefined),
     refusal.waitFor({ state: 'visible' }).catch(() => undefined),
     rateLimited.waitFor({ state: 'visible' }).catch(() => undefined),
+    unnameable.waitFor({ state: 'visible' }).catch(() => undefined),
   ])
 
+  // The isVisible calls below all swallow a closed page or context for
+  // the same reason: that state is the fixture teardown that follows a
+  // test which has already run out its budget (or a browser that died
+  // mid-wait), and it must not surface as this helper's own error --
+  // the frame expectation at the bottom is what reports it.
   if (await rateLimited.isVisible().catch(() => false)) {
     throw new Error(
       `e2e: ${account.email} was rate-limited at sign-in. This is the suite's own login budget, not a product defect: go/authn allows five sign-ins per account and twenty per IP per minute, shared by every gate in the run. Ask for one block rather than a whole tier (see e2e/README.md).`,
     )
   }
 
-  if (await refusal.isVisible()) {
+  if (await refusal.isVisible().catch(() => false)) {
     const hint =
       process.env.E2E_BASE_URL !== undefined && process.env.E2E_DEMO_PASSWORD === undefined
         ? ` Deployment mode needs E2E_DEMO_PASSWORD set to ${process.env.E2E_BASE_URL}'s own APP_DEMO_USERS_PASSWORD; the suite default only matches a server this config started.`
         : ''
     throw new Error(`e2e: ${account.email} was refused at sign-in.${hint}`)
+  }
+
+  if (await unnameable.isVisible().catch(() => false)) {
+    throw new Error(
+      `e2e: the sign-in attempt for ${account.email} was answered with an error the surface cannot name: ` +
+        `the form shows the whitelist's generic fallback ("${AUTH_ERROR_TEXT.genericFallback}"), which is what a ` +
+        `response outside the client's mapped error codes degrades to -- typically a 5xx. The trace's network log ` +
+        `for this POST carries the response's status and code, and the run's server output the cause behind them.`,
+    )
   }
 
   await expect(frame).toBeVisible()

@@ -302,6 +302,32 @@ prints os-release, kernel, the apparmor unprivileged-userns sysctl
 and browser builds into the CI log. Read that block first for the next
 crash red, then the trace's console.
 
+**A red that reads like this family and is not.** The crash's signature
+is in the page console, so start there: the two lines quoted below are
+the family's fingerprint, and a red carrying them is the crash. Without
+them, the pair this suite reports for a timeout -- "Test timeout of
+60000ms exceeded" beside "Error: locator.isVisible: Target page, context
+or browser has been closed" -- is also what a SERVER-side answer leaves
+behind: the journey's own wait kept running (nothing told it the attempt
+was over), and the "has been closed" line is the fixture teardown
+closing the context once the budget has ended, naming the teardown
+rather than any browser event. That shape's evidence is three other
+artifacts: the trace's console carries "Failed to load resource: the
+server responded with a status of 500" for
+`POST /api/v1/authn/login/password` when the server answered at all;
+the trace's network log carries that response's status and error code;
+and the tier's job output carries the server's own structured log on
+stderr, where a database-contention window shows as jobs' "database is
+locked (5) (SQLITE_BUSY)" errors in the same seconds. The on-record
+instance is the push run of `e05c32c5` (ipad), where the sign-in POST
+answered `{"code":"authn.internal_error"}` after ten seconds of that
+contention -- the server folds an unmapped internal failure into that
+code, and the surface degrades it to its generic fallback text. The
+sign-in wait now stops at the fallback and reports the answer itself
+(harness-failure-guards.spec.ts pins it), so the next red of this shape
+should carry the response's story in its first line rather than a bare
+timeout; the three artifacts above are where the cause was recorded.
+
 The console, verbatim, from the two crashes whose traces are on record
 (push runs of `1dc8204e`, webkit, and `dacefb65`, ipad -- both
 core-journey block A):
@@ -464,6 +490,19 @@ knowledge but the convenient path: `await locator.innerText()` is one
 call and always available, so it is what gets written. `readSettledText`
 in test-utils/journeys.ts makes waiting equally short, and that -- not
 another note -- is what a repeated mistake needs.
+
+**A wait that could not name an answer that had already arrived.** The
+sign-in wait raced the frame and two named refusals, so a submission the
+server answered with an unmappable failure -- which the surface renders
+as its generic fallback text -- matched none of them: the wait sat until
+the whole test budget was spent and reported a timeout, and the only
+other error in the report was the fixture teardown closing the context,
+which reads like a browser event rather than the aftermath of the
+timeout. The answer had been on screen ten seconds in. When a wait
+models the answers an interaction can get, the degradation path belongs
+in the set: an answer the surface cannot name is still an answer, and
+racing it costs one locator (journeys.ts's awaitSignInAnswer, pinned by
+harness-failure-guards.spec.ts).
 
 **`isVisible()` does not wait.** It is a point-in-time question, so a
 helper that asks it first races the page's own render: a journey that
