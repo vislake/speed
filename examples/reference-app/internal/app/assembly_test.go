@@ -78,8 +78,9 @@ func TestViewFromComponents_SharesOneCatalogBuild(t *testing.T) {
 // shared build rests on: the merge reads the plan's locale assets, which
 // Prepare writes once, so a component registered after Prepare contributes
 // nothing to a later merge and a later view still carries the same build.
-// If PlanFreezes ever stops holding -- a merge input that grows after
-// Prepare -- this test fails and the sharing contract needs re-deriving.
+// If the plan's locale assets ever stop being frozen at Prepare -- a
+// merge input that grows after Prepare -- this test fails and the
+// sharing contract needs re-deriving.
 func TestViewFromComponents_CatalogInputIsFrozenByThePlan(t *testing.T) {
 	b, reg := localeCarrierFixture(t)
 
