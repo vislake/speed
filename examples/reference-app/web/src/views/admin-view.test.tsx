@@ -40,10 +40,10 @@
  */
 
 import type { RequestFn } from '@speed/api-client'
+import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { describe, expect, it } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
-import { ADMIN_TENANTS_PATH } from '../admin-api.js'
 import { SYSTEM_PSEUDO_TENANT_ID } from '../demo-tenants.js'
 import type { DemoAdminTenant } from '../test-utils/demo-server.js'
 import { demoServer } from '../test-utils/demo-server.js'
@@ -55,6 +55,10 @@ import {
 } from '../test-utils/real-client.js'
 import { renderWithAppServices } from '../test-utils/render.js'
 import { AdminView } from './admin-view.js'
+
+/** The path of go/admin's tenant ledger the generated hook reads
+ * (adminListTenants' own URL). */
+const ADMIN_TENANTS_PATH = '/api/v1/admin/tenants'
 
 /** A transport whose every call rejects with a raw, code-less error --
  * the shape a bug-shaped transport throw arrives in (the team suite's
@@ -89,13 +93,17 @@ const DEMO_TENANT_ROWS: readonly DemoAdminTenant[] = [
 const RAW_LEDGER_TENANT_ID = 'tenant-64307885-8a11-4b23-9c45-6d7e8f90a1b2'
 
 /** Renders the administration surface over a signed-in rig (the
- * surface reads the current tenant from the auth-core hooks), with an
- * optional api override for the failure-shape journeys that must
- * drive the read through something other than the rig's own client. */
+ * surface reads the current tenant from the auth-core hooks). An api
+ * override also rebinds the api-sdk runtime seam (last bind wins) --
+ * the generated ledger hook reads the transport through that seam, so
+ * a failure-shape journey driving the read through something other
+ * than the rig's own client must replace both the context value and
+ * the binding. */
 function renderAdmin(
   rig: RealClientRig,
   apiOverride?: RequestFn,
 ): ReturnType<typeof renderWithAppServices> {
+  bindRequestFn(apiOverride ?? rig.api)
   return renderWithAppServices(
     <AdminView />,
     { session: rig.session, api: apiOverride ?? rig.api },

@@ -4,11 +4,14 @@
  * joined, plus the invite-a-colleague flow the practice's second
  * employee is added through.
  *
- * The reads go through the app's own hand-written calls over the one
- * RequestFn the host bound, on a tenant-namespaced query key
- * (['tenant', tenantId, 'team']) so a tenant switch can never read the
- * previous clinic's roster -- user-menu.tsx evicts the departing
- * tenant's ['tenant', tenantId] queries and the assembly's shipped
+ * The reads go through the one RequestFn the host bound -- the pending
+ * invitations and the clinic's root node through org's generated
+ * @speed/api-sdk operations (orgListInvitations, orgListNodes), the
+ * members half through the app's own hand-written call -- on a
+ * tenant-namespaced query key (['tenant', tenantId, 'team']) so a
+ * tenant switch can never read the previous clinic's roster --
+ * user-menu.tsx evicts the departing tenant's ['tenant', tenantId]
+ * queries and the assembly's shipped
  * session-end default empties the whole
  * cache the moment the session ends, exactly as the notes surface's own
  * key relies on. The members half of the roster reads the app's OWN
@@ -17,9 +20,7 @@
  * internal/app/team_members.go mounts, which enriches org's membership
  * rows with each member's display identity from authn's users table,
  * because org's membership rows carry opaque user ids by the module's
- * own boundary rule); the pending invitations and the clinic's root
- * node read org's own surface through the app's hand-written org
- * accessor (org-api.ts).
+ * own boundary rule).
  *
  * One snapshot query answers the whole surface -- members, pending
  * invitations and the clinic's root node -- so the surface has exactly
@@ -80,6 +81,12 @@ import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { OrgInvitation } from '@speed/api-sdk'
+import {
+  orgListInvitations,
+  orgListNodes,
+  useOrgCreateInvitation,
+} from '@speed/api-sdk'
 import { useAuthState, useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import type { RouteGuardStatus } from '@speed/layout-kit'
@@ -88,12 +95,6 @@ import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { useAppServices } from '../app-services.js'
-import type { OrgInvitation } from '../org-api.js'
-import {
-  createOrgInvitation,
-  listOrgInvitations,
-  listOrgNodes,
-} from '../org-api.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { fetchTeamMembers } from '../team-api.js'
 import type { TeamMember } from '../team-api.js'
@@ -163,8 +164,12 @@ function rememberInvitedAddress(invitationID: string, address: string): void {
 }
 
 /** The address this session invited under the given invitation id, or
- * null when this session did not send that invitation. */
-function invitedAddressOf(invitationID: string): string | null {
+ * null when this session did not send that invitation (a row the
+ * answer carried no id for names no session send). */
+function invitedAddressOf(invitationID: string | undefined): string | null {
+  if (invitationID === undefined) {
+    return null
+  }
   return invitedAddressByInvitationID.get(invitationID) ?? null
 }
 
@@ -222,7 +227,11 @@ export function TeamView(): ReactElement {
   // fetched together so the surface has a single loading/error/gate
   // state. The root node is the invitee's binding target -- the demo
   // clinics are single-root practices, and an invitation must name the
-  // node the invitee will join.
+  // node the invitee will join. The two org legs run the generated
+  // operation functions rather than two generated hooks: the snapshot
+  // query's own contract is exactly what keeps one loading state, one
+  // error state and one gate, and the members leg has no generated
+  // hook to ride (it is the host's own route).
   const teamKey = useMemo(
     () => ['tenant', tenantId, 'team'],
     [tenantId],
@@ -232,8 +241,8 @@ export function TeamView(): ReactElement {
     queryFn: async () => {
       const [membersAnswer, invitationsAnswer, nodesAnswer] = await Promise.all([
         fetchTeamMembers(api),
-        listOrgInvitations(api),
-        listOrgNodes(api),
+        orgListInvitations(),
+        orgListNodes(),
       ])
       const nodes = nodesAnswer.nodes ?? []
       const root = nodes.find((node) => node.depth === 0) ?? null
@@ -245,6 +254,11 @@ export function TeamView(): ReactElement {
     },
     enabled: tenantId !== null,
   })
+
+  // The invite send's mutation, over the generated create operation.
+  // The tenant comes from the access token server-side, exactly as the
+  // hand-written send's did.
+  const inviteMutation = useOrgCreateInvitation()
 
   // The read failure, classified error-first exactly like the notes
   // surface (see notes-view.tsx's own account of why the error state
@@ -279,22 +293,30 @@ export function TeamView(): ReactElement {
    * keeps the form and shows the answer's code text. */
   async function handleSend(values: InviteDraft): Promise<void> {
     const rootNode = teamQuery.data?.rootNode
-    if (rootNode === null || rootNode === undefined) {
+    // An invitation must name the node the invitee will join; a node
+    // the answer carried no id for cannot serve as that target, so the
+    // send stands down rather than posting an empty nodeId the server
+    // would only refuse.
+    if (rootNode?.id === undefined) {
       return
     }
     setSubmitErrorCode(null)
     setSentNotice(false)
     let invitation: OrgInvitation
     try {
-      invitation = await createOrgInvitation(api, {
-        email: values.email,
-        nodeId: rootNode.id,
+      invitation = await inviteMutation.mutateAsync({
+        data: { email: values.email, nodeId: rootNode.id },
       })
     } catch (error) {
       setSubmitErrorCode(submitErrorCodeOf(error))
       return
     }
-    rememberInvitedAddress(invitation.id, values.email)
+    // The address joins the session memory under the row's own id; an
+    // answer that carried no id cannot be paired, so the row renders
+    // the surface's "invited from another device" label instead.
+    if (invitation.id !== undefined) {
+      rememberInvitedAddress(invitation.id, values.email)
+    }
     inviteForm.reset({ email: '' })
     setInviteFormOpen(false)
     setSentNotice(true)
@@ -455,10 +477,11 @@ export function TeamView(): ReactElement {
                 </Alert>
               )}
               {/* The invite affordance renders only while this clinic has
-                  a root node to bind an invitee to -- a clinic whose tree
-                  is missing cannot receive members, so no control is drawn
+                  a root node carrying an id to bind an invitee to -- a
+                  clinic whose tree is missing, or whose root answers no
+                  id, cannot receive members, so no control is drawn
                   that would fail on click. */}
-              {teamQuery.data?.rootNode !== undefined && !inviteFormOpen ? (
+              {teamQuery.data?.rootNode?.id !== undefined && !inviteFormOpen ? (
                 <Button
                   variant="contained"
                   onClick={openInviteForm}
@@ -467,7 +490,7 @@ export function TeamView(): ReactElement {
                   {t('team.invite.action')}
                 </Button>
               ) : null}
-              {inviteFormOpen && teamQuery.data?.rootNode !== undefined && (
+              {inviteFormOpen && teamQuery.data?.rootNode?.id !== undefined && (
                 <FormLayout
                   form={inviteForm}
                   onSubmit={handleSend}
@@ -516,7 +539,11 @@ export function TeamView(): ReactElement {
               <DataTable
                 rows={teamQuery.data?.invitations ?? []}
                 columns={invitationColumns}
-                rowKey={(invitation) => invitation.id}
+                // The spec leaves the row's id optional; a row that
+                // carries one keys by it, and one that does not falls
+                // back to the table's own index keying rather than
+                // minting a colliding empty-string key.
+                rowKey={(invitation, rowIndex) => invitation.id ?? rowIndex}
                 loading={teamQuery.isFetching}
                 emptyTitle={t('team.invitations.emptyTitle')}
                 emptyDescription={t('team.invitations.emptyDescription')}

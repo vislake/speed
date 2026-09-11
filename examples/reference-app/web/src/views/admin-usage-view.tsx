@@ -2,11 +2,12 @@
  * admin-usage-view.tsx -- the platform's usage/billing dashboard, the
  * second surface of this app's administration area (offered by the
  * platform frame's nav next to the tenant ledger): every tenant in
- * go/admin's ledger, one section each, read from the module's own
- * operator-facing route (admin-api.ts -- GET /api/v1/admin/usage-summary,
- * mounted behind the same admin route guard as the ledger,
- * internal/app/demo/demo_admin.go's guardAdminRoute, which evaluates every
- * admin:* permission in rbac.SystemDomain).
+ * go/admin's ledger, one section each, read through the generated
+ * @speed/api-sdk hook for the module's own operator-facing route (GET
+ * /api/v1/admin/usage-summary, mounted behind the same admin route
+ * guard as the ledger, internal/app/demo/demo_admin.go's
+ * guardAdminRoute, which evaluates every admin:* permission in
+ * rbac.SystemDomain).
  *
  * WHAT ONE SECTION SHOWS
  *
@@ -69,15 +70,13 @@ import { useMemo } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
-import { useQuery } from '@tanstack/react-query'
+import { useAdminGetUsageSummary } from '@speed/api-sdk'
+import type { AdminSubscription } from '@speed/api-sdk'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import { RouteGuard } from '@speed/layout-kit'
 import { EmptyState } from '@speed/ui-kit'
-import { useAppServices } from '../app-services.js'
-import { fetchAdminUsageSummary } from '../admin-api.js'
-import type { AdminUsageSubscription } from '../admin-api.js'
 import { apiErrorCodeOf } from '../cases-errors.js'
 import { demoTenantNameKey } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
@@ -126,7 +125,6 @@ function tenantSectionName(
  */
 export function AdminUsageView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const { api } = useAppServices()
   const currentTenant = useCurrentTenant()
   const tenantId = currentTenant?.tenantId ?? null
 
@@ -140,13 +138,8 @@ export function AdminUsageView(): ReactElement {
     () => ['tenant', tenantId, 'admin', 'usage'],
     [tenantId],
   )
-  const summaryQuery = useQuery({
-    queryKey: summaryKey,
-    queryFn: async () => {
-      const answer = await fetchAdminUsageSummary(api)
-      return answer.rows ?? []
-    },
-    enabled: tenantId !== null,
+  const summaryQuery = useAdminGetUsageSummary({
+    query: { queryKey: summaryKey, enabled: tenantId !== null },
   })
 
   // The read failure, classified error-first exactly like the ledger
@@ -170,7 +163,7 @@ export function AdminUsageView(): ReactElement {
 
   const balanceLine = (key: string, amount: number): string =>
     t(key, { count: amount, value: formatNumber(amount) })
-  const subscriptionLine = (subscription: AdminUsageSubscription): string => {
+  const subscriptionLine = (subscription: AdminSubscription): string => {
     const statusKey = SUBSCRIPTION_STATUS_TEXT_KEYS[subscription.status]
     const statusText =
       statusKey === undefined ? subscription.status : t(statusKey)
@@ -185,7 +178,7 @@ export function AdminUsageView(): ReactElement {
     return start === '' || end === '' ? '' : `${start} – ${end}`
   }
 
-  const rows = summaryQuery.data ?? []
+  const rows = summaryQuery.data?.rows ?? []
 
   return (
     <Box sx={{ p: { xs: 2, sm: 3 }, maxWidth: 720 }}>

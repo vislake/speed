@@ -55,6 +55,7 @@
 import { act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RequestFn } from '@speed/api-client'
+import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { beforeEach, describe, expect, it } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
@@ -91,13 +92,17 @@ const INVITEE_EMAIL = 'new-hire@example.com'
 const DEMO_ROOT_NODE_ID = 'node-root-1'
 
 /** Renders the team surface over a signed-in rig (the surface reads
- * the current tenant from the auth-core hooks), with an optional api
- * override for the failure-shape journeys that must drive the reads
- * through something other than the rig's own client. */
+ * the current tenant from the auth-core hooks). An api override also
+ * rebinds the api-sdk runtime seam (last bind wins): the snapshot
+ * query's two org legs and the invite send ride the generated surface
+ * through that seam, while the members leg reads the app's own client
+ * from the services context -- so a failure-shape journey must replace
+ * both, exactly as it must for every leg of the read to fail. */
 function renderTeam(
   rig: RealClientRig,
   apiOverride?: RequestFn,
 ): ReturnType<typeof renderWithAppServices> {
+  bindRequestFn(apiOverride ?? rig.api)
   return renderWithAppServices(
     <TeamView />,
     { session: rig.session, api: apiOverride ?? rig.api },

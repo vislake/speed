@@ -34,15 +34,28 @@
  */
 
 import type { RequestFn } from '@speed/api-client'
-import type { OrgMembership } from './org-api.js'
 
 /** The path of the app's own roster-with-identity answer
  * (TeamMembersPath in internal/app/team_members.go). */
 export const TEAM_MEMBERS_PATH = '/api/reference-app/team-members'
 
-/** One roster row: the membership facts org's OrgMembership carries,
- * plus the member's display identity from authn's users table. */
-export interface TeamMember extends OrgMembership {
+/** One roster row: the membership facts org's OrgMembership carries
+ * (membershipId, userId, nodeId, status, createdAt), plus the member's
+ * display identity from authn's users table. The five membership facts
+ * are held here concretely rather than extended from the generated
+ * OrgMembership: this is the host's own route's answer, its shape is
+ * hand-kept against internal/app/team_members.go and the Go flow test
+ * that mounts the route (flowtests/team_members_test.go), and every
+ * field is always present -- unlike the generated type, whose fields
+ * the spec leaves optional. */
+export interface TeamMember {
+  readonly membershipId: string
+  /** An id in authn's users table, carried as an opaque string. */
+  readonly userId: string
+  readonly nodeId: string
+  /** One of "active", "invited", "suspended". */
+  readonly status: string
+  readonly createdAt: string
   /** The account's own display name, or '' when it registered none. */
   readonly displayName: string
   /** The account's own email, or '' when it has none. */

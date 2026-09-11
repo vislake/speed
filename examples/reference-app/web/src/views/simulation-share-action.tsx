@@ -35,14 +35,13 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
 import type { SmilesimSimulation } from '../app-api/index.js'
+import {
+  useSharingCreateShare,
+  useSharingRevokeShare,
+} from '@speed/api-sdk'
 import { useTranslation } from '@speed/i18n'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-import { useAppServices } from '../app-services.js'
 import { useDateFormatter } from '../use-date-formatter.js'
-import {
-  createPatientShare,
-  revokePatientShare,
-} from '../share-api.js'
 import {
   shareActionErrorTextKey,
   shareErrorCodeOf,
@@ -82,8 +81,13 @@ export function SimulationShareAction({
   readonly photoObjectId: string
 }): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const { api } = useAppServices()
   const formatDate = useDateFormatter(i18n.language)
+  // The pair's two creates as two mutation instances over the generated
+  // create operation (the halves are independent requests, dispatched
+  // before-first), plus the one revoke the compensation leg uses.
+  const beforeShareCreate = useSharingCreateShare()
+  const afterShareCreate = useSharingCreateShare()
+  const revokeShare = useSharingRevokeShare()
   // The output object id the after half of the pair mints for. The
   // panel mounts this control only for a succeeded entry carrying one,
   // but the spec's wire type leaves the field pointer-shaped -- an
@@ -97,7 +101,7 @@ export function SimulationShareAction({
   const [phase, setPhase] = useState<
     | { readonly kind: 'idle' }
     | { readonly kind: 'creating' }
-    | { readonly kind: 'ready'; readonly url: string; readonly expiresAt: string }
+    | { readonly kind: 'ready'; readonly url: string; readonly expiresAt: string | undefined }
     | { readonly kind: 'refused'; readonly code: string }
   >({ kind: 'idle' })
 
@@ -118,8 +122,15 @@ export function SimulationShareAction({
     // public route answers a share's raw bytes (io.Copy over the
     // resolved content), so the patient page loads each half from its
     // own share's access URL.
-    const beforeMint = createPatientShare(api, photoObjectId)
-    const afterMint = createPatientShare(api, outputObjectId)
+    // Dispatched before-first: the halves arrive at the server in this
+    // order, which the demo responder's half-refused-pair switch keys
+    // on (its second create is the scriptable refusal).
+    const beforeMint = beforeShareCreate.mutateAsync({
+      data: { resourceRef: photoObjectId },
+    })
+    const afterMint = afterShareCreate.mutateAsync({
+      data: { resourceRef: outputObjectId },
+    })
     void Promise.allSettled([beforeMint, afterMint]).then((settled) => {
       const refused = settled.find(
         (result): result is PromiseRejectedResult => result.status === 'rejected',
@@ -127,16 +138,26 @@ export function SimulationShareAction({
       if (refused === undefined) {
         const before = (settled[0] as PromiseFulfilledResult<Awaited<typeof beforeMint>>).value
         const after = (settled[1] as PromiseFulfilledResult<Awaited<typeof afterMint>>).value
+        // The pair's lifetime is its shorter half's: the link stays
+        // whole only until the first of the two shares stops being
+        // accessible, and both are minted for the same tenant default.
+        // The spec leaves expiresAt optional on the wire, so a half
+        // that reports none constrains nothing -- and a pair whose
+        // halves both report none renders without an expiry line
+        // rather than inventing a date.
+        const beforeExpiry = before.share.expiresAt
+        const afterExpiry = after.share.expiresAt
         setPhase({
           kind: 'ready',
           url: shareLinkUrl(before.token, after.token),
-          // The pair's lifetime is its shorter half's: the link stays
-          // whole only until the first of the two shares stops being
-          // accessible, and both are minted for the same tenant default.
           expiresAt:
-            before.share.expiresAt < after.share.expiresAt
-              ? before.share.expiresAt
-              : after.share.expiresAt,
+            beforeExpiry === undefined
+              ? afterExpiry
+              : afterExpiry === undefined
+                ? beforeExpiry
+                : beforeExpiry < afterExpiry
+                  ? beforeExpiry
+                  : afterExpiry,
         })
         return
       }
@@ -148,11 +169,18 @@ export function SimulationShareAction({
       // mint's own: the first half to fail, the before before the
       // after.
       const code = shareErrorCodeOf(refused.reason)
-      const revocations: Promise<void>[] = []
+      const revocations: Promise<unknown>[] = []
       for (const result of settled) {
         if (result.status === 'fulfilled') {
+          const shareId = result.value.share.id
+          if (shareId === undefined) {
+            // A share the answer carried no id for cannot be revoked;
+            // like a revoke that itself fails, it falls to the
+            // module's own default-expiry sweep.
+            continue
+          }
           revocations.push(
-            revokePatientShare(api, result.value.share.id).catch(() => {
+            revokeShare.mutateAsync({ shareId }).catch(() => {
               // Best-effort compensation: the orphan share expires
               // through the module's own default-expiry sweep.
             }),
@@ -182,9 +210,11 @@ export function SimulationShareAction({
             onFocus={(event) => event.currentTarget.select()}
             style={{ width: '100%', maxWidth: 420 }}
           />
-          <Typography variant="caption" color="text.secondary">
-            {t('cases.share.expiresOn', { date: formatDate(phase.expiresAt) })}
-          </Typography>
+          {phase.expiresAt !== undefined && (
+            <Typography variant="caption" color="text.secondary">
+              {t('cases.share.expiresOn', { date: formatDate(phase.expiresAt) })}
+            </Typography>
+          )}
         </>
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>

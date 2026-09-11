@@ -43,12 +43,26 @@ import Typography from '@mui/material/Typography'
 import { useTranslation } from '@speed/i18n'
 import { useAppServices } from '../app-services.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-import { SHARE_ACCESS_PATH } from '../share-api.js'
 import { shareErrorCodeOf, shareViewErrorTextKey } from '../share-errors.js'
 
 /** The number of image-load retries the page grants a live share whose
  * load failed transiently before the transport message is shown. */
 const MAX_IMAGE_RETRIES = 1
+
+/** GET /api/v1/sharing/access -- the module's public access route
+ * (sharing.PathAccess, go/sharing/module.go), hand-kept here because
+ * this page reaches it in the one way no generated operation can: as
+ * an `<img>` src the browser navigates under its own credentials-free
+ * rules, and as the credential-less diagnosis probe below. The probe
+ * is registered residue of the app's RequestFn surface: the generated
+ * mutator always attaches the session's access token when one exists
+ * (@speed/api-sdk/runtime has no per-operation credential-less
+ * channel), while this route must stay genuinely credential-less -- a
+ * present-but-invalid bearer is refused even on this public route
+ * (go/authn/middleware.go) -- and the page's whole point is that a
+ * visitor holding no session, or one that died mid-visit, still gets
+ * an honest answer. */
+const SHARE_ACCESS_PATH = '/api/v1/sharing/access'
 
 /** One half of the shared pair's phase: the image on its current
  * attempt, or the refusal message its failed load resolved to. */

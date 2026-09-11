@@ -1,10 +1,11 @@
 /**
  * admin-view.tsx -- the administration surface of the reference-app
  * web host: the platform's tenant ledger, the one operator task every
- * other one starts from, read from go/admin's own operator-facing
- * route (admin-api.ts -- GET /api/v1/admin/tenants, mounted in this
- * app behind guardAdminRoute, internal/app/demo/demo_admin.go, which
- * evaluates every admin:* permission in rbac.SystemDomain).
+ * other one starts from, read through the generated @speed/api-sdk hook
+ * for go/admin's own operator-facing route (GET /api/v1/admin/tenants,
+ * mounted in this app behind guardAdminRoute,
+ * internal/app/demo/demo_admin.go, which evaluates every admin:*
+ * permission in rbac.SystemDomain).
  *
  * WHO REACHES IT, AND HOW THE GATE WORKS
  *
@@ -56,16 +57,14 @@ import { useMemo } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
-import { useQuery } from '@tanstack/react-query'
+import { useAdminListTenants } from '@speed/api-sdk'
+import type { AdminTenant } from '@speed/api-sdk'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import { RouteGuard } from '@speed/layout-kit'
 import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState } from '@speed/ui-kit'
-import { useAppServices } from '../app-services.js'
-import { listAdminTenants } from '../admin-api.js'
-import type { AdminTenant } from '../admin-api.js'
 import { demoTenantNameKey } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
@@ -99,7 +98,6 @@ function apiErrorCodeOf(error: unknown): string | null {
  */
 export function AdminView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const { api } = useAppServices()
   const currentTenant = useCurrentTenant()
   const tenantId = currentTenant?.tenantId ?? null
 
@@ -112,13 +110,8 @@ export function AdminView(): ReactElement {
   // platform ledger shares the prefix, exactly like the clinic-name
   // row does.
   const tenantsKey = useMemo(() => ['tenant', tenantId, 'admin'], [tenantId])
-  const tenantsQuery = useQuery({
-    queryKey: tenantsKey,
-    queryFn: async () => {
-      const answer = await listAdminTenants(api)
-      return answer.tenants ?? []
-    },
-    enabled: tenantId !== null,
+  const tenantsQuery = useAdminListTenants(undefined, {
+    query: { queryKey: tenantsKey, enabled: tenantId !== null },
   })
 
   // The read failure, classified error-first exactly like the team
@@ -216,7 +209,7 @@ export function AdminView(): ReactElement {
           }
         >
           <DataTable
-            rows={tenantsQuery.data ?? []}
+            rows={tenantsQuery.data?.tenants ?? []}
             columns={tenantColumns}
             rowKey={(row) => row.tenantId}
             loading={tenantsQuery.isFetching}
