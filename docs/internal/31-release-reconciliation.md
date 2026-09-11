@@ -158,6 +158,14 @@
 - **登记理由**：宿主可见的装配契约行为收紧（此前可启动的误装配组合现在拒绝启动），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（四个收紧提交均带 `!BREAKING` footer，先例同 §5.2）。
 - **出处**：`da8d6c62`（`fix(pkgcore)!: refuse a token delivered by two selected components`）+ `2ae8a125`（`refactor(sharing,ai-gateway,notification,integration,admin,compliance,jobs)!: propagate optional dependency read errors`）+ `cfa6f7e1`（`refactor(saasctl)!: propagate the optional SMS sender read in the templates`）+ `3b719310`（`refactor(reference-app)!: propagate optional dependency read errors in host wiring`）。
 
+### 5.9. notification：联系人 SMS 的身份 locale 改为渲染实际 locale（行为修正）
+
+- **面**：`go/notification` 的两条 contact 系 SMS 发送——投递路径（`deliverContactSMS`）与联系人验证码（`sendCode` 经 `renderContactCode`）——此前正文渲染 locale 与 seam 携带的 `SMS.Locale` 是两个来源：正文按档 locale（dispatch 捕获的请求语言 / 验证码创建与重发请求的协商语言）渲染，`SMS.Locale` 恒为平台默认（`en-US`）。现两者同源：`SMS.Locale` 即正文实际渲染 locale（生产者未捕获语言时同为平台默认 tier）。用户投递路径（`deliverUserSMS`）与 authn 验证码（`renderSMSCode` 回报的 `usedLocale`）本已同源，不变。
+- **消费者影响**：模板型适配器（`pkgcore/sms/aliyun`、`pkgcore/sms/tencent`）按 `(locale, message-id)` 选择已审批模板。档 locale 非平台默认时，联系人与联系人验证码消息的模板选择从"平台默认语言模板"变为"该 locale 语言模板"——例如 zh-CN 档此前正文中文而模板取 en-US（或在该 pair 无映射时被拒）。只在平台默认语言注册过这些 message-id 模板的宿主，需为其实流量携带的其余 locale 补注册，否则消息在适配器侧发送前拒绝（fail-closed 无兜底，即既有适配器契约，本轮未新增行为）。自由文本传输（console/HTTP 网关/Twilio）忽略身份字段，不受影响。
+- **替代路径**：无（同签名行为修正）；按流量语言补注册 `(locale, message-id)` 模板即可。
+- **登记理由**：宿主可观测面（发送消息的模板语言与可达性）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（公共签名面未变，不带 footer）。
+- **出处**：`51da1649`（`fix(notification): select contact SMS templates in the locale the copy rendered in`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
