@@ -23,11 +23,11 @@ type bridgeModule struct {
 	keys      []pkgcore.BootstrapKey
 }
 
-func (m *bridgeModule) Name() string               { return m.name }
-func (m *bridgeModule) DependsOn() []string        { return m.dependsOn }
-func (m *bridgeModule) Migrations() embed.FS       { return embed.FS{} }
-func (m *bridgeModule) Locales() embed.FS          { return embed.FS{} }
-func (m *bridgeModule) OpenAPISpec() []byte        { return nil }
+func (m *bridgeModule) Name() string         { return m.name }
+func (m *bridgeModule) DependsOn() []string  { return m.dependsOn }
+func (m *bridgeModule) Migrations() embed.FS { return embed.FS{} }
+func (m *bridgeModule) Locales() embed.FS    { return embed.FS{} }
+func (m *bridgeModule) OpenAPISpec() []byte  { return nil }
 func (m *bridgeModule) Register(reg *pkgcore.Registry) error {
 	*m.order = append(*m.order, m.name)
 	if len(m.keys) > 0 {
@@ -45,8 +45,10 @@ func (m *bridgeModule) Register(reg *pkgcore.Registry) error {
 // as real modules are: the wrapped components' products (the module values
 // themselves) must stay individually addressable through the by-type
 // context.
-type bridgeModuleA struct{ bridgeModule }
-type bridgeModuleB struct{ bridgeModule }
+type (
+	bridgeModuleA struct{ bridgeModule }
+	bridgeModuleB struct{ bridgeModule }
+)
 
 // TestBridge_WrapsLegacyModulesThroughTheSevenStages is the bridge's
 // conformance test: two old-style modules with a DependsOn edge, handed to

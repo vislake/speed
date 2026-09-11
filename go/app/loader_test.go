@@ -212,7 +212,7 @@ func TestLoad_ResolvesBootstrapMaterial(t *testing.T) {
 
 	var host testHostConfig
 	host.PlatformConfig = testPlatformConfig()
-	wantKey := host.PlatformConfig.Authn.Blind_Index_Key
+	wantKey := host.Authn.Blind_Index_Key
 	reg := loaderTestRegistry(t, probeComponent("probe",
 		pkgcore.BootstrapKey{Key: "token", Format: "string"},
 		pkgcore.BootstrapKey{Key: "authn.blind_index_key", Format: "hexkey"},

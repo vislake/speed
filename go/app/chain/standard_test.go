@@ -213,16 +213,16 @@ func TestStandard_AcceptsAComponentRegistry(t *testing.T) {
 	}))
 
 	ctx := context.Background()
-	if err := reg.Prepare(ctx); err != nil {
+	if err = reg.Prepare(ctx); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := reg.Construct(ctx); err != nil {
+	if err = reg.Construct(ctx); err != nil {
 		t.Fatalf("Construct: %v", err)
 	}
-	if err := reg.Verify(ctx); err != nil {
+	if err = reg.Verify(ctx); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if err := reg.Init(ctx); err != nil {
+	if err = reg.Init(ctx); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })

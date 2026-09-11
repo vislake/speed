@@ -355,10 +355,18 @@ func (asm *transitionAssembly) databaseComponent(modules []pkgcore.Module) pkgco
 			return asm.app.db, nil
 		},
 		Verify: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			return applyMigrations(ctx, instance.(*gorm.DB), dialect, modules)
+			db, ok := instance.(*gorm.DB)
+			if !ok {
+				return fmt.Errorf("app: the database component holds an instance of type %T", instance)
+			}
+			return applyMigrations(ctx, db, dialect, modules)
 		},
 		Close: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			return closeDatabase(ctx, instance.(*gorm.DB))
+			db, ok := instance.(*gorm.DB)
+			if !ok {
+				return fmt.Errorf("app: the database component holds an instance of type %T", instance)
+			}
+			return closeDatabase(ctx, db)
 		},
 	}
 }
