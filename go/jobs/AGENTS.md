@@ -11,7 +11,7 @@ jobs is speed's asynchronous task queue: the `Queue`/`Task`/`Job`/`Handler` cont
 | Portable types every deployment mode shares: `JobID`, `Status`, `Priority`, `Result`, `Job` | `job.go` |
 | `Task`, the Enqueue input shape | `task.go` |
 | The terminal signal's vocabulary: `EventJobTerminal` and its `JobTerminalEvent` payload | `events.go` |
-| `Handler`, `ProgressFn`, `FailureHook`, the `NewHandlerFunc` adapter | `handler.go` |
+| `Handler`, `ProgressFn`, `FailureHook`, the `NewHandlerFunc` and `NewEmptyPayloadHandler` adapters | `handler.go` |
 | `Queue` interface, `EnqueueOption`s, `ResolvedEnqueueOptions`/`ResolveEnqueueOptions` and their defaults — shared verbatim by both implementations, `queue/asynq` included | `queue.go` |
 | `StandaloneQueue`: construction, lifecycle (`Start`/`Close`), `Queue` methods, `RegisterHandler`, `DeadLetterJobs`, the queue-depth metric | `queue_standalone.go` |
 | The dispatcher and worker goroutines: polling, per-tenant concurrency gating, tenant-context rebuild, retry/backoff/dead-letter decisions — and the terminal-signal publisher (`runTerminalPublisher`) | `worker.go` |
@@ -59,6 +59,7 @@ The `asynq-only-in-jobs` and `redis-only-in-pkgcore-and-jobs` depguard rules in 
 | `type ProgressFn func(pct int, msg string)` | The progress-reporting callback `Handle` receives |
 | `type Handler interface { Type() string; Handle(ctx, job *Job, progress ProgressFn) (Result, error) }` | Processes every `Job` of one `Task.Type`. `ctx` already carries `job.TenantID` — see "The tenant context trap" |
 | `func NewHandlerFunc(jobType string, fn func(...) (Result, error)) Handler` | Adapts a plain function into a `Handler`, mirroring `http.HandlerFunc` |
+| `func NewEmptyPayloadHandler(taskType string, run func(ctx) error) Handler` | Adapts a payload-free run function into a `Handler` for the periodic-task shape: `Handle` refuses a non-empty `Job.Payload` naming the task type, and otherwise runs `run` with the rebuilt tenant context |
 | `type FailureHook interface { OnFailure(ctx, job *Job, cause error) }` | A `Handler` optionally implements this too, to run compensation once a `Job` dead-letters — see "Failure compensation stays out of this layer" |
 
 ### `queue.go`
@@ -115,8 +116,8 @@ The `asynq-only-in-jobs` and `redis-only-in-pkgcore-and-jobs` depguard rules in 
 | `func NewScheduler(q Queue, opts ...SchedulerOption) *Scheduler` | Builds the scheduler; a nil queue is refused with a coded panic (`jobs.queue_nil`). Does nothing until `Start` |
 | `func (*Scheduler) Start(ctx) error` | Launches the tick loop and returns immediately; idempotent (a second `Start` returns nil), and refused after `Stop`. A `PerTenant` declaration with no lister wired makes `Start` refuse with `ErrTenantListerRequired` naming those declarations, starting nothing. `ctx` is the context every tick's enqueues run under — it should outlive the scheduler; the loop stops only through `Stop` |
 | `func (*Scheduler) Stop()` | Stops the tick loop and blocks until the in-flight tick (if any) has returned, so no enqueue is still running against a queue about to close. Idempotent; a no-op on a never-started scheduler |
-| `func ScheduleWindowStart(now time.Time, window time.Duration) time.Time` | `now.Truncate(window)`: the schedule window an instant falls in, truncated on the absolute clock so every replica agrees on the boundary. The same derivation the declaring modules' own `Enqueue*` methods perform with their own window constants |
-| `func ScheduleIdempotencyKey(prefix string, tenant pkgcore.TenantID, windowStart time.Time) string` | The key one `PerTenant` schedule enqueue is made under: `prefix + tenant + ":" + windowStart.UTC().Format(time.RFC3339)` — byte-identical to what each site's own `Enqueue*` resolves for the same (type, tenant, window) |
+| `func ScheduleWindowStart(now time.Time, window time.Duration) time.Time` | `now.Truncate(window)`: the schedule window an instant falls in, truncated on the absolute clock so every replica agrees on the boundary. The derivation the declaring modules' own `Enqueue*` methods call with their own window constants |
+| `func ScheduleIdempotencyKey(prefix string, tenant pkgcore.TenantID, windowStart time.Time) string` | The key one `PerTenant` schedule enqueue is made under: `prefix + tenant + ":" + windowStart.UTC().Format(time.RFC3339)` — the same call each site's own `Enqueue*` resolves for the same (type, tenant, window) |
 | `func SchedulePlatformIdempotencyKey(prefix string, windowStart time.Time) string` | The `Platform`-scope twin, with no tenant segment (a platform-wide task's key names the window alone) |
 | `var ErrTenantListerRequired` | `Start`'s refusal error; the message names every per-tenant declaration that would have been skipped |
 

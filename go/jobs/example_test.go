@@ -165,6 +165,28 @@ func ExampleNewHandlerFunc() {
 	// result: ping
 }
 
+// ExampleNewEmptyPayloadHandler shows the adapter a periodic task's handler
+// takes: the task carries no payload -- the pass reads the rows and the
+// clock at run time -- so a non-empty payload is refused before the pass
+// runs, and an empty one runs it.
+func ExampleNewEmptyPayloadHandler() {
+	sweep := jobs.NewEmptyPayloadHandler("widgets.sweep", func(context.Context) error {
+		fmt.Println("swept")
+		return nil
+	})
+
+	if _, err := sweep.Handle(context.Background(), &jobs.Job{Payload: []byte(`{"unexpected":true}`)}, nil); err != nil {
+		fmt.Println("payload refused:", err)
+	}
+	if _, err := sweep.Handle(context.Background(), &jobs.Job{}, nil); err != nil {
+		fmt.Println("sweep failed:", err)
+	}
+
+	// Output:
+	// payload refused: jobs: task "widgets.sweep" carries an unexpected payload
+	// swept
+}
+
 // ExampleWithEventBus shows the terminal signal end to end: a queue
 // configured with an EventBus publishes one jobs.job.terminal event per
 // terminal transition, so a subscriber learns a Job ended without polling

@@ -122,10 +122,10 @@ func WithInterval(d time.Duration) SchedulerOption {
 // window therefore resolve one key and collapse onto one job, whatever the
 // host's replica count; the first tick of a later window resolves a fresh
 // key and the task runs again; and a dead-lettered task poisons only its
-// own window. The derivation is deliberately identical to the one every
-// declaring module's own Enqueue* method performs, so a scheduler tick and
-// a manual enqueue landing in the same window dedupe onto one job rather
-// than running the window twice.
+// own window. The derivation is deliberately the one every declaring
+// module's own Enqueue* method calls into, so a scheduler tick and a
+// manual enqueue landing in the same window resolve one key and dedupe
+// onto one job rather than running the window twice.
 //
 // # Composition
 //
@@ -333,10 +333,10 @@ func (s *Scheduler) tick(ctx context.Context, decls []pkgcore.PeriodicTask) {
 // multi-replica host agrees on the boundary regardless of its own location.
 //
 // It is the window start every periodic task's idempotency key is composed
-// from (ScheduleIdempotencyKey / SchedulePlatformIdempotencyKey), and it is
-// the same derivation the declaring modules' own Enqueue* methods perform
-// with their own window constants -- the two must agree, or one window
-// would run twice.
+// from (ScheduleIdempotencyKey / SchedulePlatformIdempotencyKey), and the
+// one the declaring modules' own Enqueue* methods pass their own window
+// constants through -- one window, one boundary, whichever path derives
+// it, or one window would run twice.
 func ScheduleWindowStart(now time.Time, window time.Duration) time.Time {
 	return now.Truncate(window)
 }
@@ -344,9 +344,10 @@ func ScheduleWindowStart(now time.Time, window time.Duration) time.Time {
 // ScheduleIdempotencyKey derives the idempotency key one PerTenant-scope
 // schedule enqueue is made under: prefix + the tenant segment + the window
 // start as UTC RFC 3339. prefix is the declaring site's own established key
-// prefix (pkgcore.PeriodicTask.KeyPrefix), so an enqueue this derivation
-// produces and one the module's own Enqueue* method produces for the same
-// (task type, tenant, window) are the same key and dedupe onto one job.
+// prefix (pkgcore.PeriodicTask.KeyPrefix), and the declaring module's own
+// Enqueue* method resolves through this same function, so a scheduler
+// tick's enqueue and a manual enqueue for the same (task type, tenant,
+// window) land on one key and dedupe onto one job.
 func ScheduleIdempotencyKey(prefix string, tenant pkgcore.TenantID, windowStart time.Time) string {
 	return prefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
 }

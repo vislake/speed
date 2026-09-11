@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,62 @@ func TestNewHandlerFunc_PropagatesError(t *testing.T) {
 	})
 
 	_, err := h.Handle(context.Background(), &Job{}, func(int, string) {})
+	if !errors.Is(err, wantErr) {
+		t.Errorf("Handle() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestNewEmptyPayloadHandler_RunsThePassForAnEmptyPayload(t *testing.T) {
+	ctxGot := context.Background()
+	calls := 0
+	h := NewEmptyPayloadHandler("widgets.sweep", func(ctx context.Context) error {
+		calls++
+		if ctx != ctxGot {
+			t.Errorf("run() ctx = %v, want the ctx Handle received", ctx)
+		}
+		return nil
+	})
+
+	if got := h.Type(); got != "widgets.sweep" {
+		t.Errorf("Type() = %q, want %q", got, "widgets.sweep")
+	}
+	if _, err := h.Handle(ctxGot, &Job{Payload: nil}, nil); err != nil {
+		t.Fatalf("Handle() error = %v, want nil", err)
+	}
+	if calls != 1 {
+		t.Errorf("run() calls = %d, want 1", calls)
+	}
+}
+
+func TestNewEmptyPayloadHandler_RefusesANonEmptyPayloadWithoutRunning(t *testing.T) {
+	calls := 0
+	h := NewEmptyPayloadHandler("widgets.sweep", func(context.Context) error {
+		calls++
+		return nil
+	})
+
+	_, err := h.Handle(context.Background(), &Job{Payload: []byte(`{"unexpected":true}`)}, nil)
+	if err == nil {
+		t.Fatal("Handle() with a non-empty payload = nil error, want an error")
+	}
+	if !strings.Contains(err.Error(), "unexpected payload") {
+		t.Errorf("Handle() error = %q, want it to name the unexpected payload", err)
+	}
+	if !strings.Contains(err.Error(), "widgets.sweep") {
+		t.Errorf("Handle() error = %q, want it to name the task type", err)
+	}
+	if calls != 0 {
+		t.Errorf("run() calls = %d, want 0 -- a task-shape violation must not run the pass", calls)
+	}
+}
+
+func TestNewEmptyPayloadHandler_PropagatesTheRunError(t *testing.T) {
+	wantErr := errors.New("boom")
+	h := NewEmptyPayloadHandler("widgets.sweep", func(context.Context) error {
+		return wantErr
+	})
+
+	_, err := h.Handle(context.Background(), &Job{}, nil)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("Handle() error = %v, want %v", err, wantErr)
 	}

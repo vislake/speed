@@ -1,6 +1,9 @@
 package jobs
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // ProgressFn reports incremental progress from inside a Handle call. pct is
 // a caller-defined percentage (0-100 is the expected convention, though
@@ -54,6 +57,30 @@ func (h handlerFunc) Handle(ctx context.Context, job *Job, progress ProgressFn) 
 // a test) that does not need a dedicated named type.
 func NewHandlerFunc(jobType string, fn func(ctx context.Context, job *Job, progress ProgressFn) (Result, error)) Handler {
 	return handlerFunc{jobType: jobType, fn: fn}
+}
+
+// NewEmptyPayloadHandler adapts run into a Handler claiming taskType for
+// the payload-free periodic-task shape: Handle refuses a job whose Payload
+// is non-empty -- a task-shape violation no retry can fix, because the task
+// the row describes can never be the one this handler runs -- and
+// otherwise runs run with the context Handle received.
+//
+// The shape is a schedule point's own: a periodic poll, sweep or scan
+// reads its inputs from the rows and the clock at run time, so its enqueue
+// carries no payload and the handler's body is exactly "check the payload
+// is empty, then run the module's pass". run receives the ctx the worker
+// already rebuilt the job's tenant onto (see Handler.Handle) and must
+// respect ctx cancellation like any Handler.
+func NewEmptyPayloadHandler(taskType string, run func(ctx context.Context) error) Handler {
+	return handlerFunc{jobType: taskType, fn: func(ctx context.Context, job *Job, _ ProgressFn) (Result, error) {
+		if len(job.Payload) != 0 {
+			return Result{}, fmt.Errorf("jobs: task %q carries an unexpected payload", taskType)
+		}
+		if err := run(ctx); err != nil {
+			return Result{}, err
+		}
+		return Result{}, nil
+	}}
 }
 
 // compile-time check that handlerFunc satisfies Handler.
