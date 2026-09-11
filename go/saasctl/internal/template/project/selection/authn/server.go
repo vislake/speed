@@ -572,7 +572,11 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 		// composition silently keeping a console sender nobody in a
 		// distributed replica pool is reading.
 		wireSender := b.cfg.SMSGatewayURL != "" || b.cfg.DeploymentMode != pkgcore.DeploymentModeDistributed
-		if sender, err := pkgcore.Get[pkgcore.SMSSender](reg); wireSender && err == nil {
+		sender, hasSender, err := pkgcore.GetOptional[pkgcore.SMSSender](reg)
+		if err != nil {
+			return nil, err
+		}
+		if wireSender && hasSender {
 			opts = append(opts, authn.WithSMSSender(sender))
 		}
 		authnModule, err := authn.NewModule(db, opts...)
