@@ -212,9 +212,10 @@ func TestHostComponents_DeclareTheirContracts(t *testing.T) {
 
 // assembledSeams returns a registry carrying the seam values a step's view
 // derivation and registry binding need, in the combinations the adapter's
-// failure paths are pinned over. The typed nils are the products binding
-// only reads back -- what the step bodies do with them is the suites' (and
-// the whole-application assembly test's) business.
+// failure paths are pinned over. The placeholders are zero-value instances
+// of each product's own type: the binding only reads them back, and a
+// registry value must be non-nil. What the step bodies do with them is the
+// suites' (and the whole-application assembly test's) business.
 func assembledSeams(withBus, withKV bool) *pkgcore.ComponentRegistry {
 	reg := pkgcore.NewComponentRegistry()
 	if withBus {
@@ -224,28 +225,28 @@ func assembledSeams(withBus, withKV bool) *pkgcore.ComponentRegistry {
 		reg.Put(pkgcore.NewMemoryKVStore())
 	}
 	for _, product := range []any{
-		(*gorm.DB)(nil),
-		(*jobs.StandaloneQueue)(nil),
-		(*config.Module)(nil),
-		(*org.Module)(nil),
-		(*pki.Module)(nil),
-		(*authn.Module)(nil),
-		(*notes.Module)(nil),
-		(*audit.Module)(nil),
-		(*rbac.Module)(nil),
-		(*storage.Module)(nil),
-		(*sharing.Module)(nil),
-		(*integration.Module)(nil),
-		(*demomodule.Module)(nil),
-		(*notification.Module)(nil),
-		(*aigateway.Module)(nil),
-		(*billing.Module)(nil),
-		(*metering.Module)(nil),
-		(*compliance.Module)(nil),
-		(*admin.Module)(nil),
-		(*attestation.Service)(nil),
-		(*config.Service)(nil),
-		(*rbac.Service)(nil),
+		new(gorm.DB),
+		new(jobs.StandaloneQueue),
+		new(config.Module),
+		new(org.Module),
+		new(pki.Module),
+		new(authn.Module),
+		new(notes.Module),
+		new(audit.Module),
+		new(rbac.Module),
+		new(storage.Module),
+		new(sharing.Module),
+		new(integration.Module),
+		new(demomodule.Module),
+		new(notification.Module),
+		new(aigateway.Module),
+		new(billing.Module),
+		new(metering.Module),
+		new(compliance.Module),
+		new(admin.Module),
+		new(attestation.Service),
+		new(config.Service),
+		new(rbac.Service),
 	} {
 		reg.Put(product)
 	}
