@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import pathlib
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import check_env_example_consistency as m  # noqa: E402
+from testutil import make_tree  # noqa: E402
 
 BOOTSTRAP = '''package app
 
@@ -171,17 +171,6 @@ APP_CONFIG__CIPHER_KEY=
 APP_AUTHN__BLIND_INDEX_KEY=
 APP_AUTHN__PII_CIPHER_KEY=
 '''
-
-
-def make_tree(files: dict[str, str]) -> pathlib.Path:
-    root = pathlib.Path(
-        tempfile.mkdtemp(prefix="env-example-consistency-")
-    )
-    for rel, text in files.items():
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    return root
 
 
 def base_files(bootstrap: str = BOOTSTRAP, example: str = EXAMPLE,

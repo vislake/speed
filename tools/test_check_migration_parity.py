@@ -33,12 +33,12 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import check_migration_parity as m  # noqa: E402
+from testutil import make_tree as fixture_tree  # noqa: E402
 
 SQLITE_CREATE = (
     "-- a comment the postgres copy need not repeat\n"
@@ -67,14 +67,9 @@ def make_tree(
     registry: dict | None = None,
     write_registry: bool = True,
 ) -> pathlib.Path:
-    """Materialize a fixture repo tree {rel_path: sql_text} under a temp
-    dir (plus the exceptions registry, empty by default) and return the
-    temp root."""
-    root = pathlib.Path(tempfile.mkdtemp(prefix="migration-parity-"))
-    for (rel, text) in files.items():
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+    """The shared fixture tree (tools/testutil.py) plus this checker's
+    own extra: the exceptions registry, written empty by default."""
+    root = fixture_tree(files)
     if write_registry:
         if registry is None:
             registry = {

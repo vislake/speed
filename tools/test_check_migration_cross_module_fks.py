@@ -33,12 +33,12 @@ from __future__ import annotations
 
 import pathlib
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import check_migration_cross_module_fks as m  # noqa: E402
+from testutil import make_tree  # noqa: E402
 
 CREATE_AUDIT = (
     "-- create audit_events\n"
@@ -51,17 +51,6 @@ CREATE_USERS = (
     "    id TEXT PRIMARY KEY\n"
     ");\n"
 )
-
-
-def make_tree(files: dict[str, str]) -> pathlib.Path:
-    """Materialize a fixture repo tree {rel_path: sql_text} under a
-    temp dir and return the temp root."""
-    root = pathlib.Path(tempfile.mkdtemp(prefix="fk-fixture-"))
-    for (rel, text) in files.items():
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    return root
 
 
 class FixtureRules(unittest.TestCase):
@@ -182,6 +171,28 @@ class NestedCheckoutTests(unittest.TestCase):
         # The in-tree audit table still scans; the worktree file is not
         # corpus at all -- no finding either way.
         self.assertEqual(m.scan_tree(root), [])
+
+
+class SharedStripRule(unittest.TestCase):
+    """The comment-stripping rule is one rule: both migration checkers
+    import the same callable from migration_sql.py. The defect this pins:
+    the two checkers carried private copies that had already forked --
+    line comments replaced by an empty string in check_migration_parity
+    and by a space here, so a comment between two tokens glued them
+    together in one checker and not the other."""
+
+    def test_both_checkers_strip_with_the_same_callable(self):
+        import check_migration_parity
+        import migration_sql
+
+        self.assertIs(m.strip_sql_comments, migration_sql.strip_sql_comments)
+        self.assertIs(
+            check_migration_parity.strip_sql_comments,
+            migration_sql.strip_sql_comments,
+        )
+
+    def test_removed_line_comment_never_glues_tokens(self):
+        self.assertEqual(m.strip_sql_comments("a--c\nb"), "a \nb")
 
 
 class CommentStripping(unittest.TestCase):

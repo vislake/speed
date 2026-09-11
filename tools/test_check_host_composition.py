@@ -30,21 +30,12 @@ from __future__ import annotations
 
 import pathlib
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import check_host_composition as m  # noqa: E402
-
-
-def make_tree(files: dict[str, str]) -> pathlib.Path:
-    root = pathlib.Path(tempfile.mkdtemp(prefix="host-composition-"))
-    for (rel, text) in files.items():
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    return root
+from testutil import make_tree  # noqa: E402
 
 
 class NoForkRules(unittest.TestCase):

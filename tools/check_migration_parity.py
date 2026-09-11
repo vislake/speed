@@ -85,6 +85,13 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+# The comment-stripping rule shared with check_migration_cross_module_fks.py:
+# one rule, one implementation (migration_sql.py). The two checkers' private
+# copies had already forked on the line-comment replacement.
+from migration_sql import strip_sql_comments  # noqa: E402
+
 # The two dialect directory names every migration set carries, and the
 # order findings are reported in.
 DIALECTS = ("sqlite", "postgres")
@@ -128,15 +135,6 @@ SOURCE_TREES = ("go", "examples")
 # Diff lines printed for an undeclared divergence, so the output is
 # actionable without becoming a wall of text.
 MAX_DIFF_LINES = 14
-
-
-def strip_sql_comments(text: str) -> str:
-    """Remove SQL comments (-- to end of line, /* ... */ blocks) so prose
-    explaining a migration is never compared; string literals are not
-    tracked, the same convention check_migration_cross_module_fks.py
-    documents (no migration here embeds '--' or '/*' inside a literal)."""
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
-    return re.sub(r"--[^\n]*", "", text)
 
 
 def canonical_statements(text: str) -> list[str]:

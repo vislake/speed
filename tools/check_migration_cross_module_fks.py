@@ -66,6 +66,13 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+# The comment-stripping rule shared with check_migration_parity.py: one
+# rule, one implementation (migration_sql.py). The two checkers' private
+# copies had already forked on the line-comment replacement.
+from migration_sql import strip_sql_comments  # noqa: E402
+
 # Directories never descended into, matched by basename.
 PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor", "__pycache__"})
 
@@ -89,15 +96,6 @@ REFERENCES = re.compile(
 # go/<module>/... owns to the first path segment; the examples tree
 # owns to the reference app as a whole.
 GO_ROOT = "go/"
-
-
-def strip_sql_comments(text: str) -> str:
-    """Remove SQL comments so prose cannot be scanned as clauses.
-    Handles -- line comments and /* ... */ block comments; string
-    literals are not tracked (no migration in this repository embeds
-    '--' or '/*' inside a literal)."""
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
-    return re.sub(r"--[^\n]*", " ", text)
 
 
 def owning_module(rel_path: str) -> str:
