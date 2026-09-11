@@ -22,6 +22,13 @@ replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 // standalone builds only.
 replace github.com/vislake/speed/go/dbkit => ../dbkit
 
+// The metering module declares its surface against the Registrar view,
+// which no released version carries yet, so this module resolves metering
+// from the sibling checkout. A replace directive in a dependency is
+// ignored by consumers, so this affects this module's own standalone
+// builds only.
+replace github.com/vislake/speed/go/metering => ../metering
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/dbkit v0.0.1

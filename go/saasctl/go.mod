@@ -10,6 +10,23 @@ go 1.26.0
 // standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// Every module the migrate command and the materialized-host tests
+// construct declares its surface against the Registrar view, which no
+// released version carries yet, so each resolves from the sibling
+// checkout. A replace directive in a dependency is ignored by consumers,
+// so these affect this module's own standalone builds only.
+replace github.com/vislake/speed/go/authn => ../authn
+
+replace github.com/vislake/speed/go/config => ../config
+
+replace github.com/vislake/speed/go/dbkit => ../dbkit
+
+replace github.com/vislake/speed/go/org => ../org
+
+replace github.com/vislake/speed/go/pki => ../pki
+
+replace github.com/vislake/speed/go/rbac => ../rbac
+
 // The requires below are the db migrate command's real module graph,
 // maintained by go mod tidy: the four migration-shipping modules whose
 // migrations the command applies (authn, config, org, rbac -- direct,

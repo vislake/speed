@@ -22,6 +22,15 @@ replace github.com/vislake/speed/go/config => ../config
 // standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// The dbkit/audit and sharing modules declare their surfaces against the
+// Registrar view, which no released version carries yet, so each resolves
+// from the sibling checkout. A replace directive in a dependency is
+// ignored by consumers, so these affect this module's own standalone
+// builds only.
+replace github.com/vislake/speed/go/dbkit => ../dbkit
+
+replace github.com/vislake/speed/go/sharing => ../sharing
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/config v0.0.1

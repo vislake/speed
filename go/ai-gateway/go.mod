@@ -23,6 +23,13 @@ replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 // standalone builds only.
 replace github.com/vislake/speed/go/dbkit => ../dbkit
 
+// The storage module declares its surface against the Registrar view,
+// which no released version carries yet, so this module resolves storage
+// from the sibling checkout. A replace directive in a dependency is
+// ignored by consumers, so this affects this module's own standalone
+// builds only.
+replace github.com/vislake/speed/go/storage => ../storage
+
 require (
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/vislake/speed/go/dbkit v0.0.1
