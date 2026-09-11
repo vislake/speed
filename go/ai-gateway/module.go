@@ -155,8 +155,10 @@ func (m *Module) Locales() embed.FS { return embed.FS{} }
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
-// performs no I/O; SystemPurposeCredentialWrite is descriptor data the
-// component descriptor declares, not a declaration made here, so a host's
+// performs no I/O. SystemPurposeCredentialWrite is not declared here: it is
+// descriptor data, carried by the component descriptor (component.go) and
+// registered by the assembly's Init close (or, on the host path, by the
+// transition bridge inside the module's own registration turn), so a host's
 // system context can name it. Register claims the image-generation job
 // handler on reg.Jobs whenever the Module's Gateway was built with
 // WithImageGeneration (image_gateway.go's imageJobHandler):
