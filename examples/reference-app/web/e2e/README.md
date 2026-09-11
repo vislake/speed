@@ -319,10 +319,12 @@ In `1dc8204e`'s webkit run the loss reloads the page -- vite's "[vite]
 server connection lost. Polling for restart..." is followed about 30 ms
 later by a document load, the first ping having succeeded -- the reload
 discards the in-memory session, and the journey dies at the click: the
-case-create submit never re-enables (the crash killed the upload it was
-waiting on) and the reload then detaches it, so the bare click burns
-the whole test budget. Before the guards above existed, this arrived as
-exactly that: a timeout naming neither the crash nor the upload.
+case-create submit never re-enables (the upload it was waiting on never
+lands: the trace's only POST is the sign-in, and the photo row still
+reads "Uploading…" 127 ms before the crash) and the reload then
+detaches it, so the bare click burns the whole test budget. Before the
+guards above existed, this arrived as exactly that: a timeout naming
+neither the crash nor the upload.
 
 What is on record about the crash, and what is not:
 
