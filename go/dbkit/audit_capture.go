@@ -147,14 +147,14 @@ type Auditable interface {
 // when Options.AuditBus is set. models, when non-nil, is the restriction
 // resolveAuditModels derived from Options.AuditModels: a non-nil map
 // admits only writes against a model whose (pointer-free) type is a key;
-// nil admits every Auditable model, the pre-scoping semantics.
+// nil admits every Auditable model, the default scope.
 func newAuditCapturePlugin(bus pkgcore.EventBus, models map[reflect.Type]struct{}) *auditCapturePlugin {
 	return &auditCapturePlugin{bus: bus, models: models}
 }
 
 // resolveAuditModels normalizes Options.AuditModels into the type-set
 // auditCapturePlugin consults per write, or nil when the list is empty
-// (capture everything Auditable, the pre-scoping semantics).
+// (capture everything Auditable, the default scope).
 //
 // Each entry is dereferenced to its underlying type (OrgNode{} and
 // &OrgNode{} both resolve to OrgNode), and that type must implement
@@ -959,9 +959,8 @@ func auditableOf(stmt *gorm.Statement) (Auditable, bool) {
 }
 
 // inCaptureScope reports whether auditable's type is admitted by this
-// plugin's capture scope. models == nil (the pre-scoping semantics, an
-// Open call that set AuditBus but never AuditModels) admits every
-// Auditable model. A non-nil scope admits only the listed types, matched
+// plugin's capture scope. models == nil (the default scope, an Open call
+// that set AuditBus but never AuditModels) admits every Auditable model. A non-nil scope admits only the listed types, matched
 // pointer-free: the statement may hold *OrgNode while the host listed
 // OrgNode{} in Options.AuditModels, and resolveAuditModels normalized
 // both sides to the same underlying type, so this check is type equality
