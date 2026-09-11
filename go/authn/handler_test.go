@@ -624,7 +624,8 @@ func TestHandler_LoginWithSMSCode_ValidCode_ReturnsTokenPair(t *testing.T) {
 // smsCodeRunPattern matches a maximal run of ASCII digits, so
 // extractSMSCode can find the one run that is EXACTLY smsCodeDigits long --
 // the code itself -- rather than the first digit it sees, which the console
-// sender's "SMS to <phone>: <text>" record framing (pkgcore's sms.go) puts
+// sender's "SMS to <phone>: <text>" record framing (pkgcore's
+// console_sms_sender.go) puts
 // a PHONE NUMBER'S digits before the code.
 var smsCodeRunPattern = regexp.MustCompile(`\d+`)
 
@@ -2000,7 +2001,7 @@ func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 	standalone, standaloneFixture := newTestHandler(t, WithSMSSender(pkgcore.NewConsoleSMSSender(&consoleOut)))
 
 	// TLS, not plaintext: the HTTP SMS sender refuses a plaintext gateway
-	// endpoint before any request (see pkgcore's own sms_test.go,
+	// endpoint before any request (see pkgcore's own http_sms_sender_test.go,
 	// TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest), so the
 	// distributed leg's gateway must be a TLS test server for the flow to
 	// exercise a real delivery.
