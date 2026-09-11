@@ -43,6 +43,33 @@ func TestClose_StopsTheWorkerWhileTheDatabaseIsStillOpen(t *testing.T) {
 	}
 }
 
+// TestClose_BoundsTheWorkerDrain pins the drain's bound: the context the
+// worker is closed with carries a ShutdownTimeout deadline, so a worker whose
+// drain hangs cannot wedge the shutdown forever.
+func TestClose_BoundsTheWorkerDrain(t *testing.T) {
+	var host testHostConfig
+	worker := &testWorker{}
+
+	a, err := New(context.Background(), append(testBaseOptions(t, &host), WithWorker(worker))...)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	worker.mu.Lock()
+	closeCtx := worker.lastCtx
+	worker.mu.Unlock()
+	deadline, ok := closeCtx.Deadline()
+	if !ok {
+		t.Fatal("the worker's drain context carries no deadline, want one bounded by ShutdownTimeout")
+	}
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > ShutdownTimeout {
+		t.Fatalf("the worker's drain deadline is %v away, want it within ShutdownTimeout (%v)", remaining, ShutdownTimeout)
+	}
+}
+
 // reserveAddr returns a loopback address the test can hand to Run: a port is
 // reserved and released, so the server binds it a moment later.
 func reserveAddr(t *testing.T) string {
