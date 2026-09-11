@@ -10,7 +10,6 @@ package billing
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -65,26 +64,24 @@ func component() pkgcore.Component {
 				return nil, err
 			}
 			var usage UsageReader
-			reader, err := pkgcore.Get[UsageReader](reg)
-			switch {
-			case err == nil:
-				usage = reader
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional reader is absent: quota reads answer without
-				// live usage, the shape NewModule's nil usage documents.
-			default:
+			// The reader is optional: absent, quota reads answer without
+			// live usage, the shape NewModule's nil usage documents.
+			reader, ok, err := pkgcore.GetOptional[UsageReader](reg)
+			if err != nil {
 				return nil, err
 			}
+			if ok {
+				usage = reader
+			}
 			var opts []Option
-			queue, err := pkgcore.Get[jobs.Queue](reg)
-			switch {
-			case err == nil:
-				opts = append(opts, WithQueue(queue))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional queue is absent: the polling fallback is
-				// unavailable, the shape WithQueue documents.
-			default:
+			// The queue is optional: absent, the polling fallback is
+			// unavailable, the shape WithQueue documents.
+			queue, ok, err := pkgcore.GetOptional[jobs.Queue](reg)
+			if err != nil {
 				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithQueue(queue))
 			}
 			return NewModule(db, usage, opts...), nil
 		},

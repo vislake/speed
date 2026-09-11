@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -342,12 +341,12 @@ func configGet(c pkgcore.ComponentConfig, key string) (any, bool) {
 // override layer), and none is a legitimate assembly with no code
 // overrides.
 func compositionOverrides(reg *pkgcore.ComponentRegistry) (pkgcore.ComponentConfig, bool, error) {
-	override, err := pkgcore.Get[CompositionOverrides](reg)
+	override, ok, err := pkgcore.GetOptional[CompositionOverrides](reg)
 	if err != nil {
-		if errors.Is(err, pkgcore.ErrMissingRequirement) {
-			return pkgcore.ComponentConfig{}, false, nil
-		}
 		return pkgcore.ComponentConfig{}, false, fmt.Errorf("app: the composition configuration's code-override layer: %w", err)
+	}
+	if !ok {
+		return pkgcore.ComponentConfig{}, false, nil
 	}
 	return override.Config, true, nil
 }

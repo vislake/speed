@@ -20,7 +20,6 @@ package org
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -126,38 +125,35 @@ func component() pkgcore.Component {
 			if c.MaxDepth != 0 {
 				opts = append(opts, WithMaxDepth(c.MaxDepth))
 			}
-			gate, err := pkgcore.Get[FeatureGate](reg)
-			switch {
-			case err == nil:
+			// The gate is optional: absent, the flags' declared defaults
+			// apply, the shape WithFeatureGate documents.
+			gate, ok, err := pkgcore.GetOptional[FeatureGate](reg)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				opts = append(opts, WithFeatureGate(gate))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional gate is absent: the flags' declared defaults
-				// apply, the shape WithFeatureGate documents.
-			default:
+			}
+			// The resolver is optional: absent, the two caller-scoped
+			// endpoints fail closed, the shape WithSubjectResolver
+			// documents.
+			resolver, ok, err := pkgcore.GetOptional[SubjectResolver](reg)
+			if err != nil {
 				return nil, err
 			}
-			resolver, err := pkgcore.Get[SubjectResolver](reg)
-			switch {
-			case err == nil:
+			if ok {
 				opts = append(opts, WithSubjectResolver(resolver))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional resolver is absent: the two caller-scoped
-				// endpoints fail closed, the shape WithSubjectResolver
-				// documents.
-			default:
+			}
+			// The builder is optional: absent, the module's own
+			// email-invitation requirement stands, and Register refuses
+			// the email-enabled default unless the composition disabled
+			// it.
+			builder, ok, err := pkgcore.GetOptional[InvitationLinkBuilder](reg)
+			if err != nil {
 				return nil, err
 			}
-			builder, err := pkgcore.Get[InvitationLinkBuilder](reg)
-			switch {
-			case err == nil:
+			if ok {
 				opts = append(opts, WithInvitationLinkBuilder(builder))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional builder is absent: the module's own
-				// email-invitation requirement stands, and Register refuses
-				// the email-enabled default unless the composition disabled
-				// it.
-			default:
-				return nil, err
 			}
 			return NewModule(db, opts...), nil
 		},

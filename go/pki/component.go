@@ -18,7 +18,6 @@ package pki
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -101,16 +100,15 @@ func component() pkgcore.Component {
 			if c.CacheTTL != nil {
 				opts = append(opts, WithCacheTTL(*c.CacheTTL))
 			}
-			queue, err := pkgcore.Get[jobs.Queue](reg)
-			switch {
-			case err == nil:
-				opts = append(opts, WithQueue(queue))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional queue is absent: the module runs without
-				// automatic rotation, and register claims neither task
-				// handler nor schedule.
-			default:
+			// The queue is optional: absent, the module runs without
+			// automatic rotation, and register claims neither task
+			// handler nor schedule.
+			queue, ok, err := pkgcore.GetOptional[jobs.Queue](reg)
+			if err != nil {
 				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithQueue(queue))
 			}
 			m := NewModule(db, opts...)
 			// The Service is a construction value (NewModule builds it

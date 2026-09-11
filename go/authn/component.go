@@ -195,10 +195,12 @@ func component() pkgcore.Component {
 				}
 				opts = append(opts, WithPasswordParams(params))
 			}
-			if sender, err := pkgcore.Get[pkgcore.SMSSender](reg); err == nil {
-				opts = append(opts, WithSMSSender(sender))
-			} else if !errors.Is(err, pkgcore.ErrMissingRequirement) {
+			sender, ok, err := pkgcore.GetOptional[pkgcore.SMSSender](reg)
+			if err != nil {
 				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithSMSSender(sender))
 			}
 			return NewModule(db, opts...)
 		},

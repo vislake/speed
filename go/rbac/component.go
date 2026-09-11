@@ -16,7 +16,6 @@ package rbac
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -86,26 +85,24 @@ func component() pkgcore.Component {
 			if c.CacheTTL != 0 {
 				opts = append(opts, WithCacheTTL(c.CacheTTL))
 			}
-			queue, err := pkgcore.Get[jobs.Queue](reg)
-			switch {
-			case err == nil:
-				opts = append(opts, WithQueue(queue))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional queue is absent: reaps run synchronously
-				// inside the event delivery, the shape WithQueue documents.
-			default:
+			// The queue is optional: absent, reaps run synchronously
+			// inside the event delivery, the shape WithQueue documents.
+			queue, ok, err := pkgcore.GetOptional[jobs.Queue](reg)
+			if err != nil {
 				return nil, err
 			}
-			subtree, err := pkgcore.Get[SubtreeResolver](reg)
-			switch {
-			case err == nil:
-				opts = append(opts, WithSubtreeResolver(subtree))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional resolver is absent: node-scoped grants
-				// cannot materialize, the shape WithSubtreeResolver
-				// documents.
-			default:
+			if ok {
+				opts = append(opts, WithQueue(queue))
+			}
+			// The resolver is optional: absent, node-scoped grants
+			// cannot materialize, the shape WithSubtreeResolver
+			// documents.
+			subtree, ok, err := pkgcore.GetOptional[SubtreeResolver](reg)
+			if err != nil {
 				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithSubtreeResolver(subtree))
 			}
 			return NewModule(db, opts...), nil
 		},

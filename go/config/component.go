@@ -21,7 +21,6 @@ package config
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"time"
 
@@ -105,26 +104,24 @@ func component() pkgcore.Component {
 			if c.PollInterval != nil {
 				opts = append(opts, WithPollInterval(*c.PollInterval))
 			}
-			cipher, err := pkgcore.Get[*dbkit.Cipher](reg)
-			switch {
-			case err == nil:
-				opts = append(opts, WithCipher(cipher))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// No cipher is available: a schema with no Sensitive item
-				// is served fine, and one with a Sensitive item is refused
-				// at attachment.
-			default:
+			// The cipher is optional: absent, a schema with no Sensitive
+			// item is served fine, and one with a Sensitive item is refused
+			// at attachment.
+			cipher, ok, err := pkgcore.GetOptional[*dbkit.Cipher](reg)
+			if err != nil {
 				return nil, err
 			}
-			resolver, err := pkgcore.Get[tenancy.Resolver](reg)
-			switch {
-			case err == nil:
-				opts = append(opts, WithResolver(resolver))
-			case errors.Is(err, pkgcore.ErrMissingRequirement):
-				// The optional resolver is absent: requests read platform
-				// defaults, the shape WithResolver documents.
-			default:
+			if ok {
+				opts = append(opts, WithCipher(cipher))
+			}
+			// The resolver is optional: absent, requests read platform
+			// defaults, the shape WithResolver documents.
+			resolver, ok, err := pkgcore.GetOptional[tenancy.Resolver](reg)
+			if err != nil {
 				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithResolver(resolver))
 			}
 			return NewModule(db, opts...), nil
 		},
