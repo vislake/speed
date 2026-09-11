@@ -49,7 +49,7 @@ func TestNew_LoadsTheHostTargetAndTheDeclaredKeyMaterial(t *testing.T) {
 func TestNew_DeclaredKeysAreNotReachableThroughHostStructSpellings(t *testing.T) {
 	var host testHostConfig
 	opts := testBaseOptions(t, &host)
-	tableKey, _ := testDevDefaults()[testCipherKeyPath]
+	tableKey := testDevDefaults()[testCipherKeyPath]
 
 	t.Setenv("TEST_PLATFORMCONFIG__CONFIG__CIPHER_KEY", hex.EncodeToString(testKey(0x99)))
 

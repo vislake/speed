@@ -182,7 +182,7 @@ func (asm *transitionAssembly) build(ctx context.Context) error {
 
 	// Prelude, infrastructure: the platform cipher, the host's pre-database
 	// callback, then the database itself.
-	if err := asm.openInfrastructure(ctx, material); err != nil {
+	if err = asm.openInfrastructure(ctx, material); err != nil {
 		return err
 	}
 

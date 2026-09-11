@@ -155,10 +155,10 @@ func (l *Loader) ResolveDeclarations(decls []Declaration) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	if err := l.checkDeclaredDefaults(s); err != nil {
+	if err = l.checkDeclaredDefaults(s); err != nil {
 		return nil, err
 	}
-	if err := l.resolveEnvNames(s); err != nil {
+	if err = l.resolveEnvNames(s); err != nil {
 		return nil, err
 	}
 
