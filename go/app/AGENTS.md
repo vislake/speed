@@ -118,8 +118,11 @@ buffered spans and metrics are still exported.
 Runnable usage documentation (`example_test.go`) ships one example per
 package. The split is deliberate, not incidental: a consumer importing only
 the root pays the root's closure (measured with a throwaway module under
-`GOWORK=off go mod tidy`), so the root must never import the chain's or the
-bridges' participants — nor any business module at all. The serve-and-drain
+`GOWORK=off go mod tidy`: 36 `// indirect` entries, six of them
+speed-internal — config, dbkit, observability, pkgcore, ratelimit, tenancy;
+adding `go/app/chain` raises the count to 50, net +14), so the root must
+never import the chain's or the bridges' participants — nor any business
+module at all. The serve-and-drain
 lifecycle has one shape only now: `Run` (with `obs.Middleware` applied at
 serve time and the ordered `Close` drain); the pre-engine hand-composing
 helper went away once both consumers assembled through the engine.
