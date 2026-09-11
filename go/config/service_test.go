@@ -1381,12 +1381,13 @@ func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.
 		// interval queue up a second, pending tick in the meantime.
 		time.Sleep(20 * time.Millisecond)
 
-		// Release the in-flight Refresh. The fixed Close released pollMu
-		// before waiting on pollDone, so this always finishes cleanly.
-		// The buggy Close held pollMu across that wait instead, and if
-		// the poller's next select then picks the now-pending tick over
-		// the already-closed pollStop, the poller blocks forever
-		// re-acquiring pollMu for that tick's Refresh call.
+		// Release the in-flight Refresh. Close releases pollMu before
+		// waiting on pollDone, so a poller whose next select picks the
+		// now-pending tick over the already-closed pollStop still finishes
+		// that tick's Refresh -- it can re-acquire pollMu -- and reaches
+		// the next loop iteration, where it observes the closed pollStop
+		// and exits. Holding pollMu across the wait is exactly the
+		// deadlock Close's doc comment in service.go rules out.
 		close(proceedRefresh)
 
 		select {
@@ -1400,43 +1401,43 @@ func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.
 	}
 }
 
-// TestService_Close_EveryConcurrentCallerWaitsForThePollerExit is the
-// regression test for a guarantee 8dc3d1b's deadlock fix silently dropped.
-// Before that commit Close held pollMu across <-pollDone, so two concurrent
-// Close calls serialized on the lock and "Close returned" implied "the
-// poller goroutine exited" for BOTH callers. The fix had to release pollMu
-// before waiting (a poller-triggered Refresh needs that same mutex to
-// finish and let the poller observe the closed pollStop -- see
-// TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh), and in
-// doing so it cleared pollStop AND pollDone up front -- so a second Close
-// arriving while the first still waited on <-pollDone saw a nil pollStop
-// and returned immediately, with the poller possibly still running. The
-// Service stays usable after Close (direct reads and writes keep working),
-// so nothing made that early return observable in the module's own tests;
-// but a host that shuts the poller down while draining request traffic
-// relies on Close's return meaning the background goroutine is gone before
-// it tears down whatever that goroutine reads from.
+// TestService_Close_EveryConcurrentCallerWaitsForThePollerExit pins a
+// per-caller guarantee of Close: two concurrent Close calls each observe
+// the poller goroutine exited, not just the caller that requested the
+// stop. Two properties of Close hold that guarantee together: it releases
+// pollMu before waiting on pollDone (a poller-triggered Refresh needs that
+// same mutex to finish and let the poller observe the closed pollStop --
+// see TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh),
+// and it never clears pollDone, so a Close arriving while an earlier one
+// still waits on <-pollDone still finds a terminal signal to wait on
+// instead of seeing a nil pollStop and returning with the poller possibly
+// still running. The Service stays usable after Close (direct reads and
+// writes keep working), so an early return would otherwise be invisible in
+// the module's own tests; but a host that shuts the poller down while
+// draining request traffic relies on Close's return meaning the background
+// goroutine is gone before it tears down whatever that goroutine reads
+// from.
 //
 // Close leaves pollDone in place as the terminal signal every caller
 // waits on; only pollStop is closed and cleared, by whichever caller finds
 // it non-nil. This test pins the per-caller guarantee: each Close
 // result, as it arrives, must find the poller's done channel already
 // closed. The choreography makes a second Close provably race a still-alive
-// poller, the only situation the lost guarantee could surface in: the
+// poller, the only situation an early return could surface in: the
 // poller is parked inside a ticker-triggered Refresh (the afterRefreshLock
 // hook, holding pollMu), both Close calls queue behind it, and the release
 // is timed so the poller -- which owns the CPU the instant the parked
 // Refresh returns, before either queued Close can be scheduled -- selects
 // the provably pending second tick and re-enters another Refresh. A second
 // Close returning while the poller is still queued inside that Refresh
-// would be the lost guarantee; instead it waits on pollDone like the
-// first caller, and only the poller's own exit releases both. The one
-// piece this cannot pin down is the rare case where the first Close is
+// would violate the per-caller guarantee; instead it waits on pollDone
+// like the first caller, and only the poller's own exit releases both. The
+// one piece this cannot pin down is the rare case where the first Close is
 // scheduled before the poller's post-release select and the poller's select
 // then picks the closed stop over the pending tick -- an unforceable coin
 // flip by language design -- so the scenario is repeated enough times that
 // never once landing in the failing half is vanishingly unlikely, while
-// the current code passes every iteration deterministically.
+// the implementation passes every iteration deterministically.
 func TestService_Close_EveryConcurrentCallerWaitsForThePollerExit(t *testing.T) {
 	const iterations = 25
 	for i := 0; i < iterations; i++ {
