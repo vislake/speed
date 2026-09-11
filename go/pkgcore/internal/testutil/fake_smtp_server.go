@@ -7,22 +7,22 @@
 // contract-test packages (eventbustest, kvstoretest, mailertest,
 // objectstoretest), never from outside the module.
 //
-// FakeSMTPServer originated as unexported helpers inside smtp_mailer_test.go
+// FakeSMTPServer originated as unexported helpers inside mailer_smtp_test.go
 // (package pkgcore) and moved here once a second consumer needed it:
 // unittest/mailer_conformance_test.go (package unittest, see that file's
 // own doc comment) proves pkgcore.NewSMTPMailer against
 // mailertest.AssertConforms using the same scripted relay
-// smtp_mailer_test.go's own wire-level tests already use, rather than a
+// mailer_smtp_test.go's own wire-level tests already use, rather than a
 // second, drifting copy of the same fake.
 //
 // This package deliberately knows nothing about pkgcore.Mailer or
 // pkgcore.SMTPConfig — it scripts the SMTP wire protocol only. Package
-// pkgcore's own smtp_mailer_test.go is package pkgcore itself (it needs
+// pkgcore's own mailer_smtp_test.go is package pkgcore itself (it needs
 // direct access to unexported symbols like smtpMailer and buildMessage), so
 // if this package imported pkgcore, that file's use of it would be an
 // import cycle: pkgcore's own test binary -> testutil -> pkgcore. Each
 // consumer therefore builds its own thin pkgcore.Mailer wrapper around
-// FakeSMTPServer.Addr() — see smtp_mailer_test.go's mailerFor and
+// FakeSMTPServer.Addr() — see mailer_smtp_test.go's mailerFor and
 // unittest/mailer_conformance_test.go's equivalent.
 package testutil
 

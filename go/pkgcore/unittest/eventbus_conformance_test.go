@@ -29,7 +29,7 @@ import (
 // error-returning behavior — the "additional property" its synchronous
 // same-goroutine delivery gives it, which no broker-backed bus can provide
 // for a handler delivered on another replica — is pinned instead by
-// memory_eventbus_test.go's TestMemoryEventBusPublish, the package-pkgcore suite
+// eventbus_memory_test.go's TestMemoryEventBusPublish, the package-pkgcore suite
 // that stays in the source package next to the code it tests.
 //
 // The in-memory bus is single-process, so the factory returns the same

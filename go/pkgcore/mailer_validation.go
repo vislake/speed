@@ -10,16 +10,16 @@ import (
 // by all of them, and the checks run before a message touches the wire.
 //
 // This is the header-injection barrier for buildMessage's raw From/To/Subject
-// interpolation in smtp_mailer.go: every Mailer.Send calls validateMail first
+// interpolation in mailer_smtp.go: every Mailer.Send calls validateMail first
 // and returns before reaching buildMessage, so a \r or \n in any of those
 // fields -- or in the optional ReplyTo, which buildMessage interpolates the
 // same way -- never survives to be written as a header line. CodeQL's
-// go/email-injection alert on smtp_mailer.go does not recognize this
+// go/email-injection alert on mailer_smtp.go does not recognize this
 // validate-then-return-early pattern as a sanitizing barrier across the two
 // separate call sites (Send validates, then later in the same function calls
 // buildMessage) -- reviewed and confirmed a false positive; do not remove
-// this check without re-auditing that alert. See console_mailer_test.go's
-// TestConsoleMailer_RejectsInvalidMail, smtp_mailer_test.go's
+// this check without re-auditing that alert. See mailer_console_test.go's
+// TestConsoleMailer_RejectsInvalidMail, mailer_smtp_test.go's
 // TestSMTPMailer_Send_RejectsInvalidMailWithoutTouchingTheWire, and
 // mailertest/assert_conforms.go for the tests pinning this guarantee.
 func validateMail(mail Mail) error {

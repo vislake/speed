@@ -29,7 +29,7 @@ func newBuiltinMailerRegistry() *SeamRegistry[Mailer] {
 		// Bootstrap warns; holds NO state -> Stateless) classifies
 		// mailer.smtp as Stateless the same way it classifies
 		// mailer.console: every Send dials a fresh connection to the relay
-		// (net/smtp's smtp.NewClient per Send; see smtp_mailer.go) and the
+		// (net/smtp's smtp.NewClient per Send; see mailer_smtp.go) and the
 		// struct holds only its config, so there is no cross-call state a
 		// restart could drop -- nothing this implementation holds survives
 		// or fails to survive, the relay's own durability being the

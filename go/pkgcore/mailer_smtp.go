@@ -334,7 +334,7 @@ func (m *smtpMailer) authenticate(client *smtp.Client) error {
 // empty ReplyTo from SMTPConfig.ReplyTo, which the constructor refused a line
 // break in. The raw interpolation below therefore cannot be used for SMTP
 // header injection. (CodeQL's go/email-injection flags this function; see
-// validateMail's doc comment in mail_validation.go for the full reasoning --
+// validateMail's doc comment in mailer_validation.go for the full reasoning --
 // reviewed
 // and confirmed a false positive.)
 func buildMessage(mail Mail) []byte {

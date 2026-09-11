@@ -99,8 +99,8 @@ type SMS struct {
 // boot without an explicitly wired sender rather than defaulting to one that
 // prints to a writer nobody reads). The promotion makes the seam a shared
 // contract and shared implementations; it does not move SMS onto the kernel.
-// The console implementation (console_sms_sender.go) is the
-// zero-external-dependency one; NewHTTPSMSSender (http_sms_sender.go) is the
+// The console implementation (sms_console.go) is the
+// zero-external-dependency one; NewHTTPSMSSender (sms_http.go) is the
 // operator-gateway
 // transport, and the sms/aliyun, sms/tencent and sms/twilio subpackages
 // carry the three real carrier adapters.

@@ -1080,7 +1080,7 @@ func (r *statusRecorder) WriteHeader(status int) {
 //
 // CodeQL's go/reflected-xss alert traces a notification verified_contacts
 // address through pkgcore.Mail{To: [...]} into consoleMailer.Send's
-// m.w.Write(remaining) (pkgcore/console_mailer.go) and merges that with this
+// m.w.Write(remaining) (pkgcore/mailer_console.go) and merges that with this
 // Write:
 // reviewed and confirmed a false positive. consoleMailer.w is an arbitrary
 // injected io.Writer (os.Stdout in production, never an HTTP response), and

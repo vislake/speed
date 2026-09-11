@@ -26,7 +26,7 @@ import (
 // resolves and validates its Mailer seam — this is what proves the retrofit
 // did not silently change NewSMTPMailer's own behavior for its existing
 // callers. It needs no Docker: the fake relay is an in-process
-// net.Listener, the same scripted double smtp_mailer_test.go's own
+// net.Listener, the same scripted double mailer_smtp_test.go's own
 // wire-level tests exercise (see internal/testutil/fake_smtp_server.go),
 // so it runs in the plain unit tier rather than integration_test/.
 //
@@ -42,7 +42,7 @@ func TestSMTPMailer_ConformsToMailerContract(t *testing.T) {
 }
 
 // smtpMailerFor builds a pkgcore.Mailer pointed at server. It duplicates the
-// handful of lines smtp_mailer_test.go's own unexported mailerFor already
+// handful of lines mailer_smtp_test.go's own unexported mailerFor already
 // has, rather than sharing one implementation, because the two live in
 // different packages for the import-cycle reason this file's own doc
 // comment explains (mailerFor's would-be shared home, internal/testutil,
