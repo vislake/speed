@@ -397,3 +397,13 @@ Q1 建议的独立后续轮已落地:生成骨架不再直读 env,`os.Getenv` �
 - **金标重生成**:五个 `go.mod.txt` 经既有重生成程序(物化 → 真实 `go mod tidy` → 令牌回写)重新产出,按构造携带新增依赖(`pkgcore/config` 的 koanf、两个导出器子包的 gRPC/protobuf 与 Prometheus 栈);重生成同时刷新了此前已存在的漂移(依赖方模块 require pkgcore/dbkit 等至 v0.0.1 后金标未跟),头部过渡态注释改写为当前事实。新金标经"再物化 → 再 tidy → 逐字节比较"验证为 tidy 不动点。
 - **验收**:脚手架双模式验收测试(`integration_test/scaffold_dual_mode_test.go`)本地跑到 PASS:物化 → 真实 tidy → 真实构建 → `db migrate` → standalone 启动冒烟 → 真容器(Redis/RustFS/Mailpit)distributed 启动冒烟 → SIGINT 优雅退出;另补 standalone 三端点冒烟(healthz 200、`/api/v1/config/public` 200、`/metrics` 200 且真实输出)与畸形 APP_CONFIG_KEY 的错误文案逐字核对。
 - **明确不做**:骨架不采用根密钥派生(`APP_ROOT_KEY` + `derive` 字段)。派生会改变五枚密钥的解析语义与错误文案(loader `ErrInvalidValue` 取代 parseKeyEnv 文案),与"生成项目行为逐字保持"相抵,且迫使 twin 的错误文案对账与 print 的 provenance 整体重写;骨架是否采用派生是独立决定,需 §9.4 式的用户裁定另立。
+
+### 9.8 组合配置拼写(Q8,2026-09-11 装载实现轮落定)
+
+29 号文 §6.1 把组合配置的承载格式留给装载实现定义,Q8 由此定案,落地于 `go/app` 的 loader(`loader.go`/`loader_composition.go`,以及 pkgcore 侧的 `BootstrapMaterial`/`ComponentConfig.Get`/`Config.Lookup`):
+
+- **信封键与三源拼写**:整棵组合树走 `composition` 信封键——配置文件为顶层 `composition:` 节,环境为 `APP_COMPOSITION__…`(前缀随 `WithEnvPrefix`,与宿主键同族),命令行为 `--composition.…`;`deployment`/`strict` 即 `composition.deployment`/`composition.strict`,由 loader 既有 schema 面读取(flag > env > file 免费复用)。
+- **组件名的点映射**:文源(文件/环境)中组件名的点写作单下划线(`mailer.smtp` 读 `mailer_smtp`),因为双下划线已表示一层嵌套;装载侧按"原样命中已注册名 > 下划线还原为点后命中"映射,命中不了原样透传、由装配器统一报未知组件(带拼写建议)。命令行中点保留字面(`--composition.components.mailer.smtp.host=…`),按已注册名最长前缀切分 name/key。
+- **选择值与嵌套键**:`components.<name>` 为 null/映射/`false`(文源里字面 `"false"`/`"true"` 归一为布尔);组件块内的键路径以点继续嵌套。五源为"内置默认 < 项目文件 < 环境 < 命令行 < 代码覆盖",代码覆盖经 `CompositionOverrides`(宿主 Put)或 `LoadSpec.Overrides`(无注册表句柄的调用者)注入,恒赢;层间按键深合并,同名组件块合并不替换。
+- **顺序确定性**:文源层无书写序(koanf 成图即失序),按名排序;代码覆盖层保序(`ComponentConfig.With` 调用序),过渡适配器即靠它复现 WithModules 的模块序。
+

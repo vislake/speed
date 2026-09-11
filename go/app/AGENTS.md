@@ -5,8 +5,9 @@ application's boot code is built from. It is the one module in this
 repository with **no business domain** — it owns no tables, registers no
 routes, config schema, feature flags, permissions, job handlers or audit
 actions, and implements no `pkgcore.Module`. It exists so that what every
-host would otherwise re-write by hand — the boot order, the seam wiring, the
-HTTP face, the shutdown sequence — is written once, in one place.
+host would otherwise re-write by hand — the configuration load, the boot
+order, the seam wiring, the HTTP helpers, the shutdown sequence — is written
+once, in one place.
 
 `docs/internal/01-architecture.md` draws it as a node above every module it
 composes and records the **explicit exception to the module discipline
@@ -16,116 +17,154 @@ hand-maintained in every consumer.
 
 ## Charter — what app may and may not be
 
-- **Structure belongs here.** The assembly order, the seam wiring, the HTTP
-  face, the lifecycle and the configuration orchestration are the module's
-  subject; a piece of every host's boot sequence that is the same in every
-  host is a candidate to live here.
-- **Policy belongs to the host.** Which modules compose the application,
+- **Structure belongs here.** The loader, the stage driver, the shutdown, the
+  HTTP helpers and the configuration orchestration are the module's subject;
+  a piece of every host's boot sequence that is the same in every host is a
+  candidate to live here.
+- **Policy belongs to the host.** Which components compose the application,
   which values they are configured with, which seeds it writes, which keys
   the host's own configuration target declares, what its routes and rules are
-  — all of it stays in the host and enters through an option, a callback or a
-  `chain.Config` field.
-- **No implicit defaults.** The engine names what it needs (a configuration
-  target, a database) and fails the assembly when it is missing; a value the
-  host does not supply stays unset. A future configuration-file-driven
-  composition of modules is a host concern that plugs into the engine's stage
-  points; the engine itself pre-shapes nothing of it.
-- **Never constructs infrastructure implementations.** app composes modules
-  and HTTP; which EventBus/KVStore/Mailer/ObjectStore a process runs stays
-  the application assembler's decision, wired through pkgcore's kernel
-  options, and which SQL dialect packages a binary carries stays the host's
-  blank import. This is enforced mechanically, not just promised: app sits
-  under `go/`, so `.golangci.yml`'s concrete-infrastructure depguard rules
-  (redis, minio, asynq and the dialect drivers) apply to it exactly as to any
-  business module.
+  — all of it stays in the host and enters through a component descriptor, a
+  load spec, a code override or a `chain.Config` field.
+- **No implicit defaults.** The loader names the target it loads and fails
+  the assembly when it is missing; a value the host does not supply stays
+  unset. The one documented exception is the builtin composition layer: the
+  standalone deployment default and the default-participating observability
+  component, both overridable from any higher source.
+- **No HTTP assembly, no listening, in the engine core.** `driver.go`,
+  `loader.go` and `component_observability.go` contain neither: a host's own
+  application component composes routes from the declaration seats and owns
+  the listener. The reusable helpers (`chain.Chain`, `chain.Standard`,
+  `PreAuthAllowlist`, `RegisterMountedRoutes`, the serve timeouts) stay in
+  the module for hosts to compose with.
+- **Never constructs infrastructure implementations.** app composes
+  components and HTTP helpers; which EventBus/KVStore/Mailer/ObjectStore a
+  process runs stays the application assembler's decision, wired through
+  pkgcore's kernel options (the transition adapters) or selected as
+  implementation components (the target model), and which SQL dialect
+  packages a binary carries stays the host's blank import. This is enforced
+  mechanically, not just promised: app sits under `go/`, so
+  `.golangci.yml`'s concrete-infrastructure depguard rules (redis, minio,
+  asynq and the dialect drivers) apply to it exactly as to any business
+  module.
 - **A host's own modules never depend on app.** app is a leaf above the
   module graph; an import edge from a business module back into it is the
   point to stop.
 
-## The engine (`go/app`, root package)
+## The engine (go/app, root package)
 
-`New(ctx, opts...)` assembles an application and does not listen;
-`Run(ctx, opts...)` is `New` plus signal handling, listening and the ordered
-drain. Both run the same eight stages, in one fixed order, and a failure at
-any stage tears the built resources down (the same shutdown `Close` performs)
-before returning the error:
+The engine is three pieces: the loader, the driver and the observability
+component. They are all component-model code — the pre-component option
+surface lives beside them in the transition adapters below.
 
-| # | Stage | What runs |
-|---|---|---|
-| 1 | configuration | one loader fills `ConfigSpec.Host` and `ConfigSpec.Platform` |
-| 2 | infrastructure | the platform cipher from `config.cipher_key`, `WithPreDB`, `dbkit.Open` |
-| 3 | modules | `WithModules` constructs the module set |
-| 4 | kernel | every module's migrations applied, `pkgcore.NewKernel(...).Bootstrap`, the bootstrap-key binding verified |
-| 5 | attach | `Hooks.PostBootstrap` (the typed `Attach` calls) |
-| 6 | wiring | `Hooks.PostAttach` (seam bridges, boot-time credentials, subscriptions) |
-| 7 | HTTP face | the handler composed (see below) |
-| 8 | background | `Hooks.PreServe`, then `Worker.Start` |
+**The loader (`loader.go`, `loader_composition.go`)** is the bootstrap root.
+It runs before the first stage, because what it resolves is what the
+assembly plans from and what components read. It does three things in order:
 
-The option set: `WithConfig` (required) with the loader's own options
-(`ConfigFile`, `ConfigArgs`, `ConfigEnvPrefix`, `ConfigRootKey`,
-`ConfigRootKeyEnv`, `ConfigKeyDerivation`), `WithDatabase` (required) with
-`DatabaseSpec` (`Dialect`, `DSN`, `AuditBus`, `AuditModels`), `WithPreDB`,
-`WithModules` with `ModuleDeps{DB, Cipher}`, `WithKernelOptions`,
-`WithObservability` with `ObservabilitySpec` (`ServiceName`, `OTLPEndpoint`),
-`WithHTTP` with `HTTPSpec`, `WithHooks` with `Hooks`, `WithWorker` with the
-`Worker` interface (`Start`/`Close`), and `WithoutBackgroundWorkers`.
+1. loads the host's configuration target and the platform key-material
+   target through one `pkgcore/config` Loader (the same options, the same
+   sources, one pass each);
+2. resolves the composition configuration from its five sources — builtin
+   defaults, project file, environment, command line and the host's code
+   override — and publishes it, with the configuration targets, into the
+   registry as a `pkgcore.ComponentConfig` (the code override via a
+   `CompositionOverrides` Put, or `LoadSpec.Overrides` when the caller does
+   not hold the registry);
+3. resolves every registered component's declared `BootstrapKeys` on the
+   same loader chain, verifies each declared key binds the configuration
+   targets, and publishes the results as the assembly's by-purpose
+   `pkgcore.BootstrapMaterial` source — a declared key that binds nothing
+   fails the load with the stage, component, cause and remedy named.
 
-**`PlatformConfig`** is the platform's normative declaration of its six
-bootstrap keys (`authn.blind_index_key`, `authn.pii_cipher_key`,
-`config.cipher_key`, `notification.contact_index_key`,
-`org.invitation_email_index_key`, `pki.local_key_cipher_key`). A host holds it
-— typically embedded in its own configuration target and tagged
-`config:"-"`, because the engine loads it as its own target, which is what
-keeps the six declared key paths unprefixed — pre-fills its development
-defaults, and reads the material out for whichever module constructor needs
-it. The declaration pins no environment names and no defaults: the
-environment spelling is the loader's own derivation from the declared path
-(with `ConfigEnvPrefix("APP_")`, `config.cipher_key` reads
-`APP_CONFIG__CIPHER_KEY`), and a config file entry is spelled
-`config.cipher_key` exactly.
+Composition spelling (the loading implementation's convention; the design's
+§6.1 leaves the carrying format to the implementation): the whole tree
+travels under the `composition` envelope key — config file
+`composition: {…}`, environment `APP_COMPOSITION__…`, flags
+`--composition.…`. Component names appear in files and the environment with
+their dots spelled as single underscores (`mailer.smtp` reads
+`mailer_smtp`), because the double underscore already marks one level of
+nesting; on the command line the dots stay literal and the name is matched
+against the registered set by longest prefix. A selection value spelled
+`false` (or `true`) in a text source reads as its boolean.
 
-**The HTTP face** composes in one fixed order: a `http.ServeMux` carrying
-`obs.MountLiveness`, the host's `ExtraRoutes`, and — unless `HTTPSpec.Compose`
-composes the protected face — every route `pkgcore.MountRoutes` mounts from
-the registry; the registered routes seeded into the observability
-middleware's label budget (`RegisterMountedRoutes`, before that middleware is
-built); the host's `Middleware` wrapping outside-in; and the `SPA` wrapping
-outside that when configured. `Compose` receives the prepared mux and returns
-the handler that serves it — the seat for a host whose face is more than a
-route list, typically `chain.Standard`'s product, which mounts the registry's
-guarded routes onto the mux and wraps the whole composition in the fixed
-middleware chain. **`Run` then wraps that composition in `obs.Middleware`
-at serve time**, the outermost layer a served request reaches;
-`Application.Handler` — what `New` composes and a test drives — stays the
-host's own face, un-instrumented, so a host that serves it itself instruments
-it itself rather than paying for a second layer. The composed `http.Server`
-carries `ReadHeaderTimeout` and a `BaseContext` of the context `Run` received
-(never the signal-derived one).
+**The driver (`driver.go`)** only orchestrates: `Assemble` runs the loader
+and walks the registry through Prepare, Construct, Verify, Init and Start;
+`Shutdown` performs the two-phase close (the non-blocking Stop notification,
+then the reverse-order Close, errors aggregated); `RunAssembly` is the sugar
+— it creates the registry from the global registration plus extras, drives,
+waits for the context (SIGINT/SIGTERM overlaid), and shuts down. Failure
+semantics are the registry's: a failed Prepare leaves nothing to roll back,
+and a failure from Construct on closes every constructed component in
+reverse order, exactly once, before the error returns.
 
-**`Close`** is idempotent and drains in one fixed order: ① the HTTP server
-(`ShutdownTimeout`), ② the worker (`ShutdownTimeout`), ③ the kernel and then
-the database, the reverse of their construction, ④ observability last, so
-buffered spans and metrics are still exported.
+**The observability component (`component_observability.go`)** is registered
+by the engine's `init` and selected by the builtin composition defaults, so
+it participates unless a higher layer deselects it. Its `Prepare` (first
+among the components' Prepare callbacks) initializes OTel from its resolved
+`service_name` / `otlp_endpoint` block; its `Close` shuts the providers down
+and flushes. The engine never initializes observability itself.
+
+## The transition adapters (temporary)
+
+The modules and both hosts still assemble through the pre-component option
+surface, so the root package also carries the thin adapters that keep it
+working: `legacy.go`, `legacy_bridge.go`, `legacy_http.go`. They are
+**explicitly temporary and retire once the hosts assemble through the
+engine's own surface**; new code uses `Load`, `Assemble`, `Shutdown` and
+`RunAssembly` directly.
+
+The adapters are one path, never a fork: the old option set maps onto
+transition components that delegate where the old stages delegated (each
+wrapped module keeps its one `Register` call as its single declaration
+entry point, run during the component's `Init`; the host's hooks become step
+components; the HTTP face composes in the HTTP component's `Init` and
+drains in its `Stop`/`Close`), and the registry the modules declare into is
+the module Registry a `Kernel.Bootstrap` returned with its declaration
+seats re-pointed at the component assembly's seats — so the assembly's own
+validation runs over the very declarations legacy modules make. The one
+timing shift: the configuration load, the platform cipher, the pre-database
+callback, the database open and the host's module-construction callback run
+as a prelude **before** the drive, because the host's callback receives the
+open database.
+
+Contract notes for anyone touching the adapters:
+
+- the wrapped components carry the `legacy.` name prefix, so they never
+  collide with the components the modules grow in their own migration
+  (a wrapped authn module is `legacy.authn` beside the component world's
+  `authn`);
+- a wrapped module's locales do **not** ride the wrapper (locale ids are
+  prefixed by the module name, which the prefixed component name cannot
+  satisfy); they merge and validate through the kernel bootstrap's asset
+  stand-ins, under the module's own name, exactly where they merged before;
+- the kernel bootstraps over asset-carrying stand-ins of the module set
+  (identity, `DependsOn`, assets forwarded; `Register` a no-op), which is
+  what resolves the four seams, validates the deployment mode, logs the
+  composition and merges the message catalog — while the modules' actual
+  declarations arrive later, through the wrapped components' `Init`
+  callbacks, into the same registry object;
+- `DependsOn` maps onto dependency tokens (typed nil pointers to each
+  module's own product type), so the assembly's topological order reproduces
+  the module bootstrap's dependency order; a dangling name fails the
+  assembly, as it did before;
+- `Application.Kernel()` is retired (it existed for the engine's own tests);
+  `Application.Registry()` returns the registry view.
 
 ## Package layout — dependency cost is why it is split
 
 | Package | Concern | Dependency closure |
 |---|---|---|
-| `go/app` (root) | the engine: `New`/`Run`/`Application`/`Option`, `PlatformConfig` and the load orchestration, the HTTP face, the lifecycle, the hooks — plus the host-neutral kernel primitives the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
-| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
+| `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, the observability component, the transition adapters, `PlatformConfig` and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
+| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation, over either registry shape's `RouteSource`: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
 | `go/app/bridges` | the no-import seam bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
 Runnable usage documentation (`example_test.go`) ships one example per
 package. The split is deliberate, not incidental: a consumer importing only
 the root pays the root's closure (measured with a throwaway module under
-`GOWORK=off go mod tidy`: 36 `// indirect` entries, six of them
-speed-internal — config, dbkit, observability, pkgcore, ratelimit, tenancy;
-adding `go/app/chain` raises the count to 50, net +14), so the root must
-never import the chain's or the bridges' participants — nor any business
-module at all. The serve-and-drain
-lifecycle has one shape only now: `Run` (with `obs.Middleware` applied at
-serve time and the ordered `Close` drain); the pre-engine hand-composing
-helper went away once both consumers assembled through the engine.
+`GOWORK=off go mod tidy`; the transition adapters sit in the root and a
+later round moves them out with the option surface), so the root must never
+import the chain's or the bridges' participants — nor any business module at
+all.
 
 ## The chain app/chain encodes
 
@@ -149,8 +188,10 @@ allowlist entries):
   substitution may run ahead of it (`go/admin/AGENTS.md` states both).
 
 `chain.Standard(reg, verifier, protected, opts...)` derives that whole
-composition from the bootstrapped registry instead of taking the pieces
-pre-assembled: it admits every mounted route through the host's
+composition from the bootstrapped registry's mounted routes instead of
+taking the pieces pre-assembled (its `RouteSource` parameter is answered by
+both registry shapes — the module Registry and the component assembly's
+`ComponentRegistry`): it admits every mounted route through the host's
 route-authorization table (`WithAuthorization` — `rbac.GuardRoutes` over
 the host's own rules, so the table's exhaustiveness is checked and every
 gated route is wrapped in rbac's fail-closed gate before it is mounted),
@@ -175,14 +216,17 @@ host's own (a selection with no authn module composes no chain at all).
 `examples/reference-app` (the full composition: admin branch,
 impersonation, tenant-status resolver, three extra allowlist entries) and
 the project skeleton `saasctl new` materializes (the minimal
-compositions) both assemble through this module. `tools/check_host_composition.py`
-is the enforcement half: neither host tree may re-declare the kernel's
-symbols or re-grow its statements (the serve loop, the liveness/authn
-path literals) in its own code. A change to the engine, the chain, the
-allowlist or the serve lifecycle must keep both consumers working; a change
-that cannot be adopted by the skeleton's smallest selection (no authn, hence
-no `chain.Chain` call at all) is a symptom the change does not belong
-here.
+compositions) both assemble through this module — currently through the
+transition adapters, both running their full suites green over the new
+machinery. `tools/check_host_composition.py` is the enforcement half:
+neither host tree may re-declare the kernel's symbols or re-grow its
+statements (the serve loop, the liveness/authn path literals) in its own
+code, and — the staged half of its ban set — neither may create its own
+`ComponentRegistry` or drive the component stages itself. A change to the
+engine, the chain, the allowlist or the serve lifecycle must keep both
+consumers working; a change that cannot be adopted by the skeleton's
+smallest selection (no authn, hence no `chain.Chain` call at all) is a
+symptom the change does not belong here.
 
 ## Testing
 
@@ -192,14 +236,19 @@ declaration's key-path mapping, the HTTP face's composition and the
 shutdown order are pinned in the root package's `*_test.go` files beside
 their targets, over fixtures in `internal/testutil` (a module built from
 test-provided pieces, so no business module enters the test binary); the
-chain's branch structure and decorator position, the allowlist's method
-scoping and the bridges' field mapping are pinned the same way. Each
-package's `example_test.go` compiles and runs the documented usage.
-Behavior owned by another module is not re-pinned here (the route-label
-seed's mechanism lives with `go/observability`, the enrollment of the
-`Entitlements` closure body is exercised end-to-end by the reference app's
-consult flow) — this module's tests pin the composition it adds, not the
-modules it composes.
+loader's five-source layering, its composition spellings, the bootstrap
+material resolution and the binding verification are pinned in
+`loader_test.go`; the bridge's conformance (an old-style module wrapped
+and run through the seven stages, `DependsOn` reordering and all) in
+`legacy_bridge_test.go`; the driver and the sugar in `driver_test.go`;
+the chain's branch structure, decorator position, both route-source
+shapes, the allowlist's method scoping and the bridges' field mapping the
+same way. Each package's `example_test.go` compiles and runs the
+documented usage. Behavior owned by another module is not re-pinned here
+(the route-label seed's mechanism lives with `go/observability`, the
+enrollment of the `Entitlements` closure body is exercised end-to-end by
+the reference app's consult flow) — this module's tests pin the
+composition it adds, not the modules it composes.
 
 ## Known limitations
 
@@ -208,17 +257,16 @@ modules it composes.
   resolver or a different pre-auth set assembles `tenancy.Middleware`
   itself rather than bending `chain.Config`. No consumer needs that
   today.
-- The engine's option values are host-computed at call time, so a value that
-  derives from the loaded configuration (the DSN, the listen address, the
-  kernel's seam composition) is resolved by the host's own loader pass
-  before `New`/`Run`, with the same target handed to `WithConfig`; the
-  engine's load re-resolves the identical sources and is idempotent, so the
-  two passes cannot disagree.
-- `WithObservability` is the only path by which the engine initializes
-  observability, and it does so under `Run` alone; a host that calls `New`
-  and serves the handler itself keeps responsibility for `obs.Init`, exactly
-  as it keeps responsibility for its own listener — and, the same way, for
-  wrapping what it serves in `obs.Middleware` (`Run` applies that wrap at
+- The transition adapters' option values are host-computed at call time, so
+  a value that derives from the loaded configuration (the DSN, the listen
+  address, the kernel's seam composition) is resolved by the host's own
+  loader pass before `New`/`Run`, with the same target handed to
+  `WithConfig`; the loader's own load re-resolves the identical sources and
+  is idempotent, so the two passes cannot disagree.
+- `WithObservability` is the transition spelling of selecting the
+  observability component, and it selects it for `New` and `Run` alike; a
+  host that calls `New` and serves the handler itself keeps responsibility
+  for wrapping what it serves in `obs.Middleware` (Run applies that wrap at
   serve time).
 - A route conflict panics at assembly time rather than returning an error
   (`pkgcore.MountRoutes`' documented contract): a wiring error gets the
