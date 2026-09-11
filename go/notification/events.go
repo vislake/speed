@@ -46,9 +46,9 @@ type InboxCreatedPayload struct {
 // inboxEventDecls is the catalog entry for each of the module's events.
 //
 // They are declared here, in the module's single Register call, because
-// pkgcore.Registry is where the platform's event catalog is assembled --
-// observability, compliance and integration enumerate the declarations
-// without subscribing to any of them.
+// the ComponentRegistry's Events seat is where the platform's event catalog
+// is assembled -- observability, compliance and integration enumerate the
+// declarations without subscribing to any of them.
 var inboxEventDecls = []pkgcore.EventDecl{
 	{
 		Type:        EventInboxCreated,

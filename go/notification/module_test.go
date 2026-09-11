@@ -405,11 +405,10 @@ func TestModule_Register_DeclaresTheInboxEvent(t *testing.T) {
 // job-handler contribution: after Register, the registry's job-handler
 // registrar carries the deliver job type bound to the module's own delivery
 // service -- the exact object delivery.go's Dispatch hand, so a host that
-// starts a worker pool over the registry's handlers (the shape
-// Kernel.Bootstrap composes) routes enqueued deliver jobs back to this
-// module without any extra wiring. The bound value is the service itself,
-// asserted by pointer: the registrar stores handlers as given, never a
-// proxy.
+// starts a worker pool over the registry's handlers (the shape the assembly
+// composes) routes enqueued deliver jobs back to this module without any
+// extra wiring. The bound value is the service itself, asserted by pointer:
+// the registrar stores handlers as given, never a proxy.
 func TestModule_Register_RegistersTheDeliveryJobHandler(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)

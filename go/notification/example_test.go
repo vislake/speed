@@ -255,7 +255,7 @@ func ExamplePreferenceService() {
 
 	// A host assembles its own registry over the in-process seam
 	// implementations and declares its notification types on it -- the same
-	// shape Kernel.Bootstrap composes in a standalone deployment.
+	// shape the assembly composes in a standalone deployment.
 	host := componenttest.NewRegistry()
 	appointment := pkgcore.NotificationType{
 		Key:             "clinic.appointment_reminder",

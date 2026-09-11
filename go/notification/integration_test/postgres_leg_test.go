@@ -312,7 +312,7 @@ func openNotificationPostgres(t *testing.T, ctx context.Context, pgContainer *po
 
 // localeCarrier is the declaration face's locale half: the module name --
 // the id prefix its bundle's message ids merge under -- and the embedded
-// bundle itself. Every pkgcore.Module carried by these two legs satisfies
+// bundle itself. Every module carried by these two legs satisfies
 // it, notification's own module and the clinic fixture alike.
 type localeCarrier interface {
 	Name() string

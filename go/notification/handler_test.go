@@ -959,8 +959,8 @@ func TestHandler_ListTypes_MissingDescription_FailsTheWholeListing(t *testing.T)
 }
 
 // TestHandler_ListTypes_UnwiredCatalog_AnswersInternal pins the wiring
-// half: a handler whose host installed no catalog (the state before a host
-// calls Kernel.Bootstrap with this module attached) has nothing honest to
+// half: a handler whose host installed no catalog (the state before the
+// assembly has walked this module's Locales()) has nothing honest to
 // render -- every description would be missing -- so the directory fails
 // with the module's internal error rather than guessing.
 func TestHandler_ListTypes_UnwiredCatalog_AnswersInternal(t *testing.T) {

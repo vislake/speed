@@ -96,10 +96,10 @@ import (
 // the merged message catalog the type directory renders its descriptions
 // from. It is declared as an interface -- delivery.go's deliveryHost and
 // contact.go's contactHost are the same pattern -- so the handler never
-// names pkgcore.Registry for a single accessor, and a hand-built host in a
-// test satisfies it too. *pkgcore.Registry satisfies it structurally (the
-// assertion below pins that), and Module.Register hands the real registry
-// over through attachHost.
+// names pkgcore.ComponentRegistry for a single accessor, and a hand-built
+// host in a test satisfies it too. *pkgcore.ComponentRegistry satisfies it
+// structurally (the assertion below pins that), and Module.Register hands
+// the real registry over through attachHost.
 type handlerHost interface {
 	Locales() *i18n.Catalog
 }
@@ -148,10 +148,10 @@ type Handler struct {
 	// earlier, because reg.Locales() is nil inside Register (module.go's
 	// Register doc comment records the rule, delivery.go's attachHost doc
 	// comment repeats it from its side). The field is the handlerHost
-	// interface, not pkgcore.Registry itself, so the handler names exactly
-	// the one accessor it reads (delivery.go's deliveryHost and contact.go's
-	// contactHost are the same pattern); the compile-time assertion below
-	// pins that the real registry satisfies it.
+	// interface, not pkgcore.ComponentRegistry itself, so the handler names
+	// exactly the one accessor it reads (delivery.go's deliveryHost and
+	// contact.go's contactHost are the same pattern); the compile-time
+	// assertion below pins that the real registry satisfies it.
 	host handlerHost
 
 	// mux is the inner router NewHandler built: the generated

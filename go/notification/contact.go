@@ -380,8 +380,8 @@ func (r *VerifiedContactRepository) ListForTenant(ctx context.Context) ([]Verifi
 // NewModule's With* options and are validated at Register time, so a
 // service that is missing its SMSSender, its mail From, or an address
 // indexer can never be reached by a caller. The audit registrar is passed
-// separately at attach time -- pkgcore.Registry.AuditActions is an
-// interface-typed field, not a method, so it cannot ride in the host
+// separately at attach time -- the ComponentRegistry's AuditActions seat is
+// an interface-typed field, not a method, so it cannot ride in the host
 // interface (see module.go).
 type ContactService struct {
 	repo         *VerifiedContactRepository
@@ -414,22 +414,23 @@ type ContactService struct {
 	limiter ratelimit.Limiter
 }
 
-// contactHost is the structural subset of pkgcore.Registry this service
-// reads at call time: the event bus the audit trail publishes on, the KV
-// store the rate limiter is backed by, the resolved mailer, and the merged
-// message catalog verification-code messages render from. It is declared
-// here as an interface so ContactService never names pkgcore.Registry (and
-// never reaches for fields it does not need); *pkgcore.Registry satisfies it
-// structurally (see module.go's attachHost), and a hand-built host in a test
-// satisfies it too.
+// contactHost is the structural subset of pkgcore.ComponentRegistry this
+// service reads at call time: the event bus the audit trail publishes on,
+// the KV store the rate limiter is backed by, the resolved mailer, and the
+// merged message catalog verification-code messages render from. It is
+// declared here as an interface so ContactService never names
+// pkgcore.ComponentRegistry (and never reaches for fields it does not
+// need); *pkgcore.ComponentRegistry satisfies it structurally (see
+// module.go's attachHost), and a hand-built host in a test satisfies it
+// too.
 //
-// Two of the four accessors are nil on a registry the host built directly
-// with the three-argument NewRegistry: that form carries no catalog (the
-// catalog is installed only after Kernel.Bootstrap walks every module's
-// Locales()), while the mailer and the KV store are always present on such
-// a registry. Code paths treat a nil Locales or a nil KV store as internal
-// configuration errors -- never as a license to skip rendering or to allow
-// on error.
+// Two of the four accessors are nil on the bare registry a hand-built test
+// wiring carries (componenttest.NewRegistry): that form carries no catalog
+// (the catalog is installed only once the assembly has walked every
+// module's Locales()), while the mailer and the KV store are always present
+// on such a registry. Code paths treat a nil Locales or a nil KV store as
+// internal configuration errors -- never as a license to skip rendering or
+// to allow on error.
 type contactHost interface {
 	// EventBus returns the bus audit records publish on.
 	EventBus() pkgcore.EventBus
@@ -441,13 +442,13 @@ type contactHost interface {
 	KVStore() pkgcore.KVStore
 
 	// Mailer returns the resolved outbound-mail transport, or nil if the
-	// registry was built without one (NewRegistry's three-argument form
-	// carries none, though in practice a mailer is always passed). Code
-	// that sends email must treat nil as an internal configuration error.
+	// registry was built without one (a hand-built registry that put no
+	// mailer, though in practice one is always passed). Code that sends
+	// email must treat nil as an internal configuration error.
 	Mailer() pkgcore.Mailer
 
 	// Locales returns the merged message catalog, or nil if the registry
-	// was built directly without going through Kernel.Bootstrap.
+	// was built directly, without going through the assembly.
 	// Verification-code messages are rendered from it at send time --
 	// never captured at registration time.
 	Locales() *i18n.Catalog
@@ -501,9 +502,9 @@ func (s *ContactService) lookupType(typeKey string) (pkgcore.NotificationType, e
 }
 
 // attachHost binds the service's host reference and audit registrar.
-// pkgcore.Registry.AuditActions is an interface-typed field, which cannot
-// be declared in an interface; the module therefore passes it alongside the
-// host (see Module.Register).
+// The ComponentRegistry's AuditActions seat is an interface-typed field,
+// which cannot be declared in an interface; the module therefore passes it
+// alongside the host (see Module.Register).
 func (s *ContactService) attachHost(host contactHost, auditActions pkgcore.AuditActionRegistrar) {
 	s.host = host
 	s.audit = auditActions

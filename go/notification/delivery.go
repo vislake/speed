@@ -274,13 +274,14 @@ type UserAddressResolver interface {
 	Resolve(ctx context.Context, userID string) (UserAddresses, error)
 }
 
-// deliveryHost is the slice of the host's *pkgcore.Registry the delivery
-// service reads at run time: the bus it announces inbox deliveries on, the
-// mailer email goes out through, and the merged message catalog it renders
-// from. Each is read at call time -- never captured at Register, when
-// reg.Locales() is still nil -- so a host satisfies the interface
-// structurally (the compile-time assertion below pins *pkgcore.Registry)
-// and Register hands the real registry over in its third phase.
+// deliveryHost is the slice of the host's *pkgcore.ComponentRegistry the
+// delivery service reads at run time: the bus it announces inbox deliveries
+// on, the mailer email goes out through, and the merged message catalog it
+// renders from. Each is read at call time -- never captured at Register,
+// when reg.Locales() is still nil -- so a host satisfies the interface
+// structurally (the compile-time assertion below pins
+// *pkgcore.ComponentRegistry) and Register hands the real registry over in
+// its third phase.
 type deliveryHost interface {
 	EventBus() pkgcore.EventBus
 	Mailer() pkgcore.Mailer

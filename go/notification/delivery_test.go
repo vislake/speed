@@ -918,7 +918,7 @@ func TestDelivery_PendingContactRefusalIsDeferredUntilVerification(t *testing.T)
 	// A double_opt_in create renders the module's verification-code copy,
 	// which the env's clinic fixture catalog does not carry, so the
 	// catalog is widened to the merged real bundle plus the clinic
-	// fixture (the shape Kernel.Bootstrap assembles for a host that ships
+	// fixture (the shape the assembly builds for a host that ships
 	// both modules).
 	builder := i18n.NewBuilder()
 	if err := builder.AddModule(moduleName, locales.FS); err != nil {

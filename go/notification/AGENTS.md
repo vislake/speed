@@ -19,7 +19,7 @@ below), the module's own OpenAPI fragment with a generated, compile-checked
 HTTP handler, the per-replica realtime hub behind the inbox stream, and the
 dual-dialect migration set. The reference app (`examples/reference-app`) is
 the mandatory first consumer: `internal/app/server.go` wires `notification.NewModule`
-through `the assembly`, `internal/app/demo/demo_notification.go` supplies the
+through the assembly, `internal/app/demo/demo_notification.go` supplies the
 host-side demo modules, and `flowtests/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 
@@ -266,7 +266,7 @@ the catalog's completeness.
 ## Wiring and host modules
 
 A host wires the module as: `m := notification.NewModule(db,
-notification.With...(...))`, then hands `m` to `the assembly`'s module
+notification.With...(...))`, then hands `m` to the assembly's module
 set. `Register(reg)` runs in three phases (module.go's doc comment): validate
 and copy the six wiring options into the services; declare events, audit
 actions and the job handler; attach the registries (types, bus, catalog,
@@ -288,7 +288,7 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
   hand-typed string (see that constant's doc comment for why dbkit refuses
   an empty name but cannot guard a wrong one; the reference app is the
   mandatory consumer). The HMAC key behind them is declared, once, on the
-  `Registry.Bootstrap` seat as `notification.contact_index_key` (`hexkey`,
+  component descriptor's `BootstrapKeys` as `notification.contact_index_key` (`hexkey`,
   Sensitive) -- one key serves both indexers, exactly as the options'
   contract allows, and it stays separate from every cipher key. Register
   states the contract; the host resolves the value and injects the indexers,

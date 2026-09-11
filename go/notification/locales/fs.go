@@ -1,7 +1,7 @@
 // Package locales holds the notification module's message bundle: one
 // <language>.toml file per language the catalog serves, embedded for
-// Kernel.Bootstrap to feed to i18n.Builder.AddModule alongside every other
-// module's Locales() embed.FS.
+// the assembly's catalog merge to feed to i18n.Builder.AddModule alongside
+// every other module's Locales() embed.FS.
 //
 // What this bundle carries is the human description of every error code
 // go/notification/errors.go declares, one flat entry per code, with the id

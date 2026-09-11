@@ -7,7 +7,7 @@
 // renders from the host's merged catalog built from every module's bundles.
 // The Redis leg therefore bootstraps this fixture alongside the real
 // module, so the pipeline renders a real appointment-reminder type from
-// real embedded locale files -- the only shape pkgcore.Module.Locales can
+// real embedded locale files -- the only shape a module's Locales can
 // return -- with the fixture's English copy kept byte-identical across the
 // two language files (the tier asserts on rendered text, and this is a test
 // fixture, not product copy).
