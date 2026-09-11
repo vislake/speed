@@ -23,6 +23,13 @@ What the suite proves (M0 exit-condition evidence):
   * The npm half: uniform-version enforcement, and the web/.changeset
     fixed group covering exactly the packages found (both directions of
     the mismatch fail).
+  * The derived dependency-first npm publish order the release
+    workflow's publish loop walks: every package of the derived set
+    appears, every @speed dependencies edge points from an earlier to a
+    later package, devDependencies edges (never resolved by a consumer)
+    do not reorder anything, a dependency cycle fails closed, a package
+    that joins the workspace enters the order with no list to update,
+    and the workflow itself carries no hand-copied package list.
   * The first-release replace-cleanup engine as pure functions against
     the fixtures under testdata/ (never against any live go.mod): a
     cleanable transition-state go.mod yields exactly the sibling replaces
@@ -111,6 +118,27 @@ def run_cli(cwd: str, *args: str) -> tuple[int, str, str]:
         check=False,
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def _copy_live_web_half(dest_root: str) -> None:
+    """Mirror the live npm half (web/packages/*, web/.changeset/config.json).
+
+    The sandbox copy every npm-half proof derives against: the live
+    package set and fixed group, which a test may then mutate freely
+    without touching the real tree.
+    """
+    packages_root = os.path.join(LIVE_ROOT, "web", "packages")
+    for d in sorted(os.listdir(packages_root)):
+        src = os.path.join(packages_root, d, "package.json")
+        if os.path.isfile(src):
+            dst = os.path.join(dest_root, "web", "packages", d, "package.json")
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+    changeset_src = os.path.join(LIVE_ROOT, "web", ".changeset", "config.json")
+    if os.path.isfile(changeset_src):
+        dst = os.path.join(dest_root, "web", ".changeset", "config.json")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(changeset_src, dst)
 
 
 class VersionPatternTest(unittest.TestCase):
@@ -426,6 +454,163 @@ class NpmDerivationTest(unittest.TestCase):
         self.assertIn("at least two", str(cm.exception))
 
 
+class NpmPublishOrderTest(unittest.TestCase):
+    """The derived dependency-first publish order the publish loop walks.
+
+    The order is what .github/workflows/release.yml walks package by
+    package, so its contract is pinned here: the caller side must never
+    regress to a hand-copied list (which silently skipped any package it
+    had not learned about), and the derivation must order every
+    consumer-facing @speed edge correctly or fail closed.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = self._tmp.name
+        self.packages_dir = os.path.join(self.root, "web", "packages")
+
+    def _package(
+        self,
+        name: str,
+        version: str = "0.0.0",
+        deps: tuple[str, ...] = (),
+        dev_deps: tuple[str, ...] = (),
+    ) -> None:
+        _write_file(
+            os.path.join(self.packages_dir, name, "package.json"),
+            json.dumps(
+                {
+                    "name": f"@speed/{name}",
+                    "version": version,
+                    "dependencies": {
+                        f"@speed/{d}": "workspace:*" for d in deps
+                    },
+                    "devDependencies": {
+                        f"@speed/{d}": "workspace:*" for d in dev_deps
+                    },
+                }
+            ),
+        )
+
+    def _order(self, root: str) -> list[str]:
+        return [p["name"] for p in rel.derive_npm_publish_order(root)]
+
+    def test_order_is_dependency_first_with_name_tie_break(self) -> None:
+        self._package("zeta")
+        self._package("alpha", deps=("zeta",))
+        self._package("mid", deps=("zeta",))
+        self.assertEqual(
+            self._order(self.root),
+            ["@speed/zeta", "@speed/alpha", "@speed/mid"],
+        )
+
+    def test_every_derived_package_appears_once(self) -> None:
+        self._package("beta", deps=("alpha",))
+        self._package("alpha")
+        order = self._order(self.root)
+        self.assertEqual(
+            sorted(order),
+            sorted(p["name"] for p in rel.derive_npm_packages(self.root)),
+        )
+        self.assertEqual(len(order), len(set(order)))
+
+    def test_dev_dependency_edge_does_not_reorder(self) -> None:
+        # A devDependencies edge is never resolved by a consumer, so it
+        # constrains nothing: "aaa" dev-depending on "zzz" must still
+        # publish first under the name tie-break (counting the edge would
+        # force the reverse).
+        self._package("aaa", dev_deps=("zzz",))
+        self._package("zzz")
+        self.assertEqual(self._order(self.root), ["@speed/aaa", "@speed/zzz"])
+
+    def test_dependency_cycle_fails_closed(self) -> None:
+        self._package("alpha", deps=("beta",))
+        self._package("beta", deps=("alpha",))
+        with self.assertRaises(rel.ReleaseError) as cm:
+            rel.derive_npm_publish_order(self.root)
+        message = str(cm.exception)
+        self.assertIn("cycle", message)
+        self.assertIn("@speed/alpha", message)
+        self.assertIn("@speed/beta", message)
+
+    def test_live_tree_orders_every_dependency_edge(self) -> None:
+        # The real graph: every @speed dependency edge of the live
+        # web/packages set must point from an earlier to a later package.
+        order = self._order(LIVE_ROOT)
+        self.assertEqual(
+            sorted(order),
+            sorted(
+                p["name"] for p in rel.derive_npm_packages(LIVE_ROOT)
+            ),
+        )
+        index = {name: i for i, name in enumerate(order)}
+        for p in rel.derive_npm_packages(LIVE_ROOT):
+            pkg_json = os.path.join(
+                LIVE_ROOT, "web", "packages", p["dir"], "package.json"
+            )
+            with open(pkg_json, encoding="utf-8") as fh:
+                data = json.load(fh)
+            for dep in data.get("dependencies") or {}:
+                if dep in index:
+                    self.assertLess(
+                        index[dep],
+                        index[p["name"]],
+                        f"{p['name']} must publish after {dep}",
+                    )
+
+    def test_thirteenth_package_joins_the_derived_order(self) -> None:
+        """A package added to the workspace enters the order with no list.
+
+        The sandbox carries the live package set plus one synthetic
+        package that depends on @speed/tokens: the derived order must
+        contain it, place it after its dependency, and the fixed-group
+        gate must reject it until web/.changeset/config.json lists it --
+        the verify-side mirror of the same new package.
+        """
+        _copy_live_web_half(self.root)
+        self._package("zz-future", deps=("tokens",))
+        names = self._order(self.root)
+        self.assertIn("@speed/zz-future", names)
+        self.assertLess(
+            names.index("@speed/tokens"), names.index("@speed/zz-future")
+        )
+        # The fixed-group gate: not listed -> verify fails naming it.
+        packages = rel.derive_npm_packages(self.root)
+        fixed = rel.load_changesets_fixed_group(self.root)
+        with self.assertRaises(rel.ReleaseError) as cm:
+            rel.check_changesets_coverage(fixed, packages)
+        self.assertIn("@speed/zz-future", str(cm.exception))
+        # Listed -> the same gate passes again.
+        config_path = os.path.join(
+            self.root, "web", ".changeset", "config.json"
+        )
+        with open(config_path, encoding="utf-8") as fh:
+            config = json.load(fh)
+        config["fixed"][0].append("@speed/zz-future")
+        with open(config_path, "w", encoding="utf-8") as fh:
+            json.dump(config, fh)
+        fixed = rel.load_changesets_fixed_group(self.root)
+        rel.check_changesets_coverage(fixed, packages)  # must not raise
+
+    def test_release_workflow_walks_the_derived_order(self) -> None:
+        """The workflow carries no hand-copied package list.
+
+        Fail-before: the publish step used to iterate a literal
+        packages="..." list, which a package the list never learned
+        about was silently absent from (verify green, publish skipped).
+        The step must invoke the coordinator's derivation and keep no
+        such list of its own.
+        """
+        workflow = os.path.join(
+            LIVE_ROOT, ".github", "workflows", "release.yml"
+        )
+        with open(workflow, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("derive_npm_publish_order", text)
+        self.assertNotIn('packages="', text)
+
+
 class CleanupEngineTest(unittest.TestCase):
     """The first-release replace cleanup, exercised ONLY against fixtures.
 
@@ -597,27 +782,7 @@ class SandboxProofTest(unittest.TestCase):
             if os.path.isfile(src):
                 os.makedirs(os.path.join(sb, entry), exist_ok=True)
                 shutil.copy2(src, os.path.join(sb, entry, "go.mod"))
-        for d in sorted(
-            os.listdir(os.path.join(LIVE_ROOT, "web", "packages"))
-        ):
-            src = os.path.join(
-                LIVE_ROOT, "web", "packages", d, "package.json"
-            )
-            if os.path.isfile(src):
-                os.makedirs(
-                    os.path.join(sb, "web", "packages", d), exist_ok=True
-                )
-                shutil.copy2(
-                    src, os.path.join(sb, "web", "packages", d, "package.json")
-                )
-        changeset_src = os.path.join(LIVE_ROOT, "web", ".changeset")
-        changeset_dst = os.path.join(sb, "web", ".changeset")
-        if os.path.isfile(os.path.join(changeset_src, "config.json")):
-            os.makedirs(changeset_dst, exist_ok=True)
-            shutil.copy2(
-                os.path.join(changeset_src, "config.json"),
-                os.path.join(changeset_dst, "config.json"),
-            )
+        _copy_live_web_half(sb)
         for git_cmd in (
             ("init", "-q"),
             ("config", "user.email", "lockstep-self-test@localhost"),

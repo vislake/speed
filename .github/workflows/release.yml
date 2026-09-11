@@ -25,9 +25,11 @@ name: release
 # THE v0.0.1 DISPOSITION (mechanism landed 2026-09-10; the dispatch is
 # the first real end-to-end run): the first real release uses both
 # halves of the one-version plan.
-#   * Go modules release by pushing the 21 go/<module>/v0.0.1 tags -- the
-#     Go multi-module repository convention, under which the Go module
-#     proxy serves each module from the tag its path names. The tags are
+#   * Go modules release by pushing the go/<module>/v0.0.1 tags, one per
+#     module under go/ (the set is derived from go.work at run time) --
+#     the Go multi-module repository convention, under which the Go
+#     module proxy serves each module from the tag its path names. The
+#     tags are
 #     pushed BY THIS WORKFLOW, at the exact commit the run checked out
 #     and verified: one dispatch releases everything, the released
 #     content is the verified content, and the hand-tagging risk the
@@ -46,8 +48,8 @@ name: release
 #     never move, while the root tag may sit on post-release fix
 #     commits -- by design; the full semantics of the two are
 #     documented in docs/internal/02-repo-and-release.md.
-#   * The twelve npm packages (the web/.changeset fixed group) publish at
-#     0.0.1 to the GitHub Packages npm registry
+#   * Every npm package under web/packages (the web/.changeset fixed
+#     group) publishes at 0.0.1 to the GitHub Packages npm registry
 #     (https://npm.pkg.github.com) under the @speed scope, each from its
 #     own directory with `npm publish --registry
 #     https://npm.pkg.github.com`, authenticated with the built-in
@@ -84,8 +86,9 @@ name: release
 #      the npm half.
 #   3. Publishes the npm half: pinned pnpm install --frozen-lockfile and
 #      a filtered workspace build (the same toolchain and shape the
-#      npm-package-ci workflow uses), then, per package in dependency
-#      order, `npm publish --registry https://npm.pkg.github.com`. npm
+#      npm-package-ci workflow uses), then, per package in the derived
+#      dependency-first order, `npm publish --registry
+#      https://npm.pkg.github.com`. npm
 #      knows no workspace: protocol, so each manifest's @speed sibling
 #      specifiers (workspace:* in the committed tree; pnpm-lock.yaml
 #      records workspace members as links, never versions) are rewritten
@@ -196,8 +199,8 @@ jobs:
           echo "offline verification green for ${{ inputs.version }}."
           echo "The publish job of this run performs the real release for"
           echo "that version: the module tags and the repo root tag"
-          echo "pushed, the twelve @speed npm packages published to the"
-          echo "GitHub Packages registry."
+          echo "pushed, every @speed npm package under web/packages"
+          echo "published to the GitHub Packages registry."
 
   publish:
     name: Publish ${{ inputs.version }} (Go tags and npm packages)
@@ -316,7 +319,7 @@ jobs:
       - name: Install workspace dependencies (frozen lockfile)
         working-directory: web
         run: pnpm install --frozen-lockfile
-      - name: Build the twelve packages
+      - name: Build the @speed packages
         working-directory: web
         run: |
           # dist/ is gitignored and built per package; each package's
@@ -324,7 +327,7 @@ jobs:
           # its own --filter legs. A workspace-filtered recursive build
           # emits every export map the publish packs.
           pnpm -r --filter "@speed/*" build
-      - name: Publish the twelve @speed packages to the GitHub Packages registry
+      - name: Publish the @speed packages to the GitHub Packages registry
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
@@ -339,13 +342,40 @@ jobs:
           # lines also make an accidental npmjs.org publish impossible:
           # that registry has no credential and no mapping here.
           printf '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n@speed:registry=https://npm.pkg.github.com\n' > "${HOME}/.npmrc"
-          # Dependency-first order: every package publishes before any
-          # package that depends on it (the manifest rewrite below names
-          # real versions, so an in-order publish also leaves no window
-          # in which a consumer could resolve a not-yet-published half).
-          packages="tokens i18n api-client ui-kit api-sdk auth-core layout-kit billing-ui tenancy-ui auth-ui account-ui product-shell"
-          for p in $packages; do
-            pkg_json="web/packages/$p/package.json"
+          # The publish order is derived, never hand-copied: the
+          # coordinator's derive_npm_publish_order topological-sorts the
+          # web/packages/* set by each manifest's @speed dependencies, so
+          # every package publishes before any package that depends on
+          # it, a package a hand-copied list never learned about cannot
+          # be silently skipped, and a dependency cycle fails this step
+          # instead of walking an arbitrary order. (The manifest rewrite
+          # below names real versions, so an in-order publish also leaves
+          # no window in which a consumer could resolve a
+          # not-yet-published half.)
+          python3 - > /tmp/npm-publish-order.txt <<'PYEOF'
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location(
+              "lockstep_release", "tools/release/lockstep-release.py"
+          )
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          try:
+              order = m.derive_npm_publish_order(".")
+          except m.ReleaseError as exc:
+              print(f"error: {exc}", file=sys.stderr)
+              sys.exit(1)
+          for p in order:
+              print(f"{p['name']}\t{p['dir']}")
+          PYEOF
+          # The derivation above already fails on an empty package set;
+          # this guard is the last line of defense against an empty file
+          # walking the loop zero times and the step reporting success.
+          if [ ! -s /tmp/npm-publish-order.txt ]; then
+            echo "error: the derived npm publish order is empty"
+            exit 1
+          fi
+          while IFS=$'\t' read -r name dir; do
+            pkg_json="web/packages/$dir/package.json"
             # Re-run recovery on the npm side, mirroring the tag step: a
             # partial publish state (the first k packages made it up)
             # must not fail the re-dispatch. Probe the registry for the
@@ -355,9 +385,9 @@ jobs:
             # write implies read for the owning installation), and a
             # version that exists is never published or overwritten
             # again.
-            if npm view "@speed/$p@$VERSION_NO_V" \
+            if npm view "$name@$VERSION_NO_V" \
                 --registry https://npm.pkg.github.com --json >/dev/null 2>&1; then
-              echo "@speed/$p@$VERSION_NO_V already exists on the registry -- skipped (re-run recovery)"
+              echo "$name@$VERSION_NO_V already exists on the registry -- skipped (re-run recovery)"
               continue
             fi
             # npm knows no workspace: protocol -- rewrite the @speed
@@ -387,9 +417,9 @@ jobs:
               # channel policy).
               dist_tag="--tag next"
             fi
-            echo "publishing @speed/$p at $VERSION_NO_V"
-            (cd "web/packages/$p" && npm publish --registry https://npm.pkg.github.com $dist_tag)
-          done
+            echo "publishing $name at $VERSION_NO_V"
+            (cd "web/packages/$dir" && npm publish --registry https://npm.pkg.github.com $dist_tag)
+          done < /tmp/npm-publish-order.txt
       - name: Report
         run: |
           echo "release run for ${{ inputs.version }} complete: the tag"

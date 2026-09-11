@@ -34,7 +34,12 @@ Publishable set (derived at runtime, never hand-maintained):
     versioned by the changesets fixed group in web/.changeset/config.json
     (which must cover exactly the packages found -- the npm mirror of the
     go.work drift guard). All current versions must be uniform for the
-    plan to be consistent.
+    plan to be consistent. The plan also prints the dependency-first
+    publish order the release workflow's publish loop walks: a
+    topological sort over each manifest's @speed dependencies, so a new
+    package is published the moment its directory lands (there is no
+    hand-copied order to forget), and a dependency cycle fails the plan
+    instead of walking an arbitrary order.
   * examples/reference-app is deliberately NOT publishable: it is the
     mandatory first consumer of every module, consumers
     pin published modules and are never themselves published or tagged,
@@ -49,10 +54,10 @@ Modes:
   Prints the full plan -- every go/ module with the module tag it would
   get, the repo root tag (the bare version itself, the release's
   milestone reference), every npm package with the version the fixed
-  group would bump it to -- then the preflight results, and closes with
-  one aggregated line reporting the module and package counts the tree
-  carries. Exit 0 means the plan is consistent. Nothing is tagged,
-  written, fetched or published.
+  group would bump it to and the order the packages publish in -- then
+  the preflight results, and closes with one aggregated line reporting
+  the module and package counts the tree carries. Exit 0 means the plan
+  is consistent. Nothing is tagged, written, fetched or published.
 
   --self-test: runs this script's unittest suite offline (temp sandboxes
   only; see test_lockstep_release.py). Proves the verification gates and,
@@ -469,6 +474,59 @@ def derive_npm_packages(repo_root: str) -> list[dict[str, str]]:
     return packages
 
 
+def derive_npm_publish_order(repo_root: str) -> list[dict[str, str]]:
+    """Return the deliverable npm packages in dependency-first publish order.
+
+    The set is derive_npm_packages' (web/packages/* with a package.json);
+    the order is a deterministic topological sort over the @speed/*
+    entries of each package's package.json "dependencies". The edges that
+    constrain the order are the dependencies field alone: those are the
+    specifiers a consumer resolves and the ones the release workflow's
+    manifest rewrite names real versions for, so an order that respects
+    them leaves no window in which a consumer could resolve a
+    not-yet-published half. devDependencies (rewritten the same way on
+    the runner copy but never resolved by a consumer) do not constrain
+    the order. Only @speed/* dependencies that name another package of
+    the derived set are edges; ties are broken by package name, so the
+    order is stable across runs, and a dependency cycle raises
+    ReleaseError instead of handing the publish loop an order in which
+    some consumer-facing edge points backwards.
+    """
+    packages = derive_npm_packages(repo_root)
+    by_name = {p["name"]: p for p in packages}
+    packages_root = os.path.join(
+        repo_root, WEB_DIR_NAME, WEB_PACKAGES_DIR_NAME
+    )
+    remaining: dict[str, set[str]] = {}
+    for p in packages:
+        pkg_json = os.path.join(packages_root, p["dir"], "package.json")
+        try:
+            with open(pkg_json, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ReleaseError(f"cannot parse {pkg_json}: {exc}")
+        deps = data.get("dependencies") or {}
+        remaining[p["name"]] = {
+            d for d in deps if d.startswith("@speed/") and d in by_name
+        }
+    order: list[dict[str, str]] = []
+    while remaining:
+        ready = sorted(name for name, deps in remaining.items() if not deps)
+        if not ready:
+            raise ReleaseError(
+                "npm package dependency cycle among: "
+                + ", ".join(sorted(remaining))
+                + " -- the dependency-first publish order cannot exist for "
+                "a cycle; break the cycle before releasing"
+            )
+        for name in ready:
+            order.append(by_name[name])
+            del remaining[name]
+        for deps in remaining.values():
+            deps.difference_update(ready)
+    return order
+
+
 def load_changesets_fixed_group(repo_root: str) -> set[str]:
     """Return the package names of the web/ changesets fixed group.
 
@@ -607,6 +665,7 @@ def print_plan(
     go_modules: list[str],
     consumers: list[str],
     npm_packages: list[dict[str, str]],
+    publish_order: list[dict[str, str]],
     preflight_lines: list[str],
     applying: bool,
 ) -> None:
@@ -646,6 +705,9 @@ def print_plan(
           f"to {version[1:]} together (current versions must be uniform):")
     for p in npm_packages:
         print(f"  {p['name']}: {p['version']} -> {version[1:]}")
+    print("  publish order (derived, dependency-first -- every package "
+          "publishes before any package that depends on it):")
+    print("    " + " -> ".join(p["name"] for p in publish_order))
     print()
     print("Preflight checks:")
     for line in preflight_lines:
@@ -959,6 +1021,15 @@ def main(argv: list[str] | None = None) -> int:
             f"web/.changeset fixed group covers exactly the "
             f"{_n(len(npm_packages), 'package')} found"
         )
+        # The same derivation the release workflow's publish loop walks,
+        # so the verified order and the published order cannot diverge: a
+        # dependency cycle fails here, offline, before any tag is pushed.
+        publish_order = derive_npm_publish_order(repo_root)
+        preflight_lines.append(
+            f"[ok] npm publish order derived for "
+            f"{_n(len(publish_order), 'package')} (every @speed dependency "
+            f"publishes before the packages that depend on it)"
+        )
         # [warn] when same-version tags exist (a partially completed
         # release being re-run), [ok] when none do -- never a failure.
         preflight_lines.extend(
@@ -969,8 +1040,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print_plan(
-        version, go_modules, consumers, npm_packages, preflight_lines,
-        applying=args.apply,
+        version, go_modules, consumers, npm_packages, publish_order,
+        preflight_lines, applying=args.apply,
     )
     if args.apply:
         print(f"creating {len(go_modules) + 1} local tags (one per module "
