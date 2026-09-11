@@ -120,8 +120,9 @@ name: fast-check
 #       - tools/check_env_example_consistency.py -- the reference app's
 #         .env.example drift gate: the env variables the host's loader
 #         target declares (internal/app/bootstrap.go's config:"env=NAME"
-#         pins, the derive option included, plus the APP_ROOT_KEY
-#         literal WithRootKeyEnv reads) must equal the key set
+#         pins, the derive option included, plus the APP_ROOT_KEY the
+#         loader reads through WithRootKeyEnv, its argument a string
+#         literal or a same-file constant) must equal the key set
 #         examples/reference-app/.env.example documents -- its active
 #         KEY= entries and its commented-out examples alike. Its
 #         planted-drift suite
@@ -307,6 +308,8 @@ jobs:
         uses: ./.github/actions/setup-go-env
       - name: CJK discipline scan (Language Rule)
         run: python3 tools/scan_cjk.py
+      - name: CJK-scanner unit suite (tools/test_scan_cjk.py)
+        run: python3 tools/test_scan_cjk.py
       - name: Toolchain drift gate (.mise.toml mirrors)
         run: python3 tools/check_toolchain.py
       # Repository-isolation coverage: every tenant-data Repository type
@@ -376,7 +379,9 @@ jobs:
       # Reference-app env-example consistency: the env variables the
       # host's loader target declares (internal/app/bootstrap.go's
       # config:"env=NAME" pins, the derive option included, plus the
-      # APP_ROOT_KEY literal WithRootKeyEnv reads) must equal the key set
+      # APP_ROOT_KEY the loader reads through WithRootKeyEnv, its
+      # argument a string literal or a same-file constant) must equal
+      # the key set
       # examples/reference-app/.env.example documents -- its active KEY=
       # entries and its commented-out examples alike, so a variable
       # added to one side alone goes red. The planted-drift suite runs
