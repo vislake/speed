@@ -78,16 +78,16 @@ tenantless calls explicitly.
   success chunk (real `Usage`) is observed, never speculatively at stream
   start.
 - `Entitlements` and `UsageRecorder` (`seams.go`): structurally-typed,
-  no-import seams -- `ai-gateway` sits at the same dependency tier as
+  no-import module interfaces -- `ai-gateway` sits at the same dependency tier as
   `billing`, `sharing` and `integration`, so none of the three may import
   each other. Both interfaces mirror the real
   `billing.EntitlementsService.Check` and `metering.Recorder.Record`
   shapes without importing either package; a host with both wired
   satisfies them with a one-line assignment or a short closure (see each
-  interface's own doc comment and the `*Func` adapters). Both seams are
+  interface's own doc comment and the `*Func` adapters). Both modules are
   OPTIONAL: a `Gateway` built with neither wired still works, it just
   enforces no quota and reports no usage anywhere. Per-use charging of AI
-  calls is deliberately not this seam's role -- it is a host-layer billing
+  calls is deliberately not this module's role -- it is a host-layer billing
   responsibility exercised through `go/billing` (see "Usage reporting and
   charging").
 
@@ -237,7 +237,7 @@ tenantless calls explicitly.
   injected directly: both sit below ai-gateway in the dependency graph,
   so this is an ordinary downward dependency, unlike
   `Entitlements`/`UsageRecorder`, which stay structurally-typed no-import
-  seams because ai-gateway sits at billing/metering's own tier. A
+  modules because ai-gateway sits at billing/metering's own tier. A
   `Gateway` built for chat-only use (no `WithImageGeneration`) registers
   no job handler at all, and `Gateway.GenerateImage` on such a `Gateway`
   always fails with `ErrImageGenerationUnavailable`.
@@ -264,14 +264,14 @@ tenantless calls explicitly.
   cannot do this: ai-gateway and billing sit on the same dependency tier
   and neither may import the other -- the job handler knows neither the
   price nor the refund policy. `UsageRecorder` therefore stays the
-  analytics-grade usage-reporting seam: a structural mirror of
+  analytics-grade usage-reporting module: a structural mirror of
   `metering.Recorder.Record`, fail-open, undeduped -- billing-grade
-  `metering.Enqueue`-in-transaction is not the seam's shape and is not
+  `metering.Enqueue`-in-transaction is not the module's shape and is not
   built -- and no shipped host wires `WithUsageRecorder`. A host that
   charges for AI usage follows the smilesim shape; a host that wants the
-  usage dimensions in a meter wires the seam for that purpose alone. With
+  usage dimensions in a meter wires the module for that purpose alone. With
   neither wired, AI usage is unmetered and calls still work -- the same
-  optionality every other host seam in this module documents.
+  optionality every other host-injected module in this module documents.
 - Stream usage is recorded at most once per response: `relayStream` guards
   the metering call with a once-flag, so a stream carrying usage on many
   chunks -- a violation of `ChatChunk`'s own channel contract -- produces

@@ -14,7 +14,7 @@ sits one step above `@speed/auth-ui`'s tier: reads go through the
 @tanstack/react-query hooks generated into `@speed/api-sdk` over the
 host's QueryClient (the shared-QueryClient contract: one host-bound
 QueryClient, never package-constructed), and writes through the
-generated mutations over the same `bindRequestFn` seam. Two surfaces
+generated mutations over the same `bindRequestFn` binding. Two surfaces
 take the `@speed/auth-core`
 session as a required prop for exactly one session operation each (the
 add area's authorize-URL request; the step-up challenge dialog's
@@ -120,12 +120,12 @@ verification); three take no props at all.
    render `errors.unknown` by design.
 4. **No direct HTTP in `src/`, and no react-query outside the host's
    client.** Every request flows through generated operations over the
-   `bindRequestFn` seam; this package is not on the
+   `bindRequestFn` binding; this package is not on the
    `speed/no-direct-http` whitelist. Components consume the generated
    hooks and the `useQueryClient`-independent query-key builders; they
    never construct their own QueryClient (the host owns it) and never
    hand-write a query key. Tests bind their doubles through the same
-   seam (`bindRequestFn` from `@speed/api-sdk/runtime`) — never by
+   binding (`bindRequestFn` from `@speed/api-sdk/runtime`) — never by
    mocking a module or by importing another package's `dist/`.
 5. **The public surface is the `index.ts` exports; dependencies follow
    public types.** Helpers live in `src/internal/` and are deliberately

@@ -105,7 +105,7 @@ after the `With*` options have been applied and handed the registry when
   (created_at desc, id desc) keyset cursor, `limit <= 0` meaning the default page
   of 50.
 
-Store and bus arrive through two seams read at call time, never by import: the
+Store and bus arrive through two modules read at call time, never by import: the
 service holds the registry `Register` handed it (`attach`) and calls
 `Registry.ObjectStore()` / `Registry.EventBus()` per operation, so a revoke or a
 replacement is honored by the next call. Before `Register`, or on a registry
@@ -470,7 +470,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   it), never through the module's own read paths, so nothing the module
   believes about its writes goes unchecked. The composition is a
   standalone-mode kernel whose ObjectStore the host overrides via
-  `Put` — the injectable seam a distributed-mode host wires,
+  `Put` — the injectable module a distributed-mode host wires,
   exercised against real RustFS.
 
 ## Known limitations
@@ -558,7 +558,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   replicas of a distributed deployment — which share the ObjectStore but not
   the map — can still interleave an Upload on one replica with a Complete on
   another. Closing that residue would need a store-level compare-and-swap
-  the ObjectStore seam does not carry; the standalone shape (one process,
+  the ObjectStore module does not carry; the standalone shape (one process,
   one store) is airtight and the multi-replica one is not — recorded here
   rather than pretended away.
 - **A lost finalize's writeback take-back is one-shot best-effort.**
@@ -589,7 +589,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   bytes orphaned under the key: no row references them, no reader can reach
   them (reads serve completed rows, and the row is gone or doomed), and
   nothing will ever reclaim them -- the module never lists keys (the
-  `ObjectStore` seam has no listing) and object ids are never reused, so the
+  `ObjectStore` module has no listing) and object ids are never reused, so the
   key can neither be claimed by a future object nor cleaned by a row-driven
   sweep. A non-not-found re-read failure coinciding with the row's removal
   leaves the same residue by the same route: the take-back is skipped, and

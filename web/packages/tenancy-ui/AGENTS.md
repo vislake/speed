@@ -114,7 +114,7 @@ One test file per source file (`TenantSwitcher.tsx` ->
 network rigs, used for different jobs:
 
 - `@speed/test-utils/session-harness` (component tests): a scripted `RequestFn` bound
-  through the same `bindRequestFn` seam a host's real client binds.
+  through the same `bindRequestFn` binding a host's real client binds.
   Component tests use it when they must script raw `ApiError`s or
   assert the request contract (method, path, body) directly.
 - `real-client.ts` (the journey): a real `@speed/api-client`

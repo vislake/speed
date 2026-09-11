@@ -12,7 +12,7 @@ typed request function built by `createClient`, with injectable fetch,
 a memory-only access-token store, silent single-flight 401 refresh,
 timeout, conservative idempotent retry, and a structured reporter. The
 generated `@speed/api-sdk` (orval output of `task api:gen`) calls into
-this runtime through its `src/runtime.ts` seam; no package other than
+this runtime through its `src/runtime.ts` binding; no package other than
 this one may issue HTTP requests itself.
 
 ## Invariants (code review enforces; do not weaken)
@@ -121,7 +121,7 @@ HTTP through it.
 `fetchPublicConfig` / `fetchSystemFeatures` live in
 `src/config-fetcher.ts` -- typed wrappers around go/config's two
 pre-auth endpoints (`PathPublic` / `PathSystemFeatures`), built on the
-`RequestFn` seam above. Both path constants are hand-kept in sync with
+`RequestFn` interface above. Both path constants are hand-kept in sync with
 the Go side (go/config ships an OpenAPI fragment declaring the pair as
 `config_getPublicConfig` / `config_getSystemFeatures`). The generated
 operations that fragment produces -- `@speed/api-sdk`'s
@@ -169,7 +169,7 @@ attempts 3 / status 200, never the hardcoded 1/0 a fetcher-level
 error could only fake -- and `useFeature` null-guards
 `data.features` (absent/null reads as "nothing enabled", never a
 render-time throw), because the response shape is this
-hand-maintained seam and a payload violating it must fail softly.
+hand-maintained contract and a payload violating it must fail softly.
 
 Deferred with reasons:
 
@@ -178,10 +178,10 @@ Deferred with reasons:
   The consumer shell (`examples/reference-app/web`, an external
   member of the web workspace, never versioned) already binds one
   real `createClient` over the environment's own fetch into the
-  api-sdk seam: `@speed/api-sdk`, the orval-generated typed surface,
-  calls into this runtime through its `src/runtime.ts` seam, and
+  api-sdk binding: `@speed/api-sdk`, the orval-generated typed surface,
+  calls into this runtime through its `src/runtime.ts` binding, and
   `@speed/auth-core` compile-consumes both in-workspace (its session
-  layer imports this package's `AccessTokenStore` seam, calls the
+  layer imports this package's `AccessTokenStore` interface, calls the
   generated authn operations through the bound request function, and
   fills the `refreshAccessToken` hook with `() => session.refresh()`).
   The shell's home view reads the server's effective Public values

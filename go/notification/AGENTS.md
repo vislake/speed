@@ -20,7 +20,7 @@ HTTP handler, the per-replica realtime hub behind the inbox stream, and the
 dual-dialect migration set. The reference app (`examples/reference-app`) is
 the mandatory first consumer: `internal/app/server.go` wires `notification.NewModule`
 through `the assembly`, `internal/app/demo/demo_notification.go` supplies the
-host-side demo seams, and `flowtests/notification_flow_test.go` drives the
+host-side demo modules, and `flowtests/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 
 Nothing here is a stub. The "Not implemented" section below is the complete,
@@ -57,7 +57,7 @@ honest list of what the module does not ship.
 The module never imports `authn`, `rbac` or `org`, and has no table in any of
 their domains. A user is an opaque id learned from an authenticated caller or
 a domain event; a tenant's organization structure is the same; addresses of
-*user* recipients are identity data the host resolves through seams, never
+*user* recipients are identity data the host resolves through modules, never
 rows here. `notification` also never declares the notification types it
 delivers: a type is a declaration of the business module that emits it,
 registered on the host registry with `reg.NotificationsSeat().Add`
@@ -118,24 +118,24 @@ module must import.
   `DeliveryService.Dispatch`, the single registered queue handler
   (`jobTypeDeliver` = `"notification.deliver"`), send-time rechecks,
   rendering, per-channel attempt and record settling.
-- No SMS file of its own: the SMS transport is the pkgcore seam, consumed
+- No SMS file of its own: the SMS transport is the pkgcore module, consumed
   not declared -- the delivery pipeline and the contact service send
   `pkgcore.SMS` values through the host-wired `pkgcore.SMSSender`
   (`WithSMSSender`), with `pkgcore.NewConsoleSMSSender` as the
   zero-external-dependency implementation that doubles as the module's
-  test double (see "The SMS seam is pkgcore's"). Each send carries the
+  test double (see "The SMS module is pkgcore's"). Each send carries the
   render's identity alongside the text -- the copy's locale message id,
   the locale the copy rendered in, and the stringified interpolation
   values -- so a template-typed carrier adapter can select the account
   template mapped for that (locale, message id) pair.
-- `render.go` -- the template-render seam: per-channel part shapes and the
+- `render.go` -- the template-render surface: per-channel part shapes and the
   `<type_key>.<channel>.<part>` id convention.
 - `staticaddr/` -- the subpackage implementing `UserAddressResolver` over
   a fixed per-user table (`staticaddr.New(map[string]notification.UserAddresses)`,
   copied at construction, read-only and concurrency-safe thereafter). It
   serves the deployment shapes whose addresses are statically held -- demos,
   a single-tenant install whose operator holds the accounts, tests -- and
-  its package doc carries the seam's obligation: the table is the
+  its package doc carries the contract's obligation: the table is the
   operator's declaration of VERIFIED addresses, and a host whose addresses
   change (users rebinding, a verification flow) must implement its own
   resolver over its own address store. An implementation never shares a
@@ -181,7 +181,7 @@ family, the unread count, the type directory, the preference get/update pair,
 and the contact roster's list/create/verify/resend. Every operation is
 own-data self-service and refuses without BOTH a ctx tenant (the tenancy
 middleware's doing) and an identified caller resolved through the host's
-`SubjectResolver` seam (`ErrSubjectUnresolved` otherwise): the module declares
+`SubjectResolver` module (`ErrSubjectUnresolved` otherwise): the module declares
 no permissions, so who may reach these surfaces at all is the host
 authorization layer's decision.
 
@@ -263,12 +263,12 @@ SMTP mailer and the aliyun/tencent SMS adapters) sit below this module and
 could not reach a sentinel declared here. `TestErrorCatalog_IsComplete` pins
 the catalog's completeness.
 
-## Wiring and host seams
+## Wiring and host modules
 
 A host wires the module as: `m := notification.NewModule(db,
 notification.With...(...))`, then hands `m` to `the assembly`'s module
 set. `Register(reg)` runs in three phases (module.go's doc comment): validate
-and copy the six option seams into the services; declare events, audit
+and copy the six wiring options into the services; declare events, audit
 actions and the job handler; attach the registries (types, bus, catalog,
 audit) and mount the HTTP surface. The attach half is why the module never
 captures registry state during registration: `reg.Locales()` is nil inside
@@ -278,7 +278,7 @@ consumer reads the catalog from the registry at call time, never earlier.
 Six host-supplied options are REQUIRED -- `Register` returns the matching
 `Err*Required` (all Internal) without any of them:
 
-- `WithSMSSender` -- the SMS transport (see "The SMS seam is pkgcore's").
+- `WithSMSSender` -- the SMS transport (see "The SMS module is pkgcore's").
 - `WithMailFrom` -- the from-address the contact-email path sends as.
 - `WithContactEmailIndexer`, `WithContactPhoneIndexer` -- the blind indexers
   that make an encrypted contact address queryable (see "Separate index keys
@@ -307,7 +307,7 @@ email channel and the contact verification code alike), so replies to a
 no-reply sender land somewhere a person reads. Empty -- the default --
 writes no Reply-To header, leaving any transport-level default to apply.
 
-The host also supplies structural, no-import seams the module consumes as
+The host also supplies structural, no-import module interfaces the module consumes as
 interfaces it declares -- never as imported packages: `SubjectResolver` (the
 HTTP caller's identity, per operation, with `SubjectResolverFunc` as its
 func-to-interface adapter so a host wires a closure), `UserLocaleResolver`
@@ -492,8 +492,8 @@ recorded reason -- never failed, never a dispatch refusal at enqueue.
 The user-recipient path deliberately carries none of this ledger: a
 user's addresses are identity data the host's own authn half owns and
 verifies, and this module never imports authn, so it reads them at
-send time through the `UserAddressResolver` seam and holds no
-user-address consent or verification state of its own. The seam's
+send time through the `UserAddressResolver` module and holds no
+user-address consent or verification state of its own. The module's
 contract (delivery.go's `Resolve` doc comment) requires the resolver
 to return the host's own verified addresses for that user, and this
 module performs no consent check on user addresses, unlike the
@@ -523,7 +523,7 @@ cross-tenant `IsBlacklisted` read ship; no writer and no caller exist yet
 
 ## Adjudications
 
-The consent, verification and seam decisions below are recorded in the
+The consent, verification and interface decisions below are recorded in the
 module's own words, so every part of the package states the same rule.
 
 ### Unsubscribe is permanent for the contact as a whole
@@ -636,10 +636,10 @@ unauthenticated surface or placed on a pre-auth allowlist makes the
 mechanism identical to sharing's, and it must then be fixed the way
 sharing fixed it -- not re-ruled here.
 
-### The SMS seam is pkgcore's
+### The SMS module is pkgcore's
 
 The SMS transport this module sends verification codes and sms-channel
-deliveries through is pkgcore's own seam -- `pkgcore.SMS` and
+deliveries through is pkgcore's own module -- `pkgcore.SMS` and
 `pkgcore.SMSSender` -- shared with go/authn's phone-login flow, so a host
 wires ONE implementation to both modules' sender options
 (`authn.WithSMSSender` here and `WithSMSSender` there) with neither module
@@ -649,19 +649,19 @@ zero-external-dependency console transport, which doubles as this module's
 test double), `pkgcore.NewHTTPSMSSender` (an operator-run JSON gateway, the
 distributed-mode transport the reference app wires), and the three real
 carrier adapters `pkgcore/sms/aliyun`, `pkgcore/sms/tencent` and
-`pkgcore/sms/twilio` (each a host-constructed `NewSender`). The seam
+`pkgcore/sms/twilio` (each a host-constructed `NewSender`). The module
 registers two component descriptors of its own -- `sms.console` and
 `sms.http`, each carrying its capability bits -- and a composition that
 selects one resolves the sender through the registry: this module's own
 component descriptor reads it with `pkgcore.Get` into `WithSMSSender`,
 go/authn's descriptor reads it optionally into its own, and each consumer
 keeps its own wiring-time requirement on the sender (`pkgcore.SMSSender`'s
-own doc comment records the seam's shape). This module's
+own doc comment records the module's shape). This module's
 requirement is the strictest of the two: `Register` refuses to boot without
 a wired sender (`ErrSMSSenderRequired`), where authn's refusal applies only
 under the distributed deployment mode.
 
-Every SMS this module sends carries the render's identity on the seam:
+Every SMS this module sends carries the render's identity on the module interface:
 the locale message id the body rendered from (the user path's
 `<type_key>.sms.text`, built through render.go's `copyID`; the contact
 code's `contactCodeSMSID`), the locale the copy rendered in, and the
@@ -687,7 +687,7 @@ recipient's own locale (`d.Locale`) and carries `d.Params` as narrowed by
 the sms copy itself. The contact paths (deliverContactSMS, and the
 verification code's send in contact.go) map by the language of the
 rendered body too: the dispatch's captured requester language, or the
-platform default when the producer captured none -- the locale the seam
+platform default when the producer captured none -- the locale the module
 names is the one the copy rendered in, so a contact-facing template is
 selected in the language the recipient actually reads, and a host
 registers the contact message ids under every locale its dispatches can
@@ -815,7 +815,7 @@ Rules specific to this module, on top of the codebase-wide discipline:
 
 - **Never import authn, rbac or org -- in any file.** A user is an opaque
   id; the org tree is unknown; host identity and addresses arrive through
-  the seams above. The module's model files cite this for every id they
+  the modules above. The module's model files cite this for every id they
   store.
 - **No service logging.** The module imports `go/observability` in exactly
   one place -- `handler.go`, whose `mustTenant` gate annotates every
@@ -895,7 +895,7 @@ HTTP surface, driven through a real httptest server), `hub_test.go`,
 `module_test.go` (Register's validation and wiring), `errors_test.go` and
 the per-file suites. Godoc `ExampleInboxMessage` and
 `ExamplePreferenceService` compile and run in the unit suite, pinning the
-documented host wiring (six seams, a hand-built `pkgcore.NewComponentRegistry` host)
+documented host wiring (six modules, a hand-built `pkgcore.NewComponentRegistry` host)
 against the real API. The `staticaddr` subpackage carries its own suite
 (`staticaddr_test.go`: table resolution, missing rows, the
 construction-time copy, concurrent reads under `-race`) and its own

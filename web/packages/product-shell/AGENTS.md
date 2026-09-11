@@ -68,7 +68,7 @@ whole entry composition a host used to hand-derive: a fresh bilingual
 i18n instance (the family's four namespaces registered automatically
 from the packages the assembly composes), the memory-token session
 attached over the generated authn operations, the one client bound
-into the api-sdk runtime seam with the session refresh as its
+into the api-sdk runtime binding with the session refresh as its
 401-refresh leg, the no-retry query client (`createQueryClient`, also
 exported), the session-end strategy (`watchSessionEnd`) and the
 provider stack — I18nextProvider around `AppThemeProvider` around
@@ -224,7 +224,7 @@ layout-kit and tenancy-ui equivalents, and this package's own
 - `src/components/ProductShell.test.tsx` — the view machine. It drives
   real sessions over the real-client rig (a genuine `@speed/api-client`
   over a scripted fetch answering genuine `Response` objects, bound
-  through the api-sdk runtime seam exactly as a host binds one) and
+  through the api-sdk runtime binding exactly as a host binds one) and
   asserts the three branches, both slot overrides, the fail-closed
   unattached shape, the dead-end regressions (a host without a `signIn`
   view keeps the ended screen when its action is activated — never a

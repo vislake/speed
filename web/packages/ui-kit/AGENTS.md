@@ -171,7 +171,7 @@ that a real viewport actually hides or shows the column.
 ## Deferrals (recorded, do not re-open silently)
 
 - **Validation from generated types** (zod-from-generated-types) is
-  not implemented; the validation-error contract is the seam it would
+  not implemented; the validation-error contract is the interface it would
   plug into.
 - **Error-code mapping** (which namespace turns which backend code into
   text) is not implemented; verbatim passthrough is the contract.

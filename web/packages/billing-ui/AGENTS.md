@@ -85,14 +85,14 @@ navigates or touches HTTP.
    render `errors.unknown` by design.
 4. **No direct HTTP in `src/`, no react-query outside the host's
    client, no hand-formatted dates or money.** Every request flows
-   through generated operations over the `bindRequestFn` seam; this
+   through generated operations over the `bindRequestFn` binding; this
    package is not on the `speed/no-direct-http` whitelist. Money goes
    through `Intl.NumberFormat` with the invoice's own currency and
    dates through `Intl.DateTimeFormat` in the UTC calendar the server
    issued the document against (a document date is a fact of the
    record, not of the viewer's clock -- see
    `internal/invoice-format.ts`); a value Intl cannot format never
-   reaches it. Tests bind their doubles through the same seam
+   reaches it. Tests bind their doubles through the same binding
    (`bindRequestFn` from `@speed/api-sdk/runtime`) -- never by mocking
    a module or by importing another package's `dist/`.
 5. **The public surface is the `index.ts` exports; dependencies follow

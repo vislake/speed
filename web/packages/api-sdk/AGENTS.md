@@ -9,7 +9,7 @@ package safe.
 
 The generated, spec-first typed surface of speed APIs for the
 frontend: orval output from each module's openapi fragment, calling the
-`@speed/api-client` runtime through one hand-written seam
+`@speed/api-client` runtime through one hand-written binding
 (`src/runtime.ts`). Generated code never performs HTTP itself; the
 `speed/no-direct-http` ESLint rule whitelists only `@speed/api-client`,
 and `src/` must keep passing it on every regeneration.
@@ -33,7 +33,7 @@ and `src/` must keep passing it on every regeneration.
   the bare or the explicit form, and by the tsconfig pair (`bundler`
   resolution for typecheck, `nodenext` for build), not by shipped
   source.
-- **The mutator seam is a binding, not an import.** `speedRequest`
+- **The mutator surface is a binding, not an import.** `speedRequest`
   adapts orval's axios-shaped call to the request function a host bound
   with `bindRequestFn(createClient(...))`, attaching the bearer token
   from the host's api-client store. `speedRequestCredentialless` is
@@ -66,7 +66,7 @@ and `src/` must keep passing it on every regeneration.
   places (config comment, Taskfile, workflow) at once.
 - **No user-facing text, no i18n resources.** Errors are typed as the
   spec's `{code, params}` envelope; codes map to bilingual text in
-  consumer catalogs. The runtime seam's programmer errors are constant
+  consumer catalogs. The runtime binding's programmer errors are constant
   English strings.
 - **The peer family is the QueryClient contract.** `react` and
   `@tanstack/react-query` v5 are peers so hosts share one
@@ -84,11 +84,11 @@ platform module with an HTTP fragment is a merge member; the
 reference app's own notes, cases and smilesim fragments are NOT
 members, by design: the app's own API is generated into the app's own
 SDK through the app-owned flow, documented in docs/internal/
-21-api-contract.md), the runtime seam, the regeneration
+21-api-contract.md), the runtime binding, the regeneration
 tooling (config + fixup script) and the CI wiring that regenerates and
 diffs the artifact. `@speed/auth-core` compile-consumes the authn
 surface in-workspace: its unit suite binds a scripted request function
-through `bindRequestFn` -- the same seam a host's real client binds --
+through `bindRequestFn` -- the same binding a host's real client binds --
 so a spec change whose regenerated surface outgrows auth-core's calls
 fails that package's typecheck.
 
@@ -104,11 +104,11 @@ Deferred with reasons:
   operations (sharing's access-content route, storage's
   object-content read) generate typed operations with orval's
   `responseType: 'blob'` shape, but the bound api-client transport
-  reads and writes JSON text only, so the seam reads that option
+  reads and writes JSON text only, so the binding reads that option
   for type-completeness and never forwards it (runtime.ts's
   forward()). A host that must move bytes uses its own mechanism --
   browser navigation for a share link, a byte-capable client of its
-  own -- never this JSON seam.
+  own -- never this JSON transport.
 - Browser automation over the server-served page (a browser driving
   the real server) -- not shipped. The consumer shell drives the
   composed operations through the real client over a scripted
@@ -127,10 +127,10 @@ Two entry points:
   is orval's, not ours: expect it to change only through the generator.
 - `./runtime` (`src/runtime.ts`) -- `bindRequestFn`, the `speedRequest`
   mutator and the per-operation `speedRequestCredentialless` mutator
-  (selected by `web/orval.config.ts`), the stable hand-written seam
+  (selected by `web/orval.config.ts`), the stable hand-written binding
   hosts bind.
 
-`src/runtime.test.ts` pins the seam's behaviour; `src/index.test.ts`
+`src/runtime.test.ts` pins the binding's behaviour; `src/index.test.ts`
 pins the generated surface's observable behaviour (hooks issue the
 expected calls through the mutator with the expected query keys).
 Extend `runtime.ts` deliberately; the generated file only via

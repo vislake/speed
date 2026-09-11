@@ -37,17 +37,17 @@ import in the other direction is a merge blocker rather than a style note.
 | `NewService(db, bus, kv, opts...) (*Service, error)` | The service alone, for a host that does not bootstrap through a registry. |
 | `RegisterPIISerializer(cipher) error` | Registers the field-encryption serializer under `SerializerName`. **Call before opening the `*gorm.DB`.** |
 | `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. The former static-key options (`WithSigningKeys` and the `KeySet` API) do not exist in this version — breaking, with no back-compat path; `WithKeySource` is the only way in (see "Tokens and passwords" below). |
-| `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
-| `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally, and `FeatureGateFunc` adapts a closure or a method value to the seam. See "Feature flags are enforced through a host-supplied gate" below. |
-| `WithSettingsReader` | Makes this module's declared dynamic config items (`authn.password_min_length`, the token/session/OAuth-state/SMS TTLs, `authn.social.trusted_providers`, the per-channel social credentials) effective at runtime. `*config.Handle` satisfies `SettingsReader` structurally (the compile-time proof is in `settings.go`), so a host passes `configModule.Handle()` with no adapter, and the component descriptor self-wires it when a config component is assembled. See "Declared config items are read through the settings seam" below. |
+| `WithMembershipReader` | The module through which membership is asked. Absent means "refuse", not "allow". |
+| `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally, and `FeatureGateFunc` adapts a closure or a method value to that interface. See "Feature flags are enforced through a host-supplied gate" below. |
+| `WithSettingsReader` | Makes this module's declared dynamic config items (`authn.password_min_length`, the token/session/OAuth-state/SMS TTLs, `authn.social.trusted_providers`, the per-channel social credentials) effective at runtime. `*config.Handle` satisfies `SettingsReader` structurally (the compile-time proof is in `settings.go`), so a host passes `configModule.Handle()` with no adapter, and the component descriptor self-wires it when a config component is assembled. See "Declared config items are read through the settings module" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. `WithRevocationMode(RevocationModeImmediate)` needs no companion middleware wiring — enforcement is default — see "Immediate revocation is enforced by default, not by host ceremony". |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
 | `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
 | `WithVendorClientIPHeaders(headers ...VendorClientIPHeader)` | The per-header opt-in that authorizes reading a single-hop vendor client-address header (`VendorClientIPHeaderFlyClientIP`, wire value `Fly-Client-IP`) for a request whose peer is a declared trusted proxy. The `VendorClientIPHeader` set is closed -- any other value is refused at wiring time -- and the default is none. See "Every recorded address is the client's, gated on host-declared trusted proxies" below for why the trusted-proxy declaration alone must never authorize such a header. |
 
-### Declared config items are read through the settings seam
+### Declared config items are read through the settings module
 
-Every `ConfigKey*` this module declares on `reg.ConfigSeat()` is consumed at runtime through `WithSettingsReader` (`settings.go`). The rule for every read: an explicit config row wins; an unset row, a nil reader or a failed read falls back to the construction-time option (`WithPasswordPolicy`, `WithAccessTokenTTL`, `WithTrustedProviders`, ...), so a host that configures nothing dynamically behaves exactly as before the seam existed. The one deliberate exception is `authn.social.trusted_providers`: a READ FAILURE fails closed to the empty list rather than falling back, because falling back on error could resurrect auto-linking an operator had explicitly turned off. Every read site is at the operation that consumes it (a sign-in, a password set, a mint, an SMS issue), with two documented timings: the access-token TTL is resolved on the signer's first use and frozen for the process (it sizes the signing-key lifecycle; see `effectiveTTL`), and the password policy refuses an incoherent pair back to the construction-time policy (`passwordPolicyFor`). The credential items (`authn.social.<channel>.client_id`/`client_secret`) are resolved per OAuth flow and reach the provider through `CredentialedProvider.WithCredentials`; both keys must carry explicit rows or the provider keeps its construction-time pair.
+Every `ConfigKey*` this module declares on `reg.ConfigSeat()` is consumed at runtime through `WithSettingsReader` (`settings.go`). The rule for every read: an explicit config row wins; an unset row, a nil reader or a failed read falls back to the construction-time option (`WithPasswordPolicy`, `WithAccessTokenTTL`, `WithTrustedProviders`, ...), so a host that configures nothing dynamically behaves exactly as before the settings module existed. The one deliberate exception is `authn.social.trusted_providers`: a READ FAILURE fails closed to the empty list rather than falling back, because falling back on error could resurrect auto-linking an operator had explicitly turned off. Every read site is at the operation that consumes it (a sign-in, a password set, a mint, an SMS issue), with two documented timings: the access-token TTL is resolved on the signer's first use and frozen for the process (it sizes the signing-key lifecycle; see `effectiveTTL`), and the password policy refuses an incoherent pair back to the construction-time policy (`passwordPolicyFor`). The credential items (`authn.social.<channel>.client_id`/`client_secret`) are resolved per OAuth flow and reach the provider through `CredentialedProvider.WithCredentials`; both keys must carry explicit rows or the provider keeps its construction-time pair.
 
 The end-to-end proof is `unittest/settings_wiring_test.go`: a real config module stores `authn.social.trusted_providers` and the trusted/untrusted arms of automatic account linking are observed through `SocialCallback` -- including the arm that pins the unwired-reader behavior (a config row alone never links).
 
@@ -59,7 +59,7 @@ The end-to-end proof is `unittest/settings_wiring_test.go`: a real config module
 
 This module declares eight feature flags in `Register` (`authn.password_login`,
 `authn.sms_login`, one per social channel, `authn.sso.oidc`) and enforces them
-at request time through the `FeatureGate` seam (`WithFeatureGate`): with a gate
+at request time through the `FeatureGate` module (`WithFeatureGate`): with a gate
 wired and a channel's flag off, every entry point of that channel refuses with
 `authn.channel_disabled` -- the password endpoint stops issuing tokens, the
 SMS endpoints stop sending and redeeming codes, the social authorize/callback
@@ -68,10 +68,10 @@ pair stops starting or completing flows, and the enterprise relying party's
 login page, whose channel visibility comes from the same flag values served by
 the config module's pre-authentication features endpoint.
 
-The gate is structurally satisfied by `*config.Service` -- the seam is built
+The gate is structurally satisfied by `*config.Service` -- the interface is built
 from stdlib types only, so the service satisfies it through its own
 `IsEnabled` method with no adapter to write. (This module's own `go/config`
-dependency belongs to the settings seam below: the component descriptor
+dependency belongs to the settings module below: the component descriptor
 wires the config module's handle as `SettingsReader` when a config component
 is assembled.) **A host that has the config module in its deployment should
 wire its service here** (read lazily at call time: `FeatureGateFunc` over the config
@@ -158,7 +158,7 @@ there is no intent for the module to enforce.
 
 | Symbol | Purpose |
 |---|---|
-| The SMS seam is pkgcore's: `pkgcore.SMS`, `pkgcore.SMSSender`, `pkgcore.NewConsoleSMSSender(w)`, `pkgcore.NewHTTPSMSSender(endpoint, opts...)`, carriers under `pkgcore/sms/` | The message, the delivery seam and every implementation live on the dependency floor, shared with go/notification's sms channel — see "The SMS seam is pkgcore's" below. This module contributes only the wiring option `WithSMSSender` and the wiring-time sentinel below; its former in-package `SMS`/`SMSSender`/constructors are gone, a deliberate breaking change under lockstep versioning. |
+| The SMS module is pkgcore's: `pkgcore.SMS`, `pkgcore.SMSSender`, `pkgcore.NewConsoleSMSSender(w)`, `pkgcore.NewHTTPSMSSender(endpoint, opts...)`, carriers under `pkgcore/sms/` | The message, the delivery module and every implementation live on the dependency floor, shared with go/notification's sms channel — see "The SMS module is pkgcore's" below. This module contributes only the wiring option `WithSMSSender` and the wiring-time sentinel below; its former in-package `SMS`/`SMSSender`/constructors are gone, a deliberate breaking change under lockstep versioning. |
 | `Service.RequestSMSCode`, `Service.LoginWithSMSCode` | Issue-and-deliver, then verify-and-sign-in. Both never disclose whether a phone number is registered. |
 | `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired (see "A distributed deployment must wire an `SMSSender`" below). |
 
@@ -332,7 +332,7 @@ The chains (each ending at the platform default, `en-US` for language,
   the code is the person receiving it): `Accept-Language` (the frontend
   chain's value) → the account's stored locale → `DefaultLocale`.
 
-`TimeZoneResolver` is the one seam here that deliberately does NOT fail
+`TimeZoneResolver` is the one module here that deliberately does NOT fail
 closed: a nil resolver, a resolver error, or an answer that is not a known
 IANA zone all yield the empty string and the registration proceeds,
 because the tier is a convenience whose absence only means the account
@@ -625,19 +625,19 @@ moment `newOptions` validates `WithKeySource` and `WithBlindIndexKey`.
 Omitting `WithDeploymentMode` — every standalone deployment — is equivalent
 to standalone and keeps working with the console default.
 
-### The SMS seam is pkgcore's
+### The SMS module is pkgcore's
 
-The delivery seam phone-login verification codes go out on is pkgcore's own
+The delivery module phone-login verification codes go out on is pkgcore's own
 (`pkgcore.SMS` and `pkgcore.SMSSender`, mirroring the `Mail`/`Mailer`
 contract), shared with go/notification's sms channel: notification sits
-below this module in the dependency graph, so a seam this module owned
+below this module in the dependency graph, so a module owned here
 could not serve it, and a host wiring both modules now hands ONE
 implementation to both `WithSMSSender` options. The implementations are
 pkgcore's too: `pkgcore.NewConsoleSMSSender(w)` (the standalone console
 transport, which doubles as the test double), `pkgcore.NewHTTPSMSSender`
 (an operator-run JSON gateway, SSRF-guarded through `pkgcore/safehttp`),
 and the three real carrier adapters under `pkgcore/sms/` (next section).
-The seam registers two component descriptors of its own in pkgcore's assembly
+The module registers two component descriptors of its own in pkgcore's assembly
 machinery — `sms.console` and `sms.http`, each carrying its capability bits —
 and a composition that selects one resolves the sender through the registry,
 each consumer's own component descriptor reading it with `pkgcore.Get` into
@@ -647,7 +647,7 @@ that stays here.
 
 ### The three carrier adapters (aliyun, tencent, twilio)
 
-This seam has three real carrier adapters, each in its own subpackage of
+This module has three real carrier adapters, each in its own subpackage of
 pkgcore — `go/pkgcore/sms/aliyun`, `go/pkgcore/sms/tencent`,
 `go/pkgcore/sms/twilio` — so a host wires whichever carrier it has an
 account with, exactly as it wires the console or HTTP-gateway transport:
@@ -705,10 +705,10 @@ other Tencent product submodule), and `twilio/twilio-go` costs 2. Each
 adapter's signing is a small, deterministic, officially documented algorithm
 (an RPC canonical form, the TC3 chain, or Basic auth) implementable in
 well-understood stdlib code — the SDKs' real surface (credential chains,
-retries, whole-product client trees) far exceeds the one action this seam
+retries, whole-product client trees) far exceeds the one action this module
 needs, and even a subpackage-scoped SDK dependency would land in the
 owning module's `go.mod` and every workspace member's build. The adapters
-therefore add +0 dependencies and keep the seam light; the offline vectors
+therefore add +0 dependencies and keep the module light; the offline vectors
 pin the algorithms against values no Go code produced, so the usual SDK
 benefit — "the vendor maintains the signature" — is replaced by a
 maintained, test-pinned transcription of the vendor's published
@@ -719,7 +719,7 @@ Three boundaries bind every adapter, each documented in its package doc:
 - **Templates.** Aliyun and Tencent have no free-text send — every message
   instantiates an approved account template, and each vendor has one
   approved template per kind of message. Those two adapters are driven by
-  the seam's template identity: `pkgcore.SMS` carries the locale message id
+  the module's template identity: `pkgcore.SMS` carries the locale message id
   the body was rendered from, the locale it was rendered in, and the
   interpolation values, and each adapter's `Config.Templates` maps
   `"<locale>/<message-id>"` to an approved template plus the variables it
@@ -732,7 +732,7 @@ Three boundaries bind every adapter, each documented in its package doc:
   `Locale` = the locale the body was ACTUALLY rendered in — the
   post-fallback value `renderSMSCode` reports, never the raw request-side
   one, so an empty-locale account's code still maps.
-- **Phone forms.** The seam's contract — pass `SMS.To` through unchanged,
+- **Phone forms.** The module's contract — pass `SMS.To` through unchanged,
   never normalize — holds for all three adapters; each package doc records
   the form its vendor's API accepts (Aliyun: domestic numbers with `+`,
   `+86`, `0086`, `86` or no prefix, international as country-code-plus-number;
@@ -1218,7 +1218,7 @@ rather than trying to synchronize on the exact step boundary.
 | `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first. The columns exist so a resolver, when one is added, needs no migration. |
 | The declared dynamic-config items are not read back at runtime; the values are injected through options with the same defaults. | The schema is declared, which is what a module owes the config module. The read-through binding is unbuilt; it needs the live `config` module wiring that would consume it. |
 | The dynamic-config item `authn.session_revocation_immediate` does not exist. | It was declared-but-never-read: its description promised that setting it enforces immediate revocation, and no code read it — and no runtime read could ever deliver what the description promised, because the revocation mode is fixed at `SessionManager` construction and gates which revocations are even recorded, so a value read at request time cannot retrofit enforcement onto a natural-mode manager. The mode's one real selector is the `WithRevocationMode` construction option ("Immediate revocation is enforced by default, not by host ceremony" above). Reintroducing a dynamic switch would require the typed-config read-through binding the row above records as unbuilt, plus a mode that can change at runtime without contradicting natural mode's zero-cost model. |
-| The generated authn surface of `@speed/api-sdk` has no browser-driven, real-server end-to-end consumer. | In-form runtime consumption exists: `@speed/auth-ui`'s `src/usage-example.test.tsx` compiles and executes the composed sign-in family over a real `@speed/api-client` — `createClient` with a memory access-token store and an injectable fetch whose stand-in answers genuine `Response` objects, bound through the same `bindRequestFn` seam a host's client binds — driving a password sign-in, a silent credential-less refresh (the retried request carries the fresh token), and a server-side session death whose refused refresh converges the snapshot to anonymous, six requests pinned in order. The generated half stays compile-consumed in-workspace by `@speed/auth-core`; `@speed/auth-ui`'s public `RegisterForm` callback (the generated `AuthnUser`) adds a second type-level consumer. What remains is the browser-and-real-server leg. |
+| The generated authn surface of `@speed/api-sdk` has no browser-driven, real-server end-to-end consumer. | In-form runtime consumption exists: `@speed/auth-ui`'s `src/usage-example.test.tsx` compiles and executes the composed sign-in family over a real `@speed/api-client` — `createClient` with a memory access-token store and an injectable fetch whose stand-in answers genuine `Response` objects, bound through the same `bindRequestFn` binding a host's client binds — driving a password sign-in, a silent credential-less refresh (the retried request carries the fresh token), and a server-side session death whose refused refresh converges the snapshot to anonymous, six requests pinned in order. The generated half stays compile-consumed in-workspace by `@speed/auth-core`; `@speed/auth-ui`'s public `RegisterForm` callback (the generated `AuthnUser`) adds a second type-level consumer. What remains is the browser-and-real-server leg. |
 | A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (an `org` subscriber reacting to `authn.user.created`, or a host-side grant) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `flowtests/authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
 | The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`. | Only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/internal/app/demo/demo_users.go`'s `SeedDemoUsers`, through the real composed register route, over this module's own `demoseed` helper) and grants each its org membership and rbac role per configured tenant — the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` — while an unset variable leaves only the demo header actors (`internal/app/demo/demo_subject.go`), which carry grants but no database row and cannot sign in. The membership half is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). `Taskfile.yml`'s `seed` task remains a stub with no loader; what remains unbuilt is a Taskfile `seed` loader that generates demo data outside boot, a tooling item, not authn's. |
 | QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or a design decision this module has not made. |

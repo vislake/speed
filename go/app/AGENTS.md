@@ -117,7 +117,7 @@ and flushes. The engine never initializes observability itself.
 |---|---|---|
 | `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, the observability component, and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`) | pkgcore (+ its config subpackage), config, observability, tenancy — and, through config, dbkit and its GORM. Every composition carries the root |
 | `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation, over either registry shape's `RouteSource`: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
-| `go/app/bridges` | the no-import seam bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
+| `go/app/bridges` | the no-import bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
 Runnable usage documentation (`example_test.go`) ships one example per
 package. The split is deliberate, not incidental: a consumer importing only
@@ -162,7 +162,7 @@ mux before delegating the branch structure to `Chain`. The host supplies
 the business half through options: the authorizer and rule table, the
 admin prefix, the impersonation decorator, the tenant-status resolver and
 its extra pre-auth allowlist entries. The billing quota domain does not
-weave here: billing's quota mechanism is the entitlements seam checked
+weave here: billing's quota mechanism is the entitlements module checked
 inside go/ai-gateway before a provider is reached
 (`aigateway.WithEntitlements`, host-wired at module construction), not a
 route-level decorator.

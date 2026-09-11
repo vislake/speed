@@ -85,9 +85,9 @@ never decides what happens after a sign-in.
    whitelist serves the family's consumer-facing reachable set, and
    the alignment suite's GO_PINNED side stays the app's own answers.
 4. **No direct HTTP in `src/`.** Every request flows through the
-   session's generated operations over the `bindRequestFn` seam; this
+   session's generated operations over the `bindRequestFn` binding; this
    package is not on the `speed/no-direct-http` whitelist. Tests bind
-   their doubles through the same seam (`bindRequestFn` from
+   their doubles through the same binding (`bindRequestFn` from
    `@speed/api-sdk/runtime`) — never by mocking a module.
 5. **The public surface is the `index.ts` exports.** Helpers shared
    between components live in `src/internal/` and are deliberately not

@@ -23,7 +23,7 @@ refusal: a sign-in flow answered with the binding-shaped response
 (user and identity, no tokens) is a `client.protocol` violation,
 rejected before any state change. It is headless: no UI, no DOM. The
 React hooks in `src/hooks.ts` (`useAuthState`, `useCurrentTenant`,
-`usePermission`, plus the `attachSession` seam that binds them to one
+`usePermission`, plus the `attachSession` call that binds them to one
 session, last bind wins) live on the same layer -- react is a peer
 dependency, never a regular one. The package sits directly above
 `@speed/api-client` (the access-token store it receives is the same
@@ -35,7 +35,7 @@ below this layer.
 
 - **Never hand-write a backend call in this package.** Every request
   goes through a generated operation of `@speed/api-sdk`, which routes
-  through the single `bindRequestFn` seam. No `fetch`, no endpoint
+  through the single `bindRequestFn` binding. No `fetch`, no endpoint
   paths as strings, no response types of our own.
 - **The session never writes storage, and the refresh token never
   enters the store.** The access token is a memory credential by
