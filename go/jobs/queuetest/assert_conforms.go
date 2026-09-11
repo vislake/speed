@@ -89,12 +89,13 @@ const conformWaitTimeout = 15 * time.Second
 // enforces the identical access rule, marks a pending Job StatusCancelled,
 // and is idempotent on a second call; a Task.IdempotencyKey makes
 // concurrent Enqueue calls for the same (TenantID, IdempotencyKey) pair
-// converge on one Job that Handle runs exactly once for; a Handler that
-// fails transiently before eventually succeeding is retried rather than
-// immediately dead-lettered, with Attempts reflecting every attempt; and a
-// Handler that always fails exhausts its retry budget into
-// StatusDeadLetter, invokes FailureHook.OnFailure exactly once, and shows
-// up in DeadLetterJobs.
+// converge on one Job that Handle runs exactly once for; same-key enqueues
+// at different priorities also dedupe to the first Job, which keeps the
+// first call's priority; a Handler that fails transiently before eventually
+// succeeding is retried rather than immediately dead-lettered,
+// with Attempts reflecting every attempt; and a Handler that always fails
+// exhausts its retry budget into StatusDeadLetter, invokes
+// FailureHook.OnFailure exactly once, and shows up in DeadLetterJobs.
 func AssertConforms(t *testing.T, factory func() Runnable) {
 	t.Helper()
 
