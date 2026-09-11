@@ -15,7 +15,11 @@
  * test id.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
-import { expectWhileSignedIn, openSurface } from './journeys.js'
+import {
+  expectEnabledWhileSignedIn,
+  expectWhileSignedIn,
+  openSurface,
+} from './journeys.js'
 
 /** The accessible names the case-journey gates look for. */
 export const CASE_UI = {
@@ -74,7 +78,24 @@ export async function createCaseWithPhoto(page: Page, name: string): Promise<voi
   await page.getByRole('button', { name: CASE_UI.addPhoto }).click()
   await (await chooser).setFiles(PATIENT_PHOTO)
 
-  await page.getByRole('button', { name: /create|save|confirm/i }).click()
+  // Waited for, not clicked blind: the submit stays disabled until every
+  // attached file has settled one way or the other (case-create-view.tsx's
+  // createBlocked), so it only becomes clickable once the upload has
+  // landed -- and a raw click on it waits out the whole test budget on a
+  // journey whose upload can no longer land, then reports a click
+  // timeout that names neither the upload nor the reason it died. The
+  // wait runs through the session-aware guard (expectEnabledWhileSignedIn),
+  // so a browser crash or a lost session reports itself instead. Its
+  // timeout is zero -- no deadline of its own, bounded only by the test
+  // timeout, which is the bound the click itself had.
+  const submit = page.getByRole('button', { name: /create|save|confirm/i })
+  await expectEnabledWhileSignedIn(
+    page,
+    submit,
+    'the case-create submit never became enabled, so the photo attached to this case never settled',
+    0,
+  )
+  await submit.click()
   await expectWhileSignedIn(
     page,
     page.getByText(name),

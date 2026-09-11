@@ -265,7 +265,17 @@ shared journey waits answer it -- the assertion is unchanged (the element
 must still appear, within the same timeout), but the wait stops at the
 moment the sign-in surface reappears and says the session is gone, naming
 what to look for in the trace. A session the SERVER ended is a different
-state: it renders the "Session ended" screen, not the sign-in form.
+state: it renders the "Session ended" screen, not the sign-in form. The
+same guard also watches the page console for the browser's own crash
+report ("Network process crashed"), so the event is named even when no
+reload lands and the page merely stops answering; and a control whose
+enablement depends on network work is waited for through the
+enabled-state sibling (`expectEnabledWhileSignedIn`) rather than clicked
+blind -- the case-create submit stays disabled until the attached
+photo's upload has settled (case-create-view.tsx), so a bare click on it
+burns the whole test budget before reporting a click timeout that names
+neither the upload nor what killed it. Neither branch weakens the wait
+it guards.
 
 **Adding a gate:** if it signs in more than once, leave it untagged --
 it belongs to the local tier. If it must run against a deployment, keep
@@ -629,6 +639,7 @@ table -- read the file when it matters.
 | `deployment-serves-the-app.spec.ts` | The address serves the app, mounts it, and loads without a failed asset |
 | `offered-channels-work.spec.ts` | A channel the product offers either works or says why it cannot |
 | `core-journey.pending.spec.ts` | The product's reason to exist, in four blocks: case and photo, generate and compare, share with the patient, what it cost |
+| `harness-failure-guards.spec.ts` | The suite's own failure guards: a browser crash and a lost session are named by the wait they stopped; the enabled-state wait is satisfied by enablement, not visibility |
 | `test-utils/accounts.ts` | The seeded demo accounts and the grants each one carries |
 | `test-utils/journeys.ts` | Shared journey steps and every en-US string the specs assert on |
 | `test-utils/servers.ts` | Booting a server one spec owns, for the specs whose subject is a server's own lifecycle or configuration |

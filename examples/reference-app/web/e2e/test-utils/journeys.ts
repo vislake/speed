@@ -88,6 +88,9 @@ export const REQUIRED_FIELD_TEXT = 'This field is required.'
  * navigation is the one a first-time visitor makes.
  */
 export async function visitSignIn(page: Page): Promise<void> {
+  // Armed before the first navigation, so a crash that lands anywhere in
+  // the journey is already being watched for (see watchNetworkProcess).
+  watchNetworkProcess(page)
   await page.goto('/')
   await expect(page.getByRole('button', { name: SIGN_IN_TEXT.submit })).toBeVisible()
 }
@@ -587,10 +590,58 @@ function signInSurface(page: Page): Locator {
 }
 
 /**
- * Waits for `locator` the way `expect(locator, message).toBeVisible`
- * would (same timeout, same failure when it never appears), but stops
- * early -- and says why -- when the app has returned to the sign-in
- * surface instead.
+ * The browser's own report that its network process died.
+ *
+ * WebKit prints exactly this line to the page console when its network
+ * process crashes -- a failure inside the browser, not the page -- and
+ * every request in flight dies with it; when the vite client's HMR
+ * socket is among them, the client then reloads the document. The suite
+ * cannot prevent the crash; it refuses to misreport it, which is what
+ * this signature is collected for.
+ */
+const NETWORK_PROCESS_CRASH = /Network process crashed/
+
+/** One page's crash watch: settles on the first report of the crash. */
+interface CrashWatch {
+  readonly crashed: Promise<void>
+}
+
+/**
+ * The watch per page. A WeakMap so the entry follows the page's own
+ * lifetime, and a single install per page: a second console listener
+ * would never resolve, the first one owning the report.
+ */
+const crashWatches = new WeakMap<Page, CrashWatch>()
+
+/**
+ * Arms a page's crash watch, returning it. Idempotent, so any helper
+ * that needs the signal can call it without coordinating.
+ */
+function watchNetworkProcess(page: Page): CrashWatch {
+  const existing = crashWatches.get(page)
+  if (existing !== undefined) {
+    return existing
+  }
+  let report: () => void = () => undefined
+  const crashed = new Promise<void>((resolve) => {
+    report = resolve
+  })
+  page.on('console', (message) => {
+    if (NETWORK_PROCESS_CRASH.test(message.text())) {
+      report()
+    }
+  })
+  const watch: CrashWatch = { crashed }
+  crashWatches.set(page, watch)
+  return watch
+}
+
+/**
+ * The race and the reporting the `expect…WhileSignedIn` helpers share:
+ * the caller's own assertion (however long its timeout), the app's
+ * return to the sign-in surface, and the browser's own crash report --
+ * whichever settles first, with the crash and the loss named as what
+ * they are.
  *
  * WHY IT EXISTS
  *
@@ -601,39 +652,36 @@ function signInSurface(page: Page): Locator {
  * a vite DEV server, whose own client reloads the page when its HMR
  * socket is lost (@vite/client's "[vite] server connection lost" branch
  * pings and then calls location.reload unconditionally), and a browser
- * network-process crash produces exactly that socket loss. When a reload
- * lands mid-journey the app comes back anonymous, the element a journey
- * is waiting for can never appear, and without this branch the failure
+ * network-process crash brings that loss about. When a reload lands
+ * mid-journey the app comes back anonymous, the element a journey is
+ * waiting for can never appear, and without these branches the failure
  * spends its whole timeout and reports that some control was missing --
  * which reads like a product defect and is not one. (A session the
  * SERVER ended is a different state: it renders the "Session ended"
  * screen, not this one.)
  *
- * What it deliberately does NOT do is weaken the assertion: the locator
- * must still become visible within the same timeout, for the same
- * reason. The race only decides WHY a failure reports what it does, and
- * reports at the moment the loss is observable rather than a timeout
- * later.
+ * The crash branch is the same event at the source and without the
+ * reload's help: the console line is the browser's own, and the page
+ * can also just stop answering -- requests failing until the wait's
+ * timeout -- without any reload landing at all. The session-lost branch
+ * is therefore an EDGE (the sign-in surface must REAPPEAR); the crash
+ * branch is the level beneath it. A surface already on screen when the
+ * wait begins is a sign-in still in flight -- its request unanswered,
+ * its frame not yet rendered -- and a wait that fired on bare
+ * visibility would report that ordinary slow sign-in as a dead session.
  *
- * The loss signal is an EDGE: the sign-in surface must REAPPEAR. A
- * surface already on screen when the wait begins is a sign-in still in
- * flight -- its request unanswered, its frame not yet rendered -- and a
- * wait that fired on bare visibility would report that ordinary slow
- * sign-in as a dead session. Only a surface that leaves the screen and
- * comes back is the loss this branch exists to name.
+ * What these branches deliberately do NOT do is weaken the assertion:
+ * the wait's own condition must still settle within the same timeout,
+ * for the same reason. The race only decides WHY a failure reports what
+ * it does, and reports it at the moment the loss is observable rather
+ * than a timeout later.
  */
-export async function expectWhileSignedIn(
+async function whileSignedIn(
   page: Page,
-  locator: Locator,
   message: string,
-  timeout?: number,
+  assertion: Promise<'settled' | { error: unknown }>,
 ): Promise<void> {
-  const target = expect(locator, message)
-    .toBeVisible({ timeout })
-    .then(
-      () => 'visible' as const,
-      (error: unknown) => ({ error }),
-    )
+  const crash = watchNetworkProcess(page)
   // Two steps, and the first one is what makes the signal an edge
   // rather than a level. From whatever state the page is in, the
   // surface must be GONE first: that settles at once when the frame is
@@ -653,7 +701,19 @@ export async function expectWhileSignedIn(
       () => 'unobservable' as const,
     )
 
-  const outcome = await Promise.race([target, sessionLost])
+  const outcome = await Promise.race([
+    crash.crashed.then(() => 'network-process-crashed' as const),
+    sessionLost,
+    assertion,
+  ])
+  if (outcome === 'network-process-crashed') {
+    throw new Error(
+      `e2e: ${message}: the browser's network process crashed while this journey was running ` +
+        '(the page console carries "Network process crashed"), so its in-flight requests failed and the ' +
+        'page came back without this product\'s in-memory session. Read the console in the trace before ' +
+        'treating this red as a product or gate defect: the execution environment failed, not the gate.',
+    )
+  }
   if (outcome === 'session-lost') {
     throw new Error(
       `e2e: ${message}: the app is back on the sign-in surface, so this journey's session is gone. ` +
@@ -665,7 +725,7 @@ export async function expectWhileSignedIn(
     )
   }
   if (outcome === 'unobservable') {
-    const settled = await target
+    const settled = await assertion
     if (typeof settled === 'object') {
       throw settled.error
     }
@@ -674,6 +734,59 @@ export async function expectWhileSignedIn(
   if (typeof outcome === 'object') {
     throw outcome.error
   }
+}
+
+/**
+ * Waits for `locator` the way `expect(locator, message).toBeVisible`
+ * would (same timeout, same failure when it never appears), but stops
+ * early -- and says why -- when the app has returned to the sign-in
+ * surface or the browser's network process has crashed instead;
+ * whileSignedIn carries the full reasoning, and the assertion itself is
+ * unchanged.
+ */
+export async function expectWhileSignedIn(
+  page: Page,
+  locator: Locator,
+  message: string,
+  timeout?: number,
+): Promise<void> {
+  await whileSignedIn(
+    page,
+    message,
+    expect(locator, message)
+      .toBeVisible({ timeout })
+      .then(
+        () => 'settled' as const,
+        (error: unknown) => ({ error }),
+      ),
+  )
+}
+
+/**
+ * The enabled-state sibling of expectWhileSignedIn, for a control whose
+ * enablement depends on network work. The case-create submit is the one
+ * that needs it: it stays disabled until every attached photo has
+ * finished uploading (case-create-view.tsx's createBlocked), so a raw
+ * click on it waits out the whole budget on anything that kills the
+ * upload and then reports a click timeout, which names neither the
+ * upload nor the crash.
+ */
+export async function expectEnabledWhileSignedIn(
+  page: Page,
+  locator: Locator,
+  message: string,
+  timeout?: number,
+): Promise<void> {
+  await whileSignedIn(
+    page,
+    message,
+    expect(locator, message)
+      .toBeEnabled({ timeout })
+      .then(
+        () => 'settled' as const,
+        (error: unknown) => ({ error }),
+      ),
+  )
 }
 
 /**

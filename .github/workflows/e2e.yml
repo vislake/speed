@@ -10,12 +10,12 @@ name: e2e
 # acceptance and demos. Target duration and the merge-time guarantee
 # are docs/internal/18-cicd.md's pipeline table (the e2e row).
 #
-# WHAT EXISTS: the suite (26 spec files plus the shared test-utils under
+# WHAT EXISTS: the suite (27 spec files plus the shared test-utils under
 # examples/reference-app/web/e2e), its Playwright config with three
 # projects (chromium, webkit, ipad), the fake image provider, and the
 # app's vite dev server the config boots beside the Go server.
-# Selection counts, measured with `--list`: the default tier selects 72
-# tests (24 per project), the @budget tier 93 (31 per project), and
+# Selection counts, measured with `--list`: the default tier selects 78
+# tests (26 per project), the @budget tier 93 (31 per project), and
 # `pnpm test:e2e:pending` selects none. e2e/README.md is the authority
 # on what each tier means and on the constraints below.
 #
@@ -30,7 +30,9 @@ name: e2e
 #     "One engine per invocation, and why pacing cannot fix it"). A row
 #     per engine gives each its own server process and its own
 #     counters, and the rows run in parallel so the wall clock is one
-#     row's.
+#     row's. That parallelism is a wall-clock choice only: matrix rows
+#     are separate runners with their own CPU and memory, so serializing
+#     them would not make any row's work lighter.
 #   * both tiers in every row: the two invocations together run every
 #     gate expected to pass, and each invocation boots its own server,
 #     which is exactly what resets the counters @budget's separate
@@ -82,7 +84,12 @@ name: e2e
 # (measured: `playwright test --grep @pending` prints "No tests found"
 # and exits 1), so a renamed or retagged suite reddens this pipeline
 # instead of passing empty. A failed run uploads its test-results --
-# traces retained on failure and failure screenshots -- for 7 days.
+# traces retained on failure and failure screenshots -- for 7 days, and
+# prints the run's server logs into the CI log itself (the last step):
+# the webServer's Go process writes its structured log into a run-unique
+# file under the OS temp directory rather than into the report, so
+# without that step a server that dies during boot says only "was not
+# able to start. Exit code: 1" and never why.
 #
 # COST: every run pays three concurrent rows of roughly ten
 # runner-minutes each. No path filtering, matching fast-check's call
@@ -163,3 +170,37 @@ jobs:
           path: examples/reference-app/web/test-results/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Show the run's server logs
+        # The webServer starts the Go server with its stdout redirected
+        # into a run-unique file under the OS temp directory
+        # (playwright.config.ts), which is what lets the invitation
+        # journey read the console mailer -- and the price is that a
+        # server which exits during boot writes its own explanation
+        # where no report reaches it, surfacing in the step above it as
+        # "Process from config.webServer was not able to start. Exit
+        # code: 1" and nothing more. This step is where that price is
+        # paid back: on a failure, print each of the run's server logs
+        # so the reason is in the CI log itself. A failed boot writes
+        # nothing else to its file, so that file's tail is the error;
+        # a longer-lived server's tail is still where its last complaint
+        # sits.
+        if: ${{ failure() }}
+        run: |
+          found=0
+          printed=""
+          for file in "${TMPDIR:-/tmp}"/reference-app-e2e-*.log /tmp/reference-app-e2e-*.log; do
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            case " $printed " in
+              *" $file "*) continue ;;
+            esac
+            printed="$printed $file"
+            found=1
+            echo "::group::server log: $file (last 80 lines)"
+            tail -n 80 "$file"
+            echo "::endgroup::"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "no reference-app server log under ${TMPDIR:-/tmp} or /tmp"
+          fi
