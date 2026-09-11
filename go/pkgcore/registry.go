@@ -160,8 +160,12 @@ type Module interface {
 	// Register declares everything the module contributes to the host:
 	// routes, configuration schema, feature flags, permissions, job
 	// handlers, notification types, event subscriptions and audit actions.
-	// It must not perform I/O; it only declares.
-	Register(reg *Registry) error
+	// It must not perform I/O; it only declares. The declaration face is
+	// the Registrar view, which both the module Registry and the component
+	// assembly's ComponentRegistry answer with their own seats, so one
+	// declaration body serves a kernel bootstrap and a component assembly
+	// alike.
+	Register(reg Registrar) error
 }
 
 // MountedRoute is one HTTP handler mounted at a path by a module.
@@ -349,9 +353,9 @@ type RouteRegistrar interface {
 //
 // The items registered here are values editable at runtime -- per-tenant rows
 // in the configs table, served and changed while the process runs. Keys a
-// process resolves once at startup belong to the separate Bootstrap seat
-// (BootstrapRegistrar); one dotted key belongs to exactly one of the two
-// layers, never both.
+// process resolves once at startup belong to the separate bootstrap layer
+// (pkgcore.BootstrapKey, the component descriptor's BootstrapKeys field);
+// one dotted key belongs to exactly one of the two layers, never both.
 type ConfigSchemaRegistrar interface {
 	// Add registers configuration items, validating every declaration
 	// first. An item whose fields contradict one another -- an unknown
@@ -893,6 +897,43 @@ func (r *Registry) MountedRoutes() []MountedRoute {
 	}
 	return r.Routes.Routes()
 }
+
+// The ten seat accessors below answer the Registrar view over this registry:
+// each returns the registrar stored in the struct's own field, so a
+// declaration body written against Registrar declares into exactly these
+// registrars. A module Registry's registrars carry no stage gate -- the gate
+// lives in the component assembly's seats, which the transition bridge
+// re-points these fields at -- so the accessors add a shape, not a rule.
+
+// RoutesSeat returns the Routes registrar.
+func (r *Registry) RoutesSeat() RouteRegistrar { return r.Routes }
+
+// ConfigSeat returns the Config registrar.
+func (r *Registry) ConfigSeat() ConfigSchemaRegistrar { return r.Config }
+
+// FeaturesSeat returns the Features registrar.
+func (r *Registry) FeaturesSeat() FeatureRegistrar { return r.Features }
+
+// PermissionsSeat returns the Permissions registrar.
+func (r *Registry) PermissionsSeat() PermissionRegistrar { return r.Permissions }
+
+// JobsSeat returns the Jobs registrar.
+func (r *Registry) JobsSeat() JobHandlerRegistrar { return r.Jobs }
+
+// NotificationsSeat returns the Notifications registrar.
+func (r *Registry) NotificationsSeat() NotificationRegistrar { return r.Notifications }
+
+// EventsSeat returns the Events registrar.
+func (r *Registry) EventsSeat() EventRegistrar { return r.Events }
+
+// AuditActionsSeat returns the AuditActions registrar.
+func (r *Registry) AuditActionsSeat() AuditActionRegistrar { return r.AuditActions }
+
+// RetentionSeat returns the Retention registrar.
+func (r *Registry) RetentionSeat() RetentionRegistrar { return r.Retention }
+
+// SchedulesSeat returns the Schedules registrar.
+func (r *Registry) SchedulesSeat() PeriodicTaskRegistrar { return r.Schedules }
 
 // checkUnique reports whether any key produced by keyOf is already in
 // registered or repeated within items, wrapping sentinel in either case. It

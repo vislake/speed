@@ -9,8 +9,8 @@ import (
 )
 
 // PlatformConfig is the platform's normative declaration of its bootstrap key
-// material: the six keys the platform modules declare on the registry's
-// Bootstrap seat, each nested under its module's own key-path segment, so the
+// material: the six keys the platform module components declare as their
+// BootstrapKeys, each nested under its module's own key-path segment, so the
 // declaration's field paths are character for character the dotted key paths
 // the modules declare (authn.blind_index_key, config.cipher_key and so on).
 //

@@ -113,14 +113,14 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	}
 
 	t.Run("permissions", func(t *testing.T) {
-		assertContainsAll(t, reg.Permissions.Permissions(), []string{
+		assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{
 			PermissionRead, PermissionIssue, PermissionRevokeSigningKey,
 			PermissionRevokeCertificate, PermissionRotate,
 		})
 	})
 
 	t.Run("audit actions", func(t *testing.T) {
-		assertContainsAll(t, reg.AuditActions.Actions(), []string{
+		assertContainsAll(t, reg.AuditActionsSeat().Actions(), []string{
 			AuditActionAuthorityCreate, AuditActionCertificateIssue,
 			AuditActionKeyRevoke, AuditActionCertificateRevoke,
 		})
@@ -128,7 +128,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("config items", func(t *testing.T) {
 		var keys []string
-		for _, item := range reg.Config.Items() {
+		for _, item := range reg.ConfigSeat().Items() {
 			keys = append(keys, item.Key)
 			if item.Description == "" {
 				t.Errorf("config item %q is declared without a description", item.Key)
@@ -147,7 +147,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("HTTP surface is mounted", func(t *testing.T) {
 		// pki mounts its HTTP surface at apiPath.
-		routes := reg.Routes.Routes()
+		routes := reg.RoutesSeat().Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
 		}
@@ -160,7 +160,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// The five signing-key/certificate lifecycle events the expiry scan
 		// and revocation drive -- see events.go's doc comment.
 		var types []string
-		for _, decl := range reg.Events.Published() {
+		for _, decl := range reg.EventsSeat().Published() {
 			types = append(types, decl.Type)
 		}
 		assertContainsAll(t, types, []string{
@@ -176,10 +176,10 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// NewModule(db) above was built with no WithQueue -- Register must
 		// not claim the expiry-scan or CRL-regenerate task handlers when
 		// there is no queue to run them on.
-		if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; ok {
+		if _, ok := reg.JobsSeat().Handlers()[taskTypeExpiryScan]; ok {
 			t.Errorf("Register claimed the expiry-scan job handler despite no WithQueue")
 		}
-		if _, ok := reg.Jobs.Handlers()[taskTypeCRLRegenerate]; ok {
+		if _, ok := reg.JobsSeat().Handlers()[taskTypeCRLRegenerate]; ok {
 			t.Errorf("Register claimed the CRL-regenerate job handler despite no WithQueue")
 		}
 	})
@@ -199,10 +199,10 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; !ok {
+	if _, ok := reg.JobsSeat().Handlers()[taskTypeExpiryScan]; !ok {
 		t.Errorf("Register did not claim taskTypeExpiryScan despite WithQueue")
 	}
-	if _, ok := reg.Jobs.Handlers()[taskTypeCRLRegenerate]; !ok {
+	if _, ok := reg.JobsSeat().Handlers()[taskTypeCRLRegenerate]; !ok {
 		t.Errorf("Register did not claim taskTypeCRLRegenerate despite WithQueue")
 	}
 }
@@ -230,7 +230,7 @@ func TestModule_Register_RevokePermissionsAreSplitByDataDomain(t *testing.T) {
 	}
 
 	got := make(map[string]bool)
-	for _, permission := range reg.Permissions.Permissions() {
+	for _, permission := range reg.PermissionsSeat().Permissions() {
 		got[permission] = true
 	}
 	want := []string{
@@ -261,7 +261,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionRead, "neighbour:read"})
+	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, "neighbour:read"})
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database,
@@ -298,7 +298,7 @@ func TestModule_Register_DeclaresBothPeriodicSchedules(t *testing.T) {
 	}
 
 	want := []pkgcore.PeriodicTask{m.service.expiryScanSchedule(), m.ca.crlRegenerateSchedule()}
-	decls := reg.Schedules.Declarations()
+	decls := reg.SchedulesSeat().Declarations()
 	if len(decls) != len(want) {
 		t.Fatalf("Register declared %d schedules (%+v), want exactly the scan and the CRL regeneration", len(decls), decls)
 	}
@@ -345,8 +345,8 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg *pkgcore.Registry) error {
-	return reg.Permissions.Add("neighbour:read")
+func (neighbourModule) Register(reg pkgcore.Registrar) error {
+	return reg.PermissionsSeat().Add("neighbour:read")
 }
 
 var _ pkgcore.Module = neighbourModule{}
@@ -397,9 +397,9 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	declared := reg.Bootstrap.Keys()
+	declared := component().BootstrapKeys
 	if len(declared) != 1 {
-		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the local-key cipher key", len(declared), declared)
+		t.Fatalf("the pki component declared %d bootstrap keys (%v), want exactly the local-key cipher key", len(declared), declared)
 	}
 	key := declared[0]
 	if key.Key != "pki.local_key_cipher_key" {
@@ -414,7 +414,7 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	if key.Default == "" || key.Description == "" || key.Example != "" {
 		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
 	}
-	for _, item := range reg.Config.Items() {
+	for _, item := range reg.ConfigSeat().Items() {
 		if item.Key == key.Key {
 			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
 		}

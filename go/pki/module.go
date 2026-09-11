@@ -496,8 +496,8 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // (Bootstrap calls Register only after NewModule has returned) -- the same
 // reasoning storage.Module's identical placement documents. Routes.Mount
 // is a plain registration, no I/O, so Register's no-I/O contract stands.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add(
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add(
 		PermissionRead,
 		PermissionIssue,
 		PermissionRevokeSigningKey,
@@ -506,7 +506,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(
+	if err := reg.AuditActionsSeat().Add(
 		AuditActionAuthorityCreate,
 		AuditActionCertificateIssue,
 		AuditActionKeyRevoke,
@@ -514,13 +514,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.Config.Add(configItemDecls...); err != nil {
+	if err := reg.ConfigSeat().Add(configItemDecls...); err != nil {
 		return err
 	}
-	if err := reg.Bootstrap.Add(bootstrapKeyDecl); err != nil {
-		return err
-	}
-	if err := reg.Events.Publishes(eventDecls...); err != nil {
+	// The process-start key material (bootstrapKeyDecl) is descriptor data:
+	// the component descriptor carries it as BootstrapKeys, which the loader
+	// resolves before anything is constructed.
+	if err := reg.EventsSeat().Publishes(eventDecls...); err != nil {
 		return err
 	}
 	m.service.attachBus(reg)
@@ -528,10 +528,10 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.queue != nil {
 		m.service.attachQueue(m.queue)
 		m.ca.attachQueue(m.queue)
-		if err := reg.Jobs.Handle(taskTypeExpiryScan, expiryScanHandler{svc: m.service}); err != nil {
+		if err := reg.JobsSeat().Handle(taskTypeExpiryScan, expiryScanHandler{svc: m.service}); err != nil {
 			return err
 		}
-		if err := reg.Jobs.Handle(taskTypeCRLRegenerate, crlRegenerateHandler{ca: m.ca}); err != nil {
+		if err := reg.JobsSeat().Handle(taskTypeCRLRegenerate, crlRegenerateHandler{ca: m.ca}); err != nil {
 			return err
 		}
 		// Declare both periodic schedules alongside their handlers:
@@ -542,13 +542,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		// where their handlers are registered -- a composition that wires
 		// no queue registers neither, so no declaration can outlive its
 		// executor.
-		if err := reg.Schedules.Add(m.service.expiryScanSchedule(), m.ca.crlRegenerateSchedule()); err != nil {
+		if err := reg.SchedulesSeat().Add(m.service.expiryScanSchedule(), m.ca.crlRegenerateSchedule()); err != nil {
 			return err
 		}
 	}
 
-	m.handler = NewHandler(m.service, m.ca, reg.Events.Bus(), reg.AuditActions)
-	reg.Routes.Mount(apiPath, m.handler)
+	m.handler = NewHandler(m.service, m.ca, reg.EventBus(), reg.AuditActionsSeat())
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
 

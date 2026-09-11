@@ -88,16 +88,16 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	}
 
 	t.Run("permissions", func(t *testing.T) {
-		assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionRead, PermissionCreate, PermissionRevoke})
+		assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, PermissionCreate, PermissionRevoke})
 	})
 
 	t.Run("audit actions", func(t *testing.T) {
-		assertContainsAll(t, reg.AuditActions.Actions(), []string{AuditActionSensitiveShareCreate})
+		assertContainsAll(t, reg.AuditActionsSeat().Actions(), []string{AuditActionSensitiveShareCreate})
 	})
 
 	t.Run("events", func(t *testing.T) {
 		var types []string
-		for _, e := range reg.Events.Published() {
+		for _, e := range reg.EventsSeat().Published() {
 			types = append(types, e.Type)
 		}
 		assertContainsAll(t, types, []string{EventShareCreated, EventShareAccessed, EventShareRevoked})
@@ -105,7 +105,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("config items", func(t *testing.T) {
 		var keys []string
-		for _, item := range reg.Config.Items() {
+		for _, item := range reg.ConfigSeat().Items() {
 			keys = append(keys, item.Key)
 			if item.Description == "" {
 				t.Errorf("config item %q is declared without a description", item.Key)
@@ -118,14 +118,14 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("jobs handler registered", func(t *testing.T) {
-		handlers := reg.Jobs.Handlers()
+		handlers := reg.JobsSeat().Handlers()
 		if _, ok := handlers[taskTypeExpirySweep]; !ok {
-			t.Errorf("expiry-sweep handler (%q) was not registered on reg.Jobs; got keys %v", taskTypeExpirySweep, handlers)
+			t.Errorf("expiry-sweep handler (%q) was not registered on reg.JobsSeat(); got keys %v", taskTypeExpirySweep, handlers)
 		}
 	})
 
 	t.Run("both HTTP routes are mounted", func(t *testing.T) {
-		routes := reg.Routes.Routes()
+		routes := reg.RoutesSeat().Routes()
 		if len(routes) != 2 {
 			t.Fatalf("Register mounted %d route(s), want exactly 2 (PathAccess, PathShares)", len(routes))
 		}
@@ -141,7 +141,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("access-log retention participant registered", func(t *testing.T) {
 		var names []string
-		for _, p := range reg.Retention.Participants() {
+		for _, p := range reg.RetentionSeat().Participants() {
 			names = append(names, p.Name)
 			if p.Sweep == nil {
 				t.Errorf("participant %q carries a nil Sweep callback, want the access-log reap", p.Name)
@@ -194,7 +194,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionCreate, "neighbour:read"})
+	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionCreate, "neighbour:read"})
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database,
@@ -229,7 +229,7 @@ func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	decls := reg.Schedules.Declarations()
+	decls := reg.SchedulesSeat().Declarations()
 	if len(decls) != 1 || decls[0] != expirySweepSchedule {
 		t.Errorf("Register declared %+v, want exactly the expiry-sweep schedule %+v", decls, expirySweepSchedule)
 	}
@@ -268,8 +268,8 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg *pkgcore.Registry) error {
-	return reg.Permissions.Add("neighbour:read")
+func (neighbourModule) Register(reg pkgcore.Registrar) error {
+	return reg.PermissionsSeat().Add("neighbour:read")
 }
 
 var _ pkgcore.Module = neighbourModule{}

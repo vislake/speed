@@ -509,9 +509,9 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	declared := reg.Bootstrap.Keys()
+	declared := notificationComponent.BootstrapKeys
 	if len(declared) != 1 {
-		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the contact index key", len(declared), declared)
+		t.Fatalf("the notification component declared %d bootstrap keys (%v), want exactly the contact index key", len(declared), declared)
 	}
 	key := declared[0]
 	if key.Key != "notification.contact_index_key" {

@@ -20,8 +20,8 @@ import (
 // call -- the identical seam discipline go/storage's serviceHost and
 // go/org's hostSeams document for their own services.
 
-// hostSeams is the slice of *pkgcore.Registry Service reads. Declaring it
-// as its own interface, rather than holding a *pkgcore.Registry directly,
+// hostSeams is the slice of the host's declaration face Service reads.
+// Declaring it as its own interface, rather than holding the face directly,
 // keeps Service testable against a fake and honest about the one thing it
 // actually needs from the host: a bus to publish on.
 type hostSeams interface {
@@ -41,8 +41,8 @@ type hostSeams interface {
 	KVStore() pkgcore.KVStore
 }
 
-// compile-time check that the concrete registry satisfies the seam.
-var _ hostSeams = (*pkgcore.Registry)(nil)
+// compile-time check that the declaration face covers the seam.
+var _ hostSeams = (pkgcore.Registrar)(nil)
 
 // Plain, unexported wiring errors -- never returned to a caller as the
 // final answer, only logged (Service.Create's emitSensitiveAudit call site)
@@ -60,9 +60,9 @@ var (
 // It is called exactly once, by Module.Register, and performs no I/O: it
 // stores the registry slice and the audit-action registrar Service reads at
 // call time, so Service always uses the registry's final wiring.
-func (s *Service) attach(reg *pkgcore.Registry) {
+func (s *Service) attach(reg pkgcore.Registrar) {
 	s.host = reg
-	s.auditActions = reg.AuditActions
+	s.auditActions = reg.AuditActionsSeat()
 }
 
 // publish sends one domain event on the registry's bus. Callers treat a

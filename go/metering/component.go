@@ -3,10 +3,10 @@ package metering
 // component.go carries metering's descriptor for the config-driven component
 // assembly: the selection key a composition configuration names, the assets
 // the module brings, the contract it consumes, and the callbacks that
-// construct, start and stop it. The descriptor is additive:
-// pkgcore.Module.Register, driven by the host's bootstrap, remains
-// metering's declaration path, and the descriptor states the same surface in
-// the assembly's terms.
+// construct, declare, start and stop it. Its Init runs the module's one
+// declaration entry point, Register, so the module's declarations reach the
+// assembly's seats whether a host drives the module Registry or the assembly
+// drives the descriptor -- the same declaration body either way.
 
 import (
 	"context"
@@ -47,7 +47,9 @@ type overageThresholdsConfig struct {
 // component returns metering's component descriptor: the value init
 // registers, so a composition configuration can select the module and the
 // assembly can construct it from the database product in the by-type
-// context.
+// context. Its Init runs the module's one declaration entry point, Register,
+// inside the assembly's Init stage -- the one stage whose seats accept
+// writes.
 func component() pkgcore.Component {
 	return pkgcore.Component{
 		Name:   moduleName,
@@ -102,6 +104,13 @@ func component() pkgcore.Component {
 				opts = append(opts, WithOutboxRetention(c.OutboxRetention))
 			}
 			return NewModule(db, opts...), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("metering: component init got a %T instance, want *metering.Module", instance)
+			}
+			return m.Register(reg)
 		},
 		Start: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
 			m, ok := instance.(*Module)

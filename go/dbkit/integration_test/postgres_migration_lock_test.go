@@ -54,7 +54,7 @@ func (m migrationLockFakeModule) DependsOn() []string              { return nil 
 func (m migrationLockFakeModule) Migrations() embed.FS             { return m.migrations }
 func (m migrationLockFakeModule) Locales() embed.FS                { return embed.FS{} }
 func (m migrationLockFakeModule) OpenAPISpec() []byte              { return nil }
-func (m migrationLockFakeModule) Register(*pkgcore.Registry) error { return nil }
+func (m migrationLockFakeModule) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = migrationLockFakeModule{}
 

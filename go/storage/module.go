@@ -433,7 +433,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // The module's HTTP surface is registered too: Handler is built here and
 // mounted on the host's router at apiPath. Routes.Mount is a plain
 // registration, no I/O, so Register's no-I/O contract stands.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	if m.queue == nil {
 		return ErrQueueRequired
 	}
@@ -453,17 +453,17 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 			return err
 		}
 	}
-	if err := reg.Permissions.Add(PermissionRead, PermissionWrite); err != nil {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(
+	if err := reg.AuditActionsSeat().Add(
 		AuditActionObjectCreate,
 		AuditActionObjectComplete,
 		AuditActionObjectDelete,
 	); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(objectEventDecls...); err != nil {
+	if err := reg.EventsSeat().Publishes(objectEventDecls...); err != nil {
 		return err
 	}
 	// Hand the registry to the three services: its ObjectStore and
@@ -477,17 +477,17 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// so a host that drains reg.Jobs.Handlers() onto its jobs.Queue after
 	// Bootstrap gets a worker that produces thumbnails and sweeps expiry.
 	// Jobs.Handle is a plain catalog insertion, no I/O.
-	if err := reg.Jobs.Handle(taskTypeDeriveThumbnail, deriveHandler{svc: m.derive}); err != nil {
+	if err := reg.JobsSeat().Handle(taskTypeDeriveThumbnail, deriveHandler{svc: m.derive}); err != nil {
 		return err
 	}
-	if err := reg.Jobs.Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.life}); err != nil {
+	if err := reg.JobsSeat().Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.life}); err != nil {
 		return err
 	}
 	// Declare the expiry sweep's periodic schedule alongside its handler:
 	// declaring means scheduled, so a host that runs a jobs.Scheduler over
 	// the registry's declarations sweeps every tenant at the module's own
 	// window cadence without writing a schedule point of its own.
-	if err := reg.Schedules.Add(expirySweepSchedule); err != nil {
+	if err := reg.SchedulesSeat().Add(expirySweepSchedule); err != nil {
 		return err
 	}
 	// Build and mount the module's HTTP surface. Handler is built here, not
@@ -500,7 +500,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// Routes.Mount is a plain registration: no I/O, exactly as the
 	// no-I/O contract this doc comment promises requires.
 	m.handler = NewHandler(m.svc, m.life, m.objects, m.derivatives)
-	reg.Routes.Mount(apiPath, m.handler)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
 

@@ -36,8 +36,8 @@ func (*brandModule) Migrations() embed.FS { return embed.FS{} }
 func (*brandModule) Locales() embed.FS    { return embed.FS{} }
 func (*brandModule) OpenAPISpec() []byte  { return nil }
 
-func (*brandModule) Register(reg *pkgcore.Registry) error {
-	if err := reg.Config.Add(pkgcore.ConfigItem{
+func (*brandModule) Register(reg pkgcore.Registrar) error {
+	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "brand.site_name",
 		Type:        "string",
 		Default:     "Smile Studio",
@@ -47,7 +47,7 @@ func (*brandModule) Register(reg *pkgcore.Registry) error {
 	}); err != nil {
 		return err
 	}
-	return reg.Features.Add(pkgcore.FeatureFlag{
+	return reg.FeaturesSeat().Add(pkgcore.FeatureFlag{
 		Key:         "brand.custom_theme",
 		Default:     false,
 		Description: "Lets a tenant override the palette",
@@ -190,8 +190,8 @@ func (*shareExpiryModule) Migrations() embed.FS { return embed.FS{} }
 func (*shareExpiryModule) Locales() embed.FS    { return embed.FS{} }
 func (*shareExpiryModule) OpenAPISpec() []byte  { return nil }
 
-func (*shareExpiryModule) Register(reg *pkgcore.Registry) error {
-	return reg.Config.Add(pkgcore.ConfigItem{
+func (*shareExpiryModule) Register(reg pkgcore.Registrar) error {
+	return reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "share.default_expiry",
 		Type:        "duration",
 		Default:     24 * time.Hour,

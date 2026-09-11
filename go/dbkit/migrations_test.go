@@ -35,7 +35,7 @@ func (m fakeModule) DependsOn() []string              { return m.dependsOn }
 func (m fakeModule) Migrations() embed.FS             { return m.migrations }
 func (m fakeModule) Locales() embed.FS                { return embed.FS{} }
 func (m fakeModule) OpenAPISpec() []byte              { return nil }
-func (m fakeModule) Register(*pkgcore.Registry) error { return nil }
+func (m fakeModule) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = fakeModule{}
 

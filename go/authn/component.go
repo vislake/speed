@@ -9,7 +9,7 @@ package authn
 //
 // The descriptor declares no Prepare callback, and New cannot complete. Both
 // are the same missing piece: the process-start key material authn declares
-// on the bootstrap seat (bootstrapKeyDecls). Prepare would build the PII
+// as this descriptor's BootstrapKeys (bootstrapKeyDecls). Prepare would build the PII
 // cipher from the authn.pii_cipher_key material and register the serializer;
 // New needs the blind-index key, which newOptions refuses to construct
 // without. The by-purpose material source that hands a component its own
@@ -36,8 +36,8 @@ import (
 // componentConfig is authn's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry that are not key
 // material. The PII cipher key and the blind-index key are process-start key
-// material and stay on the bootstrap seat (bootstrapKeyDecls), never in
-// configuration. The argon2id cost parameters are bootstrap configuration
+// material and stay in the descriptor's BootstrapKeys (bootstrapKeyDecls),
+// never in configuration. The argon2id cost parameters are bootstrap configuration
 // rather than runtime items -- a deployment's fixed hashing budget -- which
 // is why they live here and not beside authn.password_min_length on the
 // runtime configuration seat.

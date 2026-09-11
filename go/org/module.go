@@ -535,7 +535,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 //   - the invitation email enabled with no sender address or no link builder
 //     (ErrInvitationMailRequired), because the message could not be rendered
 //     into anything a recipient could act on.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	if m.emailIndexer == nil {
 		return ErrEmailIndexerRequired
 	}
@@ -543,7 +543,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return ErrInvitationMailRequired
 	}
 
-	if err := reg.Permissions.Add(
+	if err := reg.PermissionsSeat().Add(
 		PermissionRead,
 		PermissionManage,
 		PermissionInviteMember,
@@ -551,7 +551,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(
+	if err := reg.AuditActionsSeat().Add(
 		AuditActionNodeCreate,
 		AuditActionNodeUpdate,
 		AuditActionMemberCreate,
@@ -561,18 +561,18 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.Features.Add(featureFlagDecls...); err != nil {
+	if err := reg.FeaturesSeat().Add(featureFlagDecls...); err != nil {
 		return err
 	}
-	if err := reg.Bootstrap.Add(bootstrapKeyDecl); err != nil {
-		return err
-	}
-	if err := reg.Events.Publishes(append(append([]pkgcore.EventDecl{}, nodeEventDecls...), memberEventDecls...)...); err != nil {
+	// The process-start key material (bootstrapKeyDecl) is descriptor data:
+	// the component descriptor carries it as BootstrapKeys, which the loader
+	// resolves before anything is constructed.
+	if err := reg.EventsSeat().Publishes(append(append([]pkgcore.EventDecl{}, nodeEventDecls...), memberEventDecls...)...); err != nil {
 		return err
 	}
 
 	m.attach(reg)
-	reg.Events.Subscribe(EventUserCreated, m.handleUserCreated)
+	reg.EventsSeat().Subscribe(EventUserCreated, m.handleUserCreated)
 
 	// Handler is built here, not in NewModule, deliberately: every Option a
 	// caller passed to NewModule -- WithSubjectResolver above all -- has
@@ -581,7 +581,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// is whichever one the host actually configured, never a nil one
 	// captured before the option ran.
 	m.handler = NewHandler(m.tree, m.members, m.invites, m.subject)
-	reg.Routes.Mount(apiPath, m.handler)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
 

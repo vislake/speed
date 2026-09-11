@@ -120,9 +120,9 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // itself is not a pkgcore.Module (it has no Register to call this from),
 // and Module is that event's one real subscriber and therefore its
 // closest thing to an owning module for cataloging purposes.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	m.actions = reg.AuditActions
-	if err := reg.Events.Publishes(
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	m.actions = reg.AuditActionsSeat()
+	if err := reg.EventsSeat().Publishes(
 		pkgcore.EventDecl{
 			Type:        dbkit.EventWriteCaptured,
 			PayloadType: "dbkit.WriteCapturedEvent",
@@ -136,13 +136,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(AuditActionSystemContextEntered); err != nil {
+	if err := reg.AuditActionsSeat().Add(AuditActionSystemContextEntered); err != nil {
 		return err
 	}
 
-	reg.Events.Subscribe(dbkit.EventWriteCaptured, m.onWriteCaptured)
-	reg.Events.Subscribe(EventRecorded, m.onRecorded)
-	reg.Events.Subscribe(tenancySystemContextEnteredEventType, m.onSystemContextEntered)
+	reg.EventsSeat().Subscribe(dbkit.EventWriteCaptured, m.onWriteCaptured)
+	reg.EventsSeat().Subscribe(EventRecorded, m.onRecorded)
+	reg.EventsSeat().Subscribe(tenancySystemContextEnteredEventType, m.onSystemContextEntered)
 	return nil
 }
 

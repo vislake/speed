@@ -26,7 +26,7 @@ import (
 type regTestModule struct {
 	name     string
 	deps     []string
-	register func(reg *Registry) error
+	register func(reg Registrar) error
 }
 
 func (m regTestModule) Name() string         { return m.name }
@@ -35,7 +35,7 @@ func (m regTestModule) Migrations() embed.FS { return embed.FS{} }
 func (m regTestModule) Locales() embed.FS    { return embed.FS{} }
 func (m regTestModule) OpenAPISpec() []byte  { return nil }
 
-func (m regTestModule) Register(reg *Registry) error {
+func (m regTestModule) Register(reg Registrar) error {
 	if m.register == nil {
 		return nil
 	}
@@ -48,7 +48,7 @@ func regTestRecorder(name string, deps []string, order *[]string) regTestModule 
 	return regTestModule{
 		name: name,
 		deps: deps,
-		register: func(*Registry) error {
+		register: func(Registrar) error {
 			*order = append(*order, name)
 			return nil
 		},
@@ -140,34 +140,34 @@ func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
 	kv := NewMemoryKVStore()
 	reg := NewRegistry(bus, kv, NewConsoleMailer())
 
-	if reg.Routes == nil {
+	if reg.RoutesSeat() == nil {
 		t.Error("Routes registrar is nil")
 	}
-	if reg.Config == nil {
+	if reg.ConfigSeat() == nil {
 		t.Error("Config registrar is nil")
 	}
-	if reg.Features == nil {
+	if reg.FeaturesSeat() == nil {
 		t.Error("Features registrar is nil")
 	}
-	if reg.Permissions == nil {
+	if reg.PermissionsSeat() == nil {
 		t.Error("Permissions registrar is nil")
 	}
-	if reg.Jobs == nil {
+	if reg.JobsSeat() == nil {
 		t.Error("Jobs registrar is nil")
 	}
-	if reg.Notifications == nil {
+	if reg.NotificationsSeat() == nil {
 		t.Error("Notifications registrar is nil")
 	}
-	if reg.Events == nil {
+	if reg.EventsSeat() == nil {
 		t.Error("Events registrar is nil")
 	}
-	if reg.AuditActions == nil {
+	if reg.AuditActionsSeat() == nil {
 		t.Error("AuditActions registrar is nil")
 	}
-	if reg.Retention == nil {
+	if reg.RetentionSeat() == nil {
 		t.Error("Retention registrar is nil")
 	}
-	if reg.Schedules == nil {
+	if reg.SchedulesSeat() == nil {
 		t.Error("Schedules registrar is nil")
 	}
 	if reg.EventBus() != bus {
@@ -183,10 +183,10 @@ func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
 
 	billing := regTestHandler{id: "billing"}
 	org := regTestHandler{id: "org"}
-	reg.Routes.Mount("/api/v1/billing", billing)
-	reg.Routes.Mount("/api/v1/org", org)
+	reg.RoutesSeat().Mount("/api/v1/billing", billing)
+	reg.RoutesSeat().Mount("/api/v1/org", org)
 
-	routes := reg.Routes.Routes()
+	routes := reg.RoutesSeat().Routes()
 	if len(routes) != 2 {
 		t.Fatalf("Routes() returned %d routes, want 2", len(routes))
 	}
@@ -207,12 +207,12 @@ func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
 
 func TestRouteRegistrar_Routes_ReturnsCopy(t *testing.T) {
 	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	reg.Routes.Mount("/api/v1/billing", regTestHandler{id: "billing"})
+	reg.RoutesSeat().Mount("/api/v1/billing", regTestHandler{id: "billing"})
 
-	mutated := reg.Routes.Routes()
+	mutated := reg.RoutesSeat().Routes()
 	mutated[0].Path = "/hijacked"
 
-	if got := reg.Routes.Routes()[0].Path; got != "/api/v1/billing" {
+	if got := reg.RoutesSeat().Routes()[0].Path; got != "/api/v1/billing" {
 		t.Errorf("mutating the returned slice changed the registry: path = %q, want %q", got, "/api/v1/billing")
 	}
 }
@@ -254,12 +254,12 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.first) > 0 {
-				if err := reg.Config.Add(tt.first...); err != nil {
+				if err := reg.ConfigSeat().Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.Config.Add(tt.second...)
+			err := reg.ConfigSeat().Add(tt.second...)
 			if tt.wantErr {
 				if !errors.Is(err, ErrDuplicateConfigKey) {
 					t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateConfigKey", err)
@@ -268,7 +268,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 					t.Errorf("Add() error = %q, want it to name the key %q", err, tt.wantKey)
 				}
 				// A rejected call must register nothing from that call.
-				if got := len(reg.Config.Items()); got != len(tt.first) {
+				if got := len(reg.ConfigSeat().Items()); got != len(tt.first) {
 					t.Errorf("after a rejected Add() there are %d items, want %d", got, len(tt.first))
 				}
 				return
@@ -276,7 +276,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add() error = %v, want nil", err)
 			}
-			if got := len(reg.Config.Items()); got != len(tt.first)+len(tt.second) {
+			if got := len(reg.ConfigSeat().Items()); got != len(tt.first)+len(tt.second) {
 				t.Errorf("Items() returned %d items, want %d", got, len(tt.first)+len(tt.second))
 			}
 		})
@@ -294,11 +294,11 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 		Group:       "billing.secrets",
 	}
 
-	if err := reg.Config.Add(want); err != nil {
+	if err := reg.ConfigSeat().Add(want); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	items := reg.Config.Items()
+	items := reg.ConfigSeat().Items()
 	if len(items) != 1 {
 		t.Fatalf("Items() returned %d items, want 1", len(items))
 	}
@@ -354,12 +354,12 @@ func TestRetentionRegistrar_Add_RefusesNilSweep(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.seed) > 0 {
-				if err := reg.Retention.Add(tt.seed...); err != nil {
+				if err := reg.RetentionSeat().Add(tt.seed...); err != nil {
 					t.Fatalf("seed Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.Retention.Add(tt.call...)
+			err := reg.RetentionSeat().Add(tt.call...)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Add() error = %v, want it to wrap %v", err, tt.wantErr)
 			}
@@ -368,7 +368,7 @@ func TestRetentionRegistrar_Add_RefusesNilSweep(t *testing.T) {
 			}
 			// A rejected call must store nothing from that call, leaving
 			// only the seed participants registered.
-			if got := len(reg.Retention.Participants()); got != tt.wantStored {
+			if got := len(reg.RetentionSeat().Participants()); got != tt.wantStored {
 				t.Errorf("after the refused Add() there are %d participants, want %d", got, tt.wantStored)
 			}
 		})
@@ -422,12 +422,12 @@ func TestRetentionRegistrar_Add_RefusesNilErase(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.seed) > 0 {
-				if err := reg.Retention.Add(tt.seed...); err != nil {
+				if err := reg.RetentionSeat().Add(tt.seed...); err != nil {
 					t.Fatalf("seed Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.Retention.Add(tt.call...)
+			err := reg.RetentionSeat().Add(tt.call...)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Add() error = %v, want it to wrap %v", err, tt.wantErr)
 			}
@@ -436,7 +436,7 @@ func TestRetentionRegistrar_Add_RefusesNilErase(t *testing.T) {
 			}
 			// A rejected call must store nothing from that call, leaving
 			// only the seed participants registered.
-			if got := len(reg.Retention.Participants()); got != tt.wantStored {
+			if got := len(reg.RetentionSeat().Participants()); got != tt.wantStored {
 				t.Errorf("after the refused Add() there are %d participants, want %d", got, tt.wantStored)
 			}
 		})
@@ -477,11 +477,11 @@ func TestRetentionRegistrar_Add_ExportMayStayNil(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-			if err := reg.Retention.Add(tt.participant); err != nil {
+			if err := reg.RetentionSeat().Add(tt.participant); err != nil {
 				t.Fatalf("Add() error = %v, want nil for a participant carrying both mandatory callbacks", err)
 			}
 
-			got := reg.Retention.Participants()
+			got := reg.RetentionSeat().Participants()
 			if len(got) != 1 {
 				t.Fatalf("Participants() returned %d participants, want 1", len(got))
 			}
@@ -582,7 +582,7 @@ func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-			err := reg.Config.Add(tt.item)
+			err := reg.ConfigSeat().Add(tt.item)
 			if !errors.Is(err, ErrInvalidConfigItem) {
 				t.Fatalf("Add() error = %v, want it to wrap ErrInvalidConfigItem", err)
 			}
@@ -590,7 +590,7 @@ func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
 				t.Errorf("Add() error = %q, want it to contain %q", err, tt.wantSub)
 			}
 			// A rejected call must register nothing from that call.
-			if got := len(reg.Config.Items()); got != 0 {
+			if got := len(reg.ConfigSeat().Items()); got != 0 {
 				t.Errorf("after a rejected Add() there are %d items, want 0", got)
 			}
 		})
@@ -621,11 +621,11 @@ func TestConfigRegistrar_Add_RangeDeclarationRoundTrips(t *testing.T) {
 		{Key: "org.trial_days", Type: "int", Min: 0},
 	}
 
-	if err := reg.Config.Add(items...); err != nil {
+	if err := reg.ConfigSeat().Add(items...); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	got := reg.Config.Items()
+	got := reg.ConfigSeat().Items()
 	if len(got) != len(items) {
 		t.Fatalf("Items() returned %d items, want %d", len(got), len(items))
 	}
@@ -641,21 +641,21 @@ func TestConfigRegistrar_Add_RejectedCallRegistersNothing(t *testing.T) {
 	valid := ConfigItem{Key: "billing.retry_limit", Type: "int", Default: 3}
 	invalid := ConfigItem{Key: "billing.retry_limit", Type: "int", Default: "3"}
 
-	err := reg.Config.Add(valid, invalid)
+	err := reg.ConfigSeat().Add(valid, invalid)
 	if !errors.Is(err, ErrInvalidConfigItem) {
 		t.Fatalf("Add() error = %v, want it to wrap ErrInvalidConfigItem", err)
 	}
 	// A rejected call registers nothing, not even the valid sibling.
-	if got := len(reg.Config.Items()); got != 0 {
+	if got := len(reg.ConfigSeat().Items()); got != 0 {
 		t.Errorf("after a rejected Add() there are %d items, want 0", got)
 	}
 
 	// The valid sibling alone is registrable afterwards, proving the
 	// rejection left no partial state behind.
-	if err := reg.Config.Add(valid); err != nil {
+	if err := reg.ConfigSeat().Add(valid); err != nil {
 		t.Fatalf("Add(valid) error = %v, want nil", err)
 	}
-	if got := len(reg.Config.Items()); got != 1 {
+	if got := len(reg.ConfigSeat().Items()); got != 1 {
 		t.Errorf("Items() returned %d items, want 1", got)
 	}
 }
@@ -666,16 +666,16 @@ func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T
 	// Two modules register through the same shared Registry, as Bootstrap does.
 	billing := regTestModule{
 		name: "billing",
-		register: func(reg *Registry) error {
-			return reg.Permissions.Add("billing:read", "billing:manage")
+		register: func(reg Registrar) error {
+			return reg.PermissionsSeat().Add("billing:read", "billing:manage")
 		},
 	}
 	// A copy-paste mistake: the org module claims a billing permission.
 	org := regTestModule{
 		name: "org",
 		deps: []string{"billing"},
-		register: func(reg *Registry) error {
-			return reg.Permissions.Add("org:read", "billing:manage")
+		register: func(reg Registrar) error {
+			return reg.PermissionsSeat().Add("org:read", "billing:manage")
 		},
 	}
 
@@ -692,7 +692,7 @@ func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T
 	}
 
 	// The rejected call must not have registered its other permission either.
-	got := reg.Permissions.Permissions()
+	got := reg.PermissionsSeat().Permissions()
 	want := []string{"billing:manage", "billing:read"}
 	if len(got) != len(want) {
 		t.Fatalf("Permissions() = %v, want %v", got, want)
@@ -706,11 +706,11 @@ func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T
 
 func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
 	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	if err := reg.Permissions.Add("org:read", "billing:manage", "admin:impersonate"); err != nil {
+	if err := reg.PermissionsSeat().Add("org:read", "billing:manage", "admin:impersonate"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	got := reg.Permissions.Permissions()
+	got := reg.PermissionsSeat().Permissions()
 	want := []string{"admin:impersonate", "billing:manage", "org:read"}
 	if len(got) != len(want) {
 		t.Fatalf("Permissions() = %v, want %v", got, want)
@@ -727,11 +727,11 @@ func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
 	first := regTestHandler{id: "first"}
 	second := regTestHandler{id: "second"}
 
-	if err := reg.Jobs.Handle("billing.invoice.generate", first); err != nil {
+	if err := reg.JobsSeat().Handle("billing.invoice.generate", first); err != nil {
 		t.Fatalf("Handle() error = %v, want nil", err)
 	}
 
-	err := reg.Jobs.Handle("billing.invoice.generate", second)
+	err := reg.JobsSeat().Handle("billing.invoice.generate", second)
 	if !errors.Is(err, ErrDuplicateJobType) {
 		t.Fatalf("Handle() error = %v, want it to wrap ErrDuplicateJobType", err)
 	}
@@ -740,7 +740,7 @@ func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
 	}
 
 	// The first handler must survive the rejected registration.
-	handlers := reg.Jobs.Handlers()
+	handlers := reg.JobsSeat().Handlers()
 	if got := handlers["billing.invoice.generate"]; got != any(first) {
 		t.Errorf("handler = %v, want the originally registered %v", got, first)
 	}
@@ -755,16 +755,16 @@ func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 		Unsubscribable:  true,
 	}
 
-	if err := reg.Notifications.Add(paid); err != nil {
+	if err := reg.NotificationsSeat().Add(paid); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	err := reg.Notifications.Add(NotificationType{Key: "billing.invoice_paid", Group: "other"})
+	err := reg.NotificationsSeat().Add(NotificationType{Key: "billing.invoice_paid", Group: "other"})
 	if !errors.Is(err, ErrDuplicateNotificationType) {
 		t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateNotificationType", err)
 	}
 
-	types := reg.Notifications.Types()
+	types := reg.NotificationsSeat().Types()
 	if len(types) != 1 {
 		t.Fatalf("Types() returned %d types, want 1", len(types))
 	}
@@ -775,15 +775,15 @@ func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
 	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	if err := reg.AuditActions.Add("org.member.removed", "billing.plan.changed"); err != nil {
+	if err := reg.AuditActionsSeat().Add("org.member.removed", "billing.plan.changed"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	if err := reg.AuditActions.Add("billing.plan.changed"); !errors.Is(err, ErrDuplicateAuditAction) {
+	if err := reg.AuditActionsSeat().Add("billing.plan.changed"); !errors.Is(err, ErrDuplicateAuditAction) {
 		t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateAuditAction", err)
 	}
 
-	got := reg.AuditActions.Actions()
+	got := reg.AuditActionsSeat().Actions()
 	want := []string{"billing.plan.changed", "org.member.removed"}
 	if len(got) != len(want) {
 		t.Fatalf("Actions() = %v, want %v", got, want)
@@ -800,7 +800,7 @@ func TestEventRegistrar_Subscribe_IsBackedByTheRegistryEventBus(t *testing.T) {
 
 	var mu sync.Mutex
 	var received []Event
-	reg.Events.Subscribe("org.member.invited", func(_ context.Context, evt Event) error {
+	reg.EventsSeat().Subscribe("org.member.invited", func(_ context.Context, evt Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, evt)
@@ -809,7 +809,7 @@ func TestEventRegistrar_Subscribe_IsBackedByTheRegistryEventBus(t *testing.T) {
 
 	// Several subscribers on one event type are expected, not a conflict.
 	var secondCalls int
-	reg.Events.Subscribe("org.member.invited", func(context.Context, Event) error {
+	reg.EventsSeat().Subscribe("org.member.invited", func(context.Context, Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 		secondCalls++
@@ -873,12 +873,12 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.first) > 0 {
-				if err := reg.Features.Add(tt.first...); err != nil {
+				if err := reg.FeaturesSeat().Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.Features.Add(tt.second...)
+			err := reg.FeaturesSeat().Add(tt.second...)
 			if tt.wantErr {
 				if !errors.Is(err, ErrDuplicateFeatureFlag) {
 					t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateFeatureFlag", err)
@@ -887,7 +887,7 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 					t.Errorf("Add() error = %q, want it to name the key %q", err, tt.wantKey)
 				}
 				// A rejected call must register nothing from that call.
-				if got := len(reg.Features.Flags()); got != len(tt.first) {
+				if got := len(reg.FeaturesSeat().Flags()); got != len(tt.first) {
 					t.Errorf("after a rejected Add() there are %d flags, want %d", got, len(tt.first))
 				}
 				return
@@ -895,7 +895,7 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add() error = %v, want nil", err)
 			}
-			if got := len(reg.Features.Flags()); got != len(tt.first)+len(tt.second) {
+			if got := len(reg.FeaturesSeat().Flags()); got != len(tt.first)+len(tt.second) {
 				t.Errorf("Flags() returned %d flags, want %d", got, len(tt.first)+len(tt.second))
 			}
 		})
@@ -908,15 +908,15 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) {
 	billing := regTestModule{
 		name: "billing",
-		register: func(reg *Registry) error {
-			return reg.Features.Add(FeatureFlag{Key: "billing.dunning", Default: true})
+		register: func(reg Registrar) error {
+			return reg.FeaturesSeat().Add(FeatureFlag{Key: "billing.dunning", Default: true})
 		},
 	}
 	org := regTestModule{
 		name: "org",
 		deps: []string{"billing"},
-		register: func(reg *Registry) error {
-			return reg.Features.Add(FeatureFlag{Key: "billing.dunning", Default: false})
+		register: func(reg Registrar) error {
+			return reg.FeaturesSeat().Add(FeatureFlag{Key: "billing.dunning", Default: false})
 		},
 	}
 
@@ -939,11 +939,11 @@ func TestEventRegistrar_Publishes_RecordsTheDeclaredCatalog(t *testing.T) {
 		{Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid", Description: "An invoice was paid in full."},
 		{Type: "billing.subscription.cancelled", PayloadType: "billing.SubscriptionCancelled", Description: "A subscription was cancelled."},
 	}
-	if err := reg.Events.Publishes(want...); err != nil {
+	if err := reg.EventsSeat().Publishes(want...); err != nil {
 		t.Fatalf("Publishes() error = %v, want nil", err)
 	}
 
-	got := reg.Events.Published()
+	got := reg.EventsSeat().Published()
 	if len(got) != len(want) {
 		t.Fatalf("Published() returned %d events, want %d", len(got), len(want))
 	}
@@ -956,7 +956,7 @@ func TestEventRegistrar_Publishes_RecordsTheDeclaredCatalog(t *testing.T) {
 	// The catalog is what integration maps to its public schema, so a caller
 	// must not be able to edit it through the returned slice.
 	got[0].Type = "hijacked"
-	if reg.Events.Published()[0].Type != want[0].Type {
+	if reg.EventsSeat().Published()[0].Type != want[0].Type {
 		t.Error("mutating the returned slice changed the registry")
 	}
 }
@@ -1000,12 +1000,12 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.first) > 0 {
-				if err := reg.Events.Publishes(tt.first...); err != nil {
+				if err := reg.EventsSeat().Publishes(tt.first...); err != nil {
 					t.Fatalf("first Publishes() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.Events.Publishes(tt.second...)
+			err := reg.EventsSeat().Publishes(tt.second...)
 			if tt.wantErr {
 				if !errors.Is(err, ErrDuplicateEventType) {
 					t.Fatalf("Publishes() error = %v, want it to wrap ErrDuplicateEventType", err)
@@ -1013,7 +1013,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantType) {
 					t.Errorf("Publishes() error = %q, want it to name the type %q", err, tt.wantType)
 				}
-				if got := len(reg.Events.Published()); got != len(tt.first) {
+				if got := len(reg.EventsSeat().Published()); got != len(tt.first) {
 					t.Errorf("after a rejected Publishes() there are %d events, want %d", got, len(tt.first))
 				}
 				return
@@ -1021,7 +1021,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Publishes() error = %v, want nil", err)
 			}
-			if got := len(reg.Events.Published()); got != len(tt.first)+len(tt.second) {
+			if got := len(reg.EventsSeat().Published()); got != len(tt.first)+len(tt.second) {
 				t.Errorf("Published() returned %d events, want %d", got, len(tt.first)+len(tt.second))
 			}
 		})
@@ -1043,8 +1043,8 @@ func TestRegistry_EventBus_FollowsTheEventsRegistrar(t *testing.T) {
 		t.Fatalf("EventBus() = %v, want the substituted registrar's bus", reg.EventBus())
 	}
 
-	reg.Events.Subscribe("billing.invoice.paid", func(context.Context, Event) error { return nil })
-	got := reg.Events.Bus().(*regTestBus).subscriptions()
+	reg.EventsSeat().Subscribe("billing.invoice.paid", func(context.Context, Event) error { return nil })
+	got := reg.EventBus().(*regTestBus).subscriptions()
 	if len(got) != 1 || got[0] != "billing.invoice.paid" {
 		t.Errorf("substituted bus recorded subscriptions %v, want [billing.invoice.paid]", got)
 	}
@@ -1191,7 +1191,7 @@ func TestValidateFeatureGraph(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-			if err := reg.Features.Add(tt.flags...); err != nil {
+			if err := reg.FeaturesSeat().Add(tt.flags...); err != nil {
 				t.Fatalf("Features.Add() error = %v, want nil", err)
 			}
 
@@ -1316,7 +1316,7 @@ func (m depChainModule) OpenAPISpec() []byte  { return nil }
 
 // Register records the order in which the kernel drove the modules. Bootstrap
 // registers sequentially, so no synchronisation is needed here.
-func (m depChainModule) Register(_ *Registry) error {
+func (m depChainModule) Register(_ Registrar) error {
 	*m.order = append(*m.order, m.name)
 	return nil
 }
@@ -1569,7 +1569,7 @@ func TestBootstrap_RegisterFails_WrapsModuleNameAndStops(t *testing.T) {
 
 	failing := regTestModule{
 		name: "billing",
-		register: func(*Registry) error {
+		register: func(Registrar) error {
 			order = append(order, "billing")
 			return failure
 		},
@@ -1599,8 +1599,8 @@ func TestBootstrap_UnresolvedFeatureDependency_ReturnsError(t *testing.T) {
 	// exactly why Bootstrap validates it at the end rather than inside Add.
 	billing := regTestModule{
 		name: "billing",
-		register: func(reg *Registry) error {
-			return reg.Features.Add(FeatureFlag{
+		register: func(reg Registrar) error {
+			return reg.FeaturesSeat().Add(FeatureFlag{
 				Key:       "billing.dunning",
 				DependsOn: []string{"metering.usage"},
 			})
@@ -1608,8 +1608,8 @@ func TestBootstrap_UnresolvedFeatureDependency_ReturnsError(t *testing.T) {
 	}
 	org := regTestModule{
 		name: "org",
-		register: func(reg *Registry) error {
-			return reg.Features.Add(FeatureFlag{Key: "org.workspaces"})
+		register: func(reg Registrar) error {
+			return reg.FeaturesSeat().Add(FeatureFlag{Key: "org.workspaces"})
 		},
 	}
 
@@ -1630,24 +1630,24 @@ func TestBootstrap_UnresolvedFeatureDependency_ReturnsError(t *testing.T) {
 func TestBootstrap_SharesOneRegistryAcrossModules(t *testing.T) {
 	billing := regTestModule{
 		name: "billing",
-		register: func(reg *Registry) error {
-			reg.Routes.Mount("/api/v1/billing", regTestHandler{id: "billing"})
-			if err := reg.Permissions.Add("billing:read"); err != nil {
+		register: func(reg Registrar) error {
+			reg.RoutesSeat().Mount("/api/v1/billing", regTestHandler{id: "billing"})
+			if err := reg.PermissionsSeat().Add("billing:read"); err != nil {
 				return err
 			}
-			return reg.Features.Add(FeatureFlag{Key: "billing.dunning"})
+			return reg.FeaturesSeat().Add(FeatureFlag{Key: "billing.dunning"})
 		},
 	}
 	org := regTestModule{
 		name: "org",
 		deps: []string{"billing"},
-		register: func(reg *Registry) error {
-			reg.Routes.Mount("/api/v1/org", regTestHandler{id: "org"})
-			if err := reg.Permissions.Add("org:read"); err != nil {
+		register: func(reg Registrar) error {
+			reg.RoutesSeat().Mount("/api/v1/org", regTestHandler{id: "org"})
+			if err := reg.PermissionsSeat().Add("org:read"); err != nil {
 				return err
 			}
 			// Depends on a flag the module registered before it declared.
-			return reg.Features.Add(FeatureFlag{
+			return reg.FeaturesSeat().Add(FeatureFlag{
 				Key:       "org.workspaces",
 				DependsOn: []string{"billing.dunning"},
 			})
@@ -1660,13 +1660,13 @@ func TestBootstrap_SharesOneRegistryAcrossModules(t *testing.T) {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
 
-	if got := len(reg.Routes.Routes()); got != 2 {
+	if got := len(reg.RoutesSeat().Routes()); got != 2 {
 		t.Errorf("Routes() returned %d routes, want both modules' routes", got)
 	}
-	if got := len(reg.Permissions.Permissions()); got != 2 {
+	if got := len(reg.PermissionsSeat().Permissions()); got != 2 {
 		t.Errorf("Permissions() returned %d permissions, want both modules' permissions", got)
 	}
-	if got := len(reg.Features.Flags()); got != 2 {
+	if got := len(reg.FeaturesSeat().Flags()); got != 2 {
 		t.Errorf("Flags() returned %d flags, want both modules' flags", got)
 	}
 }
@@ -1836,8 +1836,8 @@ func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 			injected := newRegTestBus()
 			subscriber := regTestModule{
 				name: "billing",
-				register: func(reg *Registry) error {
-					reg.Events.Subscribe("org.member.invited", func(context.Context, Event) error { return nil })
+				register: func(reg Registrar) error {
+					reg.EventsSeat().Subscribe("org.member.invited", func(context.Context, Event) error { return nil })
 					return nil
 				},
 			}
@@ -1909,7 +1909,7 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 			injected := newRegTestKVStore()
 			writer := regTestModule{
 				name: "billing",
-				register: func(reg *Registry) error {
+				register: func(reg Registrar) error {
 					return reg.KVStore().Set(context.Background(), "billing:seeded", []byte("1"), 0)
 				},
 			}
@@ -2405,48 +2405,48 @@ func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id := string(rune('a' + i))
-			reg.Routes.Mount("/api/v1/"+id, regTestHandler{id: id})
-			if err := reg.Permissions.Add(id + ":read"); err != nil {
+			reg.RoutesSeat().Mount("/api/v1/"+id, regTestHandler{id: id})
+			if err := reg.PermissionsSeat().Add(id + ":read"); err != nil {
 				t.Errorf("Permissions.Add() error = %v, want nil", err)
 			}
-			if err := reg.AuditActions.Add(id + ".created"); err != nil {
+			if err := reg.AuditActionsSeat().Add(id + ".created"); err != nil {
 				t.Errorf("AuditActions.Add() error = %v, want nil", err)
 			}
-			if err := reg.Jobs.Handle(id+".job", regTestHandler{id: id}); err != nil {
+			if err := reg.JobsSeat().Handle(id+".job", regTestHandler{id: id}); err != nil {
 				t.Errorf("Jobs.Handle() error = %v, want nil", err)
 			}
-			if err := reg.Config.Add(ConfigItem{Key: id + ".key", Type: "string"}); err != nil {
+			if err := reg.ConfigSeat().Add(ConfigItem{Key: id + ".key", Type: "string"}); err != nil {
 				t.Errorf("Config.Add() error = %v, want nil", err)
 			}
-			if err := reg.Features.Add(FeatureFlag{Key: id + ".flag"}); err != nil {
+			if err := reg.FeaturesSeat().Add(FeatureFlag{Key: id + ".flag"}); err != nil {
 				t.Errorf("Features.Add() error = %v, want nil", err)
 			}
-			if err := reg.Events.Publishes(EventDecl{Type: id + ".created"}); err != nil {
+			if err := reg.EventsSeat().Publishes(EventDecl{Type: id + ".created"}); err != nil {
 				t.Errorf("Events.Publishes() error = %v, want nil", err)
 			}
 		}(i)
 	}
 	wg.Wait()
 
-	if got := len(reg.Routes.Routes()); got != goroutines {
+	if got := len(reg.RoutesSeat().Routes()); got != goroutines {
 		t.Errorf("Routes() returned %d routes, want %d", got, goroutines)
 	}
-	if got := len(reg.Permissions.Permissions()); got != goroutines {
+	if got := len(reg.PermissionsSeat().Permissions()); got != goroutines {
 		t.Errorf("Permissions() returned %d permissions, want %d", got, goroutines)
 	}
-	if got := len(reg.AuditActions.Actions()); got != goroutines {
+	if got := len(reg.AuditActionsSeat().Actions()); got != goroutines {
 		t.Errorf("Actions() returned %d actions, want %d", got, goroutines)
 	}
-	if got := len(reg.Jobs.Handlers()); got != goroutines {
+	if got := len(reg.JobsSeat().Handlers()); got != goroutines {
 		t.Errorf("Handlers() returned %d handlers, want %d", got, goroutines)
 	}
-	if got := len(reg.Config.Items()); got != goroutines {
+	if got := len(reg.ConfigSeat().Items()); got != goroutines {
 		t.Errorf("Items() returned %d items, want %d", got, goroutines)
 	}
-	if got := len(reg.Features.Flags()); got != goroutines {
+	if got := len(reg.FeaturesSeat().Flags()); got != goroutines {
 		t.Errorf("Flags() returned %d flags, want %d", got, goroutines)
 	}
-	if got := len(reg.Events.Published()); got != goroutines {
+	if got := len(reg.EventsSeat().Published()); got != goroutines {
 		t.Errorf("Published() returned %d events, want %d", got, goroutines)
 	}
 	if err := ValidateFeatureGraph(reg); err != nil {
@@ -2467,7 +2467,7 @@ func (m localeBundleModule) Migrations() embed.FS { return embed.FS{} }
 func (m localeBundleModule) Locales() embed.FS    { return locales.FS }
 func (m localeBundleModule) OpenAPISpec() []byte  { return nil }
 
-func (m localeBundleModule) Register(*Registry) error { return nil }
+func (m localeBundleModule) Register(Registrar) error { return nil }
 
 // localeBundleModule.Locales returns the pkgcore seed bundle through its own
 // locales package, so this merge test consumes the same bytes the package
@@ -2615,11 +2615,11 @@ func TestScheduleRegistrar_Add_DeclaresInOrder(t *testing.T) {
 		KeyPrefix:      "pki.expiry_scan:",
 		PlatformTenant: TenantID("_pki_platform_scan"),
 	}
-	if err := reg.Schedules.Add(perTenantSweep, platformScan); err != nil {
+	if err := reg.SchedulesSeat().Add(perTenantSweep, platformScan); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	decls := reg.Schedules.Declarations()
+	decls := reg.SchedulesSeat().Declarations()
 	if len(decls) != 2 {
 		t.Fatalf("Declarations() returned %d declarations, want 2", len(decls))
 	}
@@ -2629,7 +2629,7 @@ func TestScheduleRegistrar_Add_DeclaresInOrder(t *testing.T) {
 
 	// A declaration read is a copy: mutating it changes nothing.
 	decls[0].Type = "hijacked"
-	if got := reg.Schedules.Declarations()[0].Type; got != perTenantSweep.Type {
+	if got := reg.SchedulesSeat().Declarations()[0].Type; got != perTenantSweep.Type {
 		t.Errorf("mutating the returned slice changed the registry: type = %q, want %q", got, perTenantSweep.Type)
 	}
 }
@@ -2667,16 +2667,16 @@ func TestScheduleRegistrar_Add_RejectsDuplicateType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.seed) > 0 {
-				if err := reg.Schedules.Add(tt.seed...); err != nil {
+				if err := reg.SchedulesSeat().Add(tt.seed...); err != nil {
 					t.Fatalf("seeding: Add(%v) = %v, want nil", tt.seed, err)
 				}
 			}
 
-			err := reg.Schedules.Add(tt.call...)
+			err := reg.SchedulesSeat().Add(tt.call...)
 			if !errors.Is(err, ErrDuplicatePeriodicTask) {
 				t.Fatalf("Add(%v) = %v, want an error wrapping ErrDuplicatePeriodicTask", tt.call, err)
 			}
-			if got := len(reg.Schedules.Declarations()); got != tt.wantStored {
+			if got := len(reg.SchedulesSeat().Declarations()); got != tt.wantStored {
 				t.Errorf("stored declarations after the failed call = %d, want %d", got, tt.wantStored)
 			}
 		})
@@ -2740,16 +2740,16 @@ func TestScheduleRegistrar_Add_RejectsContradictoryDeclaration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.seed) > 0 {
-				if err := reg.Schedules.Add(tt.seed...); err != nil {
+				if err := reg.SchedulesSeat().Add(tt.seed...); err != nil {
 					t.Fatalf("seeding: Add(%v) = %v, want nil", tt.seed, err)
 				}
 			}
 
-			err := reg.Schedules.Add(tt.call...)
+			err := reg.SchedulesSeat().Add(tt.call...)
 			if !errors.Is(err, ErrInvalidPeriodicTask) {
 				t.Fatalf("Add(%v) = %v, want an error wrapping ErrInvalidPeriodicTask", tt.call, err)
 			}
-			if got := len(reg.Schedules.Declarations()); got != len(tt.seed) {
+			if got := len(reg.SchedulesSeat().Declarations()); got != len(tt.seed) {
 				t.Errorf("stored declarations after the failed call = %d, want %d (the seed alone)", got, len(tt.seed))
 			}
 		})

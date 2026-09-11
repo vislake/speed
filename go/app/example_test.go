@@ -120,8 +120,13 @@ func ExampleAssemble() {
 		pkgcore.ComponentConfig{}.With("clock", nil).With("observability", false))})
 
 	spec := app.LoadSpec{
-		Host:    &host,
-		Options: []app.ConfigOption{app.ConfigArgs([]string{})},
+		Host: &host,
+		// The registered config component declares config.cipher_key, so the
+		// platform key target must bind that path: PlatformConfig is the
+		// platform's normative declaration of the key material the module
+		// descriptors declare.
+		Platform: &app.PlatformConfig{},
+		Options:  []app.ConfigOption{app.ConfigArgs([]string{})},
 	}
 	if err := app.Assemble(context.Background(), reg, spec); err != nil {
 		fmt.Println("assemble:", err)

@@ -167,9 +167,9 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // NewModule's options configured -- is mounted at apiPath.
 // reg.Routes.Mount is a plain registration, no I/O, so Register's no-I/O
 // contract stands.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeCredentialWrite)
-	if err := reg.Permissions.Add(PermissionRead, PermissionWrite, PermissionManagePlatform); err != nil {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite, PermissionManagePlatform); err != nil {
 		return err
 	}
 	// Attaches the registry as Gateway's hostSeams so checkRateLimit
@@ -177,7 +177,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// mode's resolved KVStore.
 	m.gateway.host = reg
 	if handler, ok := m.gateway.imageJobHandler(); ok {
-		if err := reg.Jobs.Handle(TaskTypeImageGenerate, handler); err != nil {
+		if err := reg.JobsSeat().Handle(TaskTypeImageGenerate, handler); err != nil {
 			return err
 		}
 	}
@@ -188,7 +188,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// (handler.go's tenancy.WithSystemContext call) has a bus to publish
 	// on.
 	m.handler = NewHandler(m.credentials, reg.EventBus())
-	reg.Routes.Mount(apiPath, m.handler)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
 

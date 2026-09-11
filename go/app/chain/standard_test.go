@@ -26,9 +26,9 @@ func (m *routesModule) DependsOn() []string  { return nil }
 func (m *routesModule) Migrations() embed.FS { return embed.FS{} }
 func (m *routesModule) Locales() embed.FS    { return embed.FS{} }
 func (m *routesModule) OpenAPISpec() []byte  { return nil }
-func (m *routesModule) Register(reg *pkgcore.Registry) error {
+func (m *routesModule) Register(reg pkgcore.Registrar) error {
 	for _, route := range m.routes {
-		reg.Routes.Mount(route.Path, route.Handler)
+		reg.RoutesSeat().Mount(route.Path, route.Handler)
 	}
 	return nil
 }

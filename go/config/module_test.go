@@ -46,11 +46,11 @@ func (f *fakeHostModule) OpenAPISpec() []byte {
 	return nil
 }
 
-func (f *fakeHostModule) Register(reg *pkgcore.Registry) error {
-	if err := reg.Config.Add(f.items...); err != nil {
+func (f *fakeHostModule) Register(reg pkgcore.Registrar) error {
+	if err := reg.ConfigSeat().Add(f.items...); err != nil {
 		return err
 	}
-	return reg.Features.Add(f.flags...)
+	return reg.FeaturesSeat().Add(f.flags...)
 }
 
 // moduleTestDBSeq numbers the in-memory SQLite databases this file's tests
@@ -110,7 +110,7 @@ func TestModule_Register_MountsBothConfigRoutesInOrder(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	routes := reg.Routes.Routes()
+	routes := reg.RoutesSeat().Routes()
 	if len(routes) != 2 {
 		t.Fatalf("the module mounted %d routes, want 2", len(routes))
 	}
@@ -130,7 +130,7 @@ func TestModule_Register_DeclaresTheChangeEventAndAuditAction(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	published := reg.Events.Published()
+	published := reg.EventsSeat().Published()
 	if len(published) != 1 {
 		t.Fatalf("the module declared %d events, want 1", len(published))
 	}
@@ -142,7 +142,7 @@ func TestModule_Register_DeclaresTheChangeEventAndAuditAction(t *testing.T) {
 		t.Fatalf("declared payload type = %q, want %q", decl.PayloadType, eventConfigItemChangedPayloadType)
 	}
 
-	actions := reg.AuditActions.Actions()
+	actions := reg.AuditActionsSeat().Actions()
 	if len(actions) != 1 || actions[0] != AuditActionConfigSet {
 		t.Fatalf("registered audit actions = %v, want exactly [%s]", actions, AuditActionConfigSet)
 	}
@@ -235,11 +235,11 @@ func TestKernelBootstrap_AttachServesTheAssembledHostSchema(t *testing.T) {
 func TestModule_Attach_RejectsASecondCall(t *testing.T) {
 	db := openModuleTestDB(t)
 	reg := newPlainRegistry()
-	if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
+	if err := reg.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
+		t.Fatalf("reg.ConfigSeat().Add: %v", err)
 	}
-	if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
+	if err := reg.FeaturesSeat().Add(serviceTestSchemaFlags...); err != nil {
+		t.Fatalf("reg.FeaturesSeat().Add: %v", err)
 	}
 	m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
 	if _, err := m.Attach(reg); err != nil {
@@ -263,11 +263,11 @@ func TestModule_Attach_ExactlyOneCallSucceedsUnderConcurrentCallers(t *testing.T
 	db := openModuleTestDB(t)
 	for round := 0; round < 8; round++ {
 		reg := newPlainRegistry()
-		if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
-			t.Fatalf("round %d reg.Config.Add: %v", round, err)
+		if err := reg.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
+			t.Fatalf("round %d reg.ConfigSeat().Add: %v", round, err)
 		}
-		if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
-			t.Fatalf("round %d reg.Features.Add: %v", round, err)
+		if err := reg.FeaturesSeat().Add(serviceTestSchemaFlags...); err != nil {
+			t.Fatalf("round %d reg.FeaturesSeat().Add: %v", round, err)
 		}
 		m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
 
@@ -318,8 +318,8 @@ func TestModule_Attach_GuardsItsDependencies(t *testing.T) {
 func TestModule_Attach_RequiresACipherForSensitiveDeclarations(t *testing.T) {
 	db := openModuleTestDB(t)
 	reg := newPlainRegistry()
-	if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
+	if err := reg.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
+		t.Fatalf("reg.ConfigSeat().Add: %v", err)
 	}
 
 	// serviceTestSchemaItems declares the Sensitive support.reply_email; a
@@ -340,9 +340,9 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	declared := reg.Bootstrap.Keys()
+	declared := component().BootstrapKeys
 	if len(declared) != 1 {
-		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly the cipher key", len(declared), declared)
+		t.Fatalf("the config component declared %d bootstrap keys (%v), want exactly the cipher key", len(declared), declared)
 	}
 	key := declared[0]
 	if key.Key != "config.cipher_key" {
@@ -357,7 +357,7 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	if key.Default == "" || key.Description == "" || key.Example != "" {
 		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
 	}
-	for _, item := range reg.Config.Items() {
+	for _, item := range reg.ConfigSeat().Items() {
 		if item.Key == key.Key {
 			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
 		}

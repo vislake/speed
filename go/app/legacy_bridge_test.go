@@ -20,7 +20,6 @@ type bridgeModule struct {
 	order     *[]string
 	mounted   string
 	handler   http.Handler
-	keys      []pkgcore.BootstrapKey
 }
 
 func (m *bridgeModule) Name() string         { return m.name }
@@ -28,15 +27,10 @@ func (m *bridgeModule) DependsOn() []string  { return m.dependsOn }
 func (m *bridgeModule) Migrations() embed.FS { return embed.FS{} }
 func (m *bridgeModule) Locales() embed.FS    { return embed.FS{} }
 func (m *bridgeModule) OpenAPISpec() []byte  { return nil }
-func (m *bridgeModule) Register(reg *pkgcore.Registry) error {
+func (m *bridgeModule) Register(reg pkgcore.Registrar) error {
 	*m.order = append(*m.order, m.name)
-	if len(m.keys) > 0 {
-		if err := reg.Bootstrap.Add(m.keys...); err != nil {
-			return err
-		}
-	}
 	if m.mounted != "" {
-		reg.Routes.Mount(m.mounted, m.handler)
+		reg.RoutesSeat().Mount(m.mounted, m.handler)
 	}
 	return nil
 }
@@ -70,7 +64,6 @@ func TestBridge_WrapsLegacyModulesThroughTheSevenStages(t *testing.T) {
 	base := &bridgeModuleB{bridgeModule{
 		name:  "base",
 		order: &order,
-		keys:  []pkgcore.BootstrapKey{{Key: "token", Format: "string"}},
 	}}
 
 	a, err := New(context.Background(), append(testBaseOptions(t, &host),
@@ -98,10 +91,6 @@ func TestBridge_WrapsLegacyModulesThroughTheSevenStages(t *testing.T) {
 	}
 	if got := a.Registry().MountedRoutes(); len(got) != 1 || got[0].Path != "/api/v1/bridge" {
 		t.Fatalf("registry view routes = %v, want the same declarations", got)
-	}
-	declared := a.Registry().Bootstrap.Keys()
-	if len(declared) != 1 || declared[0].Key != "token" {
-		t.Fatalf("view bootstrap keys = %v, want the wrapped module's declaration", declared)
 	}
 
 	// Every wrapped module's product is reachable through the by-type
@@ -139,6 +128,61 @@ func TestBridge_WrapsLegacyModulesThroughTheSevenStages(t *testing.T) {
 	}
 	if !slices.Equal(order, []string{"base", "dependent"}) {
 		t.Fatalf("registration order after close = %v, want registration to have run exactly once per module", order)
+	}
+}
+
+// TestBridge_ForwardsTheModuleDescriptorDeclarations pins the wrapper's
+// static declarations: it carries the module component descriptor's
+// BootstrapKeys and SystemPurposes, and its Init turn registers the purposes
+// -- the moment the module's own Register used to register them, before any
+// host step runs.
+func TestBridge_ForwardsTheModuleDescriptorDeclarations(t *testing.T) {
+	purpose := pkgcore.SystemPurpose("bridge.test_purpose")
+	descriptor := pkgcore.Component{
+		Name:           "base",
+		Module:         "base",
+		BootstrapKeys:  []pkgcore.BootstrapKey{{Key: "token", Format: "string"}},
+		SystemPurposes: []pkgcore.SystemPurpose{purpose},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &bridgeModuleB{}, nil
+		},
+	}
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(descriptor); err != nil {
+		t.Fatalf("register the module descriptor: %v", err)
+	}
+
+	var order []string
+	base := &bridgeModuleB{bridgeModule{name: "base", order: &order}}
+	view := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	wrapped, err := wrapLegacyModules([]pkgcore.Module{base}, view, reg)
+	if err != nil {
+		t.Fatalf("wrapLegacyModules() = %v", err)
+	}
+	if len(wrapped) != 1 {
+		t.Fatalf("wrapped = %d components, want 1", len(wrapped))
+	}
+	wrapper := wrapped[0]
+	if len(wrapper.BootstrapKeys) != 1 || wrapper.BootstrapKeys[0].Key != "token" {
+		t.Errorf("wrapper BootstrapKeys = %v, want the descriptor's declaration", wrapper.BootstrapKeys)
+	}
+	if len(wrapper.SystemPurposes) != 1 || wrapper.SystemPurposes[0] != purpose {
+		t.Errorf("wrapper SystemPurposes = %v, want the descriptor's declaration", wrapper.SystemPurposes)
+	}
+
+	// The purpose is unknown until the module's Init turn registers it: that
+	// is the timing a host step later in the assembly depends on.
+	if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "boot", Purpose: purpose}); err == nil {
+		t.Fatal("WithSystemContext accepted the purpose before the wrapper's Init, want a refusal")
+	}
+	if err := wrapper.Init(context.Background(), reg, nil); err != nil {
+		t.Fatalf("wrapper Init = %v", err)
+	}
+	if !slices.Equal(order, []string{"base"}) {
+		t.Errorf("module registration order = %v, want the wrapper's Init to call the module's Register", order)
+	}
+	if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "boot", Purpose: purpose}); err != nil {
+		t.Fatalf("WithSystemContext after the wrapper's Init = %v, want the purpose registered", err)
 	}
 }
 

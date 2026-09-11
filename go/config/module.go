@@ -227,7 +227,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // register after this one, and the schema snapshot must be complete before
 // it freezes, so the snapshot happens in Attach -- after Bootstrap has
 // returned -- never in Register.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
 
 	// One handler, two mounts: the fragment's wrapper dispatches on a
@@ -237,16 +237,19 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// therefore only ever wraps the requests it is meant to, because a
 	// request for one path never matches the other's pattern.
 	fragment := m.preAuthHandler()
-	reg.Routes.Mount(PathPublic, fragment)
-	reg.Routes.Mount(PathSystemFeatures, fragment)
+	reg.RoutesSeat().Mount(PathPublic, fragment)
+	reg.RoutesSeat().Mount(PathSystemFeatures, fragment)
 
-	if err := reg.Events.Publishes(eventDecl); err != nil {
+	if err := reg.EventsSeat().Publishes(eventDecl); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(AuditActionConfigSet); err != nil {
+	if err := reg.AuditActionsSeat().Add(AuditActionConfigSet); err != nil {
 		return err
 	}
-	return reg.Bootstrap.Add(bootstrapKeyDecl)
+	// The process-start key material (bootstrapKeyDecl) is descriptor data:
+	// the component descriptor carries it as BootstrapKeys, which the loader
+	// resolves before anything is constructed.
+	return nil
 }
 
 // Attach freezes the schema snapshot and hands the caller the runtime
@@ -272,7 +275,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 // callers: exactly one Attach succeeds and every other call fails with
 // ErrAlreadyAttached, never a second Service with its own poller and bus
 // subscription.
-func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
+func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
 	m.attachMu.Lock()
 	defer m.attachMu.Unlock()
 	if m.service != nil {
@@ -285,7 +288,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		return nil, errors.New("config: Attach requires the database NewModule was built with (its db argument must not be nil)")
 	}
 
-	schema, err := buildSchema(reg.Config.Items(), reg.Features.Flags())
+	schema, err := buildSchema(reg.ConfigSeat().Items(), reg.FeaturesSeat().Flags())
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +306,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	svc := &Service{
 		schema:           schema,
 		st:               &store{db: m.db},
-		bus:              reg.Events.Bus(),
+		bus:              reg.EventBus(),
 		kv:               reg.KVStore(),
 		cipher:           m.cipher,
 		cache:            newValueCache(),
@@ -311,7 +314,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		pollInterval:     m.pollInterval,
 		afterRefreshLock: m.afterRefreshLock,
 	}
-	reg.Events.Subscribe(EventConfigItemChanged, svc.onItemChanged)
+	reg.EventsSeat().Subscribe(EventConfigItemChanged, svc.onItemChanged)
 	svc.startPoller()
 	m.service = svc
 	return svc, nil

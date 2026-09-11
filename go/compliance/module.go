@@ -227,26 +227,30 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 //
 // It declares compliance's configuration schema, its permissions and its
 // audit vocabulary, registers the periodic retention-sweep task's
-// handler on reg.Jobs, registers this module's two audited system
-// purposes, attaches the registry's EventBus, AuditActions and Retention
-// registrar onto all three orchestration services plus the registry's
-// resolved ObjectStore onto ExportService, and registers the module's own
-// export-manifests cleanup participant onto reg.Retention so the
-// retention sweep also reaps expired export manifests (export_cleanup.go).
+// handler on the Jobs seat, attaches the registry's EventBus, AuditActions
+// and Retention registrar onto all three orchestration services plus the
+// registry's resolved ObjectStore onto ExportService, and registers the
+// module's own export-manifests cleanup participant onto the Retention seat
+// so the retention sweep also reaps expired export manifests
+// (export_cleanup.go). The module's two audited system purposes are
+// descriptor data, not declarations made here: the component descriptor
+// (component.go) carries them as SystemPurposes, which the assembly
+// registers when it closes its Init stage and the transition bridge
+// registers inside the module's own registration turn.
 // It refuses to proceed without a queue (ErrQueueRequired) -- see
 // WithQueue's doc comment. ExportService's SharingCreator is not part of this: it is not
 // a pkgcore.Registry seam, so WithSharing wires it directly at Module
 // construction time (NewModule's own Option application), and its absence
 // is never a reason to refuse Register -- see WithSharing's own doc
 // comment for why that check is Export's own, call-time responsibility.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	if m.queue == nil {
 		return ErrQueueRequired
 	}
-	if err := reg.Config.Add(configItemDecls...); err != nil {
+	if err := reg.ConfigSeat().Add(configItemDecls...); err != nil {
 		return err
 	}
-	if err := reg.Permissions.Add(
+	if err := reg.PermissionsSeat().Add(
 		PermissionAuditRead,
 		PermissionRetentionManage,
 		PermissionErasureExecute,
@@ -254,7 +258,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(
+	if err := reg.AuditActionsSeat().Add(
 		AuditActionRetentionSweep,
 		AuditActionErasureRequest,
 		AuditActionExportRequest,
@@ -262,25 +266,22 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 
-	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
-	pkgcore.RegisterSystemPurpose(SystemPurposeRightToErasure)
-
 	// Subscribe to config's own EventConfigItemChanged so every successful
 	// config.Set gets the dedicated audit record onConfigItemChanged
 	// writes (config_audit.go). Valid to install regardless of whether
 	// config's Register has run yet.
-	reg.Events.Subscribe(config.EventConfigItemChanged, m.onConfigItemChanged)
+	reg.EventsSeat().Subscribe(config.EventConfigItemChanged, m.onConfigItemChanged)
 
 	bus := reg.EventBus()
-	m.retention.retention = reg.Retention
+	m.retention.retention = reg.RetentionSeat()
 	m.retention.bus = bus
-	m.retention.actions = reg.AuditActions
-	m.erasure.retention = reg.Retention
+	m.retention.actions = reg.AuditActionsSeat()
+	m.erasure.retention = reg.RetentionSeat()
 	m.erasure.bus = bus
-	m.erasure.actions = reg.AuditActions
-	m.export.retention = reg.Retention
+	m.erasure.actions = reg.AuditActionsSeat()
+	m.export.retention = reg.RetentionSeat()
 	m.export.bus = bus
-	m.export.actions = reg.AuditActions
+	m.export.actions = reg.AuditActionsSeat()
 	m.export.store = reg.ObjectStore()
 
 	// Register the module's own export-manifest cleanup participant so
@@ -290,14 +291,14 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// host-populated post-Bootstrap Add, so the reserved
 	// compliance.export_manifests name can never collide with a host's
 	// participant.
-	if err := reg.Retention.Add(exportManifestsParticipant(m.auditRepo, reg.ObjectStore())); err != nil {
+	if err := reg.RetentionSeat().Add(exportManifestsParticipant(m.auditRepo, reg.ObjectStore())); err != nil {
 		return err
 	}
 
 	// Claim the retention-sweep task handler so a host that drains
 	// reg.Jobs.Handlers() onto its jobs.Queue after Bootstrap gets a
 	// worker that runs it -- a plain catalog insertion, no I/O.
-	if err := reg.Jobs.Handle(taskTypeRetentionSweep, retentionSweepHandler{svc: m.retention}); err != nil {
+	if err := reg.JobsSeat().Handle(taskTypeRetentionSweep, retentionSweepHandler{svc: m.retention}); err != nil {
 		return err
 	}
 	// Declare the sweep's periodic schedule alongside its handler:
@@ -305,7 +306,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// the registry's declarations sweeps every tenant at the module's own
 	// window cadence -- the schedule point this module does not run
 	// itself.
-	return reg.Schedules.Add(retentionSweepSchedule)
+	return reg.SchedulesSeat().Add(retentionSweepSchedule)
 }
 
 // compile-time check that *Module satisfies pkgcore.Module.

@@ -65,6 +65,10 @@ func component() pkgcore.Component {
 		// reader consumers take.
 		Provides:     []any{(*Module)(nil), (*Service)(nil)},
 		ConfigSchema: (*componentConfig)(nil),
+		// The process-start key material the module's cipher is built from.
+		// It is descriptor data: the loader resolves it before anything is
+		// constructed.
+		BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
 		// config ships no user-facing messages: its endpoints return
 		// structured codes, and the copy of any console rendering its items
 		// belongs to whichever module owns that surface.

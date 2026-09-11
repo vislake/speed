@@ -62,8 +62,8 @@ func (m *exampleNotesModule) DependsOn() []string  { return nil }
 func (m *exampleNotesModule) Migrations() embed.FS { return embed.FS{} }
 func (m *exampleNotesModule) Locales() embed.FS    { return embed.FS{} }
 func (m *exampleNotesModule) OpenAPISpec() []byte  { return nil }
-func (m *exampleNotesModule) Register(reg *pkgcore.Registry) error {
-	return reg.Retention.Add(pkgcore.RetentionParticipant{
+func (m *exampleNotesModule) Register(reg pkgcore.Registrar) error {
+	return reg.RetentionSeat().Add(pkgcore.RetentionParticipant{
 		Name: "example_notes.note",
 		Sweep: func(ctx context.Context, _ pkgcore.TenantID, cutoff time.Time) (int, error) {
 			var rows []exampleNote
@@ -106,7 +106,7 @@ func (exampleAuditModule) DependsOn() []string              { return nil }
 func (exampleAuditModule) Migrations() embed.FS             { return auditmigrations.FS }
 func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
-func (exampleAuditModule) Register(*pkgcore.Registry) error { return nil }
+func (exampleAuditModule) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = exampleAuditModule{}
 

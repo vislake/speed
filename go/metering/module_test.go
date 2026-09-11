@@ -172,7 +172,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("config items", func(t *testing.T) {
 		var keys []string
-		for _, item := range reg.Config.Items() {
+		for _, item := range reg.ConfigSeat().Items() {
 			keys = append(keys, item.Key)
 			if item.Description == "" {
 				t.Errorf("config item %q is declared without a description", item.Key)
@@ -186,7 +186,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("published events", func(t *testing.T) {
 		var types []string
-		for _, decl := range reg.Events.Published() {
+		for _, decl := range reg.EventsSeat().Published() {
 			types = append(types, decl.Type)
 			if decl.Description == "" {
 				t.Errorf("event %q is declared without a description", decl.Type)
@@ -198,19 +198,19 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	t.Run("no permissions are declared", func(t *testing.T) {
 		// metering has no HTTP surface for rbac to gate and no operation
 		// privileged enough to warrant an audit action.
-		if got := reg.Permissions.Permissions(); len(got) != 0 {
+		if got := reg.PermissionsSeat().Permissions(); len(got) != 0 {
 			t.Errorf("Register declared %d permission(s), want 0 this round", len(got))
 		}
 	})
 
 	t.Run("no audit actions are declared", func(t *testing.T) {
-		if got := reg.AuditActions.Actions(); len(got) != 0 {
+		if got := reg.AuditActionsSeat().Actions(); len(got) != 0 {
 			t.Errorf("Register declared %d audit action(s), want 0 this round", len(got))
 		}
 	})
 
 	t.Run("no routes are mounted", func(t *testing.T) {
-		if got := reg.Routes.Routes(); len(got) != 0 {
+		if got := reg.RoutesSeat().Routes(); len(got) != 0 {
 			t.Errorf("Register mounted %d route(s), want 0 -- metering has no HTTP surface this round", len(got))
 		}
 	})
@@ -231,7 +231,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	var keys []string
-	for _, item := range reg.Config.Items() {
+	for _, item := range reg.ConfigSeat().Items() {
 		keys = append(keys, item.Key)
 	}
 	assertContainsAll(t, keys, []string{ConfigPeriodBucketSize, "neighbour.some_setting"})
@@ -289,8 +289,8 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg *pkgcore.Registry) error {
-	return reg.Config.Add(pkgcore.ConfigItem{
+func (neighbourModule) Register(reg pkgcore.Registrar) error {
+	return reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "neighbour.some_setting",
 		Type:        "bool",
 		Default:     false,

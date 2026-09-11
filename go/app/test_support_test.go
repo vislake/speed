@@ -112,14 +112,13 @@ func testBaseOptions(t *testing.T, host *testHostConfig) []Option {
 }
 
 // testModule is a pkgcore.Module built entirely from test-provided pieces:
-// it declares the bootstrap keys, mounts the route and ships the migrations
-// the test hands it, so the engine's stages have real declarations to work
-// with and no business module is involved.
+// it mounts the route and ships the migrations the test hands it, so the
+// engine's stages have real declarations to work with and no business module
+// is involved.
 type testModule struct {
 	name        string
 	routePath   string
 	handler     http.Handler
-	keys        []pkgcore.BootstrapKey
 	migrations  embed.FS
 	registerErr error
 }
@@ -129,17 +128,12 @@ func (m *testModule) DependsOn() []string  { return nil }
 func (m *testModule) Migrations() embed.FS { return m.migrations }
 func (m *testModule) Locales() embed.FS    { return embed.FS{} }
 func (m *testModule) OpenAPISpec() []byte  { return nil }
-func (m *testModule) Register(reg *pkgcore.Registry) error {
+func (m *testModule) Register(reg pkgcore.Registrar) error {
 	if m.registerErr != nil {
 		return m.registerErr
 	}
-	if len(m.keys) > 0 {
-		if err := reg.Bootstrap.Add(m.keys...); err != nil {
-			return err
-		}
-	}
 	if m.routePath != "" {
-		reg.Routes.Mount(m.routePath, m.handler)
+		reg.RoutesSeat().Mount(m.routePath, m.handler)
 	}
 	return nil
 }

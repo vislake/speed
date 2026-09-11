@@ -162,7 +162,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	}
 
 	t.Run("permissions", func(t *testing.T) {
-		assertContainsAll(t, reg.Permissions.Permissions(), []string{
+		assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{
 			PermissionPlanManage,
 			PermissionSubscriptionRead,
 			PermissionSubscriptionManage,
@@ -172,7 +172,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("audit actions", func(t *testing.T) {
-		assertContainsAll(t, reg.AuditActions.Actions(), []string{
+		assertContainsAll(t, reg.AuditActionsSeat().Actions(), []string{
 			AuditActionCreditGrant,
 			AuditActionCreditDeductReserve,
 			AuditActionCreditDeductConfirm,
@@ -183,7 +183,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("published events", func(t *testing.T) {
 		var types []string
-		for _, decl := range reg.Events.Published() {
+		for _, decl := range reg.EventsSeat().Published() {
 			types = append(types, decl.Type)
 			if decl.Description == "" {
 				t.Errorf("event %q is declared without a description", decl.Type)
@@ -193,7 +193,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("the HTTP surface is mounted at apiPath", func(t *testing.T) {
-		routes := reg.Routes.Routes()
+		routes := reg.RoutesSeat().Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (the module's fragment surface at %s)", len(routes), apiPath)
 		}
@@ -212,7 +212,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// No code path reads a live config value: inventing one
 		// speculatively would be the speculative-declaration shape the
 		// module's own design-choice section names and rejects.
-		if got := reg.Config.Items(); len(got) != 0 {
+		if got := reg.ConfigSeat().Items(); len(got) != 0 {
 			t.Errorf("Register declared %d config item(s), want 0 this round", len(got))
 		}
 	})
@@ -230,7 +230,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// NewModule(db, usage) above was built with no WithQueue -- Register
 		// must not claim the poll task handler when there is no queue to run
 		// it on -- see go/pki's identical proof for its own expiry-scan task.
-		if _, ok := reg.Jobs.Handlers()[taskTypePoll]; ok {
+		if _, ok := reg.JobsSeat().Handlers()[taskTypePoll]; ok {
 			t.Errorf("Register claimed the poll job handler despite no WithQueue")
 		}
 	})
@@ -247,7 +247,7 @@ func TestModule_Register_WithQueue_ClaimsThePollHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if _, ok := reg.Jobs.Handlers()[taskTypePoll]; !ok {
+	if _, ok := reg.JobsSeat().Handlers()[taskTypePoll]; !ok {
 		t.Errorf("Register did not claim taskTypePoll despite WithQueue")
 	}
 }
@@ -273,7 +273,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionPlanManage, "neighbour:read"})
+	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionPlanManage, "neighbour:read"})
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database,
@@ -309,7 +309,7 @@ func TestModule_Register_DeclaresThePollSchedule(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	decls := reg.Schedules.Declarations()
+	decls := reg.SchedulesSeat().Declarations()
 	if len(decls) != 1 || decls[0] != pollSchedule {
 		t.Errorf("Register declared %+v, want exactly the poll schedule %+v", decls, pollSchedule)
 	}
@@ -352,8 +352,8 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg *pkgcore.Registry) error {
-	return reg.Permissions.Add("neighbour:read")
+func (neighbourModule) Register(reg pkgcore.Registrar) error {
+	return reg.PermissionsSeat().Add("neighbour:read")
 }
 
 var _ pkgcore.Module = neighbourModule{}

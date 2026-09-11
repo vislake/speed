@@ -26,7 +26,7 @@ func (exampleAuditModule) DependsOn() []string              { return nil }
 func (exampleAuditModule) Migrations() embed.FS             { return migrations.FS }
 func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
-func (exampleAuditModule) Register(*pkgcore.Registry) error { return nil }
+func (exampleAuditModule) Register(pkgcore.Registrar) error { return nil }
 
 // Example shows Repository end to end: migrating audit_events, appending
 // an event that records an impersonated action (an Actor together with
@@ -130,7 +130,7 @@ func ExampleEmit() {
 	// A business module declares its own qualified action name at
 	// Register time -- here, standing in for org's own Register call.
 	const action = "org.member.remove"
-	if addErr := reg.AuditActions.Add(action); addErr != nil {
+	if addErr := reg.AuditActionsSeat().Add(action); addErr != nil {
 		fmt.Println("add audit action error:", addErr)
 		return
 	}
@@ -139,7 +139,7 @@ func ExampleEmit() {
 	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-42", DisplayName: "Ada"})
 	ctx = pkgcore.WithOnBehalfOf(ctx, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1", DisplayName: "Grace"})
 
-	emitErr := audit.Emit(ctx, reg.Events.Bus(), reg.AuditActions, audit.Input{
+	emitErr := audit.Emit(ctx, reg.EventBus(), reg.AuditActionsSeat(), audit.Input{
 		Action:   action,
 		Resource: audit.Resource{Type: "org.member", ID: "member-7", DisplayName: "Bob"},
 		Result:   audit.Result{Success: true},

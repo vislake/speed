@@ -94,7 +94,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	reg := bootstrapTestModule(t)
 
 	t.Run("permissions", func(t *testing.T) {
-		assertContainsAll(t, reg.Permissions.Permissions(), []string{
+		assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{
 			PermissionRead, PermissionManage, PermissionInviteMember, PermissionRemoveMember,
 		})
 	})
@@ -112,13 +112,13 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 			AuditActionMemberCreate, AuditActionMemberUpdate,
 			AuditActionInvitationCreate, AuditActionInvitationUpdate,
 		}
-		assertContainsAll(t, reg.AuditActions.Actions(), wantActions)
-		assertContainsAll(t, wantActions, reg.AuditActions.Actions())
+		assertContainsAll(t, reg.AuditActionsSeat().Actions(), wantActions)
+		assertContainsAll(t, wantActions, reg.AuditActionsSeat().Actions())
 	})
 
 	t.Run("published events", func(t *testing.T) {
 		var types []string
-		for _, decl := range reg.Events.Published() {
+		for _, decl := range reg.EventsSeat().Published() {
 			types = append(types, decl.Type)
 			if decl.PayloadType == "" || decl.Description == "" {
 				t.Errorf("event %q is declared without a payload type or description", decl.Type)
@@ -128,7 +128,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("routes", func(t *testing.T) {
-		routes := reg.Routes.Routes()
+		routes := reg.RoutesSeat().Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
 		}
@@ -145,7 +145,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// a dynamic-config schema it cannot read back (it must not import
 		// config). Declaring a schema nothing honours would be a lying
 		// schema, so the absence is asserted rather than left implicit.
-		if got := reg.Config.Items(); len(got) != 0 {
+		if got := reg.ConfigSeat().Items(); len(got) != 0 {
 			t.Errorf("Register declared %d config item(s); org declares none it cannot honour", len(got))
 		}
 	})
@@ -373,7 +373,7 @@ func captureColumnAutoRedacts(f reflect.StructField) bool {
 // authn.user.created without ever declaring it.
 func TestModule_Register_DoesNotDeclareAuthnsEvent(t *testing.T) {
 	reg := bootstrapTestModule(t)
-	for _, decl := range reg.Events.Published() {
+	for _, decl := range reg.EventsSeat().Published() {
 		if decl.Type == "authn.user.created" {
 			t.Fatal("org declared authn.user.created; only authn may declare it, or both modules collide at bootstrap")
 		}
@@ -392,7 +392,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionRead, "neighbour:read"})
+	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, "neighbour:read"})
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database, which
@@ -437,11 +437,11 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add("neighbour:read"); err != nil {
+func (neighbourModule) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add("neighbour:read"); err != nil {
 		return err
 	}
-	return reg.AuditActions.Add("neighbour.thing.do")
+	return reg.AuditActionsSeat().Add("neighbour.thing.do")
 }
 
 var _ pkgcore.Module = neighbourModule{}
@@ -549,7 +549,7 @@ func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 
 	wantActions := []string{AuditActionMemberCreate, AuditActionMemberUpdate, AuditActionInvitationCreate, AuditActionInvitationUpdate}
 	actions := map[string]bool{}
-	for _, action := range reg.AuditActions.Actions() {
+	for _, action := range reg.AuditActionsSeat().Actions() {
 		actions[action] = true
 	}
 	for _, want := range wantActions {
@@ -559,7 +559,7 @@ func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 	}
 
 	flags := map[string]pkgcore.FeatureFlag{}
-	for _, flag := range reg.Features.Flags() {
+	for _, flag := range reg.FeaturesSeat().Flags() {
 		flags[flag.Key] = flag
 	}
 	invitations, ok := flags[FeatureInvitations]
@@ -575,7 +575,7 @@ func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 	}
 
 	events := map[string]bool{}
-	for _, decl := range reg.Events.Published() {
+	for _, decl := range reg.EventsSeat().Published() {
 		events[decl.Type] = true
 	}
 	for _, want := range []string{
@@ -766,11 +766,9 @@ var _ FeatureGate = fixedGate{}
 // indexer, a Sensitive hex key separate from every cipher key -- and the only
 // key org declares, since the runtime schema beside it is deliberately absent.
 func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
-	reg := bootstrapTestModule(t)
-
-	declared := reg.Bootstrap.Keys()
+	declared := component().BootstrapKeys
 	if len(declared) != 1 {
-		t.Fatalf("Register declared %d bootstrap keys (%v), want exactly one", len(declared), declared)
+		t.Fatalf("the org component declared %d bootstrap keys (%v), want exactly one", len(declared), declared)
 	}
 	key := declared[0]
 	if key.Key != "org.invitation_email_index_key" {

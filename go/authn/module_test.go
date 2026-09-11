@@ -564,18 +564,18 @@ func TestModule_RegisterDeclaresItsBootstrapKeys(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	declared := reg.Bootstrap.Keys()
+	declared := component().BootstrapKeys
 	byKey := make(map[string]pkgcore.BootstrapKey, len(declared))
 	for _, key := range declared {
 		byKey[key.Key] = key
 	}
 	if len(declared) != 2 {
-		t.Fatalf("Register() declared %d bootstrap keys (%v), want exactly the two key materials", len(declared), declared)
+		t.Fatalf("the authn component declared %d bootstrap keys (%v), want exactly the two key materials", len(declared), declared)
 	}
 	for _, want := range []string{"authn.pii_cipher_key", "authn.blind_index_key"} {
 		key, ok := byKey[want]
 		if !ok {
-			t.Errorf("Register() did not declare %q", want)
+			t.Errorf("the authn component did not declare %q", want)
 			continue
 		}
 		if key.Format != "hexkey" {

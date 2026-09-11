@@ -96,8 +96,8 @@ const derivedKeySize = 32
 // mixes the two freely: derive everything from one root secret by
 // default, override any single purpose's key independently when that
 // purpose's own rotation cadence demands it. For the keys modules declare
-// on the registry's bootstrap seat, the purpose convention lives at the
-// seat itself (pkgcore.BootstrapKeyPurpose maps a declared key path to its
+// in their component descriptors, the purpose convention rides the
+// declaration (pkgcore.BootstrapKeyPurpose maps a declared key path to its
 // stable, versioned purpose string, and states the stability contract that
 // makes renaming a declared path a rotation), and the material is derived
 // by this primitive: DeriveKey(rootKey, purpose). The precedence between a

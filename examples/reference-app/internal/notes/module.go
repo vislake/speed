@@ -256,8 +256,8 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // just reading a field off reg. The bus is not actually called (no
 // Publish) until a real HTTP request creates a note; see handler.go's
 // NotesCreateNote method.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	if err := reg.AuditActionsSeat().Add(AuditActionNoteCreate); err != nil {
 		return err
 	}
 
@@ -266,13 +266,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// was just declared on -- Emit itself validates the action string against
 	// it before publishing (see audit.Emit's own doc comment), which is what
 	// requires the declaration above to run before this line, not after it.
-	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActions, m.subject)
-	reg.Routes.Mount(apiPath, m.handler)
+	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActionsSeat(), m.subject)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 
-	if err := reg.Permissions.Add(PermissionRead, PermissionWrite); err != nil {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(pkgcore.EventDecl{
+	if err := reg.EventsSeat().Publishes(pkgcore.EventDecl{
 		Type:        EventNoteCreated,
 		PayloadType: eventNoteCreatedPayloadType,
 		Description: "Published whenever a new note is created for a tenant.",
@@ -287,7 +287,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// creator resolver still declares its type, and its create endpoint
 	// then fails closed (see ErrSubjectUnresolved) rather than this
 	// declaration being conditional on wiring.
-	if err := reg.Notifications.Add(noteCreatedNotificationType); err != nil {
+	if err := reg.NotificationsSeat().Add(noteCreatedNotificationType); err != nil {
 		return err
 	}
 
@@ -300,7 +300,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// the key. pkgcore validates the declarations on Add (a malformed
 	// item or a duplicated key fails registration), and config.Attach
 	// freezes them into the runtime schema after Bootstrap.
-	if err := reg.Config.Add(
+	if err := reg.ConfigSeat().Add(
 		pkgcore.ConfigItem{
 			Key:         ConfigKeyBrandSiteName,
 			Type:        "string",
@@ -319,7 +319,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.Features.Add(
+	if err := reg.FeaturesSeat().Add(
 		pkgcore.FeatureFlag{
 			Key:         FeatureFlagSmilePreview,
 			Default:     false,

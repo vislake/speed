@@ -80,7 +80,7 @@ func (migrationModule) DependsOn() []string                { return nil }
 func (m migrationModule) Migrations() embed.FS             { return m.FS }
 func (migrationModule) Locales() embed.FS                  { return embed.FS{} }
 func (migrationModule) OpenAPISpec() []byte                { return nil }
-func (migrationModule) Register(_ *pkgcore.Registry) error { return nil }
+func (migrationModule) Register(_ pkgcore.Registrar) error { return nil }
 
 // compile-time check that migrationModule satisfies pkgcore.Module.
 var _ pkgcore.Module = migrationModule{}

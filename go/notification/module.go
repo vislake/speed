@@ -412,7 +412,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Register is called, so the handler is built from the host's final
 // wiring, and each declaration arrives with the producer that needs it,
 // exactly as errors.go's doc comment says of error codes.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	if m.sms == nil {
 		return ErrSMSSenderRequired
 	}
@@ -445,20 +445,20 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.contacts.mailReplyTo = m.mailReplyTo
 	m.contacts.emailIndexer = m.emailIndexer
 	m.contacts.phoneIndexer = m.phoneIndexer
-	if err := reg.Events.Publishes(inboxEventDecls...); err != nil {
+	if err := reg.EventsSeat().Publishes(inboxEventDecls...); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(contactAuditActionDecls...); err != nil {
+	if err := reg.AuditActionsSeat().Add(contactAuditActionDecls...); err != nil {
 		return err
 	}
-	if err := reg.Jobs.Handle(jobTypeDeliver, m.deliveries); err != nil {
+	if err := reg.JobsSeat().Handle(jobTypeDeliver, m.deliveries); err != nil {
 		return err
 	}
-	m.prefs.attachTypes(reg.Notifications)
-	m.contacts.attachTypes(reg.Notifications)
-	m.contacts.attachHost(reg, reg.AuditActions)
+	m.prefs.attachTypes(reg.NotificationsSeat())
+	m.contacts.attachTypes(reg.NotificationsSeat())
+	m.contacts.attachHost(reg, reg.AuditActionsSeat())
 	m.deliveries.attachHost(reg)
-	reg.Events.Subscribe(EventInboxCreated, m.hub.HandleEvent)
+	reg.EventsSeat().Subscribe(EventInboxCreated, m.hub.HandleEvent)
 
 	// Handler is built here, not in NewModule, deliberately: every Option a
 	// caller passed to NewModule -- WithSubjectResolver above all -- has
@@ -472,8 +472,11 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// reg.Locales() is still nil.
 	m.handler = NewHandler(m.inbox, m.prefs, m.contacts, m.hub, m.subject, m.userLocale)
 	m.handler.attachHost(reg)
-	reg.Routes.Mount(apiPath, m.handler)
-	return reg.Bootstrap.Add(bootstrapKeyDecl)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
+	// The process-start key material (bootstrapKeyDecl) is descriptor data:
+	// the component descriptor carries it as BootstrapKeys, which the loader
+	// resolves before anything is constructed.
+	return nil
 }
 
 // bootstrapKeyDecl is the process-start key material this module consumes: the

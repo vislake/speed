@@ -55,11 +55,11 @@ func (exampleModule) DependsOn() []string  { return nil }
 func (exampleModule) Migrations() embed.FS { return embed.FS{} }
 func (exampleModule) Locales() embed.FS    { return embed.FS{} }
 func (exampleModule) OpenAPISpec() []byte  { return nil }
-func (m exampleModule) Register(reg *pkgcore.Registry) error {
-	reg.Routes.Mount(app.AuthnAPIPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (m exampleModule) Register(reg pkgcore.Registrar) error {
+	reg.RoutesSeat().Mount(app.AuthnAPIPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, "authn handler: %s", r.URL.Path)
 	}))
-	reg.Routes.Mount("/api/v1/notes", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	reg.RoutesSeat().Mount("/api/v1/notes", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "notes")
 	}))
 	return nil

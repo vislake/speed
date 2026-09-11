@@ -303,7 +303,7 @@ magic numbers:
 | `WithNoExpiryAllowed` | off | permits never-expiring objects: without it a `CreateParams.NoExpiry` request is refused (`storage.no_expiry_not_allowed`); with it, each such object still needs its own explicit `NoExpiry: true` |
 | `WithAllowedTypes` | image/jpeg, image/png | media-type allowlist; nil resolves to the module default. Register refuses (`storage.allowed_type_unsupported`) any configured type the module cannot pixel-check AND metadata-strip (validate.go's `mediaTypeSafety`) |
 
-`Register(reg *pkgcore.Registry)` performs no I/O and:
+`Register(reg pkgcore.Registrar)` performs no I/O and:
 
 - requires the queue `WithQueue` wired — a queueless Register fails with
   `storage.queue_required` before declaring anything;

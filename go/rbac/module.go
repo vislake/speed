@@ -176,14 +176,14 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // The permission CATALOG is deliberately not read here: other modules may
 // register after this one, so the snapshot must be taken once every module
 // has declared, which is what Attach does.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add(PermissionRead, PermissionManage); err != nil {
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionManage); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(eventDecls...); err != nil {
+	if err := reg.EventsSeat().Publishes(eventDecls...); err != nil {
 		return err
 	}
-	return reg.AuditActions.Add(auditActions...)
+	return reg.AuditActionsSeat().Add(auditActions...)
 }
 
 // Attach freezes the permission catalog and hands the caller the runtime
@@ -197,7 +197,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 // diverge from the first -- which, for the set that decides whether a
 // grant is legal, is a security-relevant difference rather than a
 // cosmetic one.
-func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
+func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
 	if m.service != nil {
 		return nil, ErrAlreadyAttached
 	}
@@ -209,13 +209,13 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	}
 
 	svc := &Service{
-		catalog:         newCatalog(reg.Permissions.Permissions()),
+		catalog:         newCatalog(reg.PermissionsSeat().Permissions()),
 		roles:           NewRoleRepository(m.db),
 		rolePermissions: NewRolePermissionRepository(m.db),
 		bindings:        NewRoleBindingRepository(m.db),
 		subtree:         m.subtree,
-		bus:             reg.Events.Bus(),
-		actions:         reg.AuditActions,
+		bus:             reg.EventBus(),
+		actions:         reg.AuditActionsSeat(),
 		queue:           m.queue,
 		cacheTTL:        m.cacheTTL,
 		cache:           newGrantCache(m.cacheTTL),
@@ -227,10 +227,10 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	// replica, and running the local write's invalidation through the same
 	// handler as the remote one means there is a single invalidation code
 	// path to get right rather than two that could drift.
-	reg.Events.Subscribe(EventRoleBindingAssigned, svc.onRoleBindingChanged)
-	reg.Events.Subscribe(EventRoleBindingRevoked, svc.onRoleBindingChanged)
-	reg.Events.Subscribe(EventRoleBindingRestored, svc.onRoleBindingChanged)
-	reg.Events.Subscribe(EventRoleChanged, svc.onRoleChanged)
+	reg.EventsSeat().Subscribe(EventRoleBindingAssigned, svc.onRoleBindingChanged)
+	reg.EventsSeat().Subscribe(EventRoleBindingRevoked, svc.onRoleBindingChanged)
+	reg.EventsSeat().Subscribe(EventRoleBindingRestored, svc.onRoleBindingChanged)
+	reg.EventsSeat().Subscribe(EventRoleChanged, svc.onRoleChanged)
 
 	// The queue-backed reap handlers are registered here, in Attach, not in
 	// Register: they execute the reaping through the very Service this call
@@ -251,10 +251,10 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	// registration is skipped rather than failing the replica's Attach.
 	// Any duplicate of a job type this module does not own is that error
 	// path's genuine meaning, and still fails here.
-	if err := reg.Jobs.Handle(taskTypeReapMember, memberReapTask{svc: svc}); err != nil && !errors.Is(err, pkgcore.ErrDuplicateJobType) {
+	if err := reg.JobsSeat().Handle(taskTypeReapMember, memberReapTask{svc: svc}); err != nil && !errors.Is(err, pkgcore.ErrDuplicateJobType) {
 		return nil, err
 	}
-	if err := reg.Jobs.Handle(taskTypeReapNode, nodeReapTask{svc: svc}); err != nil && !errors.Is(err, pkgcore.ErrDuplicateJobType) {
+	if err := reg.JobsSeat().Handle(taskTypeReapNode, nodeReapTask{svc: svc}); err != nil && !errors.Is(err, pkgcore.ErrDuplicateJobType) {
 		return nil, err
 	}
 
@@ -271,10 +271,10 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	// ever published or declared here -- Subscribe is this module's only
 	// contact with org's event surface, and it cannot fail, so a host that
 	// runs no org module simply never fires any of them.
-	reg.Events.Subscribe(eventMemberRemoved, svc.onMemberRemoved)
-	reg.Events.Subscribe(eventNodeDeleted, svc.onNodeDeleted)
-	reg.Events.Subscribe(eventMemberRestored, svc.onMemberRestored)
-	reg.Events.Subscribe(eventNodeRestored, svc.onNodeRestored)
+	reg.EventsSeat().Subscribe(eventMemberRemoved, svc.onMemberRemoved)
+	reg.EventsSeat().Subscribe(eventNodeDeleted, svc.onNodeDeleted)
+	reg.EventsSeat().Subscribe(eventMemberRestored, svc.onMemberRestored)
+	reg.EventsSeat().Subscribe(eventNodeRestored, svc.onNodeRestored)
 
 	m.service = svc
 	return svc, nil

@@ -57,8 +57,8 @@ func (d *declaringModule) DependsOn() []string  { return nil }
 func (d *declaringModule) Migrations() embed.FS { return embed.FS{} }
 func (d *declaringModule) Locales() embed.FS    { return embed.FS{} }
 func (d *declaringModule) OpenAPISpec() []byte  { return nil }
-func (d *declaringModule) Register(reg *pkgcore.Registry) error {
-	return reg.Permissions.Add(d.perms...)
+func (d *declaringModule) Register(reg pkgcore.Registrar) error {
+	return reg.PermissionsSeat().Add(d.perms...)
 }
 
 func TestModule_Name_And_DependsOn(t *testing.T) {
@@ -80,7 +80,7 @@ func TestModule_Register_DeclaresItsOwnPermissions(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	want := []string{PermissionManage, PermissionRead} // the registrar returns them sorted
-	if got := reg.Permissions.Permissions(); !reflect.DeepEqual(got, want) {
+	if got := reg.PermissionsSeat().Permissions(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("declared permissions = %v, want %v", got, want)
 	}
 }
@@ -91,7 +91,7 @@ func TestModule_Register_DeclaresItsEventsAndAuditActions(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	published := reg.Events.Published()
+	published := reg.EventsSeat().Published()
 	if len(published) != 4 {
 		t.Fatalf("declared %d events, want 4", len(published))
 	}
@@ -106,7 +106,7 @@ func TestModule_Register_DeclaresItsEventsAndAuditActions(t *testing.T) {
 	}
 
 	wantActions := []string{AuditActionRoleAssign, AuditActionRoleDefine, AuditActionRoleRevoke} // sorted
-	if got := reg.AuditActions.Actions(); !reflect.DeepEqual(got, wantActions) {
+	if got := reg.AuditActionsSeat().Actions(); !reflect.DeepEqual(got, wantActions) {
 		t.Fatalf("declared audit actions = %v, want %v", got, wantActions)
 	}
 }
@@ -120,7 +120,7 @@ func TestModule_Register_MountsNoRoutes(t *testing.T) {
 	if err := NewModule(nil).Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if got := reg.Routes.Routes(); len(got) != 0 {
+	if got := reg.RoutesSeat().Routes(); len(got) != 0 {
 		t.Fatalf("Register mounted %d routes, want none", len(got))
 	}
 	if spec := NewModule(nil).OpenAPISpec(); spec != nil {

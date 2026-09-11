@@ -154,8 +154,8 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // notification type, making it visible to the preference matrix of whatever
 // notification module the host boots. No I/O happens here; declaring the type
 // is all this module does.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	return reg.Notifications.Add(patientReminderNotificationType, simulationReadyNotificationType)
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	return reg.NotificationsSeat().Add(patientReminderNotificationType, simulationReadyNotificationType)
 }
 
 // compile-time check that *Module satisfies pkgcore.Module.

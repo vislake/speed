@@ -1,7 +1,6 @@
 package pkgcore
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -33,35 +32,27 @@ func TestNewRegistry_WiresBootstrapSeat(t *testing.T) {
 }
 
 // TestBootstrap_KeyOnBothSeats_Fails pins the layer boundary's machine
-// defence: the two seats cannot see each other while modules register, so the
-// overlap is refused where both are complete.
+// defence: the two seats cannot see each other while declarations are made,
+// so the overlap is refused where both are complete -- the comparison
+// Kernel.Bootstrap runs once every registration turn has finished.
 func TestBootstrap_KeyOnBothSeats_Fails(t *testing.T) {
 	t.Parallel()
 
-	declaring := regTestModule{
-		name: "authn",
-		register: func(reg *Registry) error {
-			return reg.Bootstrap.Add(bootstrapDecl())
-		},
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	if err := reg.Bootstrap.Add(bootstrapDecl()); err != nil {
+		t.Fatalf("Bootstrap.Add() = %v", err)
 	}
-	conflicting := regTestModule{
-		name: "config",
-		deps: []string{"authn"},
-		register: func(reg *Registry) error {
-			return reg.Config.Add(ConfigItem{
-				Key:         "authn.pii_cipher_key",
-				Type:        "string",
-				Description: "a runtime item claiming the bootstrap key's name",
-			})
-		},
+	if err := reg.Config.Add(ConfigItem{
+		Key:         "authn.pii_cipher_key",
+		Type:        "string",
+		Description: "a runtime item claiming the bootstrap key's name",
+	}); err != nil {
+		t.Fatalf("Config.Add() = %v", err)
 	}
 
-	reg, err := NewKernel().Bootstrap(context.Background(), conflicting, declaring)
+	err := validateBootstrapKeySeparation(reg)
 	if err == nil {
-		t.Fatalf("Bootstrap() error = nil, want a failure naming the doubly declared key")
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
+		t.Fatal("validateBootstrapKeySeparation() = nil, want a failure naming the doubly declared key")
 	}
 	for _, want := range []string{bootstrapDecl().Key, "reg.Config", "reg.Bootstrap"} {
 		if !strings.Contains(err.Error(), want) {
@@ -76,28 +67,21 @@ func TestBootstrap_KeyOnBothSeats_Fails(t *testing.T) {
 func TestBootstrap_SamePrefixOnBothSeats_Allowed(t *testing.T) {
 	t.Parallel()
 
-	declaring := regTestModule{
-		name: "authn",
-		register: func(reg *Registry) error {
-			return reg.Bootstrap.Add(bootstrapDecl())
-		},
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	if err := reg.Bootstrap.Add(bootstrapDecl()); err != nil {
+		t.Fatalf("Bootstrap.Add() = %v", err)
 	}
-	sibling := regTestModule{
-		name: "config",
-		deps: []string{"authn"},
-		register: func(reg *Registry) error {
-			return reg.Config.Add(ConfigItem{
-				Key:         "authn.password_min_length",
-				Type:        "int",
-				Default:     12,
-				Description: "a runtime item under the same module prefix",
-			})
-		},
+	if err := reg.Config.Add(ConfigItem{
+		Key:         "authn.password_min_length",
+		Type:        "int",
+		Default:     12,
+		Description: "a runtime item under the same module prefix",
+	}); err != nil {
+		t.Fatalf("Config.Add() = %v", err)
 	}
 
-	reg, err := NewKernel().Bootstrap(context.Background(), sibling, declaring)
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want a clean boot", err)
+	if err := validateBootstrapKeySeparation(reg); err != nil {
+		t.Fatalf("validateBootstrapKeySeparation() = %v, want a clean comparison", err)
 	}
 	if keys := reg.Bootstrap.Keys(); len(keys) != 1 {
 		t.Errorf("Keys() = %v, want the one declared bootstrap key", keys)

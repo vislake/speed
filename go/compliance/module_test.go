@@ -33,7 +33,7 @@ func (fakeAuditModule) DependsOn() []string              { return nil }
 func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
 func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
-func (fakeAuditModule) Register(*pkgcore.Registry) error { return nil }
+func (fakeAuditModule) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = fakeAuditModule{}
 
@@ -100,7 +100,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	}
 
 	foundConfig := false
-	for _, item := range reg.Config.Items() {
+	for _, item := range reg.ConfigSeat().Items() {
 		if item.Key == ConfigDefaultRetentionWindow {
 			foundConfig = true
 		}
@@ -113,7 +113,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		PermissionAuditRead, PermissionRetentionManage,
 		PermissionErasureExecute, PermissionExportExecute,
 	}
-	perms := reg.Permissions.Permissions()
+	perms := reg.PermissionsSeat().Permissions()
 	for _, want := range wantPerms {
 		if !containsString(perms, want) {
 			t.Errorf("Permissions() = %v, missing %q", perms, want)
@@ -121,7 +121,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	}
 
 	wantActions := []string{AuditActionRetentionSweep, AuditActionErasureRequest, AuditActionExportRequest}
-	actions := reg.AuditActions.Actions()
+	actions := reg.AuditActionsSeat().Actions()
 	for _, want := range wantActions {
 		if !containsString(actions, want) {
 			t.Errorf("AuditActions.Actions() = %v, missing %q", actions, want)
@@ -138,7 +138,7 @@ func TestModule_Register_WiresTheRetentionSweepJobHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	handlers := reg.Jobs.Handlers()
+	handlers := reg.JobsSeat().Handlers()
 	h, ok := handlers[taskTypeRetentionSweep]
 	if !ok {
 		t.Fatalf("Jobs.Handlers() missing %q", taskTypeRetentionSweep)
@@ -183,7 +183,7 @@ func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *test
 	}
 
 	found := false
-	for _, p := range reg.Retention.Participants() {
+	for _, p := range reg.RetentionSeat().Participants() {
 		if p.Name != exportManifestsParticipantName {
 			continue
 		}
@@ -193,7 +193,7 @@ func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *test
 		}
 	}
 	if !found {
-		t.Errorf("Retention.Participants() = %v, missing the module's own %q participant", reg.Retention.Participants(), exportManifestsParticipantName)
+		t.Errorf("Retention.Participants() = %v, missing the module's own %q participant", reg.RetentionSeat().Participants(), exportManifestsParticipantName)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 		{
 			name: "config item",
 			preseed: func(t *testing.T, reg *pkgcore.Registry) {
-				if err := reg.Config.Add(configItemDecls[0]); err != nil {
+				if err := reg.ConfigSeat().Add(configItemDecls[0]); err != nil {
 					t.Fatalf("preseed config item: %v", err)
 				}
 			},
@@ -263,7 +263,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 		{
 			name: "permission",
 			preseed: func(t *testing.T, reg *pkgcore.Registry) {
-				if err := reg.Permissions.Add(PermissionAuditRead); err != nil {
+				if err := reg.PermissionsSeat().Add(PermissionAuditRead); err != nil {
 					t.Fatalf("preseed permission: %v", err)
 				}
 			},
@@ -272,7 +272,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 		{
 			name: "audit action",
 			preseed: func(t *testing.T, reg *pkgcore.Registry) {
-				if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
+				if err := reg.AuditActionsSeat().Add(AuditActionRetentionSweep); err != nil {
 					t.Fatalf("preseed audit action: %v", err)
 				}
 			},
@@ -282,7 +282,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 			name: "reserved retention participant name",
 			preseed: func(t *testing.T, reg *pkgcore.Registry) {
 				p := pkgcore.RetentionParticipant{Name: exportManifestsParticipantName, Sweep: testutil.NoopSweep, Erase: testutil.NoopErase}
-				if err := reg.Retention.Add(p); err != nil {
+				if err := reg.RetentionSeat().Add(p); err != nil {
 					t.Fatalf("preseed retention participant: %v", err)
 				}
 			},
@@ -315,7 +315,7 @@ func TestModule_Register_DeclaresTheRetentionSweepSchedule(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	decls := reg.Schedules.Declarations()
+	decls := reg.SchedulesSeat().Declarations()
 	if len(decls) != 1 || decls[0] != retentionSweepSchedule {
 		t.Errorf("Register declared %+v, want exactly the retention-sweep schedule %+v", decls, retentionSweepSchedule)
 	}

@@ -33,8 +33,8 @@ import (
 // componentConfig is org's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry, as structured
 // configuration. The invitation-address blind-index key is process-start key
-// material and stays on the bootstrap seat (bootstrapKeyDecl), never in
-// configuration.
+// material and stays in the descriptor's BootstrapKeys (bootstrapKeyDecl),
+// never in configuration.
 type componentConfig struct {
 	MailFrom      string        `json:"mail_from"`
 	ReplyTo       string        `json:"reply_to"`

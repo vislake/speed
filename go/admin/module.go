@@ -380,7 +380,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // rbac.role_binding.assigned/revoked, and RoleService's wrapper calls
 // them exactly as any other caller would, so admin declares no audit
 // action of its own for either.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	if m.authnModule == nil {
 		return ErrAuthnServiceRequired
 	}
@@ -406,7 +406,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return ErrQueueRequired
 	}
 
-	if err := reg.Permissions.Add(
+	if err := reg.PermissionsSeat().Add(
 		PermissionAccess,
 		PermissionTenantsManage,
 		PermissionSearchUsers,
@@ -419,7 +419,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(
+	if err := reg.AuditActionsSeat().Add(
 		AuditActionTenantStatusChanged,
 		AuditActionImpersonationStarted,
 		AuditActionImpersonationEnded,
@@ -427,7 +427,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.Notifications.Add(pkgcore.NotificationType{
+	if err := reg.NotificationsSeat().Add(pkgcore.NotificationType{
 		Key:             NotificationTypeImpersonationStarted,
 		Group:           notificationGroupSecurity,
 		DefaultChannels: []string{notification.ChannelInApp, notification.ChannelEmail},
@@ -464,8 +464,8 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 
 	bus := reg.EventBus()
-	m.tenants.attachAudit(bus, reg.AuditActions, authnSvc)
-	m.impersonation.attach(bus, reg.AuditActions, m.notificationModule.Deliveries(), authnSvc, m.orgModule.Members())
+	m.tenants.attachAudit(bus, reg.AuditActionsSeat(), authnSvc)
+	m.impersonation.attach(bus, reg.AuditActionsSeat(), m.notificationModule.Deliveries(), authnSvc, m.orgModule.Members())
 
 	m.search = NewSearchService(authnSvc, m.orgModule.Members(), m.tenants)
 	m.search.attach(bus)
@@ -474,8 +474,8 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.auditSvc.attach(bus)
 
 	m.exportSvc = NewExportService(m.complianceModule.Export(), m.queue)
-	m.exportSvc.attachAudit(bus, reg.AuditActions, authnSvc)
-	if err := reg.Jobs.Handle(jobTypeAuditExport, m.exportSvc); err != nil {
+	m.exportSvc.attachAudit(bus, reg.AuditActionsSeat(), authnSvc)
+	if err := reg.JobsSeat().Handle(jobTypeAuditExport, m.exportSvc); err != nil {
 		return err
 	}
 
@@ -485,14 +485,14 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	sendRecords := NewSendRecordSearchService(m.notificationModule.Deliveries(), m.tenants)
 	sendRecords.attach(bus)
 
-	reg.Events.Subscribe(org.EventNodeCreated, m.tenants.handleOrgNodeCreated)
+	reg.EventsSeat().Subscribe(org.EventNodeCreated, m.tenants.handleOrgNodeCreated)
 	// A live impersonation grant must not outlive its administrator's own
 	// admin:impersonate permission -- see impersonation_service.go's
 	// onRoleBindingRevoked/onRoleChanged for the mechanism, which only
 	// takes effect once Module.AttachRBAC has given it a real *rbac.Service
 	// to re-check against.
-	reg.Events.Subscribe(rbac.EventRoleBindingRevoked, m.impersonation.onRoleBindingRevoked)
-	reg.Events.Subscribe(rbac.EventRoleChanged, m.impersonation.onRoleChanged)
+	reg.EventsSeat().Subscribe(rbac.EventRoleBindingRevoked, m.impersonation.onRoleBindingRevoked)
+	reg.EventsSeat().Subscribe(rbac.EventRoleChanged, m.impersonation.onRoleChanged)
 
 	m.handler = NewHandler(m.tenants, m.impersonation, m.search, m.auditSvc, m.exportSvc, m.roles, m.usage, sendRecords)
 	// The handler's optional catalog slice: hand it the registry so its
@@ -502,7 +502,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// time). A handler built directly (no Register) keeps a nil host and
 	// skips the tier.
 	m.handler.host = reg
-	reg.Routes.Mount(APIPath, m.handler)
+	reg.RoutesSeat().Mount(APIPath, m.handler)
 	return nil
 }
 

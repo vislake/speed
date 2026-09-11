@@ -14,8 +14,8 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// testTokenKey is the bootstrap key the fixture modules declare: the host
-// target binds it, so a bare assembly passes the binding check.
+// testTokenKey is a bootstrap key the host target binds: the fixtures use it
+// where a declared key must pass the binding check.
 var testTokenKey = pkgcore.BootstrapKey{Key: "token", Format: "string"}
 
 // TestNew_RunsTheAssemblyStagesInOrder pins the engine's fixed order as the
@@ -41,7 +41,7 @@ func TestNew_RunsTheAssemblyStagesInOrder(t *testing.T) {
 				t.Errorf("WithModules received deps %+v, want an open database and the platform cipher", deps)
 			}
 			record("modules")
-			return []pkgcore.Module{&testModule{name: "probe", keys: []pkgcore.BootstrapKey{testTokenKey}}}, nil
+			return []pkgcore.Module{&testModule{name: "probe"}}, nil
 		}),
 		WithHooks(Hooks{
 			PostBootstrap: func(_ context.Context, a *Application) error {
@@ -203,28 +203,38 @@ func TestNew_RollsBackALateStageFailure(t *testing.T) {
 	}
 }
 
-// TestNew_RefusesAnUnboundDeclaredKey pins the binding verification: a
-// module declaring a bootstrap key neither configuration target binds fails
-// the assembly, naming the key.
-func TestNew_RefusesAnUnboundDeclaredKey(t *testing.T) {
+// TestVerifyBinding_RefusesAnUnboundDeclaredKey pins the schema half of the
+// bootstrap binding: a key declared on the module Registry's bootstrap seat
+// that maps onto no field of either configuration target fails the boot,
+// naming the key.
+func TestVerifyBinding_RefusesAnUnboundDeclaredKey(t *testing.T) {
 	var host testHostConfig
+	host = testHostConfig{PlatformConfig: testPlatformConfig()}
 
-	_, err := New(context.Background(), append(testBaseOptions(t, &host),
-		WithModules(func(context.Context, ModuleDeps) ([]pkgcore.Module, error) {
-			return []pkgcore.Module{&testModule{
-				name: "probe",
-				keys: []pkgcore.BootstrapKey{{Key: "probe.token", Format: "string"}},
-			}}, nil
-		}),
-	)...)
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := reg.Bootstrap.Add(pkgcore.BootstrapKey{Key: "probe.token", Format: "string"}); err != nil {
+		t.Fatalf("Bootstrap.Add() = %v", err)
+	}
+
+	err := verifyBinding(&ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, reg)
 	if err == nil {
-		t.Fatal("New() with an unbound declared key error = nil, want a binding refusal")
+		t.Fatal("verifyBinding() with an unbound declared key = nil, want a binding refusal")
 	}
 	if !strings.Contains(err.Error(), "probe.token") {
 		t.Fatalf("binding refusal does not name the declared key: %v", err)
 	}
 	if !errors.Is(err, pkgcore.ErrInvalidBootstrapKey) && !strings.Contains(err.Error(), "maps onto no field") {
 		t.Fatalf("binding refusal does not explain the missing field: %v", err)
+	}
+
+	// The negative half: the same declaration with a key the host target
+	// binds passes.
+	bound := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := bound.Bootstrap.Add(testTokenKey); err != nil {
+		t.Fatalf("Bootstrap.Add() = %v", err)
+	}
+	if err := verifyBinding(&ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, bound); err != nil {
+		t.Fatalf("verifyBinding() with a bound declared key = %v, want nil", err)
 	}
 }
 

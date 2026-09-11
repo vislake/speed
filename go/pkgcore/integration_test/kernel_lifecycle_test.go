@@ -90,8 +90,8 @@ func (lifecycleProbeModule) Migrations() embed.FS { return embed.FS{} }
 func (lifecycleProbeModule) Locales() embed.FS    { return embed.FS{} }
 func (lifecycleProbeModule) OpenAPISpec() []byte  { return nil }
 
-func (m lifecycleProbeModule) Register(reg *pkgcore.Registry) error {
-	reg.Events.Subscribe("kernel.lifecycle.probe", func(context.Context, pkgcore.Event) error {
+func (m lifecycleProbeModule) Register(reg pkgcore.Registrar) error {
+	reg.EventsSeat().Subscribe("kernel.lifecycle.probe", func(context.Context, pkgcore.Event) error {
 		m.deliveries.Add(1)
 		return nil
 	})

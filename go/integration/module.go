@@ -487,11 +487,11 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // webhookDeliveryHandler already use immediately below for the identical
 // reason -- see handler.go's own "Built differently from every other
 // module's Handler" doc comment for the full argument.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add(PermissionRead, PermissionManage, PermissionWebhookRead, PermissionWebhookManage); err != nil {
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionManage, PermissionWebhookRead, PermissionWebhookManage); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(auditActionDecls...); err != nil {
+	if err := reg.AuditActionsSeat().Add(auditActionDecls...); err != nil {
 		return err
 	}
 
@@ -501,13 +501,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	}
 	m.mappingIndex = idx
 	for internalType := range idx.byInternal {
-		reg.Events.Subscribe(internalType, m.handleDomainEvent)
+		reg.EventsSeat().Subscribe(internalType, m.handleDomainEvent)
 	}
 
-	if err := reg.Jobs.Handle(jobTypeWebhookDeliver, webhookDeliveryHandler{module: m}); err != nil {
+	if err := reg.JobsSeat().Handle(jobTypeWebhookDeliver, webhookDeliveryHandler{module: m}); err != nil {
 		return err
 	}
-	if err := reg.Jobs.Handle(jobTypeAPIKeyExpirySweep, apiKeyExpirySweepHandler{module: m}); err != nil {
+	if err := reg.JobsSeat().Handle(jobTypeAPIKeyExpirySweep, apiKeyExpirySweepHandler{module: m}); err != nil {
 		return err
 	}
 	// Declare the API-key expiry sweep's periodic schedule alongside its
@@ -517,12 +517,12 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// writing a schedule point of its own. The declaration follows the
 	// handler registration unconditionally, the same way the handler
 	// itself does -- no declaration may outlive its executor.
-	if err := reg.Schedules.Add(apiKeyExpirySweepSchedule); err != nil {
+	if err := reg.SchedulesSeat().Add(apiKeyExpirySweepSchedule); err != nil {
 		return err
 	}
 
 	m.handler = NewHandler(m, m.subject)
-	reg.Routes.Mount(apiPath, m.handler)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
 
@@ -586,7 +586,7 @@ var (
 // other module contributed.
 //
 // A second Attach on the same Module fails with ErrAlreadyAttached.
-func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
+func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
 	if m.service != nil {
 		return nil, ErrAlreadyAttached
 	}
@@ -616,8 +616,8 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		repo:         NewAPIKeyRepository(m.db),
 		permissions:  m.permissions,
 		membership:   m.membership,
-		bus:          reg.Events.Bus(),
-		auditActions: reg.AuditActions,
+		bus:          reg.EventBus(),
+		auditActions: reg.AuditActionsSeat(),
 		now:          clock,
 		maxLifetime:  m.maxLifetime,
 

@@ -350,7 +350,7 @@ tenantless calls explicitly.
   the three permissions on `reg.Permissions`,
   registers `SystemPurposeCredentialWrite` via
   `pkgcore.RegisterSystemPurpose`, and mounts the Handler at `apiPath` --
-  the module's single `Register(reg *Registry)` contract unchanged. The
+  the module's single `Register(reg Registrar)` contract unchanged. The
   module's further contributions are the migrations (the
   `ai_gateway_credentials` table) and the `Gateway`/`CredentialService`
   accessors a host wires directly; `Register` declares no config item,

@@ -847,7 +847,7 @@ func (m *Module) Service() *Service { return m.svc }
 // database. Note also that reg.Locales() is deliberately not consulted: the
 // merged catalog is installed only after every module has registered, so it
 // is nil at this point by design.
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	svc, err := NewService(m.db, reg.EventBus(), reg.KVStore(), m.opts...)
 	if err != nil {
 		return err
@@ -863,7 +863,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// on its embedder doing the same.
 	pkgcore.RegisterSystemPurpose(SystemPurposeSignInTenantEnumeration)
 
-	if err := reg.AuditActions.Add(auditActions...); err != nil {
+	if err := reg.AuditActionsSeat().Add(auditActions...); err != nil {
 		return err
 	}
 	// The same registrar backs the service layer's own audit.Emit calls --
@@ -879,8 +879,8 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// through NewService, whose SaveConfig and replay detection then
 	// record nothing, exactly like the handler's own nil-bus short-circuit
 	// below.
-	svc.sso.auditActions = reg.AuditActions
-	svc.sessions.auditActions = reg.AuditActions
+	svc.sso.auditActions = reg.AuditActionsSeat()
+	svc.sessions.auditActions = reg.AuditActionsSeat()
 	// reg.AuditActions is handed to NewHandler so its own audit.Emit calls
 	// (see handler.go's recordAudit) validate against the exact
 	// AuditActionRegistrar the 9 actions above were just declared on --
@@ -888,22 +888,22 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// (see audit.Emit's own doc comment), which is what requires the
 	// declaration above to run before this line, matching notes.Module's
 	// identical ordering for its own single audit action.
-	m.handler = NewHandler(svc, reg.EventBus(), reg.AuditActions)
-	reg.Routes.Mount(apiPath, m.handler)
+	m.handler = NewHandler(svc, reg.EventBus(), reg.AuditActionsSeat())
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 
-	if err := reg.Events.Publishes(eventDecls...); err != nil {
+	if err := reg.EventsSeat().Publishes(eventDecls...); err != nil {
 		return err
 	}
-	if err := reg.Config.Add(configItems()...); err != nil {
+	if err := reg.ConfigSeat().Add(configItems()...); err != nil {
 		return err
 	}
-	if err := reg.Bootstrap.Add(bootstrapKeyDecls...); err != nil {
+	// The process-start key material (bootstrapKeyDecls) is descriptor data:
+	// the component descriptor carries it as BootstrapKeys, which the loader
+	// resolves before anything is constructed.
+	if err := reg.PermissionsSeat().Add(PermissionSSOManage); err != nil {
 		return err
 	}
-	if err := reg.Permissions.Add(PermissionSSOManage); err != nil {
-		return err
-	}
-	return reg.Features.Add(featureFlags()...)
+	return reg.FeaturesSeat().Add(featureFlags()...)
 }
 
 // featureFlags is the toggle set this module declares: one for password
@@ -954,7 +954,7 @@ func featureFlags() []pkgcore.FeatureFlag {
 }
 
 // bootstrapKeyDecls is the process-start key material this module consumes,
-// declared on the bootstrap seat.
+// declared as the authn component's BootstrapKeys (component.go).
 //
 // Both keys are separate secrets on purpose. The cipher key seals the PII
 // columns (email, phone, TOTP secrets) and the blind-index key is the HMAC key

@@ -343,20 +343,20 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Handler performs no authorization decision of its own for these five
 // operations, reading only the tenant tenancy.Middleware already resolved
 // into the request context.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add(PermissionRead, PermissionCreate, PermissionRevoke); err != nil {
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionCreate, PermissionRevoke); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(AuditActionSensitiveShareCreate); err != nil {
+	if err := reg.AuditActionsSeat().Add(AuditActionSensitiveShareCreate); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(shareEventDecls...); err != nil {
+	if err := reg.EventsSeat().Publishes(shareEventDecls...); err != nil {
 		return err
 	}
-	if err := reg.Config.Add(configItemDecls...); err != nil {
+	if err := reg.ConfigSeat().Add(configItemDecls...); err != nil {
 		return err
 	}
-	if err := reg.Jobs.Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.svc}); err != nil {
+	if err := reg.JobsSeat().Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.svc}); err != nil {
 		return err
 	}
 	// Declare the sweep's periodic schedule alongside its handler:
@@ -366,7 +366,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// declaration follows the handler registration unconditionally, the
 	// same way the handler itself does -- no declaration may outlive its
 	// executor.
-	if err := reg.Schedules.Add(expirySweepSchedule); err != nil {
+	if err := reg.SchedulesSeat().Add(expirySweepSchedule); err != nil {
 		return err
 	}
 	m.svc.attach(reg)
@@ -379,7 +379,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// host-populated post-Bootstrap Add, so the reserved
 	// sharing.access_log name can never collide with a host's participant,
 	// exactly as compliance's own export-manifests reservation works.
-	if err := reg.Retention.Add(NewAccessLogRetentionParticipant(m.svc.AccessLogs())); err != nil {
+	if err := reg.RetentionSeat().Add(NewAccessLogRetentionParticipant(m.svc.AccessLogs())); err != nil {
 		return err
 	}
 
@@ -389,8 +389,8 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// the host actually configured -- the same reasoning go/storage's
 	// identical Register-time Handler construction documents.
 	m.handler = NewHandler(m.svc, m.resolver)
-	reg.Routes.Mount(PathAccess, m.handler)
-	reg.Routes.Mount(PathShares, m.handler)
+	reg.RoutesSeat().Mount(PathAccess, m.handler)
+	reg.RoutesSeat().Mount(PathShares, m.handler)
 	return nil
 }
 

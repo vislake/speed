@@ -296,17 +296,19 @@ func (asm *transitionAssembly) buildRegistry(modules []pkgcore.Module) error {
 
 	// The resolved seams join the by-type context so the assembly's seats
 	// (the Events seat's bus lookup, in particular) reach the same values the
-	// module Registry's accessors answer.
+	// module Registry's accessors answer, and a declaration body reading the
+	// accessors off the assembly reaches them under the same names.
 	putSeamValue(reg, asm.view.EventBus())
 	putSeamValue(reg, asm.view.KVStore())
 	putSeamValue(reg, asm.view.Mailer())
 	putSeamValue(reg, asm.view.ObjectStore())
+	putSeamValue(reg, asm.view.Locales())
 
 	asm.reg = reg
 	asm.app.reg = reg
 	asm.app.registry = buildLegacyRegistryView(asm.view, reg)
 
-	wrapped, err := wrapLegacyModules(modules, asm.app.registry)
+	wrapped, err := wrapLegacyModules(modules, asm.app.registry, reg)
 	if err != nil {
 		return err
 	}

@@ -1,11 +1,11 @@
 package dbkit
 
 // bootstrap_key_derivation.go carries the one composition that turns a root
-// secret into a declared bootstrap key's material: the bootstrap seat's
-// purpose convention over the key path (pkgcore.BootstrapKeyPurpose) followed
-// by this package's DeriveKey primitive. It exists so a host -- and the
-// loader a host drives, go/pkgcore/config's WithKeyDerivation -- wires one
-// call instead of two.
+// secret into a declared bootstrap key's material: the declaration's purpose
+// convention over the key path (pkgcore.BootstrapKeyPurpose) followed by this
+// package's DeriveKey primitive. It exists so a host -- and the loader a host
+// drives, go/pkgcore/config's WithKeyDerivation -- wires one call instead of
+// two.
 
 import (
 	"fmt"

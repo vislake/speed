@@ -26,7 +26,7 @@ func (configModuleStub) DependsOn() []string              { return nil }
 func (configModuleStub) Migrations() embed.FS             { return configmigrations.FS }
 func (configModuleStub) Locales() embed.FS                { return embed.FS{} }
 func (configModuleStub) OpenAPISpec() []byte              { return nil }
-func (configModuleStub) Register(*pkgcore.Registry) error { return nil }
+func (configModuleStub) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = configModuleStub{}
 

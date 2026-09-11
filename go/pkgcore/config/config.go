@@ -126,8 +126,8 @@
 // # Verification
 //
 // Verify checks a list of declared keys against a target struct: every declared
-// key must map onto a field. A host that knows the bootstrap keys its modules
-// declared (pkgcore.BootstrapKey, the Registry.Bootstrap seat) runs it to prove
+// key must map onto a field. A host that knows the bootstrap keys its components
+// declared (pkgcore.BootstrapKey, the descriptor's BootstrapKeys) runs it to prove
 // its loader target binds everything those declarations promise, and a
 // generated reference runs it so the keys it documents are exactly the keys a
 // real target resolves.

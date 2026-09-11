@@ -2,9 +2,11 @@ package compliance
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
@@ -113,4 +115,80 @@ func TestComponent_NewFailsWithoutEachMidChainProduct(t *testing.T) {
 			t.Fatalf("New = %v, nil error; want the missing config module reported", instance)
 		}
 	})
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the component's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so every declaration lands in the assembly's
+// own seats, the services take the assembly's seam values, and the
+// assembly's Init-closing beat registers the module's system purposes.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, complianceComponent,
+		db,
+		audit.New(db),
+		config.NewModule(db),
+		&recordingQueue{},
+		pkgcore.NewMemoryEventBus(),
+	); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+
+	keys := make([]string, 0, len(reg.Config.Items()))
+	for _, item := range reg.Config.Items() {
+		keys = append(keys, item.Key)
+	}
+	if !slices.Contains(keys, ConfigDefaultRetentionWindow) || !slices.Contains(keys, ConfigExportDeliveryExpiry) {
+		t.Errorf("Config seat items = %v, want the module's two configuration items", keys)
+	}
+	if perms := reg.Permissions.Permissions(); !slices.Contains(perms, PermissionRetentionManage) || !slices.Contains(perms, PermissionErasureExecute) {
+		t.Errorf("Permissions seat = %v, want the module's permissions", perms)
+	}
+	if actions := reg.AuditActions.Actions(); !slices.Contains(actions, AuditActionRetentionSweep) {
+		t.Errorf("AuditActions seat = %v, want the module's audit actions", actions)
+	}
+	if participants := reg.Retention.Participants(); len(participants) != 1 {
+		t.Errorf("Retention seat = %v, want the export-manifests cleanup participant", participants)
+	}
+	if _, claimed := reg.Jobs.Handlers()[taskTypeRetentionSweep]; !claimed {
+		t.Errorf("Jobs seat = %v, want the retention-sweep handler", reg.Jobs.Handlers())
+	}
+	if decls := reg.Schedules.Declarations(); len(decls) != 1 || decls[0].Type != retentionSweepSchedule.Type {
+		t.Errorf("Schedules seat = %v, want the retention-sweep schedule", decls)
+	}
+
+	// The declarations reached the running services: each service holds the
+	// assembly's own seats, which the declaration body attached while the
+	// seats were open.
+	if m.retention.bus == nil || m.retention.retention == nil || m.retention.actions == nil {
+		t.Errorf("retention service seams = (%v, %v, %v), want the assembly's values",
+			m.retention.bus, m.retention.retention, m.retention.actions)
+	}
+	if m.erasure.retention == nil || m.export.retention == nil {
+		t.Error("erasure/export services did not take the assembly's Retention seat")
+	}
+
+	// The assembly's own Init-closing beat registered the module's system
+	// purposes, the declaration the component descriptor carries.
+	for _, purpose := range complianceComponent.SystemPurposes {
+		if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "test", Purpose: purpose}); err != nil {
+			t.Errorf("WithSystemContext(%q) = %v, want the purpose registered by the assembly", purpose, err)
+		}
+	}
+}
+
+// TestComponent_SelfDescribesItsSystemPurposes pins the declaration the
+// module used to make from its own Register: the descriptor carries exactly
+// the two audited purposes the module acts under, so the assembly registers
+// the same set the module's registration turn once did.
+func TestComponent_SelfDescribesItsSystemPurposes(t *testing.T) {
+	want := []pkgcore.SystemPurpose{SystemPurposeRetentionSweep, SystemPurposeRightToErasure}
+	if !slices.Equal(complianceComponent.SystemPurposes, want) {
+		t.Fatalf("component SystemPurposes = %v, want %v", complianceComponent.SystemPurposes, want)
+	}
 }

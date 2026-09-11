@@ -222,8 +222,8 @@ func (exampleTenancyModule) Migrations() embed.FS { return embed.FS{} }
 func (exampleTenancyModule) Locales() embed.FS    { return embed.FS{} }
 func (exampleTenancyModule) OpenAPISpec() []byte  { return nil }
 
-func (exampleTenancyModule) Register(reg *pkgcore.Registry) error {
-	return reg.Permissions.Add("tenant:read")
+func (exampleTenancyModule) Register(reg pkgcore.Registrar) error {
+	return reg.PermissionsSeat().Add("tenant:read")
 }
 
 // exampleBillingModule is a minimal pkgcore.Module. A module declares its
@@ -238,10 +238,10 @@ func (exampleBillingModule) Locales() embed.FS    { return embed.FS{} }
 func (exampleBillingModule) OpenAPISpec() []byte  { return nil }
 
 // Register declares; it never performs I/O.
-func (exampleBillingModule) Register(reg *pkgcore.Registry) error {
-	reg.Routes.Mount("/api/v1/billing", http.NotFoundHandler())
+func (exampleBillingModule) Register(reg pkgcore.Registrar) error {
+	reg.RoutesSeat().Mount("/api/v1/billing", http.NotFoundHandler())
 
-	if err := reg.Config.Add(pkgcore.ConfigItem{
+	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "billing.invoice_retry_limit",
 		Type:        "int",
 		Default:     3,
@@ -249,20 +249,20 @@ func (exampleBillingModule) Register(reg *pkgcore.Registry) error {
 	}); err != nil {
 		return err
 	}
-	if err := reg.Features.Add(pkgcore.FeatureFlag{
+	if err := reg.FeaturesSeat().Add(pkgcore.FeatureFlag{
 		Key:         "billing.dunning",
 		Default:     false,
 		Description: "Chase failed payments on a retry schedule.",
 	}); err != nil {
 		return err
 	}
-	if err := reg.Permissions.Add("billing:read", "billing:write"); err != nil {
+	if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add("billing.subscription_cancelled"); err != nil {
+	if err := reg.AuditActionsSeat().Add("billing.subscription_cancelled"); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(pkgcore.EventDecl{
+	if err := reg.EventsSeat().Publishes(pkgcore.EventDecl{
 		Type:        "billing.invoice.paid",
 		PayloadType: "billing.InvoicePaid",
 		Description: "An invoice was paid in full.",
@@ -270,7 +270,7 @@ func (exampleBillingModule) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 
-	reg.Events.Subscribe("authn.user_created", func(ctx context.Context, evt pkgcore.Event) error {
+	reg.EventsSeat().Subscribe("authn.user_created", func(ctx context.Context, evt pkgcore.Event) error {
 		fmt.Println("billing: opening a credit ledger for tenant", evt.TenantID)
 		return nil
 	})
@@ -364,12 +364,12 @@ func ExampleKernel_Bootstrap() {
 	}
 
 	fmt.Println("deployment mode:", kernel.DeploymentMode())
-	for _, route := range reg.Routes.Routes() {
+	for _, route := range reg.RoutesSeat().Routes() {
 		fmt.Println("route:", route.Path)
 	}
-	fmt.Println("permissions:", reg.Permissions.Permissions())
-	fmt.Println("audit actions:", reg.AuditActions.Actions())
-	for _, decl := range reg.Events.Published() {
+	fmt.Println("permissions:", reg.PermissionsSeat().Permissions())
+	fmt.Println("audit actions:", reg.AuditActionsSeat().Actions())
+	for _, decl := range reg.EventsSeat().Published() {
 		fmt.Println("publishes:", decl.Type, decl.PayloadType)
 	}
 
@@ -395,7 +395,7 @@ func ExampleKernel_Bootstrap() {
 // later, so the graph is only resolvable at the end.
 func ExampleValidateFeatureGraph() {
 	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Features.Add(pkgcore.FeatureFlag{
+	if err := reg.FeaturesSeat().Add(pkgcore.FeatureFlag{
 		Key:         "billing.dunning",
 		Description: "Chase failed payments on a retry schedule.",
 		DependsOn:   []string{"billing.invoicing"},
@@ -1084,7 +1084,7 @@ func ExamplePeriodicTask() {
 
 	// A per-tenant task: once per window for every tenant the host's
 	// tenant lister returns.
-	err := reg.Schedules.Add(pkgcore.PeriodicTask{
+	err := reg.SchedulesSeat().Add(pkgcore.PeriodicTask{
 		Type:      "storage.expiry_sweep",
 		Every:     time.Hour,
 		Scope:     pkgcore.PeriodicScopePerTenant,
@@ -1095,7 +1095,7 @@ func ExamplePeriodicTask() {
 	// A platform task runs once per window for the platform as a whole: its
 	// task belongs to no single tenant, so it carries the sentinel tenant
 	// its Job rows are enqueued under.
-	err = reg.Schedules.Add(pkgcore.PeriodicTask{
+	err = reg.SchedulesSeat().Add(pkgcore.PeriodicTask{
 		Type:           "pki.expiry_scan",
 		Every:          time.Hour,
 		Scope:          pkgcore.PeriodicScopePlatform,
@@ -1104,16 +1104,16 @@ func ExamplePeriodicTask() {
 	})
 	fmt.Println("add platform:", err)
 
-	for _, decl := range reg.Schedules.Declarations() {
+	for _, decl := range reg.SchedulesSeat().Declarations() {
 		fmt.Println(decl.Type, decl.Every, decl.Scope)
 	}
 
 	// A platform-scope declaration with no sentinel tenant could never be
 	// enqueued, so it is refused at registration -- as is a second
 	// declaration of an already owned task type.
-	err = reg.Schedules.Add(pkgcore.PeriodicTask{Type: "pki.crl_regenerate", Every: time.Hour, Scope: pkgcore.PeriodicScopePlatform, KeyPrefix: "pki.crl_regenerate:"})
+	err = reg.SchedulesSeat().Add(pkgcore.PeriodicTask{Type: "pki.crl_regenerate", Every: time.Hour, Scope: pkgcore.PeriodicScopePlatform, KeyPrefix: "pki.crl_regenerate:"})
 	fmt.Println("tenantless platform task:", errors.Is(err, pkgcore.ErrInvalidPeriodicTask))
-	err = reg.Schedules.Add(pkgcore.PeriodicTask{Type: "pki.expiry_scan", Every: time.Hour, Scope: pkgcore.PeriodicScopePlatform, KeyPrefix: "pki.expiry_scan:", PlatformTenant: "_pki_platform_scan"})
+	err = reg.SchedulesSeat().Add(pkgcore.PeriodicTask{Type: "pki.expiry_scan", Every: time.Hour, Scope: pkgcore.PeriodicScopePlatform, KeyPrefix: "pki.expiry_scan:", PlatformTenant: "_pki_platform_scan"})
 	fmt.Println("duplicate:", errors.Is(err, pkgcore.ErrDuplicatePeriodicTask))
 
 	// Output:
@@ -1123,4 +1123,23 @@ func ExamplePeriodicTask() {
 	// pki.expiry_scan 1h0m0s platform
 	// tenantless platform task: true
 	// duplicate: true
+}
+
+// ExampleRegistrar shows the declaration face at work: a declaration body
+// written against the Registrar view reaches the seats of whichever registry
+// it is handed. Here it is a module Registry, whose seats accept a write the
+// moment it is made; handed the component assembly's registry instead, the
+// same body's writes would go through that assembly's Init-stage gate.
+func ExampleRegistrar() {
+	declare := func(reg pkgcore.Registrar) error {
+		return reg.PermissionsSeat().Add("reports:read", "reports:export")
+	}
+
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	fmt.Println("declare:", declare(reg))
+	fmt.Println(reg.Permissions.Permissions())
+
+	// Output:
+	// declare: <nil>
+	// [reports:export reports:read]
 }

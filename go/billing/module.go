@@ -244,8 +244,8 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // the handler serves the service instances the host actually configured,
 // never versions captured before the options ran. Routes.Mount is a plain
 // registration, no I/O, so Register's no-I/O contract stands.
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add(
+func (m *Module) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add(
 		PermissionPlanManage,
 		PermissionSubscriptionRead,
 		PermissionSubscriptionManage,
@@ -254,7 +254,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.AuditActions.Add(
+	if err := reg.AuditActionsSeat().Add(
 		AuditActionCreditGrant,
 		AuditActionCreditDeductReserve,
 		AuditActionCreditDeductConfirm,
@@ -263,7 +263,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(eventDecls...); err != nil {
+	if err := reg.EventsSeat().Publishes(eventDecls...); err != nil {
 		return err
 	}
 
@@ -276,10 +276,10 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// AuditActions itself, not a copy, since Emit validates against its
 	// live Actions() on every call.
 	m.credits.events = bus
-	m.credits.auditActions = reg.AuditActions
+	m.credits.auditActions = reg.AuditActionsSeat()
 
 	if m.queue != nil {
-		if err := reg.Jobs.Handle(taskTypePoll, pollHandler{svc: m.polling}); err != nil {
+		if err := reg.JobsSeat().Handle(taskTypePoll, pollHandler{svc: m.polling}); err != nil {
 			return err
 		}
 		// Declare the poll's periodic schedule alongside its handler:
@@ -289,7 +289,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		// its own. Only a queue-wired billing declares -- a composition
 		// with no queue registers no handler, and a declaration must
 		// never outlive its executor.
-		if err := reg.Schedules.Add(pollSchedule); err != nil {
+		if err := reg.SchedulesSeat().Add(pollSchedule); err != nil {
 			return err
 		}
 	}
@@ -297,7 +297,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// doc comment for why the handler is built here rather than in
 	// NewModule.
 	m.handler = NewHandler(m.credits, m.invoices)
-	reg.Routes.Mount(apiPath, m.handler)
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
 

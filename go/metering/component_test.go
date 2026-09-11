@@ -36,6 +36,32 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
+// TestComponentInitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so its declarations land in the assembly's own
+// seats and the aggregator takes the assembly's bus.
+func TestComponentInitDeclaresThroughTheGate(t *testing.T) {
+	db := testutil.NewSQLite(t, moduleName, migrations.FS)
+	bus := pkgcore.NewMemoryEventBus()
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, component(), db, bus); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+	if m.aggregator.bus != pkgcore.EventBus(bus) {
+		t.Error("the aggregator did not take the assembly's bus")
+	}
+	if items := reg.Config.Items(); len(items) != len(configItemDecls) {
+		t.Errorf("Config seat items = %v, want the module's %d configuration items", items, len(configItemDecls))
+	}
+	if decls := reg.Events.Published(); len(decls) != 1 || decls[0].Type != overageEventDecl.Type {
+		t.Errorf("Events seat = %v, want the overage event declaration", decls)
+	}
+}
+
 // TestComponentAssemblesThroughRegistry drives the registered descriptor
 // through the assembly's stages the way a host would: selection from a
 // composition configuration (every schema field set), construction from the

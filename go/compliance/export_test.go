@@ -88,7 +88,7 @@ func newExportHarnessSeamed(t *testing.T, bus pkgcore.EventBus, store pkgcore.Ob
 		store = pkgcore.NewLocalObjectStore(t.TempDir())
 	}
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.AuditActions.Add(AuditActionExportRequest); err != nil {
+	if err := reg.AuditActionsSeat().Add(AuditActionExportRequest); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
 
@@ -102,18 +102,18 @@ func newExportHarnessSeamed(t *testing.T, bus pkgcore.EventBus, store pkgcore.Ob
 
 	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	participant := testutil.NewParticipant("testutil.fake_note", repo)
-	if err := reg.Retention.Add(participant); err != nil {
+	if err := reg.RetentionSeat().Add(participant); err != nil {
 		t.Fatalf("register fake participant: %v", err)
 	}
-	if err := reg.Retention.Add(extra...); err != nil {
+	if err := reg.RetentionSeat().Add(extra...); err != nil {
 		t.Fatalf("register extra participants: %v", err)
 	}
 
 	fakeSharing := &fakeSharingCreator{}
 	svc := newExportService()
-	svc.retention = reg.Retention
+	svc.retention = reg.RetentionSeat()
 	svc.bus = bus
-	svc.actions = reg.AuditActions
+	svc.actions = reg.AuditActionsSeat()
 	svc.store = store
 	svc.sharing = fakeSharing
 	return svc, repo, store, fakeSharing, captured
@@ -587,7 +587,7 @@ func (sharingModuleStub) DependsOn() []string              { return nil }
 func (sharingModuleStub) Migrations() embed.FS             { return sharingmigrations.FS }
 func (sharingModuleStub) Locales() embed.FS                { return embed.FS{} }
 func (sharingModuleStub) OpenAPISpec() []byte              { return nil }
-func (sharingModuleStub) Register(*pkgcore.Registry) error { return nil }
+func (sharingModuleStub) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = sharingModuleStub{}
 

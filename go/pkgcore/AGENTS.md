@@ -51,7 +51,8 @@ The two Chinese-cloud carriers have no free-text send at all: every message inst
 
 | Signature | Purpose |
 |---|---|
-| `type Module interface { Name() string; DependsOn() []string; Migrations() embed.FS; Locales() embed.FS; OpenAPISpec() []byte; Register(*Registry) error }` | The contract every module implements |
+| `type Registrar interface { RoutesSeat() RouteRegistrar; ConfigSeat() ConfigSchemaRegistrar; FeaturesSeat() FeatureRegistrar; PermissionsSeat() PermissionRegistrar; JobsSeat() JobHandlerRegistrar; NotificationsSeat() NotificationRegistrar; EventsSeat() EventRegistrar; AuditActionsSeat() AuditActionRegistrar; RetentionSeat() RetentionRegistrar; SchedulesSeat() PeriodicTaskRegistrar; EventBus() EventBus; KVStore() KVStore; Mailer() Mailer; ObjectStore() ObjectStore; Locales() *i18n.Catalog }` | The declaration face a module's declaration body addresses: the ten seat accessors plus the five resolved-value accessors. It is a pure view — both `*Registry` and `*ComponentRegistry` answer it with the very registrars they hold, so one declaration body serves a kernel bootstrap and a component assembly alike, and the component assembly's seats keep their Init-stage write gate |
+| `type Module interface { Name() string; DependsOn() []string; Migrations() embed.FS; Locales() embed.FS; OpenAPISpec() []byte; Register(Registrar) error }` | The contract every module implements |
 | `type Registry struct { Routes; Config; Bootstrap; Features; Permissions; Jobs; Notifications; Events; AuditActions; Retention; Schedules }` | Everything a module can contribute, one field per mechanism |
 | `func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry` | A registry wired to the in-memory registrars, to `bus`, `kv` and `mailer`. A nil argument panics |
 | `func (*Registry) EventBus() EventBus` | The bus behind `Registry.Events`, so the host publishes into what modules subscribed to |
@@ -318,7 +319,7 @@ Every in-process or SMTP built-in implementation runs its matching suite from th
 Implementing a module:
 
 ```go
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
 	reg.Routes.Mount("/api/v1/billing", m.router())
 
 	if err := reg.Config.Add(pkgcore.ConfigItem{

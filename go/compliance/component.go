@@ -34,10 +34,13 @@ import (
 // absent.
 //
 // SystemPurposes declares the two audited purposes the module acts under:
-// the retention sweep and the right-to-erasure execution.
+// the retention sweep and the right-to-erasure execution. The assembly
+// registers them when it closes its Init stage, after every Init callback
+// has run.
 //
-// Init is deliberately not declared: declaration (the module's Register
-// call) is made today by the host's bootstrap path, not by this descriptor.
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
 var complianceComponent = pkgcore.Component{
 	Name:           "compliance",
 	Module:         "compliance",
@@ -80,6 +83,9 @@ var complianceComponent = pkgcore.Component{
 		// host path builds it, so the module reads and writes the same
 		// audit_events table the audit module's persister captures into.
 		return NewModule(audit.NewRepository(db), opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		return instance.(*Module).Register(reg)
 	},
 }
 

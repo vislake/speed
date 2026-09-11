@@ -233,7 +233,7 @@ type hostSeams interface {
 // org reads it through. It is what makes Module.Register's single assignment
 // legal without org depending on anything the registry does not already
 // offer.
-var _ hostSeams = (*pkgcore.Registry)(nil)
+var _ hostSeams = (pkgcore.Registrar)(nil)
 
 // publishEvent emits one org event on the host's bus.
 //

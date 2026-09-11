@@ -178,15 +178,15 @@ func NewService(signer Signer, signerName string, signingKeys *SigningKeyReposit
 // Called from Module.Register, which -- per pkgcore.Module's own contract
 // -- performs no I/O: this is a plain field assignment plus a subscription
 // registration, exactly like go/storage's serviceHost.attach.
-func (s *Service) attachBus(reg *pkgcore.Registry) {
-	s.bus = reg.Events.Bus()
-	reg.Events.Subscribe(EventSigningKeyStaged, s.onSigningKeyLifecycleEvent)
-	reg.Events.Subscribe(EventSigningKeyActivated, s.onSigningKeyLifecycleEvent)
-	reg.Events.Subscribe(EventSigningKeyRetired, s.onSigningKeyLifecycleEvent)
+func (s *Service) attachBus(reg pkgcore.Registrar) {
+	s.bus = reg.EventBus()
+	reg.EventsSeat().Subscribe(EventSigningKeyStaged, s.onSigningKeyLifecycleEvent)
+	reg.EventsSeat().Subscribe(EventSigningKeyActivated, s.onSigningKeyLifecycleEvent)
+	reg.EventsSeat().Subscribe(EventSigningKeyRetired, s.onSigningKeyLifecycleEvent)
 	// Revocation invalidates the key-set cache through this SAME
 	// event-subscription mechanism, never a second cache-clearing path --
 	// see RevokeSigningKey's own doc comment (revocation.go).
-	reg.Events.Subscribe(EventSigningKeyRevoked, s.onSigningKeyLifecycleEvent)
+	reg.EventsSeat().Subscribe(EventSigningKeyRevoked, s.onSigningKeyLifecycleEvent)
 }
 
 // attachQueue hands Service the jobs.Queue the host wired via WithQueue, so

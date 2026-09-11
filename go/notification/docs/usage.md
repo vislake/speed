@@ -72,7 +72,7 @@ var noteCreatedNotificationType = pkgcore.NotificationType{
     Unsubscribable:  true,
 }
 
-func (m *Module) Register(reg *pkgcore.Registry) error {
+func (m *Module) Register(reg pkgcore.Registrar) error {
     // ... this module's own declarations ...
     return reg.Notifications.Add(noteCreatedNotificationType)
 }

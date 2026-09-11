@@ -101,18 +101,18 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	reg := bootstrapTestModule(t)
 
 	t.Run("permissions", func(t *testing.T) {
-		assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionRead, PermissionWrite})
+		assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, PermissionWrite})
 	})
 
 	t.Run("audit actions", func(t *testing.T) {
-		assertContainsAll(t, reg.AuditActions.Actions(), []string{
+		assertContainsAll(t, reg.AuditActionsSeat().Actions(), []string{
 			AuditActionObjectCreate, AuditActionObjectComplete, AuditActionObjectDelete,
 		})
 	})
 
 	t.Run("published events", func(t *testing.T) {
 		var types []string
-		for _, decl := range reg.Events.Published() {
+		for _, decl := range reg.EventsSeat().Published() {
 			types = append(types, decl.Type)
 			if decl.PayloadType == "" || decl.Description == "" {
 				t.Errorf("event %q is declared without a payload type or description", decl.Type)
@@ -122,7 +122,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("job handlers", func(t *testing.T) {
-		handlers := reg.Jobs.Handlers()
+		handlers := reg.JobsSeat().Handlers()
 		var types []string
 		for jobType := range handlers {
 			types = append(types, jobType)
@@ -138,7 +138,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// apiPath the fragment's paths already promise -- a drift between
 		// the two would hand the host's outer mux a prefix that serves
 		// nothing (or routes that nothing forwards).
-		routes := reg.Routes.Routes()
+		routes := reg.RoutesSeat().Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
 		}
@@ -154,7 +154,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// storage honours its bounds as package constants rather than
 		// declaring a dynamic-config schema; declaring a schema nothing
 		// reads would be a lying schema.
-		if got := reg.Config.Items(); len(got) != 0 {
+		if got := reg.ConfigSeat().Items(); len(got) != 0 {
 			t.Errorf("Register declared %d config item(s); storage declares none it cannot honour", len(got))
 		}
 	})
@@ -167,7 +167,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 func TestModule_Register_DoesNotDeclareForeignEvents(t *testing.T) {
 	reg := bootstrapTestModule(t)
 
-	decls := reg.Events.Published()
+	decls := reg.EventsSeat().Published()
 	if len(decls) != 2 {
 		t.Fatalf("storage declared %d events, want exactly 2", len(decls))
 	}
@@ -187,7 +187,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionRead, "neighbour:read"})
+	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, "neighbour:read"})
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database, which
@@ -221,7 +221,7 @@ func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	decls := reg.Schedules.Declarations()
+	decls := reg.SchedulesSeat().Declarations()
 	if len(decls) != 1 || decls[0] != expirySweepSchedule {
 		t.Errorf("Register declared %+v, want exactly the expiry-sweep schedule %+v", decls, expirySweepSchedule)
 	}
@@ -561,7 +561,7 @@ func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	handlers := reg.Jobs.Handlers()
+	handlers := reg.JobsSeat().Handlers()
 	if len(handlers) != 2 {
 		t.Fatalf("Register registered %d job handler type(s), want exactly the module's own two: %v", len(handlers), handlers)
 	}
@@ -626,11 +626,11 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg *pkgcore.Registry) error {
-	if err := reg.Permissions.Add("neighbour:read"); err != nil {
+func (neighbourModule) Register(reg pkgcore.Registrar) error {
+	if err := reg.PermissionsSeat().Add("neighbour:read"); err != nil {
 		return err
 	}
-	return reg.AuditActions.Add("neighbour.thing.do")
+	return reg.AuditActionsSeat().Add("neighbour.thing.do")
 }
 
 var _ pkgcore.Module = neighbourModule{}

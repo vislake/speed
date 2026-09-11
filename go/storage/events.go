@@ -26,13 +26,13 @@ import (
 // (EventObjectCompleted, EventObjectDeleted, and their catalog entries in
 // objectEventDecls); the services publish them.
 
-// hostSeams is the slice of *pkgcore.Registry the module's services read.
-// Declaring the two accessors as an interface keeps every service testable
-// against fakes and honest about its host dependency: ObjectService needs a
-// store for bytes and a bus for the completion event, LifecycleService the
-// same pair for deletion and sweeping, DeriveService the store for reading
-// originals and writing derivatives -- and nothing else the registry
-// carries.
+// hostSeams is the slice of the host's declaration face the module's
+// services read. Declaring the two accessors as an interface keeps every
+// service testable against fakes and honest about its host dependency:
+// ObjectService needs a store for bytes and a bus for the completion
+// event, LifecycleService the same pair for deletion and sweeping,
+// DeriveService the store for reading originals and writing derivatives --
+// and nothing else the registry carries.
 type hostSeams interface {
 	// ObjectStore returns the store the registry was bootstrapped with.
 	ObjectStore() pkgcore.ObjectStore
@@ -41,8 +41,8 @@ type hostSeams interface {
 	EventBus() pkgcore.EventBus
 }
 
-// compile-time check that the concrete registry satisfies the seam.
-var _ hostSeams = (*pkgcore.Registry)(nil)
+// compile-time check that the declaration face covers the seam.
+var _ hostSeams = (pkgcore.Registrar)(nil)
 
 // serviceHost is embedded by every storage service (ObjectService,
 // DeriveService, LifecycleService). It carries the registry slice the
@@ -60,7 +60,7 @@ type serviceHost struct {
 // It is called exactly once, by Module.Register, and performs no I/O: it
 // stores the registry, and the store and bus are read from it at call time
 // so the service always uses the registry's final wiring.
-func (h *serviceHost) attach(reg *pkgcore.Registry) { h.host = reg }
+func (h *serviceHost) attach(reg pkgcore.Registrar) { h.host = reg }
 
 // requireStore returns the object store the registry resolved, or fails
 // closed: no registry attached yet, or a registry carrying no store, means

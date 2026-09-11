@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+
+	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
 // component_registry.go carries the assembly half of the config-driven
@@ -932,6 +934,100 @@ func (r *ComponentRegistry) MountedRoutes() []MountedRoute {
 		return nil
 	}
 	return r.Routes.Routes()
+}
+
+// The ten seat accessors below answer the Registrar view over this registry:
+// each returns the seat stored in the struct's own field, so a declaration
+// body written against Registrar declares into exactly these seats -- the
+// write gate (writes only while the Init stage runs) inside each seat, and
+// nothing else. The accessors open no path the seats themselves do not
+// already answer: reads go through the same seat read methods, writes
+// through the same gated write methods, with the same refusal outside Init.
+
+// RoutesSeat returns the Routes seat.
+func (r *ComponentRegistry) RoutesSeat() RouteRegistrar { return r.Routes }
+
+// ConfigSeat returns the Config seat.
+func (r *ComponentRegistry) ConfigSeat() ConfigSchemaRegistrar { return r.Config }
+
+// FeaturesSeat returns the Features seat.
+func (r *ComponentRegistry) FeaturesSeat() FeatureRegistrar { return r.Features }
+
+// PermissionsSeat returns the Permissions seat.
+func (r *ComponentRegistry) PermissionsSeat() PermissionRegistrar { return r.Permissions }
+
+// JobsSeat returns the Jobs seat.
+func (r *ComponentRegistry) JobsSeat() JobHandlerRegistrar { return r.Jobs }
+
+// NotificationsSeat returns the Notifications seat.
+func (r *ComponentRegistry) NotificationsSeat() NotificationRegistrar { return r.Notifications }
+
+// EventsSeat returns the Events seat.
+func (r *ComponentRegistry) EventsSeat() EventRegistrar { return r.Events }
+
+// AuditActionsSeat returns the AuditActions seat.
+func (r *ComponentRegistry) AuditActionsSeat() AuditActionRegistrar { return r.AuditActions }
+
+// RetentionSeat returns the Retention seat.
+func (r *ComponentRegistry) RetentionSeat() RetentionRegistrar { return r.Retention }
+
+// SchedulesSeat returns the Schedules seat.
+func (r *ComponentRegistry) SchedulesSeat() PeriodicTaskRegistrar { return r.Schedules }
+
+// EventBus returns the assembled EventBus value from the by-type context --
+// the same value the Events seat subscribes on -- or nil when the assembly
+// carries none, mirroring the module Registry's nil-for-absent contract. It
+// is a Get sugar, so it follows the bus's own resolution rule: exactly one
+// put value assignable to EventBus is the answer.
+func (r *ComponentRegistry) EventBus() EventBus {
+	if r.Events == nil {
+		return nil
+	}
+	return r.Events.Bus()
+}
+
+// KVStore returns the assembled KVStore value from the by-type context, or
+// nil when the assembly carries none, mirroring the module Registry's
+// nil-for-absent contract.
+func (r *ComponentRegistry) KVStore() KVStore {
+	kv, err := Get[KVStore](r)
+	if err != nil {
+		return nil
+	}
+	return kv
+}
+
+// Mailer returns the assembled Mailer value from the by-type context, or nil
+// when the assembly carries none, mirroring the module Registry's
+// nil-for-absent contract.
+func (r *ComponentRegistry) Mailer() Mailer {
+	mailer, err := Get[Mailer](r)
+	if err != nil {
+		return nil
+	}
+	return mailer
+}
+
+// ObjectStore returns the assembled ObjectStore value from the by-type
+// context, or nil when the assembly carries none, mirroring the module
+// Registry's nil-for-absent contract.
+func (r *ComponentRegistry) ObjectStore() ObjectStore {
+	store, err := Get[ObjectStore](r)
+	if err != nil {
+		return nil
+	}
+	return store
+}
+
+// Locales returns the merged message catalog from the by-type context, or
+// nil when the assembly carries none, mirroring the module Registry's
+// nil-for-absent contract.
+func (r *ComponentRegistry) Locales() *i18n.Catalog {
+	catalog, err := Get[*i18n.Catalog](r)
+	if err != nil {
+		return nil
+	}
+	return catalog
 }
 
 // RegisteredComponents returns every component registered on this instance,

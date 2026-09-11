@@ -28,8 +28,10 @@ package app
 // The struct doubles as the surface's documentation: each field states what its
 // variable configures, its unset fallback, and the refusals a boot enforces.
 // verifyBootstrapBinding then proves at every boot that the targets really bind
-// the bootstrap keys this app's composition declares on the registry's
-// bootstrap seat, and the keys this app owns besides them.
+// the bootstrap keys declared on the registry's bootstrap seat, and the keys
+// this app owns besides them. The module components' keys (authn.pii_cipher_key
+// and the rest of PlatformConfig's six) are resolved by the loader over the
+// registered components, which is the check that covers them.
 
 import (
 	"errors"
@@ -497,7 +499,7 @@ func hostConfigDefaults() hostConfig {
 // development default; a set-but-wrong value fails the load, naming the
 // variable. WithKeyDerivation(dbkit.DeriveBootstrapKey) installs the platform
 // composition each derive-tagged field's material comes from: the field's
-// dotted key path gets its purpose string at the bootstrap seat
+// dotted key path gets its purpose string from the declaration convention
 // (pkgcore.BootstrapKeyPurpose -- the declaration's field names spell the
 // declared key paths literally, the same literals config.Verify compares), and
 // dbkit.DeriveKey turns the root key plus that purpose into the field's 32

@@ -283,7 +283,7 @@ func TestBootstrap_FailureAfterResolvingSeams_ClosesWhatItResolved(t *testing.T)
 		// after all four were resolved.
 		_, err := kernel.Bootstrap(context.Background(), regTestModule{
 			name: "register-fails",
-			register: func(*Registry) error {
+			register: func(Registrar) error {
 				return errors.New("boom")
 			},
 		})

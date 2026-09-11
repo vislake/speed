@@ -35,7 +35,7 @@ func (adminMigrationModule) DependsOn() []string              { return nil }
 func (adminMigrationModule) Migrations() embed.FS             { return migrations.FS }
 func (adminMigrationModule) Locales() embed.FS                { return embed.FS{} }
 func (adminMigrationModule) OpenAPISpec() []byte              { return nil }
-func (adminMigrationModule) Register(*pkgcore.Registry) error { return nil }
+func (adminMigrationModule) Register(pkgcore.Registrar) error { return nil }
 
 // ExampleUsageService_Summary demonstrates the cross-tenant usage
 // dashboard's metering leg (UsageService.Summary) against REAL

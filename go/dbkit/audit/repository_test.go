@@ -39,7 +39,7 @@ func (fakeAuditModule) DependsOn() []string              { return nil }
 func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
 func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
-func (fakeAuditModule) Register(*pkgcore.Registry) error { return nil }
+func (fakeAuditModule) Register(pkgcore.Registrar) error { return nil }
 
 var _ pkgcore.Module = fakeAuditModule{}
 
