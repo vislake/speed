@@ -364,7 +364,7 @@ tenantless calls explicitly.
   `pkgcore.WithSystemContext` on this live request path would take the
   escape hatch with zero audit events, so the audited wrapper is mandatory
   for this path.
-- `Module` (`module.go`) implements `the module contract`; `Register` declares
+- `Module` (`module.go`) implements the module contract; `Register` declares
   the three permissions on `reg.PermissionsSeat()`,
   registers `SystemPurposeCredentialWrite` via
   `pkgcore.RegisterSystemPurpose`, and mounts the Handler at `apiPath` --
