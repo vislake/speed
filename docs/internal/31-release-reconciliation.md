@@ -204,6 +204,14 @@
 - **登记理由**：宿主/API 调用面可见的契约行为收紧（`Mailer.Send` 的接受面变化 + 契约套件新增必过用例），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（提交带 `!BREAKING` footer，先例同 §5.2/§5.8）。
 - **出处**：`1267ce1c`（`fix(pkgcore)!: structurally validate addresses before Send`）。
 
+### （待编号）authn + metering：已声明的动态配置行从死声明变为生效开关（非破坏，宿主可见面登记）
+
+- **面**：`go/authn` 与 `go/metering` 在 `ConfigSeat` 上声明的动态配置项由"仅入 schema、无任何读点"变为运行期生效；两模块各新增导出缝 `SettingsReader` / `WithSettingsReader`，`go/config` 的 `Handle` 新增类型化惰性读 `Duration`/`Int`/`String`（均为新增面，无导出符号删除）。authn 的 19 项——`authn.password_min_length` / `password_max_length`、`access_token_ttl` / `refresh_token_ttl` / `session_ttl` / `oauth_state_ttl` / `sms_code_ttl` / `sms_code_max_attempts`、`social.trusted_providers`、五个社交渠道的 `client_id` / `client_secret`——在各自消费操作处读取（签入、改密、铸造、发码、OAuth 流程）；metering 的 `metering.period_bucket_size` 与 `metering.default_overage_threshold` 在每次折叠处读取。读规则：显式行优先；未设行 / 未接缝 / 读失败回落构造期选项，故无 config 模块的组合与历史行为一致。两处例外：`authn.social.trusted_providers` 读失败 fail-closed 回落到空列表（不回落构造值，避免复活已被显式关闭的自动关联），显式空行即"不信任任何渠道"；`authn.social.<channel>.client_id` / `client_secret` 须成对显式设置，否则该渠道保持构造期凭据。装配面：两模块的组件描述符在 config 组件在场时自接线其 `Handle`（可选依赖，authn/metering 的 `go.mod` 因此直接 require `go/config`），宿主手接仍走 `WithSettingsReader(configModule.Handle())`。访问令牌 TTL 是唯一一处"首次使用时解析并冻结"（它决定签名密钥生命周期），其余项随操作即时生效。
+- **消费者影响**：对已写入这些配置行的宿主，行的语义从"记录在案"变为"控制行为"——如已设的 `authn.password_min_length` 会开始拒绝更短的改密请求、`authn.social.trusted_providers` 会开始决定自动关联白名单、`metering.period_bucket_size` 会改变实时计数与摘要行的分桶。宿主代码无需改动；带 config 组件的装配自动生效，不带则完全无感（回落构造期值）。既有导出符号与签名不变。
+- **替代路径**：无（行为修正）；要保持构造期行为时不写这些键的显式行（未设行即回落），或不装配 config 组件。
+- **登记理由**：宿主可见面（已设配置行由死声明变为生效开关）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
+- **出处**：`b66b51ea`（`feat(config): add typed lazy reads to the read handle`）+ `ecc9bbc0`（`feat(authn): make the declared dynamic config items effective at runtime`）+ `96e3479c`（`feat(metering): read the declared config items through a settings seam`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
