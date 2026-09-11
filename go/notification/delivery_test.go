@@ -1529,19 +1529,21 @@ func TestDeliverUserSMS_CarriesIdentityAndNarrowedParams(t *testing.T) {
 	}
 }
 
-// TestDeliverContactSMS_MapsThroughThePlatformDefaultLocale pins the contact
-// path's documented asymmetry: the dispatch carries a captured requester
-// locale, the sms copy renders in it, and the seam message still names the
-// PLATFORM DEFAULT locale -- the captured language belongs to the requester,
-// not to the external recipient, so a template-typed carrier adapter maps a
-// contact's message through the platform default language's template.
-func TestDeliverContactSMS_MapsThroughThePlatformDefaultLocale(t *testing.T) {
+// TestDeliverContactSMS_CarriesTheRenderedLocale pins the contact SMS path's
+// seam identity as the render's own locale: the copy renders in
+// deliveryLocale(d) -- the dispatch's captured requester language, the
+// platform default when the producer captured none -- and the seam names
+// that same value, so a template-typed carrier adapter selects the account
+// template mapped for the language the body is actually written in (a locale
+// with no mapped template is refused by the adapter before any request,
+// with no fallback).
+func TestDeliverContactSMS_CarriesTheRenderedLocale(t *testing.T) {
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
 
 	// A verified contact, business-attested (ConsentRef) so the
-	// verification code never sends and the recorder holds exactly the one
-	// delivery under test.
+	// verification code never sends and the recorder holds exactly the
+	// deliveries under test.
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelSMS,
 		Address:    "+8613800138123",
@@ -1551,7 +1553,7 @@ func TestDeliverContactSMS_MapsThroughThePlatformDefaultLocale(t *testing.T) {
 		t.Fatalf("CreateContact: %v", err)
 	}
 
-	d := Dispatch{
+	captured := Dispatch{
 		TypeKey: fixtureTypeAppointment,
 		Recipient: DispatchRecipient{
 			Class:     RecipientClassExternal,
@@ -1560,19 +1562,41 @@ func TestDeliverContactSMS_MapsThroughThePlatformDefaultLocale(t *testing.T) {
 		Locale: "zh-CN",
 		Params: renderTestParams,
 	}
-	if err := env.dispatchAndAttempt(t, d); err != nil {
-		t.Fatalf("delivery attempt: %v", err)
+	if err := env.dispatchAndAttempt(t, captured); err != nil {
+		t.Fatalf("delivery attempt (captured locale): %v", err)
 	}
 
 	msgs := env.sms.messages()
 	if len(msgs) != 1 {
 		t.Fatalf("SMS sender sent %d messages, want the one contact SMS delivery", len(msgs))
 	}
-	if msgs[0].Locale != platformDefaultLocale {
-		t.Errorf("SMS Locale = %q, want the platform default %q regardless of the dispatch's captured locale", msgs[0].Locale, platformDefaultLocale)
+	if msgs[0].Locale != "zh-CN" {
+		t.Errorf("SMS Locale = %q, want the captured locale the copy rendered in (zh-CN)", msgs[0].Locale)
+	}
+	if msgs[0].Text != "王芳 您好，您预约的 2026-09-10 09:30 快到了。" {
+		t.Errorf("SMS text = %q, want the zh-CN copy the seam locale names", msgs[0].Text)
 	}
 	if msgs[0].MessageID != fixtureTypeAppointment+".sms.text" {
 		t.Errorf("SMS MessageID = %q, want the sms copy's own id", msgs[0].MessageID)
+	}
+
+	// A producer that captured no language renders the platform default,
+	// and the seam names that same tier: the locale is one value on both
+	// sides of the seam on the fallback leg too.
+	uncaptured := captured
+	uncaptured.Locale = ""
+	if err := env.dispatchAndAttempt(t, uncaptured); err != nil {
+		t.Fatalf("delivery attempt (no captured locale): %v", err)
+	}
+	msgs = env.sms.messages()
+	if len(msgs) != 2 {
+		t.Fatalf("SMS sender sent %d messages, want the fallback delivery too", len(msgs))
+	}
+	if msgs[1].Locale != platformDefaultLocale {
+		t.Errorf("SMS Locale = %q, want the platform default %q the copy actually rendered in", msgs[1].Locale, platformDefaultLocale)
+	}
+	if msgs[1].Text != "Hi 王芳, your appointment at 2026-09-10 09:30 is coming up." {
+		t.Errorf("SMS text = %q, want the platform default's en-US copy", msgs[1].Text)
 	}
 }
 

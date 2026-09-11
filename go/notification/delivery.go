@@ -1192,19 +1192,18 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 // deliverContactSMS is the SMS channel's contact delivery path, the twin of
 // deliverContactEmail over the module's SMS sender.
 //
-// Its seam message differs from the user path's in two documented ways,
-// because an external contact is not the requester. Locale is the platform
-// default, never deliveryLocale(d): the dispatch's captured locale belongs
-// to the request that created it (the requester), not to the recipient, so
-// a template-typed carrier adapter maps a contact's message through the
-// platform default language's template rather than through a language
-// nobody chose for the recipient. Params is d.Params as dispatched, not
+// The seam message names the locale the copy actually rendered in --
+// deliveryLocale(d), the one value both renderContent and the delivery key
+// read -- so a template-typed carrier adapter selects the account template
+// the operator mapped for (locale, message-id), the template whose language
+// is the language of the body. Params is d.Params as dispatched, not
 // narrowed by copyParamsForChannel -- this path renders and sends in one
 // step and never narrows -- so it can carry parameters the SMS copy does not
 // reference; the mapped carrier template's own declared variable list is
 // what bounds what actually reaches the wire.
 func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
-	parts, err := renderContent(s.catalog(), deliveryLocale(d), d.TypeKey, ChannelSMS, d.Params)
+	locale := deliveryLocale(d)
+	parts, err := renderContent(s.catalog(), locale, d.TypeKey, ChannelSMS, d.Params)
 	if err != nil {
 		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
@@ -1218,7 +1217,7 @@ func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string
 		To:        contact.Address,
 		Text:      parts["text"],
 		MessageID: copyID(d.TypeKey, ChannelSMS, "text"),
-		Locale:    platformDefaultLocale,
+		Locale:    locale,
 		Params:    params,
 	})
 	rec.DurationMs = time.Since(start).Milliseconds()

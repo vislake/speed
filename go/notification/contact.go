@@ -922,7 +922,7 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact,
 		return errInternal(err)
 	}
 
-	subject, body, err := renderContactCode(s.host.Locales(), contact.Channel, locale, code)
+	subject, body, usedLocale, err := renderContactCode(s.host.Locales(), contact.Channel, locale, code)
 	if err != nil {
 		return err
 	}
@@ -948,13 +948,13 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact,
 			To:        contact.Address,
 			Text:      body,
 			MessageID: contactCodeSMSID,
-			// The platform default locale, not the requester's negotiated
-			// one: the requester is not the recipient, and the recipient is
-			// an external contact whose own language nobody captured -- so
-			// a template-typed carrier adapter maps this message through
-			// the platform default language's template (see
-			// deliverContactSMS's identical construction).
-			Locale: platformDefaultLocale,
+			// The locale the code copy ACTUALLY rendered in -- usedLocale,
+			// the post-fallback value, never the request-side answer -- so a
+			// template-typed carrier adapter selects the account template
+			// mapped for (locale, message-id) whose language is the language
+			// of the body. A locale with no mapped template is refused by
+			// the adapter before any request, with no fallback.
+			Locale: usedLocale,
 			Params: map[string]string{
 				"code":    code,
 				"minutes": strconv.Itoa(contactCodeMinutes),
@@ -1230,40 +1230,44 @@ const contactCodeSMSID = "notification.contact.verify_code.sms"
 // triggered the send -- the requester is not the recipient, a contact row
 // carries no locale, and the synchronous create/resend request is the one
 // place the requester is present to speak for itself. An empty locale
-// falls to the platform default; the caller (the HTTP layer) is
-// responsible for having negotiated a supported value, and every failure
-// -- a nil catalog, an unsupported locale, a missing id -- is
-// ErrInternal.WithCause, never a fallback to another language.
-func renderContactCode(catalog *i18n.Catalog, channel, locale, code string) (subject, body string, err error) {
+// falls to the platform default, and the returned usedLocale names the
+// post-fallback value; the caller carries THAT (never the requested value)
+// onto the SMS seam, because a template-typed carrier adapter maps
+// templates by the locale the body was really rendered in. The caller (the
+// HTTP layer) is responsible for having negotiated a supported value, and
+// every failure -- a nil catalog, an unsupported locale, a missing id --
+// is ErrInternal.WithCause, never a fallback to another language.
+func renderContactCode(catalog *i18n.Catalog, channel, locale, code string) (subject, body, usedLocale string, err error) {
 	if catalog == nil {
-		return "", "", ErrInternal.WithCause(errors.New("notification: render contact code called with no catalog"))
+		return "", "", "", ErrInternal.WithCause(errors.New("notification: render contact code called with no catalog"))
 	}
 	if locale == "" {
 		locale = platformDefaultLocale
 	}
+	usedLocale = locale
 	params := map[string]any{
 		"code":    code,
 		"minutes": contactCodeMinutes,
 	}
 	switch channel {
 	case ChannelSMS:
-		body, err = catalog.Lookup(locale, contactCodeSMSID, params)
+		body, err = catalog.Lookup(usedLocale, contactCodeSMSID, params)
 		if err != nil {
-			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code sms: %w", err))
+			return "", "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code sms: %w", err))
 		}
-		return "", body, nil
+		return "", body, usedLocale, nil
 	case ChannelEmail:
-		subject, err = catalog.Lookup(locale, "notification.contact.verify_code.email.subject", params)
+		subject, err = catalog.Lookup(usedLocale, "notification.contact.verify_code.email.subject", params)
 		if err != nil {
-			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code email subject: %w", err))
+			return "", "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code email subject: %w", err))
 		}
-		body, err = catalog.Lookup(locale, "notification.contact.verify_code.email.body", params)
+		body, err = catalog.Lookup(usedLocale, "notification.contact.verify_code.email.body", params)
 		if err != nil {
-			return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code email body: %w", err))
+			return "", "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code email body: %w", err))
 		}
-		return subject, body, nil
+		return subject, body, usedLocale, nil
 	default:
-		return "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code for unknown channel %q", channel))
+		return "", "", "", ErrInternal.WithCause(fmt.Errorf("notification: render contact code for unknown channel %q", channel))
 	}
 }
 

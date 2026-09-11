@@ -681,17 +681,19 @@ than failing on the first attempt. Free-text transports (the console
 sender, the operator HTTP gateway, `pkgcore/sms/twilio`) ignore the
 identity fields and deliver `SMS.Text` as before.
 
-The two paths' identity differs deliberately. The user path maps by the
+The two paths' identity differs in the locale it names, and on both it is
+the locale the copy actually rendered in. The user path maps by the
 recipient's own locale (`d.Locale`) and carries `d.Params` as narrowed by
 the sms copy itself. The contact paths (deliverContactSMS, and the
-verification code's send in contact.go) map through
-`platformDefaultLocale`: the dispatch's captured locale belongs to the
-requester, not to the external recipient, and a carrier template's fixed
-text is what the recipient actually reads -- so contact-facing templates
-are keyed under the platform default language. The contact delivery path
-also does not narrow params (it renders and sends in one step); the
-mapped carrier template's own declared variable list is what bounds the
-wire there.
+verification code's send in contact.go) map by the language of the
+rendered body too: the dispatch's captured requester language, or the
+platform default when the producer captured none -- the locale the seam
+names is the one the copy rendered in, so a contact-facing template is
+selected in the language the recipient actually reads, and a host
+registers the contact message ids under every locale its dispatches can
+carry. The contact delivery path also does not narrow params (it renders
+and sends in one step); the mapped carrier template's own declared
+variable list is what bounds the wire there.
 
 ### The copy language comes from the recipient's chain, never a guess
 

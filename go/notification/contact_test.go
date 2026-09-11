@@ -705,10 +705,11 @@ func TestContact_VerifyCode_ReturnsVerifiedSnapshot(t *testing.T) {
 
 // TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams pins the
 // identity the verification-code send hands the SMS seam: the message id
-// the code copy renders from, the platform default locale (the requester is
-// not the recipient; see sendCode's construction), and exactly the two
-// parameters the copy interpolates -- the code itself and the lifetime --
-// as strings, matching the rendered body's own values.
+// the code copy renders from, the locale the copy rendered in (this create
+// request captured no language, so both the body and the seam name the
+// platform default's en-US copy), and exactly the two parameters the copy
+// interpolates -- the code itself and the lifetime -- as strings, matching
+// the rendered body's own values.
 func TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams(t *testing.T) {
 	env := newContactEnv(t)
 	rec := &recordingSMSSender{}
@@ -730,6 +731,9 @@ func TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams(t *testing.T) {
 	if sms.Locale != platformDefaultLocale {
 		t.Errorf("SMS Locale = %q, want the platform default %q", sms.Locale, platformDefaultLocale)
 	}
+	if !strings.Contains(sms.Text, "Your verification code is") {
+		t.Errorf("SMS text = %q, want the en-US copy the seam locale names", sms.Text)
+	}
 	if len(sms.Params) != 2 {
 		t.Fatalf("SMS Params = %v, want exactly code and minutes", sms.Params)
 	}
@@ -738,6 +742,35 @@ func TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams(t *testing.T) {
 	}
 	if sms.Params["minutes"] != strconv.Itoa(contactCodeMinutes) {
 		t.Errorf("SMS Params[minutes] = %q, want %q (the same constant the render interpolates)", sms.Params["minutes"], strconv.Itoa(contactCodeMinutes))
+	}
+}
+
+// TestContact_VerifyCode_SMSCarriesTheRenderedLocale pins the seam locale of
+// a verification-code send as the language the code copy actually rendered
+// in: a create request whose captured language is zh-CN renders the zh-CN
+// body, and the seam names zh-CN -- not the platform default -- so a
+// template-typed carrier adapter selects the zh-CN template, the one whose
+// language matches what the recipient reads (a locale with no mapped
+// template is refused by the adapter before any request, with no fallback).
+func TestContact_VerifyCode_SMSCarriesTheRenderedLocale(t *testing.T) {
+	env := newContactEnv(t)
+	rec := &recordingSMSSender{}
+	env.svc.sms = rec
+	ctx := tenantCtx("tenant-acme")
+
+	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone, Locale: "zh-CN"}); err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+
+	msgs := rec.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("SMS sender sent %d messages, want the one verification code", len(msgs))
+	}
+	if msgs[0].Locale != "zh-CN" {
+		t.Errorf("SMS Locale = %q, want the captured language the code rendered in (zh-CN)", msgs[0].Locale)
+	}
+	if !strings.Contains(msgs[0].Text, "您的验证码是") {
+		t.Errorf("SMS text = %q, want the zh-CN code copy the seam locale names", msgs[0].Text)
 	}
 }
 
