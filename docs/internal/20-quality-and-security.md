@@ -31,7 +31,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 这几项在 [16 验证方式](16-verification.md) 中有详细验收标准，工程上要求它们是**可复用的测试套件**而非散落的用例：
 
 - `tenancytest.AssertIsolated` —— 租户隔离，所有 Repository 必跑
-- 同一 seam 各套实现的语义一致性 —— 同一组契约用例在每套实现下结果必须一致
+- 同一模块各套实现的语义一致性 —— 同一组契约用例在每套实现下结果必须一致
 - 双方言矩阵 —— 每个模块在 PostgreSQL 与 SQLite 上各跑一遍
 - 迁移测试 —— 从零迁移到最新版本，双方言各验证一次
 
@@ -61,7 +61,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 >
 > **实施状态注记（2026-09，全量门禁批次）：** 门禁扩到全部 22 个已发布模块（go.work 的 21 个 `go/*` 模块加 reference-app），并在"不下降"之上加了 **80% 下限**——本段正文原句"不设一刀切的百分比门槛"对下限不再成立：产品决策取代了它，对"不允许下降"的论证保留，下限与基线两道比较都过才绿。度量口径同步新增规则：普查排除 `.gen.go`（oapi-codegen 提交产物，生成器写的代码不是测试标的），`--update` 与 `--check` 同口径；口径变了数字就变，基线文件在同一次改动里全部重新实测记录（基线记录与定义该量的改动同行）。下限不可重基线化：`--update` 拒绝记录低于下限的实测值——下限是产品决策而不是可记录的基线，跌破它只能加测试，或与脚本里 `LOWER_BOUND_PP` 及本段一起改决策。容差随之从 0.05 提到 0.15 个百分点：扩展到全部模块后的实测暴露了比六个地基模块时代更宽的单次测量抖动——go/authn 的 MFA 并发确认竞速测试（八个 goroutine 抢一个 pending factor）里，输家是撞上 SQLite 写锁还是干净落败取决于调度，输家分支的语句被不被覆盖纯看运气，实测单次可差约 0.12 点（authn 普查仅 3076 条语句，约 4-5 条）；主容差按噪声上沿取 0.15，有效容差另按模块规模校准——取 0.15 点与「两条语句在该模块普查中的点数」中的较大者，2 条语句的规模地板使小模块的抖动预算不被固定点数容差低估；无论哪一档，都远小于任何"加代码不写测试"的真实下降。CI 接线：reusable-go-module-ci 第 3b 腿对每个 go/ 矩阵行跑双比较（21 个 go/ 模块，每个 PR 和每次 push 到 main 都测）；reference-app 不是 go-module-ci 矩阵行（它在 go/ 之外，fast-check 只构建它、其单元套件只在 full-check 跑），它的覆盖门禁作为独立步骤接在 full-check 的 reference-app job 单元套件之后——fast-check 不 gate 应用的覆盖率：应用套件本就不在 fast-check 跑，每个 PR 再加一次完整测量只是重复一个不存在于那里的运行，每次 push 到 main 的 full-check 才是它的执行点。fast-check 的 repo-checks 继续跑 `--selfcheck`（行集合随之扩到 22）。"安全相关路径要求分支覆盖完整"仍未自动化，同上一条注记，本批次不虚报。
 >
-> **实施状态注记（2026-09，web 覆盖门禁批次）：** 前端侧覆盖门禁的度量口径与首次数值落地如下，CI 接线待补测试轮次完成。口径与 Go 门禁对齐到 statement（语句）覆盖率，但按包独立计：每个 web 发布包（`web/packages/*` 十二个包）加外部成员 `examples/reference-app/web` 各过 **80% 下限**，度量范围是包自身的 `src/**`（宿主应用即它自己的 `src/`），生成产物排除——`@speed/api-sdk` 的 `src/index.ts`（orval 输出，DO-NOT-EDIT 头）不计入，手写接缝 `src/runtime.ts` 照常计量；`include` 限定到 src 也使别名解析的兄弟包源码永远不算进引用方包的数字。度量机制：workspace 根精确安装 `@vitest/coverage-v8@4.1.11`（与 vitest 4.1.11 同版本），13 份 vitest 配置各带 v8 provider 的 coverage 块（`include: ['src/**']`、`reporter: ['text-summary', 'json-summary']`——vitest 4.1.11 的 CoverageOptions 键是单数 `reporter`，复数 `reporters` 会被静默忽略，正是本批次踩到并改正的坑；tokens/i18n/api-client 三个此前没有 vitest 配置的包新增纯 coverage 配置，其余测试选项全部留默认，套件行为抽查验证不变——tokens 与 api-client 两包带/不带 coverage 的用例数一致）。门禁将解析各包 `coverage/coverage-summary.json`；本地运行方式 `pnpm --dir <包目录> exec vitest run --coverage`。首次实测（2026-09-09，13 个测量对象全部干净跑通，无异常包）：
+> **实施状态注记（2026-09，web 覆盖门禁批次）：** 前端侧覆盖门禁的度量口径与首次数值落地如下，CI 接线待补测试轮次完成。口径与 Go 门禁对齐到 statement（语句）覆盖率，但按包独立计：每个 web 发布包（`web/packages/*` 十二个包）加外部成员 `examples/reference-app/web` 各过 **80% 下限**，度量范围是包自身的 `src/**`（宿主应用即它自己的 `src/`），生成产物排除——`@speed/api-sdk` 的 `src/index.ts`（orval 输出，DO-NOT-EDIT 头）不计入，手写绑定 `src/runtime.ts` 照常计量；`include` 限定到 src 也使别名解析的兄弟包源码永远不算进引用方包的数字。度量机制：workspace 根精确安装 `@vitest/coverage-v8@4.1.11`（与 vitest 4.1.11 同版本），13 份 vitest 配置各带 v8 provider 的 coverage 块（`include: ['src/**']`、`reporter: ['text-summary', 'json-summary']`——vitest 4.1.11 的 CoverageOptions 键是单数 `reporter`，复数 `reporters` 会被静默忽略，正是本批次踩到并改正的坑；tokens/i18n/api-client 三个此前没有 vitest 配置的包新增纯 coverage 配置，其余测试选项全部留默认，套件行为抽查验证不变——tokens 与 api-client 两包带/不带 coverage 的用例数一致）。门禁将解析各包 `coverage/coverage-summary.json`；本地运行方式 `pnpm --dir <包目录> exec vitest run --coverage`。首次实测（2026-09-09，13 个测量对象全部干净跑通，无异常包）：
 
 | 测量对象 | statements | lines | functions | branches |
 |---|---|---|---|---|
@@ -130,11 +130,11 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 - 会话校验（尤其"立即失效"模式下每请求一次 KV 查询的开销 —— 这个数据决定该模式是否值得默认开启）
 - 计量事件采集的吞吐与延迟
 
-> **实施状态注记（benchmark-suite 轮次）：** 上面清单里的四组热点已随归属模块落地为可跑的 benchmark（本轮的 `feat/benchmark-suite` 分支），全部满足"`go test -bench` 直接运行、无 Docker 无网络"的约束（SQLite 走进程内临时文件，基础设施 seam 走进程内实现）：
+> **实施状态注记（benchmark-suite 轮次）：** 上面清单里的四组热点已随归属模块落地为可跑的 benchmark（本轮的 `feat/benchmark-suite` 分支），全部满足"`go test -bench` 直接运行、无 Docker 无网络"的约束（SQLite 走进程内临时文件，基础设施模块走进程内实现）：
 >
 > - `go/jobs` 的 `queue_standalone_bench_test.go`：单次持久化 enqueue 的写路径成本（校验、id 生成、带幂等键唯一索引检查的事务插入、日志行），以及单个任务走完 dispatcher claim → worker 执行 → 终态落库的全链路延迟——分 15ms 与默认 200ms 两种轮询周期跑，两条结果的差就是轮询粒度对端到端延迟的贡献；
 > - `go/notification` 的 `delivery_bench_test.go` 与 `preference_service_bench_test.go`：投递键派生（每次投递尝试的每个 channel 都重算，canonical JSON + SHA-256），以及 `ResolveForDelivery` 的按 (收件人, 类型) 发送时偏好重查，覆盖无存储行（走类型默认值）、有存储行、轮转收件人三种真实状态；
-> - `go/authn` 的 `password_bench_test.go` 与 `token_bench_test.go`：`DefaultPasswordParams`（argon2id 成本下限，OWASP 首推配置）下的哈希与校验——每次派生约 19 MiB 内存，这一条就是"提高成本前先看当前硬件的实测"的依据——以及访问令牌的签发与每请求校验（含 KeySource seam 的逐次取钥）；
+> - `go/authn` 的 `password_bench_test.go` 与 `token_bench_test.go`：`DefaultPasswordParams`（argon2id 成本下限，OWASP 首推配置）下的哈希与校验——每次派生约 19 MiB 内存，这一条就是"提高成本前先看当前硬件的实测"的依据——以及访问令牌的签发与每请求校验（含 KeySource 模块的逐次取钥）；
 > - `go/rbac` 的 `authorizer_service_bench_test.go`：单次权限判定，三个子基准分别报告缓存命中的允许/拒绝（稳态的每请求代价，实测零分配）与失效后重载（一次 revoke 之后那次判定要付的完整数据库重载，正是"立即失效"形态的代价）。
 >
 > benchmark 随归属模块入库本身不再欠账；nightly 的回归腿（基线采集、阈值、对比告警）仍未落地，与 flaky 腿一起等实现轮次（见下节注记——当前唯一的外部前置是 `issues: write` token）。

@@ -52,7 +52,7 @@
 | [20 质量与安全工程](20-quality-and-security.md) | 测试分层、质量门槛、供应链与安全测试 |
 | [25 测试布局迁移](25-test-layout-migration.md) | 非单元测试类入专有目录的迁移:cmd/server 流测试导出面侦察与逐文件分档 |
 | [26 bootstrap 键声明与参考应用 loader 迁移](26-bootstrap-keys-loader-migration.md) | 模块级 bootstrap 键声明席位、loader 前缀选项与 env 钉、启动/运行时双层边界、reference-app 迁移与两阶段落地 |
-| [27 注册触发供给链与两个平台缝](27-provisioning-chain-and-two-seams.md) | 注册供给链的归属裁定与链契约(顺序、前向收敛与终局语义)、notification 静态地址解析器与 billing 订阅 EnsureActive 两缝的形状、reference-app 迁移计划 |
+| [27 注册触发供给链与两个平台件](27-provisioning-chain-and-two-seams.md) | 注册供给链的归属裁定与链契约(顺序、前向收敛与终局语义)、notification 静态地址解析器与 billing 订阅 EnsureActive 两件的形状、reference-app 迁移计划 |
 | [28 jobs 终态信号与周期调度席位](28-job-terminal-signal-and-periodic-schedule.md) | 终态信号缺口的机制裁定(总线终态事件 + 行内 outbox 的失败面闭合)、七处重复周期形态收编为声明制调度席位、信用结算与周期循环的迁移计划与轮次划分 |
 | [29 配置驱动的组件装配](29-config-driven-component-assembly.md) | 终态设计:模块(接口/契约)与组件(一个实现)二分;核心数据结构 ComponentRegistry(注册信息+组装信息+生命周期);组合配置与来源分层;七阶段生命周期 Prepare/Construct/Verify/Init/Start/PreStop/Close(回调=描述符七字段;连接在 Construct、迁移在 Verify);一切皆组件(config/db/app);接口 token 依赖与能力位;资产与目录式模块取用 |
 | [16 验证方式](16-verification.md) | 各能力的验收标准与 CI 强制项 |
@@ -69,7 +69,7 @@
 | [08 AI 网关](08-ai-gateway.md) | 多厂商 LLM 与图像生成抽象 |
 | [09 可观测性](09-observability.md) | OTel + LGTM 栈，租户维度的高基数处理 |
 | [10 合规与审计](10-compliance-and-audit.md) | 字段加密、操作审计、数据保留与删除 |
-| [22 密钥与证书生命周期](22-pki.md) | 签名密钥与 X.509 证书的签发/轮转/吊销、`Signer` seam 与 KMS 接入 |
+| [22 密钥与证书生命周期](22-pki.md) | 签名密钥与 X.509 证书的签发/轮转/吊销、`Signer` 模块与 KMS 接入 |
 | [23 运营后台](23-admin.md) | 跨租户检索、模拟登录、审计检索、角色与配置管理、用量汇总 |
 | [11 横切能力](11-cross-cutting.md) | 国际化、配置管理、功能开关、限流 |
 

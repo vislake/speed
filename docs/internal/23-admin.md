@@ -2,11 +2,11 @@
 
 > `go/admin` 提供运营后台的后端能力：跨租户检索、模拟登录、审计检索、角色与配置管理、用量与账单汇总。前端对应包是 `admin-shell`（M3，见 [12 前端架构](12-frontend.md)）。本篇是该模块的需求与设计细化文档，对齐 [15 里程碑](15-roadmap.md) M3 行的出口条件——"运营后台可跨租户检索、模拟登录、查审计"——以及 [10 合规与审计](10-compliance-and-audit.md)、[05 身份与访问](05-identity-and-access.md) 里已经写过、但尚未落地成机制的段落。
 >
-> **实现状态注记**：`go/admin` 已按文中 D1-D10 的决策全部落地并有真实测试——租户台账（事件驱动惰性建档 + 手工 CRUD）、模拟登录全链路（发起/结束/列表、请求管道身份替换中间件、强制性质、双身份审计、强制不可退订通知）、跨租户用户检索 + 成员关系拼装、审计检索的 HTTP 外壳与导出腿、强制暂停（经 `tenancy` 的 `TenantStatusResolver` seam）、角色管理、用量/账单看板、通知发送记录检索。reference-app 已作为强制第一消费者接入。本篇按设计文档的语态书写并保留"被否决方案"讨论；文中"请求 X 新增方法 / 需要 X 新增"的接口请求均已随实现落地，当前方法名与签名以 `go/admin/AGENTS.md` 与代码为准。
+> **实现状态注记**：`go/admin` 已按文中 D1-D10 的决策全部落地并有真实测试——租户台账（事件驱动惰性建档 + 手工 CRUD）、模拟登录全链路（发起/结束/列表、请求管道身份替换中间件、强制性质、双身份审计、强制不可退订通知）、跨租户用户检索 + 成员关系拼装、审计检索的 HTTP 外壳与导出腿、强制暂停（经 `tenancy` 的 `TenantStatusResolver` 模块）、角色管理、用量/账单看板、通知发送记录检索。reference-app 已作为强制第一消费者接入。本篇按设计文档的语态书写并保留"被否决方案"讨论；文中"请求 X 新增方法 / 需要 X 新增"的接口请求均已随实现落地，当前方法名与签名以 `go/admin/AGENTS.md` 与代码为准。
 
 ## 1. 定位与边界
 
-**admin 不是新的数据源，是既有能力的操作面。** 在模块依赖图里 admin 处于最顶端——没有任何模块反向依赖它——这既是它能放心依赖几乎全部下游模块的原因，也是它唯一的职责边界：**它不得引入任何其他模块必须知道它存在的新概念**。凡是"业务模块需要为了配合 admin 而修改自己一小块既有行为"的情况（本篇第 3、7 节会列出几处），改动都必须是纯增量、对没有装配 admin 的宿主完全透明的可选项——这与 `pkgcore` 每一版新增能力的一贯做法（新增字段/新增可选 seam，不改变默认行为）一致。
+**admin 不是新的数据源，是既有能力的操作面。** 在模块依赖图里 admin 处于最顶端——没有任何模块反向依赖它——这既是它能放心依赖几乎全部下游模块的原因，也是它唯一的职责边界：**它不得引入任何其他模块必须知道它存在的新概念**。凡是"业务模块需要为了配合 admin 而修改自己一小块既有行为"的情况（本篇第 3、7 节会列出几处），改动都必须是纯增量、对没有装配 admin 的宿主完全透明的可选项——这与 `pkgcore` 每一版新增能力的一贯做法（新增字段/新增可选模块，不改变默认行为）一致。
 
 admin 复用[01 整体架构](01-architecture.md)里说的"声明式注册的三个副产品"：权限清单、配置/开关 schema、通知类型全部是活的注册表，admin 只是把它们渲染出来、提供编辑界面，从不自己维护第二份清单。
 
@@ -31,7 +31,7 @@ admin 复用[01 整体架构](01-architecture.md)里说的"声明式注册的三
 | **模拟登录（impersonation）** | **全仓库不存在**任何机制 | admin 自建（见 D5），本设计第二大的新地基 |
 | 通知发送记录检索 | `notification.SendRecordRepository` 已落地，但只有 `ByTenantAndKey`（单租户单 key），没有跨租户/按收件人列出的方法 | 需要 notification 新增一个方法（见 D10） |
 | 用量/账单汇总 | `metering`/`billing` 的聚合与信用点余额都是按租户查询 | admin 逐租户拼接展示，不新造聚合表（见 D9） |
-| 暂停/限制一个租户 | 无任何强制点——即使 admin 记了"已暂停"，没有任何中间件会因此拒绝请求 | 需要 tenancy 新增一个可选 seam（见 D4） |
+| 暂停/限制一个租户 | 无任何强制点——即使 admin 记了"已暂停"，没有任何中间件会因此拒绝请求 | 需要 tenancy 新增一个可选模块（见 D4） |
 
 ## 3. 核心设计决策
 
@@ -75,7 +75,7 @@ ctx, err := tenancy.WithSystemContext(ctx, bus, pkgcore.SystemReason{
 
 **被否决**：把"租户"提升为 `tenancy` 模块里的一等实体（一张 `tenants` 表 + 创建租户的强制入口 + 让 `org`/`authn`/`billing` 在写入前校验 tenant 是否存在），这是概念上更"正确"的答案——`tenancy` 本就是"什么是租户"这个概念的天然归属。但这个方案的代价是：`tenancy` 是几乎所有模块最底层的公共依赖，在 lockstep 发布下改动它意味着**每一个已经发布过的模块**都要在下一个版本里决定"要不要开始校验租户存在性"；而且今天没有任何模块的写路径会先创建租户再写业务数据（`org.CreateRoot` 本身就是事实上的"创建租户"动作，只是从未被这样命名），强推一个前置的"创建租户"步骤会是一次波及全部已交付模块的破坏性改动，用来解决的只是运营后台一个模块的展示需求，不成比例。按本仓库"新增一个内建实现前先测成本"的纪律（见根 CLAUDE.md 架构纪律一节），这个方向作为候选项搁置，等出现第二个也需要权威租户目录的模块时再重新评估。
 
-### D4：暂停租户要有牙——`tenancy` 新增一个可选的 `TenantStatusResolver` seam
+### D4：暂停租户要有牙——`tenancy` 新增一个可选的 `TenantStatusResolver` 模块
 
 D3 的台账如果只是"记了但没人看"，"暂停租户"这个运营动作就是摆设。选定方案：给 `tenancy.Middleware` 增加一个新的、**默认关闭**的可选依赖：
 
@@ -90,9 +90,9 @@ type TenantStatusResolver interface {
 func WithTenantStatusResolver(r TenantStatusResolver) MiddlewareOption
 ```
 
-`tenancy.Middleware` 在解析出租户之后、把 tenant 注入 context 之前，若装配了 resolver 且返回"已暂停"，直接 403 拒绝（复用 authn 中间件链里"未认证请求 fail-closed"的同一种失败即拒绝语义），不会执行到 handler。`admin` 在自己的 `Register` 里把这个 seam 接到 `admin_tenants` 表上，是这个 seam 唯一的实现者，但接口本身不认识 `admin`——跟 `rbac.SubtreeResolver` 不认识 `org` 是同一个模式。
+`tenancy.Middleware` 在解析出租户之后、把 tenant 注入 context 之前，若装配了 resolver 且返回"已暂停"，直接 403 拒绝（复用 authn 中间件链里"未认证请求 fail-closed"的同一种失败即拒绝语义），不会执行到 handler。`admin` 在自己的 `Register` 里把这个模块接到 `admin_tenants` 表上，是这个模块唯一的实现者，但接口本身不认识 `admin`——跟 `rbac.SubtreeResolver` 不认识 `org` 是同一个模式。
 
-未装配这个 seam 的宿主（没有引入 `admin` 的项目）行为零变化，这是它能作为一条"可选、纯增量"的低层改动被接受的前提。
+未装配这个模块的宿主（没有引入 `admin` 的项目）行为零变化，这是它能作为一条"可选、纯增量"的低层改动被接受的前提。
 
 ### D5：模拟登录——admin 自建授权凭据 + 请求管道中间件，绝不铸造目标用户的真实会话
 
@@ -180,7 +180,7 @@ sequenceDiagram
 
 ### 4.2 中间件链的插入点，不改变既有顺序
 
-> 一个曾被考虑的形状是把模拟登录做成 `tenancy.Resolver` 装饰器（`admin.ImpersonationAwareResolver` "包装" `authn.NewPrincipalResolver()`），与 `org.FeatureGate`/`rbac.SubtreeResolver` 归为同一类无导入 seam——但 `tenancy.Resolver` 的接口是 `Resolve(r *http.Request) (pkgcore.TenantID, error)`，只返回一个裸的 tenant id，没有任何通道可以顺带告诉下游"这次请求该以谁的名义处理"（`tenancy.Middleware` 唯一的副作用是 `pkgcore.WithTenant`，从不触碰 `authn.Middleware` 已经装好的 `authn.Principal`）。真实机制因此是下面这个普通的 `net/http` 中间件，`go/admin/pipeline.go` 的 `ImpersonationMiddleware`：
+> 一个曾被考虑的形状是把模拟登录做成 `tenancy.Resolver` 装饰器（`admin.ImpersonationAwareResolver` "包装" `authn.NewPrincipalResolver()`），与 `org.FeatureGate`/`rbac.SubtreeResolver` 归为同一类无导入模块接口——但 `tenancy.Resolver` 的接口是 `Resolve(r *http.Request) (pkgcore.TenantID, error)`，只返回一个裸的 tenant id，没有任何通道可以顺带告诉下游"这次请求该以谁的名义处理"（`tenancy.Middleware` 唯一的副作用是 `pkgcore.WithTenant`，从不触碰 `authn.Middleware` 已经装好的 `authn.Principal`）。真实机制因此是下面这个普通的 `net/http` 中间件，`go/admin/pipeline.go` 的 `ImpersonationMiddleware`：
 
 [01 整体架构](01-architecture.md) 写死的链路是 `authn.Middleware → tenancy.Middleware(authn.NewPrincipalResolver())`。模拟登录**不重排**这条链——它是在这两者之间插入一层中间件：
 
@@ -258,12 +258,12 @@ type ImpersonationGrant struct {
 
 | 模块 | 新增内容 | 对应决策 |
 |---|---|---|
-| `tenancy` | 可选 `TenantStatusResolver` seam + `WithTenantStatusResolver`，未装配时行为不变 | D4 |
+| `tenancy` | 可选 `TenantStatusResolver` 模块 + `WithTenantStatusResolver`，未装配时行为不变 | D4 |
 | `authn` | `Service.SearchUsers`，平台运营专用检索 | D6 |
 | `rbac` | 导出已冻结的权限 catalog 快照的只读访问器 | D8 |
 | `notification` | `SendRecordRepository` 新增按租户+时间范围+渠道+状态过滤的列表方法 | D10 |
 
-四处都是纯增量方法/可选 seam，不改变任何既有签名或默认行为。
+四处都是纯增量方法/可选模块，不改变任何既有签名或默认行为。
 
 ## 8. 已知局限 / 明确不做
 

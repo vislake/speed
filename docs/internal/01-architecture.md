@@ -3,7 +3,7 @@
 > 模块划分、依赖方向、以及模块如何被装配进一个应用。前端包的分层见 [12 前端架构](12-frontend.md)。
 
 ## 架构风格：Modular Monolith
-各能力是独立发布的 Go module，但在具体产品里编译进**同一个二进制**，模块间是进程内接口调用。不引入服务发现、服务网格等 K8s 风格设施——与 Docker Compose 小规模部署的约束匹配。异步解耦统一走事件总线（`EventBus` seam 有多套常驻实现——进程内 channel、Redis Streams 消费组等，装配时按 [03 部署模式与实现组装](03-deployment-modes.md) 选择）。
+各能力是独立发布的 Go module，但在具体产品里编译进**同一个二进制**，模块间是进程内接口调用。不引入服务发现、服务网格等 K8s 风格设施——与 Docker Compose 小规模部署的约束匹配。异步解耦统一走事件总线（`EventBus` 模块有多套常驻实现——进程内 channel、Redis Streams 消费组等，装配时按 [03 部署模式与实现组装](03-deployment-modes.md) 选择）。
 
 ## 后端模块依赖图
 
@@ -18,7 +18,7 @@ graph BT
     jobs["jobs<br/>异步任务队列/重试/进度/定时任务"]
     storage["storage<br/>对象存储/媒体处理/预签名直传"]
     notify["notification<br/>邮件/短信/站内信/模板/双语"]
-    pki["pki<br/>签名密钥与X.509证书生命周期/轮转/Signer seam"]
+    pki["pki<br/>签名密钥与X.509证书生命周期/轮转/Signer 模块"]
     authn["authn<br/>密码+JWT+OIDC RP+社交登录+手机号"]
     rbac["rbac<br/>自建RBAC/domain=租户/子树范围"]
     metering["metering<br/>用量采集/聚合/配额"]
@@ -29,7 +29,7 @@ graph BT
     integ["integration<br/>API Key/限流/外发Webhook"]
     comp["compliance<br/>审计日志/数据保留删除/导出"]
     admin["admin<br/>运营后台/模拟登录"]
-    app["app<br/>应用组装层:装配引擎/中间件链/接缝桥<br/>(无业务域,纪律例外见下)"]
+    app["app<br/>应用组装层:装配引擎/中间件链/桥接<br/>(无业务域,纪律例外见下)"]
 
     app --> pkgcore
     app --> obs
@@ -69,14 +69,14 @@ graph BT
     billing --> jobs
     ai --> jobs
     ai --> storage
-    ai -.->|"Entitlements seam,无导入边(设计如此)"| billing
-    ai -.->|"UsageRecorder seam,无导入边(设计如此)"| metering
+    ai -.->|"Entitlements 模块,无导入边(设计如此)"| billing
+    ai -.->|"UsageRecorder 模块,无导入边(设计如此)"| metering
     sharing --> tenancy
     sharing --> ratelimit
-    sharing -.->|"ResourceResolver seam,无导入边(设计如此)"| storage
+    sharing -.->|"ResourceResolver 模块,无导入边(设计如此)"| storage
     integ --> jobs
     integ --> ratelimit
-    integ -.->|"MembershipChecker seam,无导入边,宿主接线(设计如此)"| org
+    integ -.->|"MembershipChecker 模块,无导入边,宿主接线(设计如此)"| org
     comp --> tenancy
     comp --> jobs
     comp --> storage
@@ -88,15 +88,15 @@ graph BT
     admin --> comp
 ```
 
-图中虚线边（`-.->`，带 seam 标注）表示两个模块之间存在真实的能力协作，但**刻意、永久不建立 import 关系**——协作方在自己包内声明一个结构化类型的接口（无导入方向的 seam），由宿主装配时注入具体实现，与 `org.FeatureGate`/`rbac.SubtreeResolver` 同一手法；这是设计决策，不是尚未补上的依赖。`ai-gateway`→`billing`/`metering`（`Entitlements`/`UsageRecorder` 两个 seam）、`sharing`→`storage`（`ResourceResolver` seam）、`integration`→`org`（`MembershipChecker` seam）三条都是这一类——`go/ai-gateway/module.go`、`go/sharing/resolver.go`、`go/integration/seams.go` 各自的文档注释明确记录这一点为永久性质。这三条虚线边并不等重：`ai-gateway` 的两个 seam 各自的文档注释指名道姓地把 `*billing.EntitlementsService`/`go/metering` 点为宿主该注入的实现；`sharing` 的 `ResourceResolver` 与 `integration` 的 `MembershipChecker` 在 reference-app 里都有真实接线——前者经宿主组件 `reference-app.sharing-resources`（`examples/reference-app/internal/app/host_wiring.go`，产品是 `sharing_resolver.go` 的 `storageSharingResolver`），后者经宿主组件 `reference-app.integration-membership`（同一文件，把 seam 接在 `go/org` 的名册上；`integration` 组件描述符把该可选 token 读入模块，见 `go/integration/component.go`）。但 `integration` 这条边的性质不同：`go/integration/seams.go` 自己的文档注释只说明"谁维护租户成员关系"这件事本身应当模块无关（"whichever module actually tracks who belongs to a tenant"），本代码库里恰好是 `go/org` 的名册，但注释原话明确"nothing requires that"——图上这条边因此记录的是本代码库这一份宿主接线，不是像 `ai-gateway` 两个 seam 那样指名道姓写死的设计目标，读图时不应把它和另外两条一视同仁。这与图上其余的实线边不同：实线边是真实的 Go import（对应各模块 `go.mod` 的 `require`），一个模块与另一个模块之间画不出边，单纯意味着当前版本没有依赖，不代表刻意的边界——`admin` 对 `billing`/`metering`/`cfg` 的依赖（用量看板）尚未建设——属于尚未建设而非刻意不建，图上因此不画任何形式的边，包括虚线。
+图中虚线边（`-.->`，带模块标注）表示两个模块之间存在真实的能力协作，但**刻意、永久不建立 import 关系**——协作方在自己包内声明一个结构化类型的接口（无导入方向的模块接口），由宿主装配时注入具体实现，与 `org.FeatureGate`/`rbac.SubtreeResolver` 同一手法；这是设计决策，不是尚未补上的依赖。`ai-gateway`→`billing`/`metering`（`Entitlements`/`UsageRecorder` 两个模块）、`sharing`→`storage`（`ResourceResolver` 模块）、`integration`→`org`（`MembershipChecker` 模块）三条都是这一类——`go/ai-gateway/module.go`、`go/sharing/resolver.go`、`go/integration/seams.go` 各自的文档注释明确记录这一点为永久性质。这三条虚线边并不等重：`ai-gateway` 的两个模块各自的文档注释指名道姓地把 `*billing.EntitlementsService`/`go/metering` 点为宿主该注入的实现；`sharing` 的 `ResourceResolver` 与 `integration` 的 `MembershipChecker` 在 reference-app 里都有真实接线——前者经宿主组件 `reference-app.sharing-resources`（`examples/reference-app/internal/app/host_wiring.go`，产品是 `sharing_resolver.go` 的 `storageSharingResolver`），后者经宿主组件 `reference-app.integration-membership`（同一文件，把这个模块接在 `go/org` 的名册上；`integration` 组件描述符把该可选 token 读入模块，见 `go/integration/component.go`）。但 `integration` 这条边的性质不同：`go/integration/seams.go` 自己的文档注释只说明"谁维护租户成员关系"这件事本身应当模块无关（"whichever module actually tracks who belongs to a tenant"），本代码库里恰好是 `go/org` 的名册，但注释原话明确"nothing requires that"——图上这条边因此记录的是本代码库这一份宿主接线，不是像 `ai-gateway` 两个模块那样指名道姓写死的设计目标，读图时不应把它和另外两条一视同仁。这与图上其余的实线边不同：实线边是真实的 Go import（对应各模块 `go.mod` 的 `require`），一个模块与另一个模块之间画不出边，单纯意味着当前版本没有依赖，不代表刻意的边界——`admin` 对 `billing`/`metering`/`cfg` 的依赖（用量看板）尚未建设——属于尚未建设而非刻意不建，图上因此不画任何形式的边，包括虚线。
 
 **四条必须写进文档并由 code review 强制执行的纪律：**
 1. `rbac` 不依赖 `authn`。授权只认 `Subject{TenantID, UserID}`，由认证方自行拼装 Subject 后调用授权。
 2. 业务模块之间禁止 import 对方的 struct 做数据库关联，一律用 **ID 引用 + 领域事件**。例：`authn` 发布 `UserCreated`，`org` 订阅后建默认工作空间；而不是 `org` import `authn.User`。这是多模块独立发版下避免版本耦合地狱的关键。
 3. **编译期引入哪些实现，由应用组装者决定，框架不代劳。** 纪律 2 管源码层面，这一条管打包层面：Go 按**包**而非按符号解析依赖，所以一套后端实现只要与接口同包，任何 import 该包的模块就继承它的全部依赖——哪怕一个实现都没用到。确定只用 SQLite 的应用不该被迫编译进 PostgreSQL 驱动；需要运行期在两者间切换的应用，两个驱动包都 import 即可，能力一分不减。现实后果可实测：`go/ratelimit` 非测试代码里零第三方 import，但一个只 import 它的裸 consumer 在 `GOWORK=off` 下跑一次 `go mod tidy`，仍会背上几个自身从未引用的 indirect 依赖——它没做错任何事，是它依赖的包替它做了决定。详见 [03 部署模式与实现组装](03-deployment-modes.md) 的"实现注册表"节与约束 6。
-4. `authn` 不 import `pki`。图上没有 `authn --> pki` 这条边是刻意的：`authn` 在自己这边声明 `KeySource` 接口，由 `pki` 的服务结构化满足，宿主在装配时注入——与 `org`/`rbac` 之间那套无 import 接缝同一手法。`pki` 因此是**装配层面**的必需依赖（不注入则 `NewModule` 失败），不是编译层面的依赖。此外 `authn` 不得触及 `pki` 的 X.509 层：JWT 验签只要公钥和 kid，证书链对它没有价值，只会引入证书解析与链校验的攻击面。详见 [22 密钥与证书生命周期](22-pki.md)。
+4. `authn` 不 import `pki`。图上没有 `authn --> pki` 这条边是刻意的：`authn` 在自己这边声明 `KeySource` 接口，由 `pki` 的服务结构化满足，宿主在装配时注入——与 `org`/`rbac` 之间那套无 import 模块接口同一手法。`pki` 因此是**装配层面**的必需依赖（不注入则 `NewModule` 失败），不是编译层面的依赖。此外 `authn` 不得触及 `pki` 的 X.509 层：JWT 验签只要公钥和 kid，证书链对它没有价值，只会引入证书解析与链校验的攻击面。详见 [22 密钥与证书生命周期](22-pki.md)。
 
-**模块纪律的明文例外：`app`（应用组装层，无业务域）。** 模块清单的通则是"按域内聚划分、只在需要独立发布节奏或可独立消费时成模块"；`go/app` 是这条通则的**唯一记录在案的例外**：它不拥有任何业务域——没有表、没有路由、没有权限、没有事件、不实现 `pkgcore.Module`——存在的唯一理由是"跨模块胶水必须有归宿"：装配引擎（配置装载、数据库打开与迁移、内核引导、HTTP 面与启动/优雅停机生命周期、装配阶段回调）、宿主中性内核（存活探针端点与其挂载规则、预认证允许列表、挂载路由标签播种、authn 挂载路径常量）、固定中间件链（`go/app/chain`：authn→impersonation→tenancy(+allowlist) 顺序编码、authn 子树与 admin 分支的结构化豁免、`chain.Standard` 的注册表推导、host 参数化）与无导入接缝桥接闭包（`go/app/bridges`：billing/metering → ai-gateway 两个 seam、config 惰性句柄 → org/authn 功能门与 sharing 租户配置读取器）。这些知识此前散落在两宿主的逐字节副本与手写闭包里；没有这个模块，"写一次"无处安放。例外是窄的、由三道闸约束：`go/app/AGENTS.md` 的宪章——**结构归 app（装配顺序、接缝接线、HTTP 面与生命周期）、策略归宿主（选哪些模块、键与值、种子内容、宿主键）、不留隐式默认、不构造 infra 实现**（depguard 的 `**/go/**` 基础设施 import 禁令对它原样生效）；包布局本身按依赖成本切分（根包=引擎，最小骨架只付它；`chain`/`bridges` 各自独立，不 wire 就不付）；以及"不得提供隐式默认、不得含策略"的第一道闸——任何让宿主自己的模块反过来依赖 `app`、让 `app` 替宿主做策略选择、或引入隐式默认值的改动，都算违反本例外。CLAUDE.md 的模块纪律原文（"模块是发布单元、按域内聚划分"）不因本例外被削弱；本例外只登记"应用组装层"这一种、且只有这一个实例。
+**模块纪律的明文例外：`app`（应用组装层，无业务域）。** 模块清单的通则是"按域内聚划分、只在需要独立发布节奏或可独立消费时成模块"；`go/app` 是这条通则的**唯一记录在案的例外**：它不拥有任何业务域——没有表、没有路由、没有权限、没有事件、不实现 `pkgcore.Module`——存在的唯一理由是"跨模块胶水必须有归宿"：装配引擎（配置装载、数据库打开与迁移、内核引导、HTTP 面与启动/优雅停机生命周期、装配阶段回调）、宿主中性内核（存活探针端点与其挂载规则、预认证允许列表、挂载路由标签播种、authn 挂载路径常量）、固定中间件链（`go/app/chain`：authn→impersonation→tenancy(+allowlist) 顺序编码、authn 子树与 admin 分支的结构化豁免、`chain.Standard` 的注册表推导、host 参数化）与无导入桥接闭包（`go/app/bridges`：billing/metering → ai-gateway 两个模块、config 惰性句柄 → org/authn 功能门与 sharing 租户配置读取器）。这些知识此前散落在两宿主的逐字节副本与手写闭包里；没有这个模块，"写一次"无处安放。例外是窄的、由三道闸约束：`go/app/AGENTS.md` 的宪章——**结构归 app（装配顺序、模块接线、HTTP 面与生命周期）、策略归宿主（选哪些模块、键与值、种子内容、宿主键）、不留隐式默认、不构造 infra 实现**（depguard 的 `**/go/**` 基础设施 import 禁令对它原样生效）；包布局本身按依赖成本切分（根包=引擎，最小骨架只付它；`chain`/`bridges` 各自独立，不 wire 就不付）；以及"不得提供隐式默认、不得含策略"的第一道闸——任何让宿主自己的模块反过来依赖 `app`、让 `app` 替宿主做策略选择、或引入隐式默认值的改动，都算违反本例外。CLAUDE.md 的模块纪律原文（"模块是发布单元、按域内聚划分"）不因本例外被削弱；本例外只登记"应用组装层"这一种、且只有这一个实例。
 
 ---
 
@@ -149,7 +149,7 @@ type Registry struct {
 
 **依赖注入用 google/wire**（编译期生成）而非 uber/fx：脚手架会被很多不同团队阅读修改，显式生成的装配代码比运行时反射更容易被陌生团队理解和调试。
 
-**事件总线是给可观测性与审计留的统一缝隙**：`observability` 与 `compliance` 只需订阅同一总线即可拿到全部领域事件，业务模块无需耦合它们的具体实现。
+**事件总线是留给可观测性与审计的统一入口**：`observability` 与 `compliance` 只需订阅同一总线即可拿到全部领域事件，业务模块无需耦合它们的具体实现。
 
 前端骨架的 Provider 组装顺序：
 `QueryClientProvider → AppThemeProvider → AuthProvider → RouterProvider`

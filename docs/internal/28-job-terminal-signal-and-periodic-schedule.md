@@ -79,7 +79,7 @@
 - **发布义务的产生点**。义务由三个真实终态写入产生:`completeSucceeded`/`completeDeadLetter`(各自照 `execute` 现在消费 transition report 的位置,只有报告为真的迁移才产生;被并发 `Cancel` 吸收的 no-op 不产生——那一次由 `Cancel` 自己那条义务覆盖)与 `markCancelled`(取消也是一个终态,且是结算侧必须看见的一个:`Refund`)。被丢弃的尝试结果不产生任何事件(它没有终态写入)。StandaloneQueue 的实际发布在发布遍(下条),asynq 的在终态钩点直发。
 - **行内 outbox(StandaloneQueue)**。`jobs` 表新增可空列 `terminal_published_at`(经 `ensureJobsSchema` 的方言分支增量加列,先例是 `claimed_by` 列的自带分支)。语义只有一句:**状态为终态且 `terminal_published_at IS NULL` 的行,欠恰好一次发布**。发布遍随队列生命周期运行:Start 的 writer gate 证明本进程是 live writer 之后(与 dispatcher 同一道门,多副本竞态由构造即封闭),一个后台循环批量取待发行、逐行 `Publish`、**成功才盖章**;失败记日志、行保持待发、下一遍重试(排序键实现轮定:`markCancelled` 今天不写 `completed_at`,取消行需经 `updated_at` 或两列合并排序)。进程在没有发完时死去,正是崩溃窗口本身——下一次 Start 的发布遍接着发,与 `resetInterruptedRecords` 的恢复精神同构。`Close` 不做特殊冲刷:未发的行下次 Start 补发,不多一条路径。存量行在加列的同时回填(`terminal_published_at = 变更时刻`),历史的终态不补发(见 §2.3)。
 - **asynq 腿**。在三个终态点直发:成功点在 `processTaskUncancelled` 的 "job succeeded" 记录点,死信点在 `handleErrorAttempt` 的 archive-bound 分支(该子包自己复刻的归档-重试边界,`queue/asynq/worker.go:228/:297`),取消在 `Cancel` 写定 cancellation marker 之后的路径。时序上发布先于 asynq 自己的归档/完成写——**与 `FailureHook.OnFailure` 已记录的同一条让步**(asynq 没有 post-archive 钩子)。后果是崩溃窗口里可能"重跑后再次到达终态",产生**重复事件而不是丢失事件**,重复由消费幂等吸收。
-- **注入**。两个实现各加一个选项:`jobs.WithEventBus(bus)` 与 `asynq.WithEventBus(bus)`(纯增量)。按选项约定的既有规则办事:传 nil 以带码 panic 拒绝(不传选项 = 不发布,是合法组合——无总线的宿主不被迫接一条没人消费的缝);`Wire` 的签名不动(它排空的是 handler 座席,与总线注入是两件事)。
+- **注入**。两个实现各加一个选项:`jobs.WithEventBus(bus)` 与 `asynq.WithEventBus(bus)`(纯增量)。按选项约定的既有规则办事:传 nil 以带码 panic 拒绝(不传选项 = 不发布,是合法组合——无总线的宿主不被迫接一条没人消费的模块接口);`Wire` 的签名不动(它排空的是 handler 座席,与总线注入是两件事)。
 - **消费契约**。(i) 幂等:至少一次投递、分布式模式下总线实现可能按设计丢弃失败 handler(eventbus 各实现的文档),重复与个别丢失都在契约内;(ii) **行是真相**:事件是通知,回读 `Get` 是数据面;在 asynq 腿上前置发布次序意味着事件到达时行可能还没离开 `running`,消费方**不得**以回读为前提(照抄 `FailureHook` 的措辞纪律);(iii) 需要完整性的消费方**保留自己的对账网**,事件只把延迟从"下一次清扫"压到"迁移即达",不替代网。
 
 ### 2.3 失败面闭合
@@ -105,7 +105,7 @@
 
 ### 2.5 备选否决理由
 
-- **B 队列侧回调注册表**:(i) 总线已经是跨模块事实的既有缝,"再加一条平行回调 ABI"正是 27 号文档否决注册回调时用过的理由(事件已经携带同一事实,回调只是平行机制);(ii) 回调是进程内的——分布式模式下"消费方在另一个副本"根本表达不了,而跨模块恰恰是记录在案的用例;(iii) 在 lockstep 下冻结一条新 ABI,收益却与订阅一条既有事件完全重叠;(iv) 回调在 worker 的终态路径上同步执行,慢回调拖住 worker,而总线实现已经把"投递到远处"这件事做完了。
+- **B 队列侧回调注册表**:(i) 总线已经是跨模块事实的既有模块接口,"再加一条平行回调 ABI"正是 27 号文档否决注册回调时用过的理由(事件已经携带同一事实,回调只是平行机制);(ii) 回调是进程内的——分布式模式下"消费方在另一个副本"根本表达不了,而跨模块恰恰是记录在案的用例;(iii) 在 lockstep 下冻结一条新 ABI,收益却与订阅一条既有事件完全重叠;(iv) 回调在 worker 的终态路径上同步执行,慢回调拖住 worker,而总线实现已经把"投递到远处"这件事做完了。
 - **C 台账轮询作为主机制**:没有信号就是现状;作为唯一机制,要求每个消费方自建节律、起点与水位——今天正是这样(§1.2),这正是要消掉的部分。台账保留为**持久真相**与消费方对账网的数据面,不作为信号。
 - **D 把 `OnFailure` 泛化成 `CompletionHook`(Handler 接口上的成功+失败双钩子)**:(i) 它 per-handler、同模块内——记录在案的 ai-gateway→billing 情形根本表达不了;(ii) 把成功路径也塞进"失败补偿面",混淆了纪律条款划出的边界;(iii) 仍然错过"订阅方是任意模块"这一半。
 - **E 队列自己重排周期任务**(把 recurrence 做进 `Enqueue`):并入 §3.5 的调度候选一并否决。
@@ -139,7 +139,7 @@
 
 - **座席**。`pkgcore.Registry` 新增字段 `Schedules`(接口形状照既有座席:`Add(decls ...PeriodicTask) error` 拒绝重复类型、`Declarations() []PeriodicTask` 按声明序返回;错误值沿用既有 `ErrDuplicate*` 家族风格)。声明 `PeriodicTask` 的字段:任务类型、周期 `Every`(窗口大小)、作用域 `Scope ∈ {Platform, PerTenant}`。
 - **驱动**。`jobs.NewScheduler(q Queue, opts ...SchedulerOption)`,选项含 `WithTenantLister` 与 `WithInterval`(tick 粒度,参考应用今天的 1 分钟),`Start`/`Stop` 生命周期与队列同款;选项校验照既有约定(非法值 = 选项期带码 panic)。
-- **租户宇宙 seam**。调度器接受任一个结构性满足 `ListTenants(ctx) ([]pkgcore.TenantID, error)` 的值——形状与 compliance 自己的 `TenantLister`(retention.go:108)逐字对齐,宿主已有的实现不改一行即可同时满足两处(结构类型 seam 的先例:org 的 `Scope`/`FeatureGate`、config 的 `WithResolver`)。参考应用的 `periodicTenantUniverse`(configured ∪ D3 台账)改造成这样一个实现——它本来就是宿主资产,不迁进任何模块。
+- **租户宇宙模块接口**。调度器接受任一个结构性满足 `ListTenants(ctx) ([]pkgcore.TenantID, error)` 的值——形状与 compliance 自己的 `TenantLister`(retention.go:108)逐字对齐,宿主已有的实现不改一行即可同时满足两处(结构类型模块接口的先例:org 的 `Scope`/`FeatureGate`、config 的 `WithResolver`)。参考应用的 `periodicTenantUniverse`(configured ∪ D3 台账)改造成这样一个实现——它本来就是宿主资产,不迁进任何模块。
 - **每 tick 的行为**:对每条声明,`Platform` 作用域直接入队一次(平台哨兵租户,先例:`platformScanTenantID`/`platformCRLRegenerateTenantID`);`PerTenant` 作用域经 lister 展开、逐租户入队(每个租户携带自己的上下文,镜像今天 `runPeriodicTasks` 的形状)。幂等键 = 该站点既有的前缀 + 租户段 + 窗口起点(UTC RFC3339),窗口截断在绝对时钟上——**与七处现键逐字对齐是迁移轮的硬要求**(同一 (类型, 租户, 窗口) 经调度器与经手动的 `Enqueue*` 必须解析出同一个键,否则同一窗口会跑两次)。
 - **无 lister 的 `PerTenant` 声明 = Start 报错**(点名声明),而不是静默不扫——静默不扫正是 reference-app 的 ledger 半修掉的那个 bug 形态。
 - **失败与门控语义**照抄现宿主 ticker 的契约:入队失败记日志、下一 tick 重试;tick 体同步、`time.Ticker` 不排积压。调度器与 worker 的关系是宿主政策:参考应用今天把排产绑在 `cfg.DisableQueueWorker` 门后(注释记录的理由:排一个本副本无法执行的作业没有意义);"只排产不执行"的副本在分布式模式下也是合法组合(`Enqueue` 不要求 `Start`),文档写明两种组合,参考应用保持现状绑法。
@@ -176,7 +176,7 @@
 ## 5 实现轮次划分
 
 - **R1 终态信号机制**(go/jobs 根包 + `queue/asynq`):事件类型与载荷、两个实现的 `WithEventBus`、StandaloneQueue 的 `terminal_published_at` 列(含存量回填)与发布遍、asynq 的三处发布点、契约文本(AGENTS.md 与 `FailureHook` 边界段的对偶)、测试(崩溃后补发、取消赢不产生丢弃事件、重复容忍、两模式契约一致、发布失败不阻塞 worker 终态路径)。消费方零改动——无人订阅时事件是无副作用的 no-op,信号可以先落地。
-- **R2 周期调度席位**(pkgcore + go/jobs + 七模块 + reference-app):`Registry.Schedules` 座席、`jobs.Scheduler` + lister seam + 统一窗口键派生、七处声明、参考应用 ticker 删除与 lister 改造、键对齐(pin 每个站点的前缀,保证同一窗口两条路径同键)、flow test 照旧。R2 出清 24 号文档普查行 4。
+- **R2 周期调度席位**(pkgcore + go/jobs + 七模块 + reference-app):`Registry.Schedules` 座席、`jobs.Scheduler` + lister 模块接口 + 统一窗口键派生、七处声明、参考应用 ticker 删除与 lister 改造、键对齐(pin 每个站点的前缀,保证同一窗口两条路径同键)、flow test 照旧。R2 出清 24 号文档普查行 4。
 - **R3 信用结算迁移**(reference-app/internal/smilesim):订阅者 + 通知半边 + `ReconcileOutstandingCredits` 上席位。**不硬依赖 R2**:R2 未落地时 reconciler 驱动力保持 `StartReconciler` 现状,R3 只做信号侧;R2 已落地则一并迁。
 - **顺序理由**:R1 先于 R3(结算需要信号);R1 与 R2 都重度触碰 `go/jobs` 同几个文件,串行落地避免并行改动;R2 的席位对 R3 是可选增强而非前置。
 - **R4(硬化,等 asynq 腿获得真实消费方)**:补投扫描(开放问题 1)。

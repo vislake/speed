@@ -27,7 +27,7 @@ reference-app 完全绕过 loader,`ConfigFromEnv`(internal/app/server.go,返回 
 | 组 | 数 | 键 |
 |---|---|---|
 | core | 3 | `APP_DEPLOYMENT_MODE`、`APP_DB_PATH`、`PORT` |
-| seams | 13 | `APP_REDIS_ADDR`、`APP_S3_ENDPOINT`、`APP_S3_BUCKET`、`APP_S3_ACCESS_KEY`、`APP_S3_SECRET_KEY`、`APP_S3_REGION`、`APP_S3_USE_SSL`、`APP_OBJECT_STORE_ROOT`、`APP_SMTP_HOST`、`APP_SMTP_PORT`、`APP_SMTP_USERNAME`、`APP_SMTP_PASSWORD`、`APP_SMS_GATEWAY_URL` |
+| 接线 | 13 | `APP_REDIS_ADDR`、`APP_S3_ENDPOINT`、`APP_S3_BUCKET`、`APP_S3_ACCESS_KEY`、`APP_S3_SECRET_KEY`、`APP_S3_REGION`、`APP_S3_USE_SSL`、`APP_OBJECT_STORE_ROOT`、`APP_SMTP_HOST`、`APP_SMTP_PORT`、`APP_SMTP_USERNAME`、`APP_SMTP_PASSWORD`、`APP_SMS_GATEWAY_URL` |
 | keys | 7 | `APP_ROOT_KEY` 与六枚派生键 `APP_CONFIG_KEY`、`APP_ORG_INDEX_KEY`、`APP_NOTIFICATION_INDEX_KEY`、`APP_PKI_LOCAL_KEY_CIPHER_KEY`、`APP_AUTHN_BLIND_INDEX_KEY`、`APP_AUTHN_PII_CIPHER_KEY` |
 | network | 2 | `APP_TRUSTED_PROXIES`、`APP_READ_FLY_CLIENT_IP` |
 | observability | 2 | `APP_OTLP_ENDPOINT`、`APP_PUBLIC_ORIGIN` |
@@ -148,7 +148,7 @@ func Verify(target any, declared []string) error   // 每个 declared 键必须�
 
 `APP_ROOT_KEY` 是**宿主键**:宿主根变量的命名与"显式单键胜过派生"的优先级应用归宿主;派生链的归属已被 §9.4 取代——原判"目的串、dev default、HKDF 调用属参考应用装配逻辑,不入任何平台模块"作废,最终归属为**席位 + 工具箱**:目的串约定(每个声明键路径一个 `"speed." + keyPath + ".v1"`)随 BootstrapKey 席位落在 `pkgcore`,材料派生由 `dbkit.DeriveKey` 原语承担;dev default 与根变量名仍归宿主。六派生键声明后,"每枚密钥为何单独存在、为何 AES 不当 HMAC 用"这类理由由模块声明承载(参考应用现有常量深注释是文案来源),参考应用侧常量注释在步骤二退役。
 
-其余 29 枚(core/seams/network/observability/serving/demo + root)是宿主键:接线地址、demo rig、故障注入、端口、部署形态——装配面的东西,归宿主。它们不会因为没有模块声明而失去文档:步骤二起由 loader 形状结构体的字段注释承载(§5.1)。
+其余 29 枚(core/接线/network/observability/serving/demo + root)是宿主键:接线地址、demo rig、故障注入、端口、部署形态——装配面的东西,归宿主。它们不会因为没有模块声明而失去文档:步骤二起由 loader 形状结构体的字段注释承载(§5.1)。
 
 ### 3.6 lockstep 姿态
 
@@ -231,7 +231,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 
 | 档 | 键 | 表达 |
 |---|---|---|
-| 部署与接线(core/seams/network/observability/serving,21 枚) | 见 §1.2 表 | 普通字段 + `env=` 钉 + 结构体默认;kind 随 curated(int/bool/string)转字段类型 |
+| 部署与接线(core/接线/network/observability/serving,21 枚) | 见 §1.2 表 | 普通字段 + `env=` 钉 + 结构体默认;kind 随 curated(int/bool/string)转字段类型 |
 | 密钥组(keys,7 枚) | `APP_ROOT_KEY` + 六派生键 | 全字段入结构体,类型为 hex 文本(string);三段优先派生(`resolveKey`)移到"加载后推导步",目的串与 dev default 常量随迁;individual env 显式(非空)胜出、派生次之、dev default 兜底的语义逐字保留;loader 的 string 空值按"未设"进入推导,与现在 `os.Getenv` 空串视同未设一致。六派生键同时是模块声明键(§3.5),结构体字段与声明的一致性由 Verify 保证 |
 | demo rig 与 kill 开关(demo,7 枚) | `APP_DEMO_USERS_PASSWORD`、`APP_DEMO_PLATFORM_STAFF_PASSWORD`、`APP_AI_GATEWAY_IMAGE_BASE_URL`、`APP_AI_GATEWAY_IMAGE_API_KEY`、`APP_DISABLE_DEMO_USER_HEADER`、`APP_DISABLE_QUEUE_WORKER`、`APP_FAIL_SELF_SERVICE_PROVISION` | 存在式开关(`DISABLE_DEMO_USER_HEADER`、`DISABLE_QUEUE_WORKER`)保持 string 型与"非空即真"语义——零行为变化;`FAIL_SELF_SERVICE_PROVISION` 为 int;AI 网关 demo 两键为 string。demo 组不因"只是演示"而降低载体一致性 |
 | `PORT` | 无前缀惯例变量 | `env=PORT` 钉;healthcheck 分支与主进程共用同一份 loader 结果(`runHealthcheck` 的 `os.Getenv("PORT")` 换成 cfg 值),cmd/server 内直读清零 |

@@ -174,7 +174,7 @@ func Value[T any](c ComponentConfig, key string) (T, error) // 类型化标量�
 
 同一个 `ComponentConfig` 类型贯穿两级：整体组合配置是一棵 `ComponentConfig`，每个组件在 `New` 里收到的是 `components.<name>` 子树。
 
-**命名消歧**：`ComponentConfig` 与旧 seam 的扁平 `Config` 类型（存于 `pkgcore`、F 轮退役）、`Config` 声明席、`config` 模块及 `pkgcore/config` 子包均不重名——`Component` 前缀即为此而设。
+**命名消歧**：`ComponentConfig` 与旧的扁平 `Config` 类型（存于 `pkgcore`、F 轮退役）、`Config` 声明席、`config` 模块及 `pkgcore/config` 子包均不重名——`Component` 前缀即为此而设。
 
 **与注册表的分工**：配置按**键**寻址（组件私有、来源分层、origins 与 sensitive 校验）；注册表按**类型**寻址（活对象、注入、全体共享）。活句柄不可能来自文件，配置的覆盖与来源性质只对数据成立——两者不可合并。
 

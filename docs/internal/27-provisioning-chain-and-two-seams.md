@@ -1,4 +1,4 @@
-# 27 注册触发供给链与两个平台缝:归属裁定、链契约与 reference-app 迁移
+# 27 注册触发供给链与两个平台件:归属裁定、链契约与 reference-app 迁移
 
 > 本文覆盖宿主面审计清单中的两项:**第 17 项**——注册触发的跨模块供给链(reference-app 的 `self_service.go` 链);**第 20 项**——两个小平台件:notification 的静态地址解析器与 billing 的订阅 `EnsureActive`。本文只产出设计,不含代码改动。全部锚点在写作时对当前树逐处复核,引用以符号名为主、`file:line` 为辅;行号随实现轮失效,复核以实现时的符号为准。
 
@@ -74,7 +74,7 @@ org 的订阅者 `handleUserCreated`(go/org/events.go:305)只处理**带租户**
 
 - **A 平台能力(新模块/上位模块内建供给)**:除 §2.2 的成本与策略理由外,还有一条循环论证——要把"哪一跳做什么"参数化到平台,平台要么给出一个回调注册表(回到审计描述的"回调形状",而且把它冻成 lockstep 公共 API),要么替宿主写死 Plan/信用点/命名(平台凭空发明产品决策)。两者都不优于宿主装配。
 - **C 模块事件链**:即 rbac 订阅注册事件、billing 订阅注册事件,各自完成自己那一跳。否决理由:(i) 每跳都要各自判断它不拥有的策略(建不建订阅?订哪个 Plan?);(ii) 没有协调者就不存在顺序与恢复——org 的注释已经点破"事件不重发,失败无人重试",每个订阅方要各自再拉一套队列重试,把同一机制复制 N 份;(iii) 分步之间的可见状态由总线投递顺序决定,部分失败没有单一的责任人与终局信号;(iv) 租户 id 是"派生、非铸造"的收敛锚,而这是宿主的策略,模块无从推导;(v) 动作发生在远处——一次未付费的注册静默创建 billing 行,排障要跨模块猜。org 现有订阅保持原样是另一回事:它反应的是"既有租户内的事实"(带租户事件),不是"租户诞生"政策,边界正在这里。
-- **D authn 注册回调(`WithRegistrationHook` 一类)**:即把链做成 authn 的一个回调选项。否决理由:(i) 它会把错误/失败语义压回 authn 的请求路径——org 的文档已经论证过为什么把错误回灌进 `Publish` 是有害的(会让 org 的理解失败表现为 authn 的创建失败),回调 ABI 是同一问题的冻结版;(ii) 事件已经携带同一事实,总线(In-process 或 Redis)是同一套缝,回调只是平行机制;(iii) 回调把供给钉死在"处理注册请求的那一个副本"上,而事件订阅在多副本下的收敛行为(派生租户 + 幂等跳)已经设计成可重复。附带说明:authn 目前**没有**任何 hook/callback 机制(树中不存在此类选项),此候选如要成立是新机制。
+- **D authn 注册回调(`WithRegistrationHook` 一类)**:即把链做成 authn 的一个回调选项。否决理由:(i) 它会把错误/失败语义压回 authn 的请求路径——org 的文档已经论证过为什么把错误回灌进 `Publish` 是有害的(会让 org 的理解失败表现为 authn 的创建失败),回调 ABI 是同一问题的冻结版;(ii) 事件已经携带同一事实,总线(In-process 或 Redis)是同一套机制,回调只是平行机制;(iii) 回调把供给钉死在"处理注册请求的那一个副本"上,而事件订阅在多副本下的收敛行为(派生租户 + 幂等跳)已经设计成可重复。附带说明:authn 目前**没有**任何 hook/callback 机制(树中不存在此类选项),此候选如要成立是新机制。
 - **E 进共享宿主内核**:宿主中性内核(存活探针、预认证允许列表、挂载标签、生命周期、固定中间件链)现居平台模块 `go/app`,由 `tools/check_host_composition.py` 钉住"单一来源"(两个宿主共同 import,任何一方不得自行重声明/重长内核语句)。供给链是策略 + 模块胶水,把 org/rbac/billing 的 import 拉进这个宿主中性模块,既违 [14 示例应用](14-reference-app.md)"只属于一个宿主的行为不进内核"的边界,也让内核失去中性。
 - **F 通用"幂等步骤序列 + 重试"原语(进 pkgcore/jobs)**:把 provision 抽象成"一串可重入步骤 + 队列重试"的通用机制。否决:这是把业务补偿放进队列层(纪律明禁);且宿主现有形状(一个 job 类型 + 一个 handler + 一个失败钩子)已经足够短,抽象只增加间接层。
 
@@ -127,7 +127,7 @@ org 的订阅者 `handleUserCreated`(go/org/events.go:305)只处理**带租户**
 
 ### 4.1 现状
 
-缝已经存在:`notification.UserAddressResolver`(go/notification/delivery.go:248,`UserAddresses` :219)是"用户投递在发送时解析收件地址"的结构化缝,**必装**:`Module.Register` 在缺失时以 `ErrUserAddressResolverRequired`(go/notification/errors.go:359)拒绝启动,`WithUserAddressResolver`(module.go:210)是注入点。契约三条:发送时读取(非入队时);缺地址不是错误(渠道跳过并记一条 skipped 记录);返回的地址必须是宿主**已验证**的地址——用户路径上模块不做验证,resolver 就是全部"可否发送"的门(delivery.go 的契约文本明说这只能写在契约里)。
+缝已经存在:`notification.UserAddressResolver`(go/notification/delivery.go:248,`UserAddresses` :219)是"用户投递在发送时解析收件地址"的结构化模块接口,**必装**:`Module.Register` 在缺失时以 `ErrUserAddressResolverRequired`(go/notification/errors.go:359)拒绝启动,`WithUserAddressResolver`(module.go:210)是注入点。契约三条:发送时读取(非入队时);缺地址不是错误(渠道跳过并记一条 skipped 记录);返回的地址必须是宿主**已验证**的地址——用户路径上模块不做验证,resolver 就是全部"可否发送"的门(delivery.go 的契约文本明说这只能写在契约里)。
 
 **手写重写有三处**:
 
@@ -155,9 +155,9 @@ func New(addresses map[string]notification.UserAddresses) notification.UserAddre
 
 ### 4.3 备选否决理由
 
-- **做成模块选项 `WithStaticUserAddresses(map)`**:把实现放进 `notification` 根包,与接口同包,违打包纪律;也让"模块根包不含实现"的先例(billing/pki/authn 的模块缝全在子包)出现例外。pkgcore 的 `kv.memory` 内置不是反例:那是 **seam 模块自身**的内建注册(带 capability 位、进 SeamRegistry),而 `UserAddressResolver` 是模块声明、宿主实现的缝。
+- **做成模块选项 `WithStaticUserAddresses(map)`**:把实现放进 `notification` 根包,与接口同包,违打包纪律;也让"模块根包不含实现"的先例(billing/pki/authn 各模块的实现全在子包)出现例外。pkgcore 的 `kv.memory` 内置不是反例:那是 **kv 模块自身**的内建注册(带 capability 位、进 SeamRegistry),而 `UserAddressResolver` 是模块声明、宿主实现的模块接口。
 - **放进 pkgcore**:pkgcore 在 notification 之下,方向反了(为一张 notification 域的表而让平台最底层的模块认识它);且 pkgcore 没有 notification 的 `UserAddresses` 类型。
-- **只留宿主侧、文档化 5 行模式**:这正是审计点名的现状;三处重写说明"5 行"没有阻止重复,且必装缝的最小可用装配应当是一行。
+- **只留宿主侧、文档化 5 行模式**:这正是审计点名的现状;三处重写说明"5 行"没有阻止重复,且必装模块接口的最小可用装配应当是一行。
 - **命名带 `demo` 立场(仿 `demoseed`)**:静态地址表对单租户生产安装同样成立(地址由运营方持有),把它结构性锁进 demo 反而误伤;立场改由包文档承载(§4.2 第二条),`demoseed` 的实体是"注册演示账号"这个 demo-only 动作,两者不同。此判断列入开放问题 Q2 复核。
 - **放进测试支持包(`queuetest` 模型)**:resolver 有生产用途(演示部署、小安装、骨架),不是测试专属。
 
