@@ -594,4 +594,3 @@ func (m *Module) attach(host hostSeams) {
 	m.members.host = host
 	m.invites.host = host
 }
-

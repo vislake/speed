@@ -14,8 +14,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 func TestModule_Identity(t *testing.T) {
@@ -440,7 +440,6 @@ func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.AuditActionsSeat().Add("neighbour.thing.do")
 }
 
-
 // assertContainsAll fails t unless got holds every entry in want.
 func assertContainsAll(t *testing.T, got, want []string) {
 	t.Helper()
@@ -525,9 +524,9 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 // no link builder, and the boot succeeds.
 func TestModule_Register_EmailDisabled_NeedsNoMailWiring(t *testing.T) {
 	_, err := componenttest.DeclareModules(NewModule(nil,
-			WithEmailIndexer(newTestEmailIndexer(t)),
-			WithInvitationEmailDisabled(),
-		))
+		WithEmailIndexer(newTestEmailIndexer(t)),
+		WithInvitationEmailDisabled(),
+	))
 	if err != nil {
 		t.Fatalf("Bootstrap with the invitation email disabled: %v", err)
 	}
