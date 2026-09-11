@@ -40,6 +40,7 @@ package notification_test
 import (
 	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -64,6 +65,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -313,12 +315,39 @@ func openNotificationPostgres(t *testing.T, ctx context.Context, pgContainer *po
 	return db
 }
 
+// localeCarrier is the declaration face's locale half: the module name --
+// the id prefix its bundle's message ids merge under -- and the embedded
+// bundle itself. Every pkgcore.Module carried by these two legs satisfies
+// it, notification's own module and the clinic fixture alike.
+type localeCarrier interface {
+	Name() string
+	Locales() embed.FS
+}
+
+// hostCatalog merges every booted module's locale bundle into the message
+// catalog, module by module under the module's own name -- the same merge a
+// real host performs over its selected components' assets and publishes
+// into the by-type context before anything can render (a notification
+// template, a verification-code message). A bundle whose ids do not carry
+// its module's prefix fails the merge here, naming the module, exactly as
+// the host's own catalog build would refuse it.
+func hostCatalog(t *testing.T, modules ...localeCarrier) *i18n.Catalog {
+	t.Helper()
+	builder := i18n.NewBuilder()
+	for _, m := range modules {
+		if err := builder.AddModule(m.Name(), m.Locales()); err != nil {
+			t.Fatalf("merge the %s message catalog: %v", m.Name(), err)
+		}
+	}
+	return builder.Build()
+}
+
 // bootModule returns a fully wired notification.Module over db -- every
 // required seam filled with the tier's fixtures (the SMS sender writing to
-// smsBuf, the recording stubQueue), bootstrapped through a bare
-// pkgcore.NewKernel() exactly as a standalone host boots it. Bootstrap
-// runs the module's Register (seam validation, declarations, attachments)
-// and assembles the merged catalog; the returned registry is the host's.
+// smsBuf, the recording stubQueue), declared through the module's Register
+// the way a host's assembly declares it, with the merged catalog (the
+// module's own bundle) published into the registry in the same Init window
+// as the host's own catalog step. The returned registry is the host's.
 func bootModule(t *testing.T, ctx context.Context, db *gorm.DB) (*notification.Module, *pkgcore.ComponentRegistry, *bytes.Buffer) {
 	t.Helper()
 
@@ -331,9 +360,15 @@ func bootModule(t *testing.T, ctx context.Context, db *gorm.DB) (*notification.M
 		notification.WithDeliveryQueue(&stubQueue{}),
 		notification.WithUserAddressResolver(&stubUserResolver{byUser: map[string]notification.UserAddresses{}}),
 	)
-	reg, err := componenttest.DeclareModules(module)
-	if err != nil {
-		t.Fatalf("Kernel.Bootstrap: %v", err)
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareAll(reg,
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			r.Put(hostCatalog(t, module))
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare the module and publish the merged catalog: %v", err)
 	}
 	return module, reg, smsBuf
 }

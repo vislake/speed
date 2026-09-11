@@ -209,10 +209,32 @@ func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *eventbusre
 	)
 	// The replica's declaration turn: bus is the registry's one EventBus
 	// value -- the seam every subscription lands on and every publish reads
-	// -- and the seats accept writes only inside the Init window
-	// DeclareInto drives.
+	// -- and the seats accept writes only inside the Init window DeclareAll
+	// drives. The same window publishes the merged catalog every booted
+	// module's bundle feeds, the host's own catalog step, so the pipeline
+	// renders the fixture type's copy from the same catalog a real replica
+	// would hold.
 	reg := componenttest.NewRegistryWithBus(bus)
-	if err := componenttest.DeclareInto(reg, append([]componenttest.Declarer{module}, extraModules...)...); err != nil {
+	carriers := []localeCarrier{module}
+	for _, extra := range extraModules {
+		if carrier, ok := extra.(localeCarrier); ok {
+			carriers = append(carriers, carrier)
+		}
+	}
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error {
+			for _, m := range append([]componenttest.Declarer{module}, extraModules...) {
+				if err := m.Register(r); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		func(r *pkgcore.ComponentRegistry) error {
+			r.Put(hostCatalog(t, carriers...))
+			return nil
+		},
+	); err != nil {
 		t.Fatalf("declare the replica's modules over the Redis bus: %v", err)
 	}
 	return module, queue
