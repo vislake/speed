@@ -303,13 +303,17 @@ func TestRequirePermission_AuthorizerError_IsAServerErrorAndStillBlocks(t *testi
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	body := testkit.DecodeErrorBody(t, rec.Body)
+	// Capture the body text before decoding: DecodeErrorBody consumes the
+	// recorder's whole buffer, so the leak check below must assert on the
+	// captured text rather than on a second read.
+	raw := rec.Body.String()
+	body := testkit.DecodeErrorBody(t, strings.NewReader(raw))
 	if body.Code != ErrStorage.Code {
 		t.Fatalf("code = %q, want %q", body.Code, ErrStorage.Code)
 	}
 	// The cause must never reach the body: it can carry SQL fragments.
-	if got := rec.Body.String(); strings.Contains(got, "database unreachable") {
-		t.Fatalf("the response body leaked the underlying cause: %s", got)
+	if strings.Contains(raw, "database unreachable") {
+		t.Fatalf("the response body leaked the underlying cause: %s", raw)
 	}
 }
 
