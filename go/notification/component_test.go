@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -82,5 +83,59 @@ func TestComponent_NewFailsWithoutTheDatabase(t *testing.T) {
 	instance, err := notificationComponent.New(context.Background(), pkgcore.NewComponentRegistry(), pkgcore.NewComponentConfig(nil))
 	if err == nil {
 		t.Fatalf("New = %v, nil error; want the missing database reported", instance)
+	}
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the module's declaration
+// entry point through a real Init stage: the module's Register runs while
+// the seats accept writes, so its full surface -- the inbox event catalog,
+// the contact audit vocabulary, the delivery job handler, the type
+// registrars the services read at call time, the inbox announcement
+// subscription and the HTTP mount -- lands in the assembly's own seats and
+// on the assembly's own bus.
+//
+// The module under test is the directly built one: the descriptor's New
+// cannot yet supply the two contact blind indexers (a host pre-database
+// step over cipher material the host holds), so a module built by the
+// descriptor itself fails Register's ErrContactEmailIndexerRequired. The
+// declaration body is the same on both paths, which is what this test
+// pins.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := testutil.NewSQLite(t, moduleName, migrations.FS)
+	bus := pkgcore.NewMemoryEventBus()
+	m := NewModule(db, testModuleOptions(t)...)
+
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(bus)
+	componenttest.DuringInit(t, reg, m.Register)
+
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	if !slices.Contains(types, EventInboxCreated) {
+		t.Errorf("Events seat = %v, want the inbox-created declaration", types)
+	}
+	if actions := reg.AuditActions.Actions(); len(actions) == 0 {
+		t.Error("AuditActions seat is empty, want the module's contact audit vocabulary")
+	}
+	if _, claimed := reg.Jobs.Handlers()[jobTypeDeliver]; !claimed {
+		t.Errorf("Jobs seat = %v, want the delivery handler", reg.Jobs.Handlers())
+	}
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
+	if m.handler == nil {
+		t.Error("the module's HTTP handler was not built during the Init stage")
+	}
+	// The declarations reached the running services: both type-scoped
+	// services hold the assembly's own registrar, and the delivery service
+	// and handler hold the assembly's declaration face for their call-time
+	// reads.
+	if m.prefs.types == nil || m.contacts.types == nil {
+		t.Error("the type-scoped services did not take the assembly's notification registrar")
+	}
+	if m.deliveries.host == nil || m.handler.host == nil {
+		t.Error("the delivery service or handler did not take the assembly's declaration face")
 	}
 }

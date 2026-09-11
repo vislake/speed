@@ -9,6 +9,7 @@ package notification
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -52,10 +53,14 @@ type notificationComponentConfig struct {
 // Prepare is deliberately not declared: the contact-address serializer and
 // the two blind indexers it needs are registered today by the host's
 // pre-database path (WithContactEmailIndexer/WithContactPhoneIndexer), from
-// cipher material the host holds; this descriptor declares no Prepare step
-// until key material is addressable through the registry. Init is
-// deliberately not declared either: declaration (the module's Register call)
-// is made today by the host's bootstrap path, not by this descriptor.
+// cipher material the host holds. Until this descriptor supplies those two
+// indexers itself, a module built here fails Register's own
+// ErrContactEmailIndexerRequired, so the assembly path reaches declaration
+// only once the indexer step lands.
+//
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
 var notificationComponent = pkgcore.Component{
 	Name:         "notification",
 	Module:       "notification",
@@ -111,6 +116,13 @@ var notificationComponent = pkgcore.Component{
 			opts = append(opts, WithUserLocaleResolver(locale))
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("notification: component init got a %T instance, want *notification.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 
