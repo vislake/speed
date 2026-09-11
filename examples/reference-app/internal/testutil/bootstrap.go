@@ -6,6 +6,7 @@ package testutil
 
 import (
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -24,9 +25,10 @@ var typedBootstrapEnvNames = map[string]struct{}{
 
 // bootstrapEnvNames is every variable the reference app's bootstrap surface
 // reads (internal/app's bootstrap.go): the host fields' pins as they spell
-// them, and the six platform key materials' variables as the loader derives
-// them from the embedded declaration's key paths -- the path's dot spelled
-// as a double underscore under the APP_ prefix.
+// them, the root-key variable the loader reads beside the target
+// (WithRootKeyEnv), and the six platform key materials' variables as the
+// loader derives them from the embedded declaration's key paths -- the
+// path's dot spelled as a double underscore under the APP_ prefix.
 var bootstrapEnvNames = []string{
 	"APP_DEPLOYMENT_MODE",
 	"PORT",
@@ -49,6 +51,7 @@ var bootstrapEnvNames = []string{
 	"APP_SMTP_PORT",
 	"APP_SMTP_USERNAME",
 	"APP_SMTP_PASSWORD",
+	"APP_SMTP_REPLY_TO",
 	"APP_SMS_GATEWAY_URL",
 	"APP_ROOT_KEY",
 	"APP_CONFIG__CIPHER_KEY",
@@ -64,6 +67,13 @@ var bootstrapEnvNames = []string{
 	"APP_DISABLE_QUEUE_WORKER",
 	"APP_DISABLE_DEMO_USER_HEADER",
 	"APP_FAIL_SELF_SERVICE_PROVISION",
+}
+
+// BootstrapEnvNames returns a copy of the census ClearBootstrapEnv clears --
+// every variable the reference app's bootstrap surface reads. The
+// internal/app suite pins the census against the target it describes.
+func BootstrapEnvNames() []string {
+	return slices.Clone(bootstrapEnvNames)
 }
 
 // ClearBootstrapEnv clears the reference app's whole bootstrap surface from

@@ -1,11 +1,13 @@
 package app
 
 // bootstrap_test.go pins the bootstrap target's shape: the loader key path of
-// every leaf field of hostConfig, and the correspondence between those paths
-// and the bootstrap surface the app itself binds -- the host keys the app
-// owns. The platform's six key materials are not part of that target: they
-// arrive through the embedded platform declaration (go/app's PlatformConfig,
-// tagged config:"-"), whose own shape go/app's suite pins.
+// every leaf field of hostConfig, the correspondence between those paths and
+// the bootstrap surface the app itself binds -- the host keys the app owns --
+// and the environment-variable census testutil clears, against the target
+// whose variables that census claims to be. The platform's six key materials
+// are not part of the host target: they arrive through the embedded platform
+// declaration (go/app's PlatformConfig, tagged config:"-"), whose own shape
+// go/app's suite pins.
 //
 // The composition-time half of the same correspondence is
 // verifyBootstrapBinding, which runs at every boot against the live registry
@@ -76,6 +78,22 @@ func skippedByLoader(field reflect.StructField) bool {
 	return slices.Contains(strings.Split(field.Tag.Get("config"), ","), "-")
 }
 
+// embeddedPlatformType returns the type of hostConfig's embedded platform
+// declaration -- the anonymous struct field the loader's skip tag keeps out
+// of the host walk. The load resolves it as its own target, so the census
+// walk below derives its variables from the declaration itself.
+func embeddedPlatformType(t *testing.T) reflect.Type {
+	t.Helper()
+	typ := reflect.TypeOf(hostConfig{})
+	for i := 0; i < typ.NumField(); i++ {
+		if field := typ.Field(i); field.Anonymous && field.Type.Kind() == reflect.Struct {
+			return field.Type
+		}
+	}
+	t.Fatal("hostConfig embeds no platform declaration")
+	return nil
+}
+
 // TestHostConfigBindsExactlyItsBootstrapSurface pins the strict equality the
 // binding proof rests on: the host target's own leaf key set is exactly the
 // host keys the app owns -- no key without a field (the Verify call at boot
@@ -128,6 +146,57 @@ func TestHostConfigPinsEveryLeafField(t *testing.T) {
 	walk(typ, "")
 	if len(unpinned) > 0 {
 		t.Fatalf("fields without an env pin: %v", unpinned)
+	}
+}
+
+// TestBootstrapEnvCensusMatchesTheTarget pins testutil's bootstrap-variable
+// census against the target it describes: every env pin of hostConfig's own
+// leaf fields (whose exhaustiveness TestHostConfigPinsEveryLeafField pins on
+// the field side), the root-key variable loadHostConfig hands the loader
+// beside the target, and the six platform key materials' names derived the
+// way the loader derives them -- config.EnvName over the embedded
+// declaration's key paths. A variable the target reads but the census omits
+// survives ClearBootstrapEnv, so an ambient value could skew a boot test; a
+// census entry no field reads is cleared for nothing.
+func TestBootstrapEnvCensusMatchesTheTarget(t *testing.T) {
+	var want []string
+
+	var collectPins func(t2 reflect.Type)
+	collectPins = func(t2 reflect.Type) {
+		for i := 0; i < t2.NumField(); i++ {
+			field := t2.Field(i)
+			if !field.IsExported() || skippedByLoader(field) {
+				continue
+			}
+			if field.Type.Kind() == reflect.Struct {
+				collectPins(field.Type)
+				continue
+			}
+			var name string
+			for _, option := range strings.Split(field.Tag.Get("config"), ",") {
+				if pinned, found := strings.CutPrefix(option, "env="); found {
+					name = pinned
+					break
+				}
+			}
+			if name == "" {
+				t.Fatalf("leaf field %s of %s carries no env pin", field.Name, t2)
+			}
+			want = append(want, name)
+		}
+	}
+	collectPins(reflect.TypeOf(hostConfig{}))
+
+	for _, path := range hostConfigKeyPaths(t, embeddedPlatformType(t)) {
+		want = append(want, config.EnvName(envPrefix, path))
+	}
+	want = append(want, rootKeyEnv)
+	sort.Strings(want)
+
+	got := testutil.BootstrapEnvNames()
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("testutil.BootstrapEnvNames() = %v, want the target's own variable surface %v", got, want)
 	}
 }
 
