@@ -226,14 +226,13 @@ func resolveAuditModels(models []any) (map[reflect.Type]struct{}, error) {
 // transaction rather than WithTenantSession), stashes the event on the
 // current statement's GORM instance map for this plugin's own
 // After("gorm:commit_or_rollback_transaction") callback (publishPending) to
-// read back and publish. For this bare-write shape specifically, investigating
-// GORM's own callback sort (see Initialize's doc comment) while designing
-// this fix found that an After-only registration like either of this
-// plugin's two per-Process callbacks in fact resolves to running at the very
-// end of the compiled chain — after the real per-statement commit or
-// rollback already happened — so capture's own pre-existing
-// "if db.Error != nil { return }" guard already prevents building (let alone
-// publishing) an event for a bare write whose own chain later fails. The
+// read back and publish. For this bare-write shape specifically, an
+// After-only registration like either of this plugin's two per-Process
+// callbacks resolves to running at the very end of the compiled chain --
+// after the real per-statement commit or rollback already happened -- so
+// capture's own "if db.Error != nil { return }" guard prevents building
+// (let alone publishing) an event for a bare write whose own chain later
+// fails. The
 // two-callback split does not depend on that GORM-internal sort behavior to
 // be correct, though: it makes "publish only once this Process's real
 // transaction outcome is known" an explicit, named position
@@ -327,8 +326,7 @@ type auditSavepointMark struct {
 // exactly the events captured against contexts derived from the returned
 // one — every statement issued against the *gorm.DB a db.Transaction
 // closure receives, since GORM propagates the same context.Context to every
-// such statement (confirmed by reading gorm.DB.Begin/WithContext/Session
-// while designing this).
+// such statement (gorm.DB.Begin/WithContext/Session).
 func withAuditBuffer(ctx context.Context) (context.Context, *auditBuffer) {
 	buf := &auditBuffer{}
 	return context.WithValue(ctx, auditBufferCtxKey{}, buf), buf
@@ -565,11 +563,10 @@ func (p *auditCapturePlugin) Name() string { return auditCapturePluginName }
 // through commit_or_rollback_transaction) carries no ordering constraint of
 // its own, so all of them are already sorted before this plugin's two
 // registrations — themselves added later, via db.Use, after gorm.Open's own
-// RegisterDefaultCallbacks — are processed at all. Confirmed by reading the
-// algorithm and empirically with a temporary debug print while designing
-// this fix (see audit_capture_test.go's
+// RegisterDefaultCallbacks — are processed at all. The behaviour is pinned
+// by audit_capture_test.go's
 // TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing,
-// whose own doc comment has the detail this comment summarizes).
+// whose own doc comment carries the detail this comment summarizes.
 func (p *auditCapturePlugin) Initialize(db *gorm.DB) error {
 	if err := db.Callback().Create().After("gorm:create").
 		Register(auditCapturePluginName+":create", p.afterCreate); err != nil {
@@ -827,7 +824,7 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 //
 // The longer version, and why ctx -- not the model's own field -- is the
 // trustworthy signal here, contrary to the naive "the row is the fact being
-// audited, prefer its own declared value" framing this fix started from:
+// audited, prefer its own declared value" framing:
 // this plugin (auditCapturePlugin) is only ever installed by Open, on the
 // exact same *gorm.DB that Open also unconditionally installs
 // tenantScopePlugin on (tenant_scope.go) -- there is no code path in this
@@ -843,17 +840,16 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 // TenantScoped model and db.Error == nil and db.RowsAffected > 0 (its own
 // existing guards, above), tenantScopePlugin has already, unconditionally,
 // guaranteed that ctx's tenant is the real, enforced tenant of whichever row
-// was actually created, matched or affected -- proven empirically while
-// designing this fix by constructing every Repository[T] write shape
-// (Create, full-record Update, Delete, softDelete) and confirming ctx's
-// tenant is what the WHERE clause or the forced column bound in every case.
+// was actually created, matched or affected -- holds for every Repository[T]
+// write shape (Create, full-record Update, Delete, softDelete): ctx's tenant
+// is what the WHERE clause or the forced column bound in every case.
 //
 // The model argument's own GetTenantID(), by contrast, is not reliably that
 // same value at all: dbkit.Repository[T]'s own sanctioned Delete and
 // softDelete build a bare "var zero T" (or an m populated only for the two
 // columns the mark-delete UPDATE selects) and never touch the argument
 // struct's TenantID field, so GetTenantID() there is simply empty --
-// confirmed by TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete, which
+// pinned by TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete, which
 // pins TenantID = ctx's tenant even though the model argument's own field
 // carries nothing. More importantly, it can be actively wrong: a caller
 // holding a bare *gorm.DB directly (outside Repository[T] -- the
@@ -873,13 +869,12 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 // argument ("tenant-b") -- as what gets captured.
 //
 // A disagreement between ctx's tenant and a non-empty GetTenantID() is
-// therefore treated as option (ii) from this fix's own design brief: a
-// signal of a deeper bug (a decoupled or stale Model argument) worth
-// surfacing loudly, via auditTenantMismatch, rather than a reason to prefer
-// the model's value over ctx's -- investigation here found no real,
-// reachable case in this codebase where the model's own field is a *more*
-// truthful answer than ctx, and at least one reachable case (above) where
-// it is actively less truthful.
+// therefore treated as a signal of a deeper bug (a decoupled or stale Model
+// argument) worth surfacing loudly, via auditTenantMismatch, rather than a
+// reason to prefer the model's value over ctx's: no real, reachable case
+// exists in this codebase where the model's own field is a *more* truthful
+// answer than ctx, and at least one reachable case (above) where it is
+// actively less truthful.
 //
 // ctx carrying no tenant at all should not be reachable for a captured
 // TenantScoped write, per the guarantee above -- but as defense in depth,

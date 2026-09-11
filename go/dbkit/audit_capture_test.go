@@ -354,8 +354,8 @@ func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
 	}
 }
 
-// TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff is the
-// named regression test for soft-delete capture: soft-delete
+// TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff pins
+// soft-delete capture: soft-delete
 // (Repository[T].Delete against a SoftDeletable model) is, underneath, one
 // UPDATE, and must be captured with Update semantics -- never a hand-rolled
 // extra Delete-semantics event bolted onto Delete's own code, which would
@@ -371,7 +371,7 @@ func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
 // still pass, but After["deleted_at"] would silently come back nil even
 // though the real SQL write set a real timestamp -- a lying audit trail on
 // an otherwise "passing" test. Asserting the real, non-nil, matching
-// deleted_at value is what actually exercises the fix.
+// deleted_at value is what actually exercises the corrected shape.
 func TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -422,7 +422,7 @@ func TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff(t *testing
 		t.Errorf("After[\"deleted_by\"] = %v, want %q", got.After["deleted_by"], "user-1")
 	}
 
-	// The second regression this test now also pins: softDelete's write is a
+	// The second property this test pins: softDelete's write is a
 	// two-column UPDATE whose payload is a freshly built struct carrying
 	// nothing but DeletedAt/DeletedBy — every other field is zero on that
 	// payload. Capturing the whole payload as After would fabricate zero
@@ -585,53 +585,47 @@ func captureSlogDefault(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
 	previous := slog.Default()
-	// Level: slog.LevelWarn (rather than the LevelError this helper used
-	// before dbkit-tenancy P2-2's fix added a Warn-level alert of its own,
-	// auditTenantMismatch) still captures every existing Error-level alert
-	// this file's other tests assert on -- LevelWarn is strictly lower, so
-	// the filter "handle anything >= this level" still passes Error
-	// records through unchanged -- while now also capturing the new
-	// Warn-level one.
+	// Level: slog.LevelWarn (not LevelError) captures every Error-level
+	// alert this file's other tests assert on -- LevelWarn is strictly
+	// lower, so the filter "handle anything >= this level" still passes
+	// Error records through unchanged -- and also captures the
+	// Warn-level auditTenantMismatch alert.
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return &buf
 }
 
 // TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing
-// pins the same property TestAuditCapturePlugin_WithTenantSession_Rollback...
-// below reproduces as a real, fail-before/pass-after regression, but for
-// the bare-write shape: a Create/Update/Delete issued directly against
-// Open's plain *gorm.DB (no WithTenantSession), never going through
-// Repository[T] or any other speed module today — confirmed by grep
-// across the whole tree: the only types implementing dbkit.Auditable are
-// this package's own test fixtures (testutil.Widget,
-// testutil.SoftDeletableWidget, and auditCaptureFailingHookWidget below)
-// and examples/reference-app/internal/notes.Note, and Note is written
+// pins the bare-write half of the same property the WithTenantSession
+// rollback test below reproduces: a Create/Update/Delete issued directly
+// against Open's plain *gorm.DB (no WithTenantSession), never going through
+// Repository[T] or any other speed module today — the only types
+// implementing dbkit.Auditable are this package's own test fixtures
+// (testutil.Widget, testutil.SoftDeletableWidget, and
+// auditCaptureFailingHookWidget below) and
+// examples/reference-app/internal/notes.Note, and Note is written
 // exclusively through dbkit.Repository[T] (every call in
 // notes/repository.go goes through WithTenantSession) — so this bare
 // shape has no real production caller today, but the mechanism must
 // still handle it correctly, since dbkit cannot assume every future
 // Auditable model will be Repository[T]-backed.
 //
-// This one is NOT a fail-before/pass-after regression, and its own doc
-// comment says so rather than overclaiming: investigating exactly where
-// GORM's callback sort (gorm.io/gorm@v1.31.2/callbacks.go's
-// sortCallbacks) places an After("gorm:create")-only registration showed
-// it appends to the very end of the already-fully-sorted default chain
-// whenever "gorm:create" itself was registered first (true here — Open's
-// db.Use(newAuditCapturePlugin(...)) always runs after gorm.Open's own
-// RegisterDefaultCallbacks) — confirmed empirically too, with a temporary
-// debug print, while designing this test: by the time the pre-fix
-// single capture callback ran for this model, db.Error already carried
-// AfterCreate's own failure. So capture's pre-existing
-// "if db.Error != nil { return }" guard already prevented a phantom
-// publish in this exact shape, by accident, before this round's fix —
-// this test pins that the split into capture (After "gorm:create") and
-// publishPending (After "gorm:commit_or_rollback_transaction") keeps that
-// property, explicitly and by design rather than by a GORM sort-order
-// coincidence a future GORM version could change. The real, reproducible
-// bug this shape does NOT protect against — a transaction opened outside
-// GORM's own per-statement chain entirely — is
+// This shape cannot reproduce the rollback hazard, and the test pins the
+// property that makes it safe rather than claiming a reproduction: GORM's
+// callback sort (gorm.io/gorm@v1.31.2/callbacks.go's sortCallbacks)
+// appends an After("gorm:create")-only registration to the very end of
+// the already-fully-sorted default chain whenever "gorm:create" itself
+// was registered first (true here — Open's db.Use(newAuditCapturePlugin(...))
+// always runs after gorm.Open's own RegisterDefaultCallbacks), so by the
+// time the capture step runs for this model, db.Error already carries
+// AfterCreate's own failure and capture's "if db.Error != nil { return }"
+// guard prevents a phantom publish. This test pins that the split into
+// capture (After "gorm:create") and publishPending (After
+// "gorm:commit_or_rollback_transaction") keeps that property explicitly,
+// rather than leaving it to a GORM sort-order coincidence a future GORM
+// version could change. The real, reproducible hazard this shape does NOT
+// protect against — a transaction opened outside GORM's own per-statement
+// chain entirely — is
 // TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNothing
 // below.
 func TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing(t *testing.T) {
@@ -665,23 +659,21 @@ func TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing(t *t
 }
 
 // TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNothing
-// is dbkit-tenancy P1-1's regression for the primary, real-production
-// shape: a write inside dbkit.WithTenantSession's transaction — the shape
+// pins the primary, real-production shape: a write inside
+// dbkit.WithTenantSession's transaction — the shape
 // examples/reference-app/internal/notes.Note (dbkit's one real Auditable
 // production consumer) always uses, and the shape every
 // dbkit.Repository[T] write uses underneath.
 //
-// The fn passed to WithTenantSession creates an Auditable widget (letting
-// capture run and, pre-fix, publish synchronously) and then deliberately
-// returns a non-nil error — reproducing, with a REAL gorm.DB.Transaction
-// rollback against a REAL in-process SQLite database (never a mocked
-// bus or a mocked transaction), a business transaction whose
-// audit-relevant write already happened but whose surrounding transaction
-// ultimately failed. Pre-fix, the event was already on the bus by the
-// time fn returned its error, since capture published inside the
-// "gorm:create" callback long before WithTenantSession's own
-// db.Transaction call could roll back — a phantom event for a row that
-// was never durably created.
+// The fn passed to WithTenantSession creates an Auditable widget and then
+// deliberately returns a non-nil error, against a REAL gorm.DB.Transaction
+// rollback on a REAL in-process SQLite database (never a mocked bus or a
+// mocked transaction): the event must never reach the bus for a business
+// transaction whose audit-relevant write already happened but whose
+// surrounding transaction ultimately failed. Publishing from inside the
+// "gorm:create" callback would put that phantom event on the bus before
+// db.Transaction's rollback could ever run, for a row that was never
+// durably created.
 func TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNothing(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -713,21 +705,18 @@ func TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNoth
 	}
 }
 
-// TestAuditCapturePlugin_BareWrite_PublishFailure_CommitsAndAlerts is
-// dbkit-tenancy P1-2's regression for the bare-write shape (see the P1-1
+// TestAuditCapturePlugin_BareWrite_PublishFailure_CommitsAndAlerts pins
+// the bare-write half of the publish-failure contract (see the rollback
 // test above for why this shape has no real production caller today, and
-// why the mechanism must still handle it). It replaces the pre-fix
-// TestAuditCapturePlugin_PublishFailure_FailsTheWriteLoudly, which
-// asserted the very bug this round fixes as intended behavior: a
-// transient audit-bus outage failing the business write itself.
+// why the mechanism must still handle it): a transient audit-bus outage
+// must never fail the business write itself.
 //
-// Post-fix, the write's own real per-statement transaction has already
-// committed by the time publishPending calls Publish (see
-// audit_capture.go's Initialize / publishPending doc comments), so a
-// Publish failure at that point can no longer roll back a write that has
-// already durably happened — it is reported as a structured alert
-// instead (auditPublishFailed), never surfaced as the triggering
-// Create/Update/Delete call's own error.
+// The write's own real per-statement transaction has already committed by
+// the time publishPending calls Publish (see audit_capture.go's
+// Initialize / publishPending doc comments), so a Publish failure at that
+// point cannot roll back a write that has already durably happened — it
+// is reported as a structured alert instead (auditPublishFailed), never
+// surfaced as the triggering Create/Update/Delete call's own error.
 func TestAuditCapturePlugin_BareWrite_PublishFailure_CommitsAndAlerts(t *testing.T) {
 	publishErr := errors.New("bus unavailable")
 	bus := &capturedBus{fail: publishErr}
@@ -763,9 +752,9 @@ func TestAuditCapturePlugin_BareWrite_PublishFailure_CommitsAndAlerts(t *testing
 }
 
 // TestAuditCapturePlugin_WithTenantSession_PublishFailure_CommitsAndAlerts
-// is dbkit-tenancy P1-2's regression for the primary, real-production
-// shape (WithTenantSession / Repository[T] — see the P1-1 WithTenantSession
-// test above). It drives a real Auditable write through WithTenantSession
+// pins the primary, real-production shape (WithTenantSession /
+// Repository[T] -- see the WithTenantSession rollback test above). It
+// drives a real Auditable write through WithTenantSession
 // with a bus whose Publish always fails, and asserts the business write
 // still durably commits — read back through a second, independent
 // connection to the same SQLite file, never the same *gorm.DB the write
@@ -824,30 +813,27 @@ func TestAuditCapturePlugin_WithTenantSession_PublishFailure_CommitsAndAlerts(t 
 }
 
 // TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks
-// is not one of dbkit-tenancy's two mandated regressions — it exists to
-// verify, empirically, a consequential side claim before touching any
-// prose about it: go/dbkit/AGENTS.md's "Audit trail collection" Known
-// limitation section, and docs/internal/10-compliance-and-audit.md's own
-// stale implementation-status note on this exact mechanism, both describe
-// (and the doc 10 note explicitly predicts the fix for) a same-goroutine
-// SQLITE_BUSY self-deadlock: a synchronous persister subscriber writing to
-// the SAME SQLite file the audited write itself used, from the SAME
-// goroutine, while that audited write's own transaction was STILL OPEN.
-// Both docs name the fix as "defer the plugin's publish until after the
-// enclosing transaction actually commits" — precisely this round's
-// change for the WithTenantSession/Repository[T] shape.
+// pins a consequential side property of publishing only after commit:
+// go/dbkit/AGENTS.md's "Audit trail collection" Known limitation section
+// describes a same-goroutine SQLITE_BUSY self-deadlock: a synchronous
+// persister subscriber writing to the SAME SQLite file the audited write
+// itself used, from the SAME goroutine, while that audited write's own
+// transaction was STILL OPEN. The shape that avoids it, "defer the
+// plugin's publish until after the enclosing transaction actually
+// commits", is what publishBuffered does for the
+// WithTenantSession/Repository[T] shape.
 //
 // This drives that exact real scenario against two real *gorm.DB
 // connections to one real (temp-file, not in-memory) SQLite database: dbA
 // carries the AuditBus, whose subscriber synchronously writes to dbB — a
 // second connection to the same file — exactly mirroring the shape
 // go/dbkit/AGENTS.md's Known limitation describes for the automatic
-// mechanism paired with go/dbkit/audit's own persister. Pre-fix, the
-// subscriber's write races the still-open audited transaction on the same
-// file and either waits out busy_timeout or fails immediately (an upgrade
-// shape); post-fix, publishBuffered runs only after dbA's own transaction
-// has already committed and released its lock, so dbB's write meets no
-// contention at all.
+// mechanism paired with go/dbkit/audit's own persister. publishBuffered
+// runs only after dbA's own transaction has already committed and
+// released its lock, so dbB's write meets no contention at all; a
+// subscriber writing while the audited transaction was still open would
+// instead race it on the same file and either wait out busy_timeout or
+// fail immediately (an upgrade shape).
 func TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "audit_capture_samefile.db")
 
@@ -936,18 +922,18 @@ func (w auditCaptureSecretWidget) GetTenantID() pkgcore.TenantID {
 func (auditCaptureSecretWidget) AuditResourceType() string { return "secret_widget" }
 
 // TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak
-// reproduces the bug recorded in go/dbkit/AGENTS.md's "Audit trail
-// collection" section: before the fix, fieldValuesMap called
-// field.ValueOf on a GORM-serializer field (dbkit's own
+// pins the capture contract for GORM-serializer fields (dbkit's own
 // RegisterEncryptedSerializer mechanism, used for any encrypted PII
-// column) and got back GORM's internal *schema.serializer wrapper --
-// which embeds a self-referential *schema.Field and so cannot be
+// column), the hazard go/dbkit/AGENTS.md's "Audit trail collection"
+// section records: fieldValuesMap must never capture such a field's raw
+// field.ValueOf, which yields GORM's internal *schema.serializer wrapper
+// -- it embeds a self-referential *schema.Field and so cannot be
 // json.Marshal'd (distributed mode's RedisEventBus.Publish and
-// standalone mode's audit.changesJSON both marshal it, and both would
-// fail: distributed mode fails the triggering write itself via
-// db.AddError, standalone mode silently drops the diff).
+// standalone mode's audit.changesJSON both marshal the map, so one would
+// fail the triggering write itself via db.AddError and the other would
+// silently drop the diff).
 //
-// This test proves the fixed behavior: the write succeeds, the captured
+// The test pins the behaviour end to end: the write succeeds, the captured
 // event's After map holds a redacted marker rather than GORM's unmarshalable
 // wrapper *and* rather than the phone number's plaintext (writing the
 // plaintext into the audit trail would itself violate the "no plaintext
@@ -999,11 +985,10 @@ func TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak(t *test
 		t.Fatalf("After[\"phone\"] leaked the plaintext phone number into the audit trail")
 	}
 
-	// The concrete regression: audit.changesJSON (go/dbkit/audit/module.go)
-	// and RedisEventBus.Publish both json.Marshal this map before the fix
-	// existed, this failed with "json: unsupported value: encountered a
-	// cycle via *schema.Field" because After["phone"] held GORM's
-	// self-referential *schema.serializer wrapper instead of a plain value.
+	// The concrete hazard: audit.changesJSON (go/dbkit/audit/module.go)
+	// and RedisEventBus.Publish both json.Marshal this map, and a
+	// self-referential *schema.serializer wrapper in After["phone"] fails
+	// with "json: unsupported value: encountered a cycle via *schema.Field".
 	if _, err := json.Marshal(events[0].After); err != nil {
 		t.Fatalf("json.Marshal(After) error = %v, want captured field values to always be JSON-marshalable", err)
 	}
@@ -1044,11 +1029,10 @@ func (auditCaptureMarkedWidget) AuditResourceType() string { return "marked_widg
 // plaintext-sensitive column — must be captured as the redacted marker,
 // never as its plaintext value, even though no GORM serializer is involved
 // (the serializer branch of fieldValuesMap cannot see this field, which is
-// exactly the gap the marker closes: before the marker existed, the only
-// redaction the capture path performed was on serializer fields, and a
-// plaintext column carrying PII — an email, a phone number — leaked
-// verbatim into the audit trail's Before/After maps the moment its model
-// opted into capture).
+// exactly the gap the marker closes: without the marker, the capture path's
+// only redaction is on serializer fields, and a plaintext column carrying
+// PII — an email, a phone number — would leak verbatim into the audit
+// trail's Before/After maps the moment its model opted into capture).
 func TestAuditCapturePlugin_PlaintextMarkedColumn_Redacts(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -1102,7 +1086,7 @@ func TestAuditCapturePlugin_PlaintextMarkedColumn_Redacts(t *testing.T) {
 }
 
 // TestAuditCapturePlugin_Restore_CapturesOnlyTheColumnsItWrites pins the
-// same After-scoping regression as the soft-delete test above, for the
+// same After-scoping rule as the soft-delete test above, for the
 // inverse write: Restore (repository.go) issues the identical two-column,
 // fresh-struct UPDATE shape against a soft-deleted row, so its captured
 // After must likewise carry exactly deleted_at/deleted_by — with nil and ""
@@ -1296,8 +1280,8 @@ func auditCaptureHardDeleteCtx(t *testing.T, base context.Context) context.Conte
 // row's soft-delete step carried a moment earlier. This is the design's
 // mandated pair (docs/internal/04-data-and-tenancy.md's delete-semantics
 // section, §4: soft-delete captures as Update with the deleted_at diff,
-// hard-delete captures as Delete for a vanished row, and the landing round
-// must pin both by explicit test assertion). It is also the regression guard
+// hard-delete captures as Delete for a vanished row), pinned here by
+// explicit test assertion. It is also the regression guard
 // for the same section's named pitfall: HardDelete must never hand-emit a
 // second, hand-rolled Delete event on top of the automatic capture — the
 // count assertion below fails the moment a duplicate event appears, and the
@@ -1379,7 +1363,7 @@ func TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete(t *testing.T) {
 // row vanished when none did. It is the HardDelete twin of the existing
 // TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing, warranted
 // here because HardDelete is a separately gated entry whose audit behaviour
-// this round is pinning wholesale.
+// needs the same pin.
 func TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -1671,20 +1655,17 @@ func createAuditCapturePlatformRecordsTable(t *testing.T, db *gorm.DB) {
 	}
 }
 
-// TestAuditCapturePlugin_NonTenantScopedModel_DoesNotInheritContextTenant is
-// the regression for dbkit-tenancy P2-2's second failure shape: a model
-// implementing Auditable but NOT dbkit.TenantScoped -- a platform or
-// identity-domain model per root CLAUDE.md's four-data-domain table --
-// written under some tenant ctx (a job or admin operation that rebuilt
-// tenant ctx for a reason entirely unrelated to this platform-level write)
-// must not have that ctx's tenant show up on its captured event at all: the
-// row itself has no real tenant, so the truthful WriteCapturedEvent.TenantID
-// is empty, never whatever the ctx happened to carry.
-//
-// Before this fix, capture built evt.TenantID directly from
-// pkgcore.TenantFromContext(db.Statement.Context) unconditionally, with no
-// check on whether the written model was even TenantScoped at all -- so
-// this exact write would have wrongly captured TenantID = "tenant-a".
+// TestAuditCapturePlugin_NonTenantScopedModel_DoesNotInheritContextTenant
+// pins the capture rule for a model implementing Auditable but NOT
+// dbkit.TenantScoped -- a platform or identity-domain model per root
+// CLAUDE.md's four-data-domain table: written under some tenant ctx (a job
+// or admin operation that rebuilt tenant ctx for a reason entirely
+// unrelated to this platform-level write), it must not have that ctx's
+// tenant show up on its captured event at all: the row itself has no real
+// tenant, so the truthful WriteCapturedEvent.TenantID is empty, never
+// whatever the ctx happened to carry. Capture must therefore check
+// TenantScoped membership before reading pkgcore.TenantFromContext, or this
+// exact write would wrongly capture TenantID = "tenant-a".
 func TestAuditCapturePlugin_NonTenantScopedModel_DoesNotInheritContextTenant(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -1757,21 +1738,20 @@ func createAuditCaptureTenantModelWidgetsTable(t *testing.T, db *gorm.DB) {
 }
 
 // TestAuditCapturePlugin_ModelArgumentTenantDiffersFromContext_TrustsContextAndWarns
-// is the regression for dbkit-tenancy P2-2's first failure shape, resolved
-// the opposite way its own audit text initially assumed: a TenantScoped
-// model's captured event trusts the write's ctx tenant, not the model
-// argument's own GetTenantID() value, because investigation (see
-// stampTenantID's own doc comment in audit_capture.go) found ctx to be the
-// value tenantScopePlugin -- always co-installed with the audit-capture
-// plugin by Open, on the exact same connection -- actually enforces via the
-// statement's WHERE clause, while a decoupled .Model(...) argument can
-// disagree with it and still have the write succeed.
+// pins the capture rule for a TenantScoped model whose Model argument
+// disagrees with the write's ctx: the captured event trusts ctx's tenant,
+// not the model argument's own GetTenantID() value, because ctx is what
+// tenantScopePlugin -- always co-installed with the audit-capture plugin by
+// Open, on the exact same connection -- actually enforces via the
+// statement's WHERE clause (see stampTenantID's own doc comment in
+// audit_capture.go), while a decoupled .Model(...) argument can disagree
+// with it and still have the write succeed.
 //
 // Why this needs auditCaptureTenantModelWidget rather than testutil.Widget:
 // GORM's own ConvertToAssignments (gorm.io/gorm/callbacks/update.go) folds
 // every non-zero primary-key field of a Model argument into the statement's
 // WHERE clause whenever Model != Dest (a map payload, as this test uses,
-// always is this) -- confirmed empirically while writing this test.
+// always is this).
 // Against testutil.Widget, whose primary key is the composite
 // (tenant_id, id) every real tenant-scoped table is required to use, a
 // stale Model argument's own tenant_id therefore becomes a second,
@@ -1876,16 +1856,16 @@ func (n auditCaptureDashNoteModel) GetTenantID() pkgcore.TenantID {
 func (auditCaptureDashNoteModel) AuditResourceType() string { return "dash_note" }
 
 // TestAuditCapturePlugin_GormDashAndAssociationFields_NeverCapturedInAfter
-// pins the P0-7 regression: before the fix, fieldValuesMap iterated every
-// entry of stmt.Schema.Fields and wrote out[field.DBName] = value with no
-// check that the field has a DBName at all. A gorm:"-" field — a plaintext
-// carrier by definition, since the whole point of the tag is to keep a value
-// off the schema — and an association field both have DBName == "", so their
-// values landed in After under the shared "" key, overwriting each other,
-// with the gorm:"-" field's plaintext written straight into the audit
-// event's After (a "no plaintext PII in the audit trail" violation), on both
-// the create path and the update path. The fixed capture skips every field
-// whose DBName is empty.
+// pins the DBName guard in fieldValuesMap: iterating every entry of
+// stmt.Schema.Fields and writing out[field.DBName] = value with no check
+// that the field has a DBName at all is a hazard, because a gorm:"-" field
+// — a plaintext carrier by definition, since the whole point of the tag is
+// to keep a value off the schema — and an association field both have
+// DBName == "", so their values would land in After under the shared ""
+// key, overwriting each other, with the gorm:"-" field's plaintext written
+// straight into the audit event's After (a "no plaintext PII in the audit
+// trail" violation), on both the create path and the update path. Capture
+// skips every field whose DBName is empty.
 func TestAuditCapturePlugin_GormDashAndAssociationFields_NeverCapturedInAfter(t *testing.T) {
 	const plaintext = "super-secret-plaintext"
 	bus := &capturedBus{}
@@ -1954,7 +1934,7 @@ func TestAuditCapturePlugin_GormDashAndAssociationFields_NeverCapturedInAfter(t 
 }
 
 // errAuditSavepointInnerDeliberate is the sentinel error a nested-block or
-// savepoint regression test returns from an inner write block to force
+// savepoint rollback test returns from an inner write block to force
 // GORM's ROLLBACK TO SAVEPOINT for exactly that block's work. It is
 // distinct from any error dbkit or gorm could plausibly produce on its own,
 // so a test can tell "the inner block's own deliberate failure came back
@@ -1962,14 +1942,14 @@ func TestAuditCapturePlugin_GormDashAndAssociationFields_NeverCapturedInAfter(t 
 var errAuditSavepointInnerDeliberate = errors.New("audit_capture_test: deliberate inner savepoint failure")
 
 // TestAuditCapturePlugin_WithTenantSession_SavepointRollback_InnerWriteNeverPublishes
-// pins the P1-9 regression: an inner write that a SAVEPOINT ... ROLLBACK TO
-// SAVEPOINT region discards must never surface in the audit trail. Before
-// the fix, capture appended every Auditable write inside a
-// WithTenantSession transaction to the transaction's audit buffer with no
-// knowledge of savepoint regions, and WithTenantSession published the whole
-// buffer once the outer transaction committed — so an inner write rolled
-// back to a savepoint was published anyway, a phantom audit row for a row
-// that never came into existence (here: two published create events for one
+// pins the savepoint contract: an inner write that a SAVEPOINT ... ROLLBACK
+// TO SAVEPOINT region discards must never surface in the audit trail. The
+// buffer must track savepoint regions -- a capture that appended every
+// Auditable write inside a WithTenantSession transaction to the
+// transaction's audit buffer with no region tracking, and published the
+// whole buffer once the outer transaction committed, would publish the
+// discarded write anyway: a phantom audit row for a row that never came
+// into existence (here: two published create events for one
 // actually-committed row).
 func TestAuditCapturePlugin_WithTenantSession_SavepointRollback_InnerWriteNeverPublishes(t *testing.T) {
 	bus := &capturedBus{}
@@ -2010,7 +1990,7 @@ func TestAuditCapturePlugin_WithTenantSession_SavepointRollback_InnerWriteNeverP
 }
 
 // TestAuditCapturePlugin_WithTenantSession_NestedTransactionRollback_InnerWriteNeverPublishes
-// pins the same P1-9 property through GORM's own nested-transaction shape: a
+// pins the same discard property through GORM's own nested-transaction shape: a
 // tx.Transaction block opened inside WithTenantSession's transaction is a
 // SAVEPOINT block (gorm.io/gorm@v1.31.2/finisher_api.go's Transaction issues
 // a savepoint and rolls back to it when the block fails), and its failed
@@ -2059,19 +2039,19 @@ func TestAuditCapturePlugin_WithTenantSession_NestedTransactionRollback_InnerWri
 }
 
 // TestAuditCapturePlugin_WithTenantSession_SecondRollbackToSameSavepoint_DiscardedRegionNeverPublishes
-// pins the regression that closed the savepoint-aware buffer's own residual:
-// a ROLLBACK TO SAVEPOINT does not destroy its savepoint on either supported
-// dialect (SQLite and PostgreSQL both retain the named savepoint after
-// rolling back to it, so a caller may legally roll back to the same
-// still-live savepoint a second time), and the buffer must mirror that.
-// Before this fix the first rollback-to closed the savepoint's frame, so
-// writes appended after it were invisible to the second rollback-to: the
-// discard-2 create was pruned from the database by that second rollback but
-// still rode the outer commit's publish — a ghost audit event for a row that
-// never came into existence, exactly the class this mechanism exists to
-// eliminate (before the fix the outer commit published three events —
-// outer-1, discard-2, outer-2 — one of them for a row the database had
-// discarded; now exactly the two committed rows' events).
+// pins the savepoint-aware buffer against a repeat: a ROLLBACK TO SAVEPOINT
+// does not destroy its savepoint on either supported dialect (SQLite and
+// PostgreSQL both retain the named savepoint after rolling back to it, so a
+// caller may legally roll back to the same still-live savepoint a second
+// time), and the buffer must mirror that: a second rollback-to prunes
+// exactly the region it discards, and never a write committed outside it. A
+// first rollback-to that closed the savepoint's frame instead would leave
+// writes appended after it invisible to the second rollback-to: the
+// discard-2 create, pruned from the database by that second rollback, would
+// still ride the outer commit's publish -- a ghost audit event for a row
+// that never came into existence, exactly the class this mechanism exists to
+// eliminate. The assertion below therefore wants exactly the two committed
+// rows' events (outer-1 and outer-2), never three.
 func TestAuditCapturePlugin_WithTenantSession_SecondRollbackToSameSavepoint_DiscardedRegionNeverPublishes(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -2150,12 +2130,12 @@ func TestAuditCapturePlugin_WithTenantSession_SecondRollbackToSameSavepoint_Disc
 // ROLLBACK TO of the released name is refused by the database ("no such
 // savepoint", verified against real SQLite), so the rows written after the
 // release commit with the outer transaction, and the observer must not prune
-// their events. Before this fix the observer read only the statement text
-// prefix and never db.Error, so the refused rollback-to pruned the buffer to
-// the now-stale frame of the released savepoint: the two committed rows
+// their events. An observer that read only the statement text prefix and
+// never db.Error would instead let the refused rollback-to prune the buffer
+// to the now-stale frame of the released savepoint: the two committed rows
 // (inside-1, whose create sat inside the released region — released, not
 // rolled back, so committed — and after-release, whose create sat between the
-// release and the refused rollback-to) published no audit events at all.
+// release and the refused rollback-to) would publish no audit events at all.
 func TestAuditCapturePlugin_WithTenantSession_ReleaseThenRollbackTo_CommittedRowsStillPublish(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -2312,12 +2292,12 @@ func TestAuditCapturePlugin_WithTenantSession_ShadowedSameNameSavepoint_RolledBa
 // caller's own SavePoint/RollbackTo arguments, so an identifier with an
 // embedded space lands in the SQL verbatim — "SAVEPOINT bad name" is refused
 // by SQLite's grammar (as is the matching "ROLLBACK TO SAVEPOINT bad name"),
-// a refusal verified against a real database. Before this fix the observer
-// read only the statement text prefix, so the refused SAVEPOINT still pushed
-// a frame and the refused rollback-to pruned to it: kept-1's create, which
-// sat between the two refused statements, was rolled back nowhere — the
-// database committed it — yet its captured event was pruned and the outer
-// commit published only kept-2's.
+// a refusal that holds against real SQLite. An observer that read only the
+// statement text prefix would let the refused SAVEPOINT still push a frame
+// and the refused rollback-to prune to it: kept-1's create, which sat
+// between the two refused statements, was rolled back nowhere — the database
+// committed it — yet its captured event would be pruned and the outer commit
+// would publish only kept-2's.
 func TestAuditCapturePlugin_WithTenantSession_RefusedSavepointStatement_ActsOnNothing(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
