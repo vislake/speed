@@ -108,8 +108,8 @@ func TestNew_RefusesDuplicateModuleNames(t *testing.T) {
 	if err == nil {
 		t.Fatal("New() with duplicate module names error = nil, want a refusal")
 	}
-	if !errors.Is(err, dbkit.ErrDuplicateModule) || !strings.Contains(err.Error(), "twice") {
-		t.Fatalf("duplicate refusal = %v, want it to wrap dbkit.ErrDuplicateModule and name the module", err)
+	if !errors.Is(err, pkgcore.ErrDuplicateModuleName) || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("duplicate refusal = %v, want it to wrap pkgcore.ErrDuplicateModuleName and name the module", err)
 	}
 }
 

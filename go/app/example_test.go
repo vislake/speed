@@ -93,6 +93,52 @@ func ExampleNew() {
 	// GET /api/v1/version: 200 v1
 }
 
+// ExampleAssemble drives one component assembly through the seven stages:
+// the registry is populated from the global registration plus one local
+// component, the code-override layer selects what the builtin composition
+// defaults do not (and deselects the observability component this example
+// does not want), and Assemble runs the loader and the stage drive; Shutdown
+// performs the two-phase close.
+func ExampleAssemble() {
+	type clock struct{}
+	type hostConfig struct {
+		Port string
+	}
+	host := hostConfig{Port: "8080"}
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(pkgcore.Component{
+		Name: "clock",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &clock{}, nil
+		},
+	}); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+	reg.Put(app.CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
+		pkgcore.ComponentConfig{}.With("clock", nil).With("observability", false))})
+
+	spec := app.LoadSpec{
+		Host:    &host,
+		Options: []app.ConfigOption{app.ConfigArgs([]string{})},
+	}
+	if err := app.Assemble(context.Background(), reg, spec); err != nil {
+		fmt.Println("assemble:", err)
+		return
+	}
+	fmt.Println("assembled; clock port", host.Port)
+	if err := app.Shutdown(context.Background(), reg); err != nil {
+		fmt.Println("shutdown:", err)
+		return
+	}
+	fmt.Println("shut down cleanly")
+
+	// Output:
+	// assembled; clock port 8080
+	// shut down cleanly
+}
+
 // ExamplePreAuthAllowlist shows the platform's pre-auth surface: the paths
 // that must work before a Principal exists pass the tenancy chain under
 // both GET and HEAD, while any other method on the same path stays

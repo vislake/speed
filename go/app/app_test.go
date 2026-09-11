@@ -74,9 +74,9 @@ func TestNew_RunsTheAssemblyStagesInOrder(t *testing.T) {
 	if starts, _ := worker.counts(); starts != 1 {
 		t.Fatalf("worker Start calls = %d, want 1", starts)
 	}
-	if a.Kernel() == nil || a.Registry() == nil || a.Handler() == nil {
-		t.Fatalf("accessors after New: Kernel=%v Registry=%v Handler=%v, want all non-nil",
-			a.Kernel() != nil, a.Registry() != nil, a.Handler() != nil)
+	if a.Registry() == nil || a.Handler() == nil {
+		t.Fatalf("accessors after New: Registry=%v Handler=%v, want both non-nil",
+			a.Registry() != nil, a.Handler() != nil)
 	}
 	routes := a.Registry().Routes.Routes()
 	if len(routes) != 0 {

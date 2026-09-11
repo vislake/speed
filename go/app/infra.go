@@ -85,34 +85,6 @@ func WithModules(fn func(ctx context.Context, deps ModuleDeps) ([]pkgcore.Module
 	return func(c *engineConfig) { c.modules = fn }
 }
 
-// openInfrastructure is stage 2: the platform cipher, the host's
-// pre-database callback, then the database itself.
-func (a *Application) openInfrastructure(ctx context.Context, cfg *engineConfig) error {
-	cipher, err := dbkit.NewCipher(cfg.configSpec.Platform.Config.Cipher_Key)
-	if err != nil {
-		return fmt.Errorf("app: build the platform cipher from the key material at %q: %w", platformCipherKeyPath, err)
-	}
-	a.cipher = cipher
-
-	if cfg.preDB != nil {
-		if preDBErr := cfg.preDB(ctx, cipher); preDBErr != nil {
-			return fmt.Errorf("app: pre-database callback: %w", preDBErr)
-		}
-	}
-
-	db, err := dbkit.Open(ctx, dbkit.Options{
-		Dialect:     cfg.databaseSpec.Dialect,
-		DSN:         cfg.databaseSpec.DSN,
-		AuditBus:    cfg.databaseSpec.AuditBus,
-		AuditModels: cfg.databaseSpec.AuditModels,
-	})
-	if err != nil {
-		return fmt.Errorf("app: open the database: %w", err)
-	}
-	a.db = db
-	return nil
-}
-
 // applyMigrations registers every module's migration set and applies it to
 // db for the declared dialect. A module shipping no migrations of its own
 // (an empty FS) registers and applies as a no-op, so the whole module set can
