@@ -278,8 +278,8 @@ type auditBufferCtxKey struct{}
 // writes — while the outer transaction still goes on to commit. Events
 // captured inside a region a ROLLBACK TO SAVEPOINT later discards describe
 // writes that never took effect, so publishing them after the outer commit
-// would fabricate audit rows exactly like the pre-buffer phantom-event bug
-// this mechanism exists to close. beginSavepoint/rollbackToSavepoint (fed by
+// would fabricate audit rows exactly like the phantom-event bug this
+// mechanism exists to close. beginSavepoint/rollbackToSavepoint (fed by
 // the plugin's raw-statement observer, see afterSavepointSQL) mark the
 // event index each savepoint opened at and prune everything appended since
 // the savepoint's region opened — a rollback-to keeps the target savepoint

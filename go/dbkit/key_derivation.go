@@ -79,11 +79,11 @@ const derivedKeySize = 32
 // # The real trade-off, stated plainly
 //
 // Using one root secret to derive many purpose-specific keys is a
-// deliberate, honest trade against the fully-independent-secrets model
-// dbkit shipped before this function existed, and both costs are real:
+// deliberate, honest trade against a fully-independent-secrets model,
+// where every key is its own independent secret, and both costs are real:
 //
 //   - A leaked root key compromises every key ever derived from it at
-//     once -- a strictly larger blast radius than today's
+//     once -- a strictly larger blast radius than the
 //     fully-independent-secrets model, where compromising one secret
 //     compromises only what it alone protects.
 //   - Rotating the root key rotates every derived key simultaneously --

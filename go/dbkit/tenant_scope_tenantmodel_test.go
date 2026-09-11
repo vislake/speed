@@ -212,8 +212,9 @@ func createTenantModelShadowedFixtureTable(t *testing.T, db *gorm.DB) {
 
 // TestTenantModel_ShadowingPromotedFieldToAddPrimaryKey_BreaksFindByIDForTheOwningTenant
 // is a warning shot, not an endorsement of the pattern it exercises: it
-// proves, empirically, exactly what TenantModel's doc comment warns
-// against, rather than leaving it as an unverified claim.
+// pins, against this exact gorm version, the failure TenantModel's doc
+// comment warns against, so that warning is an executable fact rather than
+// an unverified claim.
 //
 // A struct field declared directly on tenantModelShadowedFixture takes
 // precedence over one merely promoted from an embedded type one level
