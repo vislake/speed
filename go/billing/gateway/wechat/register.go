@@ -35,8 +35,8 @@ func mustRegister(r pkgcore.Registration[billing.PaymentGateway]) {
 // "api_v3_key" and "notify_url" have no safe default and are rejected by
 // NewGateway when empty or malformed; "platform_public_key_pem" is
 // likewise required (see doc.go's "Known limitation: static platform
-// certificate"); "gateway_url" is optional (Config.gatewayURL's own
-// default applies).
+// certificate"); "gateway_url" is optional (an empty value resolves to
+// this package's defaultGatewayURL through gateway.GatewayURL).
 func gatewayFromConfig(cfg pkgcore.Config) (billing.PaymentGateway, error) {
 	return NewGateway(Config{
 		MchID:                cfg["mch_id"],

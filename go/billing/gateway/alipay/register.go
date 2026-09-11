@@ -34,8 +34,9 @@ func mustRegister(r pkgcore.Registration[billing.PaymentGateway]) {
 // gatewayFromConfig adapts a flat pkgcore.Config onto NewGateway.
 // "app_id", "private_key_pem", "alipay_public_key_pem" and "notify_url"
 // have no safe default and are rejected by NewGateway/Config.parseKeys
-// when empty or malformed; "gateway_url" is optional (Config.gatewayURL's
-// own default applies).
+// when empty or malformed; "gateway_url" is optional (an empty value
+// resolves to this package's defaultGatewayURL through
+// gateway.GatewayURL).
 func gatewayFromConfig(cfg pkgcore.Config) (billing.PaymentGateway, error) {
 	return NewGateway(Config{
 		AppID:              cfg["app_id"],
