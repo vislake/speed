@@ -9,6 +9,7 @@ package sharing
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -32,8 +33,9 @@ import (
 // access decision but can serve no bytes, and an unwired store fails the
 // rate limiter closed.
 //
-// Init is deliberately not declared: declaration (the module's Register
-// call) is made today by the host's bootstrap path, not by this descriptor.
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
 var sharingComponent = pkgcore.Component{
 	Name:         "sharing",
 	Module:       "sharing",
@@ -65,6 +67,13 @@ var sharingComponent = pkgcore.Component{
 			opts = append(opts, WithResourceResolver(resolver))
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("sharing: component init got a %T instance, want *sharing.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 
