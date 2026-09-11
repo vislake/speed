@@ -319,7 +319,7 @@ func TestBillingHttpSurface_TenantBoundaryHoldsOverRoutes(t *testing.T) {
 	// billing_credit_flow_test.go's creditBalanceFor uses) -- a real
 	// ledger operation under acme's own context, never a row hand-edited.
 	credits := openBillingCredits(t, cfg)
-	if _, err := credits.Expire(pkgcore.WithTenant(t.Context(), acme), billing.ExpireInput{
+	if _, err := credits.Expire(pkgcore.WithTenant(t.Context(), acme), billing.PreDeductInput{
 		Amount: 300, Reason: "test:drain-acme",
 	}); err != nil {
 		t.Fatalf("Expire (drain tenant-acme): %v", err)

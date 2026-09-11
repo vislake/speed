@@ -360,7 +360,7 @@ func TestCreditService_Expire_DecreasesAvailable(t *testing.T) {
 	if _, err := svc.Grant(ctx, GrantInput{Amount: 100}); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
-	tx, err := svc.Expire(ctx, ExpireInput{Amount: 40, Reason: "expiry:2026-09"})
+	tx, err := svc.Expire(ctx, PreDeductInput{Amount: 40, Reason: "expiry:2026-09"})
 	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestCreditService_Expire_MoreThanAvailable_Refused(t *testing.T) {
 	if _, err := svc.Grant(ctx, GrantInput{Amount: 10}); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
-	_, err := svc.Expire(ctx, ExpireInput{Amount: 50})
+	_, err := svc.Expire(ctx, PreDeductInput{Amount: 50})
 	if !apperr.HasCode(err, ErrInsufficientCredits.Code) {
 		t.Errorf("Expire(50) over Available=10: err = %v, want %s", err, ErrInsufficientCredits.Code)
 	}
@@ -405,10 +405,10 @@ func TestCreditService_Expire_UnkeyedRetry_DoubleApplies(t *testing.T) {
 	if _, err := svc.Grant(ctx, GrantInput{Amount: 100}); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
-	if _, err := svc.Expire(ctx, ExpireInput{Amount: 40, Reason: "expiry:2026-09-policy"}); err != nil {
+	if _, err := svc.Expire(ctx, PreDeductInput{Amount: 40, Reason: "expiry:2026-09-policy"}); err != nil {
 		t.Fatalf("first unkeyed Expire: %v", err)
 	}
-	if _, err := svc.Expire(ctx, ExpireInput{Amount: 40, Reason: "expiry:2026-09-policy"}); err != nil {
+	if _, err := svc.Expire(ctx, PreDeductInput{Amount: 40, Reason: "expiry:2026-09-policy"}); err != nil {
 		t.Fatalf("retried unkeyed Expire: %v", err)
 	}
 
@@ -422,7 +422,7 @@ func TestCreditService_Expire_UnkeyedRetry_DoubleApplies(t *testing.T) {
 }
 
 // TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply pins the keyed
-// scheduler contract: ExpireInput.IdempotencyKey makes a keyed Expire's
+// scheduler contract: PreDeductInput.IdempotencyKey makes a keyed Expire's
 // row ID the caller's own deterministic per-window key (the go/storage
 // EnqueueExpirySweep shape), so a retried call -- a jobs-driven sweep
 // rerunning its own window after a crash or a timeout -- is answered with
@@ -439,7 +439,7 @@ func TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 	}
 
 	const key = "expiry:2026-09-policy:window-1"
-	first, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
+	first, err := svc.Expire(ctx, PreDeductInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
 	if err != nil {
 		t.Fatalf("first keyed Expire: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 	}
 
 	// The retried sweep run: same window, same deterministic key.
-	second, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
+	second, err := svc.Expire(ctx, PreDeductInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
 	if err != nil {
 		t.Fatalf("retried keyed Expire: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestCreditService_Expire_KeyedRetry_DoesNotEmitASecondAuditEvent(t *testing
 	recvAuditEvent(t, received) // drain the grant's own event.
 
 	const key = "expiry:2026-09-policy:window-1"
-	first, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
+	first, err := svc.Expire(ctx, PreDeductInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"})
 	if err != nil {
 		t.Fatalf("first keyed Expire: %v", err)
 	}
@@ -518,7 +518,7 @@ func TestCreditService_Expire_KeyedRetry_DoesNotEmitASecondAuditEvent(t *testing
 
 	// The retried sweep run with the same key must record nothing: the
 	// deduction it would describe already happened in the first call.
-	if _, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"}); err != nil {
+	if _, err := svc.Expire(ctx, PreDeductInput{Amount: 40, IdempotencyKey: key, Reason: "expiry:2026-09-policy"}); err != nil {
 		t.Fatalf("retried keyed Expire: %v", err)
 	}
 	assertNoAuditEvent(t, received)
@@ -541,7 +541,7 @@ func TestCreditService_Expire_KeyCollidingWithAnotherKind_Refused(t *testing.T) 
 		t.Fatalf("Grant: %v", err)
 	}
 
-	_, err = svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: grantTx.ID})
+	_, err = svc.Expire(ctx, PreDeductInput{Amount: 40, IdempotencyKey: grantTx.ID})
 	if !apperr.HasCode(err, ErrIdempotencyKeyCollision.Code) {
 		t.Errorf("keyed Expire reusing a grant row's id: err = %v, want %s", err, ErrIdempotencyKeyCollision.Code)
 	}
@@ -578,7 +578,7 @@ func TestCreditService_Expire_KeyedRefusedAttempt_BurnsNoKey(t *testing.T) {
 	}
 
 	const key = "expiry:2026-09-policy:window-1"
-	if _, err := svc.Expire(ctx, ExpireInput{Amount: 50, IdempotencyKey: key}); !apperr.HasCode(err, ErrInsufficientCredits.Code) {
+	if _, err := svc.Expire(ctx, PreDeductInput{Amount: 50, IdempotencyKey: key}); !apperr.HasCode(err, ErrInsufficientCredits.Code) {
 		t.Fatalf("Expire(50) over Available=10: err = %v, want %s", err, ErrInsufficientCredits.Code)
 	}
 
@@ -604,7 +604,7 @@ func TestCreditService_Expire_KeyedRefusedAttempt_BurnsNoKey(t *testing.T) {
 	if _, grantErr := svc.Grant(ctx, GrantInput{Amount: 100}); grantErr != nil {
 		t.Fatalf("second Grant: %v", grantErr)
 	}
-	expired, err := svc.Expire(ctx, ExpireInput{Amount: 50, IdempotencyKey: key})
+	expired, err := svc.Expire(ctx, PreDeductInput{Amount: 50, IdempotencyKey: key})
 	if err != nil {
 		t.Fatalf("keyed Expire after the top-up: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestCreditService_Expire_ConcurrentSameKey_ExactlyOneDeducts(t *testing.T) 
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := svc.Expire(ctx, ExpireInput{Amount: 40, IdempotencyKey: key})
+			_, err := svc.Expire(ctx, PreDeductInput{Amount: 40, IdempotencyKey: key})
 			results[i] = err
 		}(i)
 	}
@@ -1094,7 +1094,7 @@ func TestCreditService_Expire_EmitsAuditEvent(t *testing.T) {
 	}
 	recvAuditEvent(t, received)
 
-	tx, err := svc.Expire(ctx, ExpireInput{Amount: 40, Reason: "expiry:2026-09-policy"})
+	tx, err := svc.Expire(ctx, PreDeductInput{Amount: 40, Reason: "expiry:2026-09-policy"})
 	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
@@ -1182,7 +1182,7 @@ func TestCreditService_Reason_NonPhraseRefused(t *testing.T) {
 			return err
 		}},
 		{"Expire", func(reason string) error {
-			_, err := svc.Expire(ctx, ExpireInput{Amount: 10, Reason: reason})
+			_, err := svc.Expire(ctx, PreDeductInput{Amount: 10, Reason: reason})
 			return err
 		}},
 	}
@@ -1239,7 +1239,7 @@ func TestCreditService_Reason_NonPhraseRefused(t *testing.T) {
 			if _, err := svc.Grant(grantCtx, GrantInput{Amount: 10, Reason: "seed"}); err != nil {
 				return err
 			}
-			_, err := svc.Expire(grantCtx, ExpireInput{Amount: 10, Reason: "expiry:2026-09-policy"})
+			_, err := svc.Expire(grantCtx, PreDeductInput{Amount: 10, Reason: "expiry:2026-09-policy"})
 			return err
 		}},
 	}

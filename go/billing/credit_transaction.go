@@ -195,7 +195,7 @@ func (r *CreditTransactionRepository) Insert(ctx context.Context, tx *CreditTran
 // primary-key conflict, returned as an error, never reconciled -- the
 // right answer for Grant and for an unkeyed Expire, whose rows carry
 // fresh uuid.NewString() ids with no idempotent-retry contract of their
-// own. A KEYED Expire (CreditService.Expire with ExpireInput.IdempotencyKey
+// own. A KEYED Expire (CreditService.Expire with PreDeductInput.IdempotencyKey
 // set) inserts through insertIdempotent instead, exactly like PreDeduct's
 // reserve half.
 func (r *CreditTransactionRepository) insert(ctx context.Context, session *gorm.DB, tx *CreditTransaction) error {

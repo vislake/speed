@@ -30,11 +30,12 @@ const billingCreditBalancesTableName = billingCreditBalancesTable
 //
 // # The Reason contract
 //
-// Every one of the three inputs that accepts a Reason (PreDeductInput,
-// GrantInput, ExpireInput) declares it a bounded phrase, enforced by
-// validateReason before anything is written: a non-empty reason must be a
-// phrase of ASCII letters and digits joined by ":" "_" or "-" (the shape
-// of this module's own documented vocabulary -- "ai_generation:job_123",
+// Every input that accepts a Reason (PreDeductInput -- the type PreDeduct
+// and Expire share -- and GrantInput) declares it a bounded phrase,
+// enforced by validateReason before anything is written: a non-empty
+// reason must be a phrase of ASCII letters and digits joined by ":" "_"
+// or "-" (the shape of this module's own documented vocabulary --
+// "ai_generation:job_123",
 // "plan:pro:monthly_included", "expiry:2026-09-policy"), at most 255
 // characters. The constraint is not stylistic: the same reason is copied
 // verbatim into the audit trail's changes column (emitCreditAudit), and
@@ -196,21 +197,36 @@ func (s *CreditService) Transactions(ctx context.Context) ([]CreditTransaction, 
 	return rows, nil
 }
 
-// PreDeductInput names one reservation request.
+// PreDeductInput names one credit deduction request: the shared input of
+// PreDeduct's reservation and Expire's policy deduction, the two methods
+// that move credits out of a balance. What each method demands of these
+// fields -- which IdempotencyKey values are legal, in particular -- is
+// each method's own contract, stated and enforced on the method, never by
+// this shared type.
 type PreDeductInput struct {
-	// Amount is the credit count to reserve. Must be strictly positive.
+	// Amount is the credit count this operation moves. Must be strictly
+	// positive.
 	Amount int64
-	// IdempotencyKey identifies this reservation attempt, mandatory for
-	// the same reason go/metering's UsageEvent.IdempotencyKey is: it is
-	// what lets a retried PreDeduct call (a caller that timed out not
-	// knowing whether its first attempt committed) be told apart from a
-	// second, genuinely new reservation. It becomes the resulting
-	// CreditTransaction's own ID -- see PreDeduct's doc comment.
+	// IdempotencyKey identifies this deduction attempt at the ledger's own
+	// primary-key level: a set value becomes the resulting
+	// CreditTransaction's own ID, so a retried call carrying the same key
+	// recognizes its own earlier attempt. PreDeduct requires a non-empty
+	// key -- for the same reason go/metering's UsageEvent.IdempotencyKey
+	// is mandatory, a caller that timed out not knowing whether its first
+	// attempt committed must be able to retry without risking a second,
+	// genuinely new reservation -- and refuses an empty one with
+	// ErrIdempotencyKeyRequired. Expire treats the key as optional: empty
+	// selects the single-phase shape (a fresh transaction id per call, not
+	// idempotent under retry -- the one-off, operator-driven mode), while
+	// a set key makes the expiry retry-safe under a jobs-driven sweep's
+	// deterministic per-window key -- see PreDeduct's and Expire's own doc
+	// comments for the full contracts.
 	IdempotencyKey string
 	// Reason is a short, machine-readable note on the resulting ledger
-	// entry (e.g. "ai_generation:job_123"), declared a bounded phrase and
-	// validated by validateReason -- see CreditService's own doc comment
-	// for the declared shape and why the constraint exists. Optional.
+	// entry (e.g. "ai_generation:job_123", "expiry:2026-09-policy"),
+	// declared a bounded phrase and validated by validateReason -- see
+	// CreditService's own doc comment for the declared shape and why the
+	// constraint exists. Optional.
 	Reason string
 }
 
@@ -528,33 +544,6 @@ func (s *CreditService) Grant(ctx context.Context, in GrantInput) (*CreditTransa
 	return row, nil
 }
 
-// ExpireInput names one expiry deduction.
-type ExpireInput struct {
-	// Amount is the credit count to remove from Available. Must be
-	// strictly positive.
-	Amount int64
-	// IdempotencyKey optionally names this expiry run. When set, it
-	// becomes the resulting CreditTransaction's own ID -- the identical
-	// ledger-ID-as-idempotency-key shape PreDeduct's mandatory
-	// IdempotencyKey uses -- and Expire's retry contract becomes
-	// idempotent: a retried call with the same key (a jobs-driven expiry
-	// sweep rerunning its own window after a crash or a timeout, deriving
-	// a deterministic per-tenant+period key the way go/storage's
-	// EnqueueExpirySweep does) is answered with the first call's own row
-	// and applies NO second deduction (see Expire's own doc comment for
-	// the full contract, including which existing rows count as the
-	// retry's own earlier run). Empty (the default) selects the
-	// single-phase shape: a fresh uuid.NewString() transaction id per
-	// call, not idempotent under retry -- the right mode for a one-off,
-	// operator-driven expiry, wrong for any caller that may retry.
-	IdempotencyKey string
-	// Reason is a short, machine-readable note (e.g.
-	// "expiry:2026-09-policy"), declared a bounded phrase and validated by
-	// validateReason -- see CreditService's own doc comment for the
-	// declared shape and why the constraint exists. Optional.
-	Reason string
-}
-
 // Expire removes in.Amount credits from the tenant's Available balance
 // directly -- a single-phase deduction driven by an expiry policy rather
 // than a business operation that might fail and need refunding. The
@@ -565,7 +554,7 @@ type ExpireInput struct {
 // refused, not clamped to zero, so a caller's own accounting error is
 // never silently absorbed.
 //
-// # Idempotency: the caller's choice, keyed by ExpireInput.IdempotencyKey
+// # Idempotency: the caller's choice, keyed by PreDeductInput.IdempotencyKey
 //
 // An unkeyed Expire (IdempotencyKey empty) is NOT idempotent under retry:
 // its CreditTransaction.ID is a fresh uuid.NewString() every call, so a
@@ -602,7 +591,7 @@ type ExpireInput struct {
 // grant-vintage or expiry-window data exists in the ledger), and the
 // scheduler that runs such a policy is a host's jobs wiring. This method
 // supplies the at-most-once write that scheduler needs, never the policy.
-func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTransaction, error) {
+func (s *CreditService) Expire(ctx context.Context, in PreDeductInput) (*CreditTransaction, error) {
 	if in.Amount <= 0 {
 		return nil, ErrInvalidAmount.WithParam("amount", in.Amount)
 	}

@@ -262,7 +262,7 @@ func TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 	}
 
 	const key = "expiry:2026-09-policy:window-1"
-	first, err := svc.Expire(ctx, billing.ExpireInput{Amount: 40, IdempotencyKey: key})
+	first, err := svc.Expire(ctx, billing.PreDeductInput{Amount: 40, IdempotencyKey: key})
 	if err != nil {
 		t.Fatalf("first keyed Expire: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 		t.Fatalf("keyed Expire row ID = %q, want the supplied key %q", first.ID, key)
 	}
 
-	second, err := svc.Expire(ctx, billing.ExpireInput{Amount: 40, IdempotencyKey: key})
+	second, err := svc.Expire(ctx, billing.PreDeductInput{Amount: 40, IdempotencyKey: key})
 	if err != nil {
 		t.Fatalf("retried keyed Expire = %v: on PostgreSQL a statement error on the open transaction would abort it (25P02) and the read-back could never run", err)
 	}

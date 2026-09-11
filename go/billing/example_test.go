@@ -293,7 +293,7 @@ func ExampleCreditService_Expire() {
 	// is running for. A sweep run is retryable: crashing after this call
 	// committed and rerunning the same window must not deduct twice.
 	window := "expiry:2026-09-policy"
-	first, err := credits.Expire(tenantCtx, billing.ExpireInput{
+	first, err := credits.Expire(tenantCtx, billing.PreDeductInput{
 		Amount:         40,
 		IdempotencyKey: window,
 		Reason:         window,
@@ -305,7 +305,7 @@ func ExampleCreditService_Expire() {
 
 	// The crashed run's retry: same window, same key. It is answered with
 	// the first run's own row -- no second deduction.
-	retried, err := credits.Expire(tenantCtx, billing.ExpireInput{
+	retried, err := credits.Expire(tenantCtx, billing.PreDeductInput{
 		Amount:         40,
 		IdempotencyKey: window,
 		Reason:         window,

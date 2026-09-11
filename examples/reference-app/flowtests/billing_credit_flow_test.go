@@ -488,7 +488,7 @@ func TestSmileSimulation_InsufficientCredits_RefusedBeforeAIGatewayCall(t *testi
 	const remainder = 1
 	drainAmount := seeded.Available - remainder
 	credits := openBillingCredits(t, cfg)
-	if _, err := credits.Expire(pkgcore.WithTenant(context.Background(), tenantID), billing.ExpireInput{
+	if _, err := credits.Expire(pkgcore.WithTenant(context.Background(), tenantID), billing.PreDeductInput{
 		Amount: drainAmount, Reason: "test:drain-to-insufficient",
 	}); err != nil {
 		t.Fatalf("Expire (drain to insufficient): %v", err)
