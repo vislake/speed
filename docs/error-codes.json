@@ -3048,7 +3048,7 @@
       "file": "go/ratelimit/limiter.go",
       "ident": "ErrRateOneUnsupported",
       "kind": "declared",
-      "line": 61,
+      "line": 59,
       "module": "ratelimit",
       "status": 400
     },
