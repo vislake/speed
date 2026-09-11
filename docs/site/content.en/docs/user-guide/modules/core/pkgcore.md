@@ -1,7 +1,7 @@
 ---
 title: pkgcore
 weight: 1
-description: "The dependency floor — the Module/Registry/Kernel assembly contract, tenant context, the infrastructure seam interfaces, structured errors and the merged message catalog."
+description: "The dependency floor — the module/component assembly contract, tenant context, the infrastructure seam interfaces, structured errors and the merged message catalog."
 ---
 
 # pkgcore
@@ -10,12 +10,14 @@ The dependency floor of a speed-based service: the module every other
 Go module imports, and the one that imports none of them.
 
 pkgcore owns seven things and nothing else: the
-`Module`/`Registry`/`Kernel` wiring contract — one `Register(reg Registrar)`
-call per module; tenant context plus the raw system-context marker;
+module/component assembly contract — every module implementation ships
+a `Component` descriptor whose `Init` callback runs one
+`Register(reg *pkgcore.ComponentRegistry)` declaration body; tenant
+context plus the raw system-context marker;
 the infrastructure seam interfaces `KVStore`, `EventBus`, `Mailer` and
 `ObjectStore` with the in-process implementations that double as test
-doubles; the registry/capability/preset machinery `Bootstrap` resolves
-and validates assemblies through; the merged backend message catalog;
+doubles; the component-registry, capability and seam-registry machinery
+the assembly resolves and validates compositions through; the merged backend message catalog;
 the `DeploymentMode` enumeration; and the conformance suites
 (`eventbustest`, `kvstoretest`, `mailertest`, `objectstoretest`) every
 implementation of a seam must pass. Subpackages add `apperr` (the
@@ -31,23 +33,29 @@ it.
 Every speed-based binary carries it — every module of the platform
 builds on pkgcore. You use it in one of two roles:
 
-- **As a module author** — your business module implements
-  `pkgcore.Module` and contributes routes, config items, feature
-  flags, permissions, job handlers, notification types, events and
-  audit actions through one `Register` call. Do not add methods to
-  `Module` later: under lockstep versioning that breaks every module
-  at once, which is why cross-cutting mechanisms become new seats on
-  the `Registrar` declaration face instead.
-- **As a host** — your binary composes the modules with
-  `Kernel.Bootstrap` and declares which topology it runs as. The
-  bare `NewKernel()` default is standalone: in-process seams only,
-  zero configuration, no external services.
+- **As a module author** — your business module ships a
+  `pkgcore.Component` descriptor (its name, its lifecycle callbacks and
+  its asset embeds) whose `Init` callback runs one
+  `Register(reg *pkgcore.ComponentRegistry)` declaration body
+  contributing routes, config items, feature flags, permissions, job
+  handlers, notification types, events and audit actions. Do not grow
+  the descriptor's contract later: under lockstep versioning that
+  breaks every module at once, which is why cross-cutting mechanisms
+  become new seats on the `*pkgcore.ComponentRegistry` declaration
+  face instead.
+- **As a host** — your binary composes the components with
+  `pkgcore.NewComponentRegistry()` and drives them through the seven
+  stages with `app.Assemble` (or the `app.RunAssembly` sugar),
+  declaring which topology the composition runs as. The `deployment`
+  key of the composition configuration defaults to standalone, the
+  zero-external-services shape.
 
 ## Wiring and minimal use
 
 A module declares its whole surface in `Register` — no I/O, no
-services started; registration order never matters, `DependsOn` and
-`Bootstrap`'s sort decide:
+services started; registration order never matters, the
+`Requires`/`Provides` contract tokens and the assembly's dependency
+sort decide:
 
 ```go
 func (m *BillingModule) Register(reg *pkgcore.ComponentRegistry) error {
@@ -66,40 +74,53 @@ func (m *BillingModule) Register(reg *pkgcore.ComponentRegistry) error {
 }
 ```
 
-A host booting it — the module set is your own composition (`pkgcore`
-ships no application):
+A host booting it — the component set is your own composition
+(`pkgcore` ships no application):
 
 ```go
 // The host's bootstrap target: one field per process-start key it
-// resolves. go/pkgcore/config's loader fills it from flags, the
-// environment, an optional config file and the struct's own defaults,
-// and a field may pin its exact variable name with config:"env=...".
+// resolves. go/app's loader fills it from flags, the environment, an
+// optional config file and the struct's own defaults, and a field may
+// pin its exact variable name with config:"env=...".
 var boot struct {
-    DeploymentMode string
+    DatabaseDSN string
 }
-if err := config.New().Load(&boot); err != nil {
-    return err // the loader names the key and every source it consulted
+// The host's own components: its business modules' descriptors, plus
+// the config and jobs components it wires itself.
+reg := pkgcore.NewComponentRegistry()
+for _, c := range hostComponents() {
+    if err := reg.Register(c); err != nil {
+        return err
+    }
 }
-mode, err := pkgcore.ParseDeploymentMode(boot.DeploymentMode)
-if err != nil {
+// The composition configuration's code-override layer names the
+// components this binary selects (nil selects, false deselects); the
+// deployment key defaults to standalone.
+composition := pkgcore.ComponentConfig{}.With("components",
+    pkgcore.ComponentConfig{}.
+        With("eventbus.memory", nil).
+        With("kv.memory", nil).
+        With("billing", nil))
+spec := app.LoadSpec{
+    Host:      &boot,
+    Options:   []app.ConfigOption{app.ConfigEnvPrefix("BILLING")},
+    Overrides: &app.CompositionOverrides{Config: composition},
+}
+// The seven-stage drive; a refusal names the component and the reason
+// (a capability shortfall reports as ErrCapabilityUnsatisfied with the
+// component, the missing bits and the mode).
+if err := app.Assemble(ctx, reg, spec); err != nil {
     return err
-}
-// The host's own module values: its business modules' pkgcore.Module
-// implementations, plus the config and jobs modules it wires itself.
-reg, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(mode)).
-    Bootstrap(ctx, billingModule, orgModule)
-if err != nil {
-    return err // the Prepare stage named the component, the missing capability and the mode (ErrCapabilityUnsatisfied)
 }
 ```
 
-A distributed host swaps in real implementations instead of the preset
-defaults: `WithEventBus(bus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart)`,
-`WithKVStore`, `WithMailer`, `WithObjectStore` inject one implementation
-plus its capability bits, or `WithPreset(pkgcore.PresetDistributed)`
-names the built-in Redis/SMTP/S3 composition. Business code never
-branches on the mode — it only ever sees the resolved seams on the
-`Registry`.
+A distributed host swaps in real implementations by selecting their
+components in the composition configuration — `eventbus.redis`,
+`kv.redis`, `mailer.smtp` and `objectstore.s3` are the built-in
+Redis/SMTP/S3 composition, each resolving once the binary imports its
+subpackage, each declaring its own capability bits. Business code never branches on
+the mode — it only ever sees the resolved values through the
+registry's accessors.
 
 Errors ride the `apperr` contract — constructors like
 `apperr.NotFound("billing.subscription_not_found")`, decorated with
@@ -111,12 +132,17 @@ client must not see.
 
 ## Core concepts and API essentials
 
-- **The `Registry`** — one field per mechanism (`Routes`, `Config`,
-  `Features`, `Permissions`, `Jobs`, `Notifications`, `Events`,
-  `AuditActions`, `Retention`, `Schedules`), built with the three-argument
-  `NewRegistry(bus, kv, mailer)` or installed by `Bootstrap`, which
-  also resolves `ObjectStore()` and the merged `Locales()` catalog.
-  `Registry.EventBus()` is the bus behind the registrar.
+- **The `ComponentRegistry`** — one seat field per mechanism (`Routes`,
+  `Config`, `Features`, `Permissions`, `Jobs`, `Notifications`, `Events`,
+  `AuditActions`, `Retention`, `Schedules`), created with
+  `pkgcore.NewComponentRegistry()` from the global component
+  registration plus the host's own components; the seats accept writes
+  only while the Init stage runs. Its accessors read the assembled
+  values from the registry's by-type context — `EventBus()`,
+  `KVStore()`, `Mailer()`, `ObjectStore()` and the merged `Locales()`
+  catalog, each nil when the assembly carries none. `EventBus()` is the
+  bus behind the registrar, where the host publishes into what modules
+  subscribed to.
 - **Seams and capabilities** — each seam interface is designed
   against the weakest registered implementation (no server-side
   scripting on `KVStore`), and implementations declare their capability
@@ -125,10 +151,10 @@ client must not see.
   `KeyNeverLeavesBoundary` on go/pki's `Signer` implementations, which
   declare it through their own registry — a bit the assembly does not
   compare against a requirement (the gap go/pki's docs record).
-  `Bootstrap` fails a composition whose resolved implementation cannot
-  satisfy the declared mode; a missing `SurvivesRestart` is a startup
-  warning only, and a `Stateless` implementation is exempt from even
-  that.
+  The assembly's Prepare stage fails a composition whose selected
+  component cannot satisfy the declared mode; a missing
+  `SurvivesRestart` is a startup warning only, and a `Stateless`
+  implementation is exempt from even that.
 - **Tenant context** — `WithTenant`/`TenantFromContext`/
   `MustTenantFromContext` (fail-closed: `ErrNoTenant`, never "all
   tenants"), and `WithSystemContext` as a marker that suppresses
@@ -143,16 +169,18 @@ client must not see.
   fallback language.
 - **Subpackage implementations** — Redis, PostgreSQL, NATS, Memcached
   and S3 implementations live in their own subpackages and
-  self-register from `init()`; a preset that names one resolves only
-  after the host blank-imports it — the accepted `database/sql`-style
-  cost, with `ErrUnknownImplementation` naming the missing import.
+  self-register from `init()`; a composition can select one only after
+  the host blank-imports its subpackage — the accepted
+  `database/sql`-style cost, with the refusal naming the component and
+  listing the registered ones.
 
 ## Boundaries and pitfalls
 
 - A new cross-cutting mechanism belongs on the declaration face — a
-  `Registrar` accessor plus the registry field behind it — never as a
-  new `Module` method; `Register` must not perform I/O, and a
-  registrar error is never a merge — duplicate keys fail registration.
+  seat accessor on the `ComponentRegistry` plus the registrar behind
+  it — never as a new descriptor callback; `Register` must not perform
+  I/O, and a registrar error is never a merge — duplicate keys fail
+  registration.
 - Do not write mocks for the seams: `NewMemoryKVStore`,
   `NewMemoryEventBus`, `NewConsoleMailer` and `NewLocalObjectStore`
   are the doubles, and the conformance suites are the mandatory check

@@ -1,18 +1,19 @@
 ---
 title: "pkgcore: the assembly contract and the dependency floor"
 weight: 1
-description: "Why pkgcore owns the Module/Registry/Kernel wiring contract, the seam interfaces with capability-declaring implementations, the tenant-context primitives and the message catalog — and nothing else."
+description: "Why pkgcore owns the module/component assembly contract, the seam interfaces with capability-declaring implementations, the tenant-context primitives and the message catalog — and nothing else."
 ---
 
 # pkgcore: the assembly contract and the dependency floor
 
 pkgcore is the module every other Go module imports and no other speed
 module is imported by. It owns seven concerns and nothing else: the
-`Module`/`Registry`/`Kernel` wiring contract, the tenant-context
+module/component assembly contract, the tenant-context
 primitives, the infrastructure seam interfaces (`KVStore`, `EventBus`,
 `Mailer`, `ObjectStore`) with each one's in-process or stdlib-backed
-implementation, the capability/registry/preset machinery `Bootstrap`
-resolves and validates seams through, the merged message catalog, the
+implementation, the capability, component-registry and seam-registry
+machinery the assembly resolves and validates compositions through,
+the merged message catalog, the
 `DeploymentMode` enumeration, and the per-seam conformance suites.
 Three subpackages (`apperr`, `config`, `i18n`) and a family of
 implementation subpackages (the Redis-, PostgreSQL-, NATS-, S3- and
@@ -26,20 +27,22 @@ no business behaviour. The boundary list is explicit:
 - **No database access** (dbkit), **no tenant enforcement in SQL**
   (tenancy), **no logging/tracing** (observability), **no runtime
   configuration** (the config *module*), **no job execution** (jobs).
-  The module declares; the kernel decides when anything runs.
+  The module declares; the assembly decides when anything runs.
 - **No import of any other speed module** — dbkit included, and
   observability too, however tempting for structured logging; the
   floor cannot depend on anything above it. That is why
-  `Module.Migrations` returns a plain `embed.FS` rather than a dbkit
+  `Component.Migrations` is a plain `embed.FS` rather than a dbkit
   type, and why pkgcore's own log calls use `log/slog` directly.
 - **No third-party dependency in the root package.** Everything a
   subpackage needs (go-redis, pgx, nats.go, minio-go, gomemcache)
   lives behind that subpackage's own constructor, and no SDK type ever
   crosses a seam interface.
-- **One shared transport seam deliberately has no kernel seat**: the
-  `SMSSender` seam is injected by each consuming module's own option,
-  never kernel-resolved, because no consumer takes its SMS transport
-  from the kernel.
+- **The SMS transport resolves through the composition, not a seam
+  registry**: `sms.console` and `sms.http` are components whose product
+  is the `SMSSender` seam, and consuming components declare it as a
+  requirement — notification requires one, authn takes it optionally —
+  so the transport follows the same component selection as everything
+  else.
 - **Out of the seam contract's reach**: presigned URLs, object
   metadata, EXIF stripping, MIME sniffing and retention all belong to
   `go/storage`, the contract's first real consumer — the seam
@@ -49,19 +52,20 @@ no business behaviour. The boundary list is explicit:
 
 ## Design: why the wiring contract is one `Register` call
 
-Every module implements one `Module` interface (`Name`, `DependsOn`,
-`Migrations`, `Locales`, `OpenAPISpec`, `Register`) and contributes
-everything it owns — routes, config schema, feature flags,
+Every module ships one `Component` descriptor — name, the seven
+lifecycle callbacks, the `Requires`/`Provides` contract tokens and the
+embedded assets (migrations, locales, the OpenAPI fragment) — and
+contributes everything it owns — routes, config schema, feature flags,
 permissions, job handlers, notification types, events, audit actions —
-through that single `Register(reg Registrar)` call. The declaration
-face is the `Registrar` view: one registration seat per mechanism,
-answered by both the kernel's module `Registry` and the component
-assembly's `ComponentRegistry`.
+through one `Register(reg *pkgcore.ComponentRegistry)` declaration
+body, which the descriptor's `Init` callback runs. The declaration
+face is the ten registration seats on that registry, one per
+mechanism.
 
-**Why one method instead of eight?** Under lockstep versioning,
-changing the `Module` interface is a breaking change that breaks every
-module at once; a new cross-cutting mechanism becomes a new seat on
-the declaration face — a `Registrar` accessor plus the registrar
+**Why one declaration body instead of eight?** Under lockstep
+versioning, changing the descriptor contract is a breaking change that
+breaks every module at once; a new cross-cutting mechanism becomes a
+new seat on the declaration face — a seat accessor plus the registrar
 behind it — and existing modules neither change nor recompile. The
 same reasoning keeps module assets (migrations, locales, the OpenAPI
 fragment) embedded with the module's own code, so version and assets
@@ -72,10 +76,11 @@ elsewhere: permission lists feed the admin console's role surface,
 config and feature schemas feed generated configuration reference,
 notification types feed the recipient-facing preference matrix. The
 `Register`-time rules follow from the shape: no I/O during `Register`
-(it declares; the kernel decides when anything runs), no dependence on
-registration order (`DependsOn` declares, `Bootstrap` sorts and
-reports cycles), no swallowed registrar error (a duplicate key is a
-bug across modules, not a merge).
+(it declares; the assembly decides when anything runs), no dependence
+on registration order (the `Requires`/`Provides` tokens declare, the
+assembly's plan orders construction and refuses cycles), no swallowed
+registrar error (a duplicate key is a bug across modules, not a
+merge).
 
 ## Design: deployment mode and implementation composition
 
@@ -94,8 +99,8 @@ The machinery: implementations declare what they can do
 (`MultiReplicaSafe`, `SurvivesRestart`, `Stateless` — the third added
 so a stateless console mailer skips a restart-warning banner that
 names no loss for it — plus `KeyNeverLeavesBoundary`, declared by
-go/pki's `Signer` implementations and deliberately not compared by the
-assembly, which validates only the four fixed infrastructure seams),
+go/pki's `Signer` implementations through their own registry and
+deliberately not compared by the assembly's capability validation),
 each mode declares what it requires
 (distributed requires `MultiReplicaSafe` on every shared-state seam;
 standalone requires nothing), and the assembly's Prepare stage is the
@@ -109,25 +114,26 @@ implementations exist. A missing `SurvivesRestart` alone is a startup
 banner, not a failure: the operator must know exactly which data will
 not survive a restart.
 
-The kernel is assembled from options, not a mode argument:
-`NewKernel(opts...)` with `WithDeploymentMode`, `WithPreset` (swap the
-whole seam→implementation map), and per-seam injectors
-(`WithEventBus`, `WithKVStore`, `WithMailer`, `WithObjectStore`) that
-always win over the preset, per seam. Two design consequences follow.
-First, the framework ships no "production" or "test" preset — which
-composition counts as production is the assembling application's
-judgement, and a bare `NewKernel()` is a zero-configuration standalone
-default. Second, business code never holds the mode at all, so the
+The composition is assembled from a configuration, not a mode
+argument: the composition configuration names the components the
+binary selects (one entry per component under its `components` block,
+`nil` selecting and `false` deselecting) and carries the `deployment`
+key; `app.Assemble` then drives the whole seven-stage lifecycle over
+the registry. Two design consequences follow.
+First, the framework ships no "production" or "test" composition —
+which composition counts as production is the assembling application's
+judgement, and the `deployment` key defaults to standalone. Second,
+business code never holds the mode at all, so the
 "no `if mode == standalone` in business logic" rule is enforced by
 there being nothing to branch on.
 
 ```mermaid
 flowchart TD
-    Host[Host application] --> Opts["NewKernel options<br/>WithDeploymentMode · WithPreset · per-seam With*"]
-    Opts --> Boot[Kernel.Bootstrap<br/>dependency-sort modules, register each, validate feature graph]
-    Boot --> Resolve["Resolve every seam<br/>preset name, or injected value"]
+    Host[Host application] --> Opts["the composition configuration<br/>deployment key · components block · per-component config"]
+    Opts --> Boot[app.Assemble<br/>plan components, construct in dependency order, validate capabilities]
+    Boot --> Resolve["Resolve every seam<br/>selected component, host-injected value"]
     Resolve --> Check{"Capabilities satisfy<br/>declared mode's requirements"}
-    Check -->|yes| Run[Startup proceeds<br/>installs merged message catalog]
+    Check -->|yes| Run[Startup proceeds<br/>the host's steps read the assembled registry]
     Check -->|no| Fail["Startup fails: ErrCapabilityUnsatisfied<br/>naming the component, the missing capabilities and the mode"]
     Check -->|"missing SurvivesRestart only"| Banner[Startup proceeds with a durability warning banner]
 ```
@@ -138,17 +144,19 @@ Each infrastructure interface has N implementations, N ≥ 1 — never a
 fixed two. Which implementations a binary contains is the application
 assembler's decision, and the packaging follows Go's per-package
 dependency resolution: each implementation lives in its own subpackage
-and self-registers from its own `init()` onto the package-level
-`SeamRegistry` (`kv.redis`, `eventbus.postgres`, `objectstore.s3`,
-…), the in-process built-ins registering from the seam registration files
+and self-registers from its own `init()`, both as a component on the
+global component registration (`kv.redis`, `eventbus.postgres`,
+`objectstore.s3`, …) and as a `Registration` on the package-level
+`SeamRegistry`, the in-process built-ins registering from the seam
+registration files and component descriptors
 in the root package (`kv.memory`, `eventbus.memory`, `mailer.console`,
-`mailer.smtp`, `objectstore.local`). A host that wants a preset
-composition naming a distributed implementation must import that
-subpackage — a blank import suffices — or `Bootstrap` answers
-`ErrUnknownImplementation` naming the seam and the implementation:
-the accepted `database/sql`-style trade that turns a compile-time
-error into a startup error whose message names the import that fixes
-it.
+`mailer.smtp`, `objectstore.local`). A composition that selects a
+distributed implementation resolves only after the host's binary
+imports that subpackage — a blank import suffices — or the assembly
+refuses the selection, naming the component and listing the
+registered ones: the accepted `database/sql`-style trade that turns a
+compile-time error into a startup error whose message names the
+import that fixes it.
 
 Bundling everything is not a trade-off with any upside: running
 arbitrary compositions is a property that *survives* splitting, since
@@ -199,12 +207,13 @@ platform need no containers.
 
 ## Stable surface
 
-The frozen contracts consumers build against: the `Module` interface
-and the `Registry` seats; the kernel option surface and
-`Bootstrap`/`Shutdown` semantics; the seam interfaces and their
+The frozen contracts consumers build against: the `Component`
+descriptor and the `ComponentRegistry` seats; the `Requires`/`Provides`
+resolution, the seven-stage lifecycle and `app.Assemble`/`app.Shutdown`
+semantics; the seam interfaces and their
 observable semantics (TTL expiry rules, `IncrByFloat` never extending
 a live key's expiry, capability bits); the built-in implementation
-names on the four registries and the two presets; the tenant-context
+names on the four seam registries; the tenant-context
 and actor-context primitives; the `apperr` contract; the config-loader
 and i18n contracts; and the module's error-code family. Changes to any
 of these are breaking changes under lockstep.
