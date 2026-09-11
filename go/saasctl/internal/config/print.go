@@ -27,7 +27,7 @@ const defaultModPath = "go.mod"
 const redactedMarker = "[redacted]"
 
 // redactedEnv is the single, concentrated declaration of which bootstrap
-// variables' resolved values never print: the five key materials and the
+// variables' resolved values never print: the six key materials and the
 // three infrastructure credentials -- this system's durable secrets, the
 // bytes that unlock ciphertext, HMAC indexes and remote credentials. The
 // members are the APP_* variables this map's keys name; the print
@@ -57,6 +57,7 @@ var redactedEnv = map[string]bool{
 	appconfig.AuthnBlindIndexKeyEnv:   true,
 	appconfig.AuthnPIICipherKeyEnv:    true,
 	appconfig.PKILocalKeyCipherKeyEnv: true,
+	appconfig.NotificationIndexKeyEnv: true,
 	appconfig.S3SecretKeyEnv:          true,
 	appconfig.SMTPPasswordEnv:         true,
 	appconfig.SMSGatewayURLEnv:        true,
@@ -91,11 +92,12 @@ The bootstrap variables:
   APP_DEPLOYMENT_MODE     the deployment mode (standalone or distributed)
   PORT                    the HTTP port
   APP_DB_PATH             the SQLite database path
-  APP_CONFIG_KEY          the configuration master key (64 hex characters)
-  APP_ORG_INDEX_KEY       the org blind-index key (64 hex characters)
-  APP_AUTHN_BLIND_INDEX_KEY the authn blind-index HMAC key (64 hex characters)
-  APP_AUTHN_PII_CIPHER_KEY  the authn PII cipher key (64 hex characters)
-  APP_PKI_LOCAL_KEY_CIPHER_KEY the pki local-key cipher key (64 hex characters)
+  APP_CONFIG__CIPHER_KEY  the config-module cipher key (64 hex characters)
+  APP_ORG__INVITATION_EMAIL_INDEX_KEY the org blind-index key (64 hex characters)
+  APP_AUTHN__BLIND_INDEX_KEY the authn blind-index HMAC key (64 hex characters)
+  APP_AUTHN__PII_CIPHER_KEY  the authn PII cipher key (64 hex characters)
+  APP_PKI__LOCAL_KEY_CIPHER_KEY the pki local-key cipher key (64 hex characters)
+  APP_NOTIFICATION__CONTACT_INDEX_KEY the notification contact-index key (64 hex characters)
   APP_REDIS_ADDR          Redis address composing the eventbus/kv seams
   APP_OTLP_ENDPOINT       OTLP/gRPC endpoint traces and metrics are pushed to
                           (unset: the local exporters)
@@ -112,9 +114,10 @@ The bootstrap variables:
   APP_SMTP_PASSWORD       SMTP AUTH password (optional)
   APP_SMS_GATEWAY_URL     authn's HTTP SMS transport endpoint
 
-The five key variables (APP_CONFIG_KEY, APP_ORG_INDEX_KEY,
-APP_AUTHN_BLIND_INDEX_KEY, APP_AUTHN_PII_CIPHER_KEY and
-APP_PKI_LOCAL_KEY_CIPHER_KEY) and the three infrastructure credentials
+The six key variables (APP_CONFIG__CIPHER_KEY,
+APP_ORG__INVITATION_EMAIL_INDEX_KEY, APP_AUTHN__BLIND_INDEX_KEY,
+APP_AUTHN__PII_CIPHER_KEY, APP_PKI__LOCAL_KEY_CIPHER_KEY and
+APP_NOTIFICATION__CONTACT_INDEX_KEY) and the three infrastructure credentials
 (APP_S3_SECRET_KEY, APP_SMTP_PASSWORD and APP_SMS_GATEWAY_URL) are
 secrets: their values never print, only a [redacted] marker in their
 place, whatever the environment holds -- the redaction decision is
@@ -197,7 +200,7 @@ func reportError(stderr io.Writer, err error) int {
 // malformed key, or an incomplete S3/SMTP infrastructure group) -- and
 // renders one line per value: the label, the resolved value, and its
 // provenance. The value column of every row renders through valueColumn,
-// which consults the single redactedEnv declaration: the five key
+// which consults the single redactedEnv declaration: the six key
 // variables, the S3 secret key, the SMTP password and the SMS gateway
 // URL render as [redacted] whatever the environment holds, every other
 // variable prints its resolved value.
@@ -224,7 +227,7 @@ func print(modPath string) (string, error) {
 
 	// One row per bootstrap variable, in the order the generated app's own
 	// config.go resolves them (deployment mode, port, database path, the
-	// five key materials, then the infrastructure addresses and the OTLP
+	// six key materials, then the infrastructure addresses and the OTLP
 	// endpoint). Every row names
 	// its environment variable, so the renderer below can decide its value
 	// column against redactedEnv -- the per-line choices are this table.
@@ -254,7 +257,7 @@ func print(modPath string) (string, error) {
 			"sqlite path", appconfig.DBPathEnv, effectiveDBPath,
 			sqlitePathSource(cfg, effectiveDBPath),
 		},
-		// The five key rows carry no value at all, not merely a redacted
+		// The six key rows carry no value at all, not merely a redacted
 		// rendering of one: their raw bytes never enter this table, so the
 		// redaction cannot leak them through any future edit to valueColumn
 		// or the list -- the marker they render comes from redactedEnv
@@ -278,6 +281,10 @@ func print(modPath string) (string, error) {
 		{
 			"pki local key cipher key", appconfig.PKILocalKeyCipherKeyEnv, "",
 			provenance(appconfig.PKILocalKeyCipherKeyEnv, cfg.PKILocalKeyCipherKeyFromEnv, "unset or empty (development default)"),
+		},
+		{
+			"notification index key", appconfig.NotificationIndexKeyEnv, "",
+			provenance(appconfig.NotificationIndexKeyEnv, cfg.NotificationIndexKeyFromEnv, "unset or empty (development default)"),
 		},
 
 		{

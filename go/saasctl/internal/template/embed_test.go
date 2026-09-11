@@ -223,48 +223,49 @@ func TestSelectionGoModsCarryTokens(t *testing.T) {
 
 // TestSelectionServerGoMatchesSelectionKey cross-checks each selection's
 // server.go against its own key: the module constructors it calls, the
-// middleware pieces it composes and the Bootstrap argument order are the
-// selection's whole meaning (A5), so a template edit that lets the file
-// and its directory drift apart fails here even though the file itself --
-// build-ignored -- would never fail a compile.
+// middleware pieces it composes and the module list's order (the order the
+// engine applies migrations and bootstraps in) are the selection's whole
+// meaning (A5), so a template edit that lets the file and its directory
+// drift apart fails here even though the file itself -- build-ignored --
+// would never fail a compile.
 func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 	expected := []struct {
 		key              string
-		modules          []string // in Bootstrap argument order
+		modules          []string // the WithModules callback's return order
 		contains, absent []string
 	}{
 		{
 			key:      "authn+org+rbac",
-			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
+			modules:  []string{"b.pkiModule", "b.authnModule", "b.orgModule", "b.configModule", "b.rbacModule"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
 		},
 		{
 			key:      "authn+rbac",
-			modules:  []string{"pkiModule", "authnModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
+			modules:  []string{"b.pkiModule", "b.authnModule", "b.configModule", "b.rbacModule"},
+			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
 			absent:   []string{"org.NewModule("},
 		},
 		{
 			key:      "authn+org",
-			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
+			modules:  []string{"b.pkiModule", "b.authnModule", "b.orgModule", "b.configModule"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
 			absent:   []string{"rbac.NewModule("},
 		},
 		{
 			key:      "authn",
-			modules:  []string{"pkiModule", "authnModule", "configModule"},
-			contains: []string{"authn.NewModule(", "pki.NewModule(", "speedchain.Chain(speedchain.Config{", "Verifier:    authnModule.Service().Verifier(),"},
+			modules:  []string{"b.pkiModule", "b.authnModule", "b.configModule"},
+			contains: []string{"authn.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
 			absent:   []string{"org.NewModule(", "rbac.NewModule("},
 		},
 		{
 			key:      "none",
-			modules:  []string{"configModule"},
+			modules:  []string{"b.configModule"},
 			contains: []string{"config.NewModule("},
 			absent: []string{
 				"authn.NewModule(", "org.NewModule(", "rbac.NewModule(",
 				"authn.Middleware(", "tenancy.Middleware(", "authn.NewPrincipalResolver()",
 				"authnAPIPath", "authnPreAuthAllowlist", "RegisterPIISerializer", "devSigningKeySeed",
-				"speedchain.Chain(",
+				"speedchain.Chain(", "speedchain.Standard(",
 			},
 		},
 	}
@@ -276,16 +277,14 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 			continue
 		}
 		server := string(content)
-		// Bootstrap's module argument list is the composition's skeleton;
-		// assert the exact order as one line so a reordering that changes
-		// migration-vs-registration semantics cannot pass silently.
-		bootstrapLine := "Bootstrap(ctx, " + strings.Join(want.modules, ", ") + ")"
-		if !strings.Contains(server, bootstrapLine) {
-			t.Errorf("%s: missing Bootstrap call %q", path, bootstrapLine)
-		}
+		// The module set, in the order the WithModules callback returns it,
+		// is the composition's skeleton; assert the exact order as one line
+		// so a reordering that changes registration semantics cannot pass
+		// silently (the engine applies migrations and bootstraps in exactly
+		// that order).
 		migrationList := "[]pkgcore.Module{" + strings.Join(want.modules, ", ") + "}"
 		if !strings.Contains(server, migrationList) {
-			t.Errorf("%s: missing migration registration list %q", path, migrationList)
+			t.Errorf("%s: missing module list %q", path, migrationList)
 		}
 		for _, s := range want.contains {
 			if !strings.Contains(server, s) {
@@ -308,22 +307,18 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 // STRUCTURAL -- every route under authn's API path dispatched ahead of
 // tenancy.Middleware -- never an enumerated allowlist, which is exactly
 // the fixed-channel enumeration that failed: each authn selection's
-// server.go must hand the authn subtree to speedchain.Chain as its
-// AuthnRoutes branch (dispatched from authn.Middleware's output, exempt
-// from the tenancy chain by construction), route-split out of the module
-// route set in mountModuleRoutes by path prefix, and must NOT carry a
-// pre-auth allowlist for authn paths at all -- no authnPreAuthAllowlist
-// function, no per-provider social entries, no register/login literals
-// next to tenancy.WithAllowlist. A template edit that reintroduces the
+// server.go must derive its chain through chain.Standard, whose own
+// derivation splits the authn subtree out with authn.ExemptSubtree and
+// hands it to speedchain.Chain as the AuthnRoutes branch (dispatched from
+// authn.Middleware's output, exempt from the tenancy chain by
+// construction); the host must NOT hand-partition the route set or carry a
+// pre-auth allowlist for authn paths at all -- no mountModuleRoutes
+// helper, no per-provider social entries, no register/login literals next
+// to tenancy.WithAllowlist. A template edit that reintroduces the
 // enumeration (or drops the structural dispatch) fails here before any
 // generated project inherits the bug.
 func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
-	for key, mountCall := range map[string]string{
-		"authn+org+rbac": "mountModuleRoutes(authnMux, moduleMux, reg, rbacService)",
-		"authn+rbac":     "mountModuleRoutes(authnMux, moduleMux, reg, rbacService)",
-		"authn+org":      "mountModuleRoutes(authnMux, moduleMux, reg)",
-		"authn":          "mountModuleRoutes(authnMux, moduleMux, reg)",
-	} {
+	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
 		content, err := fs.ReadFile(Project, path)
 		if err != nil {
@@ -332,24 +327,27 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"AuthnRoutes: []pkgcore.MountedRoute{{Path: speedapp.AuthnAPIPath, Handler: authnMux}}",
-			mountCall,
-			"strings.HasPrefix(route.Path, speedapp.AuthnAPIPath)",
-			"Verifier:    authnModule.Service().Verifier(),",
+			"speedchain.Standard(",
+			"authnModule.Service().Verifier(),",
 		} {
 			if !strings.Contains(server, want) {
 				t.Errorf("%s: missing the structural exemption marker %q", path, want)
 			}
 		}
-		// The fixed enumeration must be gone: no pre-auth allowlist
-		// function, no allowlist entry naming an authn path or provider.
+		// The partition and the fixed enumeration must be gone: the split
+		// lives in chain.Standard's derivation, no pre-auth allowlist
+		// function may survive, and no allowlist entry may name an authn
+		// path or provider.
 		for _, stale := range []string{
+			"mountModuleRoutes",
+			"strings.HasPrefix(route.Path, speedapp.AuthnAPIPath)",
+			"AuthnRoutes: []pkgcore.MountedRoute",
 			"authnPreAuthAllowlist", "ProviderDingTalk", "ProviderFeishu",
 			`tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register")`,
 			`tenancy.WithAllowlist(http.MethodGet, authnAPIPath+"/social/`,
 		} {
 			if strings.Contains(server, stale) {
-				t.Errorf("%s: the fixed pre-auth enumeration survived: %q must not appear", path, stale)
+				t.Errorf("%s: the hand-partitioned dispatch or the fixed pre-auth enumeration survived: %q must not appear", path, stale)
 			}
 		}
 	}
@@ -358,8 +356,9 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 // TestRBACSelectionsAdoptTheRouteTable pins the adoption of the platform's
 // route-authorization mechanism where the skeleton used to leave the gate
 // table to the owner: each rbac-bearing selection must declare its routes
-// through rbac.GuardRoutes over a routeRules table (so a mounted path with
-// no declared decision fails the build), mark the platform's pre-auth
+// through a routeRules table handed to chain.Standard's WithAuthorization
+// (rbac.GuardRoutes runs inside Standard's derivation, so a mounted path
+// with no declared decision fails the build), mark the platform's pre-auth
 // surfaces public explicitly, and gate the modules that perform no
 // permission check of their own; the three selections without rbac must not
 // reference the mechanism at all (they carry no rbac dependency to gate
@@ -373,7 +372,7 @@ func TestRBACSelectionsAdoptTheRouteTable(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"rbac.GuardRoutes(az, reg.Routes.Routes(), routeRules())",
+			"speedchain.WithAuthorization(b.rbacService, routeRules())",
 			"func routeRules() []rbac.RouteRule {",
 			"{Path: speedapp.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}",
 			"{Path: config.PathPublic, Access: pkgcore.RouteAccess{Public: true}}",
@@ -510,9 +509,9 @@ func firstLine(s string) string {
 // is pinned by appconfig's own twin tests, which re-read that file.
 func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T) {
 	authnKeys := []string{
-		"dbkit.NewCipher(cfg.AuthnPIICipherKey)",
-		"dbkit.NewCipher(cfg.PKILocalKeyCipherKey)",
-		"authn.WithBlindIndexKey(cfg.AuthnBlindIndexKey)",
+		"dbkit.NewCipher(b.hostConfig.PlatformConfig.Authn.PII_Cipher_Key)",
+		"dbkit.NewCipher(b.hostConfig.PlatformConfig.PKI.Local_Key_Cipher_Key)",
+		"authn.WithBlindIndexKey(b.hostConfig.PlatformConfig.Authn.Blind_Index_Key)",
 	}
 	banished := []string{
 		"dbkit.NewCipher(devPIICipherKey)",
@@ -563,7 +562,7 @@ func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T
 // mention neither call.
 func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T) {
 	const wantRegistrar = "org.RegisterEmailSerializer(cipher)"
-	const wantConstructor = "org.NewEmailIndexer(cfg.OrgIndexKey)"
+	const wantConstructor = "org.NewEmailIndexer(b.hostConfig.PlatformConfig.Org.Invitation_Email_Index_Key)"
 	const stale = "dbkit.NewBlindIndexer("
 	for _, key := range validSelectionKeys {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
@@ -754,11 +753,15 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 
 // TestPreauthExemption_ComposedShapeIsTheTemplatesOwn pins the test's
 // composition constants to the template files it claims to mirror: if the
-// generated server.go templates compose differently (a renamed constant,
-// a different dispatch), the behavior test would be testing a shape the
-// templates do not produce -- this twin assertion closes that gap by
-// requiring the templates to carry the very markers this test's
-// composition is built from.
+// generated server.go templates compose differently (a different chain
+// entry point, a differently derived verifier), the behavior test would be
+// testing a shape the templates do not produce -- this twin assertion
+// closes that gap by requiring the templates to carry the very markers
+// this test's composition is built from. The templates compose the
+// protected face through chain.Standard, which derives the split this
+// test's own composition reproduces by hand (authn's subtree onto its own
+// branch ahead of the tenancy chain); without the authorization option the
+// chain's shape is the one this test composes.
 func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
 		content, err := fs.ReadFile(Project, ProjectRoot+"/selection/"+key+"/server.go")
@@ -768,8 +771,8 @@ func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 		}
 		server := string(content)
 		for _, marker := range []string{
-			"AuthnRoutes: []pkgcore.MountedRoute{{Path: speedapp.AuthnAPIPath, Handler: authnMux}}",
-			"Verifier:    authnModule.Service().Verifier(),",
+			"speedchain.Standard(",
+			"authnModule.Service().Verifier(),",
 		} {
 			if !strings.Contains(server, marker) {
 				t.Errorf("%s: the composed-shape twin marker %q is missing from the template", key, marker)
@@ -842,21 +845,52 @@ var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
 
 // configGoEnvVarPattern matches one `config:"env=<NAME>"` struct-tag
 // option in the template's config.go -- the loader target's env tag is
-// where each bootstrap variable's name lives (the names are pinned, not
-// derived) -- deliberately duplicated from the identical pattern in
+// where each PINNED bootstrap variable's name lives. The six key-material
+// names carry no tag: their declaration lives in go/app's PlatformConfig,
+// which the template embeds, and the loader derives each variable name
+// from the declared key path (see derivedPlatformKeyEnvs). Deliberately
+// duplicated from the identical pattern in
 // internal/appconfig/appconfig_test.go's own drift-proof test rather than
 // shared, since the two packages check two different kinds of drift (that
 // one checks the Go twin's parse behavior, this one checks the README's
 // prose) and neither should import the other's test helpers to do it.
 var configGoEnvVarPattern = regexp.MustCompile(`config:"env=([A-Za-z0-9_]+)"`)
 
+// derivedPlatformKeyEnvs returns the six environment variable names the
+// loader derives for the platform key materials the template's embedded
+// declaration carries: the declared key path uppercased with every dot
+// doubled under the APP_ prefix (pkgcore/config's own spelling rule). The
+// paths are listed here as the declaration's ground truth; a platform key
+// added to go/app's PlatformConfig without this list and the README and
+// the appconfig twin following fails the README-vs-config test's derived
+// half by construction.
+func derivedPlatformKeyEnvs() []string {
+	var envs []string
+	for _, path := range []string{
+		"authn.blind_index_key",
+		"authn.pii_cipher_key",
+		"config.cipher_key",
+		"notification.contact_index_key",
+		"org.invitation_email_index_key",
+		"pki.local_key_cipher_key",
+	} {
+		envs = append(envs, "APP_"+strings.ToUpper(strings.ReplaceAll(path, ".", "__")))
+	}
+	return envs
+}
+
 // readEnvVarNamesFromConfigGo extracts the set of environment variable
-// names the embedded template's cmd/server/config.go actually parses.
+// names the embedded template's cmd/server/config.go actually resolves:
+// the names pinned by env tags, plus the six names the loader derives for
+// the embedded platform key declaration.
 func readEnvVarNamesFromConfigGo(t *testing.T) map[string]bool {
 	t.Helper()
 	content, err := fs.ReadFile(Project, ProjectRoot+"/cmd/server/config.go")
 	if err != nil {
 		t.Fatalf("read the embedded template config.go: %v", err)
+	}
+	if !strings.Contains(string(content), "speedapp.PlatformConfig") {
+		t.Fatal("the template config.go no longer embeds speedapp.PlatformConfig; the derived key names below would rest on a declaration the file does not carry")
 	}
 	names := map[string]bool{}
 	for _, m := range configGoEnvVarPattern.FindAllStringSubmatch(string(content), -1) {
@@ -864,6 +898,9 @@ func readEnvVarNamesFromConfigGo(t *testing.T) map[string]bool {
 	}
 	if len(names) == 0 {
 		t.Fatal("extracted zero environment variable names from config.go; the extraction pattern itself has drifted")
+	}
+	for _, env := range derivedPlatformKeyEnvs() {
+		names[env] = true
 	}
 	return names
 }

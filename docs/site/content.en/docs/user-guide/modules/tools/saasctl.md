@@ -125,16 +125,17 @@ saasctl config print [go.mod]
 Renders how a generated project's bootstrap configuration resolves,
 one row per variable of the env surface the generated
 `cmd/server/config.go` resolves: the deployment mode, `PORT`,
-`APP_DB_PATH`, the five key materials (`APP_CONFIG_KEY`,
-`APP_ORG_INDEX_KEY`, `APP_AUTHN_BLIND_INDEX_KEY`,
-`APP_AUTHN_PII_CIPHER_KEY`, `APP_PKI_LOCAL_KEY_CIPHER_KEY`), the
-`APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` infrastructure groups and
+`APP_DB_PATH`, the six key materials in the loader's derived spellings
+(`APP_CONFIG__CIPHER_KEY`, `APP_ORG__INVITATION_EMAIL_INDEX_KEY`,
+`APP_AUTHN__BLIND_INDEX_KEY`, `APP_AUTHN__PII_CIPHER_KEY`,
+`APP_PKI__LOCAL_KEY_CIPHER_KEY`, `APP_NOTIFICATION__CONTACT_INDEX_KEY`),
+the `APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` infrastructure groups and
 `APP_OTLP_ENDPOINT`. Each
 row shows the resolved value and its provenance — the variable that
 carried it, or the default it fell back to. The SQLite path row reports
 the effective file, the raw value staying visible when a relative path
 resolves differently. Secret rows render `[redacted]` whatever the
-environment holds: the five key materials, the S3 secret key, the SMTP
+environment holds: the six key materials, the S3 secret key, the SMTP
 password and the SMS gateway URL. A partially set
 `APP_S3_*`/`APP_SMTP_*` group and malformed input are refused exactly
 as the app's own bootstrap would refuse them. The command writes
@@ -154,12 +155,15 @@ differ in two files only — the go.mod require set and `server.go`'s
 wiring; `config.go` is shared verbatim — and two tokens,
 `__APP_NAME__` (the module path) and `__SPEED_ROOT__` (the checkout
 path), are substituted at materialisation. The host-neutral
-composition itself (the liveness endpoints, the pre-auth allowlist
-set, the route-mount rule, the serve/shutdown lifecycle and the fixed
-middleware chain) lives once, in the platform module
+composition itself (the assembly engine — configuration load, database
+open and migration, kernel bootstrap, the HTTP face and the
+serve/shutdown lifecycle — plus the liveness endpoints, the pre-auth
+allowlist set, the route-mount rule and the fixed middleware chain)
+lives once, in the platform module
 `github.com/vislake/speed/go/app`, imported by every generated project
-and the reference app alike; a repository gate keeps either host from
-re-declaring it.
+and the reference app alike and served through the engine's `Run`; a
+repository gate keeps either host from re-declaring it or re-growing
+the assembly calls the engine owns.
 
 The boot defaults: standalone mode, SQLite `app.db`, port 8080.
 `/healthz` and `/api/v1/config/public` answer 200 and registering answers

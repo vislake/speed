@@ -64,22 +64,31 @@ distributed replica against it.
 ## Bootstrap environment
 
 Bootstrap configuration is read from the environment by
-`cmd/server/config.go`. It is deliberately NOT the dynamic configuration the
-`config` module serves: dynamic configuration lives in the database-backed
-`configs` table and can never hold the very key that encrypts it (see
-`config.go`'s doc comments), so the bootstrap values arrive through the
-environment instead.
+`cmd/server/config.go`, through the platform configuration loader the
+application engine drives. It is deliberately NOT the dynamic configuration
+the `config` module serves: dynamic configuration lives in the
+database-backed `configs` table and can never hold the very key that
+encrypts it (see `config.go`'s doc comments), so the bootstrap values
+arrive through the environment instead.
+
+The six key variables are spelled by the loader's own derivation of the six
+key paths the platform declaration carries: the declared path uppercased
+with its dots doubled under the APP_ prefix -- the declared key path
+`config.cipher_key` reads as `APP_CONFIG__CIPHER_KEY`,
+`authn.blind_index_key` as `APP_AUTHN__BLIND_INDEX_KEY`. The other
+variables are pinned by their exact names below.
 
 | Variable | Meaning |
 | --- | --- |
 | `PORT` | HTTP listen port (default `8080`) |
 | `APP_DB_PATH` | SQLite database file (default `app.db`) |
 | `APP_DEPLOYMENT_MODE` | `standalone` (default) or `distributed` |
-| `APP_CONFIG_KEY` | 64 hex characters: the master key the config module's cipher is built from |
-| `APP_ORG_INDEX_KEY` | 64 hex characters: the blind-index HMAC key; consumed only by compositions that wire the org module, parsed unconditionally so the bootstrap contract never changes with the selection |
-| `APP_AUTHN_BLIND_INDEX_KEY` | 64 hex characters: the HMAC key an authn-wiring composition's blind indexer is built from; parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
-| `APP_AUTHN_PII_CIPHER_KEY` | 64 hex characters: the AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets); parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
-| `APP_PKI_LOCAL_KEY_CIPHER_KEY` | 64 hex characters: the AES key that seals go/pki's persisted signing-key column; parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
+| `APP_CONFIG__CIPHER_KEY` | 64 hex characters: the cipher key the config module seals Sensitive values with (the loader's spelling of the declared key path `config.cipher_key`) |
+| `APP_ORG__INVITATION_EMAIL_INDEX_KEY` | 64 hex characters: the invitation blind-index HMAC key (declared path `org.invitation_email_index_key`); consumed only by compositions that wire the org module, resolved unconditionally so the bootstrap contract never changes with the selection |
+| `APP_AUTHN__BLIND_INDEX_KEY` | 64 hex characters: the HMAC key an authn-wiring composition's blind indexer is built from (declared path `authn.blind_index_key`); resolved unconditionally for the same reason |
+| `APP_AUTHN__PII_CIPHER_KEY` | 64 hex characters: the AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets; declared path `authn.pii_cipher_key`); resolved unconditionally for the same reason |
+| `APP_PKI__LOCAL_KEY_CIPHER_KEY` | 64 hex characters: the AES key that seals go/pki's persisted signing-key column (declared path `pki.local_key_cipher_key`); resolved unconditionally for the same reason |
+| `APP_NOTIFICATION__CONTACT_INDEX_KEY` | 64 hex characters: the HMAC key go/notification's blind indexers are built from (declared path `notification.contact_index_key`); resolved unconditionally for the same reason, consumed only by a composition that later wires notification |
 | `APP_REDIS_ADDR` | Redis `host:port`; when set, composes a real Redis-backed implementation of both the "eventbus" and "kv" seams (unset leaves both on the Preset's in-process default) |
 | `APP_OTLP_ENDPOINT` | OTLP/gRPC `host:port` traces and metrics are pushed to; when set, the OTLP exporters are composed and `/metrics` answers 404 by design (unset leaves the local exporters: stdout plus the Prometheus scrape endpoint `/metrics` serves) |
 | `APP_S3_ENDPOINT` | S3-compatible endpoint; together with the three variables below, composes a real ObjectStore for the "objectstore" seam -- all four are required together, a partial set is refused rather than silently ignored |
@@ -93,28 +102,28 @@ environment instead.
 | `APP_SMTP_PORT` | SMTP port |
 | `APP_SMTP_USERNAME` | SMTP AUTH username (optional; AUTH activates only when set) |
 | `APP_SMTP_PASSWORD` | SMTP AUTH password (optional) |
-| `APP_SMS_GATEWAY_URL` | authn's real HTTP SMS transport endpoint; consumed only by compositions that wire the authn module, parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
+| `APP_SMS_GATEWAY_URL` | authn's real HTTP SMS transport endpoint; consumed only by compositions that wire the authn module, resolved unconditionally for the same reason the key variables are |
 
 `saasctl config print` renders this whole surface with each value's
 provenance, refusing exactly when the generated app's own bootstrap would
 refuse -- see "Editing and regenerating" below.
 
 The committed dev keys are recognizable placeholders for zero-setup
-development, never secrets: `config.go` holds all five of them --
-`devConfigKey`, `devOrgIndexKey`, `devBlindIndexKey`, `devPIICipherKey`
-and `devPKILocalKeyCipherKey` -- each a FALLBACK that applies only while
-its own environment variable above is unset, never a value that overrides
-a configured one. A real deployment must set all five `APP_*` key
-variables above from secret-manager material, or the committed bytes are
-what protect its production data. Each key must stay stable across
-restarts: the blind-index keys must stay identical across restarts or
-every already-stored email/phone blind index becomes unfindable;
-`devPIICipherKey` seals authn's encrypted PII columns (email, phone, TOTP
-secrets); and `devPKILocalKeyCipherKey` seals go/pki's own persisted
-signing-key column. Each dev key is a DIFFERENT byte sequence from every
-other one: dbkit's key-separation rule (never let one key double as two
-different AEAD or HMAC constructions) applies across modules, not only
-within one.
+development, never secrets: `config.go` holds all six of them --
+`devConfigKey`, `devOrgIndexKey`, `devNotificationIndexKey`,
+`devBlindIndexKey`, `devPIICipherKey` and `devPKILocalKeyCipherKey` -- each
+a FALLBACK that applies only while its own environment variable above is
+unset, never a value that overrides a configured one. A real deployment
+must set all six `APP_*` key variables above from secret-manager material,
+or the committed bytes are what protect its production data. Each key must
+stay stable across restarts: the blind-index keys must stay identical
+across restarts or every already-stored email/phone blind index becomes
+unfindable; `devPIICipherKey` seals authn's encrypted PII columns (email,
+phone, TOTP secrets); and `devPKILocalKeyCipherKey` seals go/pki's own
+persisted signing-key column. Each dev key is a DIFFERENT byte sequence
+from every other one: dbkit's key-separation rule (never let one key double
+as two different AEAD or HMAC constructions) applies across modules, not
+only within one.
 
 ## What is wired -- and what is not
 

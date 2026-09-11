@@ -114,6 +114,7 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 		"authn blind index key [redacted]   unset or empty (development default)\n" +
 		"authn pii cipher key [redacted]   unset or empty (development default)\n" +
 		"pki local key cipher key [redacted]   unset or empty (development default)\n" +
+		"notification index key [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
 		"otlp endpoint                 unset or empty (observability stays on the local exporters)\n" +
 		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +
@@ -157,6 +158,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		appconfig.AuthnBlindIndexKeyEnv:   "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
 		appconfig.AuthnPIICipherKeyEnv:    "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
 		appconfig.PKILocalKeyCipherKeyEnv: "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+		appconfig.NotificationIndexKeyEnv: "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
 		appconfig.RedisAddrEnv:            "redis.internal:6379",
 		appconfig.OTLPEndpointEnv:         "collector.internal:4317",
 		appconfig.S3EndpointEnv:           "s3.internal:9000",
@@ -181,11 +183,12 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 	want := "deployment mode  distributed  from APP_DEPLOYMENT_MODE\n" +
 		"port             9090         from PORT\n" +
 		"sqlite path      testdata/db.sqlite from APP_DB_PATH (raw value: db.sqlite)\n" +
-		"config key       [redacted]   from APP_CONFIG_KEY\n" +
-		"org index key    [redacted]   from APP_ORG_INDEX_KEY\n" +
-		"authn blind index key [redacted]   from APP_AUTHN_BLIND_INDEX_KEY\n" +
-		"authn pii cipher key [redacted]   from APP_AUTHN_PII_CIPHER_KEY\n" +
-		"pki local key cipher key [redacted]   from APP_PKI_LOCAL_KEY_CIPHER_KEY\n" +
+		"config key       [redacted]   from APP_CONFIG__CIPHER_KEY\n" +
+		"org index key    [redacted]   from APP_ORG__INVITATION_EMAIL_INDEX_KEY\n" +
+		"authn blind index key [redacted]   from APP_AUTHN__BLIND_INDEX_KEY\n" +
+		"authn pii cipher key [redacted]   from APP_AUTHN__PII_CIPHER_KEY\n" +
+		"pki local key cipher key [redacted]   from APP_PKI__LOCAL_KEY_CIPHER_KEY\n" +
+		"notification index key [redacted]   from APP_NOTIFICATION__CONTACT_INDEX_KEY\n" +
 		"redis addr       redis.internal:6379 from APP_REDIS_ADDR\n" +
 		"otlp endpoint    collector.internal:4317 from APP_OTLP_ENDPOINT\n" +
 		"s3 endpoint      s3.internal:9000 from APP_S3_ENDPOINT\n" +
@@ -349,7 +352,7 @@ func TestPrintRedactedEnvParagraphEnumeratesTheList(t *testing.T) {
 	// The enumeration region runs from the paragraph's fixed opening to
 	// the colon that closes "are secrets:". Whitespace is folded first so
 	// the region's wrapped lines parse as one list.
-	const opening = "The five key variables (APP_CONFIG_KEY"
+	const opening = "The six key variables (APP_CONFIG__CIPHER_KEY"
 	start := strings.Index(printUsage, opening)
 	if start < 0 {
 		t.Fatalf("printUsage no longer opens the secret enumeration with %q", opening)
@@ -401,8 +404,11 @@ func TestPrintMalformedDeploymentModeIsReportedVerbatim(t *testing.T) {
 }
 
 // TestPrintMalformedConfigKeyNamesTheAppAndVariable: a malformed
-// APP_CONFIG_KEY fails with the generated app's own error text -- app
-// name and variable named, the required shape stated.
+// APP_CONFIG__CIPHER_KEY fails under the twin's own error text -- app
+// name and variable named, the required shape stated. The generated app's
+// own refusal for the same input is the loader's (naming the key path and
+// the derived variable), so this pins the twin's message, which is what
+// the CLI's caller sees.
 func TestPrintMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
 		appconfig.ConfigKeyEnv: "abc",
@@ -413,7 +419,7 @@ func TestPrintMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("stdout = %q, want empty", stdout)
 	}
-	want := "saasctl config print: cli-app: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
+	want := "saasctl config print: cli-app: APP_CONFIG__CIPHER_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
 	if stderr != want {
 		t.Errorf("stderr = %q, want %q", stderr, want)
 	}

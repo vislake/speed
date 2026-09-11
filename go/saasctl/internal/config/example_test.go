@@ -84,6 +84,7 @@ go 1.25.0
 	// authn blind index key [redacted]   unset or empty (development default)
 	// authn pii cipher key [redacted]   unset or empty (development default)
 	// pki local key cipher key [redacted]   unset or empty (development default)
+	// notification index key [redacted]   unset or empty (development default)
 	// redis addr                    unset or empty (eventbus/kv stay on the in-process default)
 	// otlp endpoint                 unset or empty (observability stays on the local exporters)
 	// s3 endpoint                   unset or empty (objectstore stays on the local-directory default)

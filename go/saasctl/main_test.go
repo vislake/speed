@@ -170,6 +170,7 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 		"authn blind index key [redacted]   unset or empty (development default)\n" +
 		"authn pii cipher key [redacted]   unset or empty (development default)\n" +
 		"pki local key cipher key [redacted]   unset or empty (development default)\n" +
+		"notification index key [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
 		"otlp endpoint                 unset or empty (observability stays on the local exporters)\n" +
 		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +

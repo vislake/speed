@@ -667,7 +667,7 @@ func TestMigrateMalformedDeploymentModeIsReportedVerbatim(t *testing.T) {
 }
 
 // TestMigrateMalformedConfigKeyNamesTheAppAndVariable: a malformed
-// APP_CONFIG_KEY fails with the generated app's own error text -- app
+// APP_CONFIG__CIPHER_KEY fails under the twin's own error text -- app
 // name and variable named, the required shape stated -- before the
 // database is ever touched.
 func TestMigrateMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
@@ -679,7 +679,7 @@ func TestMigrateMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	want := "saasctl db migrate: cli-app: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
+	want := "saasctl db migrate: cli-app: APP_CONFIG__CIPHER_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
 	if stderr != want {
 		t.Errorf("stderr = %q, want %q", stderr, want)
 	}

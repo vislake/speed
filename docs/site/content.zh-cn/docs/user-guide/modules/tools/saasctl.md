@@ -106,15 +106,17 @@ saasctl db migrate [go.mod]
 saasctl config print [go.mod]
 ```
 
-展示生成项目启动配置的解析结果,生成 `cmd/server/config.go` 所解析
-的每个环境变量一行:部署形态、`PORT`、`APP_DB_PATH`、五份密钥材料
-(`APP_CONFIG_KEY`、`APP_ORG_INDEX_KEY`、`APP_AUTHN_BLIND_INDEX_KEY`、
-`APP_AUTHN_PII_CIPHER_KEY`、`APP_PKI_LOCAL_KEY_CIPHER_KEY`)、
+展示生成项目启动配置的解析结果,解析生成 `cmd/server/config.go` 的
+每个环境变量一行:部署形态、`PORT`、`APP_DB_PATH`、六份密钥材料
+(按声明键路径的派生拼写:`APP_CONFIG__CIPHER_KEY`、
+`APP_ORG__INVITATION_EMAIL_INDEX_KEY`、`APP_AUTHN__BLIND_INDEX_KEY`、
+`APP_AUTHN__PII_CIPHER_KEY`、`APP_PKI__LOCAL_KEY_CIPHER_KEY`、
+`APP_NOTIFICATION__CONTACT_INDEX_KEY`)、
 `APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*` 基础设施变量组以及
 `APP_OTLP_ENDPOINT`。每行显示
 解析出的值与来源——是哪个变量带来的,还是回退到了哪个默认值。
 SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值仍然
-可见。密钥行——五份密钥材料、S3 密钥、SMTP 密码、SMS 网关 URL——
+可见。密钥行——六份密钥材料、S3 密钥、SMTP 密码、SMS 网关 URL——
 无论环境里是什么都显示 `[redacted]`。只设了一部分的
 `APP_S3_*`/`APP_SMTP_*` 组与非法输入,都会像应用自己的启动解析
 那样被拒绝。本命令不写任何东西。
@@ -130,11 +132,12 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 为所有者的第一个任务。不同组合只差两个文件——go.mod 的 require
 集合与 `server.go` 的接线;`config.go` 逐字共享——并在生成时替换
 两个 token:`__APP_NAME__`(module path)与 `__SPEED_ROOT__`
-(checkout 路径)。宿主中性的组装本身(存活探针端点、预认证允许
-列表、路由挂载规则、启动/优雅停机生命周期与固定中间件链)只有
+(checkout 路径)。宿主中性的组装本身(装配引擎:配置装载、数据库
+打开与迁移、内核引导、HTTP 面与启动/优雅停机生命周期;以及存活探针
+端点、预认证允许列表、路由挂载规则与固定中间件链)只有
 一份,位于平台模块 `github.com/vislake/speed/go/app`,每个生成项目
-与参考应用一样直接 import;仓库有一道门禁止任一宿主自行重新声明
-这套内核。
+与参考应用一样直接 import 并经由引擎的 `Run` 启动;仓库有一道门
+禁止任一宿主自行重新声明这套内核或重抛出引擎掌管的装配调用。
 
 启动默认值:standalone 形态、SQLite `app.db`、端口 8080。
 `/healthz` 与 `/api/v1/config/public` 应答 200,注册应答 201;但骨架

@@ -1,50 +1,55 @@
 // Package appconfig parses the bootstrap environment surface of a generated
-// consumer project: APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH, APP_CONFIG_KEY,
-// APP_ORG_INDEX_KEY, the three authn/pki key variables (APP_AUTHN_BLIND_INDEX_KEY,
-// APP_AUTHN_PII_CIPHER_KEY, APP_PKI_LOCAL_KEY_CIPHER_KEY), APP_REDIS_ADDR,
-// APP_OTLP_ENDPOINT, the APP_S3_* group, the APP_SMTP_* group and
-// APP_SMS_GATEWAY_URL -- the full twenty-two-variable surface -- resolved
-// exactly as the generated project's own cmd/server/config.go resolves
-// them.
+// consumer project: APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH, APP_REDIS_ADDR,
+// APP_OTLP_ENDPOINT, the APP_S3_* group, the APP_SMTP_* group,
+// APP_SMS_GATEWAY_URL, and the six platform key materials -- the six
+// variables the loader derives from the key paths go/app's PlatformConfig
+// declares (config.cipher_key reads as APP_CONFIG__CIPHER_KEY,
+// authn.blind_index_key as APP_AUTHN__BLIND_INDEX_KEY, and so on: the
+// declared path uppercased with its dots doubled) -- resolved exactly as
+// the generated project's own cmd/server/config.go resolves them.
 //
 // saasctl's db and config commands must see what the app they act on would
-// see: db migrate opens the same SQLite path the app's configFromEnv would
-// open, and config print renders the bootstrap values with their true
+// see: db migrate opens the same SQLite path the app's own configFromEnv
+// would open, and config print renders the bootstrap values with their true
 // provenance -- refusing exactly when the generated app's own bootstrap
 // would refuse to boot, on the identical incomplete infrastructure group.
 // This package is therefore a deliberate, test-pinned twin of the embedded
 // template file internal/template/project/cmd/server/config.go -- the same
-// twenty-two variable names, the same defaults, the same completeness rules
-// (an S3 group or an SMTP pair that is only partially set is refused, never
+// variable names, the same defaults, the same completeness rules (an S3
+// group or an SMTP pair that is only partially set is refused, never
 // silently dropped to the Preset default), the same development key bytes
-// and the same malformed-value error texts, with the template's
-// __APP_NAME__ token replaced by the real app name the caller derives from
-// the project's go.mod. One default is deliberately a FIXED literal on both
-// sides rather than anything derived from the app name: the unset-
-// APP_DB_PATH database path (defaultSQLitePath), which the generated
-// project freezes at materialization and which therefore cannot track a
-// later module-path rename (see defaultSQLitePath's own doc comment).
+// and the same malformed-value error texts for the host's own text-typed
+// variables, with the template's __APP_NAME__ token replaced by the real
+// app name the caller derives from the project's go.mod. One default is
+// deliberately a FIXED literal on both sides rather than anything derived
+// from the app name: the unset-APP_DB_PATH database path
+// (defaultSQLitePath), which the generated project freezes at
+// materialization and which therefore cannot track a later module-path
+// rename (see defaultSQLitePath's own doc comment).
 //
 // The twin is a sibling implementation, not a shared one, and that split is
 // deliberate. The template resolves its surface through go/pkgcore/config's
-// loader (each variable pinned by a field's env tag, three scalar defaults
-// pre-set on the target struct) and then transforms the loaded text -- hex
-// decoding, numeric and boolean parsing, the completeness refusals -- in the
-// same file; the template file is a build-ignored asset this module cannot
-// import, and the loader exposes no per-value provenance, which is exactly
-// what config print renders. So the twin carries the same transform against
-// its injectable LookupEnv source instead, and appconfig_test.go re-reads
-// the embedded template and fails when the two sides drift: the variable
-// names (the template's env tags against the exported constants above), the
-// defaults, the parse order, the error texts and the development key bytes
-// are all pinned, so a template edit that renames a variable, changes a
-// default, reorders the resolution or rewrites an error text fails here
-// before any generated app silently disagrees with the tool that maintains
-// it. The loader step the twin does not mirror is behavior-neutral by
-// construction: every template field is a string, so the loaded value is the
-// variable's text (or "" for an unset or emptied one) with the target's
-// defaults standing where no source supplied one -- the same values the
-// twin's direct lookups produce.
+// loader -- the host's own pinned text fields by their exact env tags, the
+// six key materials through the embedded platform declaration the loader
+// reads as its own target -- and transforms the loaded text (the scalar
+// parses and the completeness refusals) in the same file; the template file
+// is a build-ignored asset this module cannot import, and the loader
+// exposes no per-value provenance, which is exactly what config print
+// renders. So the twin carries the same transform against its injectable
+// LookupEnv source instead, and appconfig_test.go re-reads the embedded
+// template and fails when the two sides drift: the variable names (the
+// template's env tags plus the six names the loader derives from the
+// declared key paths against the exported constants above), the defaults,
+// the parse order, the error texts and the development key bytes are all
+// pinned, so a template edit that renames a variable, changes a default,
+// reorders the resolution or rewrites an error text fails here before any
+// generated app silently disagrees with the tool that maintains it. One
+// boundary the twin does not cross: the six key materials' own refusal
+// texts belong to the loader (a malformed value fails the generated app's
+// load naming the key path and the variable), so the twin validates the
+// same conditions -- an unset or emptied variable is unset, a set one must
+// hold 64 hex characters -- with its own messages instead of claiming the
+// loader's wording.
 //
 // The environment is injectable through LookupEnv so every caller can
 // decide its own source: the commands pass os.LookupEnv (a generated app
@@ -61,10 +66,14 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The twenty-two environment variable names of a generated project's
+// The twenty-three environment variable names of a generated project's
 // bootstrap surface, exported because the command groups that render
 // provenance and the tests that pin template parity all name the same
-// variables.
+// variables. The six key-material names are the loader's derivation of the
+// key paths go/app's PlatformConfig declares -- the declared path,
+// uppercased, its dots doubled -- not names the generated project pins
+// anywhere: the declaration is what owns them, and a platform key added to
+// it arrives with its derived name together.
 const (
 	// DeploymentModeEnv names the environment variable selecting a
 	// generated project's deployment mode. Empty defaults to standalone
@@ -78,29 +87,44 @@ const (
 	DBPathEnv = "APP_DB_PATH"
 
 	// ConfigKeyEnv names the environment variable holding the hex-encoded
-	// 32-byte master key the config module seals Sensitive values with.
-	ConfigKeyEnv = "APP_CONFIG_KEY"
+	// 32-byte AES key the config module seals Sensitive values with -- the
+	// loader's derivation of the declared key path config.cipher_key.
+	ConfigKeyEnv = "APP_CONFIG__CIPHER_KEY"
 
 	// OrgIndexKeyEnv names the environment variable holding the hex-encoded
-	// 32-byte HMAC key an org-wiring project's blind indexer is built from.
-	OrgIndexKeyEnv = "APP_ORG_INDEX_KEY"
+	// 32-byte HMAC key an org-wiring project's blind indexer is built from
+	// (org.NewEmailIndexer) -- the loader's derivation of the declared key
+	// path org.invitation_email_index_key.
+	OrgIndexKeyEnv = "APP_ORG__INVITATION_EMAIL_INDEX_KEY"
 
 	// AuthnBlindIndexKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte HMAC key an authn-wiring project's blind indexer
-	// is built from (authn.WithBlindIndexKey). Parsed in every composition,
-	// consumed only by authn-wiring ones -- the same uniform-surface
-	// doctrine OrgIndexKeyEnv's template comment states.
-	AuthnBlindIndexKeyEnv = "APP_AUTHN_BLIND_INDEX_KEY"
+	// is built from (authn.WithBlindIndexKey) -- the loader's derivation of
+	// the declared key path authn.blind_index_key. Parsed in every
+	// composition, consumed only by authn-wiring ones -- the same
+	// uniform-surface doctrine every platform key carries.
+	AuthnBlindIndexKeyEnv = "APP_AUTHN__BLIND_INDEX_KEY"
 
 	// AuthnPIICipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals authn's encrypted PII columns
-	// (authn.RegisterPIISerializer).
-	AuthnPIICipherKeyEnv = "APP_AUTHN_PII_CIPHER_KEY"
+	// (authn.RegisterPIISerializer) -- the loader's derivation of the
+	// declared key path authn.pii_cipher_key.
+	AuthnPIICipherKeyEnv = "APP_AUTHN__PII_CIPHER_KEY"
 
 	// PKILocalKeyCipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals go/pki's LocalSigner
-	// private-key column (pki.RegisterLocalKeySerializer).
-	PKILocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
+	// private-key column (pki.RegisterLocalKeySerializer) -- the loader's
+	// derivation of the declared key path pki.local_key_cipher_key.
+	PKILocalKeyCipherKeyEnv = "APP_PKI__LOCAL_KEY_CIPHER_KEY"
+
+	// NotificationIndexKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte HMAC key go/notification's blind indexers are
+	// built from -- the loader's derivation of the declared key path
+	// notification.contact_index_key. No selection this generator emits
+	// wires the notification module today; the declaration carries the key
+	// uniformly, so a selection that later adds notification finds it
+	// already resolved.
+	NotificationIndexKeyEnv = "APP_NOTIFICATION__CONTACT_INDEX_KEY"
 
 	// RedisAddrEnv names the environment variable holding the Redis server
 	// address that composes a real, MultiReplicaSafe implementation for
@@ -110,10 +134,10 @@ const (
 
 	// OTLPEndpointEnv names the environment variable holding the OTLP/gRPC
 	// endpoint traces and metrics are pushed to. Empty -- the default --
-	// leaves obs.Init on the local exporters (stdout plus the Prometheus
-	// scrape endpoint the /metrics route serves); set, obs.Init composes
-	// the OTLP exporters and /metrics answers 404 by design -- there is
-	// no local registry to scrape.
+	// leaves the engine's observability init on the local exporters
+	// (stdout plus the Prometheus scrape endpoint the /metrics route
+	// serves); set, the OTLP exporters are composed and /metrics answers
+	// 404 by design -- there is no local registry to scrape.
 	OTLPEndpointEnv = "APP_OTLP_ENDPOINT"
 
 	// S3EndpointEnv, S3BucketEnv, S3AccessKeyEnv and S3SecretKeyEnv
@@ -179,19 +203,21 @@ const defaultPort = "8080"
 const defaultSQLitePath = "app.db"
 
 // configKeyHexLength is the encoded length of the required 32-byte key (2
-// hex characters per byte), checked so a short or malformed key fails
-// configuration loading with a precise message rather than surfacing later
-// as an opaque NewCipher error -- the template's exact check.
+// hex characters per byte): the loader enforces it for the generated app's
+// key-material fields, and the twin checks it for the same five variables
+// against its own source so a short or malformed key fails configuration
+// loading with a precise message rather than surfacing later as an opaque
+// NewCipher error.
 const configKeyHexLength = 64
 
 // devConfigKey and devOrgIndexKey are the keys used when the respective
 // environment variable is unset: the documented development defaults of a
 // generated project, byte-for-byte the template's -- devConfigKey the
 // ascending 0x00..0x1f sequence, devOrgIndexKey the descending 0xff..0xe0
-// sequence chosen to be visibly a DIFFERENT 32 bytes (OrgIndexKey's doc
-// comment explains why the two must never be the same secret). Like the
-// template's own copies, they are honest placeholders, never secrets a
-// real deployment should keep.
+// sequence chosen to be visibly a DIFFERENT 32 bytes (devOrgIndexKey's doc
+// comment in the template explains why the two must never be the same
+// secret). Like the template's own copies, they are honest placeholders,
+// never secrets a real deployment should keep.
 var devConfigKey = []byte{
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
 	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -206,18 +232,25 @@ var devOrgIndexKey = []byte{
 	0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 }
 
-// devBlindIndexKey, devPIICipherKey and devPKILocalKeyCipherKey are the
-// keys used when the respective environment variable above is unset: the
-// template's own dev family for the three authn/pki key materials,
-// byte-for-byte its copies -- devBlindIndexKey the 0x40..0x5f run
-// (authn.WithBlindIndexKey's indexer), devPIICipherKey the 0x60..0x7f run
-// (authn's PII serializer cipher), devPKILocalKeyCipherKey the 0x80..0x9f
-// run (pki's local-key serializer cipher), each visibly a placeholder,
-// each a distinct value (the template's doc comment explains why), and
-// each a FALLBACK only -- an environment value always wins. Like the
-// template's own copies, they are honest placeholders, never secrets a
-// real deployment should keep.
+// devNotificationIndexKey, devBlindIndexKey, devPIICipherKey and
+// devPKILocalKeyCipherKey are the rest of the template's committed-key dev
+// family (0x20..0x3f, 0x40..0x5f, 0x60..0x7f and 0x80..0x9f), byte-for-byte
+// its copies: devBlindIndexKey backs authn's email/phone blind indexer,
+// devPIICipherKey the cipher sealing authn's encrypted PII columns,
+// devPKILocalKeyCipherKey the cipher sealing pki's persisted signing-key
+// column, and devNotificationIndexKey the notification contact-index key
+// the embedded platform declaration carries uniformly. Each is a FALLBACK
+// only -- an environment value always wins -- and each is a distinct value,
+// because dbkit's key-separation rule applies across modules, not only
+// within one. Like the template's own copies, they are honest placeholders,
+// never secrets a real deployment should keep.
 var (
+	devNotificationIndexKey = []byte{
+		0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+		0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+		0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+		0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+	}
 	devBlindIndexKey = []byte{
 		0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
 		0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
@@ -262,15 +295,16 @@ type Config struct {
 	AuthnBlindIndexKey   []byte
 	AuthnPIICipherKey    []byte
 	PKILocalKeyCipherKey []byte
+	NotificationIndexKey []byte
 
 	// RedisAddr, when non-empty, composes a real Redis-backed implementation
 	// of both the "eventbus" and "kv" seams -- see RedisAddrEnv's own doc
 	// comment above.
 	RedisAddr string
 
-	// OTLPEndpoint, when non-empty, is handed to obs.Init as
-	// obs.WithOTLPEndpoint, pushing traces and metrics to it over OTLP --
-	// see OTLPEndpointEnv's own doc comment above.
+	// OTLPEndpoint, when non-empty, is handed to the engine's observability
+	// spec as the OTLP/gRPC endpoint, pushing traces and metrics to it over
+	// OTLP -- see OTLPEndpointEnv's own doc comment above.
 	OTLPEndpoint string
 
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL
@@ -308,9 +342,10 @@ type Config struct {
 	// whether the environment variable carried a non-empty value. Empty
 	// counts as unset, matching the generated app's own resolution (its
 	// loader-loaded string fields arrive as "" for both an unset and an
-	// emptied variable, and its transform treats "" as unset): a generated
-	// server cannot distinguish "set to empty" from "unset", and neither
-	// can this package.
+	// emptied variable, and its transform treats "" as unset; an emptied
+	// key variable is dropped by the loader before it could shadow the
+	// development default): a generated server cannot distinguish "set to
+	// empty" from "unset", and neither can this package.
 	DeploymentModeFromEnv       bool
 	PortFromEnv                 bool
 	SQLitePathFromEnv           bool
@@ -319,6 +354,7 @@ type Config struct {
 	AuthnBlindIndexKeyFromEnv   bool
 	AuthnPIICipherKeyFromEnv    bool
 	PKILocalKeyCipherKeyFromEnv bool
+	NotificationIndexKeyFromEnv bool
 	RedisAddrFromEnv            bool
 	OTLPEndpointFromEnv         bool
 	S3EndpointFromEnv           bool
@@ -341,15 +377,19 @@ type Config struct {
 // the SQLite default, which is the fixed defaultSQLitePath literal -- the
 // one default the generated app freezes rather than derives, so deriving
 // it from the module path here would fork on a module rename (see
-// defaultSQLitePath's own doc comment) -- reading the twenty-two
+// defaultSQLitePath's own doc comment) -- reading the twenty-three
 // environment variables through lookup. The parse order, defaults,
 // completeness rules and failure texts mirror the generated configFromEnv
-// exactly, including its error contract: a mode that does not parse is
-// returned verbatim (no appName prefix), a malformed key variable or
-// infrastructure-group value reports the app name prefixed in the
-// template's exact wording, and an incomplete S3 group or SMTP pair is
-// refused exactly as configFromEnv refuses it -- never silently dropped
-// to the Preset default.
+// exactly for the variables that file itself parses, including its error
+// contract: a mode that does not parse is returned verbatim (no appName
+// prefix), a malformed infrastructure-group value reports the app name
+// prefixed in the template's exact wording, and an incomplete S3 group or
+// SMTP pair is refused exactly as configFromEnv refuses it -- never
+// silently dropped to the Preset default. The six key materials resolve the
+// same way the loader resolves them for the app -- the variable when set
+// (length- and hex-validated), the documented development bytes when
+// unset -- with this package's own messages rather than the loader's
+// wording (see the package doc comment).
 func Load(appName string, lookup LookupEnv) (Config, error) {
 	var cfg Config
 
@@ -395,10 +435,10 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.OrgIndexKeyFromEnv = orgIndexKeySet
 	cfg.OrgIndexKey = orgIndexKey
 
-	// The three authn/pki key materials resolve exactly like the two
-	// above: their own variable when set, their dev fallback otherwise.
-	// Parsed in every composition, consumed only by authn-wiring ones
-	// (each key's template Env doc comment says what it protects).
+	// The four authn/pki/notification key materials resolve exactly like
+	// the two above: their own variable when set, their dev fallback
+	// otherwise. Parsed in every composition, consumed only by the module
+	// that declares each key.
 	authnBlindIndexKey, authnBlindIndexKeySet, err := loadKey(appName, AuthnBlindIndexKeyEnv, devBlindIndexKey, lookup)
 	if err != nil {
 		return Config{}, err
@@ -420,6 +460,13 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.PKILocalKeyCipherKeyFromEnv = pkiLocalKeyCipherKeySet
 	cfg.PKILocalKeyCipherKey = pkiLocalKeyCipherKey
 
+	notificationIndexKey, notificationIndexKeySet, err := loadKey(appName, NotificationIndexKeyEnv, devNotificationIndexKey, lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.NotificationIndexKeyFromEnv = notificationIndexKeySet
+	cfg.NotificationIndexKey = notificationIndexKey
+
 	// redisAddr stays empty when unset, leaving the "eventbus" and "kv"
 	// seams on the Preset's in-process defaults -- see RedisAddrEnv's own
 	// doc comment above.
@@ -427,8 +474,9 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.RedisAddr = redisAddr
 	cfg.RedisAddrFromEnv = redisAddr != ""
 
-	// otlpEndpoint stays empty when unset, leaving obs.Init on the local
-	// exporters -- see OTLPEndpointEnv's own doc comment above.
+	// otlpEndpoint stays empty when unset, leaving the engine's
+	// observability init on the local exporters -- see OTLPEndpointEnv's
+	// own doc comment above.
 	otlpEndpoint, _ := lookup(OTLPEndpointEnv)
 	cfg.OTLPEndpoint = otlpEndpoint
 	cfg.OTLPEndpointFromEnv = otlpEndpoint != ""
@@ -554,12 +602,13 @@ func (c Config) EffectiveDBPath(modPath string) string {
 	return filepath.Join(filepath.Dir(modPath), c.SQLitePath)
 }
 
-// loadKey resolves one of the five hex-encoded 32-byte key variables: the
+// loadKey resolves one of the six hex-encoded 32-byte key variables: the
 // dev default when the variable is unset or empty, the decoded value
 // otherwise. A value whose encoded length is not configKeyHexLength fails
-// with the template's length message; a value of the right length that is
-// not valid hex fails with the template's decode message -- both naming
-// appName where the template names the __APP_NAME__ token.
+// with this package's length message; a value of the right length that is
+// not valid hex fails with this package's decode message -- both naming
+// appName where the generated app's own loader names the key path and the
+// variable.
 func loadKey(appName, envName string, dev []byte, lookup LookupEnv) ([]byte, bool, error) {
 	encoded, _ := lookup(envName)
 	if encoded == "" {

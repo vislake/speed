@@ -319,7 +319,7 @@ func TestRunAppNameContainingTokenTextMaterializesByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read materialized server.go: %v", err)
 	}
-	if !strings.Contains(string(server), `"`+appName+": open database:") {
+	if !strings.Contains(string(server), `"`+appName+": build the authn module:") {
 		t.Errorf("server.go's app-name error prefix was re-substituted; %q does not survive byte-identical", appName)
 	}
 }

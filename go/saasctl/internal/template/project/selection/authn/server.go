@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/redis/go-redis/v9"
 
@@ -17,12 +16,10 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
-	// so dbkit.Open below has a driver to build from -- this skeleton's own
-	// database always speaks SQLite, regardless of which deployment mode
-	// its other infrastructure seams compose under (see buildServer's own
-	// kernel-wiring comment below for the full reasoning).
+	// so the database the engine opens has a driver to build from -- this
+	// skeleton's own database always speaks SQLite, regardless of which
+	// deployment mode its other infrastructure seams compose under.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
-	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
@@ -31,48 +28,56 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// The liveness routes' paths and handlers are observability's
-// (obs.MountLiveness), the module-route mounting rule is pkgcore's
-// (pkgcore.MountRoutes), and the middleware chain plus the pre-auth
-// allowlist set are the platform composition toolkit's
-// (github.com/vislake/speed/go/app -- the same module the reference app
-// composes through): this file names them through those packages rather
-// than restating any of them, so a generated project and the reference app
-// keep composing the same host surface.
+// serverBuild carries the assembly state this selection's callbacks hand each
+// other: the resolved configuration and the loader target the engine fills
+// (the platform key materials included), the modules the WithModules stage
+// constructs, the service the post-bootstrap attach derives from them, and
+// the Redis resources this host built and therefore owns.
+type serverBuild struct {
+	cfg        serverConfig
+	hostConfig hostConfig
 
-// buildServer wires this project's Kernel, the modules the generator
-// selected for it, their migrations, and the middleware chain into a
-// single http.Handler -- the generated project's only composition point,
-// mirroring examples/reference-app/internal/app/server.go with every
-// demo-specific piece removed. It returns the composed handler and a
-// cleanup function that closes everything buildServer opened (the attached
-// service and the underlying database connection); the caller must call
-// cleanup once done with the handler.
+	redisBus    *eventbusredis.EventBus
+	redisClient *redis.Client
+
+	configModule *config.Module
+	pkiModule    *pki.Module
+	authnModule  *authn.Module
+
+	configService *config.Service
+
+	reg *pkgcore.Registry
+}
+
+// runServer assembles this project through the application engine and serves
+// it until the process is signalled. The engine's Run owns the whole
+// lifecycle -- signal handling, observability init, the HTTP serve and the
+// ordered drain -- and this file's callbacks are the host's seats inside the
+// one fixed assembly order every speed application shares.
 //
 // This composition wires the authn and config modules (the generator's
-// --with set for this project; the README's environment table and this
-// project's go.mod show which module set a differently-generated project
-// carries) plus pki, which is not part of the --with set at all -- it
-// follows authn silently, supplying the KeySource
-// authn's signing keys now live behind. Migrations register in the same order Bootstrap runs, so every
-// Register-time declaration (authn's config items, permissions and events
-// first, then config's own Register) lands before the step that freezes
-// it. The middleware chain is speedchain.Chain's composition: authn first,
-// so each token is verified exactly once and the tenant comes from the
-// verified Principal's claims, never a Host header, then tenancy under
-// the chain's pre-auth allowlist -- authn.Middleware is optional auth (a
-// bad token is a 401, an absent one stays anonymous), so tenancy's
-// fail-closed default is what makes every route NOT on the allowlist
-// require a valid Principal with no per-route wrapping. The allowlist
-// covers only the non-authn routes that must work before a Principal
-// exists: healthz, metrics and config's two pre-auth display endpoints.
-// authn's own pre-auth operations need NO allowlist entries at all --
-// speedchain.Chain dispatches the whole subtree under
-// speedapp.AuthnAPIPath ahead of tenancy (see mountModuleRoutes), which is
-// also what lets enterprise SSO's dynamic per-tenant provider names
-// ("oidc:<tenant>", authn.ProviderOIDCPrefix + a tenant id) work: no
-// allowlist could enumerate them, and authn's handler decides per
-// operation which of its routes require a Principal (go/authn/handler.go).
+// --with set for this project) plus pki, which is not part of the --with set
+// at all -- it follows authn silently, supplying the KeySource authn's
+// signing keys live behind. The middleware chain is chain.Standard's
+// derivation: authn first, so each token is verified exactly once and the
+// tenant comes from the verified Principal's claims, never a Host header,
+// then tenancy under the chain's pre-auth allowlist -- authn.Middleware is
+// optional auth (a bad token is a 401, an absent one stays anonymous), so
+// tenancy's fail-closed default is what makes every route NOT on the
+// allowlist require a valid Principal with no per-route wrapping. The
+// allowlist covers only the non-authn routes that must work before a
+// Principal exists: healthz, metrics and config's two pre-auth display
+// endpoints. authn's own pre-auth operations need NO allowlist entries at
+// all -- Standard splits the whole subtree under authn's API path onto its
+// own branch ahead of tenancy, which is also what lets enterprise SSO's
+// dynamic per-tenant provider names ("oidc:<tenant>") work: no allowlist
+// could enumerate them, and authn's handler decides per operation which of
+// its routes require a Principal (go/authn/handler.go). No module of this
+// composition declares permissions, so the chain carries no route-level
+// authorization domain: every mounted route simply requires a verified
+// Principal (tenancy's fail-closed default), and the owner adds a table
+// through chain.Standard's WithAuthorization when a permission-checking
+// module joins the set.
 //
 // Host seams deliberately left unwired, each failing closed per the owning
 // module's contract and each the owner's first task: authn's
@@ -83,131 +88,147 @@ import (
 // so unmatched hosts read platform defaults, never an error (the
 // login-page rule; a static unauthenticated Host map would violate
 // tenancy's own Resolver contract, go/tenancy/resolver.go).
-func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, error) {
-	// authn's PII columns (email, phone, TOTP secrets) must have their
-	// serializer registered BEFORE dbkit.Open: GORM resolves a model's
-	// serializer while it parses the schema, and the registration is
-	// process-global (authn.RegisterPIISerializer's own doc comment). The
-	// cipher comes from cfg.AuthnPIICipherKey -- APP_AUTHN_PII_CIPHER_KEY
-	// when set, devPIICipherKey's fallback otherwise (config.go's own doc
-	// comment for both).
-	piiCipher, err := dbkit.NewCipher(cfg.AuthnPIICipherKey)
+func runServer(baseCtx context.Context, cfg serverConfig, hc hostConfig) error {
+	b := &serverBuild{cfg: cfg, hostConfig: hc}
+	// The Redis client is this host's own resource: the engine's ordered
+	// shutdown stops every seam it resolved but never closes a value the
+	// host built, so the host closes it here, after Run has drained
+	// everything that could still be using it (a failed assembly included:
+	// Run rolls back before returning).
+	defer b.closeRedis()
+	return speedapp.Run(baseCtx, b.options()...)
+}
+
+// closeRedis stops the Redis-backed event bus and releases the client it was
+// built over, the reverse of their construction. Both may be nil -- the
+// default standalone composition runs no Redis at all.
+func (b *serverBuild) closeRedis() {
+	if b.redisBus != nil {
+		b.redisBus.Close()
+	}
+	if b.redisClient != nil {
+		_ = b.redisClient.Close()
+	}
+}
+
+// options maps the resolved configuration onto the engine's option set: the
+// configuration targets and loader options, the database, the
+// encrypted-column registrations, the module set, the kernel's seam
+// composition, the observability spec, the HTTP face, and the host's attach
+// hook. Everything host-specific the engine cannot know is named here;
+// nothing is defaulted on the host's behalf.
+func (b *serverBuild) options() []speedapp.Option {
+	return []speedapp.Option{
+		// The host target carries this project's own keys; the platform
+		// target is the embedded declaration of the six bootstrap key
+		// materials, loaded as its own target so the declared key paths stay
+		// unprefixed, exactly the two-target load configFromEnv performs
+		// before assembly. The one loader option is the environment prefix:
+		// the embedded declaration's derive tags resolve from a root key
+		// only when a host installs WithRootKeyEnv and WithKeyDerivation,
+		// and this project keeps the committed development keys as the
+		// unset fallback instead.
+		speedapp.WithConfig(
+			speedapp.ConfigSpec{Host: &b.hostConfig, Platform: &b.hostConfig.PlatformConfig},
+			speedapp.ConfigEnvPrefix(envPrefix),
+		),
+		speedapp.WithDatabase(speedapp.DatabaseSpec{
+			Dialect: dbkit.DialectSQLite,
+			DSN:     b.cfg.SQLitePath,
+		}),
+		speedapp.WithPreDB(b.registerEncryptedColumns),
+		speedapp.WithModules(b.constructModules),
+		speedapp.WithKernelOptions(b.kernelOptions()...),
+		speedapp.WithObservability(speedapp.ObservabilitySpec{
+			ServiceName:  "__APP_NAME__",
+			OTLPEndpoint: b.cfg.OTLPEndpoint,
+		}),
+		speedapp.WithHTTP(b.httpSpec()),
+		speedapp.WithHooks(speedapp.Hooks{PostBootstrap: b.postBootstrap}),
+	}
+}
+
+// registerEncryptedColumns is the engine's pre-database stage: authn's and
+// pki's encrypted columns need their serializers registered BEFORE
+// dbkit.Open, because GORM resolves a model's serializer while it parses the
+// schema and the registration is process-global (each registrar's own doc
+// comment states the contract). The cipher parameter is the engine's
+// platform cipher, built from the config.cipher_key material; authn's PII
+// cipher and pki's local-key cipher come from their own key materials on the
+// embedded platform declaration -- separate secrets, because an AES key must
+// never double as another construction's key (dbkit's key-separation rule).
+func (b *serverBuild) registerEncryptedColumns(_ context.Context, _ *dbkit.Cipher) error {
+	piiCipher, err := dbkit.NewCipher(b.hostConfig.PlatformConfig.Authn.PII_Cipher_Key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("__APP_NAME__: build authn's PII cipher: %w", err)
+		return fmt.Errorf("__APP_NAME__: build authn's PII cipher: %w", err)
 	}
 	if regErr := authn.RegisterPIISerializer(piiCipher); regErr != nil {
-		return nil, nil, fmt.Errorf("__APP_NAME__: register authn's PII serializer: %w", regErr)
+		return fmt.Errorf("__APP_NAME__: register authn's PII serializer: %w", regErr)
 	}
 
-	// go/pki's LocalSigner private-key column needs its own serializer
-	// registered before dbkit.Open too, for the identical reason
-	// authn.RegisterPIISerializer does -- GORM resolves a model's serializer
-	// while it parses the schema (pki.RegisterLocalKeySerializer's own doc
-	// comment). The cipher comes from cfg.PKILocalKeyCipherKey --
-	// APP_PKI_LOCAL_KEY_CIPHER_KEY when set, devPKILocalKeyCipherKey's
-	// fallback otherwise (config.go's own doc comment for both).
-	pkiLocalKeyCipher, err := dbkit.NewCipher(cfg.PKILocalKeyCipherKey)
+	pkiLocalKeyCipher, err := dbkit.NewCipher(b.hostConfig.PlatformConfig.PKI.Local_Key_Cipher_Key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("__APP_NAME__: build pki's local-key cipher: %w", err)
+		return fmt.Errorf("__APP_NAME__: build pki's local-key cipher: %w", err)
 	}
 	if regErr := pki.RegisterLocalKeySerializer(pkiLocalKeyCipher); regErr != nil {
-		return nil, nil, fmt.Errorf("__APP_NAME__: register pki's local-key serializer: %w", regErr)
+		return fmt.Errorf("__APP_NAME__: register pki's local-key serializer: %w", regErr)
 	}
+	return nil
+}
 
-	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
-	if err != nil {
-		return nil, nil, fmt.Errorf("__APP_NAME__: open database: %w", err)
-	}
-
-	// configService is filled by configModule.Attach below (nil until
-	// then); redisBus and redisClient are filled by the conditional Redis
-	// wiring further down (nil unless cfg.RedisAddr is set). cleanup closes
-	// the attached service and the injected Redis client first, then the
-	// database, last; every close is attempted even when an earlier one
-	// failed, and the first error wins.
-	var (
-		configService *config.Service
-		redisBus      *eventbusredis.EventBus
-		redisClient   *redis.Client
-	)
-
-	cleanup := func() error {
-		var firstErr error
-		keepErr := func(err error) {
-			if err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-		if configService != nil {
-			keepErr(configService.Close())
-		}
-		if redisBus != nil {
-			redisBus.Close()
-		}
-		if redisClient != nil {
-			keepErr(redisClient.Close())
-		}
-		sqlDB, dbErr := db.DB()
-		keepErr(dbErr)
-		if sqlDB != nil {
-			keepErr(sqlDB.Close())
-		}
-		return firstErr
-	}
-
-	cipher, err := dbkit.NewCipher(cfg.ConfigKey)
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: build the config master cipher: %w", err)
-	}
+// constructModules is the engine's module-construction stage: the modules
+// this selection wires, built explicitly here -- the engine never knows a
+// module type -- in the order the kernel registers them, which is also the
+// order their migrations apply. Every Register-time declaration (authn's
+// config items, permissions and events first, then config's own Register)
+// lands before the step that freezes it.
+func (b *serverBuild) constructModules(_ context.Context, deps speedapp.ModuleDeps) ([]pkgcore.Module, error) {
+	db := deps.DB
 
 	// pki owns authn's signing-key lifecycle: LocalSigner (its own
 	// zero-external-dependency default, exactly what this standalone
-	// composition needs) generates and stores the key in cfg.SQLitePath,
-	// so it persists across restarts with no dev-seed derivation required
-	// -- see config.go's devPKILocalKeyCipherKey doc comment for what seals
-	// that stored key. pki is not part of this generator's --with selection
-	// set: it follows authn silently,
-	// which is why it is wired here rather than offered as its own choice.
-	pkiModule := pki.NewModule(db)
+	// composition needs) generates and stores the key in the database, so it
+	// persists across restarts with no dev-seed derivation required -- see
+	// config.go's devPKILocalKeyCipherKey doc comment for what seals that
+	// stored key.
+	b.pkiModule = pki.NewModule(db)
 
-	// authn's "SMS sender" seam follows the same conditional-injection shape
-	// as every other seam this file wires: a configured gateway URL always
-	// wins, under either deployment mode, and composes the real HTTP SMS
-	// transport (pkgcore.NewHTTPSMSSender); absent that, the standalone
-	// deployment mode falls back to the console transport, while the
-	// distributed deployment mode is left deliberately UNWIRED -- authn.NewModule's own newOptions then
-	// fails closed with authn.ErrMissingDistributedSMSSender rather than
-	// this composition silently keeping a console sender nobody in a
-	// distributed replica pool is reading (see config.go's SMSGatewayURL
-	// field doc comment). See buildServer's doc comment above for the
-	// MembershipReader absence.
+	// authn's "SMS sender" seam follows a conditional-injection shape: a
+	// configured gateway URL always wins, under either deployment mode, and
+	// composes the real HTTP SMS transport (pkgcore.NewHTTPSMSSender); absent
+	// that, the standalone deployment mode falls back to the console
+	// transport, while the distributed deployment mode is left deliberately
+	// UNWIRED -- authn.NewModule's own options then fail closed with
+	// authn.ErrMissingDistributedSMSSender rather than this composition
+	// silently keeping a console sender nobody in a distributed replica pool
+	// is reading.
 	authnOpts := []authn.Option{
-		authn.WithKeySource(pkiModule.Service()),
-		authn.WithBlindIndexKey(cfg.AuthnBlindIndexKey),
-		authn.WithDeploymentMode(cfg.DeploymentMode),
+		authn.WithKeySource(b.pkiModule.Service()),
+		authn.WithBlindIndexKey(b.hostConfig.PlatformConfig.Authn.Blind_Index_Key),
+		authn.WithDeploymentMode(b.cfg.DeploymentMode),
 	}
 	switch {
-	case cfg.SMSGatewayURL != "":
-		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewHTTPSMSSender(cfg.SMSGatewayURL)))
-	case cfg.DeploymentMode != pkgcore.DeploymentModeDistributed:
+	case b.cfg.SMSGatewayURL != "":
+		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewHTTPSMSSender(b.cfg.SMSGatewayURL)))
+	case b.cfg.DeploymentMode != pkgcore.DeploymentModeDistributed:
 		authnOpts = append(authnOpts, authn.WithSMSSender(pkgcore.NewConsoleSMSSender(os.Stdout)))
 	}
 	authnModule, err := authn.NewModule(db, authnOpts...)
 	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: build the authn module: %w", err)
+		return nil, fmt.Errorf("__APP_NAME__: build the authn module: %w", err)
 	}
+	b.authnModule = authnModule
 
 	// The config module is required in every generated composition (its two
 	// pre-auth display endpoints render the login page a sign-in flow
-	// presupposes). Its resolver's lookup deliberately matches NOTHING, so
-	// the display endpoints serve platform defaults to every caller until
-	// the owner wires a real host-to-tenant source; an empty default tenant
-	// maps unmatched hosts onto the "platform defaults" tier rather than an
-	// error -- exactly the login-page rule (see buildServer's doc comment).
-	configModule := config.NewModule(db,
-		config.WithCipher(cipher),
+	// presupposes). Its cipher is the engine's platform cipher -- the one
+	// built from config.cipher_key -- and its resolver's lookup deliberately
+	// matches NOTHING, so the display endpoints serve platform defaults to
+	// every caller until the owner wires a real host-to-tenant source; an
+	// empty default tenant maps unmatched hosts onto the "platform defaults"
+	// tier rather than an error (see runServer's doc comment).
+	b.configModule = config.NewModule(db,
+		config.WithCipher(deps.Cipher),
 		config.WithResolver(tenancy.NewDomainResolver(
 			func(host string) (pkgcore.TenantID, bool) {
 				return "", false
@@ -216,158 +237,107 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		)),
 	)
 
-	migrationRegistry := dbkit.NewMigrationRegistry()
-	for _, m := range []pkgcore.Module{pkiModule, authnModule, configModule} {
-		if regErr := migrationRegistry.Register(m); regErr != nil {
-			_ = cleanup()
-			return nil, nil, fmt.Errorf("__APP_NAME__: register migrations: %w", regErr)
-		}
-	}
-	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: apply migrations: %w", applyErr)
-	}
-
-	// Bootstrap registers the selected modules in argument order, matching
-	// the migration order above -- see buildServer's doc comment.
-	// WithDeploymentMode declares the topology the assembled composition is
-	// validated against; it never selects an implementation (the deployment
-	// mode and the implementation composition are orthogonal axes, and the validation refuses a
-	// composition the declared mode cannot run, naming the seam, the
-	// implementation and the missing capability.
-	//
-	// Kernel.Bootstrap always resolves and validates all four registered
-	// seams (eventbus, kv, mailer, objectstore) regardless of which modules
-	// this selection wires -- a distributed boot still fails closed on
-	// whichever seam the Preset would otherwise resolve to an in-process
-	// default, since every resolved seam must satisfy
-	// DeploymentModeDistributed's RequiredCapabilities (MultiReplicaSafe).
-	// The four conditional injections below follow the exact shape
-	// examples/reference-app/internal/app/server.go's own kernel-wiring
-	// comment documents at length: an unset env var leaves that seam on the
-	// Preset's in-process default, so `go run ./cmd/server` stays
-	// byte-for-byte unaffected, and a configured one injects a real
-	// implementation declaring the capability bits that implementation
-	// genuinely carries. One Redis client backs both "eventbus" and "kv" --
-	// see config.go's RedisAddr field doc comment for why wiring only
-	// one of the two can never let a distributed composition pass
-	// Bootstrap.
-	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
-	if cfg.RedisAddr != "" {
-		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-		redisBus = eventbusredis.NewEventBus(redisClient)
-		kernelOptions = append(kernelOptions,
-			pkgcore.WithEventBus(redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
-		kernelOptions = append(kernelOptions,
-			pkgcore.WithKVStore(kvredis.NewKVStore(redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
-	}
-	if cfg.S3Endpoint != "" {
-		kernelOptions = append(kernelOptions,
-			pkgcore.WithObjectStore(objectstores3.NewObjectStore(objectstores3.Config{
-				Endpoint:     cfg.S3Endpoint,
-				Bucket:       cfg.S3Bucket,
-				AccessKey:    cfg.S3AccessKey,
-				SecretKey:    cfg.S3SecretKey,
-				Region:       cfg.S3Region,
-				UseSSL:       cfg.S3UseSSL,
-				BucketLookup: cfg.S3BucketLookup,
-			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
-	}
-	if cfg.SMTPHost != "" {
-		kernelOptions = append(kernelOptions,
-			pkgcore.WithMailer(pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
-				Host:     cfg.SMTPHost,
-				Port:     cfg.SMTPPort,
-				Username: cfg.SMTPUsername,
-				Password: cfg.SMTPPassword,
-			}), pkgcore.MultiReplicaSafe|pkgcore.Stateless))
-	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, configModule)
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: bootstrap kernel: %w", err)
-	}
-
-	// Attach runs strictly after Bootstrap, exactly once -- the contract
-	// pkgcore.Kernel.Bootstrap's "Post-Bootstrap module steps" section
-	// states: what it freezes is the schema snapshot of every config item
-	// and feature flag the modules declared during Register (config's own
-	// Attach doc comment).
-	configService, err = configModule.Attach(reg)
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: attach the config module: %w", err)
-	}
-
-	// Route mounting: every route reg's modules mounted goes to one of
-	// two muxes, decided in mountModuleRoutes by the route's path --
-	// authn's own subtree (speedapp.AuthnAPIPath) to authnMux, everything else to
-	// moduleMux -- never by a per-route enumeration.
-	moduleMux := http.NewServeMux()
-	obs.MountLiveness(moduleMux)
-	authnMux := http.NewServeMux()
-	if err := mountModuleRoutes(authnMux, moduleMux, reg); err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: mount module routes: %w", err)
-	}
-	// Obs route-label seeding: the shared kernel registers this host's
-	// real route table (its two liveness paths plus every module route
-	// just mounted) before obs.Middleware is constructed; see
-	// speedapp.RegisterMountedRoutes' doc comment.
-	speedapp.RegisterMountedRoutes(reg)
-
-	// The middleware chain: speedchain.Chain owns the fixed order -- authn
-	// first, then tenancy, with the pre-auth allowlist -- and dispatches
-	// authn's own subtree (speedapp.AuthnAPIPath) straight from
-	// authn.Middleware's output, exempt from tenant resolution BY
-	// STRUCTURE rather than by allowlist entry. Everything under
-	// speedapp.AuthnAPIPath must work before a Principal exists --
-	// registration, every sign-in entry point, token refresh and the
-	// social authorize/callback pair -- and authn's own handler decides,
-	// operation by operation, which of its routes require a Principal (see
-	// go/authn/handler.go). Enterprise SSO makes the structural exemption
-	// the only correct one: its provider value is the dynamic per-tenant
-	// name "oidc:<tenant>" (authn.ProviderOIDCPrefix + a tenant id), which
-	// no fixed allowlist could enumerate -- so any allowlist-shaped wiring
-	// would refuse an SSO-configured tenant's login-start request with 403
-	// tenancy.tenant_unresolved before authn's own OIDC logic ever saw it.
-	// The chain's allowlist therefore names only the NON-authn routes that
-	// must work with no Principal: healthz, metrics and config's two
-	// pre-auth display endpoints.
-	handler, err := speedchain.Chain(speedchain.Config{
-		Verifier:    authnModule.Service().Verifier(),
-		Protected:   moduleMux,
-		AuthnRoutes: []pkgcore.MountedRoute{{Path: speedapp.AuthnAPIPath, Handler: authnMux}},
-	})
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("__APP_NAME__: compose the middleware chain: %w", err)
-	}
-	return handler, cleanup, nil
+	return []pkgcore.Module{b.pkiModule, b.authnModule, b.configModule}, nil
 }
 
-// mountModuleRoutes copies every route reg's modules mounted onto one of
-// the two muxes, decided by path prefix: a route under speedapp.AuthnAPIPath --
-// authn's own subtree, which authn mounts as a single handler at its API
-// path -- goes to authnMux, mounted by buildServer on topMux ahead of
-// tenancy.Middleware; every other route goes to protectedMux, the
-// tenancy-wrapped one. Routing by the module's own mount path rather than
-// by an enumerated route list is what keeps the exemption structural: a
-// future route under authn's API path is exempt the day it mounts, and
-// nothing outside that subtree ever is. (authn owns the whole prefix: no
-// other module mounts under /api/v1/authn.)
-//
-// Each route mounts through pkgcore.MountRoutes, whose own doc comment
-// carries the exact-plus-subtree registration rule and the reasoning
-// behind it.
-
-func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Registry) error {
-	for _, route := range reg.Routes.Routes() {
-		target := protectedMux
-		if strings.HasPrefix(route.Path, speedapp.AuthnAPIPath) {
-			target = authnMux
-		}
-		pkgcore.MountRoutes(target, route)
+// postBootstrap is the engine's attach stage, after the kernel bootstrapped
+// the module set and the bootstrap-key binding was verified: the typed
+// Attach call config requires exactly once after Bootstrap.
+// configModule.Attach freezes the schema snapshot of every config item and
+// feature flag the modules declared during Register; taken any earlier it
+// would be missing whatever registered after it.
+func (b *serverBuild) postBootstrap(_ context.Context, a *speedapp.Application) error {
+	b.reg = a.Registry()
+	var err error
+	if b.configService, err = b.configModule.Attach(b.reg); err != nil {
+		return fmt.Errorf("__APP_NAME__: attach the config module: %w", err)
 	}
 	return nil
+}
+
+// httpSpec declares this project's HTTP face for the engine's stage 7: the
+// listen address and the protected-face composition below.
+func (b *serverBuild) httpSpec() speedapp.HTTPSpec {
+	return speedapp.HTTPSpec{
+		Addr:    ":" + b.cfg.Port,
+		Compose: b.composeFace,
+	}
+}
+
+// composeFace is the engine's protected-face callback. It derives the whole
+// middleware chain from the registry with chain.Standard -- the route
+// partition (authn's subtree split out with authn.ExemptSubtree, everything
+// else mounted on the mux the engine prepared) and the fixed middleware
+// order live there, not here. No authorization option is passed: none of
+// this composition's modules declares a route-level permission, so
+// Standard mounts every non-authn route unguarded, and the tenancy chain's
+// fail-closed default is what keeps each of them behind a verified
+// Principal.
+func (b *serverBuild) composeFace(mux *http.ServeMux) (http.Handler, error) {
+	handler, err := speedchain.Standard(
+		b.reg,
+		b.authnModule.Service().Verifier(),
+		mux,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("__APP_NAME__: compose the middleware chain: %w", err)
+	}
+	return handler, nil
+}
+
+// kernelOptions assembles the kernel options the engine bootstraps with: the
+// deployment mode and the conditional seam injections. WithDeploymentMode
+// declares the topology the assembled composition is validated against; it
+// never selects an implementation (the deployment mode and the
+// implementation composition are orthogonal axes, and the validation refuses
+// a composition the declared mode cannot run, naming the seam, the
+// implementation and the missing capability).
+//
+// Kernel.Bootstrap always resolves and validates all four registered seams
+// (eventbus, kv, mailer, objectstore) regardless of which modules this
+// selection wires -- a distributed boot still fails closed on whichever seam
+// the Preset would otherwise resolve to an in-process default, since every
+// resolved seam must satisfy DeploymentModeDistributed's RequiredCapabilities
+// (MultiReplicaSafe). The conditional injections below are the same shape at
+// every seam: an unset env var leaves that seam on the Preset's in-process
+// default, so `go run ./cmd/server` stays unaffected, and a configured one
+// injects a real implementation declaring the capability bits that
+// implementation genuinely carries. One Redis client backs both "eventbus"
+// and "kv" -- see config.go's RedisAddr field doc comment for why wiring
+// only one of the two can never let a distributed composition pass
+// Bootstrap; the client is this host's own resource and runServer closes it
+// (the S3 store and the SMTP mailer are injected values the kernel's
+// shutdown does close, through its own registered closers).
+func (b *serverBuild) kernelOptions() []pkgcore.KernelOption {
+	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(b.cfg.DeploymentMode)}
+	if b.cfg.RedisAddr != "" {
+		b.redisClient = redis.NewClient(&redis.Options{Addr: b.cfg.RedisAddr})
+		b.redisBus = eventbusredis.NewEventBus(b.redisClient)
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithEventBus(b.redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithKVStore(kvredis.NewKVStore(b.redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
+	if b.cfg.S3Endpoint != "" {
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithObjectStore(objectstores3.NewObjectStore(objectstores3.Config{
+				Endpoint:     b.cfg.S3Endpoint,
+				Bucket:       b.cfg.S3Bucket,
+				AccessKey:    b.cfg.S3AccessKey,
+				SecretKey:    b.cfg.S3SecretKey,
+				Region:       b.cfg.S3Region,
+				UseSSL:       b.cfg.S3UseSSL,
+				BucketLookup: b.cfg.S3BucketLookup,
+			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
+	if b.cfg.SMTPHost != "" {
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithMailer(pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
+				Host:     b.cfg.SMTPHost,
+				Port:     b.cfg.SMTPPort,
+				Username: b.cfg.SMTPUsername,
+				Password: b.cfg.SMTPPassword,
+			}), pkgcore.MultiReplicaSafe|pkgcore.Stateless))
+	}
+	return kernelOptions
 }

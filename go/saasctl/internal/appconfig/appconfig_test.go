@@ -62,10 +62,13 @@ func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 	if !bytes.Equal(cfg.OrgIndexKey, devOrgIndexKey) {
 		t.Errorf("OrgIndexKey is not the descending 0xff..0xe0 development default")
 	}
-	// The three authn/pki key materials fall back to their own dev byte
+	// The four remaining key materials fall back to their own dev byte
 	// runs when unset -- the same fallback semantics as the two keys
-	// above, asserted so the three new fields cannot silently resolve to
-	// something else (nil, zeros) while the template keeps its dev bytes.
+	// above, asserted so the fields cannot silently resolve to something
+	// else (nil, zeros) while the template keeps its dev bytes.
+	if !bytes.Equal(cfg.NotificationIndexKey, devNotificationIndexKey) {
+		t.Error("NotificationIndexKey is not the 0x20..0x3f development default")
+	}
 	if !bytes.Equal(cfg.AuthnBlindIndexKey, devBlindIndexKey) {
 		t.Error("AuthnBlindIndexKey is not the 0x40..0x5f development default")
 	}
@@ -77,7 +80,8 @@ func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 	}
 	if cfg.DeploymentModeFromEnv || cfg.PortFromEnv || cfg.SQLitePathFromEnv ||
 		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv ||
-		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv {
+		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv ||
+		cfg.NotificationIndexKeyFromEnv {
 		t.Error("an empty environment must record every field as not-from-env")
 	}
 }
@@ -91,6 +95,7 @@ func TestLoadReadsSetVariables(t *testing.T) {
 	authnBlindIndexKeyHex := "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
 	authnPIICipherKeyHex := "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
 	pkiLocalKeyCipherKeyHex := "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
+	notificationIndexKeyHex := "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
 	cfg, err := Load("cli-app", envFromMap(map[string]string{
 		DeploymentModeEnv:       "Distributed",
 		PortEnv:                 "9090",
@@ -100,6 +105,7 @@ func TestLoadReadsSetVariables(t *testing.T) {
 		AuthnBlindIndexKeyEnv:   authnBlindIndexKeyHex,
 		AuthnPIICipherKeyEnv:    authnPIICipherKeyHex,
 		PKILocalKeyCipherKeyEnv: pkiLocalKeyCipherKeyHex,
+		NotificationIndexKeyEnv: notificationIndexKeyHex,
 	}))
 	if err != nil {
 		t.Fatalf("Load with a full environment failed: %v", err)
@@ -113,9 +119,12 @@ func TestLoadReadsSetVariables(t *testing.T) {
 	if want := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f}; !bytes.Equal(cfg.ConfigKey, want) {
 		t.Errorf("ConfigKey does not decode to the hex it encoded")
 	}
-	// The three authn/pki key materials decode into the exact 32 bytes
+	// The four other key materials decode into the exact 32 bytes
 	// their hex encodes -- the env-set path is real, not a
 	// validation-only pass that would keep the dev bytes underneath.
+	if want := []byte{0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f}; !bytes.Equal(cfg.NotificationIndexKey, want) {
+		t.Error("NotificationIndexKey does not decode to the hex it encoded")
+	}
 	if want := []byte{0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f}; !bytes.Equal(cfg.AuthnBlindIndexKey, want) {
 		t.Error("AuthnBlindIndexKey does not decode to the hex it encoded")
 	}
@@ -127,7 +136,8 @@ func TestLoadReadsSetVariables(t *testing.T) {
 	}
 	if !cfg.DeploymentModeFromEnv || !cfg.PortFromEnv || !cfg.SQLitePathFromEnv ||
 		!cfg.ConfigKeyFromEnv || !cfg.OrgIndexKeyFromEnv ||
-		!cfg.AuthnBlindIndexKeyFromEnv || !cfg.AuthnPIICipherKeyFromEnv || !cfg.PKILocalKeyCipherKeyFromEnv {
+		!cfg.AuthnBlindIndexKeyFromEnv || !cfg.AuthnPIICipherKeyFromEnv || !cfg.PKILocalKeyCipherKeyFromEnv ||
+		!cfg.NotificationIndexKeyFromEnv {
 		t.Error("a full environment must record every field as from-env")
 	}
 }
@@ -153,22 +163,25 @@ func TestLoadParseModeErrorIsReturnedVerbatim(t *testing.T) {
 	}
 }
 
-// TestLoadMalformedConfigKeyErrorMatchesTheTemplate: a APP_CONFIG_KEY of
-// the wrong encoded length fails with the template's exact message, app
-// name where the template has its __APP_NAME__ token.
-func TestLoadMalformedConfigKeyErrorMatchesTheTemplate(t *testing.T) {
+// TestLoadMalformedConfigKeyErrorNamesTheVariable: an APP_CONFIG__CIPHER_KEY
+// of the wrong encoded length fails under the twin's own length message,
+// naming the app and the variable. The six key materials' refusal
+// conditions are the loader's for the generated app (a malformed value
+// fails its load naming the key path and the variable); the twin validates
+// the same condition with its own message, and this pins that message.
+func TestLoadMalformedConfigKeyErrorNamesTheVariable(t *testing.T) {
 	_, err := Load("cli-app", envFromMap(map[string]string{ConfigKeyEnv: "abc"}))
 	if err == nil {
 		t.Fatal("Load accepted a short config key")
 	}
-	want := "cli-app: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3"
+	want := "cli-app: " + ConfigKeyEnv + " must hold 64 hex characters (a 32-byte key), got 3"
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}
 }
 
-// TestLoadNonHexConfigKeyErrorNamesTheVariable: a APP_CONFIG_KEY of the
-// right length that is not valid hex fails under the template's decode
+// TestLoadNonHexConfigKeyErrorNamesTheVariable: a config key of the
+// right length that is not valid hex fails under the twin's decode
 // message, naming the variable so an operator knows which secret is
 // malformed.
 func TestLoadNonHexConfigKeyErrorNamesTheVariable(t *testing.T) {
@@ -177,8 +190,8 @@ func TestLoadNonHexConfigKeyErrorNamesTheVariable(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load accepted a non-hex config key")
 	}
-	if !strings.HasPrefix(err.Error(), "cli-app: APP_CONFIG_KEY: ") {
-		t.Errorf("error = %q, want the cli-app: APP_CONFIG_KEY: prefix", err)
+	if !strings.HasPrefix(err.Error(), "cli-app: "+ConfigKeyEnv+": ") {
+		t.Errorf("error = %q, want the cli-app: %s: prefix", err, ConfigKeyEnv)
 	}
 	if !strings.Contains(err.Error(), "invalid byte") {
 		t.Errorf("error = %q, want hex's invalid-byte detail", err)
@@ -186,34 +199,35 @@ func TestLoadNonHexConfigKeyErrorNamesTheVariable(t *testing.T) {
 }
 
 // TestLoadOrgIndexKeySharesTheConfigKeyFailureShape: the org blind-index
-// key variable fails with the same messages as the config master key,
+// key variable fails with the same messages as the config cipher key,
 // naming its own variable.
 func TestLoadOrgIndexKeySharesTheConfigKeyFailureShape(t *testing.T) {
 	_, err := Load("cli-app", envFromMap(map[string]string{OrgIndexKeyEnv: "abc"}))
 	if err == nil {
 		t.Fatal("Load accepted a short org index key")
 	}
-	want := "cli-app: APP_ORG_INDEX_KEY must hold 64 hex characters (a 32-byte key), got 3"
+	want := "cli-app: " + OrgIndexKeyEnv + " must hold 64 hex characters (a 32-byte key), got 3"
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}
 }
 
-// TestLoadAuthnPKIKeyVariablesShareTheConfigKeyFailureShape: the three
-// authn/pki key variables fail with the same messages as the config
-// master key, each naming its own variable -- the regression proof that
-// the env path these keys gained is real (length and hex validation
-// included), not a passthrough that would keep the dev bytes no matter
-// what the environment holds.
-func TestLoadAuthnPKIKeyVariablesShareTheConfigKeyFailureShape(t *testing.T) {
+// TestLoadAuthnPKINotificationKeyVariablesShareTheConfigKeyFailureShape:
+// the four authn/pki/notification key variables fail with the same
+// messages as the config cipher key, each naming its own variable -- the
+// regression proof that the env path these keys have is real (length and
+// hex validation included), not a passthrough that would keep the dev
+// bytes no matter what the environment holds.
+func TestLoadAuthnPKINotificationKeyVariablesShareTheConfigKeyFailureShape(t *testing.T) {
 	for _, tt := range []struct {
 		env   string
 		value string
 		want  string
 	}{
-		{env: AuthnBlindIndexKeyEnv, value: "abc", want: "cli-app: APP_AUTHN_BLIND_INDEX_KEY must hold 64 hex characters (a 32-byte key), got 3"},
-		{env: AuthnPIICipherKeyEnv, value: "abc", want: "cli-app: APP_AUTHN_PII_CIPHER_KEY must hold 64 hex characters (a 32-byte key), got 3"},
-		{env: PKILocalKeyCipherKeyEnv, value: "abc", want: "cli-app: APP_PKI_LOCAL_KEY_CIPHER_KEY must hold 64 hex characters (a 32-byte key), got 3"},
+		{env: AuthnBlindIndexKeyEnv, value: "abc", want: "cli-app: " + AuthnBlindIndexKeyEnv + " must hold 64 hex characters (a 32-byte key), got 3"},
+		{env: AuthnPIICipherKeyEnv, value: "abc", want: "cli-app: " + AuthnPIICipherKeyEnv + " must hold 64 hex characters (a 32-byte key), got 3"},
+		{env: PKILocalKeyCipherKeyEnv, value: "abc", want: "cli-app: " + PKILocalKeyCipherKeyEnv + " must hold 64 hex characters (a 32-byte key), got 3"},
+		{env: NotificationIndexKeyEnv, value: "abc", want: "cli-app: " + NotificationIndexKeyEnv + " must hold 64 hex characters (a 32-byte key), got 3"},
 	} {
 		_, err := Load("cli-app", envFromMap(map[string]string{tt.env: tt.value}))
 		if err == nil {
@@ -225,7 +239,7 @@ func TestLoadAuthnPKIKeyVariablesShareTheConfigKeyFailureShape(t *testing.T) {
 		}
 	}
 	encoded := strings.Repeat("z", 64)
-	for _, envName := range []string{AuthnBlindIndexKeyEnv, AuthnPIICipherKeyEnv, PKILocalKeyCipherKeyEnv} {
+	for _, envName := range []string{AuthnBlindIndexKeyEnv, AuthnPIICipherKeyEnv, PKILocalKeyCipherKeyEnv, NotificationIndexKeyEnv} {
 		_, err := Load("cli-app", envFromMap(map[string]string{envName: encoded}))
 		if err == nil {
 			t.Errorf("Load accepted a non-hex %s", envName)
@@ -251,6 +265,7 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 		AuthnBlindIndexKeyEnv:   "",
 		AuthnPIICipherKeyEnv:    "",
 		PKILocalKeyCipherKeyEnv: "",
+		NotificationIndexKeyEnv: "",
 		OTLPEndpointEnv:         "",
 	}))
 	if err != nil {
@@ -262,7 +277,7 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 	if cfg.DeploymentModeFromEnv || cfg.PortFromEnv || cfg.SQLitePathFromEnv ||
 		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv ||
 		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv ||
-		cfg.OTLPEndpointFromEnv {
+		cfg.NotificationIndexKeyFromEnv || cfg.OTLPEndpointFromEnv {
 		t.Error("set-but-empty variables must not be recorded as from-env")
 	}
 }
@@ -455,12 +470,16 @@ func TestLoadSMTPPortMustBeAValidNumber(t *testing.T) {
 }
 
 // envTagPattern matches one `config:"env=<NAME>"` struct-tag option, the
-// exact shape every one of the twenty-two bootstrap variable names takes
+// shape every one of the seventeen pinned bootstrap variable names takes
 // in the template's config.go: the name lives in its loader target
 // field's env tag, not in a constant (this package's own const block above
 // is the twin side of the same names). The tag is a raw string literal, so
 // a name ends at the closing quote -- a tag carrying further options
 // (nothing does today) would still expose its env name to this pattern.
+// The six key-material names are absent from this set by construction:
+// their declaration lives in go/app's PlatformConfig, which the template
+// embeds, and the loader derives each variable name from the declared key
+// path (see derivedKeyEnv below).
 var envTagPattern = regexp.MustCompile(`config:"env=([A-Za-z0-9_]+)"`)
 
 // extractEnvVarNames returns the set of environment-variable names pinned
@@ -473,16 +492,27 @@ func extractEnvVarNames(src string) map[string]bool {
 	return names
 }
 
+// derivedKeyEnv spells one declared platform key path the way the loader
+// spells it as an environment variable: the loader's own derivation --
+// prefix + the path uppercased with every dot doubled (pkgcore/config's
+// EnvSeparator) -- restated here so the twin's constants are checked
+// against the rule the app's loader applies, not against a copied name.
+func derivedKeyEnv(keyPath string) string {
+	return "APP_" + strings.ToUpper(strings.ReplaceAll(keyPath, ".", "__"))
+}
+
 // TestAppConfigEnvSetMatchesTheTemplateExactly is the drift-proof set
 // equality between the two sides: it extracts every env tag's variable
 // name from the embedded template's own config.go source text -- never a
 // hand-maintained list this test could silently fall behind, so a
-// template edit is caught even before anyone updates this file -- and
-// asserts the twin's own exported Env constants cover exactly that set, in
-// both directions. The twin's own side is built from the actual exported
-// Go constants (not from copied string literals), so renaming or removing
-// one of them fails this file to even compile, a second, stronger drift
-// signal than the runtime check below.
+// template edit is caught even before anyone updates this file -- adds the
+// six key-material names the loader derives from the declared key paths
+// (the template pins none of them; the embedded platform declaration owns
+// them), and asserts the twin's own exported Env constants cover exactly
+// that set, in both directions. The twin's own side is built from the
+// actual exported Go constants (not from copied string literals), so
+// renaming or removing one of them fails this file to even compile, a
+// second, stronger drift signal than the runtime check below.
 func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 	content, err := template.Project.ReadFile("project/cmd/server/config.go")
 	if err != nil {
@@ -493,10 +523,36 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 		t.Fatal("extracted zero environment variable names from the template; the extraction pattern itself has drifted")
 	}
 
+	// The six key materials: the template's config.go must embed the
+	// platform declaration and must NOT pin any of the six key variables
+	// itself (a pinned key would shadow the declared path's derived name),
+	// and each derived name must be the twin's constant for that path.
+	src := string(content)
+	if !strings.Contains(src, "speedapp.PlatformConfig") {
+		t.Error("template config.go does not embed speedapp.PlatformConfig; the six key paths would no longer be declared by the platform")
+	}
+	for keyPath, env := range map[string]string{
+		"config.cipher_key":              ConfigKeyEnv,
+		"authn.blind_index_key":          AuthnBlindIndexKeyEnv,
+		"authn.pii_cipher_key":           AuthnPIICipherKeyEnv,
+		"notification.contact_index_key": NotificationIndexKeyEnv,
+		"org.invitation_email_index_key": OrgIndexKeyEnv,
+		"pki.local_key_cipher_key":       PKILocalKeyCipherKeyEnv,
+	} {
+		if want := derivedKeyEnv(keyPath); env != want {
+			t.Errorf("twin constant for declared key path %s is %s, want the loader's derived spelling %s", keyPath, env, want)
+		}
+		if strings.Contains(src, "env="+env) {
+			t.Errorf("template config.go pins %s with an env tag; the declared key path must own its derived name", env)
+		}
+		templateVars[env] = true
+	}
+
 	twinVars := map[string]bool{
 		DeploymentModeEnv: true, PortEnv: true, DBPathEnv: true,
 		ConfigKeyEnv: true, OrgIndexKeyEnv: true,
 		AuthnBlindIndexKeyEnv: true, AuthnPIICipherKeyEnv: true, PKILocalKeyCipherKeyEnv: true,
+		NotificationIndexKeyEnv: true,
 		RedisAddrEnv: true, OTLPEndpointEnv: true,
 		S3EndpointEnv: true, S3BucketEnv: true, S3AccessKeyEnv: true, S3SecretKeyEnv: true,
 		S3RegionEnv: true, S3UseSSLEnv: true, S3BucketLookupEnv: true,
@@ -506,12 +562,12 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 
 	for name := range templateVars {
 		if !twinVars[name] {
-			t.Errorf("template config.go parses %s but the appconfig twin does not support it; the twin has drifted behind the template", name)
+			t.Errorf("template config.go resolves %s but the appconfig twin does not support it; the twin has drifted behind the template", name)
 		}
 	}
 	for name := range twinVars {
 		if !templateVars[name] {
-			t.Errorf("appconfig supports %s but the template config.go does not parse it; the twin claims a variable the app does not have", name)
+			t.Errorf("appconfig supports %s but the template config.go does not resolve it; the twin claims a variable the app does not have", name)
 		}
 	}
 }
@@ -531,12 +587,15 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}
 	src := string(content)
 
-	// The twenty-two variable pins: each hostConfig field carries one
-	// variable's exact name in its env tag -- the tag, not a constant, is
-	// where the template's variable names live, one pin per twin constant.
-	// The regex anchors on the field declaration's own line (a leading
-	// tab, so Port cannot match inside SMTPPort) and on the field's string
-	// type, the loader target's one text shape.
+	// The seventeen pinned variable pins: each hostConfig field carries
+	// one variable's exact name in its env tag -- the tag, not a constant,
+	// is where the template's variable names live, one pin per twin
+	// constant. The six key materials are deliberately absent: their names
+	// are the loader's derivation of the declared key paths (see
+	// TestAppConfigEnvSetMatchesTheTemplateExactly), and the template must
+	// not pin any of them. The regex anchors on the field declaration's own
+	// line (a leading tab, so Port cannot match inside SMTPPort) and on the
+	// field's string type, the loader target's one text shape.
 	for _, pin := range []struct {
 		field string
 		env   string
@@ -544,11 +603,6 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		{"DeploymentMode", DeploymentModeEnv},
 		{"Port", PortEnv},
 		{"DBPath", DBPathEnv},
-		{"ConfigKey", ConfigKeyEnv},
-		{"OrgIndexKey", OrgIndexKeyEnv},
-		{"AuthnBlindIndexKey", AuthnBlindIndexKeyEnv},
-		{"AuthnPIICipherKey", AuthnPIICipherKeyEnv},
-		{"PKILocalKeyCipherKey", PKILocalKeyCipherKeyEnv},
 		{"RedisAddr", RedisAddrEnv},
 		{"OTLPEndpoint", OTLPEndpointEnv},
 		{"S3Endpoint", S3EndpointEnv},
@@ -571,58 +625,31 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		}
 	}
 
-	// The five key materials pass their variable's own name to parseKeyEnv
-	// -- the name a refusal reports -- so the literal a startup error
-	// prints and the tag the loader reads are pinned to be one name: the
-	// decode call reads the value of the `encoded := hc.<Field>` local the
-	// same branch declares, which is where the field and the reported name
-	// meet.
-	for _, key := range []struct{ field, env string }{
-		{"ConfigKey", ConfigKeyEnv},
-		{"OrgIndexKey", OrgIndexKeyEnv},
-		{"AuthnBlindIndexKey", AuthnBlindIndexKeyEnv},
-		{"AuthnPIICipherKey", AuthnPIICipherKeyEnv},
-		{"PKILocalKeyCipherKey", PKILocalKeyCipherKeyEnv},
-	} {
-		assign := fmt.Sprintf("encoded := hc.%s", key.field)
-		if !strings.Contains(src, assign) {
-			t.Errorf("template does not read %s through %q; the twin has drifted", key.env, assign)
-		}
-		if call := fmt.Sprintf(`parseKeyEnv("%s", encoded)`, key.env); !strings.Contains(src, call) {
-			t.Errorf("template does not decode %s through %s; the twin has drifted", key.env, call)
+	// The six key materials are declared, not pinned: the template embeds
+	// the platform declaration and hands it to the engine as its own
+	// configuration target, so the template's source must carry the embed
+	// (skipped by the host walk with config:"-") and none of the six
+	// variables as an env tag -- a pinned key would read under the pinned
+	// name while the twin resolves the derived one.
+	if !strings.Contains(src, "speedapp.PlatformConfig `config:\"-\"`") {
+		t.Error("template's hostConfig does not embed speedapp.PlatformConfig with the config:\"-\" skip; the twin's key resolution assumes the embed")
+	}
+	for _, env := range []string{ConfigKeyEnv, OrgIndexKeyEnv, AuthnBlindIndexKeyEnv, AuthnPIICipherKeyEnv, PKILocalKeyCipherKeyEnv, NotificationIndexKeyEnv} {
+		if strings.Contains(src, "env="+env) {
+			t.Errorf("template pins %s with an env tag; the declared key path must own its derived name", env)
 		}
 	}
 
-	// The scalar defaults: the template's three constants are the twin's
+	// The scalar defaults: the template's two constants are the twin's
 	// own values byte for byte.
 	if !strings.Contains(src, `defaultPort = "`+defaultPort+`"`) {
 		t.Errorf("template's defaultPort is not the twin's %q literal; the two defaults must be one value", defaultPort)
-	}
-	decl := fmt.Sprintf("configKeyHexLength = %d", configKeyHexLength)
-	if !strings.Contains(src, decl) {
-		t.Errorf("template does not declare %s; the twin has drifted", decl)
 	}
 	if !strings.Contains(src, `defaultSQLitePath = "`+defaultSQLitePath+`"`) {
 		t.Errorf("template's defaultSQLitePath is not the twin's fixed %q literal; the two defaults must be one value (see defaultSQLitePath's doc comment for why it is fixed rather than __APP_NAME__-derived)", defaultSQLitePath)
 	}
 	if strings.Contains(src, `defaultSQLitePath = "__APP_NAME__.db"`) {
 		t.Error("template's defaultSQLitePath still derives from the __APP_NAME__ token; a fixed literal is what keeps the twin honest across a module-path rename")
-	}
-
-	// The error texts: Load must produce byte-identical messages to the
-	// template's, with the real app name in the token's place. The length
-	// message is pinned end to end here; the template's format string is
-	// asserted separately so a rewording fails on both sides at once.
-	if _, err := Load("__APP_NAME__", envFromMap(map[string]string{ConfigKeyEnv: "abc"})); err == nil {
-		t.Fatal("Load accepted a short key during the parity check")
-	} else if want := `__APP_NAME__: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3`; err.Error() != want {
-		t.Errorf("Load error = %q, want the template's %q", err, want)
-	}
-	if !strings.Contains(src, `"__APP_NAME__: %s must hold %d hex characters (a 32-byte key), got %d"`) {
-		t.Error("template's length-error format string drifted from the twin's")
-	}
-	if !strings.Contains(src, `"__APP_NAME__: %s: %w"`) {
-		t.Error("template's decode-error format string drifted from the twin's")
 	}
 	if !strings.Contains(src, "string(pkgcore.DeploymentModeStandalone)") {
 		t.Error("template no longer defaults the mode through pkgcore.DeploymentModeStandalone")
@@ -661,10 +688,9 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 
 	// The development key bytes, asserted as their byte-for-byte hex
 	// literals after whitespace normalization, so a template edit that
-	// reorders, adds or drops a byte fails here. All five dev keys are
-	// checked -- the three authn/pki ones joined the family when their
-	// environment variables did (the keys must resolve byte-identically
-	// whether the app boots or saasctl resolves them).
+	// reorders, adds or drops a byte fails here. All six dev keys are
+	// checked -- the keys must resolve byte-identically whether the app
+	// boots or saasctl resolves them.
 	normalized := regexp.MustCompile(`\s+`).ReplaceAllString(src, "")
 	for _, key := range []struct {
 		name string
@@ -672,6 +698,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}{
 		{"devConfigKey", devConfigKey},
 		{"devOrgIndexKey", devOrgIndexKey},
+		{"devNotificationIndexKey", devNotificationIndexKey},
 		{"devBlindIndexKey", devBlindIndexKey},
 		{"devPIICipherKey", devPIICipherKey},
 		{"devPKILocalKeyCipherKey", devPKILocalKeyCipherKey},
@@ -684,14 +711,16 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	// The resolution order: serverConfigFrom reads the loaded surface in
 	// the same field order Load resolves its own -- which is also the order
 	// a first-failing variable surfaces in on both sides -- so the first
-	// use of each field marker in the function body must ascend. Comments
-	// are stripped first, so prose inside the body cannot satisfy the check
-	// by text position either.
+	// use of each field marker in the function body must ascend. The six
+	// key materials carry no marker here: the loader resolved them on the
+	// embedded platform declaration before this transform runs, and the
+	// transform never reads a key field. Comments are stripped first, so
+	// prose inside the body cannot satisfy the check by text position
+	// either.
 	body := src[strings.Index(src, "func serverConfigFrom"):]
 	body = regexp.MustCompile(`(?m)//.*$`).ReplaceAllString(body, "")
 	resolveOrder := []string{
 		"hc.DeploymentMode", "hc.Port", "hc.DBPath",
-		"hc.ConfigKey", "hc.OrgIndexKey", "hc.AuthnBlindIndexKey", "hc.AuthnPIICipherKey", "hc.PKILocalKeyCipherKey",
 		"hc.RedisAddr", "hc.OTLPEndpoint",
 		"hc.S3Endpoint", "hc.S3Bucket", "hc.S3AccessKey", "hc.S3SecretKey", "hc.S3UseSSL", "hc.S3BucketLookup",
 		"hc.SMTPHost", "hc.SMTPPort",
