@@ -670,13 +670,13 @@ paths:
       summary: List the caller's inbox messages, newest first.
       description: >-
         Returns the caller's own inbox rows (recipient_user_id matches the
-        subject seam's caller), newest first, ordered by created_at then id so
-        paging is stable. Messages whose expiry passed are still listed --
-        expiry governs the unread predicate only (read_at IS NULL AND expiry not
-        passed), never list membership -- but a message that reached its
-        expiry_at renders with the unread affordance already gone, which is what
-        the frontend's per-row state derives from read_at. group filters to one
-        notification group (a type-classification namespace like
+        caller resolved through the subject module), newest first, ordered by
+        created_at then id so paging is stable. Messages whose expiry passed are
+        still listed -- expiry governs the unread predicate only (read_at IS
+        NULL AND expiry not passed), never list membership -- but a message that
+        reached its expiry_at renders with the unread affordance already gone,
+        which is what the frontend's per-row state derives from read_at. group
+        filters to one notification group (a type-classification namespace like
         "appointments"); unknown groups answer an empty list, never an error.
       parameters:
         - in: query
@@ -2174,7 +2174,7 @@ paths:
       summary: Subscribe the caller's tenant to a set of public event types.
       description: >-
         The creator is the caller's own authenticated identity, resolved
-        server-side through the same SubjectResolver seam
+        server-side through the same SubjectResolver module
         integration_createAPIKey uses -- never a request field. url is validated
         exactly as Service.CreateWebhookSubscription validates it, before
         anything is persisted: missing is 400, and a URL whose host is
@@ -2968,7 +2968,7 @@ paths:
         which resolves the request's tenant from the token itself before
         Service.Access's own ordinary rules ever run -- and, when access is
         granted, streams the resource behind the share's ResourceRef (resolved
-        through the host's own sharing.ResourceResolver seam; see module.go's
+        through the host's own sharing.ResourceResolver module; see module.go's
         WithResourceResolver).
 
 
@@ -5219,7 +5219,7 @@ components:
           description: >-
             Whether CreatedBy is no longer an active member of the tenant -- a
             display flag only, computed through the optional MembershipChecker
-            seam; false when no seam is wired, exactly as if every creator were
+            module; false when none is wired, exactly as if every creator were
             still active.
     IntegrationListAPIKeysResponse:
       type: object

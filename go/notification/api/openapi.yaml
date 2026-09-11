@@ -45,7 +45,8 @@ paths:
       summary: List the caller's inbox messages, newest first.
       description: >-
         Returns the caller's own inbox rows (recipient_user_id matches the
-        subject seam's caller), newest first, ordered by created_at then
+        caller resolved through the subject module), newest first, ordered
+        by created_at then
         id so paging is stable. Messages whose expiry passed are still
         listed -- expiry governs the unread predicate only
         (read_at IS NULL AND expiry not passed), never list membership --

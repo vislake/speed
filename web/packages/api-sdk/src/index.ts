@@ -821,7 +821,7 @@ export interface IntegrationAPIKeySummary {
   revokedAt?: string | null;
   revoked?: boolean;
   expired?: boolean;
-  /** Whether CreatedBy is no longer an active member of the tenant -- a display flag only, computed through the optional MembershipChecker seam; false when no seam is wired, exactly as if every creator were still active. */
+  /** Whether CreatedBy is no longer an active member of the tenant -- a display flag only, computed through the optional MembershipChecker module; false when none is wired, exactly as if every creator were still active. */
   creatorLeft?: boolean;
 }
 
@@ -2900,7 +2900,7 @@ export function useAuthnListLoginHistory<TData = Awaited<ReturnType<typeof authn
 
 
 /**
- * Returns the caller's own inbox rows (recipient_user_id matches the subject seam's caller), newest first, ordered by created_at then id so paging is stable. Messages whose expiry passed are still listed -- expiry governs the unread predicate only (read_at IS NULL AND expiry not passed), never list membership -- but a message that reached its expiry_at renders with the unread affordance already gone, which is what the frontend's per-row state derives from read_at. group filters to one notification group (a type-classification namespace like "appointments"); unknown groups answer an empty list, never an error.
+ * Returns the caller's own inbox rows (recipient_user_id matches the caller resolved through the subject module), newest first, ordered by created_at then id so paging is stable. Messages whose expiry passed are still listed -- expiry governs the unread predicate only (read_at IS NULL AND expiry not passed), never list membership -- but a message that reached its expiry_at renders with the unread affordance already gone, which is what the frontend's per-row state derives from read_at. group filters to one notification group (a type-classification namespace like "appointments"); unknown groups answer an empty list, never an error.
  * @summary List the caller's inbox messages, newest first.
  */
 export const notificationListMessages = (
@@ -5467,7 +5467,7 @@ export const useIntegrationRotateAPIKey = <TError = IntegrationError,
     }
 
 /**
- * The creator is the caller's own authenticated identity, resolved server-side through the same SubjectResolver seam integration_createAPIKey uses -- never a request field. url is validated exactly as Service.CreateWebhookSubscription validates it, before anything is persisted: missing is 400, and a URL whose host is malformed, unresolvable, or blocked as private/loopback is refused outright (the module's two-time SSRF rules). Every eventTypes entry must be some registered EventMapping's public type (400 naming the first unknown one); the empty set is refused. The response's secret field is the raw HMAC signing secret a receiver verifies signatures with -- shown here exactly once, the identical contract integration_createAPIKey's own key field follows; nothing else this fragment exposes ever reproduces it.
+ * The creator is the caller's own authenticated identity, resolved server-side through the same SubjectResolver module integration_createAPIKey uses -- never a request field. url is validated exactly as Service.CreateWebhookSubscription validates it, before anything is persisted: missing is 400, and a URL whose host is malformed, unresolvable, or blocked as private/loopback is refused outright (the module's two-time SSRF rules). Every eventTypes entry must be some registered EventMapping's public type (400 naming the first unknown one); the empty set is refused. The response's secret field is the raw HMAC signing secret a receiver verifies signatures with -- shown here exactly once, the identical contract integration_createAPIKey's own key field follows; nothing else this fragment exposes ever reproduces it.
  * A failure recording the operation's audit event AFTER the subscription row committed is answered as this operation's ordinary 201 success, with the response's auditRecordMissing field true: the subscription exists and is already delivering either way, and its secret is never shown twice, so the caller persists it from the success response and the field declares the audit gap (the identical partial-failure contract Service.CreateWebhookSubscription's own doc comment documents). The secret deliberately never rides in an error envelope: a 5xx body carries no secret material, because error responses flow into logs, tickets and bug reports that success bodies do not.
  * @summary Subscribe the caller's tenant to a set of public event types.
  */
@@ -6947,7 +6947,7 @@ export function usePkiGetAuthorityCrl<TData = Awaited<ReturnType<typeof pkiGetAu
 
 
 /**
- * Resolves token into the share it names -- through Service.AccessPublic, which resolves the request's tenant from the token itself before Service.Access's own ordinary rules ever run -- and, when access is granted, streams the resource behind the share's ResourceRef (resolved through the host's own sharing.ResourceResolver seam; see module.go's WithResourceResolver).
+ * Resolves token into the share it names -- through Service.AccessPublic, which resolves the request's tenant from the token itself before Service.Access's own ordinary rules ever run -- and, when access is granted, streams the resource behind the share's ResourceRef (resolved through the host's own sharing.ResourceResolver module; see module.go's WithResourceResolver).
  *
  * Every refusal reason -- an unrecognized token, a revoked, expired or view-exhausted share, or a missing or wrong password -- answers with the exact same 404 body, per this module's outward-identical-answer rule: probing this endpoint teaches an outside caller nothing about which of those reasons actually applied. A resource that could not be opened AFTER access was already granted is a distinct, undisguised 502 -- see SharingError's own description and sharing.ErrResourceUnavailable's doc comment for why that case must not be folded into the same 404.
  * @summary Access a share's content by bearer token.

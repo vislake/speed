@@ -200,7 +200,7 @@ paths:
       summary: Subscribe the caller's tenant to a set of public event types.
       description: >-
         The creator is the caller's own authenticated identity, resolved
-        server-side through the same SubjectResolver seam
+        server-side through the same SubjectResolver module
         integration_createAPIKey uses -- never a request field. url is
         validated exactly as Service.CreateWebhookSubscription validates
         it, before anything is persisted: missing is 400, and a URL whose
@@ -519,7 +519,7 @@ components:
           description: >-
             Whether CreatedBy is no longer an active member of the tenant --
             a display flag only, computed through the optional
-            MembershipChecker seam; false when no seam is wired, exactly as
+            MembershipChecker module; false when none is wired, exactly as
             if every creator were still active.
     IntegrationListAPIKeysResponse:
       type: object
