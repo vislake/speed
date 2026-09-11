@@ -156,15 +156,28 @@ name: docs-check
 #     docs/-wide check.
 #   * per-version release directories for docs/site/ (the site versioned
 #     like the code it documents).
-#   * the platform-error bundle's Go-side edge: the bundle's census
-#     input is the Go tree, but a PR that only removes an apperr
-#     construction (leaving its catalog entry behind) never starts this
-#     pipeline -- code-only PRs belong to fast-check's module matrix by
-#     the trigger design above. The residue is deliberate: the next run
-#     on any listed path goes red, naming the stale bundle file, and the
-#     fix is the one-line regeneration the gate prints. Wiring go/**
-#     here to close it would fire this pipeline on every code-only PR,
-#     which is what the path set exists to avoid.
+#   * the error-code gates' construction-site residue: the error-code
+#     census scans every *.go file under go/ and examples/ (test and
+#     generated files excluded), but a construction starts this pipeline
+#     only when it falls under a listed path: go/**/errors.go, a listed
+#     go/ root (go/pkgcore/**, go/dbkit/**, go/ratelimit/**,
+#     go/config/**), or examples/reference-app/internal/**, the app
+#     root. Elsewhere in go/ -- go/jobs' refusal sites, go/tenancy's
+#     middleware and system-context refusals,
+#     go/sharing/ratelimit.go, go/ai-gateway/ratelimit.go,
+#     go/admin/handler.go, go/integration/module.go today; the
+#     committed index's source column names the live set -- a
+#     construction added, moved or removed in a code-only PR changes
+#     the index's source column (and so docs/error-codes.json and its
+#     site page) without starting this pipeline, and one removed with
+#     its locales entry left behind can leave the platform-error bundle
+#     stale the same way. Deliberate: wiring go/** to close it would
+#     fire this pipeline on every code-only PR, which is what the path
+#     set exists to avoid -- code-only PRs belong to fast-check's
+#     module matrix by the trigger design above. The residue is
+#     recoverable rather than silent: the next run on any listed path
+#     goes red, naming the drift, and the fix is the regeneration the
+#     gate prints.
 #
 # PATH SET -- documentation or i18n/public-API changes only:
 #   docs/**                     the design docs this pipeline guards, and
@@ -239,6 +252,22 @@ name: docs-check
 #                                file and line, so a construction site
 #                                moving changes docs/error-codes.json and
 #                                its site page
+#   go/**/errors.go              the Go modules' error declaration files
+#                                (each module's sentinel codes and the doc
+#                                comments the index renders as triggering
+#                                conditions): the bulk of the error-code
+#                                index's source, so a code added, renamed,
+#                                reworded or removed here changes
+#                                docs/error-codes.json and its site page,
+#                                and a code removed with its construction
+#                                (leaving its locales entry behind) can
+#                                leave the platform-error bundle stale.
+#                                Deliberately this narrow glob rather than
+#                                go/**: the census scans every *.go file
+#                                (test and generated files excluded), but
+#                                the construction sites outside the listed
+#                                paths are the residue registered under
+#                                DELIBERATELY NOT WIRED below
 #   go/config/**                 the dynamic-config schema machinery
 #                                (item canonicalization and descriptor
 #                                semantics) the reference renders
@@ -291,6 +320,7 @@ on:
       - web/packages/i18n/**
       - tools/configrefgen/**
       - examples/reference-app/internal/**
+      - go/**/errors.go
       - go/config/**
       - go/authn/module.go
       - go/metering/module.go
