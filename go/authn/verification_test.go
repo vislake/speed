@@ -697,6 +697,50 @@ func (failingSMSSender) Send(context.Context, pkgcore.SMS) error {
 
 var errSMSSendFailed = errors.New("verification_test: sms send deliberately fails")
 
+// TestRequestSMSCode_RenderFailure_AnswersLikeAnUnknownNumber pins the
+// rendering-failure answer: a registered phone whose SMS body cannot be
+// rendered must not answer differently from a request for an unregistered
+// number. Only the registered branch ever renders -- the unknown-number
+// branch burns a code and stops -- so surfacing the render error as
+// ErrInternal would answer 500 for registered numbers while unregistered
+// ones answered nil, a registration oracle for as long as the locale
+// bundles are broken.
+//
+// Deliberately NOT t.Parallel(): it swaps the package-level SMS locale
+// cache (loadSMSLocaleMessages' smsLocaleOnce/smsLocaleMessages/smsLocaleErr)
+// for one with no bundles at all, which makes renderSMSCode fail for any
+// locale. The serialization argument is
+// TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime's:
+// a non-parallel test's body never runs concurrently with a parallel test's,
+// so no other test can observe the fake. The cleanup re-fires the cache from
+// the real embedded files rather than restoring saved values, because a
+// sync.Once cannot be copied.
+func TestRequestSMSCode_RenderFailure_AnswersLikeAnUnknownNumber(t *testing.T) {
+	smsLocaleOnce = sync.Once{}
+	smsLocaleMessages = map[string]map[string]string{}
+	smsLocaleErr = nil
+	smsLocaleOnce.Do(func() {})
+	t.Cleanup(func() {
+		smsLocaleOnce = sync.Once{}
+		smsLocaleMessages = nil
+		smsLocaleErr = nil
+		if _, err := loadSMSLocaleMessages(); err != nil {
+			t.Errorf("restore the real SMS locale bundles: %v", err)
+		}
+	})
+
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf)
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.10"}); err != nil {
+		t.Fatalf("RequestSMSCode(registered phone, render failure) error = %v, want nil: a render failure must answer exactly like the unknown-number branch, or it discloses that the number is registered", err)
+	}
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: "+8613800000000", IP: "203.0.113.11"}); err != nil {
+		t.Fatalf("RequestSMSCode(unknown phone) error = %v", err)
+	}
+}
+
 // containsString reports whether s contains v. A small local helper rather
 // than slices.Contains at every call site, kept for readability next to
 // the AMR assertions above.

@@ -573,6 +573,43 @@ func TestHandler_RequestSMSCode_GatewayDown_RegisteredPhoneStillAnswers202(t *te
 	}
 }
 
+// TestHandler_RequestSMSCode_WriteFailure_RegisteredPhoneStillAnswers202
+// pins the response-status layer of the oracle for the code-issuing write:
+// a registered phone whose verification-code row could not be persisted
+// must not answer 5xx while an unregistered phone answers 202 under the
+// same outage. Persisting the row is reachable only on the registered
+// branch -- the unknown-number branch writes nothing -- so a status split
+// here would tell an attacker exactly which numbers have accounts, for as
+// long as the write path is broken. The failure is logged server-side and
+// both requests answer 202 with an empty body.
+func TestHandler_RequestSMSCode_WriteFailure_RegisteredPhoneStillAnswers202(t *testing.T) {
+	t.Parallel()
+
+	h, f := newTestHandler(t)
+	f.registerUser(t, "smswrite@example.com", testTenantA)
+	if err := f.svc.Users().Save(t.Context(), mustSetPhone(t, f, "smswrite@example.com", "+15550000012")); err != nil {
+		t.Fatalf("save the registered phone: %v", err)
+	}
+	// Break the code-issuing write the way a broken deployment does: take
+	// the verification_codes table away. The users lookup that starts the
+	// request is untouched, so the registered number reaches the persist
+	// step and fails there, while the unknown number -- which never
+	// writes -- is unaffected.
+	if err := f.db.Migrator().DropTable(&VerificationCode{}); err != nil {
+		t.Fatalf("drop verification_codes: %v", err)
+	}
+
+	registered := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{Phone: "+15550000012"}, nil)
+	unknown := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{Phone: "+15559999999"}, nil)
+
+	if registered.Code != http.StatusAccepted {
+		t.Fatalf("registered-phone-under-write-outage status = %d, want %d; body = %s (a status split against the unknown number is a registration oracle)", registered.Code, http.StatusAccepted, registered.Body.String())
+	}
+	if registered.Code != unknown.Code || registered.Body.String() != unknown.Body.String() {
+		t.Errorf("registered-phone answer = (%d, %q); unknown-phone answer = (%d, %q); the two must be indistinguishable", registered.Code, registered.Body.String(), unknown.Code, unknown.Body.String())
+	}
+}
+
 // mustSetPhone attaches phone to the account registered under email and
 // returns the updated row, for the one test above that needs a phone
 // number on an otherwise email-registered fixture user.

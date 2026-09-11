@@ -318,6 +318,18 @@ func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) er
 // deliverSMSCode implements RequestSMSCode's known/unknown-number branch as
 // its own method so RequestSMSCode's body can pad its total duration -- see
 // RequestSMSCode's own doc comment.
+//
+// Every failure reachable only on the registered side of that branch --
+// persisting the code row, rendering the SMS body, handing it to the
+// transport -- is logged and folded into the same success answer the
+// unknown-number side gives. Surfacing any of them instead would turn the
+// response status into a registration oracle for exactly as long as the
+// failure lasts: an unknown number never reaches those steps, so a 5xx only
+// registered numbers can produce discloses the one fact RequestSMSCode's
+// doc comment promises is never disclosed. The failures that do stay errors
+// below -- the lookup itself, and the code draw both branches perform --
+// fire identically for a registered and an unregistered number, so they
+// cannot tell the two apart.
 func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, index string) error {
 	user, err := s.users.FindByPhone(ctx, in.Phone)
 	if err != nil {
@@ -329,6 +341,13 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 
 	code, err := generateNumericCode(smsCodeDigits)
 	if err != nil {
+		// Both branches draw their code with this same call -- the
+		// unknown-number branch burns one in burnSMSCodeRequestWork above
+		// -- so a draw failure fires identically for a registered and an
+		// unregistered number and cannot tell the two apart. It stays a
+		// real error, unlike the registered-only failures below: a broken
+		// entropy source is a host condition the operator should see as
+		// 5xx, and both number classes answer it identically.
 		return ErrInternal.WithCause(err)
 	}
 
@@ -341,14 +360,32 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 		ExpiresAt:   s.now().Add(s.smsCodeTTL),
 	}
 	if createErr := s.verificationCodes.Create(ctx, record); createErr != nil {
-		return createErr
+		// Reachable only for a registered number -- the unknown-number
+		// branch persists nothing -- so surfacing this failure would
+		// answer 5xx for registered numbers while unregistered ones still
+		// answered success: a registration oracle for as long as the
+		// write path is broken. Logged and answered exactly like a
+		// successful send, the same posture the transport branch below
+		// documents. No further work is attempted either: without the
+		// row the code could never verify (verifyPhoneLoginCode finds
+		// codes by target through this table), so sending it would only
+		// cost a delivery for a code that is dead on arrival.
+		obs.FromContext(ctx).Error("sms verification code row could not be persisted", "error", createErr)
+		return nil
 	}
 
 	minutes := int(s.smsCodeTTL / time.Minute)
 	text, usedLocale, err := renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, minutes)
 	if err != nil {
+		// The same registered-only shape as the persist branch above and
+		// the transport branch below: only a registered number ever
+		// renders a body, so answering this failure would distinguish the
+		// two number classes while the locale bundles are broken. The row
+		// persisted above is the harmless kind the transport branch
+		// describes -- it expires under its own TTL with nothing able to
+		// read it back.
 		obs.FromContext(ctx).Error("sms verification code message could not be rendered", "error", err)
-		return ErrInternal.WithCause(err)
+		return nil
 	}
 	// The message carries the render's identity -- the id it was rendered
 	// from, the locale it was ACTUALLY rendered in (usedLocale, the
