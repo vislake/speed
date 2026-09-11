@@ -301,7 +301,6 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	return nil
 }
 
-
 // compile-time check that *metering.Aggregator satisfies UsageReader
 // structurally -- see UsageReader's own doc comment for why this
 // package declares a small interface rather than depending on the
