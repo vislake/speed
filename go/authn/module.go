@@ -552,8 +552,8 @@ const (
 // Each entry is an IP address or a CIDR prefix -- "203.0.113.10", or
 // "172.16.0.0/12" for a whole proxy range. An entry that is neither is
 // refused at wiring time (newOptions): it can never match a peer, so
-// accepting it would silently keep recording the proxy address this option
-// was meant to fix. A declared proxy must overwrite or strip the
+// accepting it would silently keep recording the proxy address instead of
+// the client's. A declared proxy must overwrite or strip the
 // X-Forwarded-For it receives from its own clients, so a client cannot
 // smuggle a header through the proxy it is trusted for; a generic reverse
 // proxy must be configured to do the same.
@@ -747,7 +747,7 @@ func newOptions(opts []Option) (options, error) {
 	// neither an IP address nor a CIDR prefix cannot be a proxy peer, so
 	// it is refused here -- failing closed at wiring time rather than
 	// silently never matching, which would quietly keep recording the
-	// proxy address WithTrustedProxies was meant to fix.
+	// proxy address instead of the client's.
 	for _, entry := range cfg.trustedProxies {
 		prefix, err := parseTrustedProxy(entry)
 		if err != nil {

@@ -399,7 +399,7 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 // code against and nowhere real to deliver one -- doing either would risk
 // sending to an address that happens to be a real subscriber elsewhere and
 // would leave a stray row with no owner, exactly what this method's own
-// caller's doc comment says the fix must not do.
+// caller's doc comment rules out.
 func (s *Service) burnSMSCodeRequestWork() error {
 	code, err := generateNumericCode(smsCodeDigits)
 	if err != nil {
