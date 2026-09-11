@@ -87,9 +87,16 @@ func component() pkgcore.Component {
 			// rather than quietly delivering codes nobody reads.
 			{Token: (*pkgcore.SMSSender)(nil), Optional: true},
 		},
-		// The construction product is the *Module; the *Service it exposes
-		// is what host steps assemble the request chain from.
-		Provides: []any{(*Module)(nil), (*Service)(nil)},
+		// The construction product is the *Module. The *Service it exposes
+		// is built inside Register -- it needs the event bus and key-value
+		// store the registry carries -- so it is a runtime service, not a
+		// construction delivery: consumers reach it through the module
+		// product's own accessor, and it deliberately stays out of Provides
+		// (a service never resolves a token requirement).
+		Provides: []any{(*Module)(nil)},
+		// authn's state is its rows in the deployment's shared database and
+		// the shared event bus, so several replicas may run it at once.
+		Capabilities: pkgcore.MultiReplicaSafe,
 		// The one system context this module takes -- the sign-in tenant
 		// enumeration -- is declared here so the assembly collects it with
 		// every other selected component's purposes.

@@ -50,9 +50,15 @@ type integrationComponentConfig struct {
 // nowhere but the Init stage. The returned *Service is put into the by-type
 // context, where a consumer requires and reads it after the assembly.
 var integrationComponent = pkgcore.Component{
-	Name:         "integration",
-	Module:       "integration",
-	Provides:     []any{(*Module)(nil), (*Service)(nil)},
+	Name:   "integration",
+	Module: "integration",
+	// The construction product is the *Module. The *Service Attach builds
+	// over the module's freshly declared surface is a runtime service --
+	// Attach installs declarations and reads assembly values, so it can run
+	// nowhere but the Init stage and never before construction -- so it
+	// stays out of Provides (a service never resolves a token
+	// requirement).
+	Provides:     []any{(*Module)(nil)},
 	Capabilities: pkgcore.MultiReplicaSafe,
 	ConfigSchema: (*integrationComponentConfig)(nil),
 	Requires: []pkgcore.Requirement{
