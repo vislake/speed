@@ -440,8 +440,8 @@ func TestTruncateError_DoesNotSplitAMultiByteRune(t *testing.T) {
 // ANY length, not only past the truncation point: invalid bytes are
 // rendered as the Unicode replacement character (strings.ToValidUTF8),
 // never passed through and never silently dropped. The shape mirrors
-// go/sharing's truncateAccessLogValue and go/authn's truncateClientField,
-// the rune-safe helpers this codebase carries in three modules.
+// dbkit.FitColumnValue's sanitize-first ordering, under this module's
+// byte bound rather than that helper's rune bound.
 func TestTruncateError_ShortInvalidUTF8_IsSanitized(t *testing.T) {
 	// A short value (well under the 500-byte bound) whose middle byte is
 	// an invalid UTF-8 sequence -- what a caller-supplied error string

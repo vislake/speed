@@ -292,19 +292,18 @@ func retireDeliveredOutboxRecords(ctx context.Context, db *gorm.DB, olderThan ti
 const maxLastErrorLength = 500
 
 // truncateError makes cause safe for OutboxRecord.LastError's column at
-// ANY length, the rune-safe-helper shape go/sharing's
-// truncateAccessLogValue and go/authn's truncateClientField already
-// established: it never writes more bytes than the column can hold, and
-// the stored value is always valid UTF-8. A value that is short AND valid
-// passes
+// ANY length: the stored value is always valid UTF-8 and never longer
+// than maxLastErrorLength bytes. A value that is short AND valid passes
 // through untouched; anything else is first sanitized -- invalid byte
 // sequences rendered as the Unicode replacement character via
-// strings.ToValidUTF8, exactly the sharing helper's choice, never
-// silently dropped, since dropping bytes could concatenate two arbitrary
-// byte runs into a different valid value -- and the sanitized result is
-// then byte-bounded. The byte bound is the conservative direction on
-// PostgreSQL, where VARCHAR(n) counts characters, and it is enforced on
-// a UTF-8 boundary: a byte-level cut through a rune would leave invalid
+// strings.ToValidUTF8, the sanitize-first ordering dbkit.FitColumnValue
+// establishes for the rune-bounded family, never silently dropped, since
+// dropping bytes could concatenate two arbitrary byte runs into a
+// different valid value -- and the sanitized result is then byte-bounded.
+// The bound is deliberately BYTES rather than the runes dbkit.FitColumnValue
+// bounds by: a byte bound is the conservative direction on PostgreSQL,
+// where VARCHAR(n) counts characters, and it is enforced on a UTF-8
+// boundary. A byte-level cut through a rune would leave invalid
 // UTF-8 in the string, which SQLite stores happily but PostgreSQL
 // refuses on the very write this truncation feeds (SQLSTATE 22021,
 // invalid byte sequence for encoding "UTF8") -- taking the
