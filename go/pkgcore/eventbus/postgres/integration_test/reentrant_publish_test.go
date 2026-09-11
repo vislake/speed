@@ -28,6 +28,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // The re-entrancy shape these tests drive is the one real business modules
@@ -180,7 +181,7 @@ func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T)
 	// The subscriber's nested publish is delivered synchronously on its own
 	// listener goroutine, so rootSpy reaches 1 as soon as the handler above
 	// runs -- the delivery the handler's re-entrant publish must achieve.
-	eventually(t, "the listener-path handler's re-entrant publish to be delivered", func() bool {
+	testkit.Eventually(t, "the listener-path handler's re-entrant publish to be delivered", func() bool {
 		return rootSpy.count() >= 1
 	})
 

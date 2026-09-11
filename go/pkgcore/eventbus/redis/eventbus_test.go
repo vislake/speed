@@ -21,6 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestNewEventBus_PanicsOnNilClient pins that a nil client is a wiring error
@@ -71,21 +72,6 @@ func redisBuses(t *testing.T) (*miniredis.Miniredis, *EventBus, *EventBus) {
 	return mini, NewEventBus(clientA), NewEventBus(clientB)
 }
 
-// waitFor polls cond until it reports true or the deadline passes.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if cond() {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 // groupCount reports how many consumer groups the server currently holds on
 // eventType's stream, or 0 when the stream does not exist yet.
 func groupCount(t *testing.T, client *redis.Client, eventType string) int {
@@ -122,7 +108,7 @@ func TestEventBus_CrossInstanceFanOut_OverMiniredis(t *testing.T) {
 
 	// Wait for both instances' consumer groups to exist before publishing,
 	// so the event cannot be published before a reader is live.
-	waitFor(t, "both consumer groups", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "both consumer groups", func() bool {
 		return groupCount(t, redisClientOf(busB), eventType) == 2
 	})
 
@@ -143,7 +129,7 @@ func TestEventBus_CrossInstanceFanOut_OverMiniredis(t *testing.T) {
 	// visible as its group's pending count returning to zero -- then pin
 	// that the local handler ran exactly once: the publishing instance's own
 	// reader must never re-run its handlers.
-	waitFor(t, "A's reader to acknowledge its own entry", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "A's reader to acknowledge its own entry", func() bool {
 		pending, err := redisClientOf(busA).XPending(ctx, eventStreamKey(eventType), eventGroupPrefix+instanceIDOf(busA)).Result()
 		return err == nil && pending.Count == 0
 	})
@@ -166,12 +152,12 @@ func TestEventBus_Close_RemovesItsGroupAndThenTheStream_OverMiniredis(t *testing
 
 	busA.Subscribe(eventType, func(context.Context, pkgcore.Event) error { return nil })
 	busB.Subscribe(eventType, func(context.Context, pkgcore.Event) error { return nil })
-	waitFor(t, "both consumer groups", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "both consumer groups", func() bool {
 		return groupCount(t, redisClientOf(busA), eventType) == 2
 	})
 
 	busA.Close()
-	waitFor(t, "A's group to be destroyed", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "A's group to be destroyed", func() bool {
 		return groupCount(t, redisClientOf(busB), eventType) == 1
 	})
 	if err := busA.Publish(ctx, pkgcore.Event{Type: eventType, Payload: "x"}); !errors.Is(err, ErrEventBusClosed) {
@@ -185,7 +171,7 @@ func TestEventBus_Close_RemovesItsGroupAndThenTheStream_OverMiniredis(t *testing
 	}
 
 	busB.Close()
-	waitFor(t, "the stream to be deleted with its last reader", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the stream to be deleted with its last reader", func() bool {
 		return redisClientOf(busA).Exists(ctx, stream).Val() == 0
 	})
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // precreateReaderGroup makes the consumer group bus's reader will create on
@@ -126,7 +127,7 @@ func TestEventBus_ReaderAdoptsAPreexistingGroup(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish(after adoption) error = %v, want nil", err)
 	}
-	eventually(t, "the adopting reader to keep delivering", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the adopting reader to keep delivering", func() bool {
 		return recB.count() == 1
 	})
 }
@@ -187,7 +188,7 @@ func TestEventBus_AdoptedGroupCoexistsWithLaterReaders(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish(counted) error = %v, want nil", err)
 	}
-	eventually(t, "both readers to deliver the counted event exactly once each", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "both readers to deliver the counted event exactly once each", func() bool {
 		return recB.count() == 1 && recC.count() == 1
 	})
 
@@ -209,7 +210,7 @@ func TestEventBus_AdoptedGroupCoexistsWithLaterReaders(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish(spared) error = %v, want nil", err)
 	}
-	eventually(t, "the spared reader to keep delivering", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the spared reader to keep delivering", func() bool {
 		return recC.count() == 1
 	})
 }

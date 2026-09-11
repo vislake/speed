@@ -11,6 +11,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file pins the queue-backed reaping: with a jobs
@@ -82,23 +83,6 @@ import (
 // Enqueue failure falls back to the synchronous reaping. The two
 // EnqueueFailure tests below wire a queue whose Enqueue always fails and
 // assert the bindings are still reaped.
-
-// waitFor polls cond until it reports true or deadline passes. A bounded
-// deadline loop is the deterministic core of every worker test here: the
-// queue's poll interval is a millisecond, so a condition the mechanism
-// delivers is reached in milliseconds, and one the mechanism does not
-// deliver fails at the deadline with the last observed state.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
 
 // startQueue starts q and arranges its shutdown at test end.
 func startQueue(t *testing.T, q *jobs.StandaloneQueue) {
@@ -234,7 +218,7 @@ func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *tes
 
 	// The worker converges the reap: both bindings withdrawn, each
 	// announcing EventRoleBindingRevoked, the cache flipped.
-	waitFor(t, "the reap task to revoke the removed member's bindings", func() bool {
+	testkit.Eventually(t, "the reap task to revoke the removed member's bindings", func() bool {
 		return len(liveBindings(t, svc, removed.TenantID, removed.UserID)) == 0
 	})
 	// Each revoked-binding event fires strictly after its row's
@@ -243,7 +227,7 @@ func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *tes
 	// the recorder once, an instant that could race the worker's last
 	// announce -- is what makes the Can and row assertions below
 	// unconditional.
-	waitFor(t, "both reaped bindings to announce their revocation", func() bool {
+	testkit.Eventually(t, "both reaped bindings to announce their revocation", func() bool {
 		return len(rec.ofType(EventRoleBindingRevoked)) == 2
 	})
 	if ok, err := svc.Can(context.Background(), removed, "read", "notes"); err != nil || ok {
@@ -303,12 +287,12 @@ func TestService_NodeDeletionReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *test
 
 	startQueue(t, q)
 
-	waitFor(t, "the node reap to revoke the bindings at the deleted nodes", func() bool {
+	testkit.Eventually(t, "the node reap to revoke the bindings at the deleted nodes", func() bool {
 		return len(liveBindings(t, svc, "tenant-a", "user-1")) == 0
 	})
 	// Same announcement-ordering wait as test 1: each revoked-binding
 	// event fires after its row's mark-delete commit.
-	waitFor(t, "both reaped bindings to announce their revocation", func() bool {
+	testkit.Eventually(t, "both reaped bindings to announce their revocation", func() bool {
 		return len(rec.ofType(EventRoleBindingRevoked)) == 2
 	})
 	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
@@ -401,7 +385,7 @@ func TestService_MemberRemovalReap_TransientFailureNearTheEnqueue_Converges(t *t
 	// of restoring after a fixed pause, or restoring immediately and
 	// hoping a poll landed in the window) makes the retried-convergence
 	// property this test exists to prove unconditional.
-	waitFor(t, "a reap attempt to fail against the hidden bindings table", func() bool {
+	testkit.Eventually(t, "a reap attempt to fail against the hidden bindings table", func() bool {
 		rows := jobRows(t, db, taskTypeReapMember)
 		return len(rows) == 1 && rows[0]["status"] == string(jobs.StatusRetrying)
 	})
@@ -409,7 +393,7 @@ func TestService_MemberRemovalReap_TransientFailureNearTheEnqueue_Converges(t *t
 		t.Fatalf("restoring the bindings table: %v", err)
 	}
 
-	waitFor(t, "the queued reap to revoke the binding once the table is back", func() bool {
+	testkit.Eventually(t, "the queued reap to revoke the binding once the table is back", func() bool {
 		return len(liveBindings(t, svc, removed.TenantID, removed.UserID)) == 0
 	})
 	if ok, _ := svc.Can(context.Background(), removed, "read", "notes"); ok {

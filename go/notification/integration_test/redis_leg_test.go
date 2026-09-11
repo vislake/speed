@@ -58,6 +58,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // convergenceDeadline bounds every wait for a remote delivery. Redis
@@ -98,19 +99,6 @@ func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
 		}
 	}
 	return pkgcore.Event{}, false
-}
-
-// eventually polls cond until it holds or the deadline passes.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(convergenceDeadline)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // warmUp loops marker publishes on bus until spy has received one.
@@ -278,7 +266,7 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 	}
 
 	var received pkgcore.Event
-	eventually(t, "the inbox-created event to reach the peer bus", func() bool {
+	testkit.Eventually(t, "the inbox-created event to reach the peer bus", func() bool {
 		evt, ok := spy.first(func(evt pkgcore.Event) bool {
 			return evt.Type == notification.EventInboxCreated && evt.TenantID == pkgcore.TenantID(tenant)
 		})

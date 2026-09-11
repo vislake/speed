@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // pollLoopStarted reports whether p currently holds a loop generation, for
@@ -70,14 +72,14 @@ func TestPollLoop_StartAfterStop_RunsAFreshGeneration(t *testing.T) {
 	}
 
 	p.start(context.Background(), nil, body)
-	waitFor(t, func() bool { return generations.Load() == 1 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the first poll generation to start", func() bool { return generations.Load() == 1 })
 	p.stop(nil)
 	if pollLoopStarted(&p) {
 		t.Fatal("stop returned with the started flag still set: a later start would be a permanent no-op")
 	}
 
 	p.start(context.Background(), nil, body)
-	waitFor(t, func() bool { return generations.Load() == 2 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the second poll generation to start", func() bool { return generations.Load() == 2 })
 	p.stop(nil)
 }
 
@@ -100,17 +102,17 @@ func TestPollLoop_CanceledContext_ExitsAndLeavesItRestartable(t *testing.T) {
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	p.start(ctx1, nil, body)
-	waitFor(t, func() bool { return generations.Load() == 1 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the first poll generation to start", func() bool { return generations.Load() == 1 })
 	cancel1()
 
 	// The canceled generation must clear the started flag on exit, or the
 	// next start would be a permanent no-op.
-	waitFor(t, func() bool { return !pollLoopStarted(&p) })
+	testkit.EventuallyWithin(t, 2*time.Second, "the poll loop to stop", func() bool { return !pollLoopStarted(&p) })
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	p.start(ctx2, nil, body)
-	waitFor(t, func() bool { return generations.Load() == 2 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the second poll generation to start", func() bool { return generations.Load() == 2 })
 	p.stop(nil)
 }
 
@@ -127,7 +129,7 @@ func TestPollLoop_StartWhileRunning_IsANoOp(t *testing.T) {
 	}
 
 	p.start(context.Background(), nil, body)
-	waitFor(t, func() bool { return generations.Load() == 1 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the first poll generation to start", func() bool { return generations.Load() == 1 })
 
 	p.start(context.Background(), nil, body)
 	if got := generations.Load(); got != 1 {
@@ -173,7 +175,7 @@ func TestPollLoop_Hooks_RunAsTheHostsExpect(t *testing.T) {
 	spawn := func() { spawns.Add(1) }
 
 	p.start(context.Background(), spawn, body)
-	waitFor(t, func() bool { return generations.Load() == 1 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the first poll generation to start", func() bool { return generations.Load() == 1 })
 
 	p.start(context.Background(), spawn, body) // no-op: one generation already running
 	if got := spawns.Load(); got != 1 {

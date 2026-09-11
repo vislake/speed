@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // killEveryPooledConnection forces every connection currently sitting in
@@ -127,7 +128,7 @@ func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvanc
 	// catch-up scan (NOTIFY, or failing that its own listenBlock timeout):
 	// wait for the first delivery before deciding whether a second one
 	// ever follows.
-	eventually(t, "the subscriber's first delivery of the poisoned event", func() bool {
+	testkit.Eventually(t, "the subscriber's first delivery of the poisoned event", func() bool {
 		_, ok := spy.first(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == poisonSequence
@@ -165,7 +166,7 @@ func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvanc
 	}); err != nil {
 		t.Fatalf("Publish() of the follow-up event error = %v, want nil", err)
 	}
-	eventually(t, "the follow-up event to be delivered", func() bool {
+	testkit.Eventually(t, "the follow-up event to be delivered", func() bool {
 		_, ok := spy.first(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == followUpSequence

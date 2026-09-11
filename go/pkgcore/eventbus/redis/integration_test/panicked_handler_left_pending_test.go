@@ -22,6 +22,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup pins that
@@ -76,11 +77,11 @@ func TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup(t *testing.T
 		}
 	}
 
-	eventually(t, "the healthy handler to run for all three events", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the healthy handler to run for all three events", func() bool {
 		return recB.count() == 3
 	})
 
-	eventually(t, "all four panicked entries to sit pending in the group", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "all four panicked entries to sit pending in the group", func() bool {
 		return pendingAcrossGroups(t, ctx, client, streamKey(panickedType)) >= 4
 	})
 

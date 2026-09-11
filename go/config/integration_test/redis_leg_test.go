@@ -31,6 +31,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // newRedisPeerPair returns the two replicas of one test: two Services,
@@ -154,22 +155,6 @@ func requireRemoteItemEvent(t *testing.T, evt pkgcore.Event, wantKey, wantScope 
 	}
 }
 
-// eventually polls cond until it holds or the deadline passes. Remote
-// delivery over Redis is asynchronous -- a reader must wake and claim the
-// entry -- so every assertion on the far side of the bus waits through
-// this helper rather than assuming the delivery landed with the publish.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
-
 // warmUpMarker loops marker publishes on busA until the peer spy on busB
 // has received one. A reader's consumer group is created at the stream's
 // live end ("$" -- see pkgcore's createGroup), so an entry appended before
@@ -247,11 +232,11 @@ func TestRedisBus_RemoteSet_ConvergesThePeer(t *testing.T) {
 	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(Studio A): %v", err)
 	}
-	eventually(t, "replica B to converge to the first write", func() bool {
+	testkit.Eventually(t, "replica B to converge to the first write", func() bool {
 		v, err := svcB.Get(tenantContext("tenant-a"), "brand.site_name")
 		return err == nil && v.Data == "Studio A"
 	})
-	eventually(t, "the peer spy to record the first write", func() bool {
+	testkit.Eventually(t, "the peer spy to record the first write", func() bool {
 		return spy.countMatching(changedTo("brand.site_name", "Studio A")) == 1
 	})
 	firstWrite, ok := spy.first(changedTo("brand.site_name", "Studio A"))
@@ -267,11 +252,11 @@ func TestRedisBus_RemoteSet_ConvergesThePeer(t *testing.T) {
 	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A2"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(Studio A2): %v", err)
 	}
-	eventually(t, "replica B to converge to the second write", func() bool {
+	testkit.Eventually(t, "replica B to converge to the second write", func() bool {
 		v, err := svcB.Get(tenantContext("tenant-a"), "brand.site_name")
 		return err == nil && v.Data == "Studio A2"
 	})
-	eventually(t, "the peer spy to record the second write", func() bool {
+	testkit.Eventually(t, "the peer spy to record the second write", func() bool {
 		return spy.countMatching(changedTo("brand.site_name", "Studio A2")) == 1
 	})
 	secondWrite, ok := spy.first(changedTo("brand.site_name", "Studio A2"))
@@ -313,7 +298,7 @@ func TestRedisBus_RemoteSensitiveChange_CarriesOnlyTheMarker(t *testing.T) {
 	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "first@example.com"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(first): %v", err)
 	}
-	eventually(t, "replica B to serve the first sensitive value", func() bool {
+	testkit.Eventually(t, "replica B to serve the first sensitive value", func() bool {
 		v, err := svcB.Get(tenantContext("tenant-a"), "support.reply_email")
 		return err == nil && v.Data == "first@example.com" && !v.Redacted
 	})
@@ -321,7 +306,7 @@ func TestRedisBus_RemoteSensitiveChange_CarriesOnlyTheMarker(t *testing.T) {
 	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "second@example.com"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(second): %v", err)
 	}
-	eventually(t, "replica B to converge to the second sensitive value", func() bool {
+	testkit.Eventually(t, "replica B to converge to the second sensitive value", func() bool {
 		v, err := svcB.Get(tenantContext("tenant-a"), "support.reply_email")
 		return err == nil && v.Data == "second@example.com" && !v.Redacted
 	})
@@ -329,7 +314,7 @@ func TestRedisBus_RemoteSensitiveChange_CarriesOnlyTheMarker(t *testing.T) {
 	// Both changes must reach the peer in their redacted wire form. The last
 	// true-flagged event is the second change, whose OldValue -- the first
 	// plaintext -- must carry the marker like the NewValue.
-	eventually(t, "the peer spy to record both sensitive changes", func() bool {
+	testkit.Eventually(t, "the peer spy to record both sensitive changes", func() bool {
 		return spy.countMatching(sensitiveChange) == 2
 	})
 	secondChange, ok := spy.last(sensitiveChange)

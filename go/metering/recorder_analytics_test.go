@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 func TestAnalyticsRecorder_Record_InvalidEvent_ReturnsValidationError(t *testing.T) {
@@ -37,7 +38,7 @@ func TestAnalyticsRecorder_Record_FlushesIntoTheAggregator(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the realtime counter to reach 4", func() bool {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
 		return err == nil && got == 4
 	})
@@ -237,23 +238,6 @@ func TestAnalyticsRecorder_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
 	}
 }
 
-// waitFor polls cond until it reports true or the test times out, the
-// same small helper go/pkgcore/eventbustest's own conformance suite uses
-// for async delivery.
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !cond() {
-		t.Fatal("condition was never satisfied before the deadline")
-	}
-}
-
 // TestAnalyticsRecorder_IngestFailure_CountsIntoDropped pins the
 // drop-accounting contract: a buffered event whose delivery into the
 // aggregator fails (an Ingest error) is a lost event exactly like a
@@ -282,7 +266,7 @@ func TestAnalyticsRecorder_IngestFailure_CountsIntoDropped(t *testing.T) {
 	// The flush loop delivers, Ingest fails, and the failure must be
 	// counted; without the count the event vanishes with Dropped() still
 	// at 0, and this wait times out.
-	waitFor(t, func() bool { return r.Dropped() == 1 })
+	testkit.EventuallyWithin(t, 2*time.Second, "the drop counter to reach 1", func() bool { return r.Dropped() == 1 })
 }
 
 // TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered
@@ -308,7 +292,7 @@ func TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered(t 
 	// canceled ctx leaves Start restartable -- a flag left set forever
 	// would make the next Start a permanent no-op and buffer every later
 	// Record into nothing.
-	waitFor(t, func() bool { return !pollLoopStarted(&r.loop) })
+	testkit.EventuallyWithin(t, 2*time.Second, "the poll loop to stop", func() bool { return !pollLoopStarted(&r.loop) })
 
 	// A Record during the dead gap is buffered, not dropped: the stopped
 	// latch was not set by the cancel, so the event is honestly awaiting
@@ -326,7 +310,7 @@ func TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered(t 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	r.Start(ctx2)
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the realtime counter to reach 3", func() bool {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
 		return err == nil && got == 3
 	})

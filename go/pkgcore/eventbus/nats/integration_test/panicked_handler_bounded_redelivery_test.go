@@ -45,6 +45,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusnats "github.com/vislake/speed/go/pkgcore/eventbus/nats"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // maxDeliverBudget mirrors eventbus.go's unexported eventMaxDeliver: the
@@ -224,7 +225,7 @@ func TestEventBus_PanickingRemoteHandler_LaterSameTypeMessagesStillReachHealthyH
 	// The later messages must reach the healthy handler despite the earlier
 	// message's panicking handler, and so must the panicking message's own
 	// first (and only) healthy delivery.
-	eventually(t, "the healthy handler to receive every message published after the panicking one", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the healthy handler to receive every message published after the panicking one", func() bool {
 		return spyCountSeq(spy, 100) >= 1 && spyCountSeq(spy, 200) >= 1 && spyCountSeq(spy, 201) >= 1
 	})
 
@@ -395,7 +396,7 @@ func TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal(t *testi
 	// terminated, so the consumer's unacknowledged count returns to zero
 	// instead of accumulating without bound (the MaxAckPending-stall shape
 	// of an unbounded redelivery).
-	eventually(t, "the consumer's unacknowledged count to return to zero after the budget settlement", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the consumer's unacknowledged count to return to zero after the budget settlement", func() bool {
 		return ackPending(t, ctx, js, streamName, consumerName) == 0
 	})
 }
@@ -428,7 +429,7 @@ func TestEventBus_NoPanickingHandler_ControlDeliveryExactlyOnce(t *testing.T) {
 			t.Fatalf("Publish(%v) error = %v, want nil", seq, err)
 		}
 	}
-	eventually(t, "the healthy handler to receive every published message", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the healthy handler to receive every published message", func() bool {
 		return spyCountSeq(spy, 100) >= 1 && spyCountSeq(spy, 200) >= 1 && spyCountSeq(spy, 201) >= 1
 	})
 	time.Sleep(flatWindow)

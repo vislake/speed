@@ -90,6 +90,8 @@ import (
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
+
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // fakeOpenAIImageServer answers every POST /images/edits with a fixed,
@@ -558,7 +560,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	// terminal signal drives it, and waitForSmileSimSucceeded's own
 	// polling rides along as the second leg), but the notification.deliver
 	// job it triggers still needs its own worker turn.
-	eventually(t, 4*time.Second, "the simulation-ready SMS", func() bool {
+	testkit.EventuallyWithin(t, 4*time.Second, "the simulation-ready SMS", func() bool {
 		return len(smsLinesTo(sms, "+8613800138099")) == 1
 	})
 	// The demo module's copy renders in zh-CN (the fixed locale
@@ -665,7 +667,7 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 	if status, _ := final1["status"].(string); status != "succeeded" {
 		t.Fatalf("first job status = %v, want \"succeeded\"", final1["status"])
 	}
-	eventually(t, 4*time.Second, "the first simulation-ready SMS", func() bool {
+	testkit.EventuallyWithin(t, 4*time.Second, "the first simulation-ready SMS", func() bool {
 		return len(smsLinesTo(sms, "+8613800138099")) == 1
 	})
 
@@ -685,7 +687,7 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 	// Both occurrences must deliver: a shared delivery key would settle the
 	// second as a duplicate of the first, and this wait would time out
 	// with the recipient stuck at one SMS.
-	eventually(t, 4*time.Second, "the second simulation-ready SMS", func() bool {
+	testkit.EventuallyWithin(t, 4*time.Second, "the second simulation-ready SMS", func() bool {
 		return len(smsLinesTo(sms, "+8613800138099")) == 2
 	})
 	lines := smsLinesTo(sms, "+8613800138099")
@@ -982,7 +984,7 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 	// tree this branch is unreachable (the refusal comes first).
 	if resp.StatusCode == http.StatusAccepted && out.JobID != "" {
 		waitForSmileSimSucceeded(t, srv, token, out.JobID, time.Now().Add(5*time.Second))
-		eventually(t, 4*time.Second, "the simulation-ready SMS to the cross-tenant member's phone (bug state)", func() bool {
+		testkit.EventuallyWithin(t, 4*time.Second, "the simulation-ready SMS to the cross-tenant member's phone (bug state)", func() bool {
 			return len(smsLinesTo(sms, recipientPhone)) == 1
 		})
 		t.Fatalf("the simulate request naming a TENANT-B recipient was accepted with 202 -- the cross-tenant " +

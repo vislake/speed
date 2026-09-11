@@ -32,6 +32,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // flatWindow is the observation window the boundedness assertions use: two
@@ -144,7 +145,7 @@ func TestEventBus_PanickingRemoteHandler_LaterSameTypeRowsStillReachHealthyHandl
 	// The later rows must reach the healthy handler despite the earlier
 	// row's panicking handler -- a wedged cursor would leave 200 and 201
 	// undelivered.
-	eventually(t, "the healthy handler to receive every row published after the panicking one", func() bool {
+	testkit.Eventually(t, "the healthy handler to receive every row published after the panicking one", func() bool {
 		return spyCountSeq(spy, 200) >= 1 && spyCountSeq(spy, 201) >= 1 && spyCountSeq(spy, 100) >= 1
 	})
 
@@ -300,7 +301,7 @@ func TestEventBus_NoPanickingHandler_ControlDeliveryExactlyOnce(t *testing.T) {
 			t.Fatalf("Publish(%v) error = %v, want nil", seq, err)
 		}
 	}
-	eventually(t, "the healthy handler to receive every published row", func() bool {
+	testkit.Eventually(t, "the healthy handler to receive every published row", func() bool {
 		return spyCountSeq(spy, 100) >= 1 && spyCountSeq(spy, 200) >= 1 && spyCountSeq(spy, 201) >= 1
 	})
 	time.Sleep(flatWindow)

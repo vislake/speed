@@ -194,6 +194,7 @@ import (
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore/redistest"
 	"github.com/vislake/speed/go/pkgcore/rustfstest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // mailhogImage is a real SMTP catcher: Mailpit exposes a plaintext SMTP
@@ -865,7 +866,7 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	// database.
 	messagesURL := replicaB.baseURL + "/api/v1/notifications/messages"
 	var foundViaREST bool
-	eventually(t, "the note-created inbox message to be readable through replica B's REST endpoint", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the note-created inbox message to be readable through replica B's REST endpoint", func() bool {
 		req, reqErr := http.NewRequest(http.MethodGet, messagesURL, nil)
 		if reqErr != nil {
 			t.Fatalf("build GET request: %v", reqErr)
@@ -900,7 +901,7 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	// Bonus: the SAME delivery's email leg genuinely reached the real SMTP
 	// catcher -- the "mailer" seam is not merely declared
 	// MultiReplicaSafe|SurvivesRestart, it actually moved a message.
-	eventually(t, "the note-created delivery's email to reach MailHog", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the note-created delivery's email to reach MailHog", func() bool {
 		return mailhogCapturedMessage(t, mailhogAPI, distributedNoteCreatorEmail)
 	})
 

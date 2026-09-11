@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // service_test.go exercises the Service's public surface -- Get/GetTyped's
@@ -1312,7 +1313,7 @@ func TestService_Poller_ConvergesAStaleCache(t *testing.T) {
 
 	// No Refresh call happens here: only the poller's own sweeps may
 	// invalidate the cache. It must converge within a bounded wait.
-	eventually(t, 5*time.Second, func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the poller's own sweep to invalidate the cache", func() bool {
 		v, err := svc.Get(tenantA(), "brand.site_name")
 		return err == nil && v.Data == "Backdoor B"
 	})
@@ -1500,20 +1501,6 @@ func TestService_Close_EveryConcurrentCallerWaitsForThePollerExit(t *testing.T) 
 			}
 		}
 	}
-}
-
-// eventually polls probe until it reports true or timeout elapses. It is
-// the bounded loop the poller and async-delivery tests wait on.
-func eventually(t *testing.T, timeout time.Duration, probe func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if probe() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("condition was never met within %v", timeout)
 }
 
 func TestService_Get_AnAbsentRowIsReadFromTheStoreOnceThenServedFromCache(t *testing.T) {

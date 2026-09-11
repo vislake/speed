@@ -56,6 +56,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // notifCodePattern finds a 6-digit verification code inside a rendered
@@ -190,23 +191,6 @@ type (
 	}
 )
 
-// eventually polls cond until it reports true or timeout passes, failing
-// the test on timeout with what describing the waited-for condition. It
-// is the determinism tool for worker-goroutine work: a dispatch's queue
-// job runs in the background, so a test polls until the job's effect is
-// visible instead of sleeping a guess.
-func eventually(t *testing.T, timeout time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	t.Fatalf("timed out after %s waiting for %s", timeout, what)
-}
-
 // never asserts that cond stays false for the whole window, polling on the
 // same tick eventually uses. It is the negative-window tool: the thing
 // that must NOT happen (a message that must not go out) is asserted absent
@@ -292,7 +276,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// the subscription enqueues a delivery job the standalone queue runs
 	// in the background.
 	var msg1 notifMessage
-	eventually(t, 12*time.Second, "the note-created inbox message", func() bool {
+	testkit.EventuallyWithin(t, 12*time.Second, "the note-created inbox message", func() bool {
 		var out notifMessages
 		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &out)
 		if len(out.Items) != 1 {
@@ -312,7 +296,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// The same dispatch delivers the email channel to the address the
 	// demo resolver holds for the creator, with the note id interpolated
 	// into the rendered copy.
-	eventually(t, 12*time.Second, "the note-created email", func() bool {
+	testkit.EventuallyWithin(t, 12*time.Second, "the note-created email", func() bool {
 		for _, mail := range mailsTo(mailer, "user-creator-1@demo.example") {
 			if strings.Contains(mail.Text, note1ID) {
 				return true
@@ -356,7 +340,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	const note2Text = "second note of the notification flow test"
 	createNoteAs(t, srv, token, note2Text)
 	note2ID := noteIDByText(t, listNotesAs(t, srv, token), note2Text)
-	eventually(t, 12*time.Second, "the second note's inbox message", func() bool {
+	testkit.EventuallyWithin(t, 12*time.Second, "the second note's inbox message", func() bool {
 		var listed notifMessages
 		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &listed)
 		if len(listed.Items) != 2 {
@@ -489,7 +473,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 		t.Fatalf("created contact = %+v, want a pending email contact with an id", contact)
 	}
 	var code string
-	eventually(t, 5*time.Second, "the verification-code email", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the verification-code email", func() bool {
 		mails := mailsTo(mailer, contactEmail)
 		if len(mails) != 1 {
 			return false
@@ -522,7 +506,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	// the reminder and the verification message that preceded it.
 	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
 		map[string]string{"contact_id": contact.ID}, http.StatusAccepted, nil)
-	eventually(t, 10*time.Second, "the patient reminder email", func() bool {
+	testkit.EventuallyWithin(t, 10*time.Second, "the patient reminder email", func() bool {
 		mails := mailsTo(mailer, contactEmail)
 		if len(mails) != 2 {
 			return false
@@ -554,7 +538,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 		t.Fatalf("created sms contact = %+v, want a pending sms contact", contact)
 	}
 	var smsCode string
-	eventually(t, 5*time.Second, "the verification-code SMS", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the verification-code SMS", func() bool {
 		lines := smsLinesTo(sms, contactPhone)
 		if len(lines) != 1 {
 			return false
@@ -569,7 +553,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	}
 	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
 		map[string]string{"contact_id": contact.ID}, http.StatusAccepted, nil)
-	eventually(t, 10*time.Second, "the patient reminder SMS", func() bool {
+	testkit.EventuallyWithin(t, 10*time.Second, "the patient reminder SMS", func() bool {
 		lines := smsLinesTo(sms, contactPhone)
 		if len(lines) != 2 {
 			return false
@@ -597,7 +581,7 @@ func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 		map[string]string{"channel": "email", "address": contactEmail}, http.StatusCreated, &contact)
 
 	var code string
-	eventually(t, 5*time.Second, "the verification-code email", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the verification-code email", func() bool {
 		mails := mailsTo(mailer, contactEmail)
 		if len(mails) != 1 {
 			return false
@@ -633,7 +617,7 @@ func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 	// issues a fresh code, and verifying with it is still refused, because
 	// the address has no guesses left within the code-lifetime window.
 	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/resend", token, subject, nil, http.StatusNoContent, nil)
-	eventually(t, 5*time.Second, "the resent verification-code email", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the resent verification-code email", func() bool {
 		mails := mailsTo(mailer, contactEmail)
 		if len(mails) != 2 {
 			return false

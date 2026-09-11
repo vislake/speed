@@ -27,6 +27,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart
@@ -72,7 +73,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	}); err != nil {
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
-	eventually(t, "the receiver to deliver the pre-restart event", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the pre-restart event", func() bool {
 		return rec.count() == 1
 	})
 
@@ -149,7 +150,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	}); err != nil {
 		t.Fatalf("Publish() after the restart error = %v, want nil", err)
 	}
-	eventually(t, "the receiver to deliver the post-restart event", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the post-restart event", func() bool {
 		return rec.count() == 1
 	})
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
 	"github.com/vislake/speed/go/pkgcore/eventbustest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // convergenceDeadline bounds every wait for an asynchronous, cross-replica
@@ -56,18 +57,6 @@ func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
 		}
 	}
 	return pkgcore.Event{}, false
-}
-
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(convergenceDeadline)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // warmUp republishes a marker event of eventType through publisher until
@@ -213,7 +202,7 @@ func TestEventBus_FanOut_BothReplicasReceiveEveryEvent(t *testing.T) {
 	// replicaB learns about it asynchronously, through NOTIFY (or, failing
 	// that, its own periodic catch-up scan) -- this is the cross-replica
 	// leg the fan-out claim actually rests on.
-	eventually(t, "the second replica to receive the published event", func() bool {
+	testkit.Eventually(t, "the second replica to receive the published event", func() bool {
 		_, ok := spyB.first(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == realSequence
@@ -285,7 +274,7 @@ func TestEventBus_CatchUp_MissedNotifyIsDeliveredAfterReconnect(t *testing.T) {
 	// order, a cursor at the current maximum id proves every published
 	// marker is delivered AND advanced past, leaving no redelivery tail for
 	// Close to sever.
-	eventually(t, "warm's cursor to reach the live end of the outbox before it closes", func() bool {
+	testkit.Eventually(t, "warm's cursor to reach the live end of the outbox before it closes", func() bool {
 		var caughtUp bool
 		err := pool.QueryRow(ctx,
 			`SELECT last_delivered_id >= (SELECT COALESCE(MAX(id), 0) FROM pkgcore_eventbus_outbox WHERE event_type = $1)
@@ -325,7 +314,7 @@ func TestEventBus_CatchUp_MissedNotifyIsDeliveredAfterReconnect(t *testing.T) {
 	spy := &eventSpy{}
 	reconnected.Subscribe(eventType, spy.handler())
 
-	eventually(t, "the catch-up scan to deliver every event missed during the downtime window", func() bool {
+	testkit.Eventually(t, "the catch-up scan to deliver every event missed during the downtime window", func() bool {
 		return spy.count() >= missedDuringDowntime
 	})
 	if got := spy.count(); got != missedDuringDowntime {
@@ -387,7 +376,7 @@ func TestEventBus_CatchUp_ReconnectMidStream_DeliversWhatArrivedWhileDisconnecte
 		t.Fatalf("Publish() during the disconnect window error = %v, want nil", err)
 	}
 
-	eventually(t, "the reconnecting listener's catch-up scan to deliver the event published while disconnected", func() bool {
+	testkit.Eventually(t, "the reconnecting listener's catch-up scan to deliver the event published while disconnected", func() bool {
 		_, ok := spy.first(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == realSequence

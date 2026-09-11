@@ -36,6 +36,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusnats "github.com/vislake/speed/go/pkgcore/eventbus/nats"
 	"github.com/vislake/speed/go/pkgcore/eventbustest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // invoicePaid is the concrete payload type used across these tests: a plain
@@ -92,23 +93,6 @@ func (r *eventRecorder) clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.evts = nil
-}
-
-// eventually polls cond until it holds or the deadline passes, failing the
-// test in the latter case. Cross-process delivery is asynchronous: a
-// consumer's Consume dispatch fires as soon as JetStream has a message for
-// it, so remote delivery of an already-committed event lands well inside
-// this five-second window.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // warmUp proves that receiver's durable consumer on the eventType stream
@@ -270,8 +254,8 @@ func TestEventBus_FanOutDeliversToEveryReplica(t *testing.T) {
 	// BOTH replicas' handlers must fire: this is the fan-out assertion. A
 	// load-balanced (shared consumer group) delivery would have exactly one
 	// of these two waits time out.
-	eventually(t, "replica A's handler to run", func() bool { return recA.count() == 1 })
-	eventually(t, "replica B's handler to run", func() bool { return recB.count() == 1 })
+	testkit.EventuallyWithin(t, 5*time.Second, "replica A's handler to run", func() bool { return recA.count() == 1 })
+	testkit.EventuallyWithin(t, 5*time.Second, "replica B's handler to run", func() bool { return recB.count() == 1 })
 	requireRemoteInvoice(t, recA.at(0), "job-42", 42, pkgcore.TenantID("tenant-acme"))
 	requireRemoteInvoice(t, recB.at(0), "job-42", 42, pkgcore.TenantID("tenant-acme"))
 
@@ -334,7 +318,7 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 		t.Errorf("local event payload = %+v, want the published %+v", asInvoice, first)
 	}
 
-	eventually(t, "the remote handler on bus B to run once", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the remote handler on bus B to run once", func() bool {
 		return recB.count() == 1
 	})
 	requireRemoteInvoice(t, recB.at(0), "inv-1042", 1042.5, pkgcore.TenantID("tenant-acme"))
@@ -348,7 +332,7 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 	if got := recB.count(); got != 2 {
 		t.Errorf("local handler on bus B ran %d times, want exactly 2", got)
 	}
-	eventually(t, "the remote handler on bus A to run twice", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the remote handler on bus A to run twice", func() bool {
 		return recA.count() == 2
 	})
 	requireRemoteInvoice(t, recA.at(1), "inv-9", 9, pkgcore.TenantID("tenant-beta"))
@@ -397,7 +381,7 @@ func TestEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 		t.Fatalf("busA.Publish(teamCreated) error = %v, want nil", err)
 	}
 
-	eventually(t, "the plan.changed handler on bus B to run", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the plan.changed handler on bus B to run", func() bool {
 		return recB.count() == 1
 	})
 	if got := recB.at(0).Type; got != planChanged {
@@ -461,7 +445,7 @@ func TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish() after the failed one error = %v, want nil", err)
 	}
-	eventually(t, "the recovery event to reach bus B", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the recovery event to reach bus B", func() bool {
 		return recB.count() == 1
 	})
 }
@@ -499,7 +483,7 @@ func TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
 			t.Fatalf("Publish(%d) error = %v, want nil: a remote handler panic must not surface here", seq, err)
 		}
 	}
-	eventually(t, "the healthy handler on bus B to run for both events", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the healthy handler on bus B to run for both events", func() bool {
 		return recB.count() == 2
 	})
 }
@@ -592,7 +576,7 @@ func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish(live) error = %v, want nil", err)
 	}
-	eventually(t, "the live event to reach the late subscriber", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the live event to reach the late subscriber", func() bool {
 		return recB.countByTenant(pkgcore.TenantID("tenant-live")) == 1
 	})
 
@@ -661,7 +645,7 @@ func TestEventBus_ReaderRecoversFromALostConsumer(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish(after recovery) error = %v, want nil", err)
 	}
-	eventually(t, "the recovered reader to keep delivering", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the recovered reader to keep delivering", func() bool {
 		return recB.count() == 1
 	})
 }
@@ -741,7 +725,7 @@ func TestEventBus_Close_SparesAPeerConsumer(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
-	eventually(t, "the surviving reader on bus C to deliver after bus B closed", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the surviving reader on bus C to deliver after bus B closed", func() bool {
 		return recC.count() == 1
 	})
 }

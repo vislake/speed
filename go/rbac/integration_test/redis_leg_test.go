@@ -39,6 +39,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -98,19 +99,6 @@ func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
 		}
 	}
 	return pkgcore.Event{}, false
-}
-
-// eventually polls cond until it holds or the deadline passes.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(convergenceDeadline)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // warmUp loops marker publishes on bus until spy has received one.
@@ -183,14 +171,14 @@ func TestRedisBus_RevokeOnOneReplica_ConvergesTheOther(t *testing.T) {
 
 	// The peer reads the grant and caches it. Everything after this point
 	// must beat that cached entry, not outlive it.
-	eventually(t, "the peer to observe the new grant", func() bool {
+	testkit.Eventually(t, "the peer to observe the new grant", func() bool {
 		return canRead(t, peer, sub, "notes", "read")
 	})
 
 	if err := writer.RevokeRole(tenantCtx, sub, "reader", rbac.Scope{}); err != nil {
 		t.Fatalf("RevokeRole: %v", err)
 	}
-	eventually(t, "the peer to stop granting the revoked permission", func() bool {
+	testkit.Eventually(t, "the peer to stop granting the revoked permission", func() bool {
 		return !canRead(t, peer, sub, "notes", "read")
 	})
 }
@@ -229,14 +217,14 @@ func TestRedisBus_RestoreOnOneReplica_ConvergesTheOther(t *testing.T) {
 	}
 
 	// The peer observes and caches the revoked (denied) decision first.
-	eventually(t, "the peer to observe the revoke", func() bool {
+	testkit.Eventually(t, "the peer to observe the revoke", func() bool {
 		return !canRead(t, peer, sub, "notes", "read")
 	})
 
 	if err := writer.RestoreRole(tenantCtx, sub, "reader", rbac.Scope{}); err != nil {
 		t.Fatalf("RestoreRole: %v", err)
 	}
-	eventually(t, "the peer to observe the restored grant", func() bool {
+	testkit.Eventually(t, "the peer to observe the restored grant", func() bool {
 		return canRead(t, peer, sub, "notes", "read")
 	})
 }
@@ -271,7 +259,7 @@ func TestRedisBus_AssignOnOneReplica_ConvergesTheOther(t *testing.T) {
 	if err := writer.AssignRole(tenantCtx, sub, "reader", rbac.Scope{}); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
-	eventually(t, "the peer to observe the new grant", func() bool {
+	testkit.Eventually(t, "the peer to observe the new grant", func() bool {
 		return canRead(t, peer, sub, "notes", "read")
 	})
 }
@@ -308,7 +296,7 @@ func TestRedisBus_RolePermissionChange_ConvergesTheOther(t *testing.T) {
 
 	// The peer caches a grant set that holds notes:read and NOT
 	// billing:manage.
-	eventually(t, "the peer to observe the narrow grant", func() bool {
+	testkit.Eventually(t, "the peer to observe the narrow grant", func() bool {
 		return canRead(t, peer, sub, "notes", "read")
 	})
 	if canRead(t, peer, sub, "billing", "manage") {
@@ -319,7 +307,7 @@ func TestRedisBus_RolePermissionChange_ConvergesTheOther(t *testing.T) {
 	if err := writer.EnsureBuiltinRoles(tenantCtx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
-	eventually(t, "the peer to observe the widened role", func() bool {
+	testkit.Eventually(t, "the peer to observe the widened role", func() bool {
 		return canRead(t, peer, sub, "billing", "manage")
 	})
 }
@@ -359,7 +347,7 @@ func TestRedisBus_RemoteEvent_ArrivesAsAJSONMap(t *testing.T) {
 		return ok && payload["UserID"] == "user-1"
 	}
 	var received pkgcore.Event
-	eventually(t, "the assignment event to reach the peer bus", func() bool {
+	testkit.Eventually(t, "the assignment event to reach the peer bus", func() bool {
 		evt, ok := spy.first(isAssignment)
 		received = evt
 		return ok

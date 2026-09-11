@@ -45,6 +45,7 @@ import (
 
 	"github.com/vislake/speed/go/admin"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -429,7 +430,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	if targetLoginStatus != http.StatusOK || targetToken == "" {
 		t.Fatalf("login as the impersonation target failed: status=%d code=%q", targetLoginStatus, targetLoginCode)
 	}
-	eventually(t, 5*time.Second, "the impersonation-started inbox message", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the impersonation-started inbox message", func() bool {
 		var inbox notifMessages
 		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", targetToken, targetID, nil, http.StatusOK, &inbox)
 		for _, msg := range inbox.Items {

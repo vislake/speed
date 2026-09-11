@@ -98,6 +98,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // eventRecorder accumulates what one bus instance's handlers saw, for
@@ -135,24 +136,6 @@ func (r *eventRecorder) clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.evts = nil
-}
-
-// eventually polls cond until it holds or the deadline passes, failing the
-// test in the latter case. Cross-process delivery is asynchronous: the
-// reader goroutine of a RedisEventBus wakes up at most every 500ms to take
-// new entries off the stream, so remote delivery of an already-committed
-// event lands well inside this five-second window. Copied from pkgcore's
-// integration tier.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // warmUp proves that receiver's consumer group on the eventType stream
@@ -510,7 +493,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// The event must cross the real Redis server into THIS process -- the
 	// observer's reader picks entries up within one 500ms read block, so
 	// the five-second eventually window is ample.
-	eventually(t, "the audit.event.recorded event to reach the observer over Redis", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the audit.event.recorded event to reach the observer over Redis", func() bool {
 		return recorder.count() == 1
 	})
 	if n := recorder.count(); n != 1 {

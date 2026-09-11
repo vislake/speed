@@ -48,6 +48,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // webhookSubscriptionListRow mirrors one row of the spec surface's list
@@ -522,7 +523,7 @@ func TestBuildServer_WebhookCRUD_DeliveriesList_RecentDeliveredRow(t *testing.T)
 	sub := createWebhookSubscription(t, srv, ownerToken, receiver.URL, []string{"org.member.joined"})
 
 	triggerOrgMemberJoined(t, srv, cfg, mailer, tenant, "Webhook Deliveries", "webhook-deliveries-member@example.com")
-	eventually(t, 15*time.Second, "the webhook delivery", func() bool {
+	testkit.EventuallyWithin(t, 15*time.Second, "the webhook delivery", func() bool {
 		return receiver.count() >= 1
 	})
 

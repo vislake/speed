@@ -39,6 +39,7 @@ import (
 	"github.com/vislake/speed/go/notification/api"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // handlerTenant, handlerOtherTenant and handlerUser are the fixed identity
@@ -285,21 +286,6 @@ func assertNoAddressLeak(t *testing.T, rec *httptest.ResponseRecorder) {
 		}
 	}
 	walk(root)
-}
-
-// waitUntil polls cond until it holds or five seconds pass, failing the
-// test on timeout -- the synchronisation primitive the stream tests use to
-// wait for frames the handler's own goroutine writes.
-func waitUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // TestHandler_UnwiredSubject_FailsEveryRouteClosed proves the shared gate:
@@ -1402,7 +1388,7 @@ func (e *handlerEnv) openStream(t *testing.T) (*flushRecorder, context.CancelFun
 		defer close(done)
 		e.h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(ctx))
 	}()
-	waitUntil(t, "the stream opened", func() bool { return rec.flushCount() >= 1 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the stream opened", func() bool { return rec.flushCount() >= 1 })
 	return rec, cancel, done
 }
 
@@ -1419,7 +1405,7 @@ func TestHandler_Stream_DeliversTheMatchingAnnouncementAsAnSSEFrame(t *testing.T
 	defer cancel()
 
 	env.announceInbox(t, "message-1", handlerUser, handlerTenant)
-	waitUntil(t, "the announcement frame was written", func() bool { return rec.flushCount() >= 2 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the announcement frame was written", func() bool { return rec.flushCount() >= 2 })
 
 	if got := rec.statusCode(); got != http.StatusOK {
 		t.Fatalf("status = %d, want 200", got)
@@ -1447,7 +1433,7 @@ func TestHandler_Stream_DeliversTheMatchingAnnouncementAsAnSSEFrame(t *testing.T
 	}
 
 	cancel()
-	waitUntil(t, "the handler exited after cancel", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the handler exited after cancel", func() bool {
 		select {
 		case <-done:
 			return true
@@ -1472,7 +1458,7 @@ func TestHandler_Stream_SkipsAnnouncementsForOthers(t *testing.T) {
 	env.announceInbox(t, "m-foreign-user", "user-8", handlerTenant)
 	env.announceInbox(t, "m-foreign-tenant", handlerUser, handlerOtherTenant)
 	env.announceInbox(t, "m-mine", handlerUser, handlerTenant)
-	waitUntil(t, "the matching announcement was written", func() bool { return rec.flushCount() >= 2 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the matching announcement was written", func() bool { return rec.flushCount() >= 2 })
 
 	if got := rec.flushCount(); got != 2 {
 		t.Fatalf("flushes = %d, want 2 (headers + the matching frame): %s", got, rec.bodyText())
@@ -1486,7 +1472,7 @@ func TestHandler_Stream_SkipsAnnouncementsForOthers(t *testing.T) {
 	}
 
 	cancel()
-	waitUntil(t, "the handler exited after cancel", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the handler exited after cancel", func() bool {
 		select {
 		case <-done:
 			return true
@@ -1511,7 +1497,7 @@ func TestHandler_Stream_SkipsUnreadableFrames(t *testing.T) {
 
 	env.hub.Publish([]byte("{not json"))
 	env.announceInbox(t, "message-1", handlerUser, handlerTenant)
-	waitUntil(t, "the matching announcement was written", func() bool { return rec.flushCount() >= 2 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the matching announcement was written", func() bool { return rec.flushCount() >= 2 })
 
 	if got := rec.flushCount(); got != 2 {
 		t.Fatalf("flushes = %d, want 2 (headers + the matching frame): %s", got, rec.bodyText())
@@ -1522,7 +1508,7 @@ func TestHandler_Stream_SkipsUnreadableFrames(t *testing.T) {
 	}
 
 	cancel()
-	waitUntil(t, "the handler exited after cancel", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the handler exited after cancel", func() bool {
 		select {
 		case <-done:
 			return true
@@ -1542,7 +1528,7 @@ func TestHandler_Stream_EndsWhenTheRequestContextIsCancelled(t *testing.T) {
 	_, cancel, done := env.openStream(t)
 
 	cancel()
-	waitUntil(t, "the handler exited", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the handler exited", func() bool {
 		select {
 		case <-done:
 			return true
@@ -1558,13 +1544,13 @@ func TestHandler_Stream_EndsWhenTheRequestContextIsCancelled(t *testing.T) {
 	rec2, cancel2, done2 := env.openStream(t)
 	defer cancel2()
 	env.announceInbox(t, "message-2", handlerUser, handlerTenant)
-	waitUntil(t, "the second stream delivered", func() bool { return rec2.flushCount() >= 2 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the second stream delivered", func() bool { return rec2.flushCount() >= 2 })
 	frames := sseFrames(t, rec2.bodyText())
 	if len(frames) != 1 || !strings.Contains(frames[0], "message-2") {
 		t.Errorf("second stream frames = %q, want the announcement after reopen", rec2.bodyText())
 	}
 	cancel2()
-	waitUntil(t, "the second handler exited", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the second handler exited", func() bool {
 		select {
 		case <-done2:
 			return true
@@ -1650,12 +1636,12 @@ func TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter(t *testing.T)
 		defer close(done)
 		env.h.ServeHTTP(wrapped, httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(ctx))
 	}()
-	waitUntil(t, "the stream opened despite the wrapping response writer", func() bool { return rec.flushCount() >= 1 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the stream opened despite the wrapping response writer", func() bool { return rec.flushCount() >= 1 })
 	if got := rec.statusCode(); got != http.StatusOK {
 		t.Fatalf("status = %d, want %d", got, http.StatusOK)
 	}
 	cancel()
-	waitUntil(t, "the handler exited", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the handler exited", func() bool {
 		select {
 		case <-done:
 			return true
@@ -1733,7 +1719,7 @@ func TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood(t *testing.T) {
 		defer close(done)
 		env.h.ServeHTTP(gated, httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(ctx))
 	}()
-	waitUntil(t, "the stream opened", func() bool { return rec.flushCount() >= 1 })
+	testkit.EventuallyWithin(t, 5*time.Second, "the stream opened", func() bool { return rec.flushCount() >= 1 })
 
 	// The client stops draining: every subsequent flush blocks, so the route
 	// cannot read another announcement off its connection buffer.
@@ -1753,7 +1739,7 @@ func TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood(t *testing.T) {
 
 	gated.release()
 
-	waitUntil(t, "both own announcements were written", func() bool { return rec.flushCount() >= 3 })
+	testkit.EventuallyWithin(t, 5*time.Second, "both own announcements were written", func() bool { return rec.flushCount() >= 3 })
 	frames := sseFrames(t, rec.bodyText())
 	if len(frames) != 2 {
 		t.Fatalf("frames = %d (%q), want exactly the two own announcements", len(frames), rec.bodyText())
@@ -1768,7 +1754,7 @@ func TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood(t *testing.T) {
 	}
 
 	cancel()
-	waitUntil(t, "the handler exited", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the handler exited", func() bool {
 		select {
 		case <-done:
 			return true

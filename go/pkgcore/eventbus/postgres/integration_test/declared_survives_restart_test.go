@@ -25,6 +25,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart is
@@ -67,7 +68,7 @@ func TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart(t *te
 	warmSpy := &eventSpy{}
 	warm.Subscribe(eventType, warmSpy.handler())
 	warmUp(t, ctx, publisher, eventType, warmSpy)
-	eventually(t, "warm's cursor to reach the live end of the outbox before it closes", func() bool {
+	testkit.Eventually(t, "warm's cursor to reach the live end of the outbox before it closes", func() bool {
 		var caughtUp bool
 		err := pool.QueryRow(ctx,
 			`SELECT last_delivered_id >= (SELECT COALESCE(MAX(id), 0) FROM pkgcore_eventbus_outbox WHERE event_type = $1)
@@ -115,7 +116,7 @@ func TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart(t *te
 	spy := &eventSpy{}
 	reconnected.Subscribe(eventType, spy.handler())
 
-	eventually(t, "the catch-up scan to deliver every event committed before the server restart", func() bool {
+	testkit.Eventually(t, "the catch-up scan to deliver every event committed before the server restart", func() bool {
 		return spy.count() >= missedDuringDowntime
 	})
 	if got := spy.count(); got != missedDuringDowntime {

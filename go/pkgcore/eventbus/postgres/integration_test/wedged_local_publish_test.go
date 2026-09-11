@@ -41,6 +41,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // wedgeOn registers a handler that wedges -- blocks until release is
@@ -169,7 +170,7 @@ func TestEventBus_WedgedLocalPublish_SameTypeRowsStillDelivered(t *testing.T) {
 		t.Fatalf("Publish() of the remote row error = %v, want nil", err)
 	}
 
-	eventually(t, "the remote row of the wedged Type to be delivered while the local handler is still wedged", func() bool {
+	testkit.Eventually(t, "the remote row of the wedged Type to be delivered while the local handler is still wedged", func() bool {
 		counts := receivedSequenceCounts(spy)
 		return counts[remoteSeq] == 1
 	})
@@ -265,7 +266,7 @@ func TestEventBus_WedgedLocalPublish_NoRowStillOwedDeliveryIsPurged(t *testing.T
 	// delivered while the wedge is on, so the purge only ages out
 	// already-handled rows -- rows the purge deleted while still owed
 	// would never arrive.
-	eventually(t, "every wedge-era row to be delivered despite PurgeOutboxBefore having run once they were older than its window", func() bool {
+	testkit.Eventually(t, "every wedge-era row to be delivered despite PurgeOutboxBefore having run once they were older than its window", func() bool {
 		counts := receivedSequenceCounts(spy)
 		for seq := firstSeq; seq <= lastSeq; seq++ {
 			if counts[seq] != 1 {
@@ -339,7 +340,7 @@ func TestEventBus_WedgedLocalPublish_FirstScanStillCreatesTheCursorRow(t *testin
 	}); err != nil {
 		t.Fatalf("Publish() of the phase marker error = %v, want nil", err)
 	}
-	eventually(t, "the phase marker to be delivered (pinning the listener's most recent wake)", func() bool {
+	testkit.Eventually(t, "the phase marker to be delivered (pinning the listener's most recent wake)", func() bool {
 		return warmSpy.count() > markersBeforePhase
 	})
 
@@ -365,7 +366,7 @@ func TestEventBus_WedgedLocalPublish_FirstScanStillCreatesTheCursorRow(t *testin
 	// never created, so a restart under the same replicaID would
 	// initialize the cursor at the live end and skip the wedge-era rows
 	// forever.
-	eventually(t, "the cursor row to exist even though the Type's first-ever catch-up scan is blocked by a wedged local publish", func() bool {
+	testkit.Eventually(t, "the cursor row to exist even though the Type's first-ever catch-up scan is blocked by a wedged local publish", func() bool {
 		var exists bool
 		err := pool.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM pkgcore_eventbus_cursor WHERE replica_id = $1 AND event_type = $2)`,

@@ -51,6 +51,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // receivedSequenceCounts snapshots the events a spy has received so far
@@ -181,7 +182,7 @@ func TestEventBus_LaggingPoller_LocalPublishMustNotSkipUnseenRemoteRows(t *testi
 	// on its next catch-up scan, skipping the already-marked local row.
 	close(releaseBlockedHandler)
 
-	eventually(t, "the remote row to be delivered despite the local publish that advanced the cursor past it", func() bool {
+	testkit.Eventually(t, "the remote row to be delivered despite the local publish that advanced the cursor past it", func() bool {
 		counts := receivedSequenceCounts(spy)
 		return counts[blockSeq] == 1 && counts[remoteSeq] == 1 && counts[localSeq] == 1
 	})
@@ -271,7 +272,7 @@ func TestEventBus_ConcurrentMultiReplicaPublish_NoEventLostNoDuplicate(t *testin
 		return
 	}
 
-	eventually(t, "every concurrently published event to be delivered exactly once across both replicas", func() bool {
+	testkit.Eventually(t, "every concurrently published event to be delivered exactly once across both replicas", func() bool {
 		counts := receivedSequenceCounts(spy)
 		if len(counts) != totalEvents {
 			return false

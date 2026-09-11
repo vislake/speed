@@ -15,6 +15,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/metering/internal/testutil"
 	"github.com/vislake/speed/go/metering/migrations"
@@ -367,7 +368,7 @@ func TestDispatcher_StartStop_DrivesRunOnceOnASchedule(t *testing.T) {
 	d.Start(ctx)
 	defer d.Stop()
 
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the realtime counter to count the delivered event", func() bool {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
 		return err == nil && got == 1
 	})
@@ -711,14 +712,14 @@ func TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention(t *tes
 	// would stay on their tables and grow without bound.
 	d.Start(ctx)
 	defer d.Stop()
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the delivered outbox rows to be retired", func() bool {
 		var remaining int64
 		if err := db.Model(&OutboxRecord{}).Where("status = ?", outboxStatusDelivered).Count(&remaining).Error; err != nil {
 			return false
 		}
 		return remaining == 0
 	})
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the delivered receipts to be retired with them", func() bool {
 		rows, err := receipts.List(tenantCtx)
 		return err == nil && len(rows) == 0
 	})
@@ -743,7 +744,7 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 	// the started flag for its own generation (see poll_loop.go), so a
 	// canceled ctx leaves Start restartable -- a flag left set forever
 	// would make the next Start a permanent no-op.
-	waitFor(t, func() bool { return !pollLoopStarted(&d.loop) })
+	testkit.EventuallyWithin(t, 2*time.Second, "the dispatcher's poll loop to stop", func() bool { return !pollLoopStarted(&d.loop) })
 
 	// Start must run a fresh loop that genuinely polls again.
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -754,7 +755,7 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 	if _, err := Enqueue(context.Background(), db, event); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the realtime counter to count the delivered event", func() bool {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
 		return err == nil && got == 1
 	})
@@ -782,7 +783,7 @@ func TestDispatcher_StopThenStart_RestartsThePollLoop(t *testing.T) {
 
 	d.Start(ctx)
 	defer d.Stop()
-	waitFor(t, func() bool {
+	testkit.EventuallyWithin(t, 2*time.Second, "the realtime counter to count the delivered event", func() bool {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
 		return err == nil && got == 1
 	})

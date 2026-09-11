@@ -23,12 +23,14 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	natslib "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusnats "github.com/vislake/speed/go/pkgcore/eventbus/nats"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart
@@ -72,7 +74,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	}); err != nil {
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
-	eventually(t, "the receiver to deliver the pre-restart event", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the pre-restart event", func() bool {
 		return rec.count() == 1
 	})
 
@@ -113,7 +115,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	// recovery of a file-storage stream can lag the connection's own
 	// reconnect by a moment, so the state's arrival is polled and then
 	// compared strictly.
-	eventually(t, "the stream to be recovered with its pre-restart message count and last sequence intact", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the stream to be recovered with its pre-restart message count and last sequence intact", func() bool {
 		recovered, err := js.Stream(ctx, streamName)
 		if err != nil {
 			return false
@@ -155,7 +157,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	// recovery path) delivers a post-restart publish. The publisher's
 	// connection must be back up first -- its reconnect is what the publish
 	// below travels over.
-	eventually(t, "the publisher connection to reconnect to the restarted server", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the publisher connection to reconnect to the restarted server", func() bool {
 		return connA.Status() == natslib.CONNECTED
 	})
 	rec.clear()
@@ -166,7 +168,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	}); err != nil {
 		t.Fatalf("Publish() after the restart error = %v, want nil", err)
 	}
-	eventually(t, "the receiver to deliver the post-restart event", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the post-restart event", func() bool {
 		return rec.count() == 1
 	})
 }

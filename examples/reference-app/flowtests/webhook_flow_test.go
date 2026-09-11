@@ -65,6 +65,7 @@ import (
 
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // recordedWebhookDelivery is one HTTP delivery attempt webhookReceiver
@@ -335,7 +336,7 @@ func TestWebhookFlow_RealSignedDelivery_EndToEnd(t *testing.T) {
 
 	membership := triggerOrgMemberJoined(t, srv, cfg, mailer, tenant, "Webhook Success", "webhook-member-ok@example.com")
 
-	eventually(t, 15*time.Second, "the webhook delivery", func() bool {
+	testkit.EventuallyWithin(t, 15*time.Second, "the webhook delivery", func() bool {
 		return receiver.count() >= 1
 	})
 	if got := receiver.count(); got != 1 {
@@ -406,7 +407,7 @@ func TestWebhookFlow_ReceiverNonSuccess_RetriesThenDeadLetters(t *testing.T) {
 	// 1+2+4+8+16+32 = 63s after the first -- this window is generous enough
 	// to absorb a slow CI worker on top of that.
 	const wantAttempts = 7
-	eventually(t, 90*time.Second, "the retry horizon to exhaust (7 total attempts)", func() bool {
+	testkit.EventuallyWithin(t, 90*time.Second, "the retry horizon to exhaust (7 total attempts)", func() bool {
 		return receiver.count() >= wantAttempts
 	})
 

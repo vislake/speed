@@ -78,6 +78,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // The reference app's own constants, hardcoded here with a note that they
@@ -227,7 +228,7 @@ func TestServer_RealRedisEventBusComposition_SmileSimCompletionCrossesProcesses(
 		t.Fatalf("publish the real smilesim.EventSimulationCompleted event: %v", err)
 	}
 
-	eventually(t, "the demo.simulation_ready SMS to appear in the child's own stdout", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the demo.simulation_ready SMS to appear in the child's own stdout", func() bool {
 		return strings.Contains(child.logs(), smilesimSMSLinePrefix)
 	})
 	if !strings.Contains(child.logs(), smilesimSMSLinePrefix) {

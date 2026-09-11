@@ -29,6 +29,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/apptest"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
@@ -80,7 +81,7 @@ func TestSmileSimulation_TerminalSignalSettlesWithoutAnyPoll(t *testing.T) {
 
 	// From here on NOTHING reads the job -- the completion has to reach the
 	// ledger through the queue's terminal signal alone.
-	eventually(t, 5*time.Second, "the confirmed credit reservation with no job-status poll", func() bool {
+	testkit.EventuallyWithin(t, 5*time.Second, "the confirmed credit reservation with no job-status poll", func() bool {
 		bal := creditBalanceFor(t, cfg, tenantID)
 		return bal.Available == before.Available-smilesim.CreditsPerSimulation && bal.Reserved == before.Reserved
 	})
@@ -145,7 +146,7 @@ func TestSmileSimulation_CompletionNotifiesWithoutAnyPoll(t *testing.T) {
 
 	// No poll of the job-status route anywhere: the SMS below can only
 	// have been triggered by the terminal signal's publish.
-	eventually(t, 6*time.Second, "the simulation-ready SMS with no job-status poll", func() bool {
+	testkit.EventuallyWithin(t, 6*time.Second, "the simulation-ready SMS with no job-status poll", func() bool {
 		return len(smsLinesTo(sms, "+8613800138099")) == 1
 	})
 }
