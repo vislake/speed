@@ -10,7 +10,7 @@ name: e2e
 # acceptance and demos. Target duration and the eventual merge-time
 # guarantee are docs/internal/18-cicd.md's pipeline table (the e2e row).
 #
-# WHAT EXISTS: the suite (24 specs plus the shared test-utils under
+# WHAT EXISTS: the suite (26 spec files plus the shared test-utils under
 # examples/reference-app/web/e2e), its Playwright config with three
 # projects (chromium, webkit, ipad), the fake image provider, and the
 # app's vite dev server the config boots beside the Go server.
