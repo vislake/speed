@@ -90,7 +90,7 @@ var (
 
 	// The outbound-webhook error index: webhook subscriptions and their
 	// event-mapping mechanism (webhook_service.go, webhook_delivery.go,
-	// eventmapping.go, ssrf.go).
+	// eventmapping.go, webhook_guard.go).
 
 	// ErrWebhookSubscriptionNotFound reports a subscription id that does not
 	// exist in the caller's tenant. Like ErrKeyNotFound, it never
@@ -103,28 +103,29 @@ var (
 
 	// ErrWebhookURLInvalid reports a webhook URL that is malformed, missing
 	// a host, or uses a scheme other than http/https. WithParam("reason",
-	// ...) names which. See ssrf.go's ValidateWebhookURL.
+	// ...) names which. See webhook_guard.go's ValidateWebhookURL.
 	ErrWebhookURLInvalid = apperr.Invalid("integration.webhook_url_invalid")
 
 	// ErrWebhookURLUnresolvable reports a webhook URL whose host could not
 	// be resolved to any address at all -- WithParam("host", ...) names it.
-	// See ssrf.go's ValidateWebhookURL.
+	// See webhook_guard.go's ValidateWebhookURL.
 	ErrWebhookURLUnresolvable = apperr.Invalid("integration.webhook_url_unresolvable")
 
 	// ErrWebhookURLBlocked reports a webhook URL whose destination is a
 	// private, loopback, link-local, multicast or otherwise
 	// never-a-legitimate-receiver address -- the SSRF refusal the design
 	// names as the most common outbound-webhook security hole. See
-	// ssrf.go's isBlockedIP.
+	// webhook_guard.go's ValidateWebhookURL and pkgcore/safehttp's
+	// CheckAddr, the guard's one address authority.
 	//
 	// WithParam("ip", ...) is deliberately asymmetric between the two paths
 	// that raise this code, and the asymmetry must survive any later
 	// consistency change:
 	//
-	//   - The literal-IP path (ssrf.go, ValidateWebhookURL) carries the
-	//     blocked address: the caller typed it into the URL, so the param is
-	//     an echo of what the caller already knows -- zero disclosure -- and
-	//     genuinely useful diagnostics naming exactly which address was
+	//   - The literal-IP path (webhook_guard.go's ValidateWebhookURL) carries
+	//     the blocked address: the caller typed it into the URL, so the param
+	//     is an echo of what the caller already knows -- zero disclosure --
+	//     and genuinely useful diagnostics naming exactly which address was
 	//     refused.
 	//   - The resolution path (a hostname whose DNS answer is blocked)
 	//     deliberately carries no ip param: the resolved address is

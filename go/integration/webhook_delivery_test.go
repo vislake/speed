@@ -313,8 +313,8 @@ func TestService_handleDeliveryJob_ReceiverError_MarksFailedAndRetries(t *testin
 
 // TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoResolvedIP
 // is the delivery-log half of the dial-time SSRF non-disclosure contract
-// (the creation-time half is pinned by ssrf_test.go's own asymmetry tests,
-// and the dial-time refusal mechanism itself by
+// (the creation-time half is pinned by webhook_guard_test.go's own asymmetry
+// tests, and the dial-time refusal mechanism itself by
 // TestNewSafeHTTPClient_RefusesLoopbackAtDialTime): when a delivery's
 // dial-time re-check refuses a hostname that resolves to
 // a blocked address, the refusal text persisted into the delivery row and
@@ -751,9 +751,10 @@ func TestDeriveWebhookDeliveryKey_DeterministicAndDistinct(t *testing.T) {
 // module-level delivery transport's shape: a Service built with no
 // WithWebhookHTTPClient override delivers through a NON-nil client whose
 // transport is the shared, once-built default (two separately Attach-ed
-// Services hold the same client instance) carrying a sane, finite
-// IdleConnTimeout -- so consecutive deliveries to one receiver reuse a
-// connection instead of every attempt dialing its own fresh transport.
+// Services hold the same client instance) carrying the shared guard's
+// transport -- a sane, finite IdleConnTimeout and a bounded idle pool -- so
+// consecutive deliveries to one receiver reuse a connection instead of
+// every attempt dialing its own fresh transport.
 func TestDefaultWebhookHTTPClient_SharedOnceBuiltWithSaneIdleTimeout(t *testing.T) {
 	_, svc1 := newWebhookTestService(t)
 	if svc1.httpClient == nil {
@@ -774,8 +775,8 @@ func TestDefaultWebhookHTTPClient_SharedOnceBuiltWithSaneIdleTimeout(t *testing.
 	if transport.IdleConnTimeout > time.Hour {
 		t.Errorf("IdleConnTimeout = %v, want a sane finite value", transport.IdleConnTimeout)
 	}
-	if transport.MaxIdleConnsPerHost <= 0 {
-		t.Errorf("MaxIdleConnsPerHost = %d, want a positive value", transport.MaxIdleConnsPerHost)
+	if transport.MaxIdleConns <= 0 {
+		t.Errorf("MaxIdleConns = %d, want a bounded positive idle pool", transport.MaxIdleConns)
 	}
 }
 

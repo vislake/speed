@@ -442,11 +442,11 @@ func (s *Service) attemptDelivery(ctx context.Context, sub *WebhookSubscription,
 	client := s.httpClient
 	if client == nil {
 		// The module-level default, built once at package init -- see
-		// ssrf.go's defaultWebhookHTTPClient doc comment for why every
-		// delivery attempt shares one transport instead of each building
-		// its own. Its own file comment also explains why this transport
-		// re-validates the destination at dial time on every attempt, not
-		// only once at subscription-creation time.
+		// webhook_guard.go's defaultWebhookHTTPClient doc comment for why
+		// every delivery attempt shares one transport instead of each
+		// building its own. Its own file comment also explains why this
+		// transport re-validates the destination at dial time on every
+		// attempt, not only once at subscription-creation time.
 		client = defaultWebhookHTTPClient
 	}
 

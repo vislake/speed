@@ -25,8 +25,9 @@ package integration_test
 // A full round trip needs a receiver this process can reach, and the only
 // receiver an offline `go test` run can stand up is an httptest.Server --
 // which listens on loopback. ValidateWebhookURL refuses loopback
-// addresses by design (ssrf_test.go's own mandatory proof of exactly that
-// refusal), so a subscription pointing at one is refused at creation, the
+// addresses by design (webhook_guard_test.go's own mandatory proof of
+// exactly that refusal), so a subscription pointing at one is refused at
+// creation, the
 // same way it would be for any real tenant's misconfigured URL. This
 // example therefore demonstrates subscription creation against a URL that
 // genuinely passes validation (a public IP literal, which
@@ -34,8 +35,8 @@ package integration_test
 // mapping mechanism's own output, while the signed HTTP round trip, the
 // SSRF dial-time re-check, and delivery retry/dead-letter behavior are
 // proven against a real httptest.Server in this module's own internal test
-// suite (webhook_delivery_test.go, ssrf_test.go) -- compiled and run by
-// `go test` exactly as this example is, just not as a godoc Example, since
+// suite (webhook_delivery_test.go, webhook_guard_test.go) -- compiled and run
+// by `go test` exactly as this example is, just not as a godoc Example, since
 // exercising the SSRF-guarded transport this way needs an override
 // (WithWebhookURLValidator/WithWebhookHTTPClient, module.go) that a
 // production composition must never call, so it has no place in
@@ -152,8 +153,8 @@ func ExampleModule_webhookDelivery() {
 	// A public IP literal -- ValidateWebhookURL accepts it with no network
 	// call at all (no DNS lookup is needed for a literal address), which is
 	// what keeps this example self-contained. A loopback or private address
-	// here would be refused exactly as ssrf_test.go's own mandatory proof
-	// shows.
+	// here would be refused exactly as webhook_guard_test.go's own mandatory
+	// proof shows.
 	created, err := svc.CreateWebhookSubscription(tenantCtx, integration.CreateWebhookSubscriptionInput{
 		URL:        "https://93.184.216.34/webhooks/speed",
 		EventTypes: []string{"org.member.joined"},

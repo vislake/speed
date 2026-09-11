@@ -20,8 +20,8 @@ import (
 // -- this module's own tests must be able to create subscriptions pointing
 // at an httptest.Server on loopback, which ValidateWebhookURL's real,
 // production behavior always refuses (this file's own point: SSRF
-// protection is tested directly against ValidateWebhookURL and isBlockedIP
-// in ssrf_test.go, not re-exercised here).
+// protection is tested directly against ValidateWebhookURL in
+// webhook_guard_test.go, not re-exercised here).
 func alwaysAllowURL(context.Context, string) error { return nil }
 
 // testMapping is the fixed EventMapping every test in this file and

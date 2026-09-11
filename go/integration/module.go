@@ -604,9 +604,9 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 
 	// A Module with no WithWebhookHTTPClient override delivers through the
 	// module-level default client, built once at package init
-	// (ssrf.go's defaultWebhookHTTPClient) rather than per delivery attempt
-	// -- see that var's doc comment for why every delivery sharing one
-	// transport matters.
+	// (webhook_guard.go's defaultWebhookHTTPClient) rather than per delivery
+	// attempt -- see that var's doc comment for why every delivery sharing
+	// one transport matters.
 	httpClient := m.httpClient
 	if httpClient == nil {
 		httpClient = defaultWebhookHTTPClient

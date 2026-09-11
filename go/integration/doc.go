@@ -14,7 +14,8 @@
 // EventMapping, module.go's WithEventMapping), event-driven delivery via
 // go/jobs with HMAC signing, dead-lettering and retry
 // (webhook_delivery.go, webhook_signature.go), and SSRF-protected delivery
-// at both subscription-creation and delivery-dial time (ssrf.go).
+// at both subscription-creation and delivery-dial time (webhook_guard.go,
+// built on go/pkgcore/safehttp).
 //
 // The module's HTTP surface (api/openapi.yaml) covers both halves -- the
 // API-key operations and the webhook-subscription CRUD under /webhooks --

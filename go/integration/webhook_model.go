@@ -111,8 +111,8 @@ type WebhookSubscription struct {
 	// URL is the receiving endpoint every matching event is POSTed to.
 	// Validated at creation time (and, through the delivery transport's own
 	// dial-time recheck, again at every delivery attempt) by
-	// ValidateWebhookURL -- see ssrf.go's file comment for why both checks
-	// exist.
+	// ValidateWebhookURL -- see webhook_guard.go's file comment for why both
+	// checks exist.
 	URL string `gorm:"column:url;size:2048;not null"`
 
 	// EventTypes is the JSON array of public event types this subscription
