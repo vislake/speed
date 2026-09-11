@@ -576,11 +576,12 @@ func TestAuditCapturePlugin_NonAuditableModel_PublishesNothing(t *testing.T) {
 
 // captureSlogDefault swaps slog.Default() for a text handler writing into a
 // buffer this returns, restoring the previous default logger on test
-// cleanup. It is this file's twin of go/pkgcore/registry_test.go's own
-// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam swap — slog's default
-// logger is process-global, so a test using this must not run in parallel
-// with another that also touches it; none of this file's tests call
-// t.Parallel.
+// cleanup. It is this file's twin of the swap
+// go/pkgcore/eventbus_memory_test.go's own
+// TestMemoryEventBus_PanickingHandlerIsContainedAndDoesNotStopLaterHandlers
+// performs — slog's default logger is process-global, so a test using this
+// must not run in parallel with another that also touches it; none of this
+// file's tests call t.Parallel.
 func captureSlogDefault(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer

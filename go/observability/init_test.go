@@ -73,10 +73,12 @@ func TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault(t *testing.T) {
 //
 // The slog default logger is process-global, so the test swaps it for a
 // capture handler and restores it on the way out -- the same pattern
-// go/pkgcore's TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam uses for
-// the sibling banner it proves. This package's tests never run in
-// parallel (no t.Parallel call anywhere in this package), so there is no
-// concurrent Init call that could observe the swapped-out default.
+// go/pkgcore's own
+// TestMemoryEventBus_PanickingHandlerIsContainedAndDoesNotStopLaterHandlers
+// uses to assert on default-logger output (go/pkgcore/eventbus_memory_test.go).
+// This package's tests never run in parallel (no t.Parallel call anywhere in
+// this package), so there is no concurrent Init call that could observe the
+// swapped-out default.
 func TestInit_NoEndpoint_NoLocalMetricsReader_LogsStartupWarning(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()
