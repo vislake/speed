@@ -15,7 +15,7 @@ flowchart LR
     H[你的 handler] -->|Enqueue Task| Q[jobs.Queue]
     Q -->|认领 + 租户上下文| W[worker: 注册的 Handler]
     W -->|完成或重试/死信| Q
-    B[业务模块] -->|Dispatch + reg.NotificationsSeat().Add| N[notification]
+    B[业务模块] -->|"Dispatch + reg.NotificationsSeat().Add"| N[notification]
     N -->|每位收件人每通道一个 job| Q
     Q --> D[投递 job:发送时重查偏好、\n同意、地址]
     D --> I[in_app_messages 行 / email / SMS]

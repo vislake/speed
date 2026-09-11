@@ -17,7 +17,7 @@ flowchart LR
     H[Your handler] -->|Enqueue Task| Q[jobs.Queue]
     Q -->|claim + tenant context| W[worker: registered Handler]
     W -->|done or retry/dead-letter| Q
-    B[Business module] -->|Dispatch + reg.NotificationsSeat().Add| N[notification]
+    B[Business module] -->|"Dispatch + reg.NotificationsSeat().Add"| N[notification]
     N -->|one job per recipient per channel| Q
     Q --> D[delivery job: re-check preferences\nconsent, addresses at send time]
     D --> I[in_app_messages row / email / SMS]
