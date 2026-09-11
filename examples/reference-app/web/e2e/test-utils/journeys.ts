@@ -9,7 +9,7 @@
  * here and be re-read by a human, not silently pass because a hidden
  * attribute survived.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { LOGIN_LEDGER_PATH } from '../../playwright.config.js'
 import type { DemoAccount } from './accounts.js'
@@ -104,6 +104,18 @@ const LOGIN_BUDGET = {
   windowMs: 60_000,
 } as const
 
+/**
+ * How long after this ledger records an attempt the server counts it.
+ *
+ * The ledger's record is written when the pacing decides; go/authn's
+ * counter moves when the guarded request arrives, and the form fill, the
+ * button click and the request's flight sit between the two -- measured
+ * at roughly a third of a second on an idle machine, longer under load.
+ * A second is the bound the model works with; a larger value is only
+ * more conservative (see wouldAllow).
+ */
+const SUBMISSION_SKEW_MS = 1_000
+
 /** When each account attempted, and when this IP did, across the run. */
 interface LoginLedger {
   readonly byAccount: Record<string, number[]>
@@ -159,16 +171,52 @@ function writeLedger(ledger: LoginLedger): void {
  *     increments the counter too. Refusals make the next attempt worse,
  *     which is why the ledger records every submission and not just the
  *     ones that worked.
+ *
+ * THE SKEW ENVELOPE, and why the decision is not a single instant
+ *
+ * The ledger's stamp is not the instant the server counts: the pacing
+ * decides, then someone fills the form and clicks it, and the request
+ * arrives SUBMISSION_SKEW_MS later. The server's windows are aligned to
+ * the epoch, so an attempt recorded within that skew of a boundary is
+ * counted by the server in the window the ledger filed as the NEXT one
+ * -- and near a boundary the previous window still weighs almost fully,
+ * so one attempt filed into the neighbouring window moves the weighted
+ * sum by about a whole unit. That is the size of this suite's margins:
+ * the ledger's view of that attempt has already decayed (says "fits")
+ * while the server counts it at full weight and refuses.
+ *
+ * So the model does not pretend to know the instant: an earlier attempt
+ * counts in EVERY window the skew could have placed it in, and the
+ * attempt being decided is weighed at every instant the skew could date
+ * it to -- its decision instant, and just past the next boundary when
+ * that boundary falls inside the skew. Both directions only ever make
+ * the ledger's counts an upper bound on the server's, so "fits" here
+ * cannot be a verdict the server refuses: the cost of the envelope is
+ * waiting, never a 429.
  */
 function wouldAllow(stamps: readonly number[], rate: number, at: number): boolean {
   const per = LOGIN_BUDGET.windowMs
-  const index = Math.floor(at / per)
-  const elapsedFraction = (at % per) / per
   const inWindow = (which: number): number =>
-    stamps.filter((stamp) => Math.floor(stamp / per) === which).length
-  // +1 for the hit being weighed: Allow increments first, then decides.
-  const weighted = inWindow(index) + 1 + inWindow(index - 1) * (1 - elapsedFraction)
-  return weighted <= rate
+    stamps.filter((stamp) => {
+      const earliest = Math.floor(stamp / per)
+      const latest = Math.floor((stamp + SUBMISSION_SKEW_MS) / per)
+      return which >= earliest && which <= latest
+    }).length
+
+  const weightedAt = (instant: number): number => {
+    const index = Math.floor(instant / per)
+    const elapsedFraction = (instant % per) / per
+    // +1 for the hit being weighed: Allow increments first, then decides.
+    return inWindow(index) + 1 + inWindow(index - 1) * (1 - elapsedFraction)
+  }
+
+  // The instants the server could count this attempt at: now, and -- when
+  // the skew reaches across the next boundary -- a moment into the window
+  // after it, where the attempt is weighed against that window's counts.
+  const nextBoundary = (Math.floor(at / per) + 1) * per
+  const instants =
+    nextBoundary - at <= SUBMISSION_SKEW_MS ? [at, nextBoundary + 1] : [at]
+  return instants.every((instant) => weightedAt(instant) <= rate)
 }
 
 /**
@@ -206,8 +254,14 @@ function wouldAllow(stamps: readonly number[], rate: number, at: number): boolea
  * config runs workers: 1 and fullyParallel: false: one attempt is in
  * flight at a time. A parallel run would need a real lock, and would
  * blow the per-IP budget long before the ledger's races mattered.
+ *
+ * Exported so EVERY sign-in can spend from it, the API-driven one
+ * included (test-utils/invitations.ts's signInThroughApi): an attempt
+ * the server counts is an attempt this ledger must count, whichever
+ * surface it goes through, or the pacing is computed against a budget
+ * the server does not agree with.
  */
-async function payTheLoginBudget(identifier: string): Promise<void> {
+export async function payTheLoginBudget(identifier: string): Promise<void> {
   /** How often to re-ask. Local arithmetic only -- it costs no attempt. */
   const step = 1_000
   /**
@@ -523,6 +577,90 @@ export async function expectSignedOut(page: Page): Promise<void> {
 }
 
 /**
+ * The sign-in surface, as the one control that is on it: the identifier
+ * field. The observable form of "this page has no session", so a wait
+ * that expects the signed-in frame can tell a slow surface from a lost
+ * session.
+ */
+function signInSurface(page: Page): Locator {
+  return page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel })
+}
+
+/**
+ * Waits for `locator` the way `expect(locator, message).toBeVisible`
+ * would (same timeout, same failure when it never appears), but stops
+ * early -- and says why -- when the app has returned to the sign-in
+ * surface instead.
+ *
+ * WHY IT EXISTS
+ *
+ * This product keeps the access token in memory and the refresh token in
+ * a closure, never in storage (@speed/api-client's store, @speed/auth-core's
+ * session), so a full document load is the one event that discards a
+ * session -- by design, and this suite works within it. The suite drives
+ * a vite DEV server, whose own client reloads the page when its HMR
+ * socket is lost (@vite/client's "[vite] server connection lost" branch
+ * pings and then calls location.reload unconditionally), and a browser
+ * network-process crash produces exactly that socket loss. When a reload
+ * lands mid-journey the app comes back anonymous, the element a journey
+ * is waiting for can never appear, and without this branch the failure
+ * spends its whole timeout and reports that some control was missing --
+ * which reads like a product defect and is not one. (A session the
+ * SERVER ended is a different state: it renders the "Session ended"
+ * screen, not this one.)
+ *
+ * What it deliberately does NOT do is weaken the assertion: the locator
+ * must still become visible within the same timeout, for the same
+ * reason. The race only decides WHY a failure reports what it does, and
+ * reports at the moment the loss is observable rather than a timeout
+ * later.
+ */
+export async function expectWhileSignedIn(
+  page: Page,
+  locator: Locator,
+  message: string,
+  timeout?: number,
+): Promise<void> {
+  const target = expect(locator, message)
+    .toBeVisible({ timeout })
+    .then(
+      () => 'visible' as const,
+      (error: unknown) => ({ error }),
+    )
+  const sessionLost = signInSurface(page)
+    .waitFor({ state: 'visible', timeout: 0 })
+    .then(
+      () => 'session-lost' as const,
+      // The page or context went away while waiting: that is this test's
+      // own end, not a session loss, and the assertion above is the one
+      // that must report it.
+      () => 'unobservable' as const,
+    )
+
+  const outcome = await Promise.race([target, sessionLost])
+  if (outcome === 'session-lost') {
+    throw new Error(
+      `e2e: ${message}: the app is back on the sign-in surface, so this journey's session is gone. ` +
+        'This product keeps the session in memory (never in storage), so a full page load discards it -- ' +
+        'and the suite drives a vite dev server, whose client reloads the page when its HMR socket is lost ' +
+        '(a browser network-process crash does that; the console in the trace carries "[vite] server connection lost" ' +
+        'followed by a document load). Read the trace before treating this as a product defect; a session the SERVER ' +
+        'ended shows the "Session ended" screen instead.',
+    )
+  }
+  if (outcome === 'unobservable') {
+    const settled = await target
+    if (typeof settled === 'object') {
+      throw settled.error
+    }
+    return
+  }
+  if (typeof outcome === 'object') {
+    throw outcome.error
+  }
+}
+
+/**
  * Asserts the frame is showing a named surface, identified by that
  * surface's own top-level heading.
  *
@@ -536,7 +674,11 @@ export async function expectSignedOut(page: Page): Promise<void> {
  * assertion should name.
  */
 export async function expectOnSurface(page: Page, heading: string): Promise<void> {
-  await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible()
+  await expectWhileSignedIn(
+    page,
+    page.getByRole('heading', { name: heading, level: 1 }),
+    `the frame never showed the ${heading} surface`,
+  )
 }
 
 /**
@@ -562,10 +704,11 @@ export async function openSurface(page: Page, name: string | RegExp): Promise<vo
   // the frame's own render: a journey that signs in and navigates
   // immediately, with no signInAs to settle the frame first, would find
   // neither the link nor the menu while both are about to appear.
-  await expect(
+  await expectWhileSignedIn(
+    page,
     link.or(menu).first(),
     `no way to reach ${String(name)}: the frame offers neither that nav entry nor the menu button that would hold it`,
-  ).toBeVisible()
+  )
 
   if (await link.isVisible()) {
     await link.click()

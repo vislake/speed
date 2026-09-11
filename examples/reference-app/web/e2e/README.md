@@ -78,7 +78,7 @@ test lost the race -- a failure that said nothing about the product and
 pointed at the wrong gate: the run that found this reported
 `visible-controls.spec.ts`, which was not the spec that overspent.
 
-Three things about that ledger are worth knowing before trusting it:
+Four things about that ledger are worth knowing before trusting it:
 
 - **It is a file, not a variable.** A Playwright worker serves one
   project and restarts at every engine boundary, so an in-memory ledger
@@ -95,6 +95,19 @@ Three things about that ledger are worth knowing before trusting it:
 - **A refused attempt still counts.** `Allow` increments before it
   decides, so a `429` makes the next attempt worse. The ledger records
   every submission, not just the ones that worked.
+- **The server counts an attempt a beat after the ledger records it.**
+  The stamp is written when the pacing decides; the request arrives --
+  form filled, button clicked -- a few hundred milliseconds later, and
+  the windows are aligned to the epoch, so an attempt recorded just
+  before a boundary is counted by the server in the window after it.
+  Near a boundary the previous window still weighs almost fully, which
+  makes that misfiling worth about a whole unit of the weighted sum --
+  the size of the margins this suite runs against. The ledger answers
+  with an envelope rather than a hope: an earlier attempt counts in
+  every window the skew could have placed it in, and the attempt being
+  decided is weighed at every instant it could be dated to. Both
+  directions only tighten the ledger's estimate, so the envelope's cost
+  is waiting, never a `429`.
 
 It is deliberately not a retry: it waits *before* an attempt so the
 attempt is legal, and never re-submits one the server refused. A helper
@@ -152,13 +165,17 @@ unique address per attempt: the identity was never part of what the gate
 checks, and a fresh address carries no failure history to be locked out
 over.
 
-**The ledger does not see API-driven attempts.** `org-invitation-sign-in`
+**API-driven sign-ins spend from the ledger too.** `org-invitation-sign-in`
 drives register and login as direct requests rather than through the
-sign-in form, so those attempts spend the server's budget without ever
-reaching `payTheLoginBudget`. Its failure looks different too -- a raw
-`429` with the envelope in the message rather than the named refusal --
-which is the tell that a budget failure came from a spec the pacing
-cannot help.
+sign-in form, and the login one paces itself exactly like the form does
+(`signInThroughApi` calls the same `payTheLoginBudget`): go/authn counts
+that attempt against the same two limits, so a ledger that skipped it
+would compute against a budget the server does not agree with. What does
+stay outside the ledger is the API-driven REGISTRATION, by the
+hourly-limit decision above -- so a raw `429` (the envelope in the
+message, rather than the named refusal) remains the tell of a spend the
+pacing does not manage, and today that can only be a registration's
+hourly pool.
 
 **And it takes unrelated gates down with it, which is measured rather
 than feared.** A whole-tier three-engine invocation failed six tests,

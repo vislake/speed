@@ -21,6 +21,7 @@
 import { readFile } from 'node:fs/promises'
 import { expect, type APIRequestContext } from '@playwright/test'
 import { SERVER_LOG_PATH } from '../../playwright.config.js'
+import { payTheLoginBudget } from './journeys.js'
 
 /** The header this app's demo subject resolver reads to identify a caller. */
 const DEMO_SUBJECT_HEADER = 'X-Demo-User-Id'
@@ -31,12 +32,22 @@ export interface Caller {
   readonly userId: string
 }
 
-/** Signs in through the API and returns what the org calls need. */
+/**
+ * Signs in through the API and returns what the org calls need.
+ *
+ * Paced through the same ledger as the form-driven sign-in
+ * (journeys.ts's payTheLoginBudget): go/authn counts this attempt
+ * against the same per-account and per-IP limits as any other, so a
+ * ledger that did not record it would let the pacing compute against a
+ * budget the server does not agree with -- and the gate that loses the
+ * race reports a raw 429 that says nothing about its own subject.
+ */
 export async function signInThroughApi(
   request: APIRequestContext,
   email: string,
   password: string,
 ): Promise<Caller> {
+  await payTheLoginBudget(email)
   const response = await request.post('/api/v1/authn/login/password', {
     data: { identifier: email, password },
   })
