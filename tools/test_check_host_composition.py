@@ -10,8 +10,8 @@ The real tree passes the gate clean, so these planted fixtures are the
 rules' living proof, in the same shape as the sibling checker suites:
 
   * a host that merely USES the kernel (imports the platform module and
-    assembles through the engine's options) stays silent -- the positive
-    side, proving the gate is not simply firing on everything;
+    assembles through the engine's component surface) stays silent -- the
+    positive side, proving the gate is not simply firing on everything;
   * a forked declaration of a shared identifier in either host fires,
     while a test file's own use of the identifiers does not;
   * a re-grown kernel sentinel in a non-test file fires, while the same
@@ -22,8 +22,8 @@ rules' living proof, in the same shape as the sibling checker suites:
     still fire;
   * a re-issued engine-owned assembly call (pkgcore.NewKernel, dbkit.Open,
     http.NewServeMux, chain.Chain under any alias, obs.Init, ...) in a
-    non-test file fires, while the sanctioned engine options and the same
-    text in a test file stay silent.
+    non-test file fires, while the sanctioned register-and-Assemble shape
+    and the same text in a test file stay silent.
 """
 
 from __future__ import annotations
@@ -227,20 +227,20 @@ class EngineOwnedCallRules(unittest.TestCase):
             sum("calls chain.Chain" in f for f in findings), 2, findings
         )
 
-    def test_the_engine_options_stay_silent(self):
+    def test_the_component_assembly_stays_silent(self):
+        # The sanctioned host shape: the assembly core creates the registry,
+        # drives the engine's Assemble and composes its chain -- none of it
+        # banned. This is the positive control for the whole ban set.
         root = make_tree(
             {
                 "go/saasctl/internal/template/project/selection/authn/server.go": (
                     "package main\n\n"
                     "import speedchain \"github.com/vislake/speed/go/app/chain\"\n\n"
                     "func boot() {\n"
-                    "\topts := []speedapp.Option{\n"
-                    "\t\tspeedapp.WithKernelOptions(pkgcore.WithDeploymentMode(mode)),\n"
-                    "\t\tspeedapp.WithDatabase(speedapp.DatabaseSpec{Dialect: dbkit.DialectSQLite}),\n"
-                    "\t\tspeedapp.WithHooks(speedapp.Hooks{PostBootstrap: attach}),\n"
-                    "\t}\n"
+                    "\treg := pkgcore.NewComponentRegistry()\n"
+                    "\t_ = speedapp.Assemble(ctx, reg, speedapp.LoadSpec{})\n"
                     "\t_ = speedchain.Standard(reg, verifier, mux)\n"
-                    "\t_ = opts\n"
+                    "\t_ = reg\n"
                     "}\n"
                 ),
             }
@@ -251,8 +251,8 @@ class EngineOwnedCallRules(unittest.TestCase):
         # Business-path file: the banned selectors' lookbehind precision is
         # what this pins (myobs.Init is not obs.Init; xpkgcore.NewKernel is
         # not pkgcore.NewKernel). It lives outside the composition paths
-        # because the staged component-assembly bans do fire on any .Init(
-        # inside them, which the staged class pins separately.
+        # because the component-assembly bans do fire on any .Init(
+        # inside them, which the component-assembly class pins separately.
         root = make_tree(
             {
                 "examples/reference-app/internal/notes/store.go": (
@@ -282,11 +282,11 @@ class EngineOwnedCallRules(unittest.TestCase):
         self.assertEqual(m.scan(root), [])
 
 
-class ComponentAssemblyStagedRules(unittest.TestCase):
-    """The staged half: the component assembly's forbidden shapes fire, and
-    the calls the hosts legitimately make today stay silent."""
+class ComponentAssemblyRules(unittest.TestCase):
+    """The component assembly's forbidden shapes fire, and the calls the
+    hosts legitimately make today stay silent."""
 
-    def test_new_world_wrong_shapes_fire(self):
+    def test_wrong_shapes_fire(self):
         root = make_tree(
             {
                 "go/saasctl/internal/template/project/cmd/server/server.go": (
@@ -334,8 +334,8 @@ class ComponentAssemblyStagedRules(unittest.TestCase):
 
     def test_host_service_lifecycle_calls_stay_silent(self):
         # The hosts' composition files call Start/Stop/Close on their own
-        # services today; those verbs stage out of the ban set until the
-        # hosts migrate.
+        # services today; those verbs stay out of the ban set deliberately
+        # (see the module docstring's stage-ban paragraph).
         root = make_tree(
             {
                 "examples/reference-app/internal/app/attach.go": (
