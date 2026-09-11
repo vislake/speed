@@ -157,4 +157,3 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.NotificationsSeat().Add(patientReminderNotificationType, simulationReadyNotificationType)
 }
-

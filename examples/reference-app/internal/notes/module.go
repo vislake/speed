@@ -336,4 +336,3 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 	return nil
 }
-
