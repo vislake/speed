@@ -212,8 +212,8 @@ const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 // for (and this file's identifiers keep that familiar name), but MailHog
 // upstream ships no arm64 image and has had no tagged release in years;
 // Mailpit is its actively maintained, wire-compatible-enough successor
-// (multi-arch, including arm64, verified empirically while writing this
-// test on Apple Silicon) and CI's own ubuntu-latest amd64 runners pull the
+// (multi-arch, including arm64, verified empirically on Apple Silicon)
+// and CI's own ubuntu-latest amd64 runners pull the
 // identical image. No testcontainers-go module exists for either, unlike
 // Redis/Postgres above and, since the RustFS swap, RustFS as well -- this
 // is an ordinary generic container the same way any image without a

@@ -107,10 +107,10 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 	}
 
 	// THE walk-through call: the clinic owner sends an invitation into the
-	// clinic's root, bearer token only. Pre-fix this answered HTTP 500
-	// org.internal_error (the host wiring had no host for the clinic
-	// tenant, so the mail leg failed and InviteService revoked the fresh
-	// row); it must answer 201 with a pending invitation.
+	// clinic's root, bearer token only. It must answer 201 with a pending
+	// invitation: a 500 org.internal_error here would mean the host wiring
+	// has no host for the clinic tenant, so the mail leg fails and
+	// InviteService revokes the fresh row.
 	const inviteeEmail = "clinic-invitee@example.com"
 	var invitation orgInvitation
 	clinicOrgCall(t, srv, http.MethodPost, "/api/v1/org/invitations", token,
@@ -120,8 +120,8 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 	}
 
 	// The invitation is listed back as pending -- the pending list the
-	// team surface renders stays populated, never the empty list the 500
-	// left behind.
+	// team surface renders stays populated, never the empty list a
+	// revoked invitation would leave behind.
 	var listed struct {
 		Invitations []orgInvitation `json:"invitations"`
 	}
