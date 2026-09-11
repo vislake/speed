@@ -161,7 +161,8 @@ type Option func(*Module)
 // ErrSMSSenderRequired without one, so a module with no sender fails at
 // boot rather than discover the gap on the first code a patient needs.
 // pkgcore.NewConsoleSMSSender is the zero-external-dependency
-// implementation (pkgcore/sms.go); a distributed host may hand over any
+// implementation (pkgcore/console_sms_sender.go); a distributed host may hand
+// over any
 // sender satisfying the pkgcore seam -- pkgcore.NewHTTPSMSSender or one of
 // the pkgcore/sms carrier adapters -- which is exactly what go/authn's own
 // phone-login flow receives.
