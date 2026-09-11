@@ -361,9 +361,10 @@ What is on record about the crash, and what is not:
   Playwright 1.63.0 (the version the web lockfile pins) and WebKit 26.6
   (playwright build 2359), installed by `playwright install --with-deps`.
 - The closest upstream flake -- WebKit's `page.goto` that never issues a
-  request, roughly every ~65 navigations (microsoft/playwright#42385) --
-  was fixed in WebKit build 2355, and the 2359 build these runs use
-  already contains the fix, so it is not that defect.
+  request, roughly every ~65 navigations (microsoft/playwright#42385,
+  reported on WebKit 26.5 / Playwright build 2336 and closed as not
+  planned) -- is an unbounded navigation-time hang, not a mid-run
+  sub-process crash, so it is not that defect.
 - Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
   (`kernel.apparmor_restrict_unprivileged_userns`). Its documented
   failure has one shape: a sandboxed process cannot create its
