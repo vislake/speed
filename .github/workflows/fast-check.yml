@@ -119,8 +119,8 @@ name: fast-check
 #         template -- so neither host tree may re-declare its symbols,
 #         re-grow its statements (the serve loop, the liveness/authn path
 #         literals) or re-issue the engine-owned assembly calls
-#         (pkgcore.NewKernel, .Bootstrap(, pkgcore.NewComponentRegistry
-#         and the Prepare/Construct/Verify/Init drive, dbkit.Open, the
+#         (pkgcore.NewComponentRegistry and the
+#         Prepare/Construct/Verify/Init drive, dbkit.Open, the
 #         migration registry, http.NewServeMux, the jobs wiring,
 #         signal.NotifyContext, chain.Chain, obs.Init) in its own code --
 #         one ban set over the option surface and the component
