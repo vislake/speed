@@ -111,7 +111,7 @@ buffered spans and metrics are still exported.
 
 | Package | Concern | Dependency closure |
 |---|---|---|
-| `go/app` (root) | the engine: `New`/`Run`/`Application`/`Option`, `PlatformConfig` and the load orchestration, the HTTP face, the lifecycle, the hooks — plus the host-neutral kernel primitives the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`, `ServeUntilShutdown`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
+| `go/app` (root) | the engine: `New`/`Run`/`Application`/`Option`, `PlatformConfig` and the load orchestration, the HTTP face, the lifecycle, the hooks — plus the host-neutral kernel primitives the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
 | `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
 | `go/app/bridges` | the no-import seam bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
@@ -119,10 +119,10 @@ Runnable usage documentation (`example_test.go`) ships one example per
 package. The split is deliberate, not incidental: a consumer importing only
 the root pays the root's closure (measured with a throwaway module under
 `GOWORK=off go mod tidy`), so the root must never import the chain's or the
-bridges' participants — nor any business module at all. `ServeUntilShutdown`
-is the pre-engine serve-and-drain helper: `Run` supersedes it, and the
-saasctl template's `cmd/server` still calls it until the template migrates
-to the engine; it goes away with that migration.
+bridges' participants — nor any business module at all. The serve-and-drain
+lifecycle has one shape only now: `Run` (with `obs.Middleware` applied at
+serve time and the ordered `Close` drain); the pre-engine hand-composing
+helper went away once both consumers assembled through the engine.
 
 ## The chain app/chain encodes
 

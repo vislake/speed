@@ -1,11 +1,6 @@
 package app
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"net"
-	"net/http"
 	"time"
 
 	"github.com/vislake/speed/go/config"
@@ -30,15 +25,13 @@ const (
 	// request's headers before aborting the connection -- protects
 	// against slow-header (Slowloris-style) connections that trickle
 	// bytes to hold a socket open indefinitely. The engine's HTTP face
-	// applies it to the http.Server it composes, and ServeUntilShutdown
-	// applies it to the one it builds.
+	// applies it to the http.Server it composes.
 	ReadHeaderTimeout = 5 * time.Second
 
 	// ShutdownTimeout bounds how long graceful shutdown waits for
 	// in-flight requests to finish before giving up, and bounds the
 	// background worker's own drain the same way; the engine's ordered
-	// shutdown applies it to both steps, and ServeUntilShutdown applies
-	// it to its srv.Shutdown.
+	// shutdown applies it to both steps.
 	ShutdownTimeout = 10 * time.Second
 )
 
@@ -104,82 +97,4 @@ func RegisterMountedRoutes(reg *pkgcore.Registry) {
 		{Path: obs.HealthzPath},
 		{Path: obs.MetricsPath},
 	}, reg.Routes.Routes()...))
-}
-
-// ServeUntilShutdown wraps handler in obs.Middleware and serves it on
-// addr ("host:port" or ":port") until ctx is done (the caller's signal
-// context) or the listener fails, then drains in-flight requests within
-// ShutdownTimeout. appName is carried as the app_name attribute on every
-// log line and prefixes the errors this function returns
-// ("<appName>: serve: ..."), so each host stays attributable without
-// bending the logging discipline (the message is a constant string; the
-// host name is an attribute); deploymentMode is attached as the listing
-// line's deployment_mode attribute.
-//
-// ctx must be the signal-derived context (which SHOULD observe
-// cancellation), baseCtx the caller's logger-carrying base context
-// (which must NOT): net/http's Server.BaseContext hands baseCtx,
-// uncancelled, as the ancestor of every request's own context -- if it
-// were the signal-derived ctx instead, every in-flight request's context
-// would already be Done() the instant a shutdown signal arrived, racing
-// handler code that checks ctx.Err() against the graceful drain
-// srv.Shutdown is supposed to perform. Handing baseCtx here is also what
-// makes obs.FromContext(r.Context()) inside a handler find the JSON
-// logger the process attached at startup, in addition to the
-// trace_id/tenant_id the middleware layers add per request: without it,
-// net/http defaults every request's root context to a bare
-// context.Background() and the logger attachment would never reach
-// request-handling code at all.
-//
-// obs.Middleware wraps OUTSIDE the host's own middleware chain (built by
-// the caller into handler): its position costs one real thing (a tenant
-// is not yet known this far out -- see obs.AnnotateTenant, called from a
-// handler once the host's chain has resolved one) and buys the useful
-// one: every request gets a span and is counted here, including ones the
-// inner chain goes on to reject with 401/403, which matters for spotting
-// a flood of them.
-//
-// This function is the pre-engine shape of the serve-and-drain lifecycle:
-// Run owns the same sequence for an application assembled through the
-// engine (obs.Init first, obs.Middleware at the same position, the same
-// timeouts, the same graceful drain), and it stays exported for hosts that
-// still compose by hand -- the saasctl template's cmd/server is the
-// remaining caller, and it goes away once that consumer serves through the
-// engine.
-func ServeUntilShutdown(ctx, baseCtx context.Context, handler http.Handler, addr, appName, deploymentMode string) error {
-	instrumented := obs.Middleware(handler)
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           instrumented,
-		ReadHeaderTimeout: ReadHeaderTimeout,
-		BaseContext:       func(net.Listener) context.Context { return baseCtx },
-	}
-
-	serveErr := make(chan error, 1)
-	go func() {
-		obs.FromContext(ctx).Info("server listening", "app_name", appName, "addr", srv.Addr, "deployment_mode", deploymentMode)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- err
-			return
-		}
-		serveErr <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		obs.FromContext(ctx).Info("shutdown signal received", "app_name", appName)
-	case err := <-serveErr:
-		if err != nil {
-			return fmt.Errorf("%s: serve: %w", appName, err)
-		}
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("%s: graceful shutdown: %w", appName, err)
-	}
-	obs.FromContext(ctx).Info("server stopped cleanly", "app_name", appName)
-	return nil
 }

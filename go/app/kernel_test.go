@@ -1,15 +1,10 @@
 package app
 
 import (
-	"context"
 	"errors"
-	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/vislake/speed/go/config"
 	obs "github.com/vislake/speed/go/observability"
@@ -72,77 +67,4 @@ func TestRegisterMountedRoutes_AcceptsARegistryWithMountedRoutes(t *testing.T) {
 		{Path: "/api/v1/notes", Handler: http.NewServeMux()},
 	}}}
 	RegisterMountedRoutes(reg)
-}
-
-// TestServeUntilShutdown_ServesThenDrainsCleanly drives the lifecycle end
-// to end: the server answers a real request, then a cancelled context
-// returns a nil error once the drain completes.
-func TestServeUntilShutdown_ServesThenDrainsCleanly(t *testing.T) {
-	// Reserve a port and release it, so the test knows where to dial: the
-	// window between release and ServeUntilShutdown's own bind is the
-	// usual test-time race, and a rebind failure would surface loudly
-	// below as the server never answering.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve a port: %v", err)
-	}
-	addr := l.Addr().String()
-	if closeErr := l.Close(); closeErr != nil {
-		t.Fatalf("release the port: %v", closeErr)
-	}
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok")
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ServeUntilShutdown(ctx, context.Background(), handler, addr, "app-test", "standalone")
-	}()
-
-	var resp *http.Response
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		resp, err = http.Get("http://" + addr + "/") //nolint:gosec,noctx // test-local loopback URL a test built itself
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the server never answered at %s: %v", addr, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	body, readErr := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if readErr != nil {
-		t.Fatalf("read the response body: %v", readErr)
-	}
-	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
-		t.Fatalf("GET /: status %d body %q, want 200 %q", resp.StatusCode, body, "ok")
-	}
-
-	cancel()
-	select {
-	case serveErr := <-errCh:
-		if serveErr != nil {
-			t.Fatalf("ServeUntilShutdown returned %v, want nil after a clean drain", serveErr)
-		}
-	case <-time.After(ShutdownTimeout + 5*time.Second):
-		t.Fatal("ServeUntilShutdown did not return after its context was cancelled")
-	}
-}
-
-// TestServeUntilShutdown_ServeFailureIsAttributed pins the failure path:
-// an unlistenable address returns an error prefixed with the host's own
-// app name, never a bare listener error.
-func TestServeUntilShutdown_ServeFailureIsAttributed(t *testing.T) {
-	err := ServeUntilShutdown(context.Background(), context.Background(), http.NewServeMux(), "not-an-addr", "app-test", "standalone")
-	if err == nil {
-		t.Fatal("ServeUntilShutdown returned nil for an unlistenable address")
-	}
-	if !strings.HasPrefix(err.Error(), "app-test: serve: ") {
-		t.Fatalf("ServeUntilShutdown error %q does not carry the app-name attribution prefix", err)
-	}
 }
