@@ -33,7 +33,7 @@ const taskTypePoll = "billing.poll_pending_payments"
 // covers, mirroring go/storage's expirySweepWindowSize and go/compliance's
 // retentionSweepWindowSize exactly: a poll is enqueued under the key of
 // the pollIdempotencyWindowSize window (pollWindowStart) its enqueue falls
-// in, so the same-window duplicates the original key existed to collapse
+// in, so the same-window duplicates that key exists to collapse
 // -- a scheduler with two replicas, a manual re-run -- still merge into
 // one job, while an enqueue in a later window becomes a NEW job and the
 // poll runs again. The window is what makes the poll periodic at all:
