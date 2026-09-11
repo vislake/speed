@@ -338,7 +338,6 @@ func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("neighbour:read")
 }
 
-
 // fakeSigner is a minimal Signer double used only to prove WithSigner wires
 // through.
 type fakeSigner struct{}
