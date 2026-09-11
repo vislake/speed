@@ -111,13 +111,19 @@ func awaitBlocked(t *testing.T, what string, done <-chan error) {
 }
 
 // awaitReleased waits for what to complete after the gate was released,
-// failing the test if it does not.
+// failing the test if it does not. The wait is deliberately generous: it
+// only has to distinguish "queued behind the gate and released" from "never
+// coming back at all" (a genuine deadlock), and a heavily loaded or
+// starvation-stricken runner may take seconds to schedule a runnable
+// goroutine -- a tight bound here would fail on load, not on a defect,
+// which is exactly the failure shape this file's deterministic windows
+// exist to avoid.
 func awaitReleased(t *testing.T, what string, done <-chan error) error {
 	t.Helper()
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("%s did not complete after the gate was released", what)
 		return nil
 	}
