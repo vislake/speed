@@ -22,13 +22,12 @@ import (
 // MigrationRegistry.Apply here.
 type configModuleStub struct{}
 
-func (configModuleStub) Name() string                     { return "config" }
-func (configModuleStub) DependsOn() []string              { return nil }
-func (configModuleStub) Migrations() embed.FS             { return configmigrations.FS }
-func (configModuleStub) Locales() embed.FS                { return embed.FS{} }
-func (configModuleStub) OpenAPISpec() []byte              { return nil }
+func (configModuleStub) Name() string                              { return "config" }
+func (configModuleStub) DependsOn() []string                       { return nil }
+func (configModuleStub) Migrations() embed.FS                      { return configmigrations.FS }
+func (configModuleStub) Locales() embed.FS                         { return embed.FS{} }
+func (configModuleStub) OpenAPISpec() []byte                       { return nil }
 func (configModuleStub) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // newRetentionConfigService returns a live *config.Service over a freshly
 // migrated configs table, attached the way a host attaches one: a real

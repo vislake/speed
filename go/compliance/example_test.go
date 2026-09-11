@@ -94,20 +94,18 @@ func (m *exampleNotesModule) Register(reg *pkgcore.ComponentRegistry) error {
 	})
 }
 
-
 // exampleAuditModule feeds dbkit/audit's own embedded migrations to
 // dbkit.MigrationRegistry -- the same shape module_test.go's fakeAuditModule
 // uses; only Name and Migrations are ever read by MigrationRegistry.Apply
 // here.
 type exampleAuditModule struct{}
 
-func (exampleAuditModule) Name() string                     { return "audit" }
-func (exampleAuditModule) DependsOn() []string              { return nil }
-func (exampleAuditModule) Migrations() embed.FS             { return auditmigrations.FS }
-func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
-func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
+func (exampleAuditModule) Name() string                              { return "audit" }
+func (exampleAuditModule) DependsOn() []string                       { return nil }
+func (exampleAuditModule) Migrations() embed.FS                      { return auditmigrations.FS }
+func (exampleAuditModule) Locales() embed.FS                         { return embed.FS{} }
+func (exampleAuditModule) OpenAPISpec() []byte                       { return nil }
 func (exampleAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // Example wires compliance.Module alongside a fake business module, seeds
 // one soft-deleted row well past the retention window, sweeps it, and

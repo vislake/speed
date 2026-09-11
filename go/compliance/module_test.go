@@ -16,8 +16,8 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
@@ -29,13 +29,12 @@ import (
 // MigrationRegistry.Apply here.
 type fakeAuditModule struct{}
 
-func (fakeAuditModule) Name() string                     { return "audit" }
-func (fakeAuditModule) DependsOn() []string              { return nil }
-func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
-func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
-func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
+func (fakeAuditModule) Name() string                              { return "audit" }
+func (fakeAuditModule) DependsOn() []string                       { return nil }
+func (fakeAuditModule) Migrations() embed.FS                      { return migrations.FS }
+func (fakeAuditModule) Locales() embed.FS                         { return embed.FS{} }
+func (fakeAuditModule) OpenAPISpec() []byte                       { return nil }
 func (fakeAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // newTestAuditDB returns a migrated SQLite *gorm.DB carrying audit_events,
 // for building a *audit.Repository in tests.

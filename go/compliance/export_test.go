@@ -14,8 +14,8 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/sharing"
 	sharingmigrations "github.com/vislake/speed/go/sharing/migrations"
 
@@ -584,13 +584,12 @@ func TestExportService_Export_DeliveryFailureIsReported(t *testing.T) {
 // only Name and Migrations are ever read by MigrationRegistry.Apply here.
 type sharingModuleStub struct{}
 
-func (sharingModuleStub) Name() string                     { return "sharing" }
-func (sharingModuleStub) DependsOn() []string              { return nil }
-func (sharingModuleStub) Migrations() embed.FS             { return sharingmigrations.FS }
-func (sharingModuleStub) Locales() embed.FS                { return embed.FS{} }
-func (sharingModuleStub) OpenAPISpec() []byte              { return nil }
+func (sharingModuleStub) Name() string                              { return "sharing" }
+func (sharingModuleStub) DependsOn() []string                       { return nil }
+func (sharingModuleStub) Migrations() embed.FS                      { return sharingmigrations.FS }
+func (sharingModuleStub) Locales() embed.FS                         { return embed.FS{} }
+func (sharingModuleStub) OpenAPISpec() []byte                       { return nil }
 func (sharingModuleStub) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // newRealSharingService returns a *sharing.Service wired the way a real
 // host wires one: go/sharing's own real, versioned migration files applied

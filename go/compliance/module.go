@@ -309,7 +309,6 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.SchedulesSeat().Add(retentionSweepSchedule)
 }
 
-
 // compile-time check that *sharing.Service satisfies SharingCreator
 // structurally, so a host constructing a Module with WithSharing can pass
 // a real sharing.Module's Service() straight through with no adapter to
