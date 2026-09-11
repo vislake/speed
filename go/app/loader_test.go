@@ -591,47 +591,6 @@ func TestLoad_ReadsTheRootKeyFromItsNamedVariable(t *testing.T) {
 	}
 }
 
-// TestComponentConfigOf_ReportsEveryAbsence pins the component-block
-// reading's absences: no composition published at all is the load-order
-// error (a component's Prepare must run after the load), while a composition
-// without a components block, or without the name's block, is a legitimate
-// non-present report.
-func TestComponentConfigOf_ReportsEveryAbsence(t *testing.T) {
-	if _, present, err := componentConfigOf(pkgcore.NewComponentRegistry(), "observability"); err == nil || present {
-		t.Fatalf("componentConfigOf on an unloaded registry = (present %v, err %v), want the missing-composition error", present, err)
-	}
-
-	withoutBlock := pkgcore.NewComponentRegistry()
-	withoutBlock.Put(pkgcore.ComponentConfig{}.With("deployment", string(pkgcore.DeploymentModeStandalone)))
-	if _, present, err := componentConfigOf(withoutBlock, "observability"); err != nil || present {
-		t.Fatalf("componentConfigOf with no components block = (present %v, err %v), want a non-present report", present, err)
-	}
-
-	withoutName := pkgcore.NewComponentRegistry()
-	withoutName.Put(pkgcore.ComponentConfig{}.With("components", pkgcore.ComponentConfig{}.With("other", nil)))
-	if _, present, err := componentConfigOf(withoutName, "observability"); err != nil || present {
-		t.Fatalf("componentConfigOf without the name's block = (present %v, err %v), want a non-present report", present, err)
-	}
-}
-
-// TestDecodeComponentConfig_RefusesTheAbsenceAndTheUnknownKey pins the strict
-// decoding a component's Prepare runs: a missing composition fails the read,
-// and an unknown key fails the decode naming the key.
-func TestDecodeComponentConfig_RefusesTheAbsenceAndTheUnknownKey(t *testing.T) {
-	var cfg observabilityConfig
-	if err := decodeComponentConfig(pkgcore.NewComponentRegistry(), "observability", &cfg); err == nil {
-		t.Fatal("decodeComponentConfig without a published composition error = nil, want a refusal")
-	}
-
-	reg := pkgcore.NewComponentRegistry()
-	reg.Put(pkgcore.ComponentConfig{}.With("components", pkgcore.ComponentConfig{}.
-		With("observability", pkgcore.ComponentConfig{}.With("unknown_key", "x"))))
-	err := decodeComponentConfig(reg, "observability", &cfg)
-	if err == nil || !strings.Contains(err.Error(), "unknown_key") {
-		t.Fatalf("decodeComponentConfig with an unknown key error = %v, want one naming the key", err)
-	}
-}
-
 // mustGet reads a raw value out of a config, failing the test when the key
 // is absent.
 func mustGet(t *testing.T, c pkgcore.ComponentConfig, key string) any {

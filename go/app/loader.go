@@ -232,43 +232,6 @@ func declaredBootstrapKeys(reg *pkgcore.ComponentRegistry) ([]pkgconfig.Declarat
 	return decls, problems
 }
 
-// componentConfigOf reads one component's resolved configuration block out
-// of the composition configuration published in reg: the components.<name>
-// subtree. It reports present == false when the composition carries no block
-// for name (the component then takes its schema's zero values), and is the
-// reading a component's Prepare callback uses to see its own block -- the
-// one callback that runs before any instance, and therefore before the
-// per-component cfg parameter New receives exists.
-func componentConfigOf(reg *pkgcore.ComponentRegistry, name string) (pkgcore.ComponentConfig, bool, error) {
-	whole, err := pkgcore.Get[pkgcore.ComponentConfig](reg)
-	if err != nil {
-		return pkgcore.ComponentConfig{}, false, fmt.Errorf("app: the composition configuration: %w", err)
-	}
-	raw, ok := configGet(whole, "components")
-	if !ok {
-		return pkgcore.ComponentConfig{}, false, nil
-	}
-	block, ok := configGet(asComponentConfig(raw), name)
-	if !ok {
-		return pkgcore.ComponentConfig{}, false, nil
-	}
-	return asComponentConfig(block), true, nil
-}
-
-// decodeComponentConfig decodes one component's resolved block into target,
-// strictly: an unknown key fails, listing the schema's accepted keys. It is
-// a component's own reading of configuration during Prepare.
-func decodeComponentConfig(reg *pkgcore.ComponentRegistry, name string, target any) error {
-	block, _, err := componentConfigOf(reg, name)
-	if err != nil {
-		return err
-	}
-	if err := block.Decode(target); err != nil {
-		return fmt.Errorf("app: component %q configuration: %w", name, err)
-	}
-	return nil
-}
-
 // isNonNilPointer reports whether v is a non-nil pointer.
 func isNonNilPointer(v any) bool {
 	rv := reflect.ValueOf(v)

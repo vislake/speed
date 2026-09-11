@@ -49,6 +49,47 @@ func TestAssemble_RefusesAnOTLPEndpointWithNoExporterRegistered(t *testing.T) {
 	}
 }
 
+// TestAssemble_RenamedObservabilityCopyReadsItsOwnBlock is the overlay pin:
+// a host that registers a renamed copy of the engine's observability
+// descriptor selects the COPY in its composition, and the copy's own
+// configuration block must be the one its Prepare consumes. The endpoint in
+// the copy's block reaching obs.Init is observable through the same refusal
+// the test above pins -- a mis-read block would leave the endpoint unset,
+// obs.Init would succeed, and this assertion would fail. A literal
+// components.observability lookup (the shape this test exists against)
+// reads the original's block instead of the copy's, silently dropping the
+// configuration the host actually wrote.
+func TestAssemble_RenamedObservabilityCopyReadsItsOwnBlock(t *testing.T) {
+	reg := pkgcore.NewComponentRegistry()
+	var base pkgcore.Component
+	for _, c := range pkgcore.RegisteredComponents(reg) {
+		if c.Name == "observability" {
+			base = c
+			break
+		}
+	}
+	if base.Name == "" {
+		t.Fatal("the engine's observability component is not registered")
+	}
+	renamed := base
+	renamed.Name = "test-host.observability"
+	if err := reg.Register(renamed); err != nil {
+		t.Fatalf("registering the renamed copy: %v", err)
+	}
+
+	var host testHostConfig
+	spec := driverLoadSpec(t, &host)
+	spec.Overrides = &CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
+		pkgcore.ComponentConfig{}.
+			With("observability", false).
+			With(renamed.Name, pkgcore.ComponentConfig{}.With("otlp_endpoint", "127.0.0.1:4317")))}
+
+	err := Assemble(context.Background(), reg, spec)
+	if !errors.Is(err, obs.ErrOTLPExporterNotRegistered) {
+		t.Fatalf("Assemble() with a renamed observability copy carrying an OTLP endpoint error = %v, want obs.ErrOTLPExporterNotRegistered: the copy's own block must be the one its Prepare consumes", err)
+	}
+}
+
 // TestNewObservability_RequiresItsPrepareRuntime pins the construction
 // refusal: the instance is built from the runtime Prepare publishes, so a
 // registry without one fails the read naming the missing step.

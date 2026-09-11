@@ -56,13 +56,16 @@ type observabilityInstance struct {
 	shutdown func(context.Context) error
 }
 
-// observabilityComponent returns the descriptor. It takes no dependencies,
-// carries no assets and declares no capabilities: telemetry is optional by
-// nature and the assembly must never fail because of it.
+// observabilityComponent returns the descriptor. It takes no dependencies
+// and carries no assets. It declares MultiReplicaSafe: each replica exports
+// its own spans and metrics, sharing no state with any sibling, so several
+// replicas running it split nothing -- and telemetry stays optional by
+// nature, so a composition that deselects the component still assembles.
 func observabilityComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name:         "observability",
 		ConfigSchema: (*observabilityConfig)(nil),
+		Capabilities: pkgcore.MultiReplicaSafe,
 		Prepare:      prepareObservability,
 		New:          newObservability,
 		Close:        closeObservability,
@@ -70,14 +73,21 @@ func observabilityComponent() pkgcore.Component {
 }
 
 // prepareObservability initializes OTel from the component's resolved
-// configuration block. Both option halves are omitted when their value is
-// empty, exactly as go/observability documents an unset value: an empty
-// ServiceName leaves the package's default, an empty OTLPEndpoint the local
-// exporters.
+// configuration block -- read through OwnComponentConfig, so the reading
+// follows whichever name the host selected this component under: a host
+// that registers a renamed copy of the descriptor gets the copy's block,
+// where a literal components.observability lookup would silently miss it.
+// Both option halves are omitted when their value is empty, exactly as
+// go/observability documents an unset value: an empty ServiceName leaves
+// the package's default, an empty OTLPEndpoint the local exporters.
 func prepareObservability(ctx context.Context, reg *pkgcore.ComponentRegistry) error {
+	block, err := pkgcore.OwnComponentConfig(reg)
+	if err != nil {
+		return fmt.Errorf("app: read the observability component's own configuration block: %w", err)
+	}
 	var cfg observabilityConfig
-	if err := decodeComponentConfig(reg, "observability", &cfg); err != nil {
-		return err
+	if decodeErr := block.Decode(&cfg); decodeErr != nil {
+		return fmt.Errorf("app: the observability component configuration: %w", decodeErr)
 	}
 	var opts []obs.Option
 	if cfg.ServiceName != "" {
