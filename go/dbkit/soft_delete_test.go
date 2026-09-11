@@ -147,7 +147,7 @@ func TestSoftDeleteScopePlugin_NonSoftDeletableModel_Unaffected(t *testing.T) {
 // The soft-deleted x row is created and marked deleted FIRST, then the live
 // x row is inserted — the fixture table's partial unique index on
 // (tenant_id, name) WHERE deleted_at IS NULL (the unique-index tests in
-// this file pin that adjudicated answer) is exactly what makes that order
+// this file pin that design answer) is exactly what makes that order
 // legal, and it is the order a real soft-delete-then-recreate lifecycle
 // produces.
 func seedSoftDeleteOrScenario(t *testing.T, db *gorm.DB) {
@@ -193,7 +193,7 @@ func seedSoftDeleteOrScenario(t *testing.T, db *gorm.DB) {
 // OR carries no soft-delete filter at all, so it matches soft-deleted rows
 // just like live ones — breaching the plugin's whole documented purpose,
 // "soft-deleted rows are invisible to ordinary reads", the moment a caller's
-// query shape includes an Or(). The fix mirrors tenant_scope.go's own:
+// query shape includes an Or(). The grouping mirrors tenant_scope.go's own:
 // group the caller's existing conditions first, then append the
 // soft-delete predicate as one AND'd sibling.
 func TestSoftDeleteScopeBeforeQuery_CallerOrCondition_DeletedAtFilterAppliesToEveryBranch(t *testing.T) {
@@ -289,9 +289,8 @@ func TestSoftDeleteScopeBeforeQuery_UnscopedOrCondition_SeesSoftDeletedRows(t *t
 // TestSoftDeleteScopePlugin_RowPath_Scan_SkipsSoftDeletedRows is regression
 // (c), the soft-delete twin of tenant_scope_test.go's row-path regressions:
 // db.Model(&SoftDeletableWidget{}).Scan(&rows) — the projection/query shape
-// that routes through GORM's row processor, where the plugin registered no
-// callback until this round — must hide soft-deleted rows exactly like
-// Find. Pre-fix the scan returned the soft-deleted row with a nil error.
+// that routes through GORM's row processor, where the plugin must register
+// a callback of its own — must hide soft-deleted rows exactly like Find.
 func TestSoftDeleteScopePlugin_RowPath_Scan_SkipsSoftDeletedRows(t *testing.T) {
 	db := newSoftDeleteScopedTestDB(t)
 
@@ -333,14 +332,14 @@ func TestSoftDeleteScopePlugin_RowPath_Scan_SkipsSoftDeletedRows(t *testing.T) {
 }
 
 // TestSoftDeleteUniqueIndex_NameReusableAfterSoftDelete_ViaPartialIndex is
-// this round's proof for the unique-index interaction
+// the proof for the unique-index interaction
 // docs/internal/04-data-and-tenancy.md's delete-semantics section (§4) requires every
 // soft-deletable model to decide explicitly: a soft-deleted row is still a
-// real row and still occupies a plain unique constraint. This round's
-// answer, for SoftDeletableWidget (testutil.SoftDeletableWidgetTableSQL),
-// is a partial unique index on (tenant_id, name) WHERE deleted_at IS NULL —
-// proven here to actually let a name be reused immediately after its
-// holder is soft-deleted, on SQLite; the identical DDL string is exercised
+// real row and still occupies a plain unique constraint. The answer for
+// SoftDeletableWidget (testutil.SoftDeletableWidgetTableSQL) is a partial
+// unique index on (tenant_id, name) WHERE deleted_at IS NULL — proven here
+// to actually let a name be reused immediately after its holder is
+// soft-deleted, on SQLite; the identical DDL string is exercised
 // again against real PostgreSQL in
 // integration_test/postgres_soft_delete_rls_test.go, which is the
 // dual-dialect half of this proof. See go/dbkit/AGENTS.md's "Soft

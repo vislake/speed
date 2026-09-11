@@ -7,10 +7,10 @@ package dbkit
 // that file's fixtures — live here instead, keeping the "tenant_scope"
 // target prefix the convention requires for a split-out file.
 //
-// TenantModel itself had zero behavioral test coverage before this file:
-// it appeared only in its own declaration and a bare
-// "var _ TenantScoped = TenantModel{}" compile-time assertion in
-// tenant_scope.go. This file exercises it three ways: GetTenantID in
+// TenantModel's behaviour is otherwise covered nowhere: it appears only in
+// its own declaration and a bare "var _ TenantScoped = TenantModel{}"
+// compile-time assertion in tenant_scope.go. This file exercises it three
+// ways: GetTenantID in
 // isolation, embedded in a fixture and driven through Repository[T]
 // (Create, FindByID, and the isolation/override guarantees those methods
 // promise), and — because reading TenantModel's own doc comment and

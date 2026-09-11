@@ -166,9 +166,10 @@ func TestNormalizeEmail_RejectsSyntaxInvalid(t *testing.T) {
 // TestBlindIndexer_SyntaxInvalidEmail_Errors pins the mechanism to the
 // normalizer's structural gate on both sides: an indexer bound to
 // NormalizeEmail refuses "alice@examplecom" -- a shape that trims and
-// lowercases cleanly and so used to index -- on Index and on Equal alike,
-// with each error naming the column it happened on. Regression for the
-// alice@examplecom account whose email flows would be permanently broken.
+// lowercases cleanly but fails the normalizer's structural gate -- on
+// Index and on Equal alike, with each error naming the column it happened
+// on. The alice@examplecom account is the concrete case: an index taken
+// over that shape would leave its email flows permanently broken.
 func TestBlindIndexer_SyntaxInvalidEmail_Errors(t *testing.T) {
 	indexer, err := NewBlindIndexer("email_index", testKey("blind-indexer-syntax"), NormalizeEmail)
 	if err != nil {

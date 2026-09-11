@@ -53,8 +53,8 @@ const auditEventsTable = "audit_events"
 //     UUIDs this module or its callers generate, registered action
 //     strings, host-chosen tenant ids. An over-wide value there is a
 //     caller bug, not legal content, and silently cutting it would
-//     rewrite the record's own identity (a truncated id no longer
-//     deduplicates or reads back correctly), so fitEventToColumns refuses
+//     rewrite the record's own identity (a truncated id does not
+//     deduplicate or read back correctly), so fitEventToColumns refuses
 //     those with ErrEventFieldTooLong instead -- loudly, on both
 //     dialects alike, never a PostgreSQL-only 22001.
 const (

@@ -267,7 +267,7 @@ func (r *Repository[T]) FindByID(ctx context.Context, id string) (*T, error) {
 // empty, and gorm's own callback returns immediately — no SQL is built, let
 // alone executed — leaving RowsAffected at its zero value regardless of
 // whether the row exists. RowsAffected == 0 is therefore ambiguous for such
-// a T: unlike every T with at least one non-key column, it no longer means
+// a T: unlike every T with at least one non-key column, it does not mean
 // "no matching row" on its own. Update tells the two cases apart by
 // checking whether gorm actually issued any SQL at all
 // (res.Statement.SQL.Len() == 0 is gorm's own tell that the empty-SET,
@@ -298,7 +298,7 @@ func (r *Repository[T]) FindByID(ctx context.Context, id string) (*T, error) {
 // convention softDelete and Restore already follow rather than ever relying
 // on a plugin-side scope; it closes the stale-model hazard AGENTS.md's Soft
 // deletion section records: a caller holding a copy captured before someone
-// else's Delete can no longer silently resurrect the row, since Save would
+// else's Delete cannot silently resurrect the row, since Save would
 // otherwise write that stale copy's zero DeletedAt/DeletedBy back over the
 // very columns Delete just set. A soft-deleted row is therefore as
 // unreachable by Update as a hard-deleted or cross-tenant one: the call
@@ -514,8 +514,8 @@ func (r *Repository[T]) softDelete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Restore clears deleted_at/deleted_by on a row previously soft-deleted by
-// Delete, making it visible to ordinary queries again — the mark-delete's
+// Restore clears deleted_at/deleted_by on a row Delete soft-deleted,
+// making it visible to ordinary queries again — the mark-delete's
 // inverse. It returns ErrNotSoftDeletable when T does not implement
 // SoftDeletable — such a T's Delete never soft-deleted anything for Restore
 // to undo — and ErrRecordNotFound when no row matches id under ctx's

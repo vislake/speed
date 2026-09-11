@@ -64,20 +64,17 @@ const setTenantSessionGUCSQL = "SELECT set_config('" + tenantSessionGUCName + "'
 // audit_capture.go) treats its own top-level transaction call returning
 // nil as proof the real, outermost transaction has genuinely committed,
 // and publishes every event this call's writes buffered only on the
-// strength of that proof. The wrapper it used to delegate that call to
-// (GORM's db.Transaction, gorm.io/gorm@v1.31.2/finisher_api.go) did not
-// make that distinction itself: called against a *gorm.DB whose
-// Statement.ConnPool already is a gorm.TxCommitter, it issued a SAVEPOINT
-// instead of a real BEGIN, and returned nil the instant that inner
-// savepoint was released — regardless of whether the real, still-open
-// outer transaction went on to commit or roll back. A nested
-// WithTenantSession call read that nil exactly like a top-level one, and
-// published its buffered events immediately: a real, reproduced phantom
-// audit event surviving a real rollback of the enclosing transaction (see
+// strength of that proof. GORM's db.Transaction
+// (gorm.io/gorm@v1.31.2/finisher_api.go) does not make that distinction
+// itself: called against a *gorm.DB whose Statement.ConnPool already is a
+// gorm.TxCommitter, it issues a SAVEPOINT instead of a real BEGIN and
+// returns nil the instant that inner savepoint is released — regardless of
+// whether the real, still-open outer transaction goes on to commit or roll
+// back — so a nested WithTenantSession call reading that nil exactly like a
+// top-level one would publish its buffered events immediately: a phantom
+// audit event surviving a rollback of the enclosing transaction (see
 // tenant_session_test.go's
-// TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits,
-// which fails with exactly that outcome against a version of this function
-// that omits this check).
+// TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits).
 //
 // Rather than special-case "nested, but only when audit capture happens to
 // be enabled" — a distinction a caller has no way to see from the outside,

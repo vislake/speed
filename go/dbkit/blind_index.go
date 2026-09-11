@@ -291,7 +291,7 @@ func NormalizePhoneE164(raw string) (string, error) {
 // through Index and Equal: BlindIndexer exposes no accessor that returns
 // the key bytes back out, mirroring Cipher.
 //
-// Rotating key means every existing row's index no longer matches and must
+// Rotating key means every existing row's index stops matching and must
 // be recomputed under the new key as a jobs batch task; there is no
 // retired-key fallback here, because a column holds one index value per row
 // and an equality comparison matches exactly one (see BlindIndex). A

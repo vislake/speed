@@ -322,21 +322,21 @@ func newIDAndTenantOnlyMarkerRepo(t *testing.T) *Repository[testutil.IDAndTenant
 	return NewRepository[testutil.IDAndTenantOnlyMarker](db)
 }
 
-// TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp is the
-// regression test for the bug where Update on a TenantScoped model whose
-// only fields are ID and TenantID — a pure marker/link record with no
-// other column — silently returned ErrRecordNotFound even though the row
-// genuinely existed and was genuinely owned by the calling tenant.
+// TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp pins Update's
+// contract for a TenantScoped model whose only fields are ID and TenantID —
+// a pure marker/link record with no other column: the call must succeed as
+// a no-op against a row that exists and is owned by the calling tenant,
+// not return ErrRecordNotFound.
 //
-// Root cause: gorm's Update callback computes its SET clause by excluding
-// every primary-key column (gorm's callbacks/update.go,
-// ConvertToAssignments). When T has no non-key column at all, that SET
-// clause comes back empty, and gorm's own callback returns immediately --
-// no SQL is built, let alone executed — leaving RowsAffected at its zero
-// value. Update used to treat rowsAffected == 0 as "no such row for this
-// tenant" unconditionally, which was wrong here: the row existed the whole
-// time, confirmed by the FindByID call immediately before Update in this
-// test. See Update's own doc comment in repository.go for the fix.
+// The reason that needs its own handling: gorm's Update callback computes
+// its SET clause by excluding every primary-key column (gorm's
+// callbacks/update.go, ConvertToAssignments). When T has no non-key column
+// at all, that SET clause comes back empty, and gorm's own callback
+// returns immediately -- no SQL is built, let alone executed — leaving
+// RowsAffected at its zero value, so reading rowsAffected == 0 alone would
+// claim "no such row for this tenant" for a row the FindByID call
+// immediately before Update finds. See Update's own doc comment in
+// repository.go for how the two cases are told apart.
 func TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp(t *testing.T) {
 	repo := newIDAndTenantOnlyMarkerRepo(t)
 	ctx := ctxTenant("tenant-a")
@@ -364,11 +364,11 @@ func TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp(t *testing.T) {
 }
 
 // TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFound
-// proves the fix for the bug above does not weaken tenant isolation: an
-// Update attempt against an ID+TenantID-only row from a DIFFERENT tenant
-// must still return ErrRecordNotFound, exactly like every other T — not
-// be silently treated as a successful no-op just because this T now falls
-// back to an existence-check path when gorm's own SET clause is empty. The
+// proves the no-SQL fallback does not weaken tenant isolation: an Update
+// attempt against an ID+TenantID-only row from a DIFFERENT tenant must
+// still return ErrRecordNotFound, exactly like every other T — not be
+// silently treated as a successful no-op just because this T falls back
+// to an existence-check path when gorm's own SET clause is empty. The
 // existence check that fallback runs is scoped by ctx's tenant exactly
 // like every other Repository query, so it must never find, or report
 // success for, a row belonging to a different tenant.
@@ -398,11 +398,11 @@ func TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFoun
 }
 
 // TestRepository_Update_IDAndTenantIDOnlyModel_NoSuchID_ReturnsNotFound
-// confirms the fallback existence check the fix above added still returns
-// ErrRecordNotFound, not a false-positive success, when the id genuinely
-// was never created at all (as opposed to existing under a different
-// tenant, covered by the test above) — the fallback path must not treat
-// "found nothing" as anything other than not-found.
+// confirms the fallback existence check still returns ErrRecordNotFound,
+// not a false-positive success, when the id genuinely was never created at
+// all (as opposed to existing under a different tenant, covered by the
+// test above) — the fallback path must not treat "found nothing" as
+// anything other than not-found.
 func TestRepository_Update_IDAndTenantIDOnlyModel_NoSuchID_ReturnsNotFound(t *testing.T) {
 	repo := newIDAndTenantOnlyMarkerRepo(t)
 	ctx := ctxTenant("tenant-a")
@@ -761,12 +761,12 @@ func TestRepository_Restore_NonSoftDeletable_ReturnsErrNotSoftDeletable(t *testi
 	}
 }
 
-// TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged is the
-// backward-compatibility regression this round promises: a T that does not
-// implement SoftDeletable (Widget) keeps today's real, physical DELETE,
-// byte-for-byte -- the row is genuinely gone from the table, not merely
-// hidden, and RowsAffected-derived ErrRecordNotFound behavior on a second
-// Delete is unchanged.
+// TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged pins the
+// backward-compatibility contract: a T that does not implement
+// SoftDeletable (Widget) keeps the real, physical DELETE, byte-for-byte --
+// the row is genuinely gone from the table, not merely hidden, and
+// RowsAffected-derived ErrRecordNotFound behavior on a second Delete is
+// unchanged.
 func TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged(t *testing.T) {
 	repo := newWidgetRepo(t)
 	ctx := ctxTenant("tenant-a")
@@ -793,20 +793,17 @@ func TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged(t *testing.T
 }
 
 // TestRepository_Update_StaleModelAfterSoftDelete_ReturnsNotFoundAndKeepsMark
-// pins the fix for the hazard the earlier
-// TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt
-// used to document (and pin, as deliberately-unfixed) on the opposite side:
-// Update's "Select(\"*\")" full-record save writes every column,
-// deleted_at/deleted_by included, and the soft-delete auto-scope is
+// pins Update's deleted_at IS NULL guard for a SoftDeletable T against the
+// stale-copy hazard: Update's "Select(\"*\")" full-record save writes every
+// column, deleted_at/deleted_by included, and the soft-delete auto-scope is
 // query-only, so a stale in-memory copy captured before someone else's
-// Delete used to write its zero DeletedAt/DeletedBy back over the row and
-// silently "undelete" it. Update now carries its own deleted_at IS NULL
-// guard for a SoftDeletable T -- the same explicit-WHERE convention
-// softDelete and Restore already follow (repository.go), never a
-// plugin-side scope -- so a soft-deleted row is as unreachable by Update
-// as a hard-deleted or cross-tenant one, and the call collapses to
-// ErrRecordNotFound exactly as those do, leaving the row's mark (and every
-// other column) untouched.
+// Delete would otherwise write its zero DeletedAt/DeletedBy back over the
+// row and silently "undelete" it. The guard is this method's own -- the
+// same explicit-WHERE convention softDelete and Restore already follow
+// (repository.go), never a plugin-side scope -- so a soft-deleted row is
+// as unreachable by Update as a hard-deleted or cross-tenant one, and the
+// call collapses to ErrRecordNotFound exactly as those do, leaving the
+// row's mark (and every other column) untouched.
 func TestRepository_Update_StaleModelAfterSoftDelete_ReturnsNotFoundAndKeepsMark(t *testing.T) {
 	repo := newSoftDeletableWidgetRepo(t)
 	ctx := ctxTenantActor("tenant-a", "user-1")
@@ -851,8 +848,8 @@ func TestRepository_Update_StaleModelAfterSoftDelete_ReturnsNotFoundAndKeepsMark
 // scope: the deleted_at IS NULL condition Update carries for a SoftDeletable
 // T must only refuse writes aimed at soft-deleted rows, never a live row's
 // ordinary full-record save. Without this test, a guard that matched nothing
-// (or matched everything, the pre-fix state) would pass the stale-model test
-// above by accident in one direction or the other.
+// (or matched everything) would pass the stale-model test above by accident
+// in one direction or the other.
 func TestRepository_Update_SoftDeletable_LiveRowStillUpdates(t *testing.T) {
 	repo := newSoftDeletableWidgetRepo(t)
 	ctx := ctxTenantActor("tenant-a", "user-1")

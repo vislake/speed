@@ -317,8 +317,7 @@ func tenantScopeBeforeDelete(db *gorm.DB) {
 // more than one expression, and gorm's own raw-SQL heuristic
 // (clause.buildExprs' Expr case, matched via the AndConditions case that
 // wraps it) continues to parenthesize a single caller-supplied raw string
-// that itself visibly contains " AND "/" OR ", exactly as it already did
-// before this grouping was introduced.
+// that itself visibly contains " AND "/" OR ".
 //
 // A statement with no existing WHERE clause — the overwhelmingly common
 // case, since dbkit.Repository[T] never builds one before the plugin runs —

@@ -1286,16 +1286,16 @@ type decoupledUpdatesPaddedPayload struct {
 }
 
 // TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_SmallerPayload_DoesNotPanic
-// pins the first half of the P0-8 regression: before the fix,
-// updatePayloadTenantID read the tenant_id field of stmt.Schema — the
-// decoupled Model's schema — against the update payload's own reflect value.
-// A payload with fewer fields than the Model's tenant_id field index panics
-// with "reflect: Field index out of range" inside tenantScopeBeforeUpdate,
-// taking down the whole update call. The fixed check resolves the tenant_id
-// field against the payload's own schema (exactly the re-parse GORM's
-// ConvertToAssignments performs when Model and Dest differ), so a payload
-// whose own schema has no tenant_id column is reported as "payload does not
-// touch tenant_id" and the update runs.
+// pins that a decoupled Model/payload pair must resolve tenant_id against
+// the payload's own schema: reading the tenant_id field of stmt.Schema —
+// the decoupled Model's schema — against the update payload's own reflect
+// value panics with "reflect: Field index out of range" inside
+// tenantScopeBeforeUpdate for a payload with fewer fields than the Model's
+// tenant_id field index, taking down the whole update call. The check
+// resolves the tenant_id field against the payload's own schema (exactly
+// the re-parse GORM's ConvertToAssignments performs when Model and Dest
+// differ), so a payload whose own schema has no tenant_id column is
+// reported as "payload does not touch tenant_id" and the update runs.
 func TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_SmallerPayload_DoesNotPanic(t *testing.T) {
 	db := newScopedTestDB(t)
 	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-1", TenantID: string(tenantA), Name: "before", Value: 1})
@@ -1320,14 +1320,14 @@ func TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_SmallerPayload_DoesNot
 }
 
 // TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_PaddedPayload_DoesNotFabricateImmutabilityRefusal
-// pins the second half of the P0-8 regression: with a payload padded out to
-// at least as many fields as the Model's tenant_id field index, the old
-// misaligned read did not panic — it silently read the payload field sitting
-// at the Model's tenant_id index (here
+// pins the other half of the decoupled-pair contract: with a payload padded
+// out to at least as many fields as the Model's tenant_id field index, a
+// misaligned read would not panic — it would silently read the payload
+// field sitting at the Model's tenant_id index (here
 // decoupledUpdatesPaddedPayload.Position, unrelated data) as if it were the
-// payload's tenant_id. Any non-empty value that is not the context tenant
-// then fabricated an ErrTenantIDImmutable refusal for an update whose
-// payload never mentions tenant_id at all. The fixed check reads the
+// payload's tenant_id, and any non-empty value that is not the context
+// tenant would then fabricate an ErrTenantIDImmutable refusal for an update
+// whose payload never mentions tenant_id at all. The check reads the
 // tenant_id field from the payload's own schema, which has no tenant_id
 // column, so the payload is reported as not touching tenant_id and the
 // update proceeds.
@@ -1373,13 +1373,13 @@ type widgetProjection struct {
 // Rows) and db.Rows/db.Row through the row processor
 // (tx.callbacks.Row().Execute), which is a separate callback chain from the
 // query processor Find/First/Take/Last/Count/Pluck run through
-// (tx.callbacks.Query().Execute). tenantScopePlugin registered only on the
-// query processor until this round, so the row path read every tenant's rows
-// with a nil error, and — because the row processor never consulted the
-// context's tenant either — read everything with a nil error when the
-// context carried no tenant at all. These tests pin the row path to the
-// query path's contract: tenant-scoped filter under a tenant, fail-closed
-// without one, both identical to Find.
+// (tx.callbacks.Query().Execute). tenantScopePlugin must register on both
+// chains: a plugin registered on the query processor alone would leave the
+// row path reading every tenant's rows with a nil error, and — the row
+// processor consulting the context's tenant nowhere — reading everything
+// with a nil error when the context carried no tenant at all. These tests
+// pin the row path to the query path's contract: tenant-scoped filter under
+// a tenant, fail-closed without one, both identical to Find.
 // ---------------------------------------------------------------------------
 
 // TestTenantScopePlugin_RowPath_Scan_UnderTenant_OnlySeesOwnTenant is
@@ -1427,8 +1427,8 @@ func TestTenantScopePlugin_RowPath_Scan_UnderTenant_OnlySeesOwnTenant(t *testing
 // TestTenantScopePlugin_RowPath_Scan_NoTenantInContext_FailsClosed is
 // regression (b): the row-path reads of db.Model(&Widget{}) with no tenant
 // in the context must fail closed exactly like Find — an error wrapping
-// pkgcore.ErrNoTenant, never a nil error with every tenant's rows (the
-// pre-fix shape) and never a nil error with zero rows either. Scan and Rows
+// pkgcore.ErrNoTenant, never a nil error with every tenant's rows and never
+// a nil error with zero rows either. Scan and Rows
 // surface the refusal through their error channels; gorm's Row() finisher
 // has none, so the leg for it pins the refusal's other half: a nil *sql.Row
 // proving the statement never executed (see tenantScopeBeforeQuery's doc

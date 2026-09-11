@@ -79,8 +79,8 @@ var ErrEventFieldTooLong = errors.New("audit: event field exceeds its declared c
 //
 //   - Identifier and vocabulary fields are REFUSED with
 //     ErrEventFieldTooLong when over width. A cut there would rewrite the
-//     record's own identity -- a truncated id no longer deduplicates
-//     (InsertIdempotent) or reads back (Get), and a truncated tenant or
+//     record's own identity -- a truncated id does not deduplicate
+//     (InsertIdempotent) or read back (Get), and a truncated tenant or
 //     resource id misidentifies the record -- so an over-wide value is
 //     surfaced as the caller bug it is, identically on both dialects,
 //     rather than being silently rewritten or left to PostgreSQL's 22001.

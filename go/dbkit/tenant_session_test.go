@@ -104,26 +104,25 @@ func TestWithTenantSession_NoTenantInContext_FailsClosedBeforeFnRuns(t *testing.
 var tenantSessionNestedTestDBSeq atomic.Int64
 
 // TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits
-// is the regression for a real, reproduced bug: calling WithTenantSession a
-// second time from inside an outer WithTenantSession's own fn — passing the
+// pins the refusal for a real hazard: calling WithTenantSession a second
+// time from inside an outer WithTenantSession's own fn — passing the
 // tx *gorm.DB the outer fn received, rather than the base db everything else
-// in this codebase passes — used to resurrect the exact phantom-audit-event
+// in this codebase passes — would resurrect the exact phantom-audit-event
 // bug the buffered-publish mechanism (audit_capture.go, this file's sibling)
 // exists to close.
 //
-// Before ErrNestedTenantSession's check existed, the inner WithTenantSession
-// call allocated its own fresh *auditBuffer, saw its own
-// db.Transaction(...) call return nil (GORM issues a SAVEPOINT for a
-// *gorm.DB already inside a transaction and releases it, per
+// A nested call that proceeded would allocate its own fresh *auditBuffer,
+// see its own db.Transaction(...) call return nil (GORM issues a SAVEPOINT
+// for a *gorm.DB already inside a transaction and releases it, per
 // gorm.io/gorm@v1.31.2/finisher_api.go's Transaction — never a real BEGIN or
-// COMMIT), and published that buffer immediately — before the real, still-
-// open outer transaction was resolved at all. Forcing the outer fn to then
-// return a real error rolled back the widget row the inner call had
-// created, while the event the inner call had already published stayed on
-// the bus: a real phantom audit event surviving a real rollback, against a
-// real SQLite database, no mocking involved.
+// COMMIT), and publish that buffer immediately — before the real, still-
+// open outer transaction was resolved at all: force the outer fn to then
+// return a real error and the widget row the inner call created is rolled
+// back while the event the inner call published stays on the bus, a
+// phantom audit event surviving a real rollback, against a real SQLite
+// database, no mocking involved.
 //
-// Post-fix, the nested call is refused outright — ErrNestedTenantSession,
+// The nested call is refused outright — ErrNestedTenantSession,
 // returned before any transaction (even a savepoint) opens and before fn
 // runs at all — so the inner Create never executes, nothing is ever
 // buffered, and nothing is ever published, independent of how the outer
@@ -198,11 +197,10 @@ func TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits(
 // package's SQLite driver, leaves the connection holding the uncommitted
 // transaction, fn's write visible to any later statement on that
 // connection. WithTenantSession's explicit rollback attempt
-// (rollbackAfterFailedCommit) must clear that residue; the assertion below
+// (rollbackAfterFailedCommit) must clear that residue: the assertion below
 // -- the fn's write is NOT visible once WithTenantSession has returned its
-// commit error -- failed on the pre-fix implementation (which delegated
-// the lifecycle to gorm's Transaction wrapper) with the row still counted,
-// and passes after.
+// commit error -- is what pins rollbackAfterFailedCommit's residue
+// clearing.
 func TestWithTenantSession_SQLite_CommitTimeFailure_RollbackAttemptClearsTheResidue(t *testing.T) {
 	dsn := fmt.Sprintf("file:tenant_session_commit_failure_%d?mode=memory&cache=shared", tenantSessionNestedTestDBSeq.Add(1))
 
