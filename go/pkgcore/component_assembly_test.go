@@ -529,6 +529,19 @@ func TestPrepareAssetValidation(t *testing.T) {
 			t.Fatalf("Prepare with one carrier and one migration-free member = %v, want nil", err)
 		}
 	})
+
+	t.Run("a renamed copy validates under its module prefix", func(t *testing.T) {
+		// The carrier is a host-named copy of a descriptor implementing
+		// module "locgood", carrying the module's own resources: the id
+		// prefix is the MODULE's, so the copy validates exactly as the
+		// module's own descriptor would -- the shape a host override uses.
+		c := plainComponent("host.locgood.copy", &asmTokenA{})
+		c.Module = "locgood"
+		c.Locales = locales.FS
+		if _, err := prepareAssembly(t, []Component{c}, configEntry{key: "host.locgood.copy", value: nil}); err != nil {
+			t.Fatalf("Prepare with a renamed copy carrying its module's locales = %v, want nil", err)
+		}
+	})
 }
 
 func TestPreparePlanDeterminism(t *testing.T) {
