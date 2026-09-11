@@ -12,7 +12,6 @@ import (
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
-	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -88,23 +87,18 @@ type ExportService struct {
 	export *compliance.ExportService
 	queue  jobs.Queue
 
-	// bus and auditActions back the explicit admin.audit_export audit.Emit
-	// call Handle makes once an export's work actually completes -- fully
-	// or partially -- the same "explicit Emit over automatic write
-	// capture" shape ImpersonationService.recordAudit uses, for the
-	// identical reason: this module owns no row of its own to auto-capture
-	// a write against. Nil until Module.Register calls attachAudit,
-	// tolerated by skipping the audit side effect exactly like every other
-	// seam in this module before Register runs.
-	bus          pkgcore.EventBus
-	auditActions pkgcore.AuditActionRegistrar
-
-	// authnSvc resolves the requesting operator's display name onto the
-	// ctx actor Handle installs (see Handle and resolveActorName). Nil
-	// until Module.Register calls attachAudit; WithAuthn is a mandatory
-	// production option, so this is never nil in a correctly wired
-	// the assembly, and a nil-seam unit fixture records id-only actors.
-	authnSvc *authn.Service
+	// emitter carries the audit seam the explicit admin.audit_export
+	// record Handle makes once an export's work actually completes --
+	// fully or partially -- needs: the bus to publish on, the frozen
+	// action catalog, and the name resolver Handle resolves the
+	// requesting operator's display name through. The record's shape is
+	// the same "explicit Emit over automatic write capture"
+	// ImpersonationService.recordAudit uses, for the identical reason:
+	// this module owns no row of its own to auto-capture a write against.
+	// Unattached until Module.Register calls attachAudit, tolerated by
+	// skipping the audit side effect exactly like every other seam in
+	// this module before Register runs.
+	emitter auditEmitter
 }
 
 // NewExportService returns an ExportService calling export and enqueuing
@@ -113,15 +107,12 @@ func NewExportService(export *compliance.ExportService, queue jobs.Queue) *Expor
 	return &ExportService{export: export, queue: queue}
 }
 
-// attachAudit gives the service the bus and audit-action registry Handle
-// needs to record admin.audit_export -- plus the *authn.Service whose
-// users table Handle reads the requesting operator's display name from
-// (resolveActorName's own doc comment) -- all read from the host's
-// *pkgcore.ComponentRegistry (and authn module) during Module.Register.
+// attachAudit gives the service the audit seam Handle needs to record
+// admin.audit_export and to resolve the requesting operator's display
+// name, read from the host's *pkgcore.ComponentRegistry (and authn
+// module) during Module.Register -- see auditEmitter's own doc comment.
 func (s *ExportService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, authnSvc *authn.Service) {
-	s.bus = bus
-	s.auditActions = actions
-	s.authnSvc = authnSvc
+	s.emitter.attach(bus, actions, authnSvc)
 }
 
 // Enqueue validates tenantID and operatorUserID and enqueues one go/jobs
@@ -213,14 +204,14 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	// zero Actor for every admin-triggered export even though the
 	// operator identity was known and available the whole time.
 	//
-	// The actor is resolved against the users table here (resolveActorName)
-	// before it is layered on, so both this event and compliance's own
-	// carry the operator's display name, not an id-only Actor -- the
-	// worker context rebuilt from the job record has no other channel to
-	// learn it from, and the payload carries only the id Enqueue's HTTP
-	// caller resolved.
+	// The actor is resolved against the users table here (the emitter's
+	// resolveActor) before it is layered on, so both this event and
+	// compliance's own carry the operator's display name, not an id-only
+	// Actor -- the worker context rebuilt from the job record has no other
+	// channel to learn it from, and the payload carries only the id
+	// Enqueue's HTTP caller resolved.
 	if payload.OperatorUserID != "" {
-		ctx = pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc,
+		ctx = pkgcore.WithActor(ctx, s.emitter.resolveActor(ctx,
 			pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: payload.OperatorUserID}))
 	}
 
@@ -288,17 +279,14 @@ func auditExportFailureReason(manifest compliance.ExportManifest) string {
 // TenantService.SetStatus's own audit event, never a substituted
 // impersonation target.
 //
-// It is a no-op before Module.Register attaches a bus (the same
-// pre-Register tolerance every other explicit Emit call in this module
-// has), and a publish failure is logged and swallowed: the export itself
-// already succeeded and already delivered by the time this runs, so
-// surfacing an audit failure as this call's own error would report a
+// It is a no-op before Module.Register attaches the emitter's bus (the
+// same pre-Register tolerance every other explicit Emit call in this
+// module has), and a publish failure is logged and swallowed: the export
+// itself already succeeded and already delivered by the time this runs,
+// so surfacing an audit failure as this call's own error would report a
 // failure that did not happen -- matching
 // ImpersonationService.recordAudit's identical reasoning.
 func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, result *compliance.ExportResult, failureReason string) {
-	if s.bus == nil {
-		return
-	}
 	after := map[string]any{
 		"object_key": result.ObjectKey,
 	}
@@ -306,16 +294,16 @@ func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.Tenant
 		after["share_id"] = result.Delivery.ShareID
 		after["share_expires_at"] = result.Delivery.ExpiresAt
 	}
-	err := audit.Emit(ctx, s.bus, s.auditActions, audit.Input{
-		Action:   AuditActionAuditExport,
-		Resource: audit.Resource{Type: "admin.tenant", ID: string(tenantID)},
-		Result:   audit.Result{Success: failureReason == "", FailureReason: failureReason},
-		Changes:  &audit.Diff{After: after},
-	})
-	if err != nil {
-		obs.FromContext(ctx).Warn("admin failed to record an audit-export audit event",
-			"tenant_id", tenantID, "error", err)
-	}
+	s.emitter.emitBestEffort(ctx,
+		"admin failed to record an audit-export audit event",
+		[]any{"tenant_id", tenantID},
+		audit.Input{
+			Action:   AuditActionAuditExport,
+			Resource: audit.Resource{Type: "admin.tenant", ID: string(tenantID)},
+			Result:   audit.Result{Success: failureReason == "", FailureReason: failureReason},
+			Changes:  &audit.Diff{After: after},
+		},
+	)
 }
 
 // compile-time check that *ExportService satisfies jobs.Handler.

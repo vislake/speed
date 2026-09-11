@@ -80,21 +80,21 @@ type ImpersonationService struct {
 	// window loud rather than silently degraded.
 	attached bool
 
-	// bus and auditActions back the explicit audit.Emit calls Start and End
-	// make; notifier is what Start dispatches the mandatory security
-	// notification through. All three are nil until Module.Register calls
-	// attach, and the per-seam nil tolerances the methods below document
-	// (recordAudit's log-and-swallow, dispatchStartNotification's skip,
-	// validateTargetMembership's skip, resolveNotificationLocale's
+	// emitter carries the audit seam the explicit admin.impersonation.*
+	// records Start and End make need (auditEmitter's own doc comment);
+	// notifier is what Start dispatches the mandatory security
+	// notification through. Both are unattached until Module.Register
+	// calls attach, and the per-seam nil tolerances the methods below
+	// document (recordAudit's log-and-swallow, dispatchStartNotification's
+	// skip, validateTargetMembership's skip, resolveNotificationLocale's
 	// verbatim-locale branch) cover only the in-package test shapes whose
 	// attach passes a subset of the seams -- none of them is reachable
 	// through a public path, since attach is unexported and Module.Register
 	// always attaches the full mandatory set. Start itself never reaches
 	// any of them before attach has run at all: the attached guard above
 	// refuses it with ErrImpersonationNotWired.
-	bus          pkgcore.EventBus
-	auditActions pkgcore.AuditActionRegistrar
-	notifier     Notifier
+	emitter  auditEmitter
+	notifier Notifier
 
 	// authnSvc resolves the impersonation target's own existence and locale
 	// for the mandatory security notification (see resolveNotificationLocale)
@@ -124,7 +124,7 @@ type ImpersonationService struct {
 	// comment has the full reasoning for why this cannot be a
 	// construction-time option).
 	//
-	// Unlike the Register-time seams above (bus, notifier, authnSvc,
+	// Unlike the Register-time seams above (emitter, notifier, authnSvc,
 	// members -- each enforced by a mandatory With* option failing
 	// the assembly), AttachRBAC is a host-performed call nothing in this
 	// module can enforce at assembly time. Start therefore refuses while
@@ -162,10 +162,14 @@ func newImpersonationService(repo *ImpersonationRepository) *ImpersonationServic
 // (and, for authnSvc, from Module.authnModule.Service()) during
 // Module.Register. It is the one moment the attached flag above flips:
 // until it has run, Start refuses with ErrImpersonationNotWired.
+//
+// authnSvc lands on both the emitter (record-time actor-name resolution,
+// auditEmitter's own doc comment) and the service's own field (the target
+// locale and existence lookups resolveNotificationLocale performs with
+// it).
 func (s *ImpersonationService) attach(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, notifier Notifier, authnSvc *authn.Service, members MembershipChecker) {
 	s.attached = true
-	s.bus = bus
-	s.auditActions = actions
+	s.emitter.attach(bus, actions, authnSvc)
 	s.notifier = notifier
 	s.authnSvc = authnSvc
 	s.members = members
@@ -462,17 +466,20 @@ func (s *ImpersonationService) Lookup(ctx context.Context, id string) (*Imperson
 // capture has no way to populate OnBehalfOf.
 //
 // Both identities are resolved against the users table here, at record
-// time (resolveActorName), so a dual-identity row carries both display
-// names -- the impersonated target's on Actor and the real administrator's
-// on OnBehalfOf -- and stays readable after either account is renamed or
-// deleted. A system onBehalfOf (the automatic end) and any id with no user
-// row behind it stay id-only, per resolveActorName's own policy.
+// time (the emitter's resolveActor), so a dual-identity row carries both
+// display names -- the impersonated target's on Actor and the real
+// administrator's on OnBehalfOf -- and stays readable after either
+// account is renamed or deleted. A system onBehalfOf (the automatic end)
+// and any id with no user row behind it stay id-only, per
+// resolveActorName's own policy.
 //
 // A publish failure is logged and swallowed: by the time this runs the
 // grant row has already committed (Start) or already been marked ended
 // (End), so surfacing an audit failure as the caller's own error would
 // report a failure that did not happen -- matching go/pki's
-// Handler.recordAudit and notes' recordNoteCreatedAudit.
+// Handler.recordAudit and notes' recordNoteCreatedAudit, and carried by
+// the emitter's emitBestEffort. The publish is likewise skipped while the
+// emitter carries no bus (the pre-Register window).
 //
 // The started event's after map is where the reason lives: Start records
 // {target_tenant_id, reason, expires_at} there -- the operator's
@@ -482,27 +489,24 @@ func (s *ImpersonationService) Lookup(ctx context.Context, id string) (*Imperson
 // by the operator who wrote it long after the grant it justifies has
 // ended.
 func (s *ImpersonationService) recordAudit(ctx context.Context, action string, onBehalfOf pkgcore.Actor, targetUserID, grantID string, after map[string]any) {
-	if s.bus == nil {
-		return
-	}
-	auditCtx := pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc,
+	auditCtx := pkgcore.WithActor(ctx, s.emitter.resolveActor(ctx,
 		pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: targetUserID}))
-	auditCtx = pkgcore.WithOnBehalfOf(auditCtx, resolveActorName(ctx, s.authnSvc, onBehalfOf))
+	auditCtx = pkgcore.WithOnBehalfOf(auditCtx, s.emitter.resolveActor(ctx, onBehalfOf))
 
 	var diff *audit.Diff
 	if after != nil {
 		diff = &audit.Diff{After: after}
 	}
-	err := audit.Emit(auditCtx, s.bus, s.auditActions, audit.Input{
-		Action:   action,
-		Resource: audit.Resource{Type: "admin.impersonation_grant", ID: grantID},
-		Result:   audit.Result{Success: true},
-		Changes:  diff,
-	})
-	if err != nil {
-		obs.FromContext(ctx).Warn("admin failed to record an impersonation audit event",
-			"grant_id", grantID, "action", action, "error", err)
-	}
+	s.emitter.emitBestEffort(auditCtx,
+		"admin failed to record an impersonation audit event",
+		[]any{"grant_id", grantID, "action", action},
+		audit.Input{
+			Action:   action,
+			Resource: audit.Resource{Type: "admin.impersonation_grant", ID: grantID},
+			Result:   audit.Result{Success: true},
+			Changes:  diff,
+		},
+	)
 }
 
 // enterTargetSystemContext opens the cross-tenant system-context grant
@@ -512,7 +516,7 @@ func (s *ImpersonationService) recordAudit(ctx context.Context, action string, o
 func (s *ImpersonationService) enterTargetSystemContext(ctx context.Context, in StartInput) (context.Context, error) {
 	sysCtx, err := tenancy.WithSystemContext(
 		pkgcore.WithTenant(ctx, in.TargetTenantID),
-		s.bus,
+		s.emitter.bus,
 		pkgcore.SystemReason{
 			Actor:   in.AdminUserID,
 			Purpose: SystemPurposeAdminCrossTenant,
