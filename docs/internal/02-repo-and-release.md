@@ -94,6 +94,8 @@ speed/
 
 **发布机制的落地形态：离线验证与真实发布的执行腿已落地（v0.0.1 首发，2026-09-10）；真实发布类其余事项随 v1.0（M4），清单见 [24 延迟事项路线图](24-deferral-roadmap.md) 第 5 章。**
 
+> **破坏面登记**：自 2026-09 以来的全部破坏性变更（宿主装配契约翻转、内核/preset 机制退役、环境变量重命名等）逐条登记在 [31 发布对账清单](31-release-reconciliation.md)，每条附出处提交与替代路径；下一次发布的 release note 与升级指引以该清单为底稿。v0.0.1 已作废、无已发布消费者，该清单是预登记而非对已发布契约的追溯说明。
+
 - **发布协调器（离线验证）**：`tools/release/lockstep-release.py`（纯标准库，自带 unittest 套件）在运行时推导可发布集合——Go 侧为 go.work `use` 条目（`use` 条目本身就是模块的发布登记，见 [19 开发工作流](19-dev-workflow.md)），npm 侧为 `web/packages/*`——打印完整单版本计划（每个模块将获得的 `go/<module>/<version>` tag、仓库根 tag `<version>` 与每个包经 changesets fixed 组将 bump 到的版本），退出码 0 **仅当**计划一致：版本号符合 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`（v 必需）、go.work 与 `go/` 目录树双向完备、npm 版本统一、`web/.changeset/config.json` 的 fixed 组恰好覆盖现存包；该版本已存在的 tag（模块 tag 或根 tag）只警告不失败——同一版本重发（部分完成态的恢复路径）是受支持场景。入口：`task release:plan VERSION=v1.2.0`；`.github/workflows/release.yml` 手动触发时先校验版本号格式，再跑协调器默认模式与 `--self-test`，随后由 publish job 执行真实发布。
 - **同一版本的 tag 语义（模块 tag 与根 tag 并存、互不替代，同版本 sha 不同是设计）**：一次发布在仓库里留下两组同版本号 tag——
   - **模块 tag `go/<module>/<version>`**（如 `go/tenancy/v0.0.1`）：Go module proxy 的解析面，钉在模块的发布提交上；已发布的模块 tag 永不重打、永不移动（模块代理会缓存 tag，移动会让已解析的消费者拿到不同内容）。v0.0.1 的 21 个模块 tag 发布时全部指向 `fbaaaf98`，后随该版本作废从远端与本地删除（删 tag 不动模块代理已缓存的产物）。
