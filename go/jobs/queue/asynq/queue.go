@@ -69,7 +69,7 @@ type Queue struct {
 	// bus is the EventBus this Queue publishes jobs.job.terminal events on,
 	// set by WithEventBus. nil (the option omitted) means the queue
 	// publishes nothing: no publish call is made at any of the three
-	// terminal points, exactly the pre-signal behavior.
+	// terminal points.
 	bus pkgcore.EventBus
 
 	tenantMu         sync.Mutex

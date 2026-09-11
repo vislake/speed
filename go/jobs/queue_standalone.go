@@ -240,8 +240,7 @@ type StandaloneQueue struct {
 	// bus is the EventBus this queue publishes jobs.job.terminal events on,
 	// set by WithEventBus. nil (the option omitted) means the queue
 	// publishes nothing: Start launches no publish pass and
-	// terminal_published_at is never written, exactly the pre-signal
-	// behavior.
+	// terminal_published_at is never written.
 	bus pkgcore.EventBus
 
 	handlersMu sync.RWMutex

@@ -57,7 +57,8 @@ type faultTierFake struct {
 
 	// swallow is the deliberate defect: when true, a failing
 	// cancellation-state read is swallowed and the Job's natural record
-	// state reported, asynq's pre-c26b058b shape.
+	// state reported -- the fail-open answer the failure-closure
+	// assertions exist to catch.
 	swallow bool
 
 	// fault is the injector state: when true, every cancellation-state
