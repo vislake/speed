@@ -198,10 +198,15 @@ class EngineOwnedCallRules(unittest.TestCase):
         self.assertEqual(m.scan(root), [])
 
     def test_a_longer_package_name_ending_in_the_selector_stays_silent(self):
+        # Business-path file: the banned selectors' lookbehind precision is
+        # what this pins (myobs.Init is not obs.Init; xpkgcore.NewKernel is
+        # not pkgcore.NewKernel). It lives outside the composition paths
+        # because the staged component-assembly bans do fire on any .Init(
+        # inside them, which the staged class pins separately.
         root = make_tree(
             {
-                "examples/reference-app/internal/app/server.go": (
-                    "package app\n\n"
+                "examples/reference-app/internal/notes/store.go": (
+                    "package notes\n\n"
                     "func boot() {\n"
                     "\t_ = myobs.Init(ctx)\n"
                     "\t_ = xpkgcore.NewKernel()\n"
@@ -220,6 +225,75 @@ class EngineOwnedCallRules(unittest.TestCase):
                     "\t_ = pkgcore.NewKernel()\n"
                     "\tmux := http.NewServeMux()\n"
                     "\t_ = mux\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+
+class ComponentAssemblyStagedRules(unittest.TestCase):
+    """The staged half: the component assembly's forbidden shapes fire, and
+    the calls the hosts legitimately make today stay silent."""
+
+    def test_new_world_wrong_shapes_fire(self):
+        root = make_tree(
+            {
+                "go/saasctl/internal/template/project/cmd/server/server.go": (
+                    "package main\n\n"
+                    "func boot(ctx context.Context) {\n"
+                    "\treg := pkgcore.NewComponentRegistry()\n"
+                    "\t_ = reg.Prepare(ctx)\n"
+                    "\t_ = reg.Construct(ctx)\n"
+                    "\t_ = reg.Verify(ctx)\n"
+                    "\t_ = reg.Init(ctx)\n"
+                    "}\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        for label in (
+            "pkgcore.NewComponentRegistry",
+            "a component-registry Prepare call",
+            "a component-registry Construct call",
+            "a component-registry Init call",
+            "a component-registry Verify call",
+        ):
+            self.assertTrue(
+                any(f"calls {label}" in f for f in findings), (label, findings)
+            )
+
+    def test_business_code_and_test_files_stay_silent(self):
+        root = make_tree(
+            {
+                # Module-level code outside the composition paths: its own
+                # Prepare/Init methods are not the assembly's stages.
+                "examples/reference-app/internal/notes/handler.go": (
+                    "package notes\n\n"
+                    "func (h *Handler) Init() {}\n"
+                    "func (h *Handler) Prepare() {}\n"
+                ),
+                # A test file inside a composition path: exempt.
+                "examples/reference-app/internal/app/server_test.go": (
+                    "package app\n\n"
+                    "func TestBoot(t *testing.T) { _ = reg.Prepare(context.Background()) }\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_host_service_lifecycle_calls_stay_silent(self):
+        # The hosts' composition files call Start/Stop/Close on their own
+        # services today; those verbs stage out of the ban set until the
+        # hosts migrate.
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/attach.go": (
+                    "package app\n\n"
+                    "func wire(q *jobs.StandaloneQueue, s *jobs.Scheduler) {\n"
+                    "\t_ = q.Start(ctx)\n"
+                    "\t_ = q.Close(ctx)\n"
+                    "\ts.Stop()\n"
                     "}\n"
                 ),
             }

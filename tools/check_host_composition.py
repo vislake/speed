@@ -31,6 +31,22 @@ this gate checks is the no-fork half, in three layers:
     same thing through the engine's options -- WithKernelOptions,
     WithDatabase, HTTPSpec/Compose, WithHooks -- or to keep a genuinely
     host-specific symbol under a host-specific name.
+  * neither may re-issue a step of the COMPONENT assembly the engine
+    drives (HOST_COMPOSITION_ASSEMBLY_BANS, the staged half of the ban
+    set): a host that creates its own ComponentRegistry or drives the
+    component stages (Prepare, Construct, Verify, Init) itself has forked
+    the shared composition's new machinery. The two ban tables are
+    deliberately staged: the old table anchors to the pre-component option
+    surface (go/app's Option set) and the new table to the component
+    surface, both stay in force while the hosts are still on the option
+    surface, and the old table retires together with that surface (the
+    gate sync of the round that migrates the hosts). The new table's
+    stage bans deliberately omit Stop, Start and Close: the hosts'
+    composition files call those verbs on their own services today (a
+    scheduler, a queue, a service), so banning them now would fire on
+    legitimate code; a hand-rolled drive is caught at its first call
+    (Prepare) and at the registry's creation, which is the pair the bans
+    build on.
 
 Test files are deliberately exempt from the sentinel and call-ban scans:
 tests build throwaway muxes, fake servers and their own mini-kernels on
@@ -157,6 +173,25 @@ HOST_COMPOSITION_CALL_BANS = (
     ("obs.Init", r"(?<![A-Za-z0-9_.])obs\.Init\(", "tree", ()),
 )
 
+# The staged half of the ban set: the component assembly's forbidden shapes,
+# appended ahead of the round that migrates the hosts onto it. Each entry is
+# (label, regex, scope, allowed), read exactly as HOST_COMPOSITION_CALL_BANS
+# above; the finding names the component surface as the remedy. The table
+# retires into the single ban set once the old option surface is gone (see
+# the module docstring's staging paragraph).
+HOST_COMPOSITION_ASSEMBLY_BANS = (
+    (
+        "pkgcore.NewComponentRegistry",
+        r"(?<![A-Za-z0-9_.])pkgcore\.NewComponentRegistry\(",
+        "tree",
+        (),
+    ),
+    ("a component-registry Prepare call", r"\.Prepare\(", "composition", ()),
+    ("a component-registry Construct call", r"\.Construct\(", "composition", ()),
+    ("a component-registry Init call", r"\.Init\(", "composition", ()),
+    ("a component-registry Verify call", r"\.Verify\(ctx", "composition", ()),
+)
+
 # Directory names the scans never descend into.
 SKIP_DIRS = {".git", ".claude", "node_modules", "vendor", "__pycache__"}
 
@@ -211,6 +246,10 @@ def scan(root: pathlib.Path) -> list[str]:
         (label, re.compile(rx), scope, allowed)
         for label, rx, scope, allowed in HOST_COMPOSITION_CALL_BANS
     ]
+    assembly_bans = [
+        (label, re.compile(rx), scope, allowed)
+        for label, rx, scope, allowed in HOST_COMPOSITION_ASSEMBLY_BANS
+    ]
     for tree_rel in (TEMPLATE_TREE, APP_TREE):
         for path, rel in go_files(root, tree_rel):
             rel_str = rel.as_posix()
@@ -254,6 +293,21 @@ def scan(root: pathlib.Path) -> list[str]:
                             "WithDatabase, WithPreDB, WithModules, "
                             "HTTPSpec.Compose, WithHooks) instead of "
                             "re-issuing the call here"
+                        )
+                for label, pattern, scope, allowed in assembly_bans:
+                    if scope == "composition" and not in_composition:
+                        continue
+                    if rel_str in allowed:
+                        continue
+                    if pattern.search(line):
+                        findings.append(
+                            f"{rel_str}:{line_no}: calls {label}, a step "
+                            "of the config-driven component assembly the "
+                            f"engine drives ({KERNEL_MODULE}): register "
+                            "local components with pkgcore.Register and "
+                            "drive the assembly through the engine's "
+                            "RunAssembly/Assemble instead of re-issuing "
+                            "the call here"
                         )
     return findings
 
