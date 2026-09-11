@@ -36,23 +36,25 @@ import (
 // component strictly after authn's own declaration stage), org, compliance
 // and notification as mandatory dependencies -- Register refuses without
 // each -- and metering and billing as optional ones, the module's own
-// documented absent-with-no-dashboard-dimension wiring. rbac is a required
-// dependency of the provider's product: the *rbac.Service is a runtime
-// service published after rbac's declaration stage, and the requirement is
-// what orders admin's declaration stage strictly after it. The jobs queue
-// is mandatory: the audit-export leg enqueues onto it (ErrQueueRequired).
+// documented absent-with-no-dashboard-dimension wiring. rbac's *Module is a
+// mandatory dependency: the *rbac.Service is a runtime service (services
+// never resolve token requirements), so the requirement is expressed
+// against the product, which orders admin's Start turn strictly after
+// rbac's -- where the service is published and its catalog snapshot
+// completed -- and the Start callback reads the service at its use time.
+// The jobs queue is mandatory: the audit-export leg enqueues onto it
+// (ErrQueueRequired).
 //
 // SystemPurposes declares SystemPurposeAdminCrossTenant: the one audited
 // purpose every cross-tenant operation this module performs acts under. The
 // assembly registers it at the Init stage's entry, before any Init callback
 // runs.
 //
-// Init runs the module's one declaration entry point, Register, then
-// AttachRBAC -- the *rbac.Service whose catalog snapshot is already frozen
-// when rbac's own Init turn published it into the by-type context, so the
-// RoleService and impersonation pipeline wired here read a complete
-// catalog, and the roles fail closed exactly as they do on the host path
-// until this call runs.
+// Init runs the module's one declaration entry point, Register. Start then
+// calls AttachRBAC with the published *rbac.Service: by the Start stage
+// rbac's catalog snapshot is structurally complete, so the RoleService and
+// impersonation pipeline wired here read the full catalog, and the roles
+// fail closed exactly as they do until this call runs.
 var adminComponent = pkgcore.Component{
 	Name:           "admin",
 	Module:         "admin",
@@ -66,7 +68,7 @@ var adminComponent = pkgcore.Component{
 		{Token: (*org.Module)(nil)},
 		{Token: (*compliance.Module)(nil)},
 		{Token: (*notification.Module)(nil)},
-		{Token: (*rbac.Service)(nil)},
+		{Token: (*rbac.Module)(nil)},
 		{Token: (*metering.Module)(nil), Optional: true},
 		{Token: (*billing.Module)(nil), Optional: true},
 	},
@@ -118,8 +120,16 @@ var adminComponent = pkgcore.Component{
 		if !ok {
 			return fmt.Errorf("admin: component init got a %T instance, want *admin.Module", instance)
 		}
-		if err := m.Register(reg); err != nil {
-			return err
+		return m.Register(reg)
+	},
+	// Start binds the rbac Service the RoleService and the impersonation
+	// pipeline decide through: the requires edge on rbac's product orders
+	// this turn after rbac's, so the service is published and its catalog
+	// snapshot complete when this reads it.
+	Start: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("admin: component start got a %T instance, want *admin.Module", instance)
 		}
 		svc, err := pkgcore.Get[*rbac.Service](reg)
 		if err != nil {
