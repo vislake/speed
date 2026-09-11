@@ -40,8 +40,8 @@ func insertTestSendRecord(t *testing.T, repo *notification.SendRecordRepository,
 	}
 }
 
-// TestSendRecordSearchService_SingleTenant_Filters pins D10's single-
-// tenant path: a real SendRecordRepository row, written and read back
+// TestSendRecordSearchService_SingleTenant_Filters pins the single-tenant
+// path: a real SendRecordRepository row, written and read back
 // through notification's own real ListByFilter, filtered by channel and
 // status exactly as SendRecordFilter's own contract promises.
 func TestSendRecordSearchService_SingleTenant_Filters(t *testing.T) {
