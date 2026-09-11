@@ -182,10 +182,10 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	}
 }
 
-// TestComponent_SelfDescribesItsSystemPurposes pins the declaration the
-// module used to make from its own Register: the descriptor carries exactly
-// the two audited purposes the module acts under, so the assembly registers
-// the same set the module's registration turn once did.
+// TestComponent_SelfDescribesItsSystemPurposes pins the component's own
+// declaration: the descriptor carries exactly the two audited purposes the
+// module acts under, so the assembly registers the module's full audited
+// set.
 func TestComponent_SelfDescribesItsSystemPurposes(t *testing.T) {
 	want := []pkgcore.SystemPurpose{SystemPurposeRetentionSweep, SystemPurposeRightToErasure}
 	if !slices.Equal(complianceComponent.SystemPurposes, want) {

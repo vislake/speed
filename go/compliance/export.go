@@ -136,7 +136,7 @@ const exportDeliveryMaxViews = 1
 // ok is false when the tenant has configured none (the value resolved at
 // go/config's own schema default) -- Export then falls back to
 // defaultExportDeliveryExpiry, exactly as if no
-// ExportDeliveryExpiryReader had been wired at all. err is a genuine read
+// ExportDeliveryExpiryReader were wired at all. err is a genuine read
 // failure: Export reports it wrapped in ErrExportDeliveryFailed rather
 // than guessing at a default.
 type ExportDeliveryExpiryReader interface {
@@ -495,8 +495,8 @@ func (s *ExportService) deliverExport(ctx context.Context, tenant pkgcore.Tenant
 // answer is clamped DOWN to the sharing ceiling, the closest mintable
 // duration to what the operator configured, rather than silently dropped
 // to defaultExportDeliveryExpiry. The clamp uses the ceiling sharing
-// itself enforces for a tenant with no longer configured default of its
-// own (MaxExplicitShareLifetime's own doc comment: a tenant's own sharing
+// itself enforces for a tenant with no configured default of its own
+// (MaxExplicitShareLifetime's own doc comment: a tenant's own sharing
 // default can only raise the operative bound, never lower it below this
 // floor), so a window clamped here is accepted by sharing for every
 // tenant.
