@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+// KVStoreRegistry mirrors EventBusRegistry for the "kv" seam ("kv.redis"
+// registers through the kv/redis subpackage).
+var KVStoreRegistry = newBuiltinKVStoreRegistry()
+
+func newBuiltinKVStoreRegistry() *SeamRegistry[KVStore] {
+	r := NewSeamRegistry[KVStore]()
+	mustRegister(r, Registration[KVStore]{
+		Name:         "kv.memory",
+		Capabilities: 0,
+		New:          func(Config) (KVStore, error) { return NewMemoryKVStore(), nil },
+	})
+	return r
+}
+
 const (
 	// kvNoExpiry is the boundary for the ttl argument of Set: any ttl at or below
 	// it stores the key without an expiry.
