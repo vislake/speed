@@ -46,7 +46,7 @@
  * genuinely listed none.
  */
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -60,9 +60,13 @@ import {
   useBillingListInvoices,
 } from '@speed/api-sdk'
 import type { BillingInvoice, BillingInvoiceStatus } from '@speed/api-sdk'
-import { EmptyState } from '@speed/ui-kit'
-import { createInvoiceFormatters } from './internal/invoice-format.js'
-import { errorCodeOf, InlineError } from './internal/inline-error.js'
+import {
+  AsyncSection,
+  errorCodeOf,
+  ListSkeleton,
+} from '@speed/ui-kit'
+import { invoiceFormatters } from './internal/invoice-format.js'
+import { InlineError } from './internal/inline-error.js'
 import { useBillingUiTranslation } from './internal/translation.js'
 
 /**
@@ -146,17 +150,10 @@ function InvoiceListSkeleton({ label }: { readonly label: string }) {
     { primary: '22%', secondary: '18%' },
   ]
   return (
-    <Box role="status" aria-label={label} aria-busy="true">
-      {widths.map((width, index) => (
-        <Box
-          key={String(index)}
-          sx={{
-            py: 1.5,
-            ...(index > 0
-              ? { borderTop: '1px solid', borderColor: 'divider' }
-              : {}),
-          }}
-        >
+    <ListSkeleton
+      label={label}
+      rows={widths.map((width) => (
+        <>
           <Box
             sx={{
               display: 'flex',
@@ -174,9 +171,9 @@ function InvoiceListSkeleton({ label }: { readonly label: string }) {
             </Box>
           </Box>
           <Skeleton variant="text" width="30%" />
-        </Box>
+        </>
       ))}
-    </Box>
+    />
   )
 }
 
@@ -184,10 +181,10 @@ function InvoiceListSkeleton({ label }: { readonly label: string }) {
  * rendered field by field. Mounted only while its row is expanded. */
 function InvoiceDetail({ invoiceId }: { readonly invoiceId: string }) {
   const { t, i18n } = useBillingUiTranslation()
-  const fmt = useMemo(
-    () => createInvoiceFormatters(i18n.language),
-    [i18n.language],
-  )
+  // The locale's shared formatter set: the module caches one set per
+  // locale, so a row and its expanded document reuse the constructors
+  // instead of building Intl formatters per row.
+  const fmt = invoiceFormatters(i18n.language)
   const { data, error, isPending, refetch } = useBillingGetInvoice(invoiceId)
   const failureCode =
     data === undefined && !isPending ? errorCodeOf(error) : null
@@ -314,10 +311,10 @@ function InvoiceListItem({
   readonly index: number
 }) {
   const { t, i18n } = useBillingUiTranslation()
-  const fmt = useMemo(
-    () => createInvoiceFormatters(i18n.language),
-    [i18n.language],
-  )
+  // The locale's shared formatter set: the module caches one set per
+  // locale, so a row and its expanded document reuse the constructors
+  // instead of building Intl formatters per row.
+  const fmt = invoiceFormatters(i18n.language)
   const [expanded, setExpanded] = useState(false)
   // The region's id is the document's own: one region per invoice, and
   // its name stays stable across expansions.
@@ -457,65 +454,39 @@ export function InvoicesSection() {
         </Box>
       )}
 
-      {pending ? (
-        <InvoiceListSkeleton label={t('invoices.loading')} />
-      ) : invoices === undefined ? (
-        // This guard tests the absent list field with the loading
-        // branch already excluded above: pending is false here, so no
-        // invoices means the query settled without delivering a list.
-        // Two shapes settle that way: a load that failed with no data
-        // (isError), and a successful answer whose body omits the
-        // invoices key -- a 200 without the list reads as an error, not
-        // as "no invoices" (nothing re-arms the loading branch for it:
-        // isPending is false and stays false), and the Retry is the
-        // exit.
-        <EmptyState
-          variant="error"
-          title={t('invoices.error.title')}
-          description={t('invoices.error.description')}
-          // The retry is the exit for both shapes this state covers. A
-          // refetch of a data-less failed load moves the query back to
-          // the pending state, so the section re-enters the loading
-          // branch above -- that loading announcement is the retry's
-          // progress feedback; a refetch of a settled field-less answer
-          // keeps the query's own data, so this state holds until the
-          // refetched answer changes it. Either way react-query dedupes
-          // the per-query fetches, so a click can never overlap a
-          // request already in flight.
-          action={
-            <Button onClick={() => void refetch()}>
-              {t('invoices.retry')}
-            </Button>
-          }
-          // showHeader is false here (see its definition above): this
-          // EmptyState's title stands in for the hidden h2 section
-          // header, so it must render at that same level or the page's
-          // heading order skips straight from h1 to h6.
-          headingLevel="h2"
-        />
-      ) : invoices.length === 0 ? (
-        <EmptyState
-          variant="empty"
-          title={t('invoices.empty.title')}
-          description={t('invoices.empty.description')}
-          headingLevel="h2"
-        />
-      ) : (
-        // The rows are one real list: a screen-reader user hears each
-        // invoice as one item of a numbered set with a boundary between
-        // rows, never a flat div stack. role="list" keeps the list
-        // semantics under WebKit, which strips them from a
-        // list-style-none ul.
-        <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
-          {invoices.map((invoice, index) => (
-            <InvoiceListItem
-              key={invoice.id}
-              invoice={invoice}
-              index={index}
-            />
-          ))}
-        </Box>
-      )}
+      <AsyncSection
+        pending={pending}
+        payload={invoices}
+        empty={invoices !== undefined && invoices.length === 0}
+        loading={<InvoiceListSkeleton label={t('invoices.loading')} />}
+        errorState={{
+          title: t('invoices.error.title'),
+          description: t('invoices.error.description'),
+          retryLabel: t('invoices.retry'),
+          onRetry: () => void refetch(),
+        }}
+        emptyState={{
+          title: t('invoices.empty.title'),
+          description: t('invoices.empty.description'),
+        }}
+      >
+        {(settledInvoices) => (
+          // The rows are one real list: a screen-reader user hears each
+          // invoice as one item of a numbered set with a boundary between
+          // rows, never a flat div stack. role="list" keeps the list
+          // semantics under WebKit, which strips them from a
+          // list-style-none ul.
+          <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+            {settledInvoices.map((invoice, index) => (
+              <InvoiceListItem
+                key={invoice.id}
+                invoice={invoice}
+                index={index}
+              />
+            ))}
+          </Box>
+        )}
+      </AsyncSection>
     </Box>
   )
 }

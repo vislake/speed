@@ -35,6 +35,11 @@
  * as test data, so the copies cannot drift.
  */
 
+import {
+  CLIENT_TRANSPORT_ERROR_CODES,
+  SESSION_LIFECYCLE_ERROR_CODES,
+  createErrorTextResolver,
+} from '@speed/i18n'
 import { useBillingUiTranslation } from './translation.js'
 
 /**
@@ -48,20 +53,13 @@ export const ERROR_TEXT_CODES = [
   // package's list or from the host; an id that names no invoice of
   // the caller's tenant answers it.
   'billing.invoice_not_found',
-  // authn: session lifecycle -- the shared family every protected
-  // speed surface whitelists: a read of a signed-in surface is
-  // answered with these when the caller's session dies mid-flight, and
-  // the api-client 401-refresh leg surfaces them when its refresh
-  // cannot repair the request.
-  'authn.session_not_found',
-  'authn.session_revoked',
-  'authn.token_expired',
-  'authn.refresh_token_invalid',
-  'authn.refresh_token_reused',
-  // Transport-level failures of the api-client contract.
-  'client.network',
-  'client.timeout',
-  'client.protocol',
+  // The shared families (see @speed/i18n): a read of a signed-in
+  // surface is answered with the session-lifecycle codes when the
+  // caller's session dies mid-flight (the api-client 401-refresh leg
+  // surfaces them when its refresh cannot repair the request), and
+  // every caller here talks through the api-client's transport.
+  ...SESSION_LIFECYCLE_ERROR_CODES,
+  ...CLIENT_TRANSPORT_ERROR_CODES,
 ] as const
 
 const KNOWN_CODES = new Set<string>(ERROR_TEXT_CODES)
@@ -72,6 +70,5 @@ const KNOWN_CODES = new Set<string>(ERROR_TEXT_CODES)
  */
 export function useBillingUiErrorText(): (code: string) => string {
   const { t } = useBillingUiTranslation()
-  return (code: string) =>
-    t(KNOWN_CODES.has(code) ? `errors.${code}` : 'errors.unknown')
+  return createErrorTextResolver(t, KNOWN_CODES)
 }

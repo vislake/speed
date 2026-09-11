@@ -17,7 +17,10 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { createInvoiceFormatters } from './invoice-format.js'
+import {
+  createInvoiceFormatters,
+  invoiceFormatters,
+} from './invoice-format.js'
 
 // The factory renders document dates in the UTC calendar (see
 // invoice-format.ts's header), so the expected strings below recompute
@@ -141,5 +144,23 @@ describe('periodRange', () => {
   it('answer null when either bound does not parse', () => {
     const zh = createInvoiceFormatters('zh-CN')
     expect(zh.periodRange(JULY_START, NOT_A_TIMESTAMP)).toBeNull()
+  })
+})
+
+describe('invoiceFormatters', () => {
+  it('hand out one set per locale, the same instance on every call', () => {
+    expect(invoiceFormatters('zh-CN')).toBe(invoiceFormatters('zh-CN'))
+    expect(invoiceFormatters('en-US')).toBe(invoiceFormatters('en-US'))
+    expect(invoiceFormatters('zh-CN')).not.toBe(invoiceFormatters('en-US'))
+  })
+
+  it('hand out a set whose formatters agree with a fresh construction', () => {
+    const cached = invoiceFormatters('zh-CN')
+    const fresh = createInvoiceFormatters('zh-CN')
+    expect(cached.amount(123456, 'CNY')).toBe(fresh.amount(123456, 'CNY'))
+    expect(cached.date(JULY_START)).toBe(fresh.date(JULY_START))
+    expect(cached.periodLabel(JULY_START, JULY_END)).toBe(
+      fresh.periodLabel(JULY_START, JULY_END),
+    )
   })
 })

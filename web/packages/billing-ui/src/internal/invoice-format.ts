@@ -1,7 +1,8 @@
 /**
- * The billing surface's Intl formatters, one locale-bound factory so a
- * component memoizes one object per language instead of constructing
- * Intl formatters per row and per field.
+ * The billing surface's Intl formatters, constructed once per locale
+ * and handed out through `invoiceFormatters`: a list renders one row
+ * per invoice, so a per-row construction would build the same Intl
+ * formatters once per row and per field.
  *
  * Money formats through Intl.NumberFormat with the invoice's own
  * currency -- never by hand, since symbol placement and decimal digits
@@ -125,4 +126,22 @@ export function createInvoiceFormatters(locale: string): InvoiceFormatters {
       return `${mediumDate.format(start)}${RANGE_SEPARATOR}${mediumDate.format(end)}`
     },
   }
+}
+
+/**
+ * The formatter sets seen so far, one per locale: the sets are pure for
+ * a locale and a render calls them once per row and per field, so the
+ * cache is what keeps a 50-row list at one construction per locale
+ * instead of one per row.
+ */
+const formattersByLocale = new Map<string, InvoiceFormatters>()
+
+/** The locale's formatter set (created on first use, then cached). */
+export function invoiceFormatters(locale: string): InvoiceFormatters {
+  let formatters = formattersByLocale.get(locale)
+  if (formatters === undefined) {
+    formatters = createInvoiceFormatters(locale)
+    formattersByLocale.set(locale, formatters)
+  }
+  return formatters
 }
