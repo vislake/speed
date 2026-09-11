@@ -2305,7 +2305,7 @@ func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing
 	// The concurrent deleter: mark-delete target's row on db2 and hold the
 	// transaction open until release. The statement's own return establishes
 	// the hold -- never timing luck -- exactly as in go/dbkit/dialect/sqlite's
-	// busy_timeout_test.go rig.
+	// dialect_sqlite_test.go rig (TestSQLiteBusyTimeout_ContendingWriterWaitsThenSucceeds).
 	held := make(chan struct{})
 	release := make(chan struct{})
 	holderErr := make(chan error, 1)
