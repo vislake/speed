@@ -300,19 +300,17 @@ type AuditEvent struct {
 	// string when no RequestMetadata was present -- a background job with
 	// no request behind it. Read an empty value exactly that way: "no
 	// request context was carried", never as information about which
-	// background process ran (the framing earlier revisions of this
-	// comment used, which dressed an always-empty column as a
-	// conditionally-empty one; the carrier is what makes the column
-	// genuinely conditional now). The system-context-entered subscriber
+	// background process ran. The RequestMetadata carrier is what makes
+	// the column genuinely conditional, and an empty value records only
+	// the carrier's absence. The system-context-entered subscriber
 	// (module.go's onSystemContextEntered) is the one row-producing path
 	// that stores the empty string unconditionally, because tenancy's
 	// system-context event payload carries no request context by design.
 	// go/dbkit/audit/AGENTS.md's "Column inventory" section carries the
 	// standing three-question account (who fills each column, when, and
 	// what an unfillable case stores) for every column of this table,
-	// these three included. The migration files' comments were updated
-	// alongside this one, so all three say the same
-	// thing.
+	// these three included. The migration files' own comments say the
+	// same thing.
 	IP        string `gorm:"column:ip;size:64;not null"`
 	UserAgent string `gorm:"column:user_agent;size:500;not null"`
 	TraceID   string `gorm:"column:trace_id;size:64;not null"`
