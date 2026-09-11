@@ -16,7 +16,7 @@ a `Component` descriptor whose `Init` callback runs one
 context plus the raw system-context marker;
 the infrastructure seam interfaces `KVStore`, `EventBus`, `Mailer` and
 `ObjectStore` with the in-process implementations that double as test
-doubles; the component-registry, capability and seam-registry machinery
+doubles; the component-registry and capability machinery
 the assembly resolves and validates compositions through; the merged backend message catalog;
 the `DeploymentMode` enumeration; and the conformance suites
 (`eventbustest`, `kvstoretest`, `mailertest`, `objectstoretest`) every

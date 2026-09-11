@@ -6,7 +6,7 @@ description: "为什么 pkgcore 只拥有模块/组件装配契约、带能力�
 
 # pkgcore:装配契约与依赖底座
 
-pkgcore 是所有 Go 模块共同 import、却不 import 任何其它 speed 模块的依赖底座。它只拥有七件事:模块/组件装配契约、租户上下文原语、基础设施 seam 接口(`KVStore`/`EventBus`/`Mailer`/`ObjectStore`)及各自进程内或纯标准库实现、装配借以解析与校验组合的能力/组件注册表/接缝注册表机制、合并后的后端消息目录、`DeploymentMode` 枚举,以及每个 seam 的强制一致性测试套件。其余由三个子包(`apperr`、`config`、`i18n`)与一族实现子包(Redis、PostgreSQL、NATS、S3、Memcached 支撑的实现)承载。
+pkgcore 是所有 Go 模块共同 import、却不 import 任何其它 speed 模块的依赖底座。它只拥有七件事:模块/组件装配契约、租户上下文原语、基础设施 seam 接口(`KVStore`/`EventBus`/`Mailer`/`ObjectStore`)及各自进程内或纯标准库实现、装配借以解析与校验组合的能力/组件注册表机制、合并后的后端消息目录、`DeploymentMode` 枚举,以及每个 seam 的强制一致性测试套件。其余由三个子包(`apperr`、`config`、`i18n`)与一族实现子包(Redis、PostgreSQL、NATS、S3、Memcached 支撑的实现)承载。
 
 ## 职责与边界
 
@@ -47,7 +47,7 @@ flowchart TD
 
 ## 设计:实现像 `database/sql` 驱动一样注册
 
-每个基础设施接口有 N 套实现,N ≥ 1——从不是固定的两套。一个二进制包含哪些实现由应用组装者决定,打包方式追随 Go 按包解析依赖的特性:每套实现住在自己的子包里,经自己的 `init()` 双路自注册——既作为全局组件注册上的组件(`kv.redis`、`eventbus.postgres`、`objectstore.s3`……)也作为包级 `SeamRegistry` 上的 `Registration`;进程内内置实现由根包的 seam 注册文件与组件描述符登记(`kv.memory`、`eventbus.memory`、`mailer.console`、`mailer.smtp`、`objectstore.local`)。组合选中某分布式实现的前提是宿主的二进制 import 了对应子包——空白导入足矣——否则装配拒绝该选择,点名组件并列出已注册的组件:这是 `database/sql` 式交易中被接受的代价,编译期错误变成启动期错误,而报错信息会指名"缺的那行 import"。
+每个基础设施接口有 N 套实现,N ≥ 1——从不是固定的两套。一个二进制包含哪些实现由应用组装者决定,打包方式追随 Go 按包解析依赖的特性:每套实现住在自己的子包里,经自己的 `init()` 在包级全局注册上自注册为组件(`kv.redis`、`eventbus.postgres`、`objectstore.s3`……);进程内内置实现以同样方式由根包登记(`kv.memory`、`eventbus.memory`、`mailer.console`、`mailer.smtp`、`objectstore.local`)。`SeamRegistry`/`Registration` 泛型类型依然存在,作为模块内部的 provider 目录模式:ai-gateway 的 chat 与 image provider、billing 的支付网关、pki 的签名器都注册在自己模块的实例上,组件装配从不查询它。组合选中某分布式实现的前提是宿主的二进制 import 了对应子包——空白导入足矣——否则装配拒绝该选择,点名组件并列出已注册的组件:这是 `database/sql` 式交易中被接受的代价,编译期错误变成启动期错误,而报错信息会指名"缺的那行 import"。
 
 捆绑全部内置实现不是"有得有失"的取舍,因为它没换来任何东西:跑任意组装这个属性在分包之后依然可得——想要它的应用把实现全部 import 进来,代价一分不少;分包只是把这个属性从强制变成可选。这也是为什么新实现是子包、从不是新模块——模块是按领域内聚划分的发布单元,锁步下每多一个模块就要多一份 `go.work` 条目、CI 矩阵行与版本标签,而子包这些全都不需要。
 
@@ -62,7 +62,7 @@ flowchart TD
 
 ## 对外的稳定面
 
-消费者可依赖的冻结契约:`Component` 描述符与 `ComponentRegistry` 座席;`Requires`/`Provides` 解析、七阶段生命周期与 `app.Assemble`/`app.Shutdown` 语义;seam 接口及其可观察语义(TTL 过期规则、`IncrByFloat` 不延长存活 key 的过期、能力位及其声明);四个接缝注册表上的内置实现名;租户上下文与 Actor 上下文原语;`apperr` 契约(码、params、`SensitiveParams`、装饰派生新值);config loader 与 i18n 契约;以及本模块的错误码族。锁步之下,改动其中任何一项都是破坏性变更。
+消费者可依赖的冻结契约:`Component` 描述符与 `ComponentRegistry` 座席;`Requires`/`Provides` 解析、七阶段生命周期与 `app.Assemble`/`app.Shutdown` 语义;seam 接口及其可观察语义(TTL 过期规则、`IncrByFloat` 不延长存活 key 的过期、能力位及其声明);包级全局注册上的内置实现名;租户上下文与 Actor 上下文原语;`apperr` 契约(码、params、`SensitiveParams`、装饰派生新值);config loader 与 i18n 契约;以及本模块的错误码族。锁步之下,改动其中任何一项都是破坏性变更。
 
 ## Source
 

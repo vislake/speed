@@ -15,7 +15,7 @@ pkgcore 只拥有七样东西:模块/组件组装契约——每个模块实现�
 上下文标记;基础设施接缝接口 `KVStore`、`EventBus`、`Mailer`、
 `ObjectStore` 及各自的进程内实现(内存存储与总线、控制台发信器、
 本地对象存储,同时充当测试替身);装配借以解析并校验组合的
-组件注册表/能力/接缝注册表机制;合并后的后端消息目录;`DeploymentMode` 枚举;
+组件注册表/能力机制;合并后的后端消息目录;`DeploymentMode` 枚举;
 以及每条接缝的每个实现都必须通过的契约套件(`eventbustest`、
 `kvstoretest`、`mailertest`、`objectstoretest`)。它的子包承载各有
 归属的部件:`apperr`(每个模块返回的结构化错误)、`config`(启动参数

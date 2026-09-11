@@ -11,7 +11,7 @@ module is imported by. It owns seven concerns and nothing else: the
 module/component assembly contract, the tenant-context
 primitives, the infrastructure seam interfaces (`KVStore`, `EventBus`,
 `Mailer`, `ObjectStore`) with each one's in-process or stdlib-backed
-implementation, the capability, component-registry and seam-registry
+implementation, the capability and component-registry
 machinery the assembly resolves and validates compositions through,
 the merged message catalog, the
 `DeploymentMode` enumeration, and the per-seam conformance suites.
@@ -144,13 +144,16 @@ Each infrastructure interface has N implementations, N ≥ 1 — never a
 fixed two. Which implementations a binary contains is the application
 assembler's decision, and the packaging follows Go's per-package
 dependency resolution: each implementation lives in its own subpackage
-and self-registers from its own `init()`, both as a component on the
-global component registration (`kv.redis`, `eventbus.postgres`,
-`objectstore.s3`, …) and as a `Registration` on the package-level
-`SeamRegistry`, the in-process built-ins registering from the seam
-registration files and component descriptors
-in the root package (`kv.memory`, `eventbus.memory`, `mailer.console`,
-`mailer.smtp`, `objectstore.local`). A composition that selects a
+and self-registers from its own `init()` as a component on the
+package-level global registration (`kv.redis`, `eventbus.postgres`,
+`objectstore.s3`, …), and the in-process built-ins register the same
+way from the root package (`kv.memory`, `eventbus.memory`,
+`mailer.console`, `mailer.smtp`, `objectstore.local`). The generic
+`SeamRegistry`/`Registration` pair lives on as the module-internal
+provider directory pattern: ai-gateway's chat and image providers,
+billing's payment gateways and pki's signers register on their
+module's own instance, and the component assembly never consults one.
+A composition that selects a
 distributed implementation resolves only after the host's binary
 imports that subpackage — a blank import suffices — or the assembly
 refuses the selection, naming the component and listing the
@@ -213,7 +216,7 @@ resolution, the seven-stage lifecycle and `app.Assemble`/`app.Shutdown`
 semantics; the seam interfaces and their
 observable semantics (TTL expiry rules, `IncrByFloat` never extending
 a live key's expiry, capability bits); the built-in implementation
-names on the four seam registries; the tenant-context
+names on the package-level global registration; the tenant-context
 and actor-context primitives; the `apperr` contract; the config-loader
 and i18n contracts; and the module's error-code family. Changes to any
 of these are breaking changes under lockstep.
