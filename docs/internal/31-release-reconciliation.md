@@ -117,7 +117,7 @@
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
 - **登记理由**：它是仓内唯一以"生成物一致性"为门禁的工具（文档检查流水线 `--check` 四产物），其迁移已完成并全绿；消费者无需动作。
-- **出处**：`11e9b11a` 内的工具提交。
+- **出处**：`23bbb3a9`（`refactor(tools): resolve the configuration reference through the component assembly`）。
 
 ## 7. E 组：e2e stub 缺口（状态登记）
 
