@@ -2,15 +2,16 @@ package audit
 
 // component.go carries the audit module's descriptor for the config-driven
 // component assembly: the selection key a composition configuration names,
-// the assets the module brings, the contract it consumes, and the callback
-// that constructs it. The descriptor is additive: pkgcore.Module.Register,
-// driven by the host's bootstrap, remains the module's declaration path --
-// its three subscriptions and its two declarations -- and the descriptor
-// states the same surface in the assembly's terms.
+// the assets the module brings, the contract it consumes, and the callbacks
+// that construct and declare it. Its Init runs the module's one declaration
+// entry point, Register -- its three subscriptions and its two declarations
+// -- inside the assembly's Init stage, the one stage whose seats accept
+// writes.
 
 import (
 	"context"
 	"embed"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -22,7 +23,9 @@ import (
 // component returns the audit module's component descriptor: the value init
 // registers, so a composition configuration can select the module and the
 // assembly can construct it from the database product in the by-type
-// context.
+// context. Its Init runs the module's one declaration entry point, Register,
+// inside the assembly's Init stage -- the one stage whose seats accept
+// writes.
 func component() pkgcore.Component {
 	return pkgcore.Component{
 		Name:   moduleName,
@@ -48,6 +51,13 @@ func component() pkgcore.Component {
 				return nil, err
 			}
 			return New(db), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("audit: component init got a %T instance, want *audit.Module", instance)
+			}
+			return m.Register(reg)
 		},
 	}
 }

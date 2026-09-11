@@ -2,10 +2,12 @@ package audit
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
@@ -33,6 +35,39 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so its two declarations land in the assembly's
+// own seats and its three subscriptions are installed on the assembly's own
+// bus.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := openAuditTestDB(t)
+	bus := pkgcore.NewMemoryEventBus()
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, component(), db, bus); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	if actions := reg.AuditActions.Actions(); !slices.Contains(actions, AuditActionSystemContextEntered) {
+		t.Errorf("AuditActions seat = %v, want the system-context-enter action", actions)
+	}
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	for _, want := range []string{dbkit.EventWriteCaptured, EventRecorded} {
+		if !slices.Contains(types, want) {
+			t.Errorf("Events seat = %v, want the %q declaration", types, want)
+		}
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+	if m.actions == nil {
+		t.Error("the module did not take the assembly's AuditActions registrar")
+	}
+}
+
 // TestComponentAssemblesThroughRegistry drives the registered descriptor
 // through the assembly's stages the way a host would: selection from a
 // composition configuration, construction from the database product in the
@@ -45,6 +80,9 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	if err := reg.Register(testDBComponent(openAuditTestDB(t))); err != nil {
 		t.Fatalf("registering the database stand-in: %v", err)
 	}
+	// The Init callback installs the module's three subscriptions during the
+	// assembly's Init stage, so the assembly carries the bus they land on.
+	reg.Put(pkgcore.NewMemoryEventBus())
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"deployment": "standalone",
 		"components": map[string]any{
