@@ -881,6 +881,19 @@ func (r *Registry) Locales() *i18n.Catalog {
 	return r.locales
 }
 
+// MountedRoutes returns the routes declared on the Routes registrar, the
+// reading a middleware chain derives its route partition from. It is the
+// uniform route-source method both registry shapes answer -- the module
+// Registry and the component assembly's ComponentRegistry -- so a consumer
+// takes either without knowing which it holds. It returns nil for a
+// zero-value Registry.
+func (r *Registry) MountedRoutes() []MountedRoute {
+	if r.Routes == nil {
+		return nil
+	}
+	return r.Routes.Routes()
+}
+
 // checkUnique reports whether any key produced by keyOf is already in
 // registered or repeated within items, wrapping sentinel in either case. It
 // runs before anything is committed so that a rejected call registers nothing.

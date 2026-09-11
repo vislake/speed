@@ -921,6 +921,34 @@ func (r *ComponentRegistry) currentStage() stage {
 	return r.cur
 }
 
+// MountedRoutes returns the routes declared on the Routes seat, the same
+// reading Registry.Routes.Routes() answers on the module Registry. It is the
+// route source a middleware chain derives its partition from, so a consumer
+// that takes either registry shape (a *Registry or a *ComponentRegistry) can
+// read the mounted routes uniformly. Before the Init stage nothing has been
+// declared, so it returns nil.
+func (r *ComponentRegistry) MountedRoutes() []MountedRoute {
+	if r.Routes == nil {
+		return nil
+	}
+	return r.Routes.Routes()
+}
+
+// RegisteredComponents returns every component registered on this instance,
+// in registration order: the global snapshot the instance was seeded from
+// first, then the descriptors Register added. It is the reading the engine's
+// loader resolves every registered component's BootstrapKeys declaration
+// over, before the assembly plan exists.
+func RegisteredComponents(r *ComponentRegistry) []Component {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	components := make([]Component, 0, len(r.order))
+	for _, name := range r.order {
+		components = append(components, r.byName[name])
+	}
+	return components
+}
+
 // MemberNames returns the names of the selected components implementing
 // module, in dependency order -- the stable reading a directory-style
 // module's consumer enumerates its members with. It returns an empty slice

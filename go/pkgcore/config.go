@@ -117,6 +117,15 @@ func (c ComponentConfig) lookup(key string) (any, bool) {
 	return c.entries[i].value, true
 }
 
+// Get returns the raw value stored under key, exactly as it was given -- a
+// scalar, a nested map, a nested ComponentConfig, or nothing. It is the raw
+// reading, where Value is the converting one: a caller that merges or
+// re-shapes configuration trees works on the values themselves and must not
+// have a nested subtree bent into a scalar's shape along the way.
+func (c ComponentConfig) Get(key string) (any, bool) {
+	return c.lookup(key)
+}
+
 // asMap converts a raw value that is meant to be a mapping -- a plain
 // map[string]any or a nested ComponentConfig -- into a ComponentConfig,
 // reporting whether the value is a mapping at all.

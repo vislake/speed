@@ -1059,6 +1059,35 @@ func Verify(target any, declared []string) error {
 	return errors.Join(missing...)
 }
 
+// Lookup returns the value the loader target currently holds at the dotted
+// key path key, the read side of the loader's contract: after Load, it
+// answers what a declared key path resolved to, in whatever shape the field
+// holds it (the bytes of a []byte field, the text of a string field). It is
+// Verify's reading sibling -- a key Verify accepts as bound is a key Lookup
+// answers -- and the pair is what lets a host both prove a declaration maps
+// onto its target and publish the resolved material for its consumers.
+//
+// target must be the same kind of non-nil struct pointer Load accepts; an
+// invalid one reports ok == false (the described-target error is not
+// repeated here, because Load and Verify already refuse it where a caller
+// first obtains the target). A key that maps onto no leaf field, or whose
+// index path runs through a nil pointer, reports ok == false.
+func Lookup(target any, key string) (any, bool) {
+	s, err := describe(target)
+	if err != nil {
+		return nil, false
+	}
+	f, ok := s.byKey[strings.ToLower(key)]
+	if !ok {
+		return nil, false
+	}
+	v, ok := fieldValue(reflect.ValueOf(target).Elem(), f.index)
+	if !ok {
+		return nil, false
+	}
+	return v.Interface(), true
+}
+
 // coerceTextValues converts the text of a flag, environment variable or
 // string-valued config file entry into the type the field it maps to must hold,
 // so a text value is judged by strconv's rules -- and reported by this loader,
