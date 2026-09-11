@@ -953,8 +953,8 @@ func TestWithWorkerCount_ZeroOrNegative_Refused(t *testing.T) {
 
 // TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused pins the
 // WithTenantConcurrencyLimit(0) refusal: a limit of zero would refuse
-// every tenant admission forever. Same fail-before shape as the worker
-// count test.
+// every tenant admission forever. Same refusal shape as the worker count
+// test.
 func TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(0) })
 	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(-1) })

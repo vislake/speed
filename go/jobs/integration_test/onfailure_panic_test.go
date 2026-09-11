@@ -25,12 +25,11 @@ import (
 // outside that recover in handleFailedMessage on the worker goroutine
 // (pinned v0.26.0 source) -- so without a recovery a panicking hook kills
 // the whole process mid-suite. That failure mode cannot be demonstrated
-// in-process as a clean test failure (the process dies), so the
-// deterministic fail-before proof lives in the unit tier
-// (queue/asynq/worker_test.go's panicking-FailureHook subtest of
-// TestQueue_HandleErrorAttempt, where the escaping panic fails the test);
-// this leg is the pass-after real-run proof that the recovery holds end to
-// end over a real worker.
+// in-process as a clean test failure (the process dies), so the unit tier
+// pins the containment directly (queue/asynq/worker_test.go's
+// panicking-FailureHook subtest of TestQueue_HandleErrorAttempt, where the
+// escaping panic fails the test); this leg is the real-run proof, end to
+// end over a real worker, that the recovery holds.
 func TestRedisQueue_PanickingFailureHook_WorkerSurvivesAndLaterJobsRun(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)

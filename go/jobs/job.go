@@ -124,7 +124,7 @@ type Job struct {
 	// TenantID is the tenant this Job belongs to, copied from the
 	// enqueuing Task.TenantID. A worker rebuilds tenant context from
 	// exactly this field before calling Handle — never from whatever
-	// context the original Queue.Enqueue call happened to run in, which no
+	// context the Queue.Enqueue call happened to run in, which no
 	// longer exists by the time a worker picks the Job up. See
 	// Handler.Handle's own doc comment.
 	TenantID pkgcore.TenantID

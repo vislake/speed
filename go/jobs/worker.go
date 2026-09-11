@@ -71,7 +71,7 @@ const terminalPublishBatchSize = 100
 // jobContext rebuilds the context a Handler (and FailureHook) call
 // receives: pkgcore.WithTenant from the Job's own stored tenant, over a
 // freshly detached context.Background(). This is deliberately NOT derived
-// from whatever context the original Queue.Enqueue call ran in — that
+// from whatever context the Queue.Enqueue call ran in — that
 // context no longer exists by the time a worker claims the row back out of
 // SQLite — and NOT derived from StandaloneQueue's own internal dispatcher/worker
 // -loop lifecycle context either, so that closing the queue does not

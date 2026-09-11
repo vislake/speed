@@ -542,13 +542,13 @@ func (q *Queue) processTask(ctx context.Context, t *asynqlib.Task) error {
 	// The extra Redis round trip this adds to every dispatched task is the
 	// accepted cost of that correctness guarantee.
 	//
-	// This is the ONLY part of processTask that touches q.rdb -- split out
-	// so the marker decision (dispatchAfterMarkerRead) stays unit-testable
-	// against a bare *Queue with no Redis at all, the same split
-	// handleError/handleErrorAttempt already uses for the same reason, and
-	// processTaskUncancelled (everything else: handler lookup, tenant
-	// header check, admission gate, progress/ResultWriter plumbing, the
-	// Handle call itself) stays testable the way it already is; see
+	// This is the ONLY part of processTask that touches q.rdb -- kept in
+	// its own function so the marker decision (dispatchAfterMarkerRead)
+	// stays unit-testable against a bare *Queue with no Redis at all, the
+	// same split handleError/handleErrorAttempt already uses for the same
+	// reason, and processTaskUncancelled (everything else: handler lookup,
+	// tenant header check, admission gate, progress/ResultWriter plumbing,
+	// the Handle call itself) stays testable the way it already is; see
 	// worker_test.go.
 	cancelledAt, cerr := q.readCancelMarker(ctx, taskID)
 	return q.dispatchAfterMarkerRead(ctx, t, taskID, log, cancelledAt, cerr)
@@ -666,7 +666,7 @@ func (q *Queue) processTaskUncancelled(ctx context.Context, t *asynqlib.Task, ta
 
 	// handleCtx carries job.TenantID via pkgcore.WithTenant, rebuilt from
 	// the Task's own stored header -- never inherited from whatever context
-	// the original Enqueue call happened to run in (see jobs.Queue's
+	// the Enqueue call happened to run in (see jobs.Queue's
 	// Enqueue doc comment: that context is long gone by the time a worker
 	// picks this up). It is built ON TOP of ctx (asynq's own per-task
 	// context), not a fresh context.Background() the way StandaloneQueue's

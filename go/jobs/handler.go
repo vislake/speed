@@ -20,7 +20,7 @@ type Handler interface {
 	// Handle runs one attempt of job. ctx already carries job.TenantID via
 	// pkgcore.WithTenant, rebuilt by the worker from the Job's own stored
 	// tenant before this call — never inherited from whatever context the
-	// original Queue.Enqueue call happened to run in, which no longer
+	// Queue.Enqueue call happened to run in, which no longer
 	// exists by the time a worker picks the Job up (the tenant-context
 	// trap). A Handler implementation may call pkgcore.WithTenant itself
 	// too — harmless, it would set the same value again — but does not need

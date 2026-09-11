@@ -54,8 +54,8 @@ func TestJobContext_ProducesTenantScopedContext(t *testing.T) {
 // context at all -- it is rooted in a fresh context.Background() every
 // call -- so it can never inherit a stale or unrelated tenant from
 // whatever context happens to be available at the call site. This is the
-// "not inherited from the original Enqueue call's context" half of the
-// tenant-context trap: that original context is long gone by
+// "not inherited from the Enqueue call's context" half of the
+// tenant-context trap: that context is long gone by
 // the time a worker goroutine picks the Job back up out of SQLite, so
 // jobContext does not even accept one to (mis)use.
 func TestJobContext_IgnoresAmbientTenant(t *testing.T) {
@@ -212,8 +212,8 @@ func TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle(t *testing.T) {
 	// context (pkgcore.WithTenant(ctx, "") is never reported as a usable
 	// tenant -- see pkgcore.TenantFromContext) -- exactly the "only a
 	// system context or a raw table scan would ever reveal it ran"
-	// property the review flagged, so a system context is the only way
-	// this test can read the outcome back.
+	// property, so a system context is the only way this test can read
+	// the outcome back.
 	pkgcore.RegisterSystemPurpose(testSystemPurpose)
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
 		Actor: "test", Purpose: testSystemPurpose, Ticket: "TEST-1",
@@ -318,11 +318,10 @@ var (
 )
 
 // TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess is the
-// FailureHook.OnFailure half of the same panic-recovery gap: the review's
-// suggested fix direction explicitly calls out OnFailure alongside Handle
-// ("if it can also panic"), since it is exactly as much a
-// business-module-authored callback and just as capable of panicking. Same
-// crash-before/recovers-after shape as
+// FailureHook.OnFailure half of the same panic-recovery gap: OnFailure is
+// exactly as much a business-module-authored callback as Handle and just as
+// capable of panicking, so it needs the same containment invokeHandle gives
+// a Handle panic. Same recovery shape as
 // TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess, exercised
 // through the dead-letter path instead of the ordinary-retry path.
 func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {

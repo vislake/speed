@@ -3,9 +3,9 @@ package jobs
 // queue_standalone_bench_test.go holds the benchmark suite for the
 // StandaloneQueue's hot paths, per docs/internal/20-quality-and-security.md's
 // "performance-benchmark regression detection" plan: benchmarks land with the
-// module that owns the hotspot, and the nightly pipeline's future regression
-// leg runs them. Nothing here needs an external service: every benchmark runs
-// against a private temp-file SQLite database (benchSQLite below mirrors
+// module that owns the hotspot. Nothing here needs an external service:
+// every benchmark runs against a private temp-file SQLite database
+// (benchSQLite below mirrors
 // dbkit/dbtest.NewSQLite with a *testing.B, which that helper's *testing.T
 // signature cannot accept) -- the same durable write path production jobs
 // pay.

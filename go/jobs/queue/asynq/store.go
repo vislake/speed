@@ -21,11 +21,11 @@ import (
 
 // Header keys asynq's own Task.Headers carries our metadata under. Headers
 // are part of base.TaskMessage (see asynq's internal/base package) and
-// survive retries and archiving unchanged -- confirmed by reading
-// processor.go's retry()/handleFailedMessage(), which reconstruct the Task
-// via NewTaskWithHeaders(msg.Type, msg.Payload, msg.Headers) on every
-// attempt. This is why they are the right place for tenant_id and
-// idempotency_key, rather than folding them into Payload (which must stay
+// survive retries and archiving unchanged -- processor.go's retry()/
+// handleFailedMessage() reconstruct the Task via NewTaskWithHeaders(msg.Type,
+// msg.Payload, msg.Headers) on every attempt. This is why they are the right
+// place for tenant_id and idempotency_key, rather than folding them into
+// Payload (which must stay
 // exactly the caller's own opaque bytes, per jobs.Task.Payload's and
 // jobs.Job.Payload's doc comments) or inventing a parallel Redis structure.
 const (
