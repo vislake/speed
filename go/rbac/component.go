@@ -2,19 +2,22 @@ package rbac
 
 // component.go carries rbac's descriptor for the config-driven component
 // assembly: the selection key a composition configuration names, the assets
-// the module brings, the contracts it consumes, and the callback that
-// constructs it. The descriptor is additive: pkgcore.Module.Register, driven
-// by the host's bootstrap, remains rbac's declaration path, and the
-// descriptor states the same surface in the assembly's terms.
-//
-// The descriptor declares no Init. Attach -- the permission-catalog snapshot
-// that publishes the runtime *Service -- must run after every module has
-// registered, so the host's Attach call remains the path that snapshots and
-// publishes until a Component's Init can reach it.
+// the module brings, the contracts it consumes, and the callbacks that
+// construct and declare it. Its Init runs the module's one declaration entry
+// point, Register, and then Attach -- the permission-catalog snapshot that
+// publishes the runtime *Service -- inside the assembly's Init stage, the
+// one stage whose seats accept writes: Attach installs the Service's own
+// subscriptions and job handlers, so it can run nowhere else. The *Service
+// is put into the by-type context, where a consumer requires and reads it.
+// The snapshot therefore covers the declarations made before this
+// component's Init turn in plan order, not the full catalog: the design's
+// full-catalog freeze (docs/internal/29 §7, the component's Start callback)
+// is not implemented.
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -35,7 +38,9 @@ type componentConfig struct {
 
 // component returns rbac's component descriptor: the value init registers,
 // so a composition configuration can select the module and the assembly can
-// construct it from the database product in the by-type context.
+// construct it from the database product in the by-type context. Its Init
+// declares through Register and publishes the runtime *Service through
+// Attach.
 func component() pkgcore.Component {
 	return pkgcore.Component{
 		Name:   moduleName,
@@ -97,6 +102,21 @@ func component() pkgcore.Component {
 				return nil, err
 			}
 			return NewModule(db, opts...), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("rbac: component init got a %T instance, want *rbac.Module", instance)
+			}
+			if err := m.Register(reg); err != nil {
+				return err
+			}
+			svc, err := m.Attach(reg)
+			if err != nil {
+				return err
+			}
+			reg.Put(svc)
+			return nil
 		},
 	}
 }

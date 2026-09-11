@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"gorm.io/gorm"
@@ -33,6 +34,48 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
+// TestComponent_InitDeclaresAndPublishesTheService drives the descriptor's
+// Init through a real assembly: Register runs inside the one stage whose
+// seats accept writes, so its declarations land in the assembly's own
+// seats; Attach then runs in the same stage -- the only stage that can
+// carry its seat writes -- and the runtime *Service it builds is put into
+// the by-type context, where a consumer reads it after the assembly.
+func TestComponent_InitDeclaresAndPublishesTheService(t *testing.T) {
+	db := newRBACTestDB(t)
+	reg := pkgcore.NewComponentRegistry()
+	bus := pkgcore.NewMemoryEventBus()
+	if err := componenttest.RunInit(t, reg, component(), db, bus); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	for _, want := range []string{PermissionRead, PermissionManage} {
+		if !slices.Contains(reg.Permissions.Permissions(), want) {
+			t.Errorf("Permissions seat = %v, want the %q declaration", reg.Permissions.Permissions(), want)
+		}
+	}
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	for _, want := range []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleChanged} {
+		if !slices.Contains(types, want) {
+			t.Errorf("Events seat = %v, want the %q declaration", types, want)
+		}
+	}
+
+	svc, err := pkgcore.Get[*Service](reg)
+	if err != nil {
+		t.Fatalf("the published service is not reachable: %v", err)
+	}
+	// The catalog is the Init stage's snapshot: it carries the permissions
+	// declared before this component's turn, rbac's own included.
+	if !svc.catalog.Has(PermissionRead) || !svc.catalog.Has(PermissionManage) {
+		t.Errorf("the published service's catalog lacks the module's own permissions: %v", svc.catalog.permissions())
+	}
+	if svc.bus != pkgcore.EventBus(bus) {
+		t.Error("the service did not take the assembly's bus")
+	}
+}
+
 // TestComponentAssemblesThroughRegistry drives the registered descriptor
 // through the assembly's stages the way a host would: selection from a
 // composition configuration, construction from the database product in the
@@ -45,6 +88,10 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	if err := reg.Register(testDBComponent(newRBACTestDB(t))); err != nil {
 		t.Fatalf("registering the database stand-in: %v", err)
 	}
+	// The Init callback runs Attach during the assembly's Init stage:
+	// Attach installs the service's subscriptions and job handlers, so the
+	// assembly carries the bus they land on.
+	reg.Put(pkgcore.NewMemoryEventBus())
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"deployment": "standalone",
 		"components": map[string]any{

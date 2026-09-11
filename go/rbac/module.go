@@ -187,10 +187,12 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 }
 
 // Attach freezes the permission catalog and hands the caller the runtime
-// Service. It must be called exactly once, after Kernel.Bootstrap has
-// returned, with the registry Bootstrap produced: only then has every
-// module registered, so reg.Permissions.Permissions() is the complete
-// declaration the catalog snapshots.
+// Service. It must be called exactly once, with the registry the modules
+// declared into: the host calls it after Kernel.Bootstrap has returned
+// (only then has every module registered, so reg.Permissions.Permissions()
+// is the complete declaration the catalog snapshots), and the component
+// descriptor calls it from its Init callback, which publishes the returned
+// *Service into the assembly's by-type context.
 //
 // A second Attach on the same Module fails with ErrAlreadyAttached: the
 // catalog freezes at the first call, and a second snapshot could silently
