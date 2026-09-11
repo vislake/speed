@@ -1,7 +1,7 @@
 // Package locales holds the storage module's message bundle: one
 // <language>.toml file per language the catalog serves, embedded for
-// Kernel.Bootstrap to feed to i18n.Builder.AddModule alongside every other
-// module's Locales() embed.FS.
+// the assembly's catalog merge to feed to i18n.Builder.AddModule alongside
+// every other module's Locales() embed.FS.
 //
 // What this bundle carries today is the human description of every error
 // code go/storage/errors.go declares, one flat entry per code, with the id

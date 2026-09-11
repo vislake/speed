@@ -114,7 +114,7 @@ const expirySweepWindowSize = time.Hour
 const expirySweepKeyPrefix = "storage.sweep:"
 
 // expirySweepSchedule is the module's declaration of the expiry sweep on
-// the pkgcore.Registry.Schedules seat: a per-tenant task at the sweep's
+// the ComponentRegistry's Schedules seat: a per-tenant task at the sweep's
 // own window, keyed with the same prefix and the same window derivation
 // the manual EnqueueExpirySweep path uses (jobs.ScheduleWindowStart /
 // jobs.ScheduleIdempotencyKey), so a scheduler tick and a manual enqueue
@@ -410,7 +410,7 @@ func (s *LifecycleService) reclaimUpload(ctx context.Context, row Object) error 
 
 // EnqueueExpirySweep enqueues the expiry-sweep task for the tenant ctx
 // carries. The sweep's default schedule is the module's own: Register
-// declares it on the pkgcore.Registry.Schedules seat (expirySweepSchedule,
+// declares it on the ComponentRegistry's Schedules seat (expirySweepSchedule,
 // a per-tenant task at the sweep's own window), so a host that runs a
 // jobs.Scheduler sweeps every tenant without writing a schedule point of
 // its own; this method remains the manual entry point. The task's

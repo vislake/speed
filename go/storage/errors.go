@@ -4,7 +4,8 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// moduleName is storage's pkgcore.Module.Name(). It is also the prefix of
+// moduleName is storage's module name (the value Name() answers). It is
+// also the prefix of
 // every error code declared below (<module>.<reason>, the convention this
 // file's doc comment cites) and of the event types, permissions, audit
 // actions and migration-registry keys module.go registers -- one namespace,

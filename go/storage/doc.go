@@ -29,7 +29,9 @@
 //
 // # Wiring
 //
-// A host constructs one with NewModule and hands it to Kernel.Bootstrap.
+// A host constructs one with NewModule -- directly, or as the product of
+// the module's component descriptor -- and its Register runs inside the
+// assembly's Init stage.
 // Register contributes the module's permissions (storage:read,
 // storage:write), its audit actions (storage.object.create/.complete/
 // .delete) and its two event types (storage.object.completed and
