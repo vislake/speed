@@ -1685,6 +1685,15 @@
       "status": 500
     },
     {
+      "code": "dbkit.close_failed",
+      "file": "go/dbkit/close.go",
+      "ident": "",
+      "kind": "inline",
+      "line": 34,
+      "module": "dbkit",
+      "status": 500
+    },
+    {
       "code": "dbkit.connect_failed",
       "file": "go/dbkit/open.go",
       "ident": "",

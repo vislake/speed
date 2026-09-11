@@ -21,8 +21,8 @@ func TestClose_ReleasesTheHandle(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 
-	if err := Close(db); err != nil {
-		t.Fatalf("Close() error = %v, want nil", err)
+	if closeErr := Close(db); closeErr != nil {
+		t.Fatalf("Close() error = %v, want nil", closeErr)
 	}
 
 	err = db.Exec("SELECT 1").Error

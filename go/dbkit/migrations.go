@@ -228,8 +228,75 @@ func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dial
 		return err
 	}
 
+	sources := make([]migrationSource, 0, len(ordered))
+	for _, m := range ordered {
+		sources = append(sources, migrationSource{name: m.Name(), fs: m.Migrations()})
+	}
+	return applySources(ctx, db, dialect, dir, sources)
+}
+
+// ApplyMigrations brings the database in reg's by-type context up to date
+// with every selected component's migration set: it resolves the *gorm.DB
+// the assembly constructed (the db component's product), derives the
+// dialect from the connection's own dialector name, and applies the
+// selected components' Assets -- which pkgcore returns in dependency order,
+// so the sets land in the order the components were planned -- through the
+// same machinery MigrationRegistry.Apply uses: dbkit's schema_migrations
+// ledger, one transaction per component, and the PostgreSQL advisory lock
+// around the whole run. A selected component carrying no migrations is
+// skipped; the ledger key is the component's name, mirroring the module
+// name a MigrationRegistry registration records under.
+//
+// It is the migration-application step of a db component's Verify callback:
+// every product exists by then, so the assembled set is complete, and a
+// dependency-free db component runs first in the stage, before any other
+// component's Verify sees the schema.
+func ApplyMigrations(ctx context.Context, reg *pkgcore.ComponentRegistry) error {
+	if reg == nil {
+		return errors.New("dbkit: ApplyMigrations requires a non-nil *pkgcore.ComponentRegistry")
+	}
+	db, err := pkgcore.Get[*gorm.DB](reg)
+	if err != nil {
+		return fmt.Errorf("dbkit: apply migrations: %w", err)
+	}
+
+	dialect := Dialect(db.Name())
+	dir, err := dialectDir(dialect)
+	if err != nil {
+		return fmt.Errorf("dbkit: apply migrations: %w", err)
+	}
+
+	var zeroFS embed.FS
+	var sources []migrationSource
+	for _, asset := range pkgcore.Assets(reg) {
+		if asset.Migrations == zeroFS {
+			continue
+		}
+		sources = append(sources, migrationSource{name: asset.Name, fs: asset.Migrations})
+	}
+
+	return applySources(ctx, db, dialect, dir, sources)
+}
+
+// migrationSource is one named migration set to apply: the name the
+// schema_migrations ledger records its files under, and the embed.FS
+// carrying them. Both registration paths produce sources -- Apply converts
+// each registered pkgcore.Module (name from Name(), set from Migrations()),
+// ApplyMigrations each selected component's Asset (name and set as the
+// component declared them) -- so the ledger semantics are identical
+// whichever path a boot takes.
+type migrationSource struct {
+	name string
+	fs   embed.FS
+}
+
+// applySources runs the shared application sequence against db: on
+// PostgreSQL the whole run executes on one pinned connection under the
+// session-level advisory lock (see Apply's own doc comment for why), on
+// every other dialect directly against db.
+func applySources(ctx context.Context, db *gorm.DB, dialect Dialect, dir string, sources []migrationSource) error {
 	if dialect != DialectPostgres {
-		return applyOrdered(ctx, db, dir, ordered)
+		return applyOrdered(ctx, db, dir, sources)
 	}
 	return db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
 		if err := acquireMigrationLock(ctx, conn); err != nil {
@@ -240,28 +307,28 @@ func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dial
 		// its own doc comment for why an already-cancelled ctx here must
 		// never stop the unlock statement itself from running.
 		defer releaseMigrationLock(context.WithoutCancel(ctx), conn)
-		return applyOrdered(ctx, conn, dir, ordered)
+		return applyOrdered(ctx, conn, dir, sources)
 	})
 }
 
 // applyOrdered creates dbkit's own schema_migrations bookkeeping table (see
 // createSchemaMigrationsTableSQL) if it does not already exist, then applies
-// every module in ordered, in order, via applyModule. It is Apply's own
-// step 2-4 body, factored out so that Apply's PostgreSQL branch can run it
-// inside the single physical connection its advisory lock requires (see
-// acquireMigrationLock), while its non-PostgreSQL branch runs it directly
-// against db with no such wrapping.
-func applyOrdered(ctx context.Context, db *gorm.DB, dir string, ordered []pkgcore.Module) error {
+// every source in ordered, in order, via applyModule. It is the shared
+// step 2-4 body of Apply and ApplyMigrations, factored out so the
+// PostgreSQL branch can run it inside the single physical connection its
+// advisory lock requires (see acquireMigrationLock), while the
+// non-PostgreSQL branch runs it directly against db with no such wrapping.
+func applyOrdered(ctx context.Context, db *gorm.DB, dir string, ordered []migrationSource) error {
 	if err := db.WithContext(ctx).Exec(createSchemaMigrationsTableSQL).Error; err != nil {
 		return fmt.Errorf("dbkit: create %s table: %w", schemaMigrationsTable, err)
 	}
 
-	for _, m := range ordered {
+	for _, s := range ordered {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("dbkit: apply stopped before module %q: %w", m.Name(), err)
+			return fmt.Errorf("dbkit: apply stopped before module %q: %w", s.name, err)
 		}
-		if err := applyModule(ctx, db, dir, m); err != nil {
-			return fmt.Errorf("dbkit: module %q: %w", m.Name(), err)
+		if err := applyModule(ctx, db, dir, s); err != nil {
+			return fmt.Errorf("dbkit: module %q: %w", s.name, err)
 		}
 	}
 	return nil
@@ -411,20 +478,20 @@ func releaseMigrationLock(ctx context.Context, db *gorm.DB) {
 	}
 }
 
-// applyModule applies every not-yet-applied migration file m declares for
+// applyModule applies every not-yet-applied migration file s declares for
 // the dialect subdirectory dir, inside one transaction: either every file
 // newly applied by this call commits together with its schema_migrations
 // row, or -- on any failure -- none of them do, leaving the module exactly
 // as it was before this call.
-func applyModule(ctx context.Context, db *gorm.DB, dir string, m pkgcore.Module) error {
-	files, err := migrationFiles(m.Migrations(), dir)
+func applyModule(ctx context.Context, db *gorm.DB, dir string, s migrationSource) error {
+	files, err := migrationFiles(s.fs, dir)
 	if err != nil {
 		return err
 	}
 
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, f := range files {
-			applied, err := isApplied(tx, m.Name(), f.name)
+			applied, err := isApplied(tx, s.name, f.name)
 			if err != nil {
 				return err
 			}
@@ -434,7 +501,7 @@ func applyModule(ctx context.Context, db *gorm.DB, dir string, m pkgcore.Module)
 			if err := tx.Exec(string(f.contents)).Error; err != nil {
 				return fmt.Errorf("apply %s: %w", f.name, err)
 			}
-			if err := recordApplied(tx, m.Name(), f.name); err != nil {
+			if err := recordApplied(tx, s.name, f.name); err != nil {
 				return fmt.Errorf("record %s as applied: %w", f.name, err)
 			}
 		}
