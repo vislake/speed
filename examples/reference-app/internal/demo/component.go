@@ -8,6 +8,7 @@ package demo
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -20,8 +21,9 @@ import (
 // nothing -- and requires nothing, exactly as the module's own empty
 // DependsOn states.
 //
-// Init is deliberately not declared: declaration (the module's Register
-// call) is made today by the host's bootstrap path, not by this descriptor.
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
 var demoComponent = pkgcore.Component{
 	Name:         "demo",
 	Module:       "demo",
@@ -30,6 +32,13 @@ var demoComponent = pkgcore.Component{
 	Locales:      locales.FS,
 	New: func(_ context.Context, _ *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		return NewModule(), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("demo: component init got a %T instance, want *demo.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 

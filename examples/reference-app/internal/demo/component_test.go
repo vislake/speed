@@ -2,6 +2,7 @@ package demo
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -28,5 +29,25 @@ func TestComponent_NewBuildsTheModule(t *testing.T) {
 	}
 	if got := m.Name(); got != moduleName {
 		t.Errorf("Name() = %q, want %q", got, moduleName)
+	}
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so both notification types land in the
+// assembly's own seat.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, demoComponent); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	var keys []string
+	for _, typ := range reg.Notifications.Types() {
+		keys = append(keys, typ.Key)
+	}
+	for _, want := range []string{patientReminderNotificationType.Key, simulationReadyNotificationType.Key} {
+		if !slices.Contains(keys, want) {
+			t.Errorf("Notifications seat = %v, want the %q declaration", keys, want)
+		}
 	}
 }

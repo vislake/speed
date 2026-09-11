@@ -7,6 +7,7 @@ package notes
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -25,8 +26,9 @@ import (
 // unwired resolver fails every create closed (ErrSubjectUnresolved) rather
 // than refusing to boot.
 //
-// Init is deliberately not declared: declaration (the module's Register
-// call) is made today by the host's bootstrap path, not by this descriptor.
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
 var notesComponent = pkgcore.Component{
 	Name:         "notes",
 	Module:       "notes",
@@ -49,6 +51,13 @@ var notesComponent = pkgcore.Component{
 			opts = append(opts, WithSubjectResolver(subject))
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("notes: component init got a %T instance, want *notes.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 
