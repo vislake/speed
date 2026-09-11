@@ -101,10 +101,10 @@ replace github.com/vislake/speed/go/integration => ../../go/integration
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/minio/minio-go/v7 v7.3.0
-	github.com/redis/go-redis/v9 v9.14.1
+	github.com/minio/minio-go/v7 v7.3.0 // indirect
+	github.com/redis/go-redis/v9 v9.14.1 // indirect
 	github.com/testcontainers/testcontainers-go v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
+	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0 // indirect
 	github.com/vislake/speed/go/admin v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ai-gateway v0.0.1
 	github.com/vislake/speed/go/app v0.0.0-00010101000000-000000000000
