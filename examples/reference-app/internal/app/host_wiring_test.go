@@ -322,11 +322,12 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 
 // TestAssemble_ComposesAndClosesTheWholeApplication drives the flip end to
 // end over a real database: the loader resolves the composition, the
-// assembly constructs every module and step, the app component composes the
-// face without listening (BuildServer's drive), and the two-phase shutdown
-// releases everything. The composition's strict mode makes this the
-// completeness check: a token no selected component provides fails the
-// assembly by name.
+// assembly constructs every module and step, Verify applies the selected
+// migration sets and the ledger keys them by module, the app component
+// composes the face without listening (BuildServer's drive), and the
+// two-phase shutdown releases everything. The composition's strict mode
+// makes this the completeness check: a token no selected component provides
+// fails the assembly by name.
 func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	cfg := ServerConfig{
 		DeploymentMode: pkgcore.DeploymentModeStandalone,
@@ -350,6 +351,29 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	if face.server != nil {
 		t.Fatal("BuildServer's drive started a listener, want the face composed without one")
 	}
+	// The migration ledger keys every set by the module its component
+	// implements, never by the host-prefixed component name the assembly
+	// selected: the set below is exactly the migration-carrying modules this
+	// composition selects, and a "reference-app."-prefixed key here would
+	// mean the boot replayed -- or, once every set is idempotent, silently
+	// forked -- the log the migration command recorded under module names.
+	gdb, err := pkgcore.Get[*gorm.DB](reg)
+	if err != nil {
+		t.Fatalf("read the assembled database: %v", err)
+	}
+	var modules []string
+	if err := gdb.Table("schema_migrations").Distinct("module").Order("module").Pluck("module", &modules).Error; err != nil {
+		t.Fatalf("read the migration ledger: %v", err)
+	}
+	wantModules := []string{
+		"admin", "ai-gateway", "audit", "authn", "billing", "config",
+		"integration", "metering", "notes", "notification", "org", "pki",
+		"rbac", "sharing", "storage",
+	}
+	if !reflect.DeepEqual(modules, wantModules) {
+		t.Errorf("schema_migrations module keys = %v, want %v", modules, wantModules)
+	}
+
 	if err := speedapp.Shutdown(context.Background(), reg); err != nil {
 		t.Fatalf("Shutdown(): %v", err)
 	}
