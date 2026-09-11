@@ -50,17 +50,25 @@ import (
 	"github.com/vislake/speed/go/pkgcore/spa"
 )
 
-// webSPASpec returns the engine's SPA declaration for dir, configured for
-// this app's surface: /api and everything nested below it, plus the two
-// probe endpoints, always reach the composed handler, and every other
-// GET/HEAD request is served from dir (see the package doc comment above).
+// hostSPAOptions returns the spa options the composed file server is built
+// with for this app's surface: /api and everything nested below it, plus the
+// two probe endpoints, always reach the composed handler, and every other
+// GET/HEAD request is served from the SPA directory (see the package doc
+// comment above). Both SPA wrappings use them -- the engine's, through
+// webSPASpec, and the app component's own composition (component.go).
+func hostSPAOptions() []spa.Option {
+	return []spa.Option{
+		spa.WithServerPrefix("/api"),
+		spa.WithServerPath(obs.HealthzPath),
+		spa.WithServerPath(obs.MetricsPath),
+	}
+}
+
+// webSPASpec returns the engine's SPA declaration for dir, carrying the
+// app's own surface options (hostSPAOptions).
 func webSPASpec(dir string) *speedapp.SPASpec {
 	return &speedapp.SPASpec{
-		Dir: dir,
-		Options: []spa.Option{
-			spa.WithServerPrefix("/api"),
-			spa.WithServerPath(obs.HealthzPath),
-			spa.WithServerPath(obs.MetricsPath),
-		},
+		Dir:     dir,
+		Options: hostSPAOptions(),
 	}
 }

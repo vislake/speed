@@ -1,0 +1,5 @@
+# Synthetic en-US locale fixture for the host-catalog assembly test: the
+# ids carry the "alpha" prefix the component named "alpha" registers under.
+
+"alpha.greeting" = "Hello from alpha."
+"alpha.farewell" = "Goodbye from alpha."

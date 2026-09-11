@@ -1,0 +1,4 @@
+# Synthetic zh-CN locale fixture for the host-catalog assembly test: the
+# ids carry the "beta" prefix the component named "beta" registers under.
+
+"beta.notice" = "来自 beta 的一则通知。"

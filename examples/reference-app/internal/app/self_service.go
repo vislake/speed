@@ -221,7 +221,7 @@ type SelfServiceProvisioner struct {
 	authnSvc *authn.Service
 	// catalog is the merged message catalog the clinic's org root is
 	// named from when the registrant registered no display name
-	// (reg.Locales(), non-nil once Bootstrap has run -- the
+	// (the assembly view's catalog, non-nil once Bootstrap has run -- the
 	// subscription is installed after Bootstrap, so it is always non-nil
 	// here).
 	catalog *i18n.Catalog
@@ -717,7 +717,11 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // registers the retry job's handler on the standalone queue the caller
 // hands in -- the queue a failed synchronous provisioning attempt enqueues
 // its recovery onto (scheduleProvisionRetry), whose job rows survive a
-// restart and are re-dispatched by the next boot's queue start. The three
+// restart and are re-dispatched by the next boot's queue start. catalog is
+// the assembly view's merged message catalog (the clinic root name's
+// fallback source) and events is the view's event seat the subscription is
+// installed on -- a declaration-seat write, which is why the caller runs
+// while the pre-serve step's Init holds the seats open. The three
 // billing services ride along as the provisioner's subscription and
 // credit half (SelfServiceProvisioner's own field comments): plans is the
 // PlanService whose demo Plan the clinic subscribes to, subscriptions the
@@ -759,7 +763,7 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // memberships, grants and first-tenant resolution all stay as the seed
 // made them), which is the residual cost of the ordering discriminator
 // under a genuinely concurrent multi-replica boot.
-func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, plans *billing.PlanService, subscriptions *billing.SubscriptionService, credits *billing.CreditService, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
+func wireSelfService(ctx context.Context, catalog *i18n.Catalog, events pkgcore.EventRegistrar, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, plans *billing.PlanService, subscriptions *billing.SubscriptionService, credits *billing.CreditService, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
 	provisioner := &SelfServiceProvisioner{
 		orgModule:     orgModule,
 		rbacService:   rbacService,
@@ -767,11 +771,11 @@ func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.
 		subscriptions: subscriptions,
 		credits:       credits,
 		authnSvc:      authnSvc,
-		catalog:       reg.Locales(),
+		catalog:       catalog,
 		queue:         queue,
 		FailProvision: failProvision,
 	}
-	reg.Events.Subscribe(authn.EventUserCreated, provisioner.onUserCreated)
+	events.Subscribe(authn.EventUserCreated, provisioner.onUserCreated)
 	if err := queue.RegisterHandler(&SelfServiceProvisionJobHandler{Provisioner: provisioner}); err != nil {
 		return fmt.Errorf("reference-app: register the clinic provisioning retry handler: %w", err)
 	}

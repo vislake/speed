@@ -1,0 +1,5 @@
+# Synthetic zh-CN locale fixture for the host-catalog assembly test: the
+# ids carry the "alpha" prefix the component named "alpha" registers under.
+
+"alpha.greeting" = "来自 alpha 的问候。"
+"alpha.farewell" = "来自 alpha 的告别。"

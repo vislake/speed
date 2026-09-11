@@ -16,6 +16,10 @@ rules' living proof, in the same shape as the sibling checker suites:
     while a test file's own use of the identifiers does not;
   * a re-grown kernel sentinel in a non-test file fires, while the same
     text in a test file stays silent;
+  * the sentinel and call-ban allowances stay scoped to the one named
+    file (the reference app's application component): the sanctioned
+    shapes there stay silent, the same shapes in another host file --
+    and in the skeleton's tree -- still fire;
   * a re-issued engine-owned assembly call (pkgcore.NewKernel, dbkit.Open,
     http.NewServeMux, chain.Chain under any alias, obs.Init, ...) in a
     non-test file fires, while the sanctioned engine options and the same
@@ -126,6 +130,52 @@ class NoForkRules(unittest.TestCase):
             }
         )
         self.assertEqual(m.scan(root), [])
+
+    def test_the_application_component_may_serve_its_own_face(self):
+        # The reference app's application component owns the host's face:
+        # the mux it composes and the request base context its listener
+        # carries are sanctioned in that one file.
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/component.go": (
+                    "package app\n\n"
+                    "func compose() {\n"
+                    "\tmux := http.NewServeMux()\n"
+                    "\tsrv := &http.Server{BaseContext: baseContext}\n"
+                    "\t_ = mux\n"
+                    "\t_ = srv\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_the_sanctioned_shapes_in_another_host_file_still_fire(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/server.go": (
+                    "package app\n\n"
+                    "func compose() {\n"
+                    "\tmux := http.NewServeMux()\n"
+                    "\tsrv := &http.Server{BaseContext: baseContext}\n"
+                    "\t_ = mux\n"
+                    "\t_ = srv\n"
+                    "}\n"
+                ),
+                "go/saasctl/internal/template/project/cmd/server/server.go": (
+                    "package main\n\n"
+                    "func compose() { mux := http.NewServeMux(); _ = mux }\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        self.assertTrue(
+            any("http.NewServeMux" in f for f in findings), findings
+        )
+        self.assertTrue(any("BaseContext" in f for f in findings), findings)
+        self.assertEqual(
+            sum("http.NewServeMux" in f for f in findings), 2, findings
+        )
 
 
 class EngineOwnedCallRules(unittest.TestCase):

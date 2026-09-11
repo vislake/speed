@@ -6,18 +6,17 @@ package app
 
 import (
 	"context"
-
-	speedapp "github.com/vislake/speed/go/app"
+	"net/http"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
-// preServe is the engine's stage-8 hook: it runs after the HTTP face exists
-// (so the seeds can register through the same composed handler a browser
-// reaches) and before anything listens.
-func (b *serverBuild) preServe(ctx context.Context, a *speedapp.Application) error {
-	handler := a.Handler()
-
+// runPreServe runs the pre-serve assembly step: it runs after the HTTP face
+// exists (so the seeds can register through the same composed handler a
+// browser reaches) and before anything listens. The transition's PreServe
+// hook (handed the engine's composed handler) and the host's pre-serve
+// component (handed the app component's face) both call it.
+func (b *serverBuild) runPreServe(ctx context.Context, view assemblyView, handler http.Handler) error {
 	// The demo-user seeds run last, once the composed handler exists: they
 	// register the demo accounts through the same register route a browser
 	// would use, which needs the whole chain above it. Each seed is opt-in
@@ -64,7 +63,7 @@ func (b *serverBuild) preServe(ctx context.Context, a *speedapp.Application) err
 	// the failure-injection hook -- nil under the disabled default, armed
 	// either by ConfigFromEnv's own env-driven parse or by a test's
 	// ServerConfig.
-	if wireErr := wireSelfService(ctx, b.reg, b.orgModule, b.rbacService, b.authnModule.Service(), b.billingModule.Plans(), b.billingModule.Subscriptions(), b.billingModule.Credits(), b.standaloneQueue, b.cfg.FailSelfServiceProvision); wireErr != nil {
+	if wireErr := wireSelfService(ctx, view.catalog, view.events, b.orgModule, b.rbacService, b.authnModule.Service(), b.billingModule.Plans(), b.billingModule.Subscriptions(), b.billingModule.Credits(), b.standaloneQueue, b.cfg.FailSelfServiceProvision); wireErr != nil {
 		return wireErr
 	}
 	return nil

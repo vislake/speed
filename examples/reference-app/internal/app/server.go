@@ -492,6 +492,11 @@ type serverBuild struct {
 	// source actually supplied).
 	hostConfig hostConfig
 
+	// view is the single reading of the assembly's declaration seats and
+	// resolved seam values (assembly.go) the host's steps work from, set by
+	// the PostBootstrap hook once the registry exists.
+	view assemblyView
+
 	bus             pkgcore.EventBus
 	busCapabilities pkgcore.Capability
 	redisBus        *eventbusredis.EventBus
@@ -605,15 +610,18 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 }
 
 // httpSpec declares this app's HTTP face for the engine's stage 7: the
-// protected-face composition (composeFace, which mounts the app's own
-// routes and derives the middleware chain from the registry), the listen
-// address Run binds, and the frontend directory when this boot serves one
-// (cfg.WebDistDir, set by ConfigFromEnv from APP_WEB_DIST -- the Dockerfile
-// ships the dist and sets the variable itself).
+// protected-face composition (composeFace over the assembly view the
+// PostBootstrap hook captured, which mounts the app's own routes and derives
+// the middleware chain from the registry), the listen address Run binds, and
+// the frontend directory when this boot serves one (cfg.WebDistDir, set by
+// ConfigFromEnv from APP_WEB_DIST -- the Dockerfile ships the dist and sets
+// the variable itself).
 func (b *serverBuild) httpSpec() speedapp.HTTPSpec {
 	spec := speedapp.HTTPSpec{
-		Addr:    ":" + b.cfg.Port,
-		Compose: b.composeFace,
+		Addr: ":" + b.cfg.Port,
+		Compose: func(mux *http.ServeMux) (http.Handler, error) {
+			return b.composeFace(b.view, mux)
+		},
 	}
 	if b.cfg.WebDistDir != "" {
 		spec.SPA = webSPASpec(b.cfg.WebDistDir)
@@ -676,9 +684,21 @@ func (b *serverBuild) options() []speedapp.Option {
 		speedapp.WithKernelOptions(b.kernelOptions()...),
 		speedapp.WithHTTP(b.httpSpec()),
 		speedapp.WithHooks(speedapp.Hooks{
-			PostBootstrap: b.postBootstrap,
-			PostAttach:    b.postAttach,
-			PreServe:      b.preServe,
+			// The three hooks are the transition's thin adapters onto the
+			// step bodies the host's components call (component.go): each
+			// captures the assembly view once, in the stage that first has
+			// the registry, and then runs the same body.
+			PostBootstrap: func(ctx context.Context, a *speedapp.Application) error {
+				b.reg = a.Registry()
+				b.view = viewFromModules(b.reg)
+				return b.runPostBootstrap(ctx, b.view)
+			},
+			PostAttach: func(ctx context.Context, _ *speedapp.Application) error {
+				return b.runPostAttach(ctx, b.view)
+			},
+			PreServe: func(ctx context.Context, a *speedapp.Application) error {
+				return b.runPreServe(ctx, b.view, a.Handler())
+			},
 		}),
 		speedapp.WithWorker(&backgroundWorker{b: b}),
 	}
@@ -714,24 +734,27 @@ func (b *serverBuild) openBus() {
 }
 
 // backgroundWorker is this host's seat in the engine's lifecycle: Start
-// launches the job queue and the periodic-task scheduler together (a task
-// this replica can never execute is pointless to enqueue, so the scheduler
-// runs exactly when the queue's worker does), and Close drains the process
-// in the order the shared resources require.
+// forwards to startWorker and Close to stopWorker, the same bodies the
+// host's own worker component runs (component.go), so the worker has one
+// implementation whichever drive starts it.
 type backgroundWorker struct{ b *serverBuild }
 
-// Start launches the job queue's dispatcher and worker pool, then the
+// Start launches the background worker (startWorker).
+func (w *backgroundWorker) Start(ctx context.Context) error {
+	return w.b.startWorker(ctx, w.b.view)
+}
+
+// startWorker launches the job queue's dispatcher and worker pool, then the
 // periodic-task scheduler over the registry's declared schedules. The
 // tenant universe every per-tenant declaration expands through is the
 // configured host tenants joined with go/admin's tenant ledger
 // (periodic_scheduler.go's periodicTenantUniverse).
-func (w *backgroundWorker) Start(ctx context.Context) error {
-	b := w.b
+func (b *serverBuild) startWorker(ctx context.Context, view assemblyView) error {
 	if err := b.standaloneQueue.Start(ctx); err != nil {
 		return fmt.Errorf("reference-app: start the job queue: %w", err)
 	}
 	schedulerOpts := []jobs.SchedulerOption{
-		jobs.WithSchedules(b.reg.Schedules),
+		jobs.WithSchedules(view.schedules),
 		jobs.WithTenantLister(newPeriodicTenantUniverse(b.cfg.HostTenants, b.adminModule.Tenants())),
 	}
 	if b.cfg.PeriodicTaskInterval > 0 {
@@ -748,7 +771,12 @@ func (w *backgroundWorker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close tears the process's shared resources down in the order their
+// Close drains the background worker (stopWorker).
+func (w *backgroundWorker) Close(ctx context.Context) error {
+	return w.b.stopWorker(ctx)
+}
+
+// stopWorker tears the process's shared resources down in the order their
 // dependencies require: the credit-reservation reconciler and the
 // scheduler first (both tick against the queue and the database), then the
 // attached services whose background loops write the database, then the
@@ -759,8 +787,7 @@ func (w *backgroundWorker) Start(ctx context.Context) error {
 // the Redis client the host owns. The database itself closes last, in the
 // engine's own order after this step. Every step is attempted even when an
 // earlier one failed; the first error wins.
-func (w *backgroundWorker) Close(ctx context.Context) error {
-	b := w.b
+func (b *serverBuild) stopWorker(ctx context.Context) error {
 	var firstErr error
 	keepErr := func(err error) {
 		if err != nil && firstErr == nil {

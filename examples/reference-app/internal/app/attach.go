@@ -1,13 +1,14 @@
 package app
 
-// This file runs the host's two assembly hooks. postBootstrap executes after
-// the kernel bootstrapped the module set: the typed Attach calls every module
-// requires exactly once after Bootstrap, the host steps interleaved with them
-// (the channel flags, the demo seeds, the rbac hand-off), and the platform
-// credentials the gateway's write path needs. postAttach executes after that:
-// the stores and services whose schemas must exist before the first request,
-// the job queue's wiring onto the registry's declared handlers, and the
-// modules' own background pipeline starts.
+// This file runs the host's two post-Bootstrap assembly steps.
+// runPostBootstrap executes after the kernel bootstrapped the module set: the
+// typed Attach calls every module requires exactly once after Bootstrap, the
+// host steps interleaved with them (the channel flags, the demo seeds, the
+// rbac hand-off), and the platform credentials the gateway's write path
+// needs. runPostAttach executes after that: the stores and services whose
+// schemas must exist before the first request, the job queue's wiring onto
+// the registry's declared handlers, and the modules' own background pipeline
+// starts.
 
 import (
 	"context"
@@ -16,7 +17,6 @@ import (
 	"os"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
-	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/jobs"
@@ -121,8 +121,10 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 	return nil
 }
 
-// postBootstrap is the engine's stage-5 hook: the typed Attach calls and the
-// host steps interleaved with them.
+// runPostBootstrap runs the post-bootstrap assembly step: the typed Attach
+// calls and the host steps interleaved with them. The transition's
+// PostBootstrap hook and the host's post-bootstrap component both call it,
+// so the option surface and the component assembly drive one body.
 //
 // The Attach calls follow pkgcore.Kernel.Bootstrap's post-bootstrap contract:
 // each exactly once, after Bootstrap has returned, and each before the first
@@ -131,15 +133,20 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 // steps between the attaches (the channel flags, the seeds, the rbac
 // hand-off), which is why it is written out step by step; each step's own
 // comment carries its ordering rationale.
-func (b *serverBuild) postBootstrap(ctx context.Context, a *speedapp.Application) error {
-	b.reg = a.Registry()
-
-	// The bootstrap binding check: the loader target must bind the keys the
-	// composed modules declared, and every key this app owns besides. A
-	// declared key the target never resolves is a key whose contract
-	// silently binds to nothing.
-	if err := verifyBootstrapBinding(b.reg); err != nil {
-		return err
+//
+// The Attach calls, and the binding check before them, need the module
+// Registry the assembly bootstrapped (view.modules): they are the module
+// world's own surface, and they are skipped on a view built from a component
+// registry, where the same Services are component products.
+func (b *serverBuild) runPostBootstrap(ctx context.Context, view assemblyView) error {
+	if view.modules != nil {
+		// The bootstrap binding check: the loader target must bind the keys
+		// the composed modules declared, and every key this app owns
+		// besides. A declared key the target never resolves is a key whose
+		// contract silently binds to nothing.
+		if err := verifyBootstrapBinding(view.modules); err != nil {
+			return err
+		}
 	}
 
 	// The org-backed half of the membership store binds here, only now that
@@ -152,21 +159,23 @@ func (b *serverBuild) postBootstrap(ctx context.Context, a *speedapp.Application
 	// questions only inside a Login or Refresh call.
 	b.memberships.attach(b.orgModule.Members())
 
-	// integration's Attach must run after Bootstrap for the same reason
-	// config's and rbac's do: its Service reads reg.Events.Bus() and
-	// reg.AuditActions, which Bootstrap only finishes wiring once every
-	// module's Register call has returned. Its ordering relative to the
-	// other attaches is not load-bearing. The return value is discarded:
-	// every spec-generated surface the module mounts reads the Service at
-	// call time through Handler's own Register-time forwarding wrapper.
-	if _, attachErr := b.integrationModule.Attach(b.reg); attachErr != nil {
-		return fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
+	if view.modules != nil {
+		// integration's Attach must run after Bootstrap for the same reason
+		// config's and rbac's do: its Service reads reg.Events.Bus() and
+		// reg.AuditActions, which Bootstrap only finishes wiring once every
+		// module's Register call has returned. Its ordering relative to the
+		// other attaches is not load-bearing. The return value is discarded:
+		// every spec-generated surface the module mounts reads the Service at
+		// call time through Handler's own Register-time forwarding wrapper.
+		if _, attachErr := b.integrationModule.Attach(view.modules); attachErr != nil {
+			return fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
+		}
+		configService, err := b.configModule.Attach(view.modules)
+		if err != nil {
+			return fmt.Errorf("reference-app: attach the config module: %w", err)
+		}
+		b.configService = configService
 	}
-	configService, err := b.configModule.Attach(b.reg)
-	if err != nil {
-		return fmt.Errorf("reference-app: attach the config module: %w", err)
-	}
-	b.configService = configService
 
 	// With the config service live, open the sign-in channels this host
 	// actually assembled: authn's social flags default OFF, so a provider
@@ -190,11 +199,13 @@ func (b *serverBuild) postBootstrap(ctx context.Context, a *speedapp.Application
 	// module declared, so a snapshot taken any earlier would be missing
 	// whatever registered after it -- and a permission missing from that
 	// catalog cannot be granted at all.
-	rbacService, err := b.rbacModule.Attach(b.reg)
-	if err != nil {
-		return fmt.Errorf("reference-app: attach the rbac module: %w", err)
+	if view.modules != nil {
+		rbacService, err := b.rbacModule.Attach(view.modules)
+		if err != nil {
+			return fmt.Errorf("reference-app: attach the rbac module: %w", err)
+		}
+		b.rbacService = rbacService
 	}
-	b.rbacService = rbacService
 	if seedErr := demo.SeedDemoGrants(ctx, b.rbacService, b.cfg.HostTenants); seedErr != nil {
 		return seedErr
 	}
@@ -227,11 +238,11 @@ func (b *serverBuild) postBootstrap(ctx context.Context, a *speedapp.Application
 
 	// notes' retention participant is registered here, after Bootstrap --
 	// compliance's Register is what attaches the Retention registrar the
-	// kernel's reg.Retention seat resolves to, so Add before Bootstrap
-	// would silently register onto a registrar nothing sweeps with. The
+	// kernel's Retention seat resolves to, so Add before Bootstrap would
+	// silently register onto a registrar nothing sweeps with. The
 	// participant is built over the very dbkit.Open *gorm.DB the notes
 	// Module already uses -- share the connection, never a second pool.
-	if err := b.reg.Retention.Add(notes.NewRetentionParticipant(notes.NewRepository(b.db))); err != nil {
+	if err := view.retention.Add(notes.NewRetentionParticipant(notes.NewRepository(b.db))); err != nil {
 		return fmt.Errorf("reference-app: register notes retention participant: %w", err)
 	}
 
@@ -244,12 +255,13 @@ func (b *serverBuild) postBootstrap(ctx context.Context, a *speedapp.Application
 	return nil
 }
 
-// postAttach is the engine's stage-6 hook. It runs after the typed attaches
-// and before the HTTP face: the stores whose schemas must exist before the
-// first request, the services built over them, the gateway's boot-time
-// credentials, the job queue's wiring onto the registry's declared handlers,
-// and metering's background pipelines.
-func (b *serverBuild) postAttach(ctx context.Context, _ *speedapp.Application) error {
+// runPostAttach runs the post-attach assembly step. It runs after the typed
+// attaches and before the HTTP face: the stores whose schemas must exist
+// before the first request, the services built over them, the gateway's
+// boot-time credentials, the job queue's wiring onto the registry's declared
+// handlers, and metering's background pipelines. The transition's PostAttach
+// hook and the host's post-attach component both call it.
+func (b *serverBuild) runPostAttach(ctx context.Context, view assemblyView) error {
 	// The attestation layer's two boot steps run here, after Bootstrap (the
 	// pki migrations the CA chain's pki_authorities rows live in were
 	// applied there) and before any request can reach the surfaces that
@@ -284,7 +296,7 @@ func (b *serverBuild) postAttach(ctx context.Context, _ *speedapp.Application) e
 	// The last argument is gatewayEntitlements -- the same adapter instance
 	// aiGatewayModule's WithEntitlements gate runs -- so Simulate can
 	// pre-flight the model-access gate before its credit reservation opens.
-	b.smileSimService = smilesim.NewService(b.aiGatewayModule.Gateway(), b.billingModule.Credits(), b.reg.EventBus(), b.standaloneQueue, smileSimReservationStore, smileSimulationStore, b.gatewayEntitlements)
+	b.smileSimService = smilesim.NewService(b.aiGatewayModule.Gateway(), b.billingModule.Credits(), view.bus, b.standaloneQueue, smileSimReservationStore, smileSimulationStore, b.gatewayEntitlements)
 
 	// The case domain's repository shares this app's own db connection and
 	// creates its two tiny tables imperatively via EnsureSchema -- the same
@@ -319,7 +331,7 @@ func (b *serverBuild) postAttach(ctx context.Context, _ *speedapp.Application) e
 	// than mis-typing it into a worker at job-claim time, and creating the
 	// queue's own tables so an Enqueue needs no Start first. The pool
 	// itself starts with the worker, in the engine's stage 8.
-	if err := jobs.Wire(ctx, b.standaloneQueue, b.reg.Jobs); err != nil {
+	if err := jobs.Wire(ctx, b.standaloneQueue, view.jobs); err != nil {
 		return fmt.Errorf("reference-app: wire the job queue: %w", err)
 	}
 

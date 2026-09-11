@@ -22,7 +22,9 @@ this gate checks is the no-fork half, in three layers:
   * no host tree may DECLARE any of the platform kernel's identifiers
     (HOST_COMPOSITION_IDENTIFIERS below) in its own code;
   * neither may re-grow the statements the kernel owns -- the serve loop
-    and the literal paths (HOST_COMPOSITION_SENTINELS);
+    and the literal paths (HOST_COMPOSITION_SENTINELS), each with its own
+    named-file allowance for the one host file that legitimately carries
+    it;
   * neither may re-issue a step of the assembly the engine owns
     (HOST_COMPOSITION_CALL_BANS): a host that builds its own kernel,
     opens its own database, applies its own migrations, composes its own
@@ -103,13 +105,23 @@ HOST_COMPOSITION_IDENTIFIERS = (
 # file inside either host tree means a host re-grew that piece. The path
 # literals stay on this list because a host literal for any of them is
 # drift whichever package owns the constant (obs.HealthzPath,
-# obs.MetricsPath, and app.AuthnAPIPath respectively).
+# obs.MetricsPath, and app.AuthnAPIPath respectively). Each entry is
+# (sentinel, allowed), read as the call bans' allowed tuple is:
+#
+#   * BaseContext -- allowed in the reference app's application component
+#     (examples/reference-app/internal/app/component.go), which composes and
+#     serves the host's own HTTP face: the request base context it hands its
+#     listener is that component's own contract, not a re-grown copy of the
+#     engine's serve loop. Every other host file still fires, and the
+#     ListenAndServe entry stays unconditionally banned (the component calls
+#     net.Listen plus Serve, so no host file spells the engine's listen
+#     call).
 HOST_COMPOSITION_SENTINELS = (
-    "ListenAndServe",
-    "BaseContext",
-    '"/healthz"',
-    '"/metrics"',
-    '"/api/v1/authn"',
+    ("ListenAndServe", ()),
+    ("BaseContext", ("examples/reference-app/internal/app/component.go",)),
+    ('"/healthz"', ()),
+    ('"/metrics"', ()),
+    ('"/api/v1/authn"', ()),
 )
 
 # The composition surface of each host tree: the files where the host's own
@@ -150,12 +162,23 @@ HOST_COMPOSITION_PATHS = (
 #         (app.WithWorker). A NEW file calling either still fires; making
 #         the exemption explicit for one more file is the deliberate act
 #         this list forces.
+#       - http.NewServeMux in the reference app's application component
+#         (examples/reference-app/internal/app/component.go): the mux that
+#         component's Init composes IS the host's own face -- the platform
+#         liveness routes, the protected-face composition and the SPA wrap
+#         hang off it there -- so that one file owns the call. Any other
+#         composition-path file still fires.
 HOST_COMPOSITION_CALL_BANS = (
     ("pkgcore.NewKernel", r"(?<![A-Za-z0-9_.])pkgcore\.NewKernel\(", "tree", ()),
     (".Bootstrap(", r"\.Bootstrap\(", "tree", ()),
     ("dbkit.Open", r"(?<![A-Za-z0-9_.])dbkit\.Open\(", "tree", ()),
     ("dbkit.NewMigrationRegistry", r"(?<![A-Za-z0-9_.])dbkit\.NewMigrationRegistry\(", "tree", ()),
-    ("http.NewServeMux", r"(?<![A-Za-z0-9_.])http\.NewServeMux\(", "composition", ()),
+    (
+        "http.NewServeMux",
+        r"(?<![A-Za-z0-9_.])http\.NewServeMux\(",
+        "composition",
+        ("examples/reference-app/internal/app/component.go",),
+    ),
     (
         "jobs.NewStandaloneQueue",
         r"(?<![A-Za-z0-9_.])jobs\.NewStandaloneQueue\(",
@@ -270,7 +293,9 @@ def scan(root: pathlib.Path) -> list[str]:
                         )
                 if is_test_file(rel):
                     continue
-                for sentinel in HOST_COMPOSITION_SENTINELS:
+                for sentinel, allowed in HOST_COMPOSITION_SENTINELS:
+                    if rel_str in allowed:
+                        continue
                     if sentinel in line:
                         findings.append(
                             f"{rel_str}:{line_no}: uses {sentinel}, which "

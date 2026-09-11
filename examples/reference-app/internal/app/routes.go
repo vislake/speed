@@ -21,11 +21,13 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
 
-// composeFace is the engine's protected-face callback: it mounts this app's
+// composeFace is the protected-face composition both drives call (the
+// engine's HTTP component through the transition's Compose callback, and the
+// host's application component in its Init): it mounts this app's
 // hand-written routes on the mux (which already carries the platform
-// liveness routes and the engine's ExtraRoutes), then derives the whole
-// middleware chain from the registry with chain.Standard -- the route
-// partition and the fixed order live there, not here.
+// liveness routes), then derives the whole middleware chain from the view
+// with chain.Standard -- the route partition and the fixed order live there,
+// not here.
 //
 // The hand-written routes are mounted FIRST and directly, exactly as a
 // module's own routes would be once Standard mounts them: every one of them
@@ -35,17 +37,19 @@ import (
 // check applies it itself (team_members.go is the standing example), while
 // the demo notification and integration surfaces resolve identity per
 // operation.
-func (b *serverBuild) composeFace(mux *http.ServeMux) (http.Handler, error) {
+func (b *serverBuild) composeFace(view assemblyView, mux *http.ServeMux) (http.Handler, error) {
 	// WireDemoNotification adds the reference app's demo glue on top of the
 	// mounted module routes: the subscription that turns notes' note-created
 	// event into a notification dispatch for the note's creator, and the
 	// hand-written demo patient-message route that dispatches the demo
 	// module's patient-reminder type to a verified external contact. The
-	// bus is reg.EventBus() -- the same bus Bootstrap gave every module --
-	// and the notificationModule services are the module's own accessors,
-	// the same instances its Register validated and its HTTP handler drives.
-	// The call cannot fail: nothing it does returns an error.
-	demo.WireDemoNotification(mux, b.reg.EventBus(), b.notificationModule, b.reg, b.authnUserLocales)
+	// bus is view.bus -- the same bus the assembly gave every module -- the
+	// catalog is the assembly's merged one (the patient-message route
+	// negotiates the request's Accept-Language against it), and the
+	// notificationModule services are the module's own accessors, the same
+	// instances its Register validated and its HTTP handler drives. The
+	// call cannot fail: nothing it does returns an error.
+	demo.WireDemoNotification(mux, view.bus, b.notificationModule, view.catalog, b.authnUserLocales)
 
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
 	// (consult.go): consultService shares notesModule's own database
@@ -68,7 +72,7 @@ func (b *serverBuild) composeFace(mux *http.ServeMux) (http.Handler, error) {
 	// Gateway.GenerateImage, and settles that reservation (Confirm/Refund)
 	// once the async job reaches a terminal status. memberships rides along
 	// as the recipient gate's membership answer -- the SAME store authn's
-	// MembershipReader reads, attached to org in postBootstrap.
+	// MembershipReader reads, attached to org in the post-bootstrap step.
 	// storageModule.ObjectService() is the simulation-content route's read
 	// path for a generated image's stored bytes, the same instance the
 	// cases photo routes drive.
@@ -82,7 +86,7 @@ func (b *serverBuild) composeFace(mux *http.ServeMux) (http.Handler, error) {
 	// notification publishes then too. The publisher half of the mechanism
 	// is jobs.WithEventBus(bus) on the standaloneQueue construction; the
 	// install's full contract is smilesim_terminal.go's doc comment.
-	wireSmilesimTerminalSignal(b.reg, b.smileSimService)
+	wireSmilesimTerminalSignal(view.events, b.smileSimService)
 
 	// WireClinicName mounts this host's own tenant-identity answer
 	// (clinic_name.go): the org root name of the tenant the caller's token
@@ -117,9 +121,9 @@ func (b *serverBuild) composeFace(mux *http.ServeMux) (http.Handler, error) {
 	// minimal "whoami" demo endpoint gated by the module's own
 	// AuthMiddleware, with the guard wired ahead of it through
 	// integration.WithAuthenticationGuard, applied inside
-	// wireIntegrationAuthenticated once reg.KVStore() exists, since the
-	// guard's limiter is built over this same resolved KVStore seam.
-	wireIntegrationAuthenticated(mux, b.integrationModule, b.reg.KVStore())
+	// wireIntegrationAuthenticated once view.kv exists, since the guard's
+	// limiter is built over this same resolved KVStore seam.
+	wireIntegrationAuthenticated(mux, b.integrationModule, view.kv)
 
 	// The middleware chain: chain.Standard owns the fixed order --
 	// authn.Middleware(verifier) outermost (the only order that verifies a
@@ -142,7 +146,7 @@ func (b *serverBuild) composeFace(mux *http.ServeMux) (http.Handler, error) {
 	// handed to Standard here is exactly the enforced composition.
 	orgGuardDeps := demo.OrgRouteGuardDeps{Scope: b.orgModule.Scope(), Members: b.orgModule.Members()}
 	return speedchain.Standard(
-		b.reg,
+		view.routes,
 		b.authnModule.Service().Verifier(),
 		mux,
 		speedchain.WithAuthorization(b.rbacService, demo.DemoRouteRules(b.rbacService, orgGuardDeps, b.cfg.DisableDemoUserHeader)),

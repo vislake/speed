@@ -1,0 +1,4 @@
+# Synthetic en-US locale fixture for the host-catalog assembly test: the
+# ids carry the "beta" prefix the component named "beta" registers under.
+
+"beta.notice" = "A notice from beta."

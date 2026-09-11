@@ -17,10 +17,10 @@ import (
 // delay -- and publishes EventSimulationCompleted for a job Simulate was
 // given a recipient for.
 //
-// The subscription is installed on reg.Events, the same registry event seat
-// wireSelfService's own user-created subscription uses, so it rides the
-// very bus reg.EventBus() resolves to -- the bus the queue was handed.
-// Installing it here, at assembly time, is the host's side of the consumer
+// events is the assembly view's event seat, so the subscription rides the
+// very bus the view resolved -- the bus the queue was handed -- and lands
+// while the declaration seats are open, which is the app component's Init.
+// Installing it there, at assembly time, is the host's side of the consumer
 // contract jobs.EventJobTerminal documents: the signal lands on a bus with
 // nothing subscribed to it as a side-effect-free no-op, so a host that
 // wants settlement at the transition subscribes before it serves.
@@ -31,8 +31,8 @@ import (
 // both legs publish through the one latch, so the recipient still gets at
 // most one delivery.
 //
-// The call cannot fail: reg.Events.Subscribe returns nothing, mirroring
+// The call cannot fail: events.Subscribe returns nothing, mirroring
 // WireDemoNotification's own no-error shape.
-func wireSmilesimTerminalSignal(reg *pkgcore.Registry, svc *smilesim.Service) {
-	reg.Events.Subscribe(jobs.EventJobTerminal, svc.OnJobTerminal)
+func wireSmilesimTerminalSignal(events pkgcore.EventRegistrar, svc *smilesim.Service) {
+	events.Subscribe(jobs.EventJobTerminal, svc.OnJobTerminal)
 }

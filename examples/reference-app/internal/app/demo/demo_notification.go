@@ -265,14 +265,16 @@ func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJo
 // WireDemoNotification mounts the reference app's demo glue for the
 // notification module on mux: the subscription that turns notes'
 // note-created event into a notification dispatch for the note's creator,
-// and the demo patient-message route. bus is reg.EventBus() -- the same bus
-// Kernel.Bootstrap gave every module, so the subscription hears exactly
-// what notes' handler publishes -- and module is the app's notification
-// module, whose Deliveries() accessor the two glue pieces drive.
+// and the demo patient-message route. bus is the assembled bus -- the same
+// bus the module set publishes on, so the subscription hears exactly what
+// notes' handler publishes -- catalog is the assembly's merged message
+// catalog the patient-message route negotiates its Accept-Language against,
+// and module is the app's notification module, whose Deliveries() accessor
+// the two glue pieces drive.
 //
 // The call cannot fail: subscribing to a bus returns no error, and mounting
 // a route on a *http.ServeMux cannot fail for a well-formed pattern.
-func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module, reg *pkgcore.Registry, userLocales AuthnUserLocales) {
+func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module, catalog *i18n.Catalog, userLocales AuthnUserLocales) {
 	// The note-created subscription: notes publishes notes.note.created as
 	// a fact (see internal/notes/handler.go's publishNoteCreated) whenever
 	// a note is created; this subscription dispatches the type of the same
@@ -400,7 +402,7 @@ func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 		// language this deployment's catalog ships dispatches an empty
 		// Locale, and the module renders the platform default.
 		locale := ""
-		if catalog := reg.Locales(); catalog != nil {
+		if catalog != nil {
 			locale, _ = i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
 		}
 		if _, err := module.Deliveries().Dispatch(r.Context(), notification.Dispatch{
