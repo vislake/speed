@@ -1087,13 +1087,13 @@ func TestObjectService_Complete_PublishesTheEventAndEnqueuesDerivation(t *testin
 // the lost update answers storage.object_not_found -- what the caller will
 // find -- and runs no side effect: a finalize that did not commit logs
 // nothing, enqueues no thumbnail task and publishes no completion event.
-// (On the pre-conditional-write code this test failed with the shape the two
-// lost-update forms each took: a vanished row surfaced as
+// (Without the conditional commit the lost update would take one of the
+// two shapes this test discriminates: a vanished row would surface as
 // storage.internal_error wrapping a record-not-found -- an internal fault
 // where the honest answer is object-not-found -- and a row whose window
-// closed mid-pipeline finalized silently into completed. The conditional
-// finalize answers both from a re-read; this test pins the vanished-row
-// shape.)
+// closed mid-pipeline would finalize silently into completed. The
+// conditional finalize answers both from a re-read; this test pins the
+// vanished-row shape.)
 func TestObjectService_Complete_RefusesWhenTheRowsVanishMidPipeline(t *testing.T) {
 	svc, store, queue, bus := newTestService(t, nil)
 	ctx := serviceCtx("tenant-a")
@@ -1134,9 +1134,9 @@ func TestObjectService_Complete_RefusesWhenTheRowsVanishMidPipeline(t *testing.T
 // the put rewrote the key, and its row removal lands right after -- so the
 // upload answers storage.content_missing, the same answer a completion
 // racing the reclaim gives, and takes its own bytes back: a write the
-// reclaim orphaned must not be what a later sweep finds under the key. (On
-// the pre-re-check code this test failed with the upload reporting success
-// for bytes whose row a concurrent reclaim had just removed.)
+// reclaim orphaned must not be what a later sweep finds under the key.
+// (Without the post-write re-check the upload would report success for
+// bytes whose row a concurrent reclaim removed mid-write.)
 func TestObjectService_Upload_RefusesWhenTheReclaimRemovesTheRowMidWrite(t *testing.T) {
 	svc, store, _, bus := newTestService(t, nil)
 	ctx := serviceCtx("tenant-a")

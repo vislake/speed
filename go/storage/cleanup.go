@@ -93,9 +93,9 @@ const taskTypeExpirySweep = "storage.expiry_sweep"
 // is what makes the sweep periodic at all: jobs' idempotency is
 // unconditional for one key on StandaloneQueue (a resolved key is held
 // forever), so a tenant-only key would give each tenant exactly one sweep
-// per database file -- the pre-window design's recorded residual -- and,
-// worse, a sweep job that dead-letters would poison its tenant forever,
-// since every later enqueue would keep returning the dead job's id. A
+// per database file, and, worse, a sweep job that dead-letters would
+// poison its tenant forever, since every later enqueue would keep
+// returning the dead job's id. A
 // dead-lettered job now poisons only its own window; the next window's
 // enqueue is a fresh key and runs. One hour means an expired object is
 // reaped at most expirySweepWindowSize after the sweep that should have

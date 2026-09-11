@@ -759,8 +759,8 @@ func TestExpirySweepHandler_RejectsAPayload(t *testing.T) {
 // own window, never its tenant's later windows. All three run against a
 // REAL jobs.StandaloneQueue over a real SQLite database -- the dedupe
 // behaviour under test lives in jobs' partial unique index and row
-// semantics, which a fake queue cannot exercise. Tests (b) and (c) fail on
-// the pre-window key (tenant-only): the later enqueue returns the first
+// semantics, which a fake queue cannot exercise. Tests (b) and (c) fail
+// under a tenant-only key (no window): the later enqueue returns the first
 // job's id and no second sweep ever runs.
 //
 // EnqueueExpirySweep returns no job id (it is a fire-and-forget schedule
