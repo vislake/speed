@@ -209,7 +209,7 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 
 	reg := pkgcore.NewComponentRegistry()
 	for _, c := range hostComponents(db, cipher) {
-		if err := reg.Register(c); err != nil {
+		if err = reg.Register(c); err != nil {
 			return nil, err
 		}
 	}
@@ -221,7 +221,7 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := reg.Register(notificationComp); err != nil {
+	if err = reg.Register(notificationComp); err != nil {
 		return nil, err
 	}
 	// config is a register-only override: the shipped descriptor attaches
@@ -231,7 +231,7 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := reg.Register(configComp); err != nil {
+	if err = reg.Register(configComp); err != nil {
 		return nil, err
 	}
 	// The key source is a plain by-type value: see dummyKeySource's own doc
@@ -252,7 +252,7 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 		Args:      []string{},
 		Overrides: &speedapp.CompositionOverrides{Config: composition()},
 	}
-	if err := speedapp.Load(ctx, reg, spec); err != nil {
+	if err = speedapp.Load(ctx, reg, spec); err != nil {
 		return nil, err
 	}
 
@@ -269,7 +269,7 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 		{"verify", reg.Verify},
 		{"init", reg.Init},
 	} {
-		if err := stage.run(ctx); err != nil {
+		if err = stage.run(ctx); err != nil {
 			return nil, fmt.Errorf("configrefgen: assembly stage %s: %w", stage.name, err)
 		}
 	}
