@@ -44,7 +44,18 @@ func newBuiltinObjectStoreRegistry() *SeamRegistry[ObjectStore] {
 // the same throwaway-by-default behaviour the standalone composition's
 // local store has.
 func localObjectStoreFromConfig(cfg Config) (ObjectStore, error) {
-	directory := cfg["directory"]
+	return newLocalObjectStoreFromDirectory(cfg["directory"])
+}
+
+// newLocalObjectStoreFromDirectory builds "objectstore.local" for directory,
+// the single construction path both configuration channels funnel through:
+// the flat Config adapter above and the "objectstore.local" component
+// (objectstore_local.go), whose typed configuration carries the same
+// "directory" key. An empty directory falls back to a fresh private
+// temporary directory whose removal the returned value owns (see
+// closableObjectStore); a non-empty one is the host's own directory and the
+// store never carries a closer for it.
+func newLocalObjectStoreFromDirectory(directory string) (ObjectStore, error) {
 	if directory == "" {
 		created, err := os.MkdirTemp("", "pkgcore-object-store-*")
 		if err != nil {

@@ -133,12 +133,23 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // since a Preset's own contract is "resolve an implementation", never "also
 // migrate a database".
 func poolFromConfig(cfg pkgcore.Config) (*pgxpool.Pool, error) {
-	dsn := cfg["dsn"]
+	return newPool(context.Background(), cfg["dsn"])
+}
+
+// newPool validates and builds the pool for the "kv.postgres" settings both
+// configuration channels resolve to: the flat pkgcore.Config adapter above
+// (which carries no context of its own -- Registration.New has none --
+// hence its background context) and the "kv.postgres" component
+// (component.go), whose typed configuration carries the same field and
+// whose New passes its own context down. The required key and the pool
+// construction live here, so the two channels cannot drift on them; nothing
+// is dialed here, per pgxpool.New's own laziness.
+func newPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf(`missing required config key "dsn"`)
 	}
 
-	pool, err := pgxpool.New(context.Background(), dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("build connection pool: %w", err)
 	}

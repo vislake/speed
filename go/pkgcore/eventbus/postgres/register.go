@@ -137,16 +137,27 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // credential under PresetDistributed, rather than the connection being
 // dialed here only to fail unhelpfully later.
 func poolAndReplicaFromConfig(cfg pkgcore.Config) (*pgxpool.Pool, string, error) {
-	dsn := cfg["dsn"]
+	return newPoolAndReplica(context.Background(), cfg["dsn"], cfg["replica_id"])
+}
+
+// newPoolAndReplica validates and builds the pool-replicaID pair for the
+// "eventbus.postgres" settings both configuration channels resolve to: the
+// flat pkgcore.Config adapter above (which carries no context of its own --
+// Registration.New has none -- hence its background context) and the
+// "eventbus.postgres" component (component.go), whose typed configuration
+// carries the same two fields and whose New passes its own context down.
+// Both required keys and the pool construction live here, so the two
+// channels cannot drift on them; nothing is dialed here, per pgxpool.New's
+// own laziness.
+func newPoolAndReplica(ctx context.Context, dsn, replicaID string) (*pgxpool.Pool, string, error) {
 	if dsn == "" {
 		return nil, "", fmt.Errorf(`missing required config key "dsn"`)
 	}
-	replicaID := cfg["replica_id"]
 	if replicaID == "" {
 		return nil, "", fmt.Errorf(`missing required config key "replica_id"`)
 	}
 
-	pool, err := pgxpool.New(context.Background(), dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, "", fmt.Errorf("build connection pool: %w", err)
 	}

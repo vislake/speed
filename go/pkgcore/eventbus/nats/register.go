@@ -144,7 +144,17 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // reachable yet at that exact moment -- the same property a host gets for
 // free from go-redis's own laziness.
 func connFromConfig(cfg pkgcore.Config) (*nats.Conn, error) {
-	url := cfg["url"]
+	return newConn(cfg["url"], cfg["token"], cfg["user"], cfg["password"])
+}
+
+// newConn dials the *nats.Conn for the "eventbus.nats" settings both
+// configuration channels resolve to: the flat pkgcore.Config adapter above
+// and the "eventbus.nats" component (component.go), whose typed
+// configuration carries the same four fields. The url fallback and the
+// retry posture live here, so the two channels cannot drift on them; this
+// is the connection dial nats.Connect performs synchronously, as
+// connFromConfig's own doc comment explains.
+func newConn(url, token, user, password string) (*nats.Conn, error) {
 	if url == "" {
 		url = nats.DefaultURL
 	}
@@ -153,11 +163,11 @@ func connFromConfig(cfg pkgcore.Config) (*nats.Conn, error) {
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1), // never give up reconnecting in the background
 	}
-	if token := cfg["token"]; token != "" {
+	if token != "" {
 		opts = append(opts, nats.Token(token))
 	}
-	if user := cfg["user"]; user != "" {
-		opts = append(opts, nats.UserInfo(user, cfg["password"]))
+	if user != "" {
+		opts = append(opts, nats.UserInfo(user, password))
 	}
 
 	return nats.Connect(url, opts...)

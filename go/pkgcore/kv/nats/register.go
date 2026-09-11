@@ -139,7 +139,14 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // address -- the one piece of connFromConfig's job pure enough, and worth
 // enough, to unit test on its own without a live server.
 func natsURLFromConfig(cfg pkgcore.Config) string {
-	if url := cfg["url"]; url != "" {
+	return natsURLOrDefault(cfg["url"])
+}
+
+// natsURLOrDefault applies the zero-configuration URL fallback: an empty url
+// resolves to nats.DefaultURL, the only sensible default for a seam a
+// zero-configuration caller must still be able to build something for.
+func natsURLOrDefault(url string) string {
+	if url != "" {
 		return url
 	}
 	return nats.DefaultURL
@@ -171,13 +178,23 @@ func natsBucketFromConfig(cfg pkgcore.Config) string {
 // kv/redis's own clientFromConfig comment argues for its eventbus/redis
 // counterpart).
 func connFromConfig(cfg pkgcore.Config) (*nats.Conn, error) {
-	url := natsURLFromConfig(cfg)
+	return newConn(cfg["url"], cfg["user"], cfg["password"], cfg["token"])
+}
+
+// newConn dials the *nats.Conn for the "kv.nats" settings both configuration
+// channels resolve to: the flat pkgcore.Config adapter above and the
+// "kv.nats" component (component.go), whose typed configuration carries the
+// same four fields. The url fallback and the client name live here, so the
+// two channels cannot drift on them; this is the one real network round
+// trip at construction, as connFromConfig's own doc comment explains.
+func newConn(url, user, password, token string) (*nats.Conn, error) {
+	url = natsURLOrDefault(url)
 
 	opts := []nats.Option{nats.Name("speed-pkgcore-kv")}
-	if user := cfg["user"]; user != "" {
-		opts = append(opts, nats.UserInfo(user, cfg["password"]))
+	if user != "" {
+		opts = append(opts, nats.UserInfo(user, password))
 	}
-	if token := cfg["token"]; token != "" {
+	if token != "" {
 		opts = append(opts, nats.Token(token))
 	}
 

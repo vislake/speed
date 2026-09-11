@@ -133,7 +133,17 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // own rendezvous-hashing ServerList) sets it in cfg, or bypasses this
 // registry entirely with pkgcore.WithKVStore(memcached.NewKVStore(client), ...).
 func clientFromConfig(cfg pkgcore.Config) (*memcache.Client, error) {
-	addrs := cfg["addrs"]
+	return newClient(cfg["addrs"]), nil
+}
+
+// newClient builds the *memcache.Client for the "kv.memcached" settings both
+// configuration channels resolve to: the flat pkgcore.Config adapter above
+// and the "kv.memcached" component (component.go), whose typed
+// configuration carries the same comma-separated addrs spelling. The
+// fallback address and the sharding list live here, so the two channels
+// cannot drift on them; nothing is dialed, per gomemcache's own per-operation
+// laziness (see clientFromConfig's doc comment above).
+func newClient(addrs string) *memcache.Client {
 	if addrs == "" {
 		addrs = "localhost:11211"
 	}
@@ -141,5 +151,5 @@ func clientFromConfig(cfg pkgcore.Config) (*memcache.Client, error) {
 	for i, s := range servers {
 		servers[i] = strings.TrimSpace(s)
 	}
-	return memcache.New(servers...), nil
+	return memcache.New(servers...)
 }

@@ -130,11 +130,6 @@ func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registrati
 // different seams, and neither owns the other, so duplicating a dozen lines
 // is cheaper than inventing a third package for both to depend on.
 func clientFromConfig(cfg pkgcore.Config) (*redis.Client, error) {
-	addr := cfg["addr"]
-	if addr == "" {
-		addr = "localhost:6379"
-	}
-
 	db := 0
 	if raw, ok := cfg["db"]; ok && raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -144,9 +139,22 @@ func clientFromConfig(cfg pkgcore.Config) (*redis.Client, error) {
 		db = parsed
 	}
 
+	return newClient(cfg["addr"], cfg["password"], db), nil
+}
+
+// newClient builds the go-redis client for the "kv.redis" settings both
+// configuration channels resolve to: the flat pkgcore.Config adapter above
+// and the "kv.redis" component (component.go), whose typed configuration
+// carries the same three fields. The addr fallback lives here, so the two
+// channels cannot drift on it; nothing is dialed, per NewKVStore's own
+// construction contract.
+func newClient(addr, password string, db int) *redis.Client {
+	if addr == "" {
+		addr = "localhost:6379"
+	}
 	return redis.NewClient(&redis.Options{
 		Addr:     addr,
-		Password: cfg["password"],
+		Password: password,
 		DB:       db,
-	}), nil
+	})
 }
