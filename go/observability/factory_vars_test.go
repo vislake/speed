@@ -16,9 +16,9 @@ import (
 
 // TestFactoryVars_ConcurrentRegisterAndInit_NoDataRace exercises the two
 // exporter-factory package variables (otlpFactory and
-// metricsReaderFactory, init.go) under the exact concurrency a reviewer
-// flagged: RegisterOTLPExporters / RegisterLocalMetricsReader write them
-// while Init reads them, with no mutex between the two sides -- a state
+// metricsReaderFactory, init.go) under the exact concurrency this guards:
+// RegisterOTLPExporters / RegisterLocalMetricsReader write them while Init
+// reads them, with no mutex between the two sides -- a state
 // inconsistent with currentMetricsHandler, which IS mutex-guarded for
 // exactly the repeated-call reason the neighbouring doc comments name. In
 // a real binary both registrars run once from exporter-subpackage init()

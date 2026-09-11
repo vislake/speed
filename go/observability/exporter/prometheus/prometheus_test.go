@@ -126,7 +126,7 @@ func TestBuildReader_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
 // and obs.MaxRouteLabelLength (per-value length) exist to close, through
 // the third dimension neither bound checks: value VALIDITY.
 //
-// The fix sanitizes non-UTF-8 path bytes (to the Unicode replacement rune)
+// Non-UTF-8 path bytes are sanitized (to the Unicode replacement rune)
 // before a label value is formed, so an invalid path is still counted --
 // under a sanitized, exporter-safe label -- and never reaches the
 // registry. The baseline shape: one normal request (200), then one GET
@@ -167,8 +167,7 @@ func TestBuildReader_InvalidUTF8Path_NeverVoidsTheScrape(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), bad)
 
 	// The scrape must keep answering 200 and must still serve the normal
-	// request's series -- the whole point of the fix. (Fail-before: 500,
-	// zero metrics.)
+	// request's series. (Without the sanitization the scrape answers 500.)
 	metricsRR := httptest.NewRecorder()
 	obs.MetricsHandler().ServeHTTP(metricsRR, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if metricsRR.Code != http.StatusOK {

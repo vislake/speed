@@ -287,7 +287,7 @@ func installMetricsHandler(h http.Handler) int {
 
 // clearMetricsHandlerIfCurrent replaces the current metrics handler with
 // the not-configured 404 -- the post-shutdown state -- unless a newer
-// Init has since installed its own handler (gen no longer matches the
+// Init has since installed its own handler (gen does not match the
 // install this shutdown belongs to), in which case it is a no-op.
 func clearMetricsHandlerIfCurrent(gen int) {
 	metricsHandlerMu.Lock()
