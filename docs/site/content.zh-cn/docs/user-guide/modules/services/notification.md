@@ -77,8 +77,8 @@ m := notification.NewModule(db,
   退订把一位已验证联系人从一种类型中窄化出去,其余照收。验证尝试
   在查验码之前先扣每地址预算。
 - **一切在发送时重查。** 偏好、同意与地址由投递 job 现读,绝不采
-  信 payload;永久传输失败(`ErrTransportPermanent`)把租户自己的联
-  系人标成 `bounced`。
+  信 payload;永久传输失败(`pkgcore.ErrTransportPermanent`,传输实现
+  自身包装的哨兵)把租户自己的联系人标成 `bounced`。
 - **结果日志。** 每个尝试过的通道一行 `send_records`,收在
   UNIQUE `(tenant_id, idempotency_key)` 索引下——`succeeded` 只在
   传输接受之后写,`failed` 带受限分类(绝不存原始传输文本),

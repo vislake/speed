@@ -96,8 +96,9 @@ create/verify/resend) plus the hand-mounted stream.
   budget before the code is judged.
 - **Re-checked at send time, always.** Preferences, consent and
   addresses are read by the delivery job, never trusted from the
-  payload; a permanent transport failure (`ErrTransportPermanent`)
-  marks the tenant's contact `bounced`.
+  payload; a permanent transport failure (`pkgcore.ErrTransportPermanent`,
+  the sentinel the transports themselves wrap) marks the tenant's
+  contact `bounced`.
 - **The outcome log.** One `send_records` row per attempted channel
   under a UNIQUE `(tenant_id, idempotency_key)` index — `succeeded`
   only after the transport accepted, `failed` with a bounded
