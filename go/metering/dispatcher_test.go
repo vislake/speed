@@ -739,15 +739,11 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 	d.Start(ctx1)
 	cancel1()
 
-	// Wait for the canceled loop to actually exit: run clears the started
-	// flag for its own generation on exit, so a canceled ctx leaves Start
-	// restartable -- a flag left set forever would make the next Start a
-	// permanent no-op.
-	waitFor(t, func() bool {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return !d.started
-	})
+	// Wait for the canceled loop to actually exit: the loop's exit clears
+	// the started flag for its own generation (see poll_loop.go), so a
+	// canceled ctx leaves Start restartable -- a flag left set forever
+	// would make the next Start a permanent no-op.
+	waitFor(t, func() bool { return !pollLoopStarted(&d.loop) })
 
 	// Start must run a fresh loop that genuinely polls again.
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -758,6 +754,34 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 	if _, err := Enqueue(context.Background(), db, event); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
+	waitFor(t, func() bool {
+		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
+		return err == nil && got == 1
+	})
+}
+
+// TestDispatcher_StopThenStart_RestartsThePollLoop pins the restart
+// contract in its Dispatcher form for a completed Stop (the ctx-canceled
+// path is the sibling CancelThenStart regression above): a Start after
+// Stop has returned must run a fresh loop that genuinely polls again. A
+// stopped generation that left the started flag set would make every
+// later Start a permanent no-op, and pending rows would sit unclaimed
+// forever.
+func TestDispatcher_StopThenStart_RestartsThePollLoop(t *testing.T) {
+	d, agg, db := newTestDispatcher(t)
+	d.interval = 10 * time.Millisecond
+
+	ctx := context.Background()
+	d.Start(ctx)
+	d.Stop()
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-stop-restart", OccurredAt: time.Now()}
+	if _, err := Enqueue(context.Background(), db, event); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	d.Start(ctx)
+	defer d.Stop()
 	waitFor(t, func() bool {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
 		return err == nil && got == 1

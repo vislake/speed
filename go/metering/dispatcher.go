@@ -2,7 +2,6 @@ package metering
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -169,15 +168,8 @@ type Dispatcher struct {
 	// the record sites guard.
 	delivery metric.Int64Counter
 
-	// mu guards every lifecycle field below, exactly as on
-	// AnalyticsRecorder. The poll goroutine reads stop/done only through
-	// the channel values Start passes it as arguments (see run), so no
-	// lifecycle field is ever read outside mu.
-	mu         sync.Mutex
-	started    bool // a poll goroutine is running (spawned, not yet stopped)
-	stopClosed bool // stop has been closed (at most once per loop generation)
-	stop       chan struct{}
-	done       chan struct{}
+	// loop is the poll goroutine's start/stop lifecycle (poll_loop.go).
+	loop pollLoop
 }
 
 // NewDispatcher returns a Dispatcher polling db for aggregator's pending
@@ -202,41 +194,24 @@ func NewDispatcher(db *gorm.DB, aggregator *Aggregator) *Dispatcher {
 // Start runs the poll loop until ctx is done or Stop is called. Safe to
 // call with one loop running at a time: a Start while a loop is already
 // running is a no-op, and a Start after the running loop has exited --
-// a completed Stop, or a canceled ctx, which run clears the started flag
-// for itself on exit (see run) -- runs a fresh loop with the new ctx.
-// Calling Start immediately after canceling the previous ctx, before the
-// exiting loop has finished its own exit, is still a no-op by the "one
-// loop at a time" rule; wait for the exit (Stop, or observe the loop's
-// end) before restarting.
+// a completed Stop, or a canceled ctx, whose exit clears the started flag
+// for its own generation (see poll_loop.go) -- runs a fresh loop with the
+// new ctx. Calling Start immediately after canceling the previous ctx,
+// before the exiting loop has finished its own exit, is still a no-op by
+// the "one loop at a time" rule; wait for the exit (Stop, or observe the
+// loop's end) before restarting.
 func (d *Dispatcher) Start(ctx context.Context) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.started {
-		return
-	}
-	d.started = true
-	d.stopClosed = false
-	d.stop = make(chan struct{})
-	d.done = make(chan struct{})
-	stop, done := d.stop, d.done
-	go d.run(ctx, stop, done)
+	d.loop.start(ctx, nil, d.run)
 }
 
 // run is the poll loop: one delivery cycle (RunOnce) and one bounded
-// retention pass per tick. stop and done are passed as arguments, never
-// read off the receiver: Start and Stop exchange them under mu, and the
-// goroutine must not touch fields the caller is mutating.
-//
-// On exit it clears the started flag for its own loop generation unless
-// Stop is already handling that: a loop that ends because Stop closed
-// stop leaves the clearing (and the drain) to Stop's own post-wait code,
-// while a loop that ends because ctx was canceled has no Stop to do it --
-// without the clearing, started would stay true forever and a later Start
-// would no-op, leaving pending rows unclaimed. The generation check
-// (d.done == done) makes the clearing a no-op when a newer Start has
-// already replaced the channels.
-func (d *Dispatcher) run(ctx context.Context, stop <-chan struct{}, done chan struct{}) {
-	defer close(done)
+// retention pass per tick -- the first cycle immediately, each later one
+// on the interval. It exits when stop is closed or ctx is done; the exit
+// handling, including the started-flag clearing that leaves a canceled
+// ctx restartable, belongs to pollLoop (see poll_loop.go), so run neither
+// closes done nor reads lifecycle fields off the receiver. stop is the
+// generation's own channel, passed by start as an argument.
+func (d *Dispatcher) run(ctx context.Context, stop <-chan struct{}) {
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 	for {
@@ -249,25 +224,10 @@ func (d *Dispatcher) run(ctx context.Context, stop <-chan struct{}, done chan st
 		select {
 		case <-ticker.C:
 		case <-stop:
-			d.clearStartedIfCurrent(done)
 			return
 		case <-ctx.Done():
-			d.clearStartedIfCurrent(done)
 			return
 		}
-	}
-}
-
-// clearStartedIfCurrent clears the started flag when the loop that is
-// exiting is still the live generation, so a later Start can run a fresh
-// loop. A Stop that initiated this exit clears the flag itself after
-// waiting on done (see Stop); the clearing here is idempotent with that,
-// and is what makes a ctx-canceled loop leave Start restartable.
-func (d *Dispatcher) clearStartedIfCurrent(done chan struct{}) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.done == done {
-		d.started = false
 	}
 }
 
@@ -285,28 +245,7 @@ func (d *Dispatcher) retentionSweep(ctx context.Context) error {
 // leaves a later Start's loop fully stoppable (nothing is consumed by
 // the early call), and a Start after a completed Stop runs a fresh loop.
 func (d *Dispatcher) Stop() {
-	d.mu.Lock()
-	if !d.started {
-		d.mu.Unlock()
-		return
-	}
-	if !d.stopClosed {
-		d.stopClosed = true
-		close(d.stop)
-	}
-	done := d.done
-	d.mu.Unlock()
-
-	<-done
-
-	d.mu.Lock()
-	// Clear started only if the loop this Stop waited on is still the
-	// live one: a Start racing this Stop's wait has replaced the channels
-	// with a fresh generation, whose started flag must survive.
-	if d.done == done {
-		d.started = false
-	}
-	d.mu.Unlock()
+	d.loop.stop(nil)
 }
 
 // RunOnce claims up to one batch of pending outbox records and attempts to

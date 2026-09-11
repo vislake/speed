@@ -2,7 +2,6 @@ package metering
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
 	"go.opentelemetry.io/otel/metric"
@@ -62,22 +61,20 @@ type AnalyticsRecorder struct {
 	ingestedCount metric.Int64Counter
 	droppedMetric metric.Int64Counter
 
-	// mu guards every lifecycle field below, and is held by Record around
-	// the stopped check and the buffer enqueue so that check is atomic with
-	// respect to Stop: an event either lands in the buffer before Stop
-	// latches closed -- and is then delivered by the flush loop or by
-	// Stop's own drain -- or is a counted drop afterwards. It is never
-	// buffered into a drain that has already run. The flush goroutine
-	// reads stop/done only through the channel values Start passes it as
-	// arguments (see run), so no lifecycle field is ever read outside mu.
-	mu      sync.Mutex
-	started bool // a flush goroutine is running (spawned, not yet stopped)
-	stopped bool // Stop has been called; Record drops and counts from here on
-	// stopClosed records that stop has been closed, so a Stop racing
-	// another Stop closes it once per loop generation.
-	stopClosed bool
-	stop       chan struct{}
-	done       chan struct{}
+	// stopped latches the recorder closed at Stop: Record drops and counts
+	// from here on (see Record and Stop). It is guarded by loop.mu, the
+	// same lock the loop's start/stop hooks run under, and Record holds it
+	// around the stopped check and the buffer enqueue so that check is
+	// atomic with respect to Stop: an event either lands in the buffer
+	// before Stop latches closed -- and is then delivered by the flush
+	// loop or by Stop's own drain -- or is a counted drop afterwards. It
+	// is never buffered into a drain that has already run.
+	stopped bool
+
+	// loop is the flush goroutine's start/stop lifecycle (poll_loop.go);
+	// its mutex also guards stopped above (see the field's comment), and
+	// its hooks flip that latch atomically with the loop generation.
+	loop pollLoop
 }
 
 // NewAnalyticsRecorder returns an AnalyticsRecorder that flushes into
@@ -105,19 +102,20 @@ func (r *AnalyticsRecorder) Record(ctx context.Context, event UsageEvent) error 
 		return err
 	}
 	// The stopped check and the enqueue share one lock with Stop, so the
-	// two are mutually atomic: see the mu field's own comment for why that
-	// is what makes "delivered, or dropped and counted" airtight across
-	// the shutdown boundary. The send below is non-blocking (default
-	// branch), so holding mu for it can never block on a full buffer.
-	r.mu.Lock()
+	// two are mutually atomic: see the stopped field's own comment for why
+	// that is what makes "delivered, or dropped and counted" airtight
+	// across the shutdown boundary. The send below is non-blocking
+	// (default branch), so holding the lock for it can never block on a
+	// full buffer.
+	r.loop.mu.Lock()
 	if r.stopped {
-		r.mu.Unlock()
+		r.loop.mu.Unlock()
 		r.drop(ctx, event)
 		return nil
 	}
 	select {
 	case r.events <- event:
-		r.mu.Unlock()
+		r.loop.mu.Unlock()
 		// metering.events.ingested -- the analytics channel's ingest
 		// rate (metrics.go's doc comment maps the row).
 		if r.ingestedCount != nil {
@@ -125,7 +123,7 @@ func (r *AnalyticsRecorder) Record(ctx context.Context, event UsageEvent) error 
 		}
 		return nil
 	default:
-		r.mu.Unlock()
+		r.loop.mu.Unlock()
 		r.drop(ctx, event)
 		return nil
 	}
@@ -157,75 +155,46 @@ func (r *AnalyticsRecorder) Dropped() int64 { return r.dropped.Load() }
 // Start runs the background flush loop until ctx is done or Stop is
 // called. Safe to call with one loop running at a time: a Start while a
 // loop is already running is a no-op, and a Start after the running loop
-// has exited -- a completed Stop, or a canceled ctx, which run clears the
-// started flag for itself on exit (see run) -- runs a fresh loop with the
-// new ctx. A fresh loop consumes whatever the previous one left buffered,
-// so events Recorded between a cancel and the restart are delivered, not
-// lost. Calling Start immediately after canceling the previous ctx,
-// before the exiting loop has finished its own exit, is still a no-op by
-// the "one loop at a time" rule; wait for the exit (Stop, or observe the
-// loop's end) before restarting.
+// has exited -- a completed Stop, or a canceled ctx, whose exit clears
+// the started flag for its own generation (see poll_loop.go) -- runs a
+// fresh loop with the new ctx. A fresh loop consumes whatever the
+// previous one left buffered, so events Recorded between a cancel and the
+// restart are delivered, not lost. Calling Start immediately after
+// canceling the previous ctx, before the exiting loop has finished its
+// own exit, is still a no-op by the "one loop at a time" rule; wait for
+// the exit (Stop, or observe the loop's end) before restarting.
 func (r *AnalyticsRecorder) Start(ctx context.Context) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.started {
-		return
-	}
-	r.started = true
-	r.stopped = false
-	r.stopClosed = false
-	r.stop = make(chan struct{})
-	r.done = make(chan struct{})
-	stop, done := r.stop, r.done
-	go r.run(ctx, stop, done)
+	// The latch reset rides start's onSpawn hook: it must flip in the same
+	// critical section that spawns the loop, or a Stop interleaving
+	// between the two would leave the recorder latched against a running
+	// loop (a no-op start must not reset it either).
+	r.loop.start(ctx, func() { r.stopped = false }, r.run)
 }
 
 // run drains r.events into r.aggregator until stopped. A per-event
 // Ingest failure is logged and counted into Dropped (see deliver) and
 // does not stop the loop -- one malformed or transiently failing event
 // must not silence the rest of the buffer, which is the whole point of a
-// fail-open tier. stop and done are passed as arguments, never read off
-// the receiver: Start and Stop exchange them under mu, and the goroutine
-// must not touch fields the caller is mutating.
+// fail-open tier.
 //
-// On exit it clears the started flag for its own loop generation unless
-// Stop is already handling that: a loop that ends because Stop closed
-// stop leaves the clearing (and the drain) to Stop's own post-wait code,
-// while a loop that ends because ctx was canceled has no Stop to do it --
-// without the clearing, started would stay true forever, a later Start
-// would no-op, and Record would buffer into a loop that would never run
-// again. Buffered events survive the exit: the stopped latch is NOT set
-// here, so a Record made after the
+// It exits when stop is closed or ctx is done; the exit handling,
+// including the started-flag clearing that leaves a canceled ctx
+// restartable, belongs to pollLoop (see poll_loop.go), so run neither
+// closes done nor clears the flag itself. Buffered events survive the
+// exit: the stopped latch is NOT set here, so a Record made after the
 // cancel still buffers honestly, and whatever sits in the buffer when the
 // next Start runs a fresh loop -- or when a later Stop drains -- is
-// delivered then. The generation check (r.done == done) makes the
-// clearing a no-op when a newer Start has already replaced the channels.
-func (r *AnalyticsRecorder) run(ctx context.Context, stop <-chan struct{}, done chan struct{}) {
-	defer close(done)
+// delivered then.
+func (r *AnalyticsRecorder) run(ctx context.Context, stop <-chan struct{}) {
 	for {
 		select {
 		case event := <-r.events:
 			r.deliver(ctx, event)
 		case <-stop:
-			r.clearStartedIfCurrent(done)
 			return
 		case <-ctx.Done():
-			r.clearStartedIfCurrent(done)
 			return
 		}
-	}
-}
-
-// clearStartedIfCurrent clears the started flag when the loop that is
-// exiting is still the live generation, so a later Start can run a fresh
-// loop. A Stop that initiated this exit clears the flag itself after
-// waiting on done (see Stop); the clearing here is idempotent with that,
-// and is what makes a ctx-canceled loop leave Start restartable.
-func (r *AnalyticsRecorder) clearStartedIfCurrent(done chan struct{}) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.done == done {
-		r.started = false
 	}
 }
 
@@ -247,34 +216,12 @@ func (r *AnalyticsRecorder) clearStartedIfCurrent(done chan struct{}) {
 // a per-event failure exactly like the loop does; a host that needs
 // stronger guarantees uses the billing-grade Enqueue tier instead.
 func (r *AnalyticsRecorder) Stop() {
-	r.mu.Lock()
-	// Latch closed under mu, before the drain: every Record that acquires
-	// mu after this point takes the counted-drop branch (see Record), so
-	// nothing can land in the buffer behind this Stop's own drain.
-	r.stopped = true
-	if !r.started {
-		r.mu.Unlock()
-		r.drain()
-		return
-	}
-	if !r.stopClosed {
-		r.stopClosed = true
-		close(r.stop)
-	}
-	done := r.done
-	r.mu.Unlock()
-
-	<-done
-
-	r.mu.Lock()
-	// Clear started only if the loop this Stop waited on is still the
-	// live one: a Start racing this Stop's wait has replaced the channels
-	// with a fresh generation, whose started flag must survive.
-	if r.done == done {
-		r.started = false
-	}
-	r.mu.Unlock()
-
+	// The latch rides stop's onStop hook, so it flips in the same critical
+	// section that closes the generation's stop channel (or observes no
+	// running generation): every Record that acquires the lock after this
+	// point takes the counted-drop branch (see Record), so nothing can
+	// land in the buffer behind this Stop's own drain.
+	r.loop.stop(func() { r.stopped = true })
 	r.drain()
 }
 

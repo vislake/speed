@@ -303,15 +303,12 @@ func TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered(t 
 	r.Start(ctx1)
 	cancel1()
 
-	// Wait for the canceled loop to actually exit: run clears the started
-	// flag for its own generation on exit, so a canceled ctx leaves Start
-	// restartable -- a flag left set forever would make the next Start a
-	// permanent no-op and buffer every later Record into nothing.
-	waitFor(t, func() bool {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		return !r.started
-	})
+	// Wait for the canceled loop to actually exit: the loop's exit clears
+	// the started flag for its own generation (see poll_loop.go), so a
+	// canceled ctx leaves Start restartable -- a flag left set forever
+	// would make the next Start a permanent no-op and buffer every later
+	// Record into nothing.
+	waitFor(t, func() bool { return !pollLoopStarted(&r.loop) })
 
 	// A Record during the dead gap is buffered, not dropped: the stopped
 	// latch was not set by the cancel, so the event is honestly awaiting
