@@ -58,7 +58,7 @@ if you need an operator dashboard over the results, pair it with
 
 ```go
 b := billing.NewModule(db, nil) // nil UsageReader: quota grants fail closed
-// in your Kernel.Bootstrap set. Then:
+// in your the assembly set. Then:
 
 // "may this tenant use feature X" — before the paid work:
 d, err := b.Entitlements().Check(ctx, "model:chat:default", 1)

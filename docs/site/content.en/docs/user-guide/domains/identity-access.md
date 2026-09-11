@@ -38,7 +38,7 @@ middleware, and the tenant never comes from a request header.
 
 1. **Wire the modules into your kernel.** Add `authn`, `rbac` and
    `org` (plus `pki` as authn's key source) to the module set your
-   `Kernel.Bootstrap` runs. The `dbkit.MigrationRegistry` applies each
+   `the assembly` runs. The `dbkit.MigrationRegistry` applies each
    module's own migrations; the app's boot-time comments in
    `examples/reference-app/cmd/server/server.go` walk the exact wiring
    order.
@@ -57,7 +57,7 @@ middleware, and the tenant never comes from a request header.
    reach it. Protect everything else with
    `tenancy.Middleware(authn.NewPrincipalResolver())` downstream.
 4. **Gate your routes on permissions.** rbac attaches after
-   `Kernel.Bootstrap` (its `Attach` freezes every module's declared
+   `the assembly` (its `Attach` freezes every module's declared
    permission vocabulary — granting anything else is refused). Protect
    an operation with `rbac.RequirePermission("notes", "write")` or its
    `*Func` variant; org exports the four permissions its own routes
@@ -179,12 +179,12 @@ func main() {
 	rbacModule := rbac.NewModule(db)
 
 	migrations := dbkit.NewMigrationRegistry()
-	for _, m := range []pkgcore.Module{pkiModule, authnModule, rbacModule} {
+	for _, m := range []the module contract{pkiModule, authnModule, rbacModule} {
 		must(migrations.Register(m))
 	}
 	must(migrations.Apply(ctx, db, dbkit.DialectSQLite))
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, pkiModule, authnModule, rbacModule, notesLikeModule{})
+	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, pkiModule, authnModule, rbacModule, notesLikeModule{})
 	must(err)
 	az, err := rbacModule.Attach(reg) // freezes the permission catalog
 	must(err)

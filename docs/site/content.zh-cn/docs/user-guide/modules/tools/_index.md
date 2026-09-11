@@ -22,7 +22,7 @@ bookCollapseSection: true
   `[redacted]`。
 
 没有任何东西会把 saasctl 组装进运行中的服务。它不实现
-`pkgcore.Module`,从不注册进 `Registry`,业务方代码从不 import 它;
+`the module contract`,从不注册进 `Registry`,业务方代码从不 import 它;
 参考应用也刻意不接它——它的消费方是那些生成项目本身。模块各页
 回答「我要把模块 X 集成进我的二进制」,本页回答「我要开始或维护
 一个基于 speed 的项目」:工具在开发期作用于项目边界——创建目录、

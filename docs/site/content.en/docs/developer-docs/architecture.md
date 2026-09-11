@@ -170,7 +170,7 @@ declares capabilities: `MultiReplicaSafe` (several replicas can share
 this state), `SurvivesRestart` (state outlives a restart), and
 `Stateless` (nothing a restart could lose — the console mailer skips
 a warning that would be empty for it). Each deployment mode declares
-what it requires; `Kernel.Bootstrap` resolves every seam and compares
+what it requires; `the assembly` resolves every seam and compares
 the sets. A composition that cannot run in the declared mode **fails
 startup** with `ErrCapabilityUnsatisfied`, naming the seam, the
 implementation, the missing capability and the mode — never a generic
@@ -181,9 +181,9 @@ operator must know exactly which data will not survive a restart.
 
 ```mermaid
 flowchart TD
-    Host[Host application] --> Mode[WithDeploymentMode<br/>standalone or distributed]
-    Host --> Seams[WithPreset, or per-seam injection]
-    Mode --> Boot[Kernel.Bootstrap resolves every seam]
+    Host[Host application] --> Mode[the composition's deployment field<br/>standalone or distributed]
+    Host --> Seams[the composition configuration, or per-seam injection]
+    Mode --> Boot[the assembly resolves every seam]
     Seams --> Boot
     Boot --> Check{Capabilities satisfy<br/>the declared mode}
     Check -->|yes| Run[Startup proceeds]
@@ -214,18 +214,18 @@ containers.)
 
 ## The module wiring contract
 
-Every backend module implements one `pkgcore.Module` interface and
+Every backend module implements one `the module contract` interface and
 registers everything it contributes — routes, config schema, feature
 flags, permissions, job handlers, notification types, events, audit
-actions — through a **single `Register(reg Registrar)` call**. The
-declaration face is the `Registrar` view: one registration seat per
+actions — through a **single `Register(reg *pkgcore.ComponentRegistry)` call**. The
+declaration face is the `*pkgcore.ComponentRegistry` view: one registration seat per
 mechanism, answered by both the kernel's module `Registry` and the
 component assembly's `ComponentRegistry`.
 
 **Why one `Register` call instead of eight interface methods?**
 Under lockstep versioning, changing the `Module` interface is a
 breaking change that breaks every module at once. A new cross-cutting
-mechanism becomes a new seat on the declaration face — a `Registrar`
+mechanism becomes a new seat on the declaration face — a `*pkgcore.ComponentRegistry`
 accessor plus the registrar behind it; existing modules do not change
 and do not recompile. The declaration face exists precisely so that
 adding a mechanism never changes the `Module` interface.
@@ -239,7 +239,7 @@ module ships its assets — dual-dialect SQL migrations, `zh-CN`/
 version and assets never drift apart.
 
 The kernel is assembled from options, not a mode argument —
-`NewKernel(opts...)` with `WithDeploymentMode`, `WithPreset`, and the
+`app.Assemble(opts...)` with `the composition's deployment field`, `the composition configuration`, and the
 per-seam injectors. `Bootstrap` walks the module graph, resolves and
 validates every seam, and installs the merged message catalog; a
 module declares during `Register` and reads resolved state

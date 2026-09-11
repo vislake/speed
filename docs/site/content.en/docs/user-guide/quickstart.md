@@ -109,7 +109,7 @@ go run .
 The boot defaults: standalone deployment mode, a SQLite database `app.db`
 in the current directory (`APP_DB_PATH` overrides), port 8080 (`PORT`
 overrides). The generated app applies its own migrations at startup
-(`Kernel.Bootstrap`'s `Apply` step) — `db migrate` is the
+(`the assembly`'s `Apply` step) — `db migrate` is the
 operator-driven twin of that step, for when you want the schema ready
 before the first boot. CLI-then-boot and boot-only agree.
 

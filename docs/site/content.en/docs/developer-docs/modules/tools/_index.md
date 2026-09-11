@@ -8,10 +8,10 @@ bookCollapseSection: true
 # Tools
 
 Every other group in this module-design section documents a Go module
-or npm package your binary composes: it implements `pkgcore.Module`,
+or npm package your binary composes: it implements `the module contract`,
 registers on the kernel's `Registry` and boots inside a `Kernel`. This
 group documents the one deliverable that does none of that — **saasctl**,
-the consumer-facing CLI. It implements no `pkgcore.Module`, ships no
+the consumer-facing CLI. It implements no `the module contract`, ships no
 tables, migrations, HTTP fragment or permissions, and a running product
 never serves a route from it. It does not appear in the module
 dependency graph at all — it sits above nothing and below nothing.

@@ -72,7 +72,7 @@ a := admin.NewModule(db,
     admin.WithMetering(meteringModule),     // 可选:用量汇总维度
     admin.WithBilling(billingModule),       // 可选,与 metering 相互独立
 )
-// 放进你的 Kernel.Bootstrap 模块集。然后,Bootstrap 之后——
+// 放进你的 the assembly 模块集。然后,Bootstrap 之后——
 // rbac.Service 要等 rbac 自己的 post-Bootstrap Attach 冻结目录才存在:
 if err := a.AttachRBAC(rbacService); err != nil { /* 处理 */ }
 ```

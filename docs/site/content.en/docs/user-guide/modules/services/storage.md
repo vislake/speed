@@ -69,7 +69,7 @@ m := storage.NewModule(db,
     storage.WithQueue(queue),           // a jobs.Queue — Register refuses without one
     storage.WithMaxUploadBytes(10<<20), // optional: per-object ceiling
 )
-// hand m to Kernel.Bootstrap's module set; the ObjectStore and
+// hand m to the assembly's module set; the ObjectStore and
 // EventBus come from the resolved registry, read per call.
 
 svc := m.ObjectService()

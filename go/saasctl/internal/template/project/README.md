@@ -92,7 +92,7 @@ variables are pinned by their exact names below.
 | `APP_AUTHN__PII_CIPHER_KEY` | 64 hex characters: the AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets; declared path `authn.pii_cipher_key`); resolved unconditionally for the same reason |
 | `APP_PKI__LOCAL_KEY_CIPHER_KEY` | 64 hex characters: the AES key that seals go/pki's persisted signing-key column (declared path `pki.local_key_cipher_key`); resolved unconditionally for the same reason |
 | `APP_NOTIFICATION__CONTACT_INDEX_KEY` | 64 hex characters: the HMAC key go/notification's blind indexers are built from (declared path `notification.contact_index_key`); resolved unconditionally for the same reason, consumed only by a composition that later wires notification |
-| `APP_REDIS_ADDR` | Redis `host:port`; when set, composes a real Redis-backed implementation of both the "eventbus" and "kv" seams (unset leaves both on the Preset's in-process default) |
+| `APP_REDIS_ADDR` | Redis `host:port`; when set, composes a real Redis-backed implementation of both the "eventbus" and "kv" seams (unset leaves both on the composition's in-process default) |
 | `APP_OTLP_ENDPOINT` | OTLP/gRPC `host:port` traces and metrics are pushed to; when set, the OTLP exporters are composed and `/metrics` answers 404 by design (unset leaves the local exporters: stdout plus the Prometheus scrape endpoint `/metrics` serves) |
 | `APP_S3_ENDPOINT` | S3-compatible endpoint; together with the three variables below, composes a real ObjectStore for the "objectstore" seam -- all four are required together, a partial set is refused rather than silently ignored |
 | `APP_S3_BUCKET` | S3 bucket name |

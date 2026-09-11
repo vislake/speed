@@ -7,7 +7,7 @@ description: 启动参考应用,用真实 HTTP 驱动登录、权限与租户隔
 # 参考应用演练
 
 `examples/reference-app` 是 speed 的强制第一消费方:一个 AI 微笑模拟
-平台,把十七个 `pkgcore.Module` 实现组装进一次 `Kernel.Bootstrap`
+平台,把十七个 `the module contract` 实现组装进一次 `the assembly`
 调用,并在启动时预置一层演示身份。它也是感受组装好的 speed 产品在线
 上实际行为的最快方式。本演练以 standalone 部署形态运行它——单进程、
 单个 SQLite 文件、每条基础设施接缝都在进程内、零外部依赖——用真实

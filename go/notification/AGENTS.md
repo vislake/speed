@@ -19,7 +19,7 @@ below), the module's own OpenAPI fragment with a generated, compile-checked
 HTTP handler, the per-replica realtime hub behind the inbox stream, and the
 dual-dialect migration set. The reference app (`examples/reference-app`) is
 the mandatory first consumer: `internal/app/server.go` wires `notification.NewModule`
-through `Kernel.Bootstrap`, `internal/app/demo/demo_notification.go` supplies the
+through `the assembly`, `internal/app/demo/demo_notification.go` supplies the
 host-side demo seams, and `flowtests/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 
@@ -82,7 +82,7 @@ module must import.
   the six required host options and the optional `WithReplyTo`/
   `WithSubjectResolver`, the
   exported service accessors `Preferences()`, `Contacts()`,
-  `Deliveries()`. Compile-time `var _ pkgcore.Module` pin.
+  `Deliveries()`. Compile-time `var _ the module contract` pin.
 - `types.go` -- the closed channel vocabulary (`ChannelInApp`/`ChannelEmail`/
   `ChannelSMS`), what a type declaration says, and the canonical sorting
   (`in_app`, `email`, `sms`) preference rows and dedupe keys are stored in.
@@ -262,7 +262,7 @@ caller. `TestErrorCatalog_IsComplete` pins the catalog's completeness.
 ## Wiring and host seams
 
 A host wires the module as: `m := notification.NewModule(db,
-notification.With...(...))`, then hands `m` to `Kernel.Bootstrap`'s module
+notification.With...(...))`, then hands `m` to `the assembly`'s module
 set. `Register(reg)` runs in three phases (module.go's doc comment): validate
 and copy the six option seams into the services; declare events, audit
 actions and the job handler; attach the registries (types, bus, catalog,
@@ -885,7 +885,7 @@ HTTP surface, driven through a real httptest server), `hub_test.go`,
 `module_test.go` (Register's validation and wiring), `errors_test.go` and
 the per-file suites. Godoc `ExampleInboxMessage` and
 `ExamplePreferenceService` compile and run in the unit suite, pinning the
-documented host wiring (six seams, a hand-built `pkgcore.NewRegistry` host)
+documented host wiring (six seams, a hand-built `pkgcore.NewComponentRegistry` host)
 against the real API. The `staticaddr` subpackage carries its own suite
 (`staticaddr_test.go`: table resolution, missing rows, the
 construction-time copy, concurrent reads under `-race`) and its own

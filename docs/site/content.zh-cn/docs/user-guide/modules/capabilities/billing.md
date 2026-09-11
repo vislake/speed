@@ -49,7 +49,7 @@ billing 是 speed 的商务模块:`Plan`/`Feature`/`Grant`/`Entitlements`
 
 ```go
 b := billing.NewModule(db, nil) // nil UsageReader:配额授予会失败关闭
-// 放进你的 Kernel.Bootstrap 模块集。然后:
+// 放进你的 the assembly 模块集。然后:
 
 // 「这个租户能不能用功能 X」——在付费工作之前:
 d, err := b.Entitlements().Check(ctx, "model:chat:default", 1)

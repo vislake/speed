@@ -14,7 +14,7 @@ require 重写到同一个锁步版本(`upgrade`)、把各模块的 SQL 迁移�
 (`config print`)。
 
 与本节参考里的每个模块都不同,没有任何东西会把 saasctl 组装进
-二进制:它不实现 `pkgcore.Module`,业务方代码从不 import 它,参考
+二进制:它不实现 `the module contract`,业务方代码从不 import 它,参考
 应用也刻意不接它——它的消费方是生成的项目。它在开发期作用于项目
 边界,从不进入运行中的内核。目前还没有可用的发布物,所以它从
 checkout 运行(`go run ./go/saasctl <command>`,在仓库根目录)。

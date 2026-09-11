@@ -130,7 +130,7 @@ func main() {
 	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	if _, err = pkgcore.NewKernel().Bootstrap(ctx, module); err != nil {
+	if _, err = pkgcore.app.Assemble().Bootstrap(ctx, module); err != nil {
 		panic(err)
 	}
 

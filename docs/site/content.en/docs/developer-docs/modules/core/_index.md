@@ -55,7 +55,7 @@ The seven split into two shapes, and knowing which shape a module has
 tells you how you use it:
 
 - **Kernel-assembled modules** — `config` and `jobs` (and every module
-  above the core group) implement `pkgcore.Module` and contribute
+  above the core group) implement `the module contract` and contribute
   routes, config schema, permissions, events and job handlers through
   one `Register` call; the kernel assembles them. `config` additionally
   needs its `Attach` call after bootstrap, because its schema is folded

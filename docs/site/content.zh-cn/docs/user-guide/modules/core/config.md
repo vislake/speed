@@ -28,7 +28,7 @@ schema,运行时解析开关依赖,并服务有效值。
 
 永远——它属于常开模块,没有关闭开关。它的接线与普通内核模块有一
 个承重差异:光注册不够。`Register` 声明不需要已组装注册器的东西;
-`Attach`——恰好一次,在 `Kernel.Bootstrap` **返回之后**——把注册器
+`Attach`——恰好一次,在 `the assembly` **返回之后**——把注册器
 *合并*后的配置项与开关声明折进 schema,并要求注册期不得触碰的
 运行时部件:迁移好的 `configs` 表、任何已注册项为 `Sensitive` 时
 的 `dbkit.Cipher`(否则 `ErrCipherRequired`)、以及轮询间隔。
@@ -45,7 +45,7 @@ migrations := dbkit.NewMigrationRegistry()
 if err := migrations.Register(configModule); err != nil { /* handle err */ }
 if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
 
-reg, err := pkgcore.NewKernel().Bootstrap(ctx, &myModule{}, configModule)
+reg, err := pkgcore.app.Assemble().Bootstrap(ctx, &myModule{}, configModule)
 // handle err
 
 svc, err := configModule.Attach(reg)

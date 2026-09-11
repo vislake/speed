@@ -63,7 +63,7 @@ if err != nil {
 ```
 
 `WithSMSSender` 决定短信传输——独立部署默认 console;分布式部署还必
-须声明 `WithDeploymentMode`,否则构造以
+须声明 `the composition's deployment field`,否则构造以
 `ErrMissingDistributedSMSSender` 失败。`WithFeatureGate` 让模块声明的
 八个功能开关(密码登录、短信登录、各社交渠道、企业 SSO)在请求时生
 效;`*config.Service` 结构化满足该门。TTL、`WithRevocationMode`、

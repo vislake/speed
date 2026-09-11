@@ -57,7 +57,7 @@ c := compliance.NewModule(auditRepo, // 与你审计接线共用的同一个 *au
     compliance.WithSharing(sharingModule.Service()), // 武装导出投递
     // 可选:compliance.WithTenantLister(lister)、WithConfigService(cfg)
 )
-// 放进你的 Kernel.Bootstrap 模块集。Bootstrap 之后,注册编排可能碰
+// 放进你的 the assembly 模块集。Bootstrap 之后,注册编排可能碰
 // 到的业务模块的行——参考应用的 notes 模块注册的正是这个形态,回
 // 调由它自己的仓库的 HardDelete 与读方法背书:
 if err := reg.Retention.Add(

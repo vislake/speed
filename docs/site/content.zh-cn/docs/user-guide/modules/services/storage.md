@@ -59,7 +59,7 @@ m := storage.NewModule(db,
     storage.WithQueue(queue),           // 一个 jobs.Queue——没有它 Register 直接拒绝
     storage.WithMaxUploadBytes(10<<20), // 可选:单对象上限
 )
-// 把 m 交给 Kernel.Bootstrap 的模块集;ObjectStore 与 EventBus
+// 把 m 交给 the assembly 的模块集;ObjectStore 与 EventBus
 // 来自已解析的注册表,每次调用现读。
 
 svc := m.ObjectService()

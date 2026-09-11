@@ -45,7 +45,7 @@ flowchart TB
 
 依赖方向就是发布纪律:`pkgcore` 不导入任何其他 speed 模块,根包也
 不携带任何第三方依赖,上面每一层只添加自己关切所需的东西。对消费方
-这意味着两点。其一,你写的大多数业务模块实现 `pkgcore.Module`,在
+这意味着两点。其一,你写的大多数业务模块实现 `the module contract`,在
 一次 `Register` 调用里注册路由、配置 schema、权限、事件与任务处理器
 ——由内核组装。其二,有几块 core 组件是直接用、不走内核的:`tenancy`
 的中间件护住你的 HTTP 入口,`observability.Init` 在进程启动时运行,

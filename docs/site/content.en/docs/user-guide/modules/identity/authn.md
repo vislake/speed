@@ -71,7 +71,7 @@ if err != nil {
 
 `WithSMSSender` takes the SMS transport — console by default in
 standalone; a distributed deployment must also declare
-`WithDeploymentMode`, or construction fails with
+`the composition's deployment field`, or construction fails with
 `ErrMissingDistributedSMSSender`. `WithFeatureGate` enforces the
 module's eight declared feature flags (password login, SMS login, the
 social channels, enterprise SSO) at request time; `*config.Service`

@@ -97,7 +97,7 @@ go run .
 
 启动默认值:standalone 部署形态、当前目录下名为 `app.db` 的 SQLite
 数据库(`APP_DB_PATH` 可覆盖)、8080 端口(`PORT` 可覆盖)。生成的应用
-自己会在启动时应用迁移(`Kernel.Bootstrap` 的 `Apply` 步骤)——`db
+自己会在启动时应用迁移(`the assembly` 的 `Apply` 步骤)——`db
 migrate` 是同一步骤的运维方手动版本,适合想在第一次启动前就把 schema
 准备好的场景;先 CLI 后启动与只靠启动两条路结果一致。
 

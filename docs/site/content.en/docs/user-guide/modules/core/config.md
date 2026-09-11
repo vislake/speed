@@ -35,7 +35,7 @@ Always — it is among the always-on modules with no off switch. Its
 wiring differs from a plain kernel module in one load-bearing way:
 registration alone is not enough. `Register` declares what never needs
 the assembled registry; `Attach` — called exactly once, **after**
-`Kernel.Bootstrap` returns — folds the registry's *combined* item and
+`the assembly` returns — folds the registry's *combined* item and
 flag declarations into the schema, and demands what registration must
 not touch: a migrated `configs` table, a `dbkit.Cipher` whenever any
 registered item is `Sensitive` (`ErrCipherRequired` otherwise), and a
@@ -52,7 +52,7 @@ migrations := dbkit.NewMigrationRegistry()
 if err := migrations.Register(configModule); err != nil { /* handle err */ }
 if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
 
-reg, err := pkgcore.NewKernel().Bootstrap(ctx, &myModule{}, configModule)
+reg, err := pkgcore.app.Assemble().Bootstrap(ctx, &myModule{}, configModule)
 // handle err
 
 svc, err := configModule.Attach(reg)

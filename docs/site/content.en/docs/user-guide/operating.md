@@ -39,7 +39,7 @@ modes.
 ## `db migrate` — apply the schema ahead of a boot
 
 The generated app applies its own migrations at every startup
-(`Kernel.Bootstrap`'s `Apply`, idempotent through the
+(`the assembly`'s `Apply`, idempotent through the
 `schema_migrations` ledger). `saasctl db migrate` is the operator-driven
 twin of that step, for when you want the schema in place before any
 process runs — a prepared-schema first boot, a scripted provisioning

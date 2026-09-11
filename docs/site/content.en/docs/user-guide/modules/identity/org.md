@@ -58,7 +58,7 @@ m := org.NewModule(db,
 )
 ```
 
-The module joins the `Kernel.Bootstrap` set; its accessors are
+The module joins the `the assembly` set; its accessors are
 `Tree()`, `Members()`, `Invitations()` and the read-only `Scope()`
 view, and it reads the host's registry at **call time**, never during
 `Register`. The HTTP surface is eleven operations under `/api/v1/org`

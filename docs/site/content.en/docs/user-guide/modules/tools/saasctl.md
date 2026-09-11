@@ -16,7 +16,7 @@ rewriting its speed-module requires onto one lockstep version
 (`config print`).
 
 Unlike every module in this reference, nothing assembles saasctl into a
-binary: it implements no `pkgcore.Module`, consumer code never imports
+binary: it implements no `the module contract`, consumer code never imports
 it, and the reference app deliberately does not wire it — its consumers
 are the generated projects. It acts on the project boundary at
 development time, never inside a running kernel. No usable release is

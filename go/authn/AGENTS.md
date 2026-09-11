@@ -33,14 +33,14 @@ import in the other direction is a merge blocker rather than a style note.
 
 | Symbol | Purpose |
 |---|---|
-| `NewModule(db, opts...) (*Module, error)` | The `pkgcore.Module`. Options are validated eagerly, so a missing key is a startup error. |
+| `NewModule(db, opts...) (*Module, error)` | The `the module contract`. Options are validated eagerly, so a missing key is a startup error. |
 | `NewService(db, bus, kv, opts...) (*Service, error)` | The service alone, for a host that does not bootstrap through a registry. |
 | `RegisterPIISerializer(cipher) error` | Registers the field-encryption serializer under `SerializerName`. **Call before opening the `*gorm.DB`.** |
 | `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. The former static-key options (`WithSigningKeys` and the `KeySet` API) do not exist in this version — breaking, with no back-compat path; `WithKeySource` is the only way in (see "Tokens and passwords" below). |
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
 | `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally, and `FeatureGateFunc` adapts a closure or a method value to the seam. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. `WithRevocationMode(RevocationModeImmediate)` needs no companion middleware wiring — enforcement is default — see "Immediate revocation is enforced by default, not by host ceremony". |
-| `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
+| `WithSMSSender`, `the composition's deployment field`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `the composition's deployment field` is for. |
 | `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
 | `WithVendorClientIPHeaders(headers ...VendorClientIPHeader)` | The per-header opt-in that authorizes reading a single-hop vendor client-address header (`VendorClientIPHeaderFlyClientIP`, wire value `Fly-Client-IP`) for a request whose peer is a declared trusted proxy. The `VendorClientIPHeader` set is closed -- any other value is refused at wiring time -- and the default is none. See "Every recorded address is the client's, gated on host-declared trusted proxies" below for why the trusted-proxy declaration alone must never authorize such a header. |
 
@@ -149,7 +149,7 @@ there is no intent for the module to enforce.
 |---|---|
 | The SMS seam is pkgcore's: `pkgcore.SMS`, `pkgcore.SMSSender`, `pkgcore.NewConsoleSMSSender(w)`, `pkgcore.NewHTTPSMSSender(endpoint, opts...)`, carriers under `pkgcore/sms/` | The message, the delivery seam and every implementation live on the dependency floor, shared with go/notification's sms channel — see "The SMS seam is pkgcore's" below. This module contributes only the wiring option `WithSMSSender` and the wiring-time sentinel below; its former in-package `SMS`/`SMSSender`/constructors are gone, a deliberate breaking change under lockstep versioning. |
 | `Service.RequestSMSCode`, `Service.LoginWithSMSCode` | Issue-and-deliver, then verify-and-sign-in. Both never disclose whether a phone number is registered. |
-| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired (see "A distributed deployment must wire an `SMSSender`" below). |
+| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `the composition's deployment field(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired (see "A distributed deployment must wire an `SMSSender`" below). |
 
 ### TOTP, recovery codes, step-up
 
@@ -555,7 +555,7 @@ configuration change rather than a migration: existing hashes keep verifying, an
 
 ### A distributed deployment must wire an `SMSSender`
 
-`WithDeploymentMode(pkgcore.DeploymentModeDistributed)` is how a host tells
+`the composition's deployment field(pkgcore.DeploymentModeDistributed)` is how a host tells
 `NewModule`/`NewService` which deployment mode it is being wired for, solely
 so construction can enforce that a distributed deployment supplies an
 explicit SMS sender (`WithSMSSender`) rather than silently defaulting to
@@ -567,7 +567,7 @@ kernel seat that could enforce the requirement (see `pkgcore.SMSSender`'s
 doc comment): the kernel resolves no SMS sender, so the module that needs a
 real one in a distributed deployment says so at wiring time, the same
 moment `newOptions` validates `WithKeySource` and `WithBlindIndexKey`.
-Omitting `WithDeploymentMode` — every standalone deployment — is equivalent
+Omitting `the composition's deployment field` — every standalone deployment — is equivalent
 to standalone and keeps working with the console default.
 
 ### The SMS seam is pkgcore's
@@ -1047,7 +1047,7 @@ see "The middleware chain is authn, then tenancy" above) around a real
 `AuditActionSSOConfigure`, whose emission lives at the service layer — see
 this file's Known limitations row) is proven at the
 `Handler` layer, not `Service`: `handler_test.go`'s `newAuditTestHandler`
-builds a real `*pkgcore.Registry` (`pkgcore.NewRegistry`, the same
+builds a real `*pkgcore.ComponentRegistry` (`pkgcore.NewComponentRegistry`, the same
 construction `module.go`'s `Register` runs in production) with the declared
 actions already added, wires it into the `Handler` under test, and
 subscribes a `testutil.EventRecorder` to `audit.EventRecorded` on the same
@@ -1061,7 +1061,7 @@ request is credential-less, so the handler answering its 401 has nothing to
 attribute a row to), is proven by
 `TestService_Refresh_ActualReplay_LeavesADurableAuditRecord`
 (`service_test.go`), which drives a real `Module.Register` over a real
-`*pkgcore.Registry` -- so the registrar wiring under test is module.go's
+`*pkgcore.ComponentRegistry` -- so the registrar wiring under test is module.go's
 own -- and asserts the resulting `authn.session.revoke` row's
 refused-presentation shape (`Result.Success` false, `RevokeReasonReplay` as
 `FailureReason`), its attribution to the account owner, its tenant stamp,
@@ -1140,7 +1140,7 @@ rather than trying to synchronize on the exact step boundary.
 | Limitation | Why, and what closes it |
 |---|---|
 | Access-token signing keys live in `go/pki`'s database tables rather than purely in this process's memory. | Accepted trade-off: real rotation, multi-replica key consistency and an expiry scan, at the cost that a database compromise plus a `dbkit` master-key compromise together are enough to sign arbitrary tokens (mitigated by the `vault`/`kmsaws` `Signer` implementations, under which the key never enters this process's memory at all). |
-| `Signer.EnsurePurpose` runs lazily on the FIRST `Issue` call of each process, not once at deployment-wide bootstrap. | `pkgcore.Module.Register` may perform no I/O (`Module.Register`'s own doc comment), so the earliest point a real `context.Context` and a certain need for the purpose exist is the first real token issuance. `EnsurePurpose` is idempotent past a purpose's first-ever key, so this costs nothing once the deployment has issued a single token; a process that only ever verifies (never issues) never calls it at all, and does not need to -- `Verifier` reads whatever key rows already exist in the database, created by whichever replica issued first. |
+| `Signer.EnsurePurpose` runs lazily on the FIRST `Issue` call of each process, not once at deployment-wide bootstrap. | `the module contract.Register` may perform no I/O (`Module.Register`'s own doc comment), so the earliest point a real `context.Context` and a certain need for the purpose exist is the first real token issuance. `EnsurePurpose` is idempotent past a purpose's first-ever key, so this costs nothing once the deployment has issued a single token; a process that only ever verifies (never issues) never calls it at all, and does not need to -- `Verifier` reads whatever key rows already exist in the database, created by whichever replica issued first. |
 | A brand-new deployment's very first `EnsurePurpose` calls can still race across replicas exactly like any other first-write race -- two replicas both finding no active key and both attempting the first `Create` -- but the loser of the database arbitration is answered as success, never as a token-issuance error. | The convergence is `go/pki`'s, not this module's: `Service.EnsurePurpose` treats a `Create` refused by `pki_signing_keys`' partial unique index -- at most one active row per purpose -- by re-reading the purpose and answering nil when an in-validity active key now exists, the "someone else just created the active key counts as success" shape. The path covers both the first-boot double-create and the expiry-heal race, pinned by `TestService_EnsurePurpose_ConcurrentHeals_OneReplacementBothSucceed` (the index itself by `TestSigningKeyRepository_ActivePurposeUniqueness_IsEnforcedByTheDatabase`). This module's own share is unchanged: `Signer.ensure` serializes in-process callers under one mutex (row above), and a purpose that still genuinely lacks an in-validity key after the failed insert keeps surfacing the store error loudly, retried after the bounded window. |
 | Registration reports a duplicate identifier as a conflict, which makes it an account-enumeration oracle in a way sign-in deliberately is not. | Closing it means answering every registration with "check your inbox" and moving the conflict into an email, which needs the delivery and verification flows. |
 | `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first. The columns exist so a resolver, when one is added, needs no migration. |

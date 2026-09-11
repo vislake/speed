@@ -48,7 +48,7 @@ m := org.NewModule(db,
 )
 ```
 
-模块像任何模块一样加入 `Kernel.Bootstrap` 集;访问器是 `Tree()`、
+模块像任何模块一样加入 `the assembly` 集;访问器是 `Tree()`、
 `Members()`、`Invitations()` 与只读的 `Scope()` 视图,并且它在**调用
 时**才读宿主的 registry,绝不在 `Register` 期间读。HTTP 面是
 `/api/v1/org` 下的十一个操作——节点 CRUD 加移动、子树范围的成员列

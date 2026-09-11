@@ -9,7 +9,7 @@ description: "共享的 KVStore 承载限流原语——每次 Allow 一个滑�
 speed 的共享限流原语:一个 `Limiter`,判定对调用方给出的 `key` 再来
 一次命中是否落在调用方给出的 `Limit` 之内,后端完全是
 `pkgcore.KVStore`。它是**纯库**——与平台其他模块不同,它不实现
-`pkgcore.Module`:无可注册之物、无内核可接,消费方直接调
+`the module contract`:无可注册之物、无内核可接,消费方直接调
 `ratelimit.New(store)`。它存在是因为六个互不相干的业务模块各自都
 需要限流——`authn` 的登录暴力破解守卫、`integration` 的三层 API
 密钥节流、`notification` 的验证码预算、`org` 的邀请投递限额、
@@ -85,7 +85,7 @@ return byAccount.Allowed && byIP.Allowed, nil
 - 没有动态配置:`Limit` 值由各调用点写死在代码里。没有 schema 承载、
   可运维调参的设置——那需要本库刻意不要的模块机制。
 - 别给 `Limiter` 加第二个方法、HTTP 专用 `Decision` 或多键 `Allow`;
-  别把它做成 `pkgcore.Module`;别在包内读租户上下文。一次调用一个
+  别把它做成 `the module contract`;别在包内读租户上下文。一次调用一个
   维度、由调用方组合,就是整个设计。
 
 ## Source

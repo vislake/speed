@@ -22,7 +22,7 @@ core 组的模块——组装契约(`pkgcore`)、双方言数据库与仓储层
 真正变成功能的部分。core 模块常常无表无路由;services 组的每个
 模块都带着完整业务能力的全套:真实的表与双方言迁移、声明的权限、
 审计动作、事件与任务处理器,全部经由[模块接线契约](/zh-cn/docs/developer-docs/architecture/)
-那一次 `Register(reg Registrar)` 调用注册——除 metering 外,每个
+那一次 `Register(reg *pkgcore.ComponentRegistry)` 调用注册——除 metering 外,每个
 模块还挂载 `/api/v1/*` 的 OpenAPI 片段。metering 是刻意的例外:
 它是业务模块进程内调用的 Go 级 API,而不是经 HTTP 访问的服务,因此
 不挂片段。

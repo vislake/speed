@@ -20,7 +20,7 @@ own console.
 
 None of the five is required. Every module below them in the graph
 boots without them, and a host that wants none of these surfaces simply
-leaves them out of its `Kernel.Bootstrap` set. They are picked by
+leaves them out of its `the assembly` set. They are picked by
 product decision, and they are picked on top of the groups below: each
 page's "Wiring it in" section names the services and core modules it
 composes with (billing judges usage `go/metering` records, compliance

@@ -35,7 +35,7 @@ flowchart LR
    `dbkit.WithTenantSession` 事务形态。
 3. **版本化 SQL 迁移,绝不 `AutoMigrate`。** 每个模块随附双方言
    迁移集(SQLite 与 PostgreSQL),由 `dbkit.MigrationRegistry` 应用;
-   模块经 `pkgcore.Module` 的 `Migrations()` 暴露它们。两种方言一视
+   模块经 `the module contract` 的 `Migrations()` 暴露它们。两种方言一视
    同仁——避开 PostgreSQL 专属特性(`gen_random_uuid()`、原生数组、
    `NOW()`);ID 在应用里生成。
 4. **设计前先给表分类。** 租户数据是租户级、跑
@@ -53,7 +53,7 @@ flowchart LR
 支持设置、能力开关、AI 密钥。两个决策塑造了它的用法:
 
 - **Register 与 Attach 分离。** 模块在 `Register` 时*声明*自己的配置
-  项与开关;`Attach`——恰好一次,在 `Kernel.Bootstrap` 返回之后——
+  项与开关;`Attach`——恰好一次,在 `the assembly` 返回之后——
   把所有模块的声明折成一个 schema,并且只要存在 `Sensitive` 项就
   拒绝无密钥启动。宿主保留 Attach 返回的 `*Service`。
 - **作用域层级与回退。** 每个值只在一个层级(租户/系统);读取从窄
@@ -176,7 +176,7 @@ func main() {
 
 	// Bootstrap 遍历模块图,逐个调用 Register;Attach——恰好一次,在其
 	// 之后——冻结所有声明的并集。
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, subscriptionsModule{}, configModule)
+	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, subscriptionsModule{}, configModule)
 	if err != nil {
 		panic(err)
 	}

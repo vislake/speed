@@ -112,13 +112,13 @@ web 包以分层 npm workspace 镜像同一形态——设计令牌与 i18n 在�
 
 反例说明为什么:单进程部署对接真实 Stripe、真实 SMTP、真实 S3,是小客户安装的常规生产形态;分布式部署同样可以在联调环境挂 Mailpit 与支付沙箱。"外部服务真不真"是环境与凭证问题,不是副本数问题。
 
-因此:**部署模式不选择实现,它只约束实现。** `pkgcore` 的每个基础设施接缝(`KVStore`、`EventBus`、`Mailer`、`ObjectStore`)都是带 N 套实现的接口,N ≥ 1——绝不是固定两套。每套实现声明自己的能力:`MultiReplicaSafe`(多副本可共享这份状态)、`SurvivesRestart`(状态跨进程重启仍在)、`Stateless`(没有重启会丢失的东西——控制台发信器因此跳过对它毫无意义的横幅警告)。每种部署模式声明自己要求什么;`Kernel.Bootstrap` 解析每个接缝后做集合比较。无法在所声明模式下运行的组装**启动即失败**,报 `ErrCapabilityUnsatisfied`,点名接缝、实现、缺失的能力与模式——绝不会是"缺少分布式实现"这类泛化错误,因为一旦存在 N 套实现,这句话就不再有任何含义。仅缺 `SurvivesRestart` 是响亮的启动横幅而非失败:组装可以运行,但操作者必须确切知道哪些数据不跨重启存活。
+因此:**部署模式不选择实现,它只约束实现。** `pkgcore` 的每个基础设施接缝(`KVStore`、`EventBus`、`Mailer`、`ObjectStore`)都是带 N 套实现的接口,N ≥ 1——绝不是固定两套。每套实现声明自己的能力:`MultiReplicaSafe`(多副本可共享这份状态)、`SurvivesRestart`(状态跨进程重启仍在)、`Stateless`(没有重启会丢失的东西——控制台发信器因此跳过对它毫无意义的横幅警告)。每种部署模式声明自己要求什么;`the assembly` 解析每个接缝后做集合比较。无法在所声明模式下运行的组装**启动即失败**,报 `ErrCapabilityUnsatisfied`,点名接缝、实现、缺失的能力与模式——绝不会是"缺少分布式实现"这类泛化错误,因为一旦存在 N 套实现,这句话就不再有任何含义。仅缺 `SurvivesRestart` 是响亮的启动横幅而非失败:组装可以运行,但操作者必须确切知道哪些数据不跨重启存活。
 
 ```mermaid
 flowchart TD
-    Host[Host application] --> Mode[WithDeploymentMode<br/>standalone or distributed]
-    Host --> Seams[WithPreset, or per-seam injection]
-    Mode --> Boot[Kernel.Bootstrap resolves every seam]
+    Host[Host application] --> Mode[the composition's deployment field<br/>standalone or distributed]
+    Host --> Seams[the composition configuration, or per-seam injection]
+    Mode --> Boot[the assembly resolves every seam]
     Seams --> Boot
     Boot --> Check{Capabilities satisfy<br/>the declared mode}
     Check -->|yes| Run[Startup proceeds]
@@ -133,13 +133,13 @@ flowchart TD
 
 ## 模块接线契约
 
-每个后端模块实现同一个 `pkgcore.Module` 接口,把它贡献的一切——路由、配置 schema、功能开关、权限、任务处理器、通知类型、事件、审计动作——通过**一次 `Register(reg Registrar)` 调用**注册。声明面就是 `Registrar` 视图:每种机制一个注册席,内核的模块 `Registry` 与组件组装的 `ComponentRegistry` 都回答它。
+每个后端模块实现同一个 `the module contract` 接口,把它贡献的一切——路由、配置 schema、功能开关、权限、任务处理器、通知类型、事件、审计动作——通过**一次 `Register(reg *pkgcore.ComponentRegistry)` 调用**注册。声明面就是 `*pkgcore.ComponentRegistry` 视图:每种机制一个注册席,内核的模块 `Registry` 与组件组装的 `ComponentRegistry` 都回答它。
 
-**为什么是一次 `Register` 而不是八个接口方法?** 因为在锁步版本下,改动 `Module` 接口是同时打破所有模块的破坏性变更。新的横切机制变成声明面上的一个新注册席——`Registrar` 上的一个访问器加上它背后的注册器;既有模块不用改、不用重编译。声明面的存在意义,正是让"新增机制"永远不改变 `Module` 接口。
+**为什么是一次 `Register` 而不是八个接口方法?** 因为在锁步版本下,改动 `Module` 接口是同时打破所有模块的破坏性变更。新的横切机制变成声明面上的一个新注册席——`*pkgcore.ComponentRegistry` 上的一个访问器加上它背后的注册器;既有模块不用改、不用重编译。声明面的存在意义,正是让"新增机制"永远不改变 `Module` 接口。
 
 注册是声明式的,这在外界换来三份红利:权限清单自动汇入运营后台的角色配置界面,配置与开关 schema 自动汇入生成的配置文档,通知类型自动汇入用户可见的偏好矩阵。每个模块还把自己的资产——双方言 SQL 迁移、`zh-CN`/`en-US` 语言包、自己的 OpenAPI 片段——与代码一同发布,模块版本与资产永不脱节。
 
-Kernel 由选项组装,而不是由模式参数组装——`NewKernel(opts...)` 加 `WithDeploymentMode`、`WithPreset` 与逐接缝注入。`Bootstrap` 遍历模块图、解析并校验每个接缝、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
+Kernel 由选项组装,而不是由模式参数组装——`app.Assemble(opts...)` 加 `the composition's deployment field`、`the composition configuration` 与逐接缝注入。`Bootstrap` 遍历模块图、解析并校验每个接缝、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
 
 HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` 是它唯一
 的实现:`authn.Middleware(verifier)` 包住整个组合,把两个结构性豁免

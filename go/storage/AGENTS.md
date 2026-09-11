@@ -281,7 +281,7 @@ a plain error: sweeping is optional work, and a host that runs no workers must
 not be forced to wire a queue it cannot drain — the module's queue requirement
 is about the thumbnail work the completion pipeline already promised. The
 module also declares the sweep's periodic schedule on the
-`pkgcore.Registry.Schedules` seat (cleanup.go's `expirySweepSchedule`,
+`pkgcore.ComponentRegistry.Schedules` seat (cleanup.go's `expirySweepSchedule`,
 declared by `Register` alongside the handler), so a host that starts a
 `jobs.Scheduler` over the finished registry sweeps every tenant at the
 module's own window without writing a schedule point of its own (see "Known
@@ -303,7 +303,7 @@ magic numbers:
 | `WithNoExpiryAllowed` | off | permits never-expiring objects: without it a `CreateParams.NoExpiry` request is refused (`storage.no_expiry_not_allowed`); with it, each such object still needs its own explicit `NoExpiry: true` |
 | `WithAllowedTypes` | image/jpeg, image/png | media-type allowlist; nil resolves to the module default. Register refuses (`storage.allowed_type_unsupported`) any configured type the module cannot pixel-check AND metadata-strip (validate.go's `mediaTypeSafety`) |
 
-`Register(reg pkgcore.Registrar)` performs no I/O and:
+`Register(reg *pkgcore.ComponentRegistry)` performs no I/O and:
 
 - requires the queue `WithQueue` wired — a queueless Register fails with
   `storage.queue_required` before declaring anything;
@@ -406,7 +406,7 @@ plain unit suite under `-race`:
   completion event and derive enqueue, completed-rows-only reads, and
   fail-closed behavior without an attached host;
 - `module_test.go` — the register-time wiring proof: after a real standalone
-  `pkgcore.Kernel.Bootstrap`, `Module.Register` hands the registry to all three
+  `pkgcore.the assembly`, `Module.Register` hands the registry to all three
   services and claims the two job handlers on it, each bound to the module's
   own service instance (a new service or handler that Register stopped wiring
   fails here), and a real Create→Upload→Complete→OpenContent round trip runs
@@ -470,7 +470,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   it), never through the module's own read paths, so nothing the module
   believes about its writes goes unchecked. The composition is a
   standalone-mode kernel whose ObjectStore the host overrides via
-  `WithObjectStore` — the injectable seam a distributed-mode host wires,
+  `Put` — the injectable seam a distributed-mode host wires,
   exercised against real RustFS.
 
 ## Known limitations

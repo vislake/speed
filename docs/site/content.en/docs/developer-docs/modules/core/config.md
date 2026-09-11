@@ -53,7 +53,7 @@ The module's wiring splits into two steps, and the split is load-
 bearing. **Register** declares what never needs the assembled
 registry — the audited system purpose, the two route paths, the change
 event, the audit action. **Attach** happens only after every module
-has registered (after `Kernel.Bootstrap` returns), because the
+has registered (after `the assembly` returns), because the
 service's schema is folded from the registry's *combined* item and
 flag declarations — items owned by other modules are first-class
 citizens of it, so the schema cannot exist before registration

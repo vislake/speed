@@ -20,7 +20,7 @@ interface every deployment mode already provides.
 ## Responsibility and boundary
 
 This is a **pure library**, unlike every other module in the
-repository: it implements no `pkgcore.Module`, registers no routes, no
+repository: it implements no `the module contract`, registers no routes, no
 config schema, no feature flags, no permissions. There is nothing to
 wire into a kernel; a consumer just calls `ratelimit.New`. The
 deliberate boundaries follow from "no business semantics", stated

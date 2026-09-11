@@ -10,7 +10,7 @@ speed's shared rate-limiting primitive: a `Limiter` that decides
 whether one more hit against a caller-supplied `key` is within a
 caller-supplied `Limit`, backed entirely by `pkgcore.KVStore`. It is a
 **pure library** — unlike every other module in the platform it does
-not implement `pkgcore.Module`: nothing to register, nothing to wire
+not implement `the module contract`: nothing to register, nothing to wire
 into a Kernel, a consumer just calls `ratelimit.New(store)`. It exists
 because six otherwise-unrelated modules each need rate limiting —
 `authn`'s login brute-force guard, `integration`'s three-layer API-key
@@ -108,7 +108,7 @@ one protocol helper the package ships, `RetryAfterSeconds(remaining)`
   lacks.
 - Do not give `Limiter` a second method, an HTTP-specific
   `Decision`, or a multi-key `Allow`; do not make it a
-  `pkgcore.Module`; do not read tenant context inside it. One
+  `the module contract`; do not read tenant context inside it. One
   dimension per call, composed by the caller, is the whole design.
 
 ## Source

@@ -51,7 +51,7 @@ OpenAPI 片段(它是业务模块进程内调用的 Go 级 API);无分布式聚�
 ## 怎么接线
 
 ```go
-m := metering.NewModule(db)          // 放进你的 Kernel.Bootstrap 模块集
+m := metering.NewModule(db)          // 放进你的 the assembly 模块集
 m.Start(ctx)                         // 启动分析冲刷与 dispatcher 循环
 defer m.Stop()
 

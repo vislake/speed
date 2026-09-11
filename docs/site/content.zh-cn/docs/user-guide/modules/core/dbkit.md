@@ -59,7 +59,7 @@ db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectPostgres, DSN: ds
 // handle err
 
 reg := dbkit.NewMigrationRegistry()
-if err := reg.Register(billingModule); err != nil { // billingModule: 你的 pkgcore.Module
+if err := reg.Register(billingModule); err != nil { // billingModule: 你的 the module contract
     // handle err
 }
 if err := reg.Apply(ctx, db, dbkit.DialectPostgres); err != nil {

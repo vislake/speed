@@ -16,7 +16,7 @@ speed 二进制都要组装的底座(`pkgcore`、`dbkit`、`tenancy`、
 对平台持有数据的治理、以及平台运营者自己的控制台。
 
 五个模块没有一个必选。依赖图里它们之下的每个模块不带它们也能启
-动;一个都不想要的宿主,直接从自己的 `Kernel.Bootstrap` 集合里省掉
+动;一个都不想要的宿主,直接从自己的 `the assembly` 集合里省掉
 即可。它们是按产品决策挑选的,而且挑在下面两组之上:每页的「怎么
 接线」一节点名它要组合的 services 与 core 模块(billing 判定
 `go/metering` 记录的用量,compliance 经 `go/sharing` 投递导出,

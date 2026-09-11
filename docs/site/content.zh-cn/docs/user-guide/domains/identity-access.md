@@ -31,7 +31,7 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
 
 ## 最少集成步骤
 
-1. **把模块接进你的内核。** 在 `Kernel.Bootstrap` 的模块集里加入
+1. **把模块接进你的内核。** 在 `the assembly` 的模块集里加入
    `authn`、`rbac`、`org`(以及作为 authn 密钥源的 `pki`)。
    `dbkit.MigrationRegistry` 会应用每个模块自己的迁移;参考应用
    `examples/reference-app/internal/app/server.go` 的启动注释逐行演示
@@ -47,7 +47,7 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
    principal 判定,被冒名的身份或租户自己的 Owner 角色都绝不能抵达
    它。其余一切路由用下游的
    `tenancy.Middleware(authn.NewPrincipalResolver())` 保护。
-4. **用权限门护住路由。** rbac 在 `Kernel.Bootstrap` 之后执行
+4. **用权限门护住路由。** rbac 在 `the assembly` 之后执行
    `Attach`(冻结所有模块声明的权限词汇表——授予词汇表外的任何东西
    都会被拒绝)。用 `rbac.RequirePermission("notes", "write")` 或其
    `*Func` 变体护住操作;org 导出它自己四条路由声明的权限
@@ -161,12 +161,12 @@ func main() {
 	rbacModule := rbac.NewModule(db)
 
 	migrations := dbkit.NewMigrationRegistry()
-	for _, m := range []pkgcore.Module{pkiModule, authnModule, rbacModule} {
+	for _, m := range []the module contract{pkiModule, authnModule, rbacModule} {
 		must(migrations.Register(m))
 	}
 	must(migrations.Apply(ctx, db, dbkit.DialectSQLite))
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, pkiModule, authnModule, rbacModule, notesLikeModule{})
+	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, pkiModule, authnModule, rbacModule, notesLikeModule{})
 	must(err)
 	az, err := rbacModule.Attach(reg) // 冻结权限目录
 	must(err)

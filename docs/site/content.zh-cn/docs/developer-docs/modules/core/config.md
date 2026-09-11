@@ -18,7 +18,7 @@ config 拥有 speed 的运行时配置层:基于数据库、schema 先行的设�
 
 ## 设计:声明与冻结是两个分离的步骤
 
-模块的接线拆成两步,拆分本身承重。**Register** 声明永远不需要已组装注册表的东西——审计 purpose、两条路由路径、变更事件、审计动作。**Attach** 只在所有模块都注册完之后(即 `Kernel.Bootstrap` 返回之后)发生,因为服务的 schema 是从注册表的*合并*条目与开关声明折出来的——别的模块拥有的条目是它的头等公民,schema 不可能在注册完成前存在。Attach 要求注册不能碰的东西:已迁移的 `*gorm.DB`;只要有任一注册条目是 `Sensitive` 就必须有 cipher(否则 `ErrCipherRequired`——没有密钥的宿主读写这类值必然泄露);以及轮询间隔。它带幂等守卫(`ErrAlreadyAttached`),服务在 Register 与 Attach 之间的窗口回答 `config.service_not_attached` 而非空指针崩溃——宿主接线 bug 以编码错误浮现,绝不崩。
+模块的接线拆成两步,拆分本身承重。**Register** 声明永远不需要已组装注册表的东西——审计 purpose、两条路由路径、变更事件、审计动作。**Attach** 只在所有模块都注册完之后(即 `the assembly` 返回之后)发生,因为服务的 schema 是从注册表的*合并*条目与开关声明折出来的——别的模块拥有的条目是它的头等公民,schema 不可能在注册完成前存在。Attach 要求注册不能碰的东西:已迁移的 `*gorm.DB`;只要有任一注册条目是 `Sensitive` 就必须有 cipher(否则 `ErrCipherRequired`——没有密钥的宿主读写这类值必然泄露);以及轮询间隔。它带幂等守卫(`ErrAlreadyAttached`),服务在 Register 与 Attach 之间的窗口回答 `config.service_not_attached` 而非空指针崩溃——宿主接线 bug 以编码错误浮现,绝不崩。
 
 Schema 先行让这个存储可以被安全地管理:每个条目声明类型、默认值、边界、`Sensitive`/`Public` 位、说明与分组,声明时校验自相矛盾,Attach 时校验只有全注册表才看得见的问题——跨模块重复键、开关依赖普通条目、开关成环。三个红利:管理面可以按 schema 渲染表单而非逐条目写页面;写入经范围校验;文档自动生成。
 

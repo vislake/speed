@@ -87,7 +87,7 @@ a := admin.NewModule(db,
     admin.WithMetering(meteringModule),     // optional: usage-summary dimensions
     admin.WithBilling(billingModule),       // optional, independent of metering
 )
-// in your Kernel.Bootstrap set. Then, after Bootstrap — rbac.Service only
+// in your the assembly set. Then, after Bootstrap — rbac.Service only
 // exists once rbac's own post-Bootstrap Attach has frozen the catalog:
 if err := a.AttachRBAC(rbacService); err != nil { /* handle */ }
 ```

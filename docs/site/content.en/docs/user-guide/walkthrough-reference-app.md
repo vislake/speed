@@ -7,8 +7,8 @@ description: Boot the reference app and drive sign-in, permissions and tenant is
 # Reference app walkthrough
 
 `examples/reference-app` is speed's mandatory first consumer: an
-AI smile-simulation platform assembled from seventeen `pkgcore.Module`
-implementations in one `Kernel.Bootstrap` call, with a demo identity
+AI smile-simulation platform assembled from seventeen `the module contract`
+implementations in one `the assembly` call, with a demo identity
 layer seeded at boot. It is also the fastest way to feel what a
 composed speed product does over the wire. This walkthrough runs it in
 the standalone deployment mode — one process, one SQLite file, every

@@ -33,7 +33,7 @@ description: saasctl 生成项目的日常维护——它可以运行的两种�
 
 ## `db migrate`——在启动前备好 schema
 
-生成的应用每次启动都会自己应用迁移(`Kernel.Bootstrap` 的 `Apply`,
+生成的应用每次启动都会自己应用迁移(`the assembly` 的 `Apply`,
 经 `schema_migrations` 台账幂等)。`saasctl db migrate` 是这一步的
 运维方手动版本,用于让 schema 在任何进程运行前就位——预置好 schema
 的首次启动、脚本化的开通步骤、CI 运行。

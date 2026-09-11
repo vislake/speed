@@ -69,7 +69,7 @@ c := compliance.NewModule(auditRepo, // the same *audit.Repository your audit wi
     compliance.WithSharing(sharingModule.Service()), // arms export delivery
     // optional: compliance.WithTenantLister(lister), WithConfigService(cfg)
 )
-// in your Kernel.Bootstrap set. After Bootstrap, register the business
+// in your the assembly set. After Bootstrap, register the business
 // modules whose rows the orchestrations may touch — the reference app's
 // notes module registers exactly this participant shape, its callbacks
 // backed by its own repository's HardDelete and read methods:

@@ -25,7 +25,7 @@ modules it pulls in:
   configuration resolves, secret rows `[redacted]`.
 
 Nothing assembles saasctl into a running service. It implements no
-`pkgcore.Module`, never registers into a `Registry`, and consumer code
+`the module contract`, never registers into a `Registry`, and consumer code
 never imports it; the reference app deliberately does not wire it —
 its consumers are the generated projects themselves. Where the module
 pages answer "I am integrating module X into my binary", this page

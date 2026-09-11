@@ -52,7 +52,7 @@ The dependency direction is the release discipline: `pkgcore` imports
 no other speed module and carries no third-party dependency in its
 root package, and every layer above only adds what its own concern
 requires. For a consumer this means two things. First, most business
-modules you write implement `pkgcore.Module` and register routes,
+modules you write implement `the module contract` and register routes,
 config schema, permissions, events and job handlers in one
 `Register` call — the kernel assembles them. Second, several core
 pieces are used directly rather than through the kernel: `tenancy`'s

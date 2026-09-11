@@ -120,7 +120,7 @@ func uploadDeriveAndShare() {
 	// A real kernel: Bootstrap runs both modules' Register, attaching
 	// the object store, event bus and registry seats their services read
 	// at call time — the same path a host takes.
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, media, links)
+	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, media, links)
 	must(err)
 	must(jobs.Wire(ctx, queue, reg.Jobs))
 	must(queue.Start(ctx))

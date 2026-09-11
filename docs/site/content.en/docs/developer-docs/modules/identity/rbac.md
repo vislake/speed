@@ -85,7 +85,7 @@ foreign keys.
 
 The permission **catalog** is platform data **with no table**: a
 frozen in-memory snapshot of every `resource:action` every module
-declared. `Module.Attach` — exactly once, after `Kernel.Bootstrap`
+declared. `Module.Attach` — exactly once, after `the assembly`
 returns — takes the snapshot; a second `Attach` fails
 (`ErrAlreadyAttached`): for the set that decides whether a grant is
 legal, a different second snapshot is a security difference.

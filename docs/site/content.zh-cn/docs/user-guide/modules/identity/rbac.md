@@ -54,7 +54,7 @@ rbac 分两相,因为模块按 bootstrap 顺序注册:`Register` 期间拍的权
 
 ```go
 rbacMod := rbac.NewModule(db) // 选项:WithSubtreeResolver、WithCacheTTL、WithQueue
-// rbacMod 加入 Kernel.Bootstrap 的模块集;Bootstrap 返回之后,恰好一次:
+// rbacMod 加入 the assembly 的模块集;Bootstrap 返回之后,恰好一次:
 az, err := rbacMod.Attach(reg) // 冻结每个模块声明的权限
 if err != nil {
     return err // 第二次 Attach 失败:ErrAlreadyAttached

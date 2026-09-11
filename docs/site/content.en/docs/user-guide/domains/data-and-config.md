@@ -41,7 +41,7 @@ leaking rows across tenants.
 3. **Migrate with versioned SQL, never `AutoMigrate`.** Each module
    ships dual-dialect migration sets (SQLite and PostgreSQL) applied by
    `dbkit.MigrationRegistry`; a module exposes them through its
-   `pkgcore.Module` `Migrations()`. Both dialects are first-class —
+   `the module contract` `Migrations()`. Both dialects are first-class —
    avoid PostgreSQL-only features (`gen_random_uuid()`, native arrays,
    `NOW()`); generate IDs in the application.
 4. **Classify every table before designing it.** Tenant data is
@@ -63,7 +63,7 @@ switches, AI keys. Two decisions shape its use:
 
 - **Register vs Attach.** Modules *declare* their config items and
   flags on the registry during `Register`; `Attach` — exactly once,
-  after `Kernel.Bootstrap` returns — folds every module's declarations
+  after `the assembly` returns — folds every module's declarations
   into one schema and refuses a cipher-less startup while any
   `Sensitive` item exists. A host keeps the `*Service` Attach returns.
 - **Scope tiers and fallback.** Every value lives at one tier
@@ -195,7 +195,7 @@ func main() {
 
 	// Bootstrap walks the module graph, calling Register on each; Attach --
 	// exactly once, afterwards -- freezes the union of every declaration.
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, subscriptionsModule{}, configModule)
+	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, subscriptionsModule{}, configModule)
 	if err != nil {
 		panic(err)
 	}

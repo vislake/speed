@@ -48,10 +48,10 @@ Independent Go modules, each with its own `go.mod`, developed together through `
 
 ## 2. Module Wiring
 
-Every module implements `pkgcore.Module` and registers routes, config schema, feature flags, permissions, job handlers, notification types, events and audit actions through a single `Register(reg Registrar)`.
+Every module carries the module contract (`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec` plus a `Register` body) and registers routes, config schema, feature flags, permissions, job handlers, notification types, events and audit actions through a single `Register(reg *pkgcore.ComponentRegistry)` call.
 
 ```go
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
     reg.RoutesSeat().Mount("/api/v1/billing", billingapi.Handler(m.svc)) // implements the spec-generated interface
     reg.ConfigSeat().Add(configSchema...)
     reg.FeaturesSeat().Add(featureFlags...)
