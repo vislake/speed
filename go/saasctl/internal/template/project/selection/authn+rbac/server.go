@@ -548,7 +548,8 @@ func (b *serverBuild) observabilityComponent(reg *pkgcore.ComponentRegistry) (pk
 // authnComponent returns authn's descriptor with this project's own
 // construction: the signing-key lifecycle taken from the pki module's own
 // product, the blind-index key material the assembly resolved for the
-// module's declared path, the declared deployment mode, and the SMS
+// module's declared path, the declared deployment mode, the configuration
+// module's lazy handle as authn's dynamic-configuration reader, and the SMS
 // transport the "SMS sender" seam's conditional-injection rule selects.
 func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
 	return overrideComponent(reg, "authn", "authn", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
@@ -568,10 +569,24 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 		if err != nil {
 			return nil, err
 		}
+		// The config module's construction product: this construction wires
+		// its lazy handle as authn's dynamic-configuration reader below, and
+		// the required edge declared beside pki's orders this component after
+		// the config module's, so the product is in the by-type context here.
+		cfgModule, err := pkgcore.Get[*config.Module](reg)
+		if err != nil {
+			return nil, err
+		}
 		opts := []authn.Option{
 			authn.WithKeySource(pkiModule.Service()),
 			authn.WithBlindIndexKey(blindIndexKey),
 			authn.WithDeploymentMode(b.cfg.DeploymentMode),
+			// The dynamic-configuration reader: the handle satisfies
+			// authn.SettingsReader structurally, so the module's declared
+			// dynamic config items (password policy, token TTLs, the
+			// trusted-provider list, per-channel credentials) take effect at
+			// runtime.
+			authn.WithSettingsReader(cfgModule.Handle()),
 		}
 		// The "SMS sender" seam follows a conditional-injection shape: the
 		// seam the composition selected is wired when a gateway URL is
@@ -596,6 +611,7 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 		return authnModule, nil
 	},
 		pkgcore.Requirement{Token: (*pki.Module)(nil)},
+		pkgcore.Requirement{Token: (*config.Module)(nil)},
 	)
 }
 
