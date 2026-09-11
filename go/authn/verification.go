@@ -373,13 +373,22 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 		return ErrInternal.WithCause(err)
 	}
 
+	// The code's lifetime and attempt budget are resolved once per issued
+	// code through the declared dynamic configuration
+	// (authn.sms_code_ttl / authn.sms_code_max_attempts) when a settings
+	// reader is wired, falling back to the construction-time values; the
+	// row carries the resolved values, so a later change never rewrites the
+	// rules of a code already in flight.
+	smsTTL := s.smsCodeTTLFor(ctx)
+	smsMaxAttempts := s.smsCodeMaxAttemptsFor(ctx)
+
 	record := &VerificationCode{
 		Purpose:     VerificationPurposePhoneLogin,
 		TargetIndex: index,
 		CodeHash:    hashVerificationCode(code),
-		MaxAttempts: s.smsCodeMaxAttempts,
+		MaxAttempts: smsMaxAttempts,
 		CreatedAt:   s.now(),
-		ExpiresAt:   s.now().Add(s.smsCodeTTL),
+		ExpiresAt:   s.now().Add(smsTTL),
 	}
 	if createErr := s.verificationCodes.Create(ctx, record); createErr != nil {
 		// Reachable only for a registered number -- the unknown-number
@@ -396,7 +405,7 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 		return nil
 	}
 
-	minutes := int(s.smsCodeTTL / time.Minute)
+	minutes := int(smsTTL / time.Minute)
 	text, usedLocale, err := renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, minutes)
 	if err != nil {
 		// The same registered-only shape as the persist branch above and

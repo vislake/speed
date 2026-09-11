@@ -596,3 +596,81 @@ func ExampleExemptSubtree() {
 	// ordinary chain: /api/v1/notes
 	// ordinary chain: /api/v1/org
 }
+
+// exampleSettingsReader is the smallest stand-in for the config module's
+// handle: it answers only authn.password_min_length, so this example shows
+// a declared item reaching the password policy. The config module's real
+// Handle satisfies authn.SettingsReader structurally, so a host passes it
+// directly.
+type exampleSettingsReader struct{ minLength int64 }
+
+func (exampleSettingsReader) Duration(context.Context, string) (time.Duration, bool, error) {
+	return 0, false, nil
+}
+
+func (r exampleSettingsReader) Int(_ context.Context, key string) (int64, bool, error) {
+	if key == authn.ConfigKeyPasswordMinLength {
+		return r.minLength, true, nil
+	}
+	return 0, false, nil
+}
+
+func (exampleSettingsReader) String(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
+var _ authn.SettingsReader = exampleSettingsReader{}
+
+// ExampleWithSettingsReader wires the module's declared dynamic
+// configuration into the behavior it controls: here a raised
+// authn.password_min_length makes Register refuse a 28-character password
+// the built-in policy would have accepted. Without the seam every read
+// falls back to the construction-time value (WithPasswordPolicy and
+// friends), which is the behavior the module had before the seam existed.
+func ExampleWithSettingsReader() {
+	ctx := context.Background()
+
+	cipher, err := dbkit.NewCipher(make([]byte, 32))
+	if err != nil {
+		panic(err)
+	}
+	if regErr := authn.RegisterPIISerializer(cipher); regErr != nil {
+		panic(regErr)
+	}
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:authn_example_settings?mode=memory&cache=shared"})
+	if err != nil {
+		panic(err)
+	}
+
+	module, err := authn.NewModule(db,
+		authn.WithKeySource(newExampleKeySource("example-settings")),
+		authn.WithBlindIndexKey(exampleBlindIndexKey()),
+		authn.WithPasswordParams(exampleParams),
+		authn.WithSettingsReader(exampleSettingsReader{minLength: 30}),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	migrations := dbkit.NewMigrationRegistry()
+	if regErr := migrations.Register(module); regErr != nil {
+		panic(regErr)
+	}
+	if applyErr := migrations.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		panic(applyErr)
+	}
+	registry := componenttest.NewRegistry()
+	if declareErr := componenttest.DeclareInto(registry, module); declareErr != nil {
+		panic(declareErr)
+	}
+	svc := module.Service()
+
+	_, err = svc.Register(ctx, authn.RegisterInput{
+		Email:    "settings-demo@example.com",
+		Password: "correct horse battery staple",
+	})
+	fmt.Println("register refused below the configured minimum:", apperr.HasCode(err, authn.ErrPasswordTooShort.Code))
+
+	// Output:
+	// register refused below the configured minimum: true
+}

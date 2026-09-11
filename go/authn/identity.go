@@ -352,7 +352,7 @@ func (s *Service) SocialAuthorizeURL(ctx context.Context, in SocialAuthorizeInpu
 			return "", err
 		}
 	}
-	provider, err := s.socialProvider(in.Provider)
+	provider, err := s.socialProviderFor(ctx, in.Provider)
 	if err != nil {
 		return "", err
 	}
@@ -390,7 +390,7 @@ func (s *Service) SocialCallback(ctx context.Context, in SocialCallbackInput) (*
 			return nil, err
 		}
 	}
-	provider, err := s.socialProvider(in.Provider)
+	provider, err := s.socialProviderFor(ctx, in.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +534,8 @@ func (s *Service) resolveSocialAccount(
 	ip, userAgent string,
 ) (*User, bool, error) {
 	email := strings.TrimSpace(external.Email)
-	linkable := email != "" && external.EmailVerified && s.providerIsTrusted(external.Provider)
+	trusted := s.providerIsTrusted(ctx, external.Provider)
+	linkable := email != "" && external.EmailVerified && trusted
 
 	if email != "" {
 		existing, err := s.users.FindByEmail(ctx, email)
@@ -546,7 +547,7 @@ func (s *Service) resolveSocialAccount(
 				"provider", external.Provider,
 				"user_id", existing.ID,
 				"email_verified", external.EmailVerified,
-				"provider_trusted", s.providerIsTrusted(external.Provider),
+				"provider_trusted", trusted,
 			)
 			// The refusal is the account's own security signal -- an
 			// external identity claimed this account's address and was
@@ -820,6 +821,30 @@ func (s *Service) socialProvider(name string) (SocialProvider, error) {
 	return provider, nil
 }
 
+// socialProviderFor resolves a channel for one flow and folds in any
+// dynamically configured client credentials: when the declared
+// authn.social.<channel>.client_id/client_secret items carry explicit rows
+// AND the provider implements CredentialedProvider (every shipped channel
+// does), the returned provider authenticates as those credentials for this
+// flow only. Without an explicit, complete pair the provider's own
+// construction-time credentials stand, so a host that configures nothing
+// dynamically is unaffected.
+func (s *Service) socialProviderFor(ctx context.Context, name string) (SocialProvider, error) {
+	provider, err := s.socialProvider(name)
+	if err != nil {
+		return nil, err
+	}
+	clientID, clientSecret, ok := s.providerCredentialsFor(ctx, name)
+	if !ok {
+		return provider, nil
+	}
+	credentialed, ok := provider.(CredentialedProvider)
+	if !ok {
+		return provider, nil
+	}
+	return credentialed.WithCredentials(clientID, clientSecret), nil
+}
+
 // socialChannelFlag maps a wired social channel's name to the feature flag
 // that gates it. The five flags this module declares (FeatureFlagSocial*)
 // correspond one-to-one with the five providers it ships constructors for;
@@ -846,9 +871,13 @@ func socialChannelFlag(provider string) string {
 
 // providerIsTrusted reports whether the platform has put name on the list of
 // providers whose verified-email assertion may automatically link an existing
-// account.
-func (s *Service) providerIsTrusted(name string) bool {
-	return slices.Contains(s.trustedProviders, name)
+// account. The list is resolved per call through the declared dynamic
+// configuration (authn.social.trusted_providers) when a settings reader is
+// wired, falling back to the construction-time WithTrustedProviders list;
+// see settings.go's trustedProviderList for the fail-closed-on-error rule
+// that makes the declared switch effective.
+func (s *Service) providerIsTrusted(ctx context.Context, name string) bool {
+	return slices.Contains(s.trustedProviderList(ctx), name)
 }
 
 // publishIdentityBound announces a new binding.

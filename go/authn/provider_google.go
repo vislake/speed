@@ -66,6 +66,20 @@ func NewGoogleProvider(clientID, clientSecret string, opts ...ProviderOption) *G
 // Name implements SocialProvider.
 func (p *GoogleProvider) Name() string { return ProviderGoogle }
 
+// WithCredentials implements CredentialedProvider: the next authorization
+// flow for this channel authenticates with clientID/clientSecret instead of
+// the construction-time pair (see CredentialedProvider for when authn calls
+// this). The fresh provider carries no memoized OIDC discovery -- discovery
+// is per-issuer and credential-independent, so the only cost of the
+// override is one extra discovery round trip.
+func (p *GoogleProvider) WithCredentials(clientID, clientSecret string) SocialProvider {
+	return &GoogleProvider{
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		cfg:          p.cfg,
+	}
+}
+
 // AuthorizeURL implements SocialProvider.
 //
 // No "nonce" is sent. The replay protection here is the state value, which is

@@ -53,6 +53,16 @@ func NewGitHubProvider(clientID, clientSecret string, opts ...ProviderOption) *G
 	}
 }
 
+// WithCredentials implements CredentialedProvider; see CredentialedProvider
+// for when authn calls this.
+func (p *GitHubProvider) WithCredentials(clientID, clientSecret string) SocialProvider {
+	return &GitHubProvider{
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		cfg:          p.cfg,
+	}
+}
+
 // Name implements SocialProvider.
 func (p *GitHubProvider) Name() string { return ProviderGitHub }
 

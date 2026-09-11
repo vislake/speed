@@ -53,6 +53,16 @@ func NewDingTalkProvider(clientID, clientSecret string, opts ...ProviderOption) 
 // Name implements SocialProvider.
 func (p *DingTalkProvider) Name() string { return ProviderDingTalk }
 
+// WithCredentials implements CredentialedProvider; see CredentialedProvider
+// for when authn calls this.
+func (p *DingTalkProvider) WithCredentials(clientID, clientSecret string) SocialProvider {
+	return &DingTalkProvider{
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		cfg:          p.cfg,
+	}
+}
+
 // AuthorizeURL implements SocialProvider.
 func (p *DingTalkProvider) AuthorizeURL(state, redirectURI string) string {
 	query := url.Values{}

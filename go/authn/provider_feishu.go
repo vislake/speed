@@ -36,6 +36,17 @@ type FeishuProvider struct {
 	cfg       providerConfig
 }
 
+// WithCredentials implements CredentialedProvider; see CredentialedProvider
+// for when authn calls this. Feishu's own names for the pair are app_id and
+// app_secret, which the declaration's keys carry.
+func (p *FeishuProvider) WithCredentials(appID, appSecret string) SocialProvider {
+	return &FeishuProvider{
+		appID:     appID,
+		appSecret: appSecret,
+		cfg:       p.cfg,
+	}
+}
+
 // NewFeishuProvider returns the Feishu channel configured with an
 // application's credentials.
 func NewFeishuProvider(appID, appSecret string, opts ...ProviderOption) *FeishuProvider {

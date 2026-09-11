@@ -505,7 +505,9 @@ func (h *Handler) ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (s
 		Value: value,
 		Path:  "/api/v1/authn/social",
 		// MaxAge tracks the state store's TTL -- the lifetime the state
-		// record minted in this very request was issued with (Service's
+		// record minted in this very request is issued with
+		// (authn.oauth_state_ttl resolved through the dynamic
+		// configuration when a settings reader is wired, else Service's
 		// configured cfg.oauthStateTTL, DefaultOAuthStateTTL when no
 		// option overrode it) -- never the package default in a vacuum: a
 		// host that configured a longer TTL for slow identity providers
@@ -513,7 +515,7 @@ func (h *Handler) ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (s
 		// callback without its binding. Rounded UP to a whole second --
 		// the finest a Max-Age can express -- so the cookie is never
 		// shorter-lived than the state it accompanies.
-		MaxAge:   int((h.svc.states.ttl + time.Second - 1) / time.Second),
+		MaxAge:   int((h.svc.oauthStateTTLFor(r.Context()) + time.Second - 1) / time.Second),
 		HttpOnly: true,
 		Secure:   h.svc.secureCookies || r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,

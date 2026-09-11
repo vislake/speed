@@ -256,6 +256,12 @@ type options struct {
 	passwordParams PasswordParams
 	passwordPolicy PasswordPolicy
 
+	// settings is the dynamic-configuration reader (WithSettingsReader):
+	// the seam the module's declared config items resolve through at
+	// runtime. Nil is legal and means every read falls back to the
+	// construction-time value. See settings.go.
+	settings SettingsReader
+
 	providers        []SocialProvider
 	trustedProviders []string
 	redirects        RedirectAllowlist

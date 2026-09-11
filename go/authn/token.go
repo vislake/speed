@@ -155,6 +155,12 @@ type tokenConfig struct {
 	ttl    time.Duration
 	issuer string
 	now    func() time.Time
+
+	// ttlSource, when non-nil, is the dynamic-configuration reader the
+	// SIGNER resolves its effective TTL through on first use (settings.go).
+	// It is never set on a Verifier, which reads each token's own expiry,
+	// and it is package-private because only NewService wires it.
+	ttlSource SettingsReader
 }
 
 // TokenOption configures a Signer or a Verifier.
@@ -231,6 +237,17 @@ type Signer struct {
 	ensured          bool
 	ensureErr        error
 	retryEnsureAfter time.Time
+
+	// ttlOnce and effectiveTTLValue freeze the access-token lifetime on
+	// first use. The value sizes the signing-key lifecycle through
+	// EnsurePurpose (RetiringOverlap must cover a token's full lifetime),
+	// and EnsurePurpose only ever sizes a purpose ONCE -- so a lifetime
+	// that moved per mint would let tokens outlive the keys that signed
+	// them. Freezing at first use makes the dynamic read honest: it is
+	// honored exactly, and an operator's change takes effect on the next
+	// process start, the same way the key policy it feeds does.
+	ttlOnce           sync.Once
+	effectiveTTLValue time.Duration
 }
 
 // ensureRetryInterval is how long a failed EnsurePurpose keeps failing
@@ -251,8 +268,25 @@ func NewSigner(keySource KeySource, opts ...TokenOption) (*Signer, error) {
 
 // TTL reports how long tokens this Signer issues stay valid. Callers that
 // need to size a revocation-list TTL to the remaining life of outstanding
-// access tokens read it here rather than assuming the default.
+// access tokens read it here rather than assuming the default. Before the
+// first Issue call the dynamic override may not have been resolved yet
+// (effectiveTTL); callers that need the frozen value after issuance read
+// effectiveTTL instead.
 func (s *Signer) TTL() time.Duration { return s.cfg.ttl }
+
+// effectiveTTL resolves the lifetime this Signer mints with and sizes its
+// key purpose against: the construction-time TTL, or -- when a dynamic
+// reader is wired and carries an explicit row for
+// authn.access_token_ttl -- that value, resolved ONCE and frozen for the
+// process (see the ttlOnce field comment for why it cannot move). A read
+// failure or a non-positive value is logged and the construction-time TTL
+// stands.
+func (s *Signer) effectiveTTL(ctx context.Context) time.Duration {
+	s.ttlOnce.Do(func() {
+		s.effectiveTTLValue = durationSetting(ctx, s.cfg.ttlSource, ConfigKeyAccessTokenTTL, s.cfg.ttl)
+	})
+	return s.effectiveTTLValue
+}
 
 // ensure runs EnsurePurpose for this Signer -- the first call for its whole
 // lifetime, and again after a failure once ensureRetryInterval has passed --
@@ -277,7 +311,7 @@ func (s *Signer) ensure(ctx context.Context) error {
 		// this caller (see the field comment).
 		return s.ensureErr
 	}
-	err := s.keySource.EnsurePurpose(ctx, s.purpose, accessTokenKeyAlgorithm, s.cfg.ttl)
+	err := s.keySource.EnsurePurpose(ctx, s.purpose, accessTokenKeyAlgorithm, s.effectiveTTL(ctx))
 	if err != nil {
 		s.ensureErr = err
 		s.retryEnsureAfter = s.cfg.now().Add(ensureRetryInterval)
@@ -316,7 +350,7 @@ func (s *Signer) Issue(ctx context.Context, p Principal) (string, time.Time, err
 	}
 
 	issuedAt := s.cfg.now()
-	expiresAt := issuedAt.Add(s.cfg.ttl)
+	expiresAt := issuedAt.Add(s.effectiveTTL(ctx))
 
 	claims := &accessClaims{
 		RegisteredClaims: jwt.RegisteredClaims{

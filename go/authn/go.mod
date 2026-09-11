@@ -15,12 +15,20 @@ replace github.com/vislake/speed/go/dbkit => ../dbkit
 // standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// The typed lazy reads (config.Handle's Duration/Int/String) and the dynamic
+// settings seam's arrival shape are not in a released config version yet, so
+// this module resolves config from the sibling checkout. A replace directive
+// in a dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/config => ../config
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/coreos/go-oidc/v3 v3.16.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/oapi-codegen/runtime v1.7.0
+	github.com/vislake/speed/go/config v0.0.1
 	github.com/vislake/speed/go/dbkit v0.0.1
 	github.com/vislake/speed/go/observability v0.0.1
 	github.com/vislake/speed/go/pkgcore v0.0.1

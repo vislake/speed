@@ -133,6 +133,25 @@ type SocialProvider interface {
 	Exchange(ctx context.Context, code, redirectURI string) (*ExternalIdentity, error)
 }
 
+// CredentialedProvider is the optional extension a SocialProvider implements
+// when its client credentials can be replaced per flow. The five shipped
+// channels implement it, which is what makes their declared
+// authn.social.<channel>.client_id/client_secret config items effective: a
+// deployment can set a channel's credentials in the configs table -- the
+// operator story the declaration's comment records, adding a login channel
+// without a redeploy -- and the next authorization flow uses them.
+//
+// A provider that does not implement this interface keeps its
+// construction-time credentials; such channels have no declared config keys
+// (channelCredentialKeys), so nothing is silently ignored.
+type CredentialedProvider interface {
+	SocialProvider
+	// WithCredentials returns a copy of the provider that authenticates as
+	// clientID/clientSecret. The receiver is unmodified, so a registry-held
+	// provider is never mutated by a per-flow credential override.
+	WithCredentials(clientID, clientSecret string) SocialProvider
+}
+
 // ProviderRegistry is the set of channels a deployment has wired.
 //
 // It is immutable after construction: the channels available to a login page
@@ -440,6 +459,12 @@ type StateBinding struct {
 type StateStore struct {
 	kv  pkgcore.KVStore
 	ttl time.Duration
+
+	// settings is the dynamic-configuration reader (settings.go), wired by
+	// NewService: Issue resolves authn.oauth_state_ttl through it per
+	// issued flow, with ttl as the construction-time fallback. Nil -- every
+	// store a test constructs directly -- keeps ttl.
+	settings SettingsReader
 }
 
 // NewStateStore binds kv, which is the pkgcore seam, so the same code runs in
@@ -472,7 +497,8 @@ func (s *StateStore) Issue(ctx context.Context, binding StateBinding) (string, e
 	if err != nil {
 		return "", fmt.Errorf("authn: encode oauth state: %w", err)
 	}
-	if err := s.kv.Set(ctx, stateKey(state), encoded, s.ttl); err != nil {
+	ttl := durationSetting(ctx, s.settings, ConfigKeyOAuthStateTTL, s.ttl)
+	if err := s.kv.Set(ctx, stateKey(state), encoded, ttl); err != nil {
 		return "", fmt.Errorf("authn: store oauth state: %w", err)
 	}
 	return state, nil

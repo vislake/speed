@@ -277,6 +277,14 @@ type Service struct {
 	params      PasswordParams
 	policy      PasswordPolicy
 
+	// Dynamic-configuration state: the reader this module's declared
+	// config items resolve through (nil = none wired; every read falls
+	// back to the construction-time value), and the construction-time
+	// fallbacks for the per-operation values that live only here. The
+	// resolution rules are settings.go's.
+	settings      SettingsReader
+	oauthStateTTL time.Duration
+
 	// Federation state: the social channels a deployment wired, the
 	// single-use state store their callbacks are validated against, the
 	// redirect URIs they may return to, and the providers whose
@@ -403,6 +411,9 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	if err != nil {
 		return nil, err
 	}
+	// The state TTL is read per issued flow through the dynamic reader when
+	// one is wired; see StateStore.Issue.
+	states.settings = cfg.settings
 	providers, err := NewProviderRegistry(cfg.providers...)
 	if err != nil {
 		return nil, err
@@ -429,6 +440,12 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	if err != nil {
 		return nil, err
 	}
+	// The access-token TTL is resolved on the signer's first use through
+	// the dynamic reader when one is wired, and frozen there; it sizes the
+	// signing-key lifecycle, so it must not move under live keys (token.go's
+	// effectiveTTL). The VERIFIER deliberately gets no source: it reads each
+	// token's own expiry.
+	signer.cfg.ttlSource = cfg.settings
 	verifier, err := NewVerifier(cfg.keySource, tokenOpts...)
 	if err != nil {
 		return nil, err
@@ -439,6 +456,14 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	if err != nil {
 		return nil, err
 	}
+	// The dynamic-configuration wiring: the manager resolves its
+	// refresh/session TTLs through the same reader the Service does, and
+	// sizes its revocation-list entries on the signer's effective
+	// access-token TTL -- the one the signer actually mints with -- so a
+	// dynamically raised TTL can never let a token outlive its own
+	// revocation entry (markRevoked's contract).
+	manager.settings = cfg.settings
+	manager.accessTTLSource = signer.effectiveTTL
 
 	// The revocation source every Middleware built over this service's
 	// verifier consults BY DEFAULT: the manager itself. RevocationMode
@@ -468,6 +493,8 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		now:              cfg.now,
 		params:           cfg.passwordParams,
 		policy:           cfg.passwordPolicy,
+		settings:         cfg.settings,
+		oauthStateTTL:    cfg.oauthStateTTL,
 		identities:       identities,
 		providers:        providers,
 		states:           states,
@@ -550,7 +577,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 	if email == "" && phone == "" {
 		return nil, ErrIdentifierRequired
 	}
-	if err := s.policy.Validate(in.Password); err != nil {
+	if err := s.passwordPolicyFor(ctx).Validate(in.Password); err != nil {
 		return nil, err
 	}
 	// The display name is refused, not truncated, when it exceeds

@@ -120,6 +120,19 @@ type SessionManager struct {
 	sessionTTL time.Duration
 	accessTTL  time.Duration
 
+	// settings is the dynamic-configuration reader (settings.go), wired by
+	// NewService for the manager it builds; refreshTTL/sessionTTL above are
+	// then the construction-time fallbacks. Nil -- every manager a test
+	// constructs directly -- keeps the construction-time values, the
+	// behavior this manager had before the seam existed.
+	settings SettingsReader
+
+	// accessTTLSource, when non-nil, is the SIGNER's effective access-token
+	// TTL resolver: the revocation list must be sized to the lifetime
+	// tokens are actually minted with, so a dynamically raised TTL cannot
+	// let a token outlive its own revocation entry (see markRevoked).
+	accessTTLSource func(ctx context.Context) time.Duration
+
 	// auditActions is the registrar the replay-response audit record
 	// (emitReplayAudit) validates its action string against. It is nil
 	// until module.go's Register wires it from the host's
@@ -194,7 +207,7 @@ func (m *SessionManager) Start(ctx context.Context, in StartSessionInput) (*Sess
 		IP:              in.IP,
 		CreatedAt:       now,
 		LastSeenAt:      now,
-		ExpiresAt:       now.Add(m.sessionTTL),
+		ExpiresAt:       now.Add(m.sessionTTLFor(ctx)),
 	}
 	session.SetAMR(in.AMR)
 
@@ -246,7 +259,7 @@ func (m *SessionManager) issueRefreshToken(ctx context.Context, session *Session
 		TokenHash:   digest,
 		Status:      RefreshTokenStatusActive,
 		CreatedAt:   now,
-		ExpiresAt:   now.Add(m.refreshTTL),
+		ExpiresAt:   now.Add(m.refreshTTLFor(ctx)),
 	}
 	if err := withInsertConflictRetry(
 		func() error { return m.tokens.Create(ctx, record) },
@@ -634,7 +647,29 @@ func (m *SessionManager) markRevoked(ctx context.Context, sessionID string) erro
 	if m.mode != RevocationModeImmediate {
 		return nil
 	}
-	return m.kv.Set(ctx, revokedSessionKeyPrefix+sessionID, []byte{1}, m.accessTTL)
+	return m.kv.Set(ctx, revokedSessionKeyPrefix+sessionID, []byte{1}, m.accessTTLFor(ctx))
+}
+
+// sessionTTLFor, refreshTTLFor and accessTTLFor resolve the manager's three
+// lifetimes at the operation that consumes them; see settings.go for the
+// fallback rules. accessTTLFor prefers the signer's effective TTL -- the
+// lifetime tokens are actually minted with -- over the construction-time
+// accessTTL, so the two can never disagree when the dynamic value is wired.
+func (m *SessionManager) sessionTTLFor(ctx context.Context) time.Duration {
+	return durationSetting(ctx, m.settings, ConfigKeySessionTTL, m.sessionTTL)
+}
+
+func (m *SessionManager) refreshTTLFor(ctx context.Context) time.Duration {
+	return durationSetting(ctx, m.settings, ConfigKeyRefreshTokenTTL, m.refreshTTL)
+}
+
+func (m *SessionManager) accessTTLFor(ctx context.Context) time.Duration {
+	if m.accessTTLSource != nil {
+		if d := m.accessTTLSource(ctx); d > 0 {
+			return d
+		}
+	}
+	return m.accessTTL
 }
 
 // IsRevoked reports whether sessionID is on the immediate-revocation list.

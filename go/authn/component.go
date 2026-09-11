@@ -23,6 +23,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -86,6 +87,14 @@ func component() pkgcore.Component {
 			// fails construction closed (ErrMissingDistributedSMSSender)
 			// rather than quietly delivering codes nobody reads.
 			{Token: (*pkgcore.SMSSender)(nil), Optional: true},
+			// The configuration module, whose Handle this descriptor wires
+			// as the module's SettingsReader: the seam that makes authn's
+			// declared dynamic config items (configItems) effective at
+			// runtime. Optional -- a composition without a config module
+			// keeps every construction-time value, exactly the behavior
+			// before the seam existed -- which is why the read sites all
+			// carry documented fallbacks (settings.go).
+			{Token: (*config.Module)(nil), Optional: true},
 		},
 		// The construction product is the *Module. The *Service it exposes
 		// is built inside Register -- it needs the event bus and key-value
@@ -201,6 +210,19 @@ func component() pkgcore.Component {
 			}
 			if ok {
 				opts = append(opts, WithSMSSender(sender))
+			}
+			// The dynamic-configuration reader: the config module's lazy
+			// handle satisfies authn.SettingsReader structurally (the
+			// compile-time assertion in settings.go), and the handle exists
+			// from the config module's own construction, so wiring it here
+			// -- long before either module's reads ever run -- is a plain
+			// value capture, not a resolution.
+			cfgModule, ok, err := pkgcore.GetOptional[*config.Module](reg)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithSettingsReader(cfgModule.Handle()))
 			}
 			return NewModule(db, opts...)
 		},

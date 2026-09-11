@@ -34,6 +34,17 @@ type WeChatProvider struct {
 	cfg       providerConfig
 }
 
+// WithCredentials implements CredentialedProvider; see CredentialedProvider
+// for when authn calls this. WeChat's own names for the pair are appid and
+// secret, which the declaration's keys carry.
+func (p *WeChatProvider) WithCredentials(appID, appSecret string) SocialProvider {
+	return &WeChatProvider{
+		appID:     appID,
+		appSecret: appSecret,
+		cfg:       p.cfg,
+	}
+}
+
 // NewWeChatProvider returns the WeChat channel. appID and appSecret are the
 // Open Platform application's credentials -- WeChat's own names for what
 // other channels call the client id and client secret.
