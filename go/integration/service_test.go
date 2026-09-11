@@ -9,8 +9,8 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // errBus is a pkgcore.EventBus whose Publish always fails, standing in for

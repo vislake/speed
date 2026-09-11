@@ -12,8 +12,8 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // alwaysAllowURL is a WithWebhookURLValidator override that accepts any URL
