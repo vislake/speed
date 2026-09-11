@@ -106,31 +106,18 @@ const (
 
 // ServerConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
-// mode, port, database path, the platform key materials, the optional Redis
-// address, the demo host map). It is a plain struct resolved from the
-// process environment by ConfigFromEnv's loader-driven bootstrap
-// (bootstrap.go), NOT the dynamic configuration the config
-// module serves: dynamic configuration lives in the configs table and can
-// never hold the very key that encrypts it, so this bootstrap struct is
-// the deliberate exception to "a plain struct, not pkgcore/config's
-// dynamic configuration" -- it is main.go's own wiring, which never goes
-// through Module.Register either.
+// mode, port, database path, the optional Redis address, the demo host
+// map). It is a plain struct resolved from the process environment by
+// ConfigFromEnv's loader-driven bootstrap (bootstrap.go), NOT the dynamic
+// configuration the config module serves: dynamic configuration lives in
+// the configs table and can never hold the very key that encrypts it, so
+// this bootstrap struct is the deliberate exception to "a plain struct, not
+// pkgcore/config's dynamic configuration" -- it is main.go's own wiring,
+// which never goes through Module.Register either. The six platform key
+// materials are not here: each declaring module's component carries its
+// key's declaration, and the assembly's loader resolves them into the
+// bootstrap material the wiring reads.
 type ServerConfig struct {
-	// PlatformConfig carries the six platform key materials the composed
-	// modules declare, as go/app's normative declaration (PlatformConfig):
-	// authn's blind-index and PII cipher keys, config's cipher key,
-	// notification's contact-index key, org's invitation-email index key
-	// and pki's local-key cipher key. ConfigFromEnv resolves them through
-	// the loader -- each key reads its own variable (the loader's
-	// derivation from the declared key path, so config.cipher_key is
-	// APP_CONFIG__CIPHER_KEY), APP_ROOT_KEY's derivation, or the
-	// documented development default -- and BuildServer hands the value
-	// over as the engine's platform target. Embedding the declaration is
-	// what keeps the six keys declared once, by the platform itself: a
-	// platform key added later arrives through this struct, never through
-	// a restatement here.
-	speedapp.PlatformConfig
-
 	DeploymentMode pkgcore.DeploymentMode
 	Port           string
 	SQLitePath     string
@@ -546,15 +533,10 @@ type serverBuild struct {
 }
 
 // newServerBuild returns the build state one BuildServer or Run call
-// assembles from: the resolved configuration, and the app's own loader
-// target -- the shape the engine's binding verification checks against the
-// keys the composed modules declared -- pre-filled with the resolved
-// platform key materials, so the engine's configuration pass reads over the
-// same target shape and the same values the host already resolved.
+// assembles from: the resolved configuration and a zero host target, which
+// the assembly's loader fills with the host's own keys.
 func newServerBuild(cfg ServerConfig) *serverBuild {
-	b := &serverBuild{cfg: cfg}
-	b.hostConfig.PlatformConfig = cfg.PlatformConfig
-	return b
+	return &serverBuild{cfg: cfg}
 }
 
 // BuildServer assembles the reference app through the component assembly and
@@ -664,19 +646,29 @@ func (b *serverBuild) assemble(ctx context.Context, live bool) (*pkgcore.Compone
 	}
 
 	spec := speedapp.LoadSpec{
-		Host:     &b.hostConfig,
-		Platform: &b.hostConfig.PlatformConfig,
-		Options: []speedapp.ConfigOption{
-			speedapp.ConfigEnvPrefix(envPrefix),
-			speedapp.ConfigRootKeyEnv(rootKeyEnv),
-			speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),
-		},
+		Host:      &b.hostConfig,
+		Options:   declaredKeyOptions(),
 		Overrides: &speedapp.CompositionOverrides{Config: b.composition(live)},
 	}
 	if err := speedapp.Assemble(ctx, reg, spec); err != nil {
 		return nil, err
 	}
 	return reg, nil
+}
+
+// declaredKeyOptions returns the loader options the assembly's resolution
+// runs with: the APP_ prefix the declared key paths' variables are derived
+// under, the root key APP_ROOT_KEY feeds the derivation with, the platform
+// derivation composition, and this app's documented development defaults as
+// the lowest-priority table. The declared keys themselves come from the
+// composed modules' components -- this app declares none on its own.
+func declaredKeyOptions() []speedapp.ConfigOption {
+	return []speedapp.ConfigOption{
+		speedapp.ConfigEnvPrefix(envPrefix),
+		speedapp.ConfigRootKeyEnv(rootKeyEnv),
+		speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),
+		speedapp.ConfigDevDefaults(BootstrapDevDefaults()),
+	}
 }
 
 // composition returns this host's code-override layer: the composition

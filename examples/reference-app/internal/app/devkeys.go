@@ -1,11 +1,9 @@
 // This file holds the zero-setup development keys the app falls back to when
 // neither the matching environment variable nor APP_ROOT_KEY supplies key
-// material, and DevPlatformConfig, which assembles them onto the platform's
-// own key-material declaration.
+// material, and BootstrapDevDefaults, which assembles them into the declared
+// defaults table the loader is given.
 
 package app
-
-import speedapp "github.com/vislake/speed/go/app"
 
 // DevConfigKey is the cipher key config's config.cipher_key material falls
 // back to when neither APP_CONFIG__CIPHER_KEY nor APP_ROOT_KEY supplies one.
@@ -112,21 +110,21 @@ var DevNotificationIndexKey = []byte{
 	0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
 }
 
-// DevPlatformConfig returns the platform key-material declaration (go/app's
-// PlatformConfig) carrying this file's six development defaults: the value
-// hostConfigDefaults pre-fills onto the loader target -- so every material
-// stands when no source supplies one -- and the value this app's test helpers
-// hand a ServerConfig they build by hand instead of resolving one through
-// ConfigFromEnv.
-func DevPlatformConfig() speedapp.PlatformConfig {
-	return speedapp.PlatformConfig{
-		Authn: speedapp.PlatformAuthnKeyMaterial{
-			Blind_Index_Key: DevBlindIndexKey,
-			PII_Cipher_Key:  DevPIICipherKey,
-		},
-		Config:       speedapp.PlatformConfigKeyMaterial{Cipher_Key: DevConfigKey},
-		Notification: speedapp.PlatformNotificationKeyMaterial{Contact_Index_Key: DevNotificationIndexKey},
-		Org:          speedapp.PlatformOrgKeyMaterial{Invitation_Email_Index_Key: DevOrgIndexKey},
-		PKI:          speedapp.PlatformPKIKeyMaterial{Local_Key_Cipher_Key: DevPKILocalKeyCipherKey},
+// BootstrapDevDefaults returns this file's six development defaults as the
+// declared defaults table: the values the assembly's declared key materials
+// fall back to when neither their own variables nor APP_ROOT_KEY supply
+// material. The keys are the declared key paths of the composed modules'
+// components -- each module declares its own, so this table carries values
+// only, no declaration -- and the table rides the loader options every
+// assembly pass reads (assemble's LoadSpec.Options), which is what keeps the
+// host's own pre-assembly pass and the engine's pass over the same sources.
+func BootstrapDevDefaults() map[string][]byte {
+	return map[string][]byte{
+		"authn.blind_index_key":          DevBlindIndexKey,
+		"authn.pii_cipher_key":           DevPIICipherKey,
+		"config.cipher_key":              DevConfigKey,
+		"notification.contact_index_key": DevNotificationIndexKey,
+		"org.invitation_email_index_key": DevOrgIndexKey,
+		"pki.local_key_cipher_key":       DevPKILocalKeyCipherKey,
 	}
 }

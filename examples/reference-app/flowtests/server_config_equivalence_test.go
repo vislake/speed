@@ -30,7 +30,6 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
-	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -39,18 +38,20 @@ import (
 // os.Getenv reads with the per-variable rules the bootstrap fields' doc
 // comments now carry (an empty string reads as unset for every string-valued
 // variable; the two bools and the two ints go through strconv, so an emptied
-// one is their zero value; the key materials resolve through the same
+// one is their zero value; the six key materials resolve through the same
 // three-tier precedence; the S3, SMTP, object-store and Fly-client-IP
 // combinations refuse the boot with the same rule). It exists only as this
-// file's oracle: production resolution is app.ConfigFromEnv.
-func legacyConfigFromEnv() (app.ServerConfig, error) {
+// file's oracle: production resolution is app.ConfigFromEnv for the host's
+// own keys, and the assembly's declared-key resolution for the six materials
+// the second return carries.
+func legacyConfigFromEnv() (app.ServerConfig, map[string][]byte, error) {
 	deploymentModeStr := os.Getenv("APP_DEPLOYMENT_MODE")
 	if deploymentModeStr == "" {
 		deploymentModeStr = string(pkgcore.DeploymentModeStandalone)
 	}
 	deploymentMode, err := pkgcore.ParseDeploymentMode(deploymentModeStr)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 
 	port := os.Getenv("PORT")
@@ -67,10 +68,10 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	if raw := os.Getenv("APP_FAIL_SELF_SERVICE_PROVISION"); raw != "" {
 		parsed, parseErr := strconv.Atoi(raw)
 		if parseErr != nil {
-			return app.ServerConfig{}, fmt.Errorf("reference-app: %s must be a whole number of provisioning attempts to fail (absent or 0 disables the injection), got %q: %w", "APP_FAIL_SELF_SERVICE_PROVISION", raw, parseErr)
+			return app.ServerConfig{}, nil, fmt.Errorf("reference-app: %s must be a whole number of provisioning attempts to fail (absent or 0 disables the injection), got %q: %w", "APP_FAIL_SELF_SERVICE_PROVISION", raw, parseErr)
 		}
 		if parsed < 0 {
-			return app.ServerConfig{}, fmt.Errorf("reference-app: %s must not be negative (absent or 0 disables the injection), got %d", "APP_FAIL_SELF_SERVICE_PROVISION", parsed)
+			return app.ServerConfig{}, nil, fmt.Errorf("reference-app: %s must not be negative (absent or 0 disables the injection), got %d", "APP_FAIL_SELF_SERVICE_PROVISION", parsed)
 		}
 		failProvisionCount = parsed
 	}
@@ -79,34 +80,34 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	if encoded := os.Getenv("APP_ROOT_KEY"); encoded != "" {
 		decoded, decodeErr := legacyParseHexKeyEnv("APP_ROOT_KEY", encoded)
 		if decodeErr != nil {
-			return app.ServerConfig{}, decodeErr
+			return app.ServerConfig{}, nil, decodeErr
 		}
 		rootKey = decoded
 	}
 
 	configKey, err := legacyResolveKey(rootKey, "config.cipher_key", "APP_CONFIG__CIPHER_KEY", app.DevConfigKey)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 	orgIndexKey, err := legacyResolveKey(rootKey, "org.invitation_email_index_key", "APP_ORG__INVITATION_EMAIL_INDEX_KEY", app.DevOrgIndexKey)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 	notificationIndexKey, err := legacyResolveKey(rootKey, "notification.contact_index_key", "APP_NOTIFICATION__CONTACT_INDEX_KEY", app.DevNotificationIndexKey)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 	pkiLocalKeyCipherKey, err := legacyResolveKey(rootKey, "pki.local_key_cipher_key", "APP_PKI__LOCAL_KEY_CIPHER_KEY", app.DevPKILocalKeyCipherKey)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 	authnBlindIndexKey, err := legacyResolveKey(rootKey, "authn.blind_index_key", "APP_AUTHN__BLIND_INDEX_KEY", app.DevBlindIndexKey)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 	authnPIICipherKey, err := legacyResolveKey(rootKey, "authn.pii_cipher_key", "APP_AUTHN__PII_CIPHER_KEY", app.DevPIICipherKey)
 	if err != nil {
-		return app.ServerConfig{}, err
+		return app.ServerConfig{}, nil, err
 	}
 
 	s3Endpoint := os.Getenv("APP_S3_ENDPOINT")
@@ -115,14 +116,14 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	s3SecretKey := os.Getenv("APP_S3_SECRET_KEY")
 	if s3Endpoint != "" || s3Bucket != "" || s3AccessKey != "" || s3SecretKey != "" {
 		if s3Endpoint == "" || s3Bucket == "" || s3AccessKey == "" || s3SecretKey == "" {
-			return app.ServerConfig{}, errors.New("reference-app: an incomplete APP_S3_* composition")
+			return app.ServerConfig{}, nil, errors.New("reference-app: an incomplete APP_S3_* composition")
 		}
 	}
 	s3UseSSL := false
 	if raw := os.Getenv("APP_S3_USE_SSL"); raw != "" {
 		parsed, parseErr := strconv.ParseBool(raw)
 		if parseErr != nil {
-			return app.ServerConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", "APP_S3_USE_SSL", raw, parseErr)
+			return app.ServerConfig{}, nil, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", "APP_S3_USE_SSL", raw, parseErr)
 		}
 		s3UseSSL = parsed
 	}
@@ -131,17 +132,17 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	if raw := os.Getenv("APP_READ_FLY_CLIENT_IP"); raw != "" {
 		parsed, parseErr := strconv.ParseBool(raw)
 		if parseErr != nil {
-			return app.ServerConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", "APP_READ_FLY_CLIENT_IP", raw, parseErr)
+			return app.ServerConfig{}, nil, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", "APP_READ_FLY_CLIENT_IP", raw, parseErr)
 		}
 		readFlyClientIP = parsed
 	}
 	if readFlyClientIP && len(legacySplitTrustedProxies(os.Getenv("APP_TRUSTED_PROXIES"))) == 0 {
-		return app.ServerConfig{}, errors.New("reference-app: APP_READ_FLY_CLIENT_IP is true but APP_TRUSTED_PROXIES is empty")
+		return app.ServerConfig{}, nil, errors.New("reference-app: APP_READ_FLY_CLIENT_IP is true but APP_TRUSTED_PROXIES is empty")
 	}
 
 	objectStoreRoot := os.Getenv("APP_OBJECT_STORE_ROOT")
 	if objectStoreRoot != "" && s3Endpoint != "" {
-		return app.ServerConfig{}, errors.New("reference-app: APP_OBJECT_STORE_ROOT and an APP_S3_* composition name two different ObjectStores for one seam")
+		return app.ServerConfig{}, nil, errors.New("reference-app: APP_OBJECT_STORE_ROOT and an APP_S3_* composition name two different ObjectStores for one seam")
 	}
 
 	smtpHost := os.Getenv("APP_SMTP_HOST")
@@ -150,11 +151,11 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	switch {
 	case smtpHost == "" && smtpPortRaw == "":
 	case smtpHost == "" || smtpPortRaw == "":
-		return app.ServerConfig{}, errors.New("reference-app: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set")
+		return app.ServerConfig{}, nil, errors.New("reference-app: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set")
 	default:
 		parsed, parseErr := strconv.Atoi(smtpPortRaw)
 		if parseErr != nil {
-			return app.ServerConfig{}, fmt.Errorf("reference-app: %s must be a valid port number, got %q: %w", "APP_SMTP_PORT", smtpPortRaw, parseErr)
+			return app.ServerConfig{}, nil, fmt.Errorf("reference-app: %s must be a valid port number, got %q: %w", "APP_SMTP_PORT", smtpPortRaw, parseErr)
 		}
 		smtpPort = parsed
 	}
@@ -164,20 +165,21 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		publicOrigin = "http://localhost:" + port
 	}
 
+	// The six key materials the pre-declaration resolution produced, keyed by
+	// declared key path: the material face of the equivalence comparison.
+	materials := map[string][]byte{
+		"config.cipher_key":              configKey,
+		"org.invitation_email_index_key": orgIndexKey,
+		"notification.contact_index_key": notificationIndexKey,
+		"pki.local_key_cipher_key":       pkiLocalKeyCipherKey,
+		"authn.blind_index_key":          authnBlindIndexKey,
+		"authn.pii_cipher_key":           authnPIICipherKey,
+	}
+
 	cfg := app.ServerConfig{
-		DeploymentMode: deploymentMode,
-		Port:           port,
-		SQLitePath:     dbPath,
-		PlatformConfig: speedapp.PlatformConfig{
-			Authn: speedapp.PlatformAuthnKeyMaterial{
-				Blind_Index_Key: authnBlindIndexKey,
-				PII_Cipher_Key:  authnPIICipherKey,
-			},
-			Config:       speedapp.PlatformConfigKeyMaterial{Cipher_Key: configKey},
-			Notification: speedapp.PlatformNotificationKeyMaterial{Contact_Index_Key: notificationIndexKey},
-			Org:          speedapp.PlatformOrgKeyMaterial{Invitation_Email_Index_Key: orgIndexKey},
-			PKI:          speedapp.PlatformPKIKeyMaterial{Local_Key_Cipher_Key: pkiLocalKeyCipherKey},
-		},
+		DeploymentMode:            deploymentMode,
+		Port:                      port,
+		SQLitePath:                dbPath,
 		RedisAddr:                 os.Getenv("APP_REDIS_ADDR"),
 		OTLPEndpoint:              os.Getenv("APP_OTLP_ENDPOINT"),
 		S3Endpoint:                s3Endpoint,
@@ -209,7 +211,7 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	// The SMTP group resolves to the four target fields alone, exactly like
 	// production: no Mailer is built here either -- BuildServer composes
 	// "mailer.smtp" from those fields through the Preset's config channel.
-	return cfg, nil
+	return cfg, materials, nil
 }
 
 // legacyParseHexKeyEnv and legacyResolveKey mirror the deleted direct-read
@@ -296,7 +298,18 @@ type equivalenceEnvCase struct {
 	name    string
 	env     map[string]string
 	wantErr string
+	// refusalAt names the layer whose resolution refuses the case:
+	// refusalAtConfig (the default) is the host pass ConfigFromEnv drives,
+	// refusalAtMaterial the assembly's declared-key resolution. The oracle
+	// resolves both layers, so either refusal is the same pre-declaration
+	// semantics; the field pins where today's resolution surfaces it.
+	refusalAt string
 }
+
+const (
+	refusalAtConfig   = "config"
+	refusalAtMaterial = "material"
+)
 
 // equivalenceEnvCases is the documented case set the migration must preserve:
 // the dev-default path, the root-derivation path, the individual-override
@@ -385,9 +398,10 @@ func equivalenceEnvCases() []equivalenceEnvCase {
 			wantErr: "not-a-deployment-mode",
 		},
 		{
-			name:    "a malformed individual key refuses",
-			env:     map[string]string{"APP_ORG__INVITATION_EMAIL_INDEX_KEY": "not-64-hex-chars"},
-			wantErr: "APP_ORG__INVITATION_EMAIL_INDEX_KEY",
+			name:      "a malformed individual key refuses at the assembly's resolution",
+			env:       map[string]string{"APP_ORG__INVITATION_EMAIL_INDEX_KEY": "not-64-hex-chars"},
+			wantErr:   "APP_ORG__INVITATION_EMAIL_INDEX_KEY",
+			refusalAt: refusalAtMaterial,
 		},
 		{
 			name:    "a malformed root key refuses",
@@ -455,7 +469,7 @@ func TestConfigFromEnv_MatchesThePreLoaderResolution(t *testing.T) {
 				t.Setenv(key, value)
 			}
 
-			want, wantErr := legacyConfigFromEnv()
+			want, wantMaterial, wantErr := legacyConfigFromEnv()
 			got, gotErr := app.ConfigFromEnv()
 
 			if tc.wantErr == "" {
@@ -465,11 +479,43 @@ func TestConfigFromEnv_MatchesThePreLoaderResolution(t *testing.T) {
 				if err := serverConfigsEquivalent(got, want); err != nil {
 					t.Fatalf("loader-driven ConfigFromEnv diverged from the pre-loader resolution: %v", err)
 				}
+
+				// The material face: the same environment, resolved by the
+				// assembly's declared-key chain, must reproduce the oracle's
+				// six materials key by key.
+				material, materialErr := resolveDeclaredMaterial(t)
+				if materialErr != nil {
+					t.Fatalf("resolving the declared key material: %v", materialErr)
+				}
+				for keyPath, wantKey := range wantMaterial {
+					gotKey := declaredMaterialKey(t, material, keyPath)
+					if !bytes.Equal(gotKey, wantKey) {
+						t.Errorf("declared material %s = %x, want the pre-declaration resolution's %x", keyPath, gotKey, wantKey)
+					}
+				}
 				return
 			}
 			if wantErr == nil {
 				t.Fatalf("legacy resolution accepted the case, want a refusal naming %s", tc.wantErr)
 			}
+
+			if tc.refusalAt == refusalAtMaterial {
+				// The host pass resolves none of the declared keys, so its
+				// own resolution accepts the environment; the refusal is the
+				// assembly's, naming the same variable the oracle named.
+				if gotErr != nil {
+					t.Fatalf("ConfigFromEnv refused a case whose refusal belongs to the declared-key resolution: %v", gotErr)
+				}
+				_, materialErr := resolveDeclaredMaterial(t)
+				if materialErr == nil {
+					t.Fatalf("the declared-key resolution accepted the case, want a refusal naming %s", tc.wantErr)
+				}
+				if !strings.Contains(materialErr.Error(), tc.wantErr) {
+					t.Errorf("declared-key refusal does not name %s: %v", tc.wantErr, materialErr)
+				}
+				return
+			}
+
 			if gotErr == nil {
 				t.Fatalf("loader-driven ConfigFromEnv accepted the case, want a refusal naming %s", tc.wantErr)
 			}
@@ -506,7 +552,7 @@ func TestConfigFromEnv_EmptyTypedVariable_RefusesTheLoad(t *testing.T) {
 
 			// The pre-loader direct read accepted the same injection and read
 			// it as unset -- the behaviour this pin deliberately retires.
-			if _, err := legacyConfigFromEnv(); err != nil {
+			if _, _, err := legacyConfigFromEnv(); err != nil {
 				t.Fatalf("oracle no longer accepts the emptied %s, so this pin no longer records a behaviour change: %v", name, err)
 			}
 		})
@@ -521,12 +567,6 @@ type serverConfigValues struct {
 	deploymentMode            pkgcore.DeploymentMode
 	port                      string
 	sqlitePath                string
-	configKey                 string
-	orgIndexKey               string
-	notificationIndexKey      string
-	pkiLocalKeyCipherKey      string
-	authnBlindIndexKey        string
-	authnPIICipherKey         string
 	redisAddr                 string
 	otlpEndpoint              string
 	s3Endpoint                string
@@ -564,12 +604,6 @@ func comparableValues(c app.ServerConfig) serverConfigValues {
 		deploymentMode:            c.DeploymentMode,
 		port:                      c.Port,
 		sqlitePath:                c.SQLitePath,
-		configKey:                 string(c.Config.Cipher_Key),
-		orgIndexKey:               string(c.Org.Invitation_Email_Index_Key),
-		notificationIndexKey:      string(c.Notification.Contact_Index_Key),
-		pkiLocalKeyCipherKey:      string(c.PKI.Local_Key_Cipher_Key),
-		authnBlindIndexKey:        string(c.Authn.Blind_Index_Key),
-		authnPIICipherKey:         string(c.Authn.PII_Cipher_Key),
 		redisAddr:                 c.RedisAddr,
 		otlpEndpoint:              c.OTLPEndpoint,
 		s3Endpoint:                c.S3Endpoint,
@@ -675,7 +709,11 @@ func TestLegacyProvisionFailureInjector_MatchesTheResolvedHook(t *testing.T) {
 			t.Fatalf("attempt %d (%s): resolved hook err=%v, oracle err=%v", i, account, gotErr, wantErr)
 		}
 	}
-	if !bytes.Equal(cfg.Config.Cipher_Key, app.DevConfigKey) {
-		t.Fatalf("Config.Cipher_Key = %x, want the dev default %x", cfg.Config.Cipher_Key, app.DevConfigKey)
+	material, err := resolveDeclaredMaterial(t)
+	if err != nil {
+		t.Fatalf("resolve the declared key material: %v", err)
+	}
+	if got := declaredMaterialKey(t, material, "config.cipher_key"); !bytes.Equal(got, app.DevConfigKey) {
+		t.Fatalf("config.cipher_key material = %x, want the dev default %x", got, app.DevConfigKey)
 	}
 }

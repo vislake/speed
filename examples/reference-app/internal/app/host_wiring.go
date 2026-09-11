@@ -86,9 +86,43 @@ import (
 // name as its suffix, so the override is readable as such.
 const hostComponentPrefix = "reference-app."
 
-// configCipherKeyPath is the bootstrap key path the platform cipher's
-// material is declared under.
-const configCipherKeyPath = "config.cipher_key"
+// The declared bootstrap key paths this file's wiring reads material for.
+// Each is the declaring module's own key path, spelled as its declaration
+// carries it: the assembly's loader resolves the declaration, and this app
+// reads the result by the same path.
+const (
+	// configCipherKeyPath is the path the platform cipher's material is
+	// declared under (go/config's component).
+	configCipherKeyPath = "config.cipher_key"
+	// authnBlindIndexKeyPath is the path authn's blind-index HMAC key is
+	// declared under (go/authn's component).
+	authnBlindIndexKeyPath = "authn.blind_index_key"
+	// pkiLocalKeyCipherKeyPath is the path the cipher sealing pki's
+	// local-signer private-key column is declared under (go/pki's component).
+	pkiLocalKeyCipherKeyPath = "pki.local_key_cipher_key"
+	// orgInvitationIndexKeyPath is the path org's invitation-email blind
+	// index's HMAC key is declared under (go/org's component).
+	orgInvitationIndexKeyPath = "org.invitation_email_index_key"
+	// notificationContactIndexKeyPath is the path notification's
+	// contact-index HMAC key is declared under (go/notification's
+	// component). One key serves both the email and the phone indexer.
+	notificationContactIndexKeyPath = "notification.contact_index_key"
+)
+
+// declaredMaterial reads the []byte material a declared bootstrap key
+// resolved to from the assembly's published material source, naming the
+// declared path when the assembly carries no value for it.
+func declaredMaterial(reg *pkgcore.ComponentRegistry, keyPath string) ([]byte, error) {
+	material, err := pkgcore.BootstrapMaterialOf(reg)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := material.Material(keyPath)
+	if !ok {
+		return nil, fmt.Errorf("reference-app: the assembly resolved no material for the declared bootstrap key %q", keyPath)
+	}
+	return value, nil
+}
 
 // overriddenModuleLocales lists the locale resources of the modules whose
 // descriptors this host overrides. A locale file's message ids are prefixed
@@ -264,9 +298,17 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 		if err != nil {
 			return nil, err
 		}
+		// The blind-index key is authn's second declared key material: the
+		// assembly resolved it before anything was constructed, so this
+		// override reads it from the published material source by its
+		// declared path -- the same source authn's own descriptor reads.
+		blindIndexKey, err := declaredMaterial(reg, authnBlindIndexKeyPath)
+		if err != nil {
+			return nil, err
+		}
 		opts := []authn.Option{
 			authn.WithKeySource(keySource),
-			authn.WithBlindIndexKey(b.cfg.Authn.Blind_Index_Key),
+			authn.WithBlindIndexKey(blindIndexKey),
 			authn.WithMembershipReader(b.memberships),
 			authn.WithDeploymentMode(b.cfg.DeploymentMode),
 			authn.WithSocialProviders(b.cfg.SocialProviders...),
@@ -427,13 +469,9 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 		Name:     hostComponentPrefix + "crypto",
 		Provides: []any{(*dbkit.Cipher)(nil)},
 		Prepare: func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
-			material, err := pkgcore.BootstrapMaterialOf(reg)
+			cipherKey, err := declaredMaterial(reg, configCipherKeyPath)
 			if err != nil {
 				return err
-			}
-			cipherKey, ok := material.Material(configCipherKeyPath)
-			if !ok {
-				return fmt.Errorf("reference-app: the assembly resolved no material for the declared bootstrap key %q", configCipherKeyPath)
 			}
 			cipher, err := dbkit.NewCipher(cipherKey)
 			if err != nil {
@@ -442,7 +480,11 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 
 			// go/pki's LocalSigner private-key column, over the
 			// pki.local_key_cipher_key material.
-			pkiLocalKeyCipher, err := dbkit.NewCipher(b.cfg.PKI.Local_Key_Cipher_Key)
+			pkiLocalKeyCipherKey, err := declaredMaterial(reg, pkiLocalKeyCipherKeyPath)
+			if err != nil {
+				return err
+			}
+			pkiLocalKeyCipher, err := dbkit.NewCipher(pkiLocalKeyCipherKey)
 			if err != nil {
 				return fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
 			}
@@ -453,7 +495,7 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 				return err
 			}
 
-			orgIndexer, contactEmailIndexer, contactPhoneIndexer, indexErr := buildModuleIndexers(b.cfg)
+			orgIndexer, contactEmailIndexer, contactPhoneIndexer, indexErr := buildModuleIndexers(reg)
 			if indexErr != nil {
 				return indexErr
 			}

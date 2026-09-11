@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -51,8 +52,12 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.SQLitePath != app.DefaultSQLitePath {
 		t.Fatalf("SQLitePath = %q, want %q", cfg.SQLitePath, app.DefaultSQLitePath)
 	}
-	if !bytes.Equal(cfg.Config.Cipher_Key, app.DevConfigKey) {
-		t.Fatalf("Config.Cipher_Key = %x, want the dev default %x", cfg.Config.Cipher_Key, app.DevConfigKey)
+	material, err := resolveDeclaredMaterial(t)
+	if err != nil {
+		t.Fatalf("resolve the declared key material: %v", err)
+	}
+	if got := declaredMaterialKey(t, material, "config.cipher_key"); !bytes.Equal(got, app.DevConfigKey) {
+		t.Fatalf("config.cipher_key material = %x, want the dev default %x", got, app.DevConfigKey)
 	}
 	if cfg.RedisAddr != "" {
 		t.Fatalf("RedisAddr = %q, want the empty default (in-process bus)", cfg.RedisAddr)
@@ -214,8 +219,12 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 		0x1f, 0x1e, 0x1d, 0x1c, 0x1b, 0x1a, 0x19, 0x18,
 		0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x10,
 	}
-	if !bytes.Equal(cfg.Config.Cipher_Key, wantKey) {
-		t.Fatalf("Config.Cipher_Key = %x, want the decoded APP_CONFIG__CIPHER_KEY %x", cfg.Config.Cipher_Key, wantKey)
+	material, err := resolveDeclaredMaterial(t)
+	if err != nil {
+		t.Fatalf("resolve the declared key material: %v", err)
+	}
+	if got := declaredMaterialKey(t, material, "config.cipher_key"); !bytes.Equal(got, wantKey) {
+		t.Fatalf("config.cipher_key material = %x, want the decoded APP_CONFIG__CIPHER_KEY %x", got, wantKey)
 	}
 	if cfg.FailSelfServiceProvision == nil {
 		t.Fatal("FailSelfServiceProvision nil with APP_FAIL_SELF_SERVICE_PROVISION=2, want the armed injection")
@@ -303,14 +312,51 @@ func TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestConfigFromEnv_ConfigKeyRejectsMalformedValues proves ConfigFromEnv
-// fails configuration loading on a malformed config.cipher_key value (read
-// from APP_CONFIG__CIPHER_KEY) -- too short
-// to be a 32-byte key, or not hex at all -- with a precise error, rather
-// than letting a subtly wrong key reach dbkit.NewCipher (whose error would
-// name only the key size) or, worse, silently sealing values with a key
-// the operator did not intend.
-func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
+// resolveDeclaredMaterial runs the assembly's declared-key resolution over
+// the process environment: the same loader options a boot's LoadSpec carries
+// (the APP_ prefix, the APP_ROOT_KEY source, the platform derivation and the
+// app's documented development defaults), against the components this test
+// binary's imports register. It is the read side the key-material tests
+// compare through.
+func resolveDeclaredMaterial(t *testing.T) (*pkgcore.BootstrapMaterial, error) {
+	t.Helper()
+
+	var host struct{}
+	reg := pkgcore.NewComponentRegistry()
+	err := speedapp.Load(context.Background(), reg, speedapp.LoadSpec{
+		Host: &host,
+		Options: []speedapp.ConfigOption{
+			speedapp.ConfigEnvPrefix("APP_"),
+			speedapp.ConfigRootKeyEnv("APP_ROOT_KEY"),
+			speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),
+			speedapp.ConfigDevDefaults(app.BootstrapDevDefaults()),
+		},
+		Args: []string{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pkgcore.BootstrapMaterialOf(reg)
+}
+
+// declaredMaterialKey reads one declared key's material out of a resolved
+// source, failing the test when the assembly resolved no value for it.
+func declaredMaterialKey(t *testing.T, material *pkgcore.BootstrapMaterial, keyPath string) []byte {
+	t.Helper()
+	value, ok := material.Material(keyPath)
+	if !ok {
+		t.Fatalf("the assembly resolved no material for the declared bootstrap key %q", keyPath)
+	}
+	return value
+}
+
+// TestDeclaredMaterial_ConfigKeyRejectsMalformedValues proves the assembly's
+// declared-key resolution fails on a malformed config.cipher_key value (read
+// from APP_CONFIG__CIPHER_KEY) -- too short to be a 32-byte key, or not hex
+// at all -- with a precise error, rather than letting a subtly wrong key
+// reach dbkit.NewCipher (whose error would name only the key size) or, worse,
+// silently sealing values with a key the operator did not intend.
+func TestDeclaredMaterial_ConfigKeyRejectsMalformedValues(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
@@ -321,8 +367,8 @@ func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("APP_CONFIG__CIPHER_KEY", encoded)
-			if _, err := app.ConfigFromEnv(); err == nil {
-				t.Fatalf("ConfigFromEnv with APP_CONFIG__CIPHER_KEY=%q: want error, got nil", encoded)
+			if _, err := resolveDeclaredMaterial(t); err == nil {
+				t.Fatalf("resolving the declared key material with APP_CONFIG__CIPHER_KEY=%q: want error, got nil", encoded)
 			}
 		})
 	}
@@ -371,81 +417,84 @@ func clearRootKeyOverrides(t *testing.T) {
 	}
 }
 
-// TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
-// -- no individual key env var set -- derives every one of the six key
-// materials loadHostConfig's own doc comment documents, and that
-// ConfigFromEnv's derivation matches the platform composition
-// (pkgcore.BootstrapKeyPurpose over the declared key path, then
-// dbkit.DeriveKey over the root): not merely "some non-default bytes landed
-// in cfg", but the exact key a caller who knew the root and the declared
-// path could reproduce independently through the platform API.
-func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
+// TestDeclaredMaterial_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
+// -- no individual key env var set -- derives every one of the six declared
+// key materials a boot resolves, and that the assembly's derivation matches
+// the platform composition (pkgcore.BootstrapKeyPurpose over the declared key
+// path, then dbkit.DeriveKey over the root): not merely "some non-default
+// bytes landed in the material", but the exact key a caller who knew the root
+// and the declared path could reproduce independently through the platform
+// API.
+func TestDeclaredMaterial_RootKey_DerivesAllSixKeys(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
 	clearRootKeyOverrides(t)
 
-	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_DerivesAllSixKeys root secret"))
+	rootKey := sha256.Sum256([]byte("TestDeclaredMaterial_RootKey_DerivesAllSixKeys root secret"))
 	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
 
-	cfg, err := app.ConfigFromEnv()
-	if err != nil {
+	if _, err := app.ConfigFromEnv(); err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
+	material, err := resolveDeclaredMaterial(t)
+	if err != nil {
+		t.Fatalf("resolve the declared key material: %v", err)
+	}
 
-	for _, tt := range []struct {
-		name    string
-		got     []byte
-		keyPath string
-	}{
-		{"Config.Cipher_Key", cfg.Config.Cipher_Key, "config.cipher_key"},
-		{"Org.Invitation_Email_Index_Key", cfg.Org.Invitation_Email_Index_Key, "org.invitation_email_index_key"},
-		{"Notification.Contact_Index_Key", cfg.Notification.Contact_Index_Key, "notification.contact_index_key"},
-		{"PKI.Local_Key_Cipher_Key", cfg.PKI.Local_Key_Cipher_Key, "pki.local_key_cipher_key"},
-		{"Authn.Blind_Index_Key", cfg.Authn.Blind_Index_Key, "authn.blind_index_key"},
-		{"Authn.PII_Cipher_Key", cfg.Authn.PII_Cipher_Key, "authn.pii_cipher_key"},
+	for _, keyPath := range []string{
+		"config.cipher_key",
+		"org.invitation_email_index_key",
+		"notification.contact_index_key",
+		"pki.local_key_cipher_key",
+		"authn.blind_index_key",
+		"authn.pii_cipher_key",
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			want := deriveDeclaredKeyMaterial(t, rootKey[:], tt.keyPath)
-			if !bytes.Equal(tt.got, want) {
-				t.Fatalf("cfg.%s = %x, want the composed derivation over %q = %x", tt.name, tt.got, tt.keyPath, want)
+		t.Run(keyPath, func(t *testing.T) {
+			got := declaredMaterialKey(t, material, keyPath)
+			want := deriveDeclaredKeyMaterial(t, rootKey[:], keyPath)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("material at %q = %x, want the composed derivation %x", keyPath, got, want)
 			}
 		})
 	}
 }
 
-// TestConfigFromEnv_RootKey_IndividualOverrideWins proves the precedence
-// order loadHostConfig's own doc comment states: with both APP_ROOT_KEY and
-// one individual key env var (APP_CONFIG__CIPHER_KEY) set, the explicit
-// individual value wins for that one key, while every other key still
-// resolves through the root-key derivation -- the "power users can still
-// override any single one" half of the design.
-func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
+// TestDeclaredMaterial_RootKey_IndividualOverrideWins proves the precedence
+// order the loader applies: with both APP_ROOT_KEY and one individual key env
+// var (APP_CONFIG__CIPHER_KEY) set, the explicit individual value wins for
+// that one key, while every other key still resolves through the root-key
+// derivation -- the "power users can still override any single one" half of
+// the design.
+func TestDeclaredMaterial_RootKey_IndividualOverrideWins(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
 	clearRootKeyOverrides(t)
 
-	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins root secret"))
+	rootKey := sha256.Sum256([]byte("TestDeclaredMaterial_RootKey_IndividualOverrideWins root secret"))
 	t.Setenv("APP_ROOT_KEY", hex.EncodeToString(rootKey[:]))
 
-	explicitConfigKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins explicit APP_CONFIG__CIPHER_KEY"))
+	explicitConfigKey := sha256.Sum256([]byte("TestDeclaredMaterial_RootKey_IndividualOverrideWins explicit APP_CONFIG__CIPHER_KEY"))
 	t.Setenv("APP_CONFIG__CIPHER_KEY", hex.EncodeToString(explicitConfigKey[:]))
 
-	cfg, err := app.ConfigFromEnv()
-	if err != nil {
+	if _, err := app.ConfigFromEnv(); err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
+	material, err := resolveDeclaredMaterial(t)
+	if err != nil {
+		t.Fatalf("resolve the declared key material: %v", err)
+	}
 
-	if !bytes.Equal(cfg.Config.Cipher_Key, explicitConfigKey[:]) {
-		t.Fatalf("cfg.Config.Cipher_Key = %x, want the explicit %s value %x (it must win over the APP_ROOT_KEY derivation)",
-			cfg.Config.Cipher_Key, "APP_CONFIG__CIPHER_KEY", explicitConfigKey[:])
+	if got := declaredMaterialKey(t, material, "config.cipher_key"); !bytes.Equal(got, explicitConfigKey[:]) {
+		t.Fatalf("config.cipher_key material = %x, want the explicit APP_CONFIG__CIPHER_KEY value %x (it must win over the APP_ROOT_KEY derivation)",
+			got, explicitConfigKey[:])
 	}
 
 	wantOrgIndexKey := deriveDeclaredKeyMaterial(t, rootKey[:], "org.invitation_email_index_key")
-	if !bytes.Equal(cfg.Org.Invitation_Email_Index_Key, wantOrgIndexKey) {
-		t.Fatalf("cfg.Org.Invitation_Email_Index_Key = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since %s was never set",
-			cfg.Org.Invitation_Email_Index_Key, wantOrgIndexKey, "APP_ORG__INVITATION_EMAIL_INDEX_KEY")
+	if got := declaredMaterialKey(t, material, "org.invitation_email_index_key"); !bytes.Equal(got, wantOrgIndexKey) {
+		t.Fatalf("org.invitation_email_index_key material = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since APP_ORG__INVITATION_EMAIL_INDEX_KEY was never set",
+			got, wantOrgIndexKey)
 	}
 }
 
@@ -471,36 +520,35 @@ func deriveDeclaredKeyMaterial(t *testing.T, rootKey []byte, keyPath string) []b
 }
 
 // TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose is
-// the end-to-end proof: APP_ROOT_KEY set alone (every
-// individual key env var cleared), ConfigFromEnv resolves all six key
+// the end-to-end proof: APP_ROOT_KEY set alone (every individual key env var
+// cleared), the assembly's declared-key resolution derives all six key
 // materials through the composed platform derivation
-// (pkgcore.BootstrapKeyPurpose + dbkit.DeriveKey), BuildServer boots a
-// real composed server from the result, and every one of the six derived keys is
-// exercised through the real mechanism it protects -- never merely "no
-// error from NewCipher/NewBlindIndexer".
+// (pkgcore.BootstrapKeyPurpose + dbkit.DeriveKey), BuildServer boots a real
+// composed server over the result, and every one of the six derived keys is
+// exercised through the real mechanism it protects -- never merely "no error
+// from NewCipher/NewBlindIndexer".
 //
 // config.cipher_key, org.invitation_email_index_key and
-// notification.contact_index_key are proven with a real
-// encrypt/decrypt or Index/Equal round trip through the exact dbkit
-// primitive (and, for the two blind-index keys, the same normalizer and
-// column-name argument BuildServer itself wires them with -- org's over
-// the org.EmailIndexColumn constant, notification's over the
-// notification.AddressIndexColumn constant, each referenced by this
-// file's replicas and internal/app/modules.go's call sites alike so neither can drift
-// apart from the wiring; Equal's returned column is never executed
-// against a database here, which is exactly why each module's own suite
-// pins its constant to the real migrated column
+// notification.contact_index_key are proven with a real encrypt/decrypt or
+// Index/Equal round trip through the exact dbkit primitive (and, for the two
+// blind-index keys, the same normalizer and column-name argument BuildServer
+// itself wires them with -- org's over the org.EmailIndexColumn constant,
+// notification's over the notification.AddressIndexColumn constant, each
+// referenced by this file's replicas and internal/app/modules.go's call
+// sites alike so neither can drift apart from the wiring; Equal's returned
+// column is never executed against a database here, which is exactly why
+// each module's own suite pins its constant to the real migrated column
 // (go/org/email_index_column_drift_test.go,
 // go/notification/address_index_column_test.go)).
-// pki.local_key_cipher_key, authn.blind_index_key and
-// authn.pii_cipher_key are proven together by a real register-then-login
-// round trip through the actual composed HTTP stack: registration
-// encrypts the new user's email under authn.pii_cipher_key and blind-indexes
-// it under authn.blind_index_key, and login can only succeed if the very
-// same derived authn.blind_index_key both wrote and reads back that index
-// value -- while the returned, verified access token proves
-// pki.local_key_cipher_key correctly round-tripped pki's persisted signing
-// key well enough to both mint and verify a real EdDSA-signed token.
+// pki.local_key_cipher_key, authn.blind_index_key and authn.pii_cipher_key
+// are proven together by a real register-then-login round trip through the
+// actual composed HTTP stack: registration encrypts the new user's email
+// under authn.pii_cipher_key and blind-indexes it under
+// authn.blind_index_key, and login can only succeed if the very same derived
+// authn.blind_index_key both wrote and reads back that index value -- while
+// the returned, verified access token proves pki.local_key_cipher_key
+// correctly round-tripped pki's persisted signing key well enough to both
+// mint and verify a real EdDSA-signed token.
 func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *testing.T) {
 	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "0")
@@ -519,13 +567,18 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	cfg.HostTenants = demo.DemoHostTenants
 	cfg.Memberships = app.NewSignInMemberships()
 
+	material, err := resolveDeclaredMaterial(t)
+	if err != nil {
+		t.Fatalf("resolve the declared key material: %v", err)
+	}
+
 	// config.cipher_key: the exact mechanism go/config's Sensitive values
 	// are sealed with (config.WithCipher over dbkit.NewCipher, per
 	// see go/config's own docs) -- a real Encrypt/Decrypt round trip under the
 	// derived key.
-	configCipher, err := dbkit.NewCipher(cfg.Config.Cipher_Key)
+	configCipher, err := dbkit.NewCipher(declaredMaterialKey(t, material, "config.cipher_key"))
 	if err != nil {
-		t.Fatalf("dbkit.NewCipher(cfg.Config.Cipher_Key): %v", err)
+		t.Fatalf("dbkit.NewCipher(config.cipher_key material): %v", err)
 	}
 	const configPlaintext = "sensitive config value protected by the derived config.cipher_key"
 	ciphertext, err := configCipher.Encrypt([]byte(configPlaintext))
@@ -545,19 +598,20 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	// included) BuildServer itself wires org.WithEmailIndexer and the
 	// notification contact indexers from -- a real Index/Equal round trip
 	// under each derived key.
-	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.Org.Invitation_Email_Index_Key, dbkit.NormalizeEmail)
+	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, declaredMaterialKey(t, material, "org.invitation_email_index_key"), dbkit.NormalizeEmail)
 	if err != nil {
 		t.Fatalf("dbkit.NewBlindIndexer(org.EmailIndexColumn): %v", err)
 	}
 	assertBlindIndexRoundTrip(t, orgIndexer, "invitee@example.com")
 
-	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.Notification.Contact_Index_Key, dbkit.NormalizeEmail)
+	contactIndexKey := declaredMaterialKey(t, material, "notification.contact_index_key")
+	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, contactIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		t.Fatalf("dbkit.NewBlindIndexer(notification.AddressIndexColumn): %v", err)
 	}
 	assertBlindIndexRoundTrip(t, contactEmailIndexer, "contact@example.com")
 
-	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.Notification.Contact_Index_Key, dbkit.NormalizePhoneE164)
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, contactIndexKey, dbkit.NormalizePhoneE164)
 	if err != nil {
 		t.Fatalf("dbkit.NewBlindIndexer(notification.AddressIndexColumn): %v", err)
 	}
@@ -757,12 +811,13 @@ func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
 	}
 }
 
-// TestConfigFromEnv_MalformedIndividualKeysAreRefused pins the
+// TestDeclaredMaterial_MalformedIndividualKeysAreRefused pins the
 // individual-override parse for the five key materials beyond
-// config.cipher_key (whose malformed values TestConfigFromEnv_ConfigKeyRejectsMalformedValues
-// already covers): a malformed individual variable must refuse boot
-// naming the variable, never fall through to the dev default silently.
-func TestConfigFromEnv_MalformedIndividualKeysAreRefused(t *testing.T) {
+// config.cipher_key (whose malformed values
+// TestDeclaredMaterial_ConfigKeyRejectsMalformedValues already covers): a
+// malformed individual variable must refuse the assembly's resolution naming
+// the variable, never fall through to the dev default silently.
+func TestDeclaredMaterial_MalformedIndividualKeysAreRefused(t *testing.T) {
 	testutil.ClearBootstrapEnv(t)
 
 	for _, key := range []string{
@@ -771,9 +826,9 @@ func TestConfigFromEnv_MalformedIndividualKeysAreRefused(t *testing.T) {
 	} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "not-64-hex-chars")
-			_, err := app.ConfigFromEnv()
+			_, err := resolveDeclaredMaterial(t)
 			if err == nil {
-				t.Fatalf("ConfigFromEnv with a malformed %s succeeded, want the refusal", key)
+				t.Fatalf("resolving the declared key material with a malformed %s succeeded, want the refusal", key)
 			}
 			if !strings.Contains(err.Error(), key) {
 				t.Errorf("error = %q, want it to name %q", err, key)

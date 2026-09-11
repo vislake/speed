@@ -329,7 +329,6 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 // assembly by name.
 func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	cfg := ServerConfig{
-		PlatformConfig: DevPlatformConfig(),
 		DeploymentMode: pkgcore.DeploymentModeStandalone,
 		Port:           "0",
 		SQLitePath:     filepath.Join(t.TempDir(), "assembly.db"),

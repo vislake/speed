@@ -43,21 +43,21 @@ const testPassword = "a perfectly fine passphrase"
 // the same reference BuildServer itself wires (and attaches to org) so a
 // test's grant is visible to the running server.
 //
-// PlatformConfig carries the documented development key materials
-// (app.DevPlatformConfig) because every boot consumes the six materials
-// straight off cfg -- the engine's platform cipher, the org, notification
-// and authn blind indexers, and the authn PII and pki local-key ciphers are
-// all built from these values -- and a missing material fails the boot
-// before the first request. The environment resolution (each key's own
-// variable, or APP_ROOT_KEY's derivation) lives on the ConfigFromEnv path,
-// which this helper bypasses entirely.
+// The six platform key materials need no field here: every boot resolves them
+// from the declaring components' declarations on the loader chain, with
+// app.BootstrapDevDefaults as the documented development defaults -- the
+// engine's platform cipher, the org, notification and authn blind indexers,
+// and the authn PII and pki local-key ciphers are all built from that
+// material, and a missing one fails the boot before the first request. The
+// environment resolution (each key's own variable, or APP_ROOT_KEY's
+// derivation) runs on the same chain, on ConfigFromEnv's path and the
+// assembly's alike.
 func testConfig(t *testing.T) app.ServerConfig {
 	t.Helper()
 	return app.ServerConfig{
 		DeploymentMode: pkgcore.DeploymentModeStandalone,
 		Port:           "0",
 		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
-		PlatformConfig: app.DevPlatformConfig(),
 		HostTenants:    demo.DemoHostTenants,
 		Memberships:    app.NewSignInMemberships(),
 	}
