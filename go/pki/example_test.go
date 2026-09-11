@@ -22,7 +22,7 @@ package pki_test
 //     CRL generation: revoke an issued certificate, regenerate the issuing
 //     authority's CRL, and read the document back with the standard
 //     library's own parser.
-//   - ExampleCAService_SignCertificate drives the consumer-round signing
+//   - ExampleCAService_SignCertificate drives the consumer-side signing
 //     path: sign a message with an issued certificate's key
 //     (CAService.SignCertificate), verify the signature with the standard
 //     library against the leaf's public key, and watch the signing call
