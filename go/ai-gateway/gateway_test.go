@@ -3,6 +3,7 @@ package aigateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -474,5 +475,100 @@ func TestGateway_GenerateImage_EmptyBaseURLCredential_RefusedWithCodedError(t *t
 	}
 	if queue.calls != 0 {
 		t.Fatalf("queue was called %d times for a credential that can never build the provider, want 0", queue.calls)
+	}
+}
+
+// --- resolveProvider: the shared kernel's selection and error branches -------
+
+// TestGateway_Resolve_UnroutedModel_ZeroProviderAndRoute pins the selection
+// leg both thin wrappers share through resolveProvider: an unrouted logical
+// model comes back as the zero provider, the zero route and the coded
+// ErrUnroutedModel -- never a partially populated result a caller could
+// mistake for a usable provider.
+func TestGateway_Resolve_UnroutedModel_ZeroProviderAndRoute(t *testing.T) {
+	provider := &fakeChatProvider{}
+	g := gatewayTestFixture(t, provider)
+
+	got, route, err := g.resolve(context.Background(), "chat:unrouted")
+	if got != nil {
+		t.Fatalf("resolve of an unrouted model returned provider %v, want nil", got)
+	}
+	if route != (ModelRoute{}) {
+		t.Fatalf("resolve of an unrouted model returned route %+v, want the zero ModelRoute", route)
+	}
+	if code, ok := apperrCode(err); !ok || code != ErrUnroutedModel.Code {
+		t.Fatalf("resolve err = %v, want the coded ErrUnroutedModel", err)
+	}
+}
+
+// TestGateway_ResolveImage_UnroutedModel_ZeroProviderAndRoute is the
+// image-side twin of the resolve test above: resolveImage selects through
+// the same resolveProvider kernel for the ImageProvider family.
+func TestGateway_ResolveImage_UnroutedModel_ZeroProviderAndRoute(t *testing.T) {
+	provider := &fakeImageProvider{}
+	g, _, _ := imageGatewayTestFixture(t, provider)
+
+	got, route, err := g.resolveImage(context.Background(), "image:unrouted")
+	if got != nil {
+		t.Fatalf("resolveImage of an unrouted model returned provider %v, want nil", got)
+	}
+	if route != (ModelRoute{}) {
+		t.Fatalf("resolveImage of an unrouted model returned route %+v, want the zero ModelRoute", route)
+	}
+	if code, ok := apperrCode(err); !ok || code != ErrUnroutedModel.Code {
+		t.Fatalf("resolveImage err = %v, want the coded ErrUnroutedModel", err)
+	}
+}
+
+// TestGateway_Resolve_BuildFailure_WrapsWithTheFamilyLabel pins the one
+// per-family difference the resolveProvider kernel carries: a registry
+// constructor refusal is wrapped with the chat family label, naming the
+// provider and the logical model, and the coded error stays reachable
+// through the wrap.
+func TestGateway_Resolve_BuildFailure_WrapsWithTheFamilyLabel(t *testing.T) {
+	credentials := NewCredentialService(newTestDB(t))
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	// baseURL deliberately omitted -- the write path allows it, and the
+	// registry's own constructor is what refuses to build from it.
+	if setErr := credentials.SetPlatformCredential(sysCtx, ProviderOpenAICompatible, "sk-test", ""); setErr != nil {
+		t.Fatalf("SetPlatformCredential: %v", setErr)
+	}
+	g := NewGateway(credentials, WithModelRoute("chat:default", ProviderOpenAICompatible, "gpt-4o-mini"))
+
+	_, _, resolveErr := g.resolve(context.Background(), "chat:default")
+	if code, ok := apperrCode(resolveErr); !ok || code != ErrProviderConfigInvalid.Code {
+		t.Fatalf("resolve err = %v, want the coded ErrProviderConfigInvalid through the wrap", resolveErr)
+	}
+	want := `aigateway: resolve provider "chat.openai-compatible" for model "chat:default"`
+	if resolveErr == nil || !strings.Contains(resolveErr.Error(), want) {
+		t.Fatalf("resolve err = %v, want it to carry the chat family label %q", resolveErr, want)
+	}
+}
+
+// TestGateway_ResolveImage_BuildFailure_WrapsWithTheFamilyLabel is the
+// image-side twin of the resolve test above: resolveImage's build-failure
+// wrap names the image family ("resolve image provider"), so each family's
+// error message reads on the provider it actually resolved.
+func TestGateway_ResolveImage_BuildFailure_WrapsWithTheFamilyLabel(t *testing.T) {
+	credentials := NewCredentialService(newTestDB(t))
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	if setErr := credentials.SetPlatformCredential(sysCtx, ProviderOpenAICompatibleImage, "sk-test", ""); setErr != nil {
+		t.Fatalf("SetPlatformCredential: %v", setErr)
+	}
+	g := NewGateway(credentials, WithModelRoute("image:default", ProviderOpenAICompatibleImage, "dall-e-3"))
+
+	_, _, resolveErr := g.resolveImage(context.Background(), "image:default")
+	if code, ok := apperrCode(resolveErr); !ok || code != ErrProviderConfigInvalid.Code {
+		t.Fatalf("resolveImage err = %v, want the coded ErrProviderConfigInvalid through the wrap", resolveErr)
+	}
+	want := `aigateway: resolve image provider "image.openai-compatible" for model "image:default"`
+	if resolveErr == nil || !strings.Contains(resolveErr.Error(), want) {
+		t.Fatalf("resolveImage err = %v, want it to carry the image family label %q", resolveErr, want)
 	}
 }

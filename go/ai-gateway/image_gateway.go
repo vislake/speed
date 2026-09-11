@@ -69,7 +69,6 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/storage"
 )
 
@@ -156,41 +155,11 @@ func WithImageGeneration(queue jobs.Queue, objects *storage.ObjectService) Gatew
 
 // resolveImage runs the routing and credential-resolution legs shared by
 // GenerateImage (once, to fail fast) and the job handler (again, at
-// execution time) -- the image-side mirror of Gateway.resolve.
+// execution time) -- the image-family instantiation of resolveProvider.
+// Re-resolving fresh in the job worker keeps a tenant BYOK image credential
+// dial-guarded wherever the job executes, on whichever replica.
 func (g *Gateway) resolveImage(ctx context.Context, logicalModel string) (ImageProvider, ModelRoute, error) {
-	route, ok := g.routes[logicalModel]
-	if !ok {
-		return nil, ModelRoute{}, ErrUnroutedModel.WithParam("model", logicalModel)
-	}
-
-	cred, err := g.credentials.Resolve(ctx, route.Provider)
-	if err != nil {
-		return nil, route, err
-	}
-
-	provider, _, err := g.imageRegistry.Build(route.Provider, pkgcore.Config{
-		"base_url": cred.BaseURL,
-		"api_key":  cred.APIKey,
-	})
-	if err != nil {
-		return nil, route, fmt.Errorf("aigateway: resolve image provider %q for model %q: %w", route.Provider, logicalModel, err)
-	}
-	// The identical tenant-tier dial guard Gateway.resolve applies to chat
-	// providers applies here -- see that call site's comment and provider_guard.go's
-	// file header. It runs in the job worker too (callProvider re-resolves
-	// fresh at execution time), so a tenant BYOK image credential is
-	// dial-guarded wherever the job executes, on whichever replica -- and an
-	// image provider that cannot carry the guarded client is refused with
-	// the same coded error, exactly like its chat twin.
-	if err := guardTenantScopeDial(provider, cred.Scope); err != nil {
-		// The identical decoration Gateway.resolve applies to the guard's
-		// coded refusal applies here -- see that call site's comment.
-		if appErr, ok := apperr.As(err); ok {
-			err = appErr.WithParam("provider", route.Provider).WithParam("model", logicalModel)
-		}
-		return nil, route, err
-	}
-	return provider, route, nil
+	return resolveProvider(ctx, g, g.imageRegistry, "image provider", logicalModel)
 }
 
 // GenerateImage validates req, checks Entitlements (if wired) and resolves

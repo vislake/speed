@@ -143,36 +143,50 @@ func NewGateway(credentials *CredentialService, opts ...GatewayOption) *Gateway 
 }
 
 // resolve runs the routing and credential-resolution legs of the pipeline
-// shared by Chat and ChatStream: look up logicalModel's ModelRoute, resolve
-// its credential, and build a fresh ChatProvider instance from the two.
+// shared by Chat and ChatStream -- the chat-family instantiation of
+// resolveProvider.
 func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvider, ModelRoute, error) {
+	return resolveProvider(ctx, g, g.registry, "provider", logicalModel)
+}
+
+// resolveProvider runs the routing and credential-resolution legs shared by
+// the chat and image pipelines: look up logicalModel's ModelRoute in the
+// gateway's routes, resolve its credential, build a fresh provider of T
+// through registry from the two, and, for a credential that resolved at
+// the tenant tier, install the SSRF-guarded client on it. family names the
+// provider family inside the build-failure wrap ("provider" for chat,
+// "image provider" for images), so each family keeps its own error
+// message.
+//
+// The tenant-tier install is a credential that resolved at the tenant tier
+// being the caller's own influence over where this call dials, so its
+// provider must dial through the SSRF-guarded client -- the dial-time
+// re-check that closes the DNS-rebinding window between this credential's
+// validated write and this call (provider_guard.go's file header). A
+// provider that cannot carry the guarded client (it does not implement
+// httpClientSettable) is refused here rather than silently dialing
+// unguarded -- the failure mode guardTenantScopeDial's own doc comment
+// describes. A platform-tier row is the operator's own default and is left
+// on the provider's ordinary client.
+func resolveProvider[T any](ctx context.Context, g *Gateway, registry *pkgcore.SeamRegistry[T], family, logicalModel string) (T, ModelRoute, error) {
+	var zero T
 	route, ok := g.routes[logicalModel]
 	if !ok {
-		return nil, ModelRoute{}, ErrUnroutedModel.WithParam("model", logicalModel)
+		return zero, ModelRoute{}, ErrUnroutedModel.WithParam("model", logicalModel)
 	}
 
 	cred, err := g.credentials.Resolve(ctx, route.Provider)
 	if err != nil {
-		return nil, route, err
+		return zero, route, err
 	}
 
-	provider, _, err := g.registry.Build(route.Provider, pkgcore.Config{
+	provider, _, err := registry.Build(route.Provider, pkgcore.Config{
 		"base_url": cred.BaseURL,
 		"api_key":  cred.APIKey,
 	})
 	if err != nil {
-		return nil, route, fmt.Errorf("aigateway: resolve provider %q for model %q: %w", route.Provider, logicalModel, err)
+		return zero, route, fmt.Errorf("aigateway: resolve %s %q for model %q: %w", family, route.Provider, logicalModel, err)
 	}
-	// A credential that resolved at the tenant tier is the caller's own
-	// influence over where this call dials, so its provider must dial
-	// through the SSRF-guarded client -- the dial-time re-check that closes
-	// the DNS-rebinding window between this credential's validated write
-	// and this call (provider_guard.go's file header). A provider that cannot carry
-	// the guarded client (it does not implement httpClientSettable) is
-	// refused here rather than silently dialing unguarded -- the failure
-	// mode guardTenantScopeDial's own doc comment describes. A platform-
-	// tier row is the operator's own default and is left on the provider's
-	// ordinary client.
 	if err := guardTenantScopeDial(provider, cred.Scope); err != nil {
 		// The one error guardTenantScopeDial returns is the coded
 		// ErrProviderNotSSRFGuardable; apperr.As picks it out of the error
@@ -182,7 +196,7 @@ func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvide
 		if appErr, ok := apperr.As(err); ok {
 			err = appErr.WithParam("provider", route.Provider).WithParam("model", logicalModel)
 		}
-		return nil, route, err
+		return zero, route, err
 	}
 	return provider, route, nil
 }
@@ -270,15 +284,16 @@ func newIdempotencyKey() string {
 	return hex.EncodeToString(buf[:])
 }
 
-// Chat runs the full pipeline (entitlement check, credential resolution,
-// provider resolution, the provider call, then automatic usage reporting)
-// for one non-streaming chat request. req.Model is a logical model key --
-// see ChatRequest's own doc comment.
-func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+// prepareChat runs the pipeline legs Chat and ChatStream share before the
+// provider call: validate req, apply the per-tenant rate limiter, check
+// Entitlements, resolve the route/credential/provider, and stamp the
+// route's vendor model onto the vendor-facing request copy. It returns the
+// fresh provider instance to call, the resolved route and the vendor
+// request; both callers map a non-nil error onto their own zero values.
+func (g *Gateway) prepareChat(ctx context.Context, req ChatRequest) (ChatProvider, ModelRoute, ChatRequest, error) {
 	if err := req.validate(); err != nil {
-		return ChatResponse{}, err
+		return nil, ModelRoute{}, ChatRequest{}, err
 	}
-	logicalModel := req.Model
 
 	// The rate limiter is per-tenant: a tenantless call (a system-context
 	// caller -- CredentialService.Resolve's own doc comment names tenantless
@@ -289,21 +304,33 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	// tenantless callers exactly as for tenant-carrying ones.
 	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
 		if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
-			return ChatResponse{}, err
+			return nil, ModelRoute{}, ChatRequest{}, err
 		}
 	}
 
-	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
-		return ChatResponse{}, err
+	if err := g.checkEntitlement(ctx, req.Model); err != nil {
+		return nil, ModelRoute{}, ChatRequest{}, err
 	}
 
-	provider, route, err := g.resolve(ctx, logicalModel)
+	provider, route, err := g.resolve(ctx, req.Model)
 	if err != nil {
-		return ChatResponse{}, err
+		return nil, ModelRoute{}, ChatRequest{}, err
 	}
 
 	vendorReq := req
 	vendorReq.Model = route.VendorModel
+	return provider, route, vendorReq, nil
+}
+
+// Chat runs the full pipeline (entitlement check, credential resolution,
+// provider resolution, the provider call, then automatic usage reporting)
+// for one non-streaming chat request. req.Model is a logical model key --
+// see ChatRequest's own doc comment.
+func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	provider, route, vendorReq, err := g.prepareChat(ctx, req)
+	if err != nil {
+		return ChatResponse{}, err
+	}
 
 	// aigateway.provider.* (metrics.go): one invocation of the resolved
 	// provider, counted with its duration and, on failure, its error.
@@ -315,12 +342,12 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	}
 
 	obs.FromContext(ctx).Info("aigateway: chat completed",
-		"model", logicalModel,
+		"model", req.Model,
 		"provider", route.Provider,
 		"prompt_tokens", resp.Usage.PromptTokens,
 		"completion_tokens", resp.Usage.CompletionTokens,
 	)
-	g.recordUsage(ctx, logicalModel, resp.Usage)
+	g.recordUsage(ctx, req.Model, resp.Usage)
 	return resp, nil
 }
 
@@ -333,31 +360,10 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 // chunks is recorded once, never per chunk (relayStream's own doc
 // comment).
 func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatChunk, error) {
-	if err := req.validate(); err != nil {
-		return nil, err
-	}
-	logicalModel := req.Model
-
-	// The identical per-tenant limiter gating Chat's own call site applies
-	// here -- see the comment there for why a tenantless context skips the
-	// check rather than feeding it the empty string.
-	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
-		if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
-		return nil, err
-	}
-
-	provider, route, err := g.resolve(ctx, logicalModel)
+	provider, route, vendorReq, err := g.prepareChat(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-
-	vendorReq := req
-	vendorReq.Model = route.VendorModel
 
 	// aigateway.provider.* (metrics.go): the stream's establishment is
 	// one provider invocation -- counted with its duration here; a
@@ -371,7 +377,7 @@ func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatC
 	}
 
 	out := make(chan ChatChunk)
-	go g.relayStream(ctx, logicalModel, route.Provider, upstream, out)
+	go g.relayStream(ctx, req.Model, route.Provider, upstream, out)
 	return out, nil
 }
 
