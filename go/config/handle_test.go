@@ -167,3 +167,107 @@ func TestHandle_ReadsAfterAttach_ResolveThroughTheService(t *testing.T) {
 		t.Fatalf("TenantDuration after a tenant row = (%v, ok=%v); want (5m, ok=true)", d, ok)
 	}
 }
+
+// TestHandle_TypedReads_FollowTheContextTenant pins the typed reads
+// (Duration, Int, String): each resolves the schema default with ok=false,
+// an explicit row for the CONTEXT's tenant with ok=true, and a row written
+// at another tenant does not leak into a tenant-less read.
+func TestHandle_TypedReads_FollowTheContextTenant(t *testing.T) {
+	db := openModuleTestDB(t)
+	module := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
+	handle := module.Handle()
+
+	reg := newPlainRegistry()
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(serviceTestSchemaItems...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(serviceTestSchemaFlags...) },
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			svc = attached
+			return attachErr
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Schema defaults resolve with ok=false: "no explicit row produced
+	// this", the cue a seam takes to fall back to its own value.
+	d, ok, err := handle.Duration(ctx, "brand.welcome_interval")
+	if err != nil {
+		t.Fatalf("Duration at the schema default: %v", err)
+	}
+	if ok || d != 90*time.Second {
+		t.Fatalf("Duration at the schema default = (%v, ok=%v); want the declared default with ok=false", d, ok)
+	}
+	n, ok, err := handle.Int(ctx, "billing.retry_limit")
+	if err != nil {
+		t.Fatalf("Int at the schema default: %v", err)
+	}
+	if ok || n != 3 {
+		t.Fatalf("Int at the schema default = (%d, ok=%v); want the declared default with ok=false", n, ok)
+	}
+	s, ok, err := handle.String(ctx, "brand.site_name")
+	if err != nil {
+		t.Fatalf("String at the schema default: %v", err)
+	}
+	if ok || s != "Smile Studio" {
+		t.Fatalf("String at the schema default = (%q, ok=%v); want the declared default with ok=false", s, ok)
+	}
+
+	// An explicit system row flips ok to true for the tenant-less read.
+	// ScopeSystem writes demand a system context, exactly as they do in
+	// production (the platform-scope write gate).
+	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
+	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+		Actor:   "ops",
+		Purpose: SystemPurposeSystemWrite,
+		Ticket:  "ticket-42",
+	})
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	if setErr := svc.Set(sysCtx, ScopeSystem, "brand.site_name", Value{Data: "Platform Studio"}, "ops"); setErr != nil {
+		t.Fatalf("Set system row: %v", setErr)
+	}
+	s, ok, err = handle.String(ctx, "brand.site_name")
+	if err != nil {
+		t.Fatalf("String after a system row: %v", err)
+	}
+	if !ok || s != "Platform Studio" {
+		t.Fatalf("String after a system row = (%q, ok=%v); want the row's value with ok=true", s, ok)
+	}
+
+	// A tenant row is visible only to a context carrying that tenant.
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	if setErr := svc.Set(tenantCtx, ScopeTenant, "billing.retry_limit", Value{Data: int64(7)}, "ops"); setErr != nil {
+		t.Fatalf("Set tenant row: %v", setErr)
+	}
+	n, ok, err = handle.Int(tenantCtx, "billing.retry_limit")
+	if err != nil {
+		t.Fatalf("Int under the tenant: %v", err)
+	}
+	if !ok || n != 7 {
+		t.Fatalf("Int under the tenant row = (%d, ok=%v); want (7, ok=true)", n, ok)
+	}
+	n, ok, err = handle.Int(ctx, "billing.retry_limit")
+	if err != nil {
+		t.Fatalf("Int without a tenant: %v", err)
+	}
+	if ok || n != 3 {
+		t.Fatalf("Int under a tenant-less context = (%d, ok=%v); want the declared default with ok=false (the tenant row must not leak)", n, ok)
+	}
+
+	// A wrongly-typed read refuses before the row test, like
+	// TenantDuration's own order.
+	_, _, typeErr := handle.Int(ctx, "brand.site_name")
+	assertCode(t, typeErr, ErrTypedValueMismatch)
+	_, _, typeErr = handle.String(ctx, "billing.retry_limit")
+	assertCode(t, typeErr, ErrTypedValueMismatch)
+
+	// Unknown keys pass Get's own refusal through.
+	_, _, unknownErr := handle.String(ctx, "no.such_key")
+	assertCode(t, unknownErr, ErrUnknownKey)
+}

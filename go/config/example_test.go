@@ -337,3 +337,80 @@ func ExampleModule_Handle() {
 	// before Attach: config.service_not_attached
 	// after Attach: false
 }
+
+// exampleIntModule declares one integer item, so the typed-reads example
+// has an int alongside brandModule's string.
+type exampleIntModule struct{}
+
+func (*exampleIntModule) Name() string         { return "billing" }
+func (*exampleIntModule) DependsOn() []string  { return nil }
+func (*exampleIntModule) Migrations() embed.FS { return embed.FS{} }
+func (*exampleIntModule) Locales() embed.FS    { return embed.FS{} }
+func (*exampleIntModule) OpenAPISpec() []byte  { return nil }
+
+func (*exampleIntModule) Register(reg *pkgcore.ComponentRegistry) error {
+	return reg.ConfigSeat().Add(pkgcore.ConfigItem{
+		Key:         "billing.retry_limit",
+		Type:        "int",
+		Default:     3,
+		Description: "How many payment retries an invoice gets",
+		Group:       "billing",
+	})
+}
+
+// ExampleHandle_typedReads shows the typed reads a request-time module seam
+// consumes (authn's and metering's settings readers are the shipped ones):
+// each resolves the schema default with ok=false -- the module's cue to use
+// its own construction-time value -- and an explicit row for the context's
+// own tenant with ok=true.
+func ExampleHandle_typedReads() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:config_example_typed_reads?mode=memory&cache=shared",
+	})
+	if err != nil {
+		panic(err)
+	}
+	configModule := config.NewModule(db, config.WithPollInterval(0))
+	migrations := dbkit.NewMigrationRegistry()
+	if err = migrations.Register(configModule); err != nil {
+		panic(err)
+	}
+	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+
+	svc := exampleService(configModule, &brandModule{}, &exampleIntModule{})
+	defer svc.Close()
+	handle := configModule.Handle()
+
+	name, ok, err := handle.String(ctx, "brand.site_name")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("string default: %q, explicit row: %v\n", name, ok)
+
+	retries, ok, err := handle.Int(ctx, "billing.retry_limit")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("int default: %d, explicit row: %v\n", retries, ok)
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	if setErr := svc.Set(tenantCtx, config.ScopeTenant, "brand.site_name",
+		config.Value{Data: "Acme Dental"}, "ops-1"); setErr != nil {
+		panic(setErr)
+	}
+	name, ok, err = handle.String(tenantCtx, "brand.site_name")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("after a tenant row: %q, explicit row: %v\n", name, ok)
+
+	// Output:
+	// string default: "Smile Studio", explicit row: false
+	// int default: 3, explicit row: false
+	// after a tenant row: "Acme Dental", explicit row: true
+}
