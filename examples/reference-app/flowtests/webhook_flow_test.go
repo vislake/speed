@@ -23,8 +23,9 @@ package flowtests
 //
 // # Why this needs cfg.WebhookURLValidator/cfg.WebhookHTTPClient at all
 //
-// go/integration's SSRF protection (go/integration/ssrf.go) genuinely
-// refuses loopback, private, link-local and CGNAT addresses, both at
+// go/integration's SSRF protection (go/integration/webhook_guard.go, over
+// go/pkgcore/safehttp) genuinely refuses loopback, private, link-local and
+// CGNAT addresses, both at
 // subscription-creation time and again at every delivery attempt's dial
 // time. Every receiver process this repository's test infrastructure can
 // stand up offline is exactly one of those addresses: an httptest.Server

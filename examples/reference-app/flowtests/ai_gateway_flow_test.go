@@ -33,7 +33,8 @@ package flowtests
 // smilesim_flow_test.go already establish. The boot-time platform
 // credential is written by BuildServer itself under cfg.AIGatewayBaseURL
 // (an operator-chosen platform default, deliberately outside the SSRF
-// guard's tenant-scope boundary -- go/ai-gateway/ssrf.go's file header).
+// guard's tenant-scope boundary -- go/ai-gateway/provider_guard.go's file
+// header).
 import (
 	"bytes"
 	"encoding/json"
