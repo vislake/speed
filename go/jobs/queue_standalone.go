@@ -481,6 +481,21 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop signals this queue's dispatcher, worker pool and terminal-signal
+// publisher to wind down: no new Job is claimed from the moment stopCh
+// closes, and every goroutine whose loop selects on stopCh returns at its
+// next select. Stop itself does not wait for anything -- it is the
+// non-blocking half of the two-step shutdown (a component's Stop phase),
+// where Close is the waiting half: in-flight Handle calls run to their own
+// natural completion and Close drains them. It is idempotent and safe to
+// call more than once, or without a prior Start; a Close after Stop is the
+// documented Close (its own signal becomes a no-op and the drain proceeds).
+func (q *StandaloneQueue) Stop() {
+	q.depthGaugeMu.Lock()
+	q.closeOnce.Do(func() { close(q.stopCh) })
+	q.depthGaugeMu.Unlock()
+}
+
 // Close stops the dispatcher and waits for in-flight Jobs to reach their
 // own natural completion or timeout, up to ctx's deadline. It does not
 // itself cancel an in-flight Handle call: each one runs on a context
