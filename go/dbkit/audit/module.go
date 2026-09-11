@@ -116,17 +116,17 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // actions).
 //
 // It also declares dbkit.EventWriteCaptured on reg.Events, even though
-// that event's Type constant is defined in dbkit's root package: dbkit
-// itself is not a pkgcore.Module (it has no Register to call this from),
-// and Module is that event's one real subscriber and therefore its
-// closest thing to an owning module for cataloging purposes.
+// that event's Type constant is defined in dbkit's root package: no dbkit
+// component declares it (dbkit's own descriptor provides the database and
+// publishes no events), and Module is that event's one real subscriber and
+// therefore its closest thing to an owning module for cataloging purposes.
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	m.actions = reg.AuditActionsSeat()
 	if err := reg.EventsSeat().Publishes(
 		pkgcore.EventDecl{
 			Type:        dbkit.EventWriteCaptured,
 			PayloadType: "dbkit.WriteCapturedEvent",
-			Description: "Published by dbkit's automatic GORM write-capture plugin after a successful Create, Update or Delete against a model implementing dbkit.Auditable. Declared here, on dbkit's behalf, since dbkit itself is not a pkgcore.Module.",
+			Description: "Published by dbkit's automatic GORM write-capture plugin after a successful Create, Update or Delete against a model implementing dbkit.Auditable. Declared here, on dbkit's behalf: dbkit's own component descriptor provides the database and declares no events.",
 		},
 		pkgcore.EventDecl{
 			Type:        EventRecorded,

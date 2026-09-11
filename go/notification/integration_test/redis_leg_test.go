@@ -60,6 +60,7 @@ import (
 	"github.com/vislake/speed/go/notification/internal/testutil"
 	"github.com/vislake/speed/go/notification/migrations"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 )
 
@@ -188,13 +189,13 @@ func warmUp(t *testing.T, bus pkgcore.EventBus, spy *eventSpy) {
 // the six required seams (the SMS sender writing to io.Discard -- no test
 // here sends an SMS -- the tier's indexers, a recording stubQueue the test
 // reads the delivery job back from, and a resolver answering no addresses,
-// which the in-app-only fixture type never consults), through a kernel
-// whose event bus is bus. extraModules join the writer's boot, so the
-// clinic fixture module (its Register declaring the appointment-reminder
-// type) rides the same kernel as the module that delivers its type -- the
-// shape a real host assembles. The peer replica boots without them: it
-// only needs to run the module's own subscription machinery on its bus.
-func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *eventbusredis.EventBus, extraModules ...pkgcore.Module) (*notification.Module, *stubQueue) {
+// which the in-app-only fixture type never consults), through a registry
+// whose one EventBus value is bus. extraModules join the writer's boot, so
+// the clinic fixture module (its Register declaring the appointment-reminder
+// type) rides the same assembly as the module that delivers its type -- the
+// shape a real host assembles. The peer replica boots without them: it only
+// needs to run the module's own subscription machinery on its bus.
+func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *eventbusredis.EventBus, extraModules ...componenttest.Declarer) (*notification.Module, *stubQueue) {
 	t.Helper()
 
 	queue := &stubQueue{}
@@ -206,10 +207,13 @@ func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *eventbusre
 		notification.WithDeliveryQueue(queue),
 		notification.WithUserAddressResolver(&stubUserResolver{byUser: map[string]notification.UserAddresses{}}),
 	)
-	modules := []pkgcore.Module{module}
-	modules = append(modules, extraModules...)
-	if _, err := pkgcore.NewKernel(pkgcore.WithEventBus(bus, 0)).Bootstrap(ctx, modules...); err != nil {
-		t.Fatalf("Kernel.Bootstrap over the Redis bus: %v", err)
+	// The replica's declaration turn: bus is the registry's one EventBus
+	// value -- the seam every subscription lands on and every publish reads
+	// -- and the seats accept writes only inside the Init window
+	// DeclareInto drives.
+	reg := componenttest.NewRegistryWithBus(bus)
+	if err := componenttest.DeclareInto(reg, append([]componenttest.Declarer{module}, extraModules...)...); err != nil {
+		t.Fatalf("declare the replica's modules over the Redis bus: %v", err)
 	}
 	return module, queue
 }

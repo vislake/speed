@@ -58,6 +58,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/storage/internal/testutil"
@@ -167,9 +168,12 @@ func TestObjectLifecycle_RoundTripsThroughS3(t *testing.T) {
 
 	db := testutil.NewSQLite(t, "storage", migrations.FS)
 	module := storage.NewModule(db, storage.WithQueue(noopQueue{}))
-	if _, err := pkgcore.NewKernel(pkgcore.WithObjectStore(store,
-		pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart)).Bootstrap(ctx, module); err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+	// The registry carries the real RustFS store as the seam the module's
+	// services read, and the module declares inside its one Init window.
+	reg := componenttest.NewRegistry()
+	reg.Put(store)
+	if err := componenttest.DeclareInto(reg, module); err != nil {
+		t.Fatalf("declare the storage module: %v", err)
 	}
 
 	tenant := pkgcore.TenantID("rustfs-leg-tenant")

@@ -204,7 +204,7 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 		return nil, ErrAlreadyAttached
 	}
 	if reg == nil {
-		return nil, errors.New("rbac: Attach requires a non-nil *pkgcore.Registry (pass the registry Kernel.Bootstrap returned)")
+		return nil, errors.New("rbac: Attach requires a non-nil *pkgcore.ComponentRegistry (pass the registry the assembly drove)")
 	}
 	if m.db == nil {
 		return nil, errors.New("rbac: Attach requires the database NewModule was built with (its db argument must not be nil)")

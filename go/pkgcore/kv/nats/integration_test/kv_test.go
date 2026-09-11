@@ -496,21 +496,20 @@ func TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification(t *testing.T)
 // end, the way kv/redis's own register_test.go pins it without needing a
 // real server at all (go-redis's lazy client lets that test succeed with
 // nothing listening).
-func TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities(t *testing.T) {
+func TestNewKVStore_ConstructsAgainstARealServer_WithCapabilities(t *testing.T) {
 	ctx := context.Background()
 	conn := startNATSConn(t, ctx)
-	uri := conn.ConnectedUrl()
-	conn.Close()
+	defer conn.Close()
 
-	impl, caps, err := pkgcore.KVStoreRegistry.Build("kv.nats", pkgcore.Config{"url": uri, "bucket": "registry-check"})
+	impl, err := kvnats.NewKVStore(ctx, conn, "registry-check")
 	if err != nil {
-		t.Fatalf("Build(%q) error = %v, want nil", "kv.nats", err)
+		t.Fatalf("NewKVStore error = %v, want nil", err)
 	}
 	if impl == nil {
-		t.Error("Build(\"kv.nats\") returned a nil KVStore")
+		t.Error("NewKVStore returned a nil KVStore")
 	}
-	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; caps != want {
-		t.Errorf("Build(%q) capabilities = %v, want %v", "kv.nats", caps, want)
+	if want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart; kvnats.Capabilities != want {
+		t.Errorf("Capabilities = %v, want %v", kvnats.Capabilities, want)
 	}
 }
 
