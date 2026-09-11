@@ -1146,9 +1146,11 @@ type Asset struct {
 	// Name is the owning component's name.
 	Name string
 	// Module is the owning component's module name (Component.Module): the
-	// key a migration ledger records the component's Migrations set under,
-	// so the log stays stable when a host renames or overrides the
-	// component. Empty for a component implementing no module.
+	// identity its assets merge under -- a migration ledger records the
+	// component's Migrations set under it, and the component's locale
+	// resources take it as their id prefix -- so both stay stable when a
+	// host renames or overrides the component. Empty for a component
+	// implementing no module.
 	Module string
 	// Migrations is the component's versioned SQL migration set, one
 	// subdirectory per dialect; the zero value means the component carries

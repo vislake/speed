@@ -432,6 +432,12 @@ func validateOpenAPIFragment(spec []byte) error {
 // language set are enforced exactly as the eventual catalog merge will
 // enforce them, before anything is constructed. Nothing is merged: the
 // builder is built and discarded.
+//
+// The id prefix is the component's MODULE name when it implements one: the
+// message ids belong to the module's contract, so every implementation of a
+// module shares one prefix, and a host that renamed or copied a descriptor
+// (an override component carries the module's own locale resources) still
+// validates and merges under the module's name rather than the host's.
 func validateLocaleAssets(selected []*selection) error {
 	var zeroFS embed.FS
 	builder := i18n.NewBuilder()
@@ -439,11 +445,21 @@ func validateLocaleAssets(selected []*selection) error {
 		if sel.component.Locales == zeroFS {
 			continue
 		}
-		if err := builder.AddModule(sel.component.Name, sel.component.Locales); err != nil {
+		if err := builder.AddModule(localePrefix(sel.component), sel.component.Locales); err != nil {
 			return fmt.Errorf("%w (stage prepare): component %q: locale resources: %w", ErrInvalidAsset, sel.name, err)
 		}
 	}
 	return nil
+}
+
+// localePrefix returns the id prefix a component's locale resources merge
+// under: the module name it implements, or its own component name for an
+// assembly-time step that implements no module.
+func localePrefix(c Component) string {
+	if c.Module != "" {
+		return c.Module
+	}
+	return c.Name
 }
 
 // validateMigrationLedgerKeys enforces the migration ledger's one-set-per-key
