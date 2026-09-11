@@ -85,13 +85,22 @@ environment spelling is the loader's own derivation from the declared path
 `config.cipher_key` exactly.
 
 **The HTTP face** composes in one fixed order: a `http.ServeMux` carrying
-`obs.MountLiveness` plus every route `pkgcore.MountRoutes` mounts from the
-registry plus the host's `ExtraRoutes`; the registered routes seeded into the
-observability middleware's label budget (`RegisterMountedRoutes`, before that
-middleware is built); the host's `Middleware` wrapping outside-in; the
-`SPA` wrapping outside that when configured; and `obs.Middleware` outermost.
-The composed `http.Server` carries `ReadHeaderTimeout` and a `BaseContext` of
-the context `Run` received (never the signal-derived one).
+`obs.MountLiveness`, the host's `ExtraRoutes`, and — unless `HTTPSpec.Compose`
+composes the protected face — every route `pkgcore.MountRoutes` mounts from
+the registry; the registered routes seeded into the observability
+middleware's label budget (`RegisterMountedRoutes`, before that middleware is
+built); the host's `Middleware` wrapping outside-in; and the `SPA` wrapping
+outside that when configured. `Compose` receives the prepared mux and returns
+the handler that serves it — the seat for a host whose face is more than a
+route list, typically `chain.Standard`'s product, which mounts the registry's
+guarded routes onto the mux and wraps the whole composition in the fixed
+middleware chain. **`Run` then wraps that composition in `obs.Middleware`
+at serve time**, the outermost layer a served request reaches;
+`Application.Handler` — what `New` composes and a test drives — stays the
+host's own face, un-instrumented, so a host that serves it itself instruments
+it itself rather than paying for a second layer. The composed `http.Server`
+carries `ReadHeaderTimeout` and a `BaseContext` of the context `Run` received
+(never the signal-derived one).
 
 **`Close`** is idempotent and drains in one fixed order: ① the HTTP server
 (`ShutdownTimeout`), ② the worker (`ShutdownTimeout`), ③ the kernel and then
@@ -103,7 +112,7 @@ buffered spans and metrics are still exported.
 | Package | Concern | Dependency closure |
 |---|---|---|
 | `go/app` (root) | the engine: `New`/`Run`/`Application`/`Option`, `PlatformConfig` and the load orchestration, the HTTP face, the lifecycle, the hooks — plus the host-neutral kernel primitives the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`, `ServeUntilShutdown`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
-| `go/app/chain` | the fixed middleware chain: `chain.Config`, `chain.Chain` — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`) | root + authn + tenancy + pkgcore — bounded by the chain's own participants; no admin import (the impersonation decorator is a `func(http.Handler) http.Handler` the host builds) |
+| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
 | `go/app/bridges` | the no-import seam bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
 Runnable usage documentation (`example_test.go`) ships one example per
@@ -111,9 +120,9 @@ package. The split is deliberate, not incidental: a consumer importing only
 the root pays the root's closure (measured with a throwaway module under
 `GOWORK=off go mod tidy`), so the root must never import the chain's or the
 bridges' participants — nor any business module at all. `ServeUntilShutdown`
-is the pre-engine serve-and-drain helper: `Run` supersedes it, it stays
-exported while hosts still call it, and it goes away once both of this
-module's consumers serve through the engine.
+is the pre-engine serve-and-drain helper: `Run` supersedes it, and the
+saasctl template's `cmd/server` still calls it until the template migrates
+to the engine; it goes away with that migration.
 
 ## The chain app/chain encodes
 
@@ -130,14 +139,33 @@ allowlist entries):
   authn operations resolve the tenant from the Principal's own claim per
   operation, and enterprise SSO's dynamic `oidc:<tenant>` login-start
   path is not expressible as an exact (method, path) allowlist at all.
-- `AdminRoutes` — admin's own route. Its permissions are evaluated in
-  `rbac.SystemDomain` against the caller's OWN unsubstituted Principal,
-  so neither tenancy resolution nor impersonation substitution may run
-  ahead of it (`go/admin/AGENTS.md` states both).
+- `AdminRoutes` — admin's own route, split out of the mounted set by the
+  prefix the host declares (`WithAdminPrefix`, `admin.APIPath`). Its
+  permissions are evaluated in `rbac.SystemDomain` against the caller's OWN
+  unsubstituted Principal, so neither tenancy resolution nor impersonation
+  substitution may run ahead of it (`go/admin/AGENTS.md` states both).
 
-The route-level gate above the chain (`rbac.GuardRoutes` over the host's
-own decision table) stays host-specific by design: the table is the
-host's policy, not the platform's.
+`chain.Standard(reg, verifier, protected, opts...)` derives that whole
+composition from the bootstrapped registry instead of taking the pieces
+pre-assembled: it admits every mounted route through the host's
+route-authorization table (`WithAuthorization` — `rbac.GuardRoutes` over
+the host's own rules, so the table's exhaustiveness is checked and every
+gated route is wrapped in rbac's fail-closed gate before it is mounted),
+splits the authn subtree out with `authn.ExemptSubtree` and the admin
+subtree out by prefix, and mounts everything else on the host's protected
+mux before delegating the branch structure to `Chain`. The host supplies
+the business half through options: the authorizer and rule table, the
+admin prefix, the impersonation decorator, the tenant-status resolver and
+its extra pre-auth allowlist entries. The billing quota domain does not
+weave here: billing's quota mechanism is the entitlements seam checked
+inside go/ai-gateway before a provider is reached
+(`aigateway.WithEntitlements`, host-wired at module construction), not a
+route-level decorator.
+
+Which entry point a host uses is the host's call: `Standard` when the
+registry's route set is the face (the reference app, and what the
+skeleton's fuller selections compose), `Chain` when the layout is the
+host's own (a selection with no authn module composes no chain at all).
 
 ## Two mandatory consumers
 
@@ -186,7 +214,9 @@ modules it composes.
 - `WithObservability` is the only path by which the engine initializes
   observability, and it does so under `Run` alone; a host that calls `New`
   and serves the handler itself keeps responsibility for `obs.Init`, exactly
-  as it keeps responsibility for its own listener.
+  as it keeps responsibility for its own listener — and, the same way, for
+  wrapping what it serves in `obs.Middleware` (`Run` applies that wrap at
+  serve time).
 - A route conflict panics at assembly time rather than returning an error
   (`pkgcore.MountRoutes`' documented contract): a wiring error gets the
   loudest available report, and no rollback runs on a panic.

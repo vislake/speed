@@ -143,8 +143,9 @@ func RegisterMountedRoutes(reg *pkgcore.Registry) {
 // Run owns the same sequence for an application assembled through the
 // engine (obs.Init first, obs.Middleware at the same position, the same
 // timeouts, the same graceful drain), and it stays exported for hosts that
-// still compose by hand. It is superseded by Run and is removed once both
-// of this module's mandatory consumers serve through the engine.
+// still compose by hand -- the saasctl template's cmd/server is the
+// remaining caller, and it goes away once that consumer serves through the
+// engine.
 func ServeUntilShutdown(ctx, baseCtx context.Context, handler http.Handler, addr, appName, deploymentMode string) error {
 	instrumented := obs.Middleware(handler)
 

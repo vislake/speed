@@ -53,6 +53,7 @@ require (
 	github.com/vislake/speed/go/observability v0.0.1
 	github.com/vislake/speed/go/org v0.0.1
 	github.com/vislake/speed/go/pkgcore v0.0.1
+	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/sharing v0.0.1
 	github.com/vislake/speed/go/tenancy v0.0.1
 	gorm.io/gorm v1.31.2

@@ -19,8 +19,12 @@
 //   - go/app/chain: the fixed middleware chain -- the order authn then the
 //     optional impersonation decorator then tenancy with the pre-auth
 //     allowlist, with the authn subtree and the admin route dispatched around
-//     it by structure -- assembled by chain.Chain. Its closure is bounded by
-//     the chain's own participants (authn included); it imports no module a
+//     it by structure. chain.Standard derives the whole composition from the
+//     bootstrapped registry (guarding the mounted routes through the host's
+//     route-authorization table, partitioning the exempt subtrees, mounting
+//     the rest on the host's protected mux); chain.Chain is the direct path
+//     for a host with a custom layout. Its closure is bounded by the chain's
+//     own participants (authn and rbac included); it imports no module a
 //     chain-bearing host does not already have.
 //   - go/app/bridges: the no-import seam bridges that hand one module's
 //     concrete service to another module's structurally-typed seam

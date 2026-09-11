@@ -5,6 +5,15 @@
 // order, no state, no infrastructure construction. docs/internal/
 // 01-architecture.md's fixed-middleware-order paragraph is the order's
 // design authority; this package is its one implementation.
+//
+// Two entry points compose it. Chain takes the host's pieces directly: the
+// verifier, the protected handler and the two structurally exempt route
+// branches, which the host has partitioned and mounted itself -- the path
+// for a host with a custom route layout. Standard derives the same
+// composition from the bootstrapped registry: it admits every mounted route
+// through the host's route-authorization table, partitions the authn
+// subtree and the admin subtree out of it, mounts the rest on the host's
+// protected mux, and delegates to Chain.
 package chain
 
 import (

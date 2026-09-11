@@ -9,6 +9,7 @@ package chain_test
 import (
 	"context"
 	"crypto"
+	"embed"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,6 +43,68 @@ func (exampleKeySource) VerificationKeys(context.Context, string) ([]struct {
 }, error,
 ) {
 	return nil, nil
+}
+
+// exampleModule is a pkgcore.Module mounting one route, so the example can
+// bootstrap a registry without any business module; a real host's registry
+// comes from Kernel.Bootstrap over its own module set.
+type exampleModule struct{}
+
+func (exampleModule) Name() string         { return "example" }
+func (exampleModule) DependsOn() []string  { return nil }
+func (exampleModule) Migrations() embed.FS { return embed.FS{} }
+func (exampleModule) Locales() embed.FS    { return embed.FS{} }
+func (exampleModule) OpenAPISpec() []byte  { return nil }
+func (m exampleModule) Register(reg *pkgcore.Registry) error {
+	reg.Routes.Mount(app.AuthnAPIPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "authn handler: %s", r.URL.Path)
+	}))
+	reg.Routes.Mount("/api/v1/notes", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "notes")
+	}))
+	return nil
+}
+
+// ExampleStandard shows the derivation a host composes when its route
+// layout is the registry's own: Standard reads the mounted routes from the
+// bootstrapped registry, admits them through the host's route-authorization
+// table, splits the authn subtree out, and mounts the rest on the host's
+// protected face. With no rbac module in this example's registry there is
+// no rule table to pass, which is why the option is omitted -- a host with
+// an authorization domain adds WithAuthorization.
+func ExampleStandard() {
+	verifier, err := authn.NewVerifier(exampleKeySource{})
+	if err != nil {
+		panic(err)
+	}
+
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), exampleModule{})
+	if err != nil {
+		panic(err)
+	}
+
+	// The host's protected face: the mux the application engine prepared,
+	// carrying the platform liveness route and the host's own routes.
+	protected := http.NewServeMux()
+	protected.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "ok")
+	})
+
+	handler, err := chain.Standard(reg, verifier, protected)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, path := range []string{"/api/v1/notes", "/healthz", app.AuthnAPIPath + "/register"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		fmt.Printf("%s: %d\n", path, rec.Code)
+	}
+
+	// Output:
+	// /api/v1/notes: 403
+	// /healthz: 200
+	// /api/v1/authn/register: 200
 }
 
 // ExampleChain shows the composition every host is built on: the host's

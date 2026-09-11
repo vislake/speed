@@ -21,13 +21,12 @@ type HTTPSpec struct {
 	Addr string
 
 	// Middleware is the host's own middleware chain, outermost first: the
-	// composed chain wraps the mux carrying the liveness routes, every
-	// module route and ExtraRoutes, and the first entry listed here is the
-	// one a request reaches first. A chain that needs the mux itself (the
-	// platform middleware chain is built over the protected handler, not
-	// over a bare next-handler) states that with a closure: the entry
-	// receives the already-composed handler and returns the chain built
-	// around it.
+	// entries wrap the composed handler -- the mux, or Compose's product
+	// when one is declared -- and the first entry listed here is the one a
+	// request reaches first. A chain that needs the mux itself states that
+	// with a closure (the entry receives the already-composed handler and
+	// returns the chain built around it) or, when it must mount the
+	// registry's routes too, through Compose below.
 	Middleware []func(http.Handler) http.Handler
 
 	// ExtraRoutes are the host's hand-written routes, mounted beside the
@@ -36,6 +35,24 @@ type HTTPSpec struct {
 	// conflicting with one already mounted panics at assembly time, the
 	// loudest report a wiring error can get.
 	ExtraRoutes []pkgcore.MountedRoute
+
+	// Compose, when non-nil, is the host's own composition of the
+	// protected face, built over the mux the engine prepared. It receives
+	// that mux -- already carrying the platform liveness routes and the
+	// host's ExtraRoutes -- and returns the handler that serves them,
+	// typically the product of chain.Standard, which mounts the registry's
+	// guarded routes onto the mux and wraps the whole composition in the
+	// fixed middleware chain. The returned handler replaces the bare mux as
+	// the thing the Middleware entries wrap.
+	//
+	// It is the seat for a host whose HTTP face is more than a route list:
+	// the platform chain must wrap the mux from the inside (authn outermost
+	// around the branches, tenancy around the protected half), which a
+	// plain middleware entry -- one that wraps whatever it is given -- cannot
+	// express. When Compose is set the engine does NOT mount the registry's
+	// routes itself; the host's composition mounts them from the registry it
+	// holds, so no route is registered twice.
+	Compose func(mux *http.ServeMux) (http.Handler, error)
 
 	// SPA, when non-nil, serves a built single-page application at the
 	// outermost layer of the host's own composition: requests the frontend
@@ -74,24 +91,27 @@ func WithHTTP(spec HTTPSpec) Option {
 
 // buildHandler is stage 7: the fixed HTTP assembly order.
 //
-// A mux carries the platform liveness routes and every route the registry's
-// modules mounted; the host's ExtraRoutes are mounted beside them; the
-// registered routes are seeded into the observability middleware's
-// route-label budget BEFORE that middleware is built (the seed is a snapshot
-// consumed at construction, and without it a burst of garbage paths could
-// exhaust the budget before a real route is ever requested); the host's
-// middleware chain wraps outside-in; the SPA wraps outside that when one is
-// configured; and obs.Middleware wraps the whole composition -- its position
-// costs nothing here and counts every request, including the ones an inner
-// layer rejects.
+// A mux carries the platform liveness routes, the host's ExtraRoutes, and --
+// unless the host composes its own protected face through Compose -- every
+// route the registry's modules mounted; the registered routes are seeded into
+// the observability middleware's route-label budget BEFORE Run constructs
+// that middleware (the seed is a snapshot consumed at construction, and
+// without it a burst of garbage paths could exhaust the budget before a real
+// route is ever requested); the host's middleware entries wrap outside-in;
+// and the SPA wraps outside that when one is configured. Run then wraps the
+// whole composition in obs.Middleware before serving -- the outermost layer a
+// served request reaches, counting every request including the ones an inner
+// layer rejects -- so the handler this stage stores (and Application.Handler
+// returns) is the host's composed face, un-instrumented.
 //
 // The composed http.Server is created here, not yet listening: Run serves it,
 // and Close drains it.
 func (a *Application) buildHandler(cfg *engineConfig) error {
 	mux := http.NewServeMux()
 	obs.MountLiveness(mux)
-	pkgcore.MountRoutes(mux, a.registry.Routes.Routes()...)
-	RegisterMountedRoutes(a.registry)
+	if a.registry != nil {
+		RegisterMountedRoutes(a.registry)
+	}
 
 	var spec HTTPSpec
 	if cfg.httpSpec != nil {
@@ -100,6 +120,18 @@ func (a *Application) buildHandler(cfg *engineConfig) error {
 	pkgcore.MountRoutes(mux, spec.ExtraRoutes...)
 
 	var handler http.Handler = mux
+	if spec.Compose != nil {
+		composed, err := spec.Compose(mux)
+		if err != nil {
+			return fmt.Errorf("app: compose the protected face: %w", err)
+		}
+		if composed == nil {
+			return errors.New("app: Compose returned a nil handler")
+		}
+		handler = composed
+	} else if a.registry != nil {
+		pkgcore.MountRoutes(mux, a.registry.Routes.Routes()...)
+	}
 	for i := len(spec.Middleware) - 1; i >= 0; i-- {
 		if spec.Middleware[i] == nil {
 			continue
@@ -109,7 +141,7 @@ func (a *Application) buildHandler(cfg *engineConfig) error {
 	if spec.SPA != nil && spec.SPA.Dir != "" {
 		handler = spa.New(spec.SPA.Dir, handler, spec.SPA.Options...)
 	}
-	a.handler = obs.Middleware(handler)
+	a.handler = handler
 
 	a.server = &http.Server{
 		Addr:              spec.Addr,
@@ -126,8 +158,15 @@ func (a *Application) buildHandler(cfg *engineConfig) error {
 // the signal-derived context, and the server's request base context stays the
 // uncancelled one Run received, so a shutdown signal never cancels in-flight
 // requests ahead of the drain.
+//
+// obs.Middleware is applied here, at serve time: it is the outermost layer a
+// served request reaches (counting every request, including the ones an inner
+// layer rejects), and applying it here is what keeps Application.Handler the
+// host's own composition -- a host that serves a New-composed handler itself
+// decides its own instrumentation instead of paying for a second layer.
 func (a *Application) serve(ctx context.Context) error {
 	srv := a.server
+	srv.Handler = obs.Middleware(srv.Handler)
 
 	serveErr := make(chan error, 1)
 	go func() {

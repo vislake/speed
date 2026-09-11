@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -192,6 +193,90 @@ func TestNew_SkipsANilMiddlewareEntry(t *testing.T) {
 
 	if rec := serveTo(t, a.Handler(), http.MethodGet, "/healthz"); rec.Code != http.StatusOK {
 		t.Fatalf("GET /healthz: status %d, want 200", rec.Code)
+	}
+}
+
+// TestNew_ComposeReceivesThePreparedMux pins the protected-face hook's
+// contract: the callback receives the mux already carrying the platform
+// liveness route and the host's ExtraRoutes, the engine does not mount the
+// registry's routes when the callback composes the face, and the returned
+// handler is what the host middleware entries wrap.
+func TestNew_ComposeReceivesThePreparedMux(t *testing.T) {
+	var host testHostConfig
+	var composedMux *http.ServeMux
+	wrapped := 0
+	wrap := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			wrapped++
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	a, err := New(context.Background(), append(testBaseOptions(t, &host),
+		WithModules(func(context.Context, ModuleDeps) ([]pkgcore.Module, error) {
+			return []pkgcore.Module{&testModule{name: "probe", routePath: "/api/v1/probe", handler: staticHandler("probe")}}, nil
+		}),
+		WithHTTP(HTTPSpec{
+			ExtraRoutes: []pkgcore.MountedRoute{{Path: "/api/v1/host", Handler: staticHandler("host")}},
+			Compose: func(mux *http.ServeMux) (http.Handler, error) {
+				composedMux = mux
+				return mux, nil
+			},
+			Middleware: []func(http.Handler) http.Handler{wrap},
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = a.Close(context.Background()) })
+	if composedMux == nil {
+		t.Fatal("Compose was never called")
+	}
+
+	for _, tc := range []struct{ path, want string }{
+		{"/healthz", ""},
+		{"/api/v1/host", "host"},
+	} {
+		rec := serveTo(t, a.Handler(), http.MethodGet, tc.path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s through the composed face: status %d, want 200", tc.path, rec.Code)
+		}
+		if tc.want != "" && rec.Body.String() != tc.want {
+			t.Fatalf("GET %s: body %q, want %q", tc.path, rec.Body.String(), tc.want)
+		}
+	}
+	if wrapped != 2 {
+		t.Fatalf("the host middleware ran %d time(s), want 2; it must wrap the composed handler", wrapped)
+	}
+
+	// The engine must not mount the registry's routes itself when Compose
+	// composes the face: this test's callback returns the bare mux without
+	// mounting anything, so the module route answers the mux's 404.
+	if rec := serveTo(t, a.Handler(), http.MethodGet, "/api/v1/probe"); rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/v1/probe: status %d, want 404; a Compose host owns the face, so the engine must not mount the registry's routes", rec.Code)
+	}
+}
+
+// TestNew_ComposeErrorsFailTheAssembly pins the failure half of the hook:
+// a composition that cannot be built refuses the assembly instead of
+// serving a face the host never composed.
+func TestNew_ComposeErrorsFailTheAssembly(t *testing.T) {
+	var host testHostConfig
+
+	_, err := New(context.Background(), append(testBaseOptions(t, &host),
+		WithHTTP(HTTPSpec{Compose: func(*http.ServeMux) (http.Handler, error) {
+			return nil, errors.New("unauthorized route table")
+		}}),
+	)...)
+	if err == nil {
+		t.Fatal("New() with a failing Compose returned no error")
+	}
+
+	_, err = New(context.Background(), append(testBaseOptions(t, &host),
+		WithHTTP(HTTPSpec{Compose: func(*http.ServeMux) (http.Handler, error) { return nil, nil }}),
+	)...)
+	if err == nil {
+		t.Fatal("New() with a nil-handler Compose returned no error")
 	}
 }
 

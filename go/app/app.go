@@ -169,11 +169,14 @@ func Run(ctx context.Context, opts ...Option) error {
 	return a.serve(ctx)
 }
 
-// Handler returns the composed HTTP handler: obs.Middleware outermost, then
-// the configured SPA, the host's middleware chain, and the mux carrying the
-// liveness routes, every module route and the host's extra routes. It is nil
-// until the HTTP-face stage has run (a PostBootstrap hook still sees nil; a
-// PreServe hook does not).
+// Handler returns the composed HTTP handler: the configured SPA outermost,
+// then the host's middleware chain (or, for a host composing its own face
+// through HTTPSpec.Compose, that composition), and the mux carrying the
+// liveness routes, every module route and the host's extra routes. Run wraps
+// it in obs.Middleware at serve time -- observe the served request path,
+// never this value, for the instrumentation's position. It is nil until the
+// HTTP-face stage has run (a PostBootstrap hook still sees nil; a PreServe
+// hook does not).
 func (a *Application) Handler() http.Handler { return a.handler }
 
 // Registry returns the Registry the kernel bootstrapped: every route,
