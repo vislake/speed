@@ -299,8 +299,8 @@ func (r *ObjectRepository) deleteObjectRows(ctx context.Context, objectID string
 // its rows are consumed -- each listed deleting row is either completed or
 // left for the next scheduled run when its protocol fails again -- so a
 // full list is bounded by the tenant's in-flight deletions, not by its
-// lifetime upload volume. Paging a state listing is future work if a
-// tenant's backlog ever grows past one task's worth.
+// lifetime upload volume. Paging a state listing is not implemented: this
+// shape serves a tenant backlog of up to one task's worth of work.
 func (r *ObjectRepository) listStateRows(ctx context.Context, state string) ([]Object, error) {
 	var rows []Object
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
