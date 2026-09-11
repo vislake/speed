@@ -287,6 +287,82 @@ this suite, and the convenient locator is usually the wrong one.
 The first run compiles the Go server, which takes minutes; later runs
 reuse the build cache and the whole suite finishes in seconds.
 
+## The browser network-process crash on CI, and the machine facts it needs
+
+Every "Network process crashed" red on CI has had one shape: a
+WebKit-engine row (`webkit` or `ipad`, never `chromium`), inside the
+`@budget` tier's long journeys, on GitHub-hosted `ubuntu-24.04`. The
+crash is a browser sub-process dying mid-run, and the page console is
+the only place that says so -- the trace's console carries it, and the
+machine facts that could size it are gone by the time anyone reads the
+red. So the workflow now records them: the "Record the runner's
+environment facts" step runs on every job before the two tiers and
+prints os-release, kernel, the apparmor unprivileged-userns sysctl
+(where the key exists), `/dev/shm`, memory and the resolved Playwright
+and browser builds into the CI log. Read that block first for the next
+crash red, then the trace's console.
+
+The console, verbatim, from the two crashes whose traces are on record
+(push runs of `1dc8204e`, webkit, and `dacefb65`, ipad -- both
+core-journey block A):
+
+    WebSocket connection to 'ws://127.0.0.1:PORT/?token=...' failed:
+      WebSocket network error: Network process crashed.
+    Failed to load resource: WebKit encountered an internal error
+
+What happens after the crash differs between the two, and it is worth
+knowing both before reading either red: in `dacefb65`'s ipad run the
+loss then reloads the page (vite's "[vite] server connection lost.
+Polling for restart..." followed by a document load), the reload
+discards the in-memory session, and the wait reports the crash through
+`expectWhileSignedIn`. In `1dc8204e`'s webkit run the page reconnects
+about a second later, no reload lands, and the journey instead dies on
+the state the crash killed: the case-create submit never re-enables and
+a bare click burns the whole test budget. Before the guards above
+existed, this arrived as exactly that: a timeout naming neither the
+crash nor the upload.
+
+What is on record about the crash, and what is not:
+
+- All instances so far have been WebKit-engine rows in `@budget` runs on
+  the hosted ubuntu runner; `chromium` has never shown it. The two
+  on-record crashes ran on `ubuntu-24.04` (runner image 20260907.300.1,
+  kernel 6.17.0-1022-azure as that image's own readme lists it) with
+  Playwright 1.63.0 (the version the web lockfile pins) and WebKit 26.6
+  (playwright build 2359), installed by `playwright install --with-deps`.
+- The closest upstream flake -- WebKit's `page.goto` that never issues a
+  request, roughly every ~65 navigations (microsoft/playwright#42385) --
+  was fixed in WebKit build 2355, and the 2359 build these runs use
+  already contains the fix, so it is not that defect.
+- Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
+  (`kernel.apparmor_restrict_unprivileged_userns`). Its documented
+  failure has one shape: a sandboxed process cannot create its
+  namespaces at all, so an Electron/Chromium browser fails to LAUNCH.
+  The workaround that shape has landed on -- `sudo sysctl -w
+  kernel.apparmor_restrict_unprivileged_userns=0` -- is also what
+  Playwright's own CI applies on Ubuntu 24 runners, scoped there by
+  comment to electron/electron#42510, and it is what
+  microsoft/playwright#34251 settled on for Electron. No official
+  documentation ties that restriction to a mid-run sub-process crash,
+  and the shape here -- a browser that starts cleanly, runs for minutes,
+  loses one sub-process and can come back -- is not the documented one.
+  GitHub's own stance is runner-images#10015: the images keep AppArmor
+  on by design, and per-workflow handling is left to the workflow. So
+  the workflow records the sysctl's actual value instead of loosening
+  it: the red that would justify a mitigation carries the fact the
+  decision would rest on, and if the sysctl already reads 0 the userns
+  hypothesis is dead on arrival.
+
+An upstream report, when a red justifies one (microsoft/playwright
+issues, or WebKit's own tracker), should carry: the two console
+signatures above, the engine distribution (WebKit-engine rows only,
+`chromium` never), where it strikes (long `@budget` journeys on the
+ubuntu-24.04 runner), the frequency, the runner image and kernel from
+the environment-facts block, the Playwright and WebKit builds, and the
+post-crash behavior (sub-process respawn; the upload state a crash can
+leave behind). The environment-facts step is the machine half of
+exactly that record.
+
 ## A worktree does not isolate the machine
 
 Several git worktrees of this repository routinely run this same suite at

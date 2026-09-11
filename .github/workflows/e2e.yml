@@ -61,6 +61,25 @@ name: e2e
 # the sign-in budget. The three rows run in parallel, so the pipeline's
 # wall clock is one row plus queueing.
 #
+# ENVIRONMENT FACTS: a step before the two tiers runs on every job and
+# prints the runner's os-release, kernel, the apparmor unprivileged-
+# userns sysctl (where the key exists), /dev/shm, memory and the
+# resolved Playwright and browser builds into the CI log. It exists for
+# the WebKit network-process crash this suite keeps meeting: every
+# instance so far has been a WebKit-engine row in the @budget tier on
+# this runner family, chromium has never shown it, and the machine
+# facts that could size it are gone by the time a red is read -- so the
+# next red carries them itself. e2e/README.md ("The browser
+# network-process crash on CI, and the machine facts it needs") holds
+# the evidence chain, what the next red should be read for, and the
+# upstream issues to file against. No userns sysctl mitigation is
+# applied: no official documentation ties the Ubuntu 24.04 AppArmor
+# userns restriction to a mid-run sub-process crash (Playwright's own
+# CI command against it is scoped to Electron's sandbox not starting
+# at all), and the step records the sysctl's own value instead, so the
+# red that would justify a decision carries the fact the decision
+# would rest on. The step costs seconds.
+#
 # NO WORKFLOW-LEVEL ENVIRONMENT IS NEEDED, and none is set: the config
 # picks its own random ports and run-unique SQLite, login-ledger and
 # server-log paths under the OS temp directory; the demo passphrase and
@@ -153,6 +172,60 @@ jobs:
         # `go run` during the test run (e2e/test-utils/servers.ts).
         working-directory: examples/reference-app
         run: go build ./cmd/server
+      - name: Record the runner's environment facts
+        # Runs on every job before the tiers; see the ENVIRONMENT FACTS
+        # note at the top of this file and e2e/README.md ("The browser
+        # network-process crash on CI, and the machine facts it needs").
+        # Every probe degrades to an explicit line instead of an error,
+        # because these keys are Linux-specific and this script also
+        # runs on developer machines, where /etc/os-release and the
+        # userns sysctl do not exist.
+        working-directory: examples/reference-app/web
+        run: |
+          echo "::group::runner environment facts"
+          echo "-- os-release:"
+          if [ -r /etc/os-release ]; then
+            grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release
+          else
+            echo "/etc/os-release not present (non-Linux host)"
+          fi
+          echo "-- kernel:"
+          uname -sr
+          echo "-- unprivileged user namespaces:"
+          if value="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"; then
+            echo "kernel.apparmor_restrict_unprivileged_userns = ${value}"
+          else
+            echo "kernel.apparmor_restrict_unprivileged_userns not readable on this host"
+          fi
+          if [ -d /proc/sys/kernel ]; then
+            echo "userns-related keys under /proc/sys/kernel:"
+            ls /proc/sys/kernel | grep -i userns || echo "(none)"
+          fi
+          echo "-- /dev/shm:"
+          if [ -d /dev/shm ]; then
+            df -h /dev/shm
+          else
+            echo "/dev/shm not present (non-Linux host)"
+          fi
+          echo "-- memory:"
+          if [ -r /proc/meminfo ]; then
+            grep -E '^(MemTotal|MemAvailable|SwapTotal):' /proc/meminfo
+          else
+            echo "no /proc/meminfo; hw.memsize = $(sysctl -n hw.memsize 2>/dev/null || echo unreadable)"
+          fi
+          echo "-- Playwright:"
+          if command -v pnpm >/dev/null 2>&1; then
+            pnpm exec playwright --version 2>/dev/null || echo "playwright not resolvable from this directory"
+          else
+            echo "pnpm not on PATH"
+          fi
+          echo "-- installed browsers (ms-playwright cache):"
+          if [ -d "${HOME}/.cache/ms-playwright" ]; then
+            ls "${HOME}/.cache/ms-playwright"
+          else
+            echo "no ms-playwright cache under ${HOME}/.cache"
+          fi
+          echo "::endgroup::"
       - name: Default tier
         working-directory: examples/reference-app/web
         run: pnpm test:e2e --project=${{ matrix.project }}
