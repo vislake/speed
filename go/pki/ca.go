@@ -98,13 +98,13 @@ func (a signerAdapter) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]
 // (EnsureAuthorityChain), and every simulation output a tenant observes
 // is attested through IssueCertificate + SignCertificate under a
 // per-tenant "simulation.attestation" certificate, whose public shares
-// are gated on VerifyCertificate. The integration found exactly one
-// missing capability -- a way to sign with an issued certificate's key
-// (SignCertificate) -- and changed nothing else: this type's public API
-// is no longer under the "first consumer may break it freely" exemption,
-// though it is still not held to the same frozen-API standard as the
-// key-lifecycle layer (AGENTS.md's consumer record states what remains
-// unconsumed and what that means for API stability).
+// are gated on VerifyCertificate. That consumer needed exactly one
+// capability the type did not already have -- a way to sign with an
+// issued certificate's key (SignCertificate) -- and nothing else: this
+// type's public API is expected to stay stable, though it is not held to
+// the same frozen-API standard as the key-lifecycle layer (AGENTS.md's
+// consumer record states what remains unconsumed and what that means for
+// API stability).
 //
 // # One Signer per CAService
 //

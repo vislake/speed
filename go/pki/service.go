@@ -201,7 +201,7 @@ func (s *Service) attachQueue(queue jobs.Queue) {
 // cache's janitor goroutine and waits for it to exit. It is idempotent, and
 // Service stays usable -- and correct -- afterwards: without a janitor,
 // expired entries are still refused by the cache's own expiry check
-// (cache.go's get), they are simply no longer proactively reclaimed. See
+// (cache.go's get), they are simply not proactively reclaimed. See
 // rbac.Service.Close's identical doc comment for the same reasoning applied
 // to that module's decision cache.
 func (s *Service) Close() error {

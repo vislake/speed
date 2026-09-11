@@ -64,7 +64,7 @@ const (
 // seeds the duplicates, re-applies the migration set through the real
 // dbkit.MigrationRegistry, and asserts the remediated end state.
 //
-// Against the pre-fix 0008 file this fails at the re-apply: the CREATE
+// The re-apply fails against an 0008 file without the dedupe: the CREATE
 // UNIQUE INDEX refuses to build over the seeded duplicates.
 func AssertMigration0008UpgradeDedupesDuplicateLedger(t *testing.T, db *gorm.DB, dialect dbkit.Dialect, moduleName string, fs embed.FS) {
 	t.Helper()
@@ -89,7 +89,8 @@ func AssertMigration0008UpgradeDedupesDuplicateLedger(t *testing.T, db *gorm.DB,
 	)
 
 	// 3. The remediated boot: re-apply the module's migration set through
-	// the real registry. This is the assertion the pre-fix file fails.
+	// the real registry. This is the assertion that catches an 0008 file
+	// without the dedupe.
 	Migrate(t, db, dialect, moduleName, fs)
 
 	// 4. The remediated end state: one row per certificate, the earliest

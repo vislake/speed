@@ -27,14 +27,14 @@ func init() {
 	// rotation" section describes: this name governs the Transit key's
 	// LIFECYCLE through the pki module's own state machine (pending ->
 	// active -> retiring -> retired), which rotates by creating NEW Transit
-	// key names and never rotates one in place. Since the key_version pin
-	// landed, an in-place rotation of the key through Vault's own rotate
-	// endpoint (the one way a managed name acquires a version other than
-	// the one this package created it at) can no longer silently change
-	// which version signs or which public key is served: sign requests pin
-	// key_version to the created version, public-key reads serve that same
-	// version, and a sign answer naming any other version is refused. What
-	// the pin does NOT do is make the in-place-rotated version usable:
+	// key names and never rotates one in place. An in-place rotation of the
+	// key through Vault's own rotate endpoint (the one way a managed name
+	// acquires a version other than the one this package created it at)
+	// cannot silently change which version signs or which public key is
+	// served: sign requests pin key_version to the created version,
+	// public-key reads serve that same version, and a sign answer naming
+	// any other version is refused. What the pin does NOT do is make the
+	// in-place-rotated version usable:
 	// signatures and exports stay on the created version forever, and a
 	// host that wants a NEW key version live must rotate through the pki
 	// module's own lifecycle (a new name per stage). The pin's behaviour is

@@ -142,11 +142,10 @@ func openAndMigrate(t *testing.T, dsn string) *sql.DB {
 }
 
 // The four tests below cover BuildSignerRequiring, the pki-local
-// capability-comparison helper added to close the round-4 record that
-// pkgcore.KeyNeverLeavesBoundary was declared but never compared against
-// anything a caller wanted (go/pki/AGENTS.md's Known limitations). The two
-// names the tests resolve are registered on the package-level SignerRegistry
-// from this file, exactly the way go/pki/signer/vault and
+// capability-comparison helper that compares pkgcore.KeyNeverLeavesBoundary
+// against what a caller requires (go/pki's AGENTS.md, Known limitations).
+// The two names the tests resolve are registered on the package-level
+// SignerRegistry from this file, exactly the way go/pki/signer/vault and
 // go/pki/signer/kmsaws register their own names from init(): a host that
 // wants "signer.test.boundary"-like capability declarations registers its
 // own Registration with the capability its implementation honestly has.

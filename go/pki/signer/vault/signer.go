@@ -376,7 +376,7 @@ func (s *signer) decryptPrivateKey(ctx context.Context, keyRef string) (ed25519.
 // request to directSignPinnedKeyVersion, and this function's caller
 // compares the version Vault actually signed with against that pin,
 // refusing a signature produced by any other version. The version is
-// therefore no longer merely parsed-and-validated; it is the signal that
+// therefore not merely parsed-and-validated; it is the signal that
 // tells the caller an in-place Transit key rotation -- or a Vault that
 // ignored the request's key_version parameter -- changed which version
 // signs, so the divergence doc.go's "in-place Transit key rotation"
