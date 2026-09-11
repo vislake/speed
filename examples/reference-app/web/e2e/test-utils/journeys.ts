@@ -614,6 +614,13 @@ function signInSurface(page: Page): Locator {
  * reason. The race only decides WHY a failure reports what it does, and
  * reports at the moment the loss is observable rather than a timeout
  * later.
+ *
+ * The loss signal is an EDGE: the sign-in surface must REAPPEAR. A
+ * surface already on screen when the wait begins is a sign-in still in
+ * flight -- its request unanswered, its frame not yet rendered -- and a
+ * wait that fired on bare visibility would report that ordinary slow
+ * sign-in as a dead session. Only a surface that leaves the screen and
+ * comes back is the loss this branch exists to name.
  */
 export async function expectWhileSignedIn(
   page: Page,
@@ -627,13 +634,22 @@ export async function expectWhileSignedIn(
       () => 'visible' as const,
       (error: unknown) => ({ error }),
     )
-  const sessionLost = signInSurface(page)
-    .waitFor({ state: 'visible', timeout: 0 })
+  // Two steps, and the first one is what makes the signal an edge
+  // rather than a level. From whatever state the page is in, the
+  // surface must be GONE first: that settles at once when the frame is
+  // signed in (there is no such surface), and waits out a sign-in still
+  // on screen instead of firing on it. Only a surface that then becomes
+  // visible again -- the frame that was up has been replaced by the
+  // sign-in form -- is the loss.
+  const signIn = signInSurface(page)
+  const sessionLost = signIn
+    .waitFor({ state: 'hidden', timeout: 0 })
+    .then(() => signIn.waitFor({ state: 'visible', timeout: 0 }))
     .then(
       () => 'session-lost' as const,
-      // The page or context went away while waiting: that is this test's
-      // own end, not a session loss, and the assertion above is the one
-      // that must report it.
+      // The page or context went away while waiting -- in either step:
+      // that is this test's own end, not a session loss, and the
+      // assertion above is the one that must report it.
       () => 'unobservable' as const,
     )
 
