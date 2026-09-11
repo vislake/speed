@@ -48,6 +48,15 @@ Carve-outs (a whole subtree is exempt):
   .idea/, .vscode/                IDE-local directories holding developer
                                   machine state (UI strings etc.); they are
                                   gitignored, never exist in CI
+  .claude/worktrees/              this repository's git worktrees -- each
+                                  a complete checkout carrying its own
+                                  docs/internal/ Chinese content under a
+                                  path the docs/internal carve-out above
+                                  cannot reach; gitignored, never exists in
+                                  CI. Matched by exact repo-relative path,
+                                  never by basename: a directory merely
+                                  named worktrees/ is scanned, and
+                                  .claude/skills/** stays scanned source
 
 Go comments additionally exempt one fixture-in-comment shape: a godoc
 Example function's "Output:" block -- the comment lines that follow a
@@ -112,6 +121,16 @@ NON_SCANNED_DIR_NAMES = frozenset({".git", ".idea", ".vscode", "node_modules", "
 # their common ancestor ("docs") itself is still descended into so the
 # pruning happens at the right level.
 CARVED_SUBTREES = frozenset({"docs/internal", "docs/site"})
+
+# Directories never scanned that must be matched by exact repo-relative
+# path rather than basename: .claude/worktrees/ holds this repository's
+# git worktrees -- each a complete checkout whose own docs/internal/
+# Chinese content sits under a path the root-relative docs/internal
+# carve-out above cannot reach. gitignored local machine state, never
+# present in CI; only this exact path is pruned, so .claude/skills/**
+# stays scanned source and a directory merely named worktrees/ elsewhere
+# is scanned like any other.
+NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
 
 # Han-script rune ranges, byte-for-byte what Go's unicode.Han classifies
 # (go/ratelimit/no_cjk_characters_test.go calls unicode.Is(unicode.Han, r)),
@@ -381,7 +400,7 @@ def _pruned_dirnames(dirnames: list[str], rel_dir: str) -> list[str]:
         if name in NON_SCANNED_DIR_NAMES:
             continue
         rel = name if rel_dir == "." else f"{rel_dir}/{name}"
-        if rel in CARVED_SUBTREES:
+        if rel in CARVED_SUBTREES or rel in NON_SCANNED_DIR_PATHS:
             continue
         kept.append(name)
     return kept

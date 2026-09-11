@@ -21,6 +21,15 @@ comments after an "Output:" marker, and CI compiles and runs every
 Example, so an Example demonstrating zh-CN rendering carries Chinese
 text in comment syntax
 (test_godoc_output_block_is_exempt_but_other_comments_are_not).
+A third carve-out is machine-local state: the .claude/worktrees/ subtree
+holds this repository's git worktrees -- complete checkouts, each
+carrying its own docs/internal/ Chinese content -- and is pruned by its
+exact repo-relative path, so a worktree's planted Chinese file is not
+reported while a directory merely NAMED worktrees/ and the rest of
+.claude/ (.claude/skills/** included) stay scanned
+(test_repository_worktree_subtree_is_pruned,
+test_claude_skills_tree_is_still_scanned,
+test_worktrees_named_dir_outside_claude_is_still_scanned).
 
 Fixture text below is spelled with \\u escapes so this test file itself
 stays ASCII: tools/ are scanned as full text by the very scanner under
@@ -48,6 +57,7 @@ _ZH_NOTE = '\u5171 1 \u6761\u5907\u6ce8\u3002\n'  # godoc Example output
 _ZH_COMMENT = '\u4e2d\u6587\u6ce8\u91ca'  # a plain Chinese comment
 _ZH_PROSE = '\u540e\u4e00\u6bb5\u6ce8\u91ca'  # a later, separate comment
 _ZH_README = 'bilingual catalogs \u4e2d\u6587\u8bf4\u660e\n'  # README prose
+_ZH_INTERNAL = '\u5185\u90e8\u8bbe\u8ba1\u6587\u6863\n'  # docs/internal doc text
 
 
 class ScanRootTests(unittest.TestCase):
@@ -145,6 +155,40 @@ class ScanRootTests(unittest.TestCase):
             "}\n"
         )
         self.assertEqual(self._scan({"pkg/i18n/x_test.go": code}), 1)
+
+    def test_repository_worktree_subtree_is_pruned(self):
+        # A git worktree of this repository under .claude/worktrees/ is a
+        # complete checkout carrying its own docs/internal/ Chinese
+        # content under a path the root-relative carve-out cannot reach,
+        # and it is gitignored machine-local state that never exists in
+        # CI. The whole subtree is pruned by its exact repo-relative
+        # path, so this planted worktree docs/internal file must not be
+        # reported. Fails before the exact-path prune: the nested Chinese
+        # text is then scanned as a plain text file and flagged.
+        files = {
+            ".claude/worktrees/w/docs/internal/zh.md": _ZH_INTERNAL,
+        }
+        self.assertEqual(self._scan(files), 0)
+
+    def test_claude_skills_tree_is_still_scanned(self):
+        # The prune stops at .claude/worktrees/: the rest of .claude/ --
+        # .claude/skills/** in particular -- is scanned source under the
+        # same rules as the rest of the tree, so a CJK file there is a
+        # violation.
+        files = {
+            ".claude/skills/example/SKILL.md": _ZH_README,
+        }
+        self.assertEqual(self._scan(files), 1)
+
+    def test_worktrees_named_dir_outside_claude_is_still_scanned(self):
+        # The prune matches the exact repo-relative path
+        # ".claude/worktrees", never the basename: a directory merely
+        # NAMED worktrees/ elsewhere in the tree is ordinary source, so
+        # CJK content in it stays a violation.
+        files = {
+            "src/worktrees/zh.md": _ZH_README,
+        }
+        self.assertEqual(self._scan(files), 1)
 
 
 if __name__ == "__main__":
