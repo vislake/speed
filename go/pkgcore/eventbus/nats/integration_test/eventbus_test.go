@@ -634,7 +634,10 @@ func TestEventBus_ReaderRecoversFromALostConsumer(t *testing.T) {
 	}
 	streamName := streamNameForEventType(paidType)
 	consumerName := soleConsumerName(t, ctx, js, streamName)
-	if err := js.DeleteConsumer(ctx, streamName, consumerName); err != nil {
+	// The delete retries the transient server-side race a delivery in flight
+	// can produce (see consumer_delete_retry_test.go); any other failure, or
+	// one that persists, still fails here.
+	if err := deleteConsumerWithRetry(ctx, js, streamName, consumerName); err != nil {
 		t.Fatalf("js.DeleteConsumer(%q, %q): %v", streamName, consumerName, err)
 	}
 
