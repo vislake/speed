@@ -166,6 +166,22 @@
 - **登记理由**：宿主可观测面（发送消息的模板语言与可达性）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（公共签名面未变，不带 footer）。
 - **出处**：`51da1649`（`fix(notification): select contact SMS templates in the locale the copy rendered in`）。
 
+### 5.10. pkgcore：typed-nil 产品与 Put 值按缺失拒绝（行为收紧）
+
+- **面**：组件装配的三个边界统一 nil 规则。`New` 回调返回 typed-nil 指针（`(*T)(nil)`）此前穿过 `instance == nil` 检查被当作产品收下，现与返回 untyped nil 一致按"未交付产品"在构造期拒绝（`Construct` 报 `ErrComponentFailed`、`Build` 同报错）；`reg.Put((*T)(nil))` 此前静默入上下文，现与 `Put(nil)` 一致 panic。导出符号与签名不变。
+- **消费者影响**：此前 New 返回 typed-nil 的组件"构造成功"，nil 指针进入按类型上下文，依赖方向的 `Get` 返回一个"存在但为 nil"的值（首个方法调用即 panic，远离装配错误现场）；现在构造期即失败并点名组件。以 typed-nil 表达"服务不可用"的误用形态从"启动后首用崩"变为"启动期拒绝"；正确返回产品的组件零行为变化。
+- **替代路径**：无（行为收紧）；让 `New` 返回真实产品或 `(nil, err)`。
+- **登记理由**：宿主可见的装配契约行为收紧（此前可启动的形态现在构造期拒绝），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（签名不变、非 API 破坏，不带 footer）。
+- **出处**：`82823591`（`fix(pkgcore): treat a typed nil product as the absence it is`）。
+
+### 5.11. pkgcore：整数目标字段拒收越界浮点（行为收紧）
+
+- **面**：`ComponentConfig` 的 `Decode` / `Value[T]` 在目标为整数、配置值为浮点时，越界值此前先经 Go 的浮点→整数转换（越界结果由平台实现定义——arm64 饱和为边界值、amd64 为不定值）再对转换结果做 range check，于是 1e30 这样的值被静默接受为垃圾整数；现改为先对浮点本身做范围检查（int64 界精确用 -2^63 / 2^63、uint64 界用 2^64 的 float64 常量），越界即报 `does not fit` 并点名配置键。可表示边界照常转换（-2^63、2^62 入 int64，2^63 入 uint64），`Value`/`Decode` 文档承诺的"越界值为错误"不变、本次是让实现兑现它。
+- **消费者影响**：把整数键写成越界浮点（如 `retries: 1e30`）的宿主此前以垃圾整数启动，现在 `Load`/`Decode` 失败并点名键；范围内数值配置零行为变化。
+- **替代路径**：无（行为收紧）；把配置值改回目标整数范围内。
+- **登记理由**：宿主可见的配置接受面行为收紧，同 §5.10（签名不变，不带 footer）。
+- **出处**：`c663f610`（`fix(pkgcore): refuse out-of-range floats before converting to integers`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
