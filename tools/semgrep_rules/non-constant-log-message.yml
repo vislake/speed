@@ -29,6 +29,17 @@
 #     by pattern-not below: it is a net/http stdlib function whose shape
 #     collides with the logger call syntax ($RECV=http, $M=Error) and it
 #     is not the structured logger.
+#   * t.Error / b.Error / tb.Error are filtered by pattern-not below:
+#     they are the Go testing package's reporting methods (testing.T /
+#     testing.B / testing.TB) whose call shape collides with the logger
+#     call syntax ($RECV=t|b|tb, $M=Error), and they are not the
+#     structured logger. Such calls appear in non-test files as well --
+#     exported assertion helpers (go/saasctl's appconfigtest package,
+#     for one) sit outside the *_test.go path exclusion -- so the filter
+#     keys on the three conventional receiver names, the only
+#     discrimination a syntactic pattern has; a testing handle under
+#     another receiver name would still be flagged, and none exists
+#     today.
 rules:
   - id: non-constant-log-message
     message: >-
@@ -55,6 +66,11 @@ rules:
             - pattern-not: '"$ANY"'
       # net/http stdlib helper, not the structured logger.
       - pattern-not: http.Error(...)
+      # Go testing package reporting methods (testing.T / testing.B /
+      # testing.TB) -- not the structured logger.
+      - pattern-not: t.Error(...)
+      - pattern-not: b.Error(...)
+      - pattern-not: tb.Error(...)
     paths:
       exclude:
         - "**/*_test.go"
