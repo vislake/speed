@@ -22,7 +22,7 @@ task release:plan   # 离线验证某个版本号下全模块的 lockstep 发布
 
 **`task`/`mise` 二进制本身在标准检出环境里可能未安装**（根 `CLAUDE.md` 已有此说明）：`Taskfile.yml` 与其包装的命令都真实存在且能跑，但 `task` 这个 CLI 本身不一定在 `PATH` 上——遇到时直接跑它包装的原始命令（`go test ./...`、`go vet ./...`、`golangci-lint run ./...` 等），不要假设 `task xxx` 就一定可用，先确认 `task` 在 `PATH` 上。`mise` 同理：`task setup` 的工具链腿在 `mise` 缺席时只警告并跳过，不会失败（见下方「工具链版本统一」一节）。
 
-`task release:plan` 是真实任务（非 stub），离线验证「给定版本号下，全部 Go 模块与 npm 包能按同一版本号一致发布」：它包装 `tools/release/lockstep-release.py` 的默认校验模式——退出码 0 仅当计划一致，不写任何文件。用法：`task release:plan VERSION=v1.2.0`。`.github/workflows/release.yml` 手动触发时运行同一校验，再跑协调器自测。真实发布动作——推 tag、changesets bump、npm publish、GitHub Release——尚未接线：发布流水线当前只验证、不发布。
+`task release:plan` 是真实任务（非 stub），离线验证「给定版本号下，全部 Go 模块与 npm 包能按同一版本号一致发布」：它包装 `tools/release/lockstep-release.py` 的默认校验模式——退出码 0 仅当计划一致，不写任何文件。用法：`task release:plan VERSION=v1.2.0`。`.github/workflows/release.yml` 手动触发时先由只读的 `verify` job 运行同一校验并跑协调器自测，再由 `publish` job（job 级 `contents: write` + `packages: write`）执行真实发布：推送模块 tag 与仓库根 tag、把十二个 `@speed` 包发布到 GitHub Packages。真实发布动作里，推 tag 与 npm publish 已接线且已真实执行（首发 v0.0.1 半成功并作废的经过见 `docs/internal/18-cicd.md` 发布流水线一节的实施状态注记）；未接线的仅剩 changesets bump 与 GitHub Release。
 
 `task dev` 必须在**单进程部署模式**下工作：单进程、SQLite、零外部依赖。这是单进程部署模式给开发体验带来的直接收益——本地开发不需要 `docker compose up` 拉起一堆容器。
 
