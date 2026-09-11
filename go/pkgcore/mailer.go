@@ -56,6 +56,14 @@ type Mail struct {
 // after returning, and implementations must be safe for concurrent use by
 // multiple goroutines. A message that fails the shared rules above is
 // rejected with ErrInvalidMail before anything is sent.
+//
+// A failure that is the recipient's own permanent refusal of the message --
+// a relay's 5xx answer to RCPT, the destination's verdict on the address
+// itself -- must be wrapped with ErrTransportPermanent, so a delivery
+// caller can tell a terminal refusal from a failure worth retrying (see
+// that sentinel's doc comment for the exact boundary: only the
+// destination's verdict is wrapped, never a connection, credential or
+// message-shape failure).
 type Mailer interface {
 	// Send delivers mail to every recipient in mail.To.
 	Send(ctx context.Context, mail Mail) error

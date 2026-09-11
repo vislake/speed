@@ -11,6 +11,7 @@
 package unittest
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -39,6 +40,33 @@ func TestSMTPMailer_ConformsToMailerContract(t *testing.T) {
 		server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
 		return smtpMailerFor(t, server)
 	})
+}
+
+// TestSMTPMailer_PermanentRefusalCarriesTheSentinel drives the contract
+// suite's sentinel clause (mailertest.AssertPermanentFailure) through the
+// SMTP leg's scripted relay: the relay refuses the recipient with its 550,
+// and the mailer's returned error must wrap
+// pkgcore.ErrTransportPermanent -- the signal a delivery caller splits
+// terminal refusals from retryable failures by. The clause is asserted here
+// rather than inside AssertConforms because provoking a real refusal takes a
+// backend scripted to refuse, which the shared suite's generic factory
+// cannot be.
+func TestSMTPMailer_PermanentRefusalCarriesTheSentinel(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{
+		Reject: func(string) bool { return true },
+	})
+	mailer := smtpMailerFor(t, server)
+
+	err := mailer.Send(context.Background(), pkgcore.Mail{
+		From: "ops@example.com", To: []string{"ada@example.com"},
+		Subject: "mailertest permanent refusal", Text: "body",
+	})
+	if err == nil {
+		t.Fatal("Send() error = nil, want the relay's 550 refusal")
+	}
+	mailertest.AssertPermanentFailure(t, err)
 }
 
 // smtpMailerFor builds a pkgcore.Mailer pointed at server. It duplicates the

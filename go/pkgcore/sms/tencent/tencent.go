@@ -240,7 +240,9 @@ type tencentResponse struct {
 // TemplateParamSet, so the mapped template's Params list fixes which seam
 // parameter fills {1}, {2} and so on -- are resolved from msg.Params; both
 // steps fail before any request, and a template declaring no variables sends
-// no TemplateParamSet at all.
+// no TemplateParamSet at all. A refusal that is the destination's own
+// verdict on the number is wrapped with pkgcore.ErrTransportPermanent (see
+// isNumberVerdict); every other failure returns unwrapped.
 func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 	tpl, ok := s.templates[templateKey{locale: msg.Locale, messageID: msg.MessageID}]
 	if !ok {
@@ -298,7 +300,11 @@ func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 	// A refused send -- bad signature, unapproved template, wrong region --
 	// is answered with the envelope's own Error, whatever the HTTP status.
 	if envelope.Response.Error != nil {
-		return fmt.Errorf("tencent sms: send refused: %s: %s (request %s)", envelope.Response.Error.Code, envelope.Response.Error.Message, envelope.Response.RequestID)
+		refusal := fmt.Errorf("tencent sms: send refused: %s: %s (request %s)", envelope.Response.Error.Code, envelope.Response.Error.Message, envelope.Response.RequestID)
+		if isNumberVerdict(envelope.Response.Error.Code) {
+			return fmt.Errorf("%w: %w", pkgcore.ErrTransportPermanent, refusal)
+		}
+		return refusal
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("tencent sms: gateway returned status %d (request %s)", resp.StatusCode, envelope.Response.RequestID)
@@ -313,9 +319,46 @@ func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 		if msg == "" {
 			msg = "(no message)"
 		}
-		return fmt.Errorf("tencent sms: send refused: %s: %s (request %s)", code, msg, envelope.Response.RequestID)
+		refusal := fmt.Errorf("tencent sms: send refused: %s: %s (request %s)", code, msg, envelope.Response.RequestID)
+		if isNumberVerdict(code) {
+			return fmt.Errorf("%w: %w", pkgcore.ErrTransportPermanent, refusal)
+		}
+		return refusal
 	}
 	return nil
+}
+
+// isNumberVerdict reports whether a Tencent SendSms error code -- the
+// envelope's own Error or a per-number send-status row's Code, one
+// vocabulary -- is the destination's own verdict on the phone number, the
+// refusal a retry can never change, so Send can mark it with
+// pkgcore.ErrTransportPermanent (go/notification answers the marked failure
+// by stopping the attempt and bouncing the contact; the sentinel's own doc
+// comment draws the boundary):
+//
+//   - FailedOperation.PhoneNumberInBlacklist: the number is on the opt-out
+//     or carrier blacklist.
+//   - FailedOperation.PhoneNumberParseFail: the number cannot be parsed as
+//     a phone number at all.
+//   - InvalidParameterValue.IncorrectPhoneNumber: the number's format is
+//     wrong.
+//
+// Every other code stays unwrapped on purpose. The LimitExceeded.* per-number
+// caps (30-second, hourly, daily, duplicate-content) are temporary; the
+// signature, template, auth and region refusals are the request's or the
+// operator's; envelope system errors and non-2xx statuses are the platform's
+// or the connection's. None of them is the destination's verdict, so a
+// sender that marked one would have a healthy number bounced over a
+// platform or configuration problem.
+func isNumberVerdict(code string) bool {
+	switch code {
+	case "FailedOperation.PhoneNumberInBlacklist",
+		"FailedOperation.PhoneNumberParseFail",
+		"InvalidParameterValue.IncorrectPhoneNumber":
+		return true
+	default:
+		return false
+	}
 }
 
 // templateParamSet resolves tpl's positional parameters from params, in the

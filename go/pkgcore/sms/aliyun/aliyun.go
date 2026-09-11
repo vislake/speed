@@ -209,8 +209,11 @@ type dysmsapiResponse struct {
 // gateway. The message is first mapped to its approved template by
 // (msg.Locale, msg.MessageID) and its declared variables are resolved from
 // msg.Params -- both before any request, and before the nonce is drawn so a
-// refused send costs nothing -- and the whole parameter set -- common RPC
-// parameters plus the SendSms-specific ones -- then travels percent-encoded
+// refused send costs nothing. A refusal that is the destination's own
+// verdict on the number is wrapped with pkgcore.ErrTransportPermanent (see
+// isNumberVerdict); every other failure returns unwrapped. The whole
+// parameter set -- common RPC parameters plus the SendSms-specific ones --
+// then travels percent-encoded
 // with Aliyun's own RFC 3986 rule in the REQUEST LINE's query string with an
 // empty body, the exact wire placement both official SDK generations use for
 // dysmsapi's SendSms (the legacy alibaba-cloud-sdk-go builds the same
@@ -285,9 +288,41 @@ func (s *sender) Send(ctx context.Context, msg pkgcore.SMS) error {
 		// The code and message are Aliyun's own business-error vocabulary
 		// (isv.*, SignatureDoesNotMatch, ...); both surface so an operator
 		// can act on the refusal, and neither echoes a credential.
-		return fmt.Errorf("aliyun sms: send refused: %s %s (request %s)", envelope.Code, envelope.Message, envelope.RequestID)
+		refusal := fmt.Errorf("aliyun sms: send refused: %s %s (request %s)", envelope.Code, envelope.Message, envelope.RequestID)
+		if isNumberVerdict(envelope.Code) {
+			return fmt.Errorf("%w: %w", pkgcore.ErrTransportPermanent, refusal)
+		}
+		return refusal
 	}
 	return nil
+}
+
+// isNumberVerdict reports whether a Dysmsapi business-error code is the
+// destination's own verdict on the phone number -- the refusal a retry can
+// never change -- so Send can mark it with pkgcore.ErrTransportPermanent
+// (go/notification answers the marked failure by stopping the attempt and
+// bouncing the contact; the sentinel's own doc comment draws the boundary):
+//
+//   - isv.MOBILE_NUMBER_ILLEGAL: the number is not a valid phone number.
+//   - isv.BLACK_KEY_CONTROL_LIMIT: the number carries Aliyun's blacklist
+//     control -- an opt-out or complaint history, a permanent per-number
+//     refusal.
+//
+// Every other refusal stays unwrapped on purpose. The frequency limits
+// (isv.BUSINESS_LIMIT_CONTROL and the DAY/MONTH/HOUR/MINUTE variants) are
+// per-number but temporary; the account, signature, template and content
+// codes (isv.AMOUNT_NOT_ENOUGH, isv.SMS_TEMPLATE_ILLEGAL, ...) are the
+// operator's or the platform's; the signature and system codes
+// (SignatureDoesNotMatch, isp.SYSTEM_ERROR, ...) are the request's or
+// Aliyun's. None of them is the destination's verdict, so a sender that
+// marked one would have a healthy number bounced over an account problem.
+func isNumberVerdict(code string) bool {
+	switch code {
+	case "isv.MOBILE_NUMBER_ILLEGAL", "isv.BLACK_KEY_CONTROL_LIMIT":
+		return true
+	default:
+		return false
+	}
 }
 
 // templateVariables selects the values tpl's declared variables receive from

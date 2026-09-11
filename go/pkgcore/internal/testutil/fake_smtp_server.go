@@ -63,8 +63,13 @@ type FakeSMTPOptions struct {
 	// command, which is what a dead relay looks like mid-transaction.
 	Hang bool
 
-	// Reject, when set, answers 550 to every RCPT it reports true for.
+	// Reject, when set, answers a refusal to every RCPT it reports true for.
 	Reject func(rcpt string) bool
+
+	// RejectReply is the whole reply line a rejected RCPT is answered with,
+	// e.g. "452 4.2.2 Mailbox full" for a transient refusal. Empty means the
+	// default permanent refusal, "550 5.1.1 No such user".
+	RejectReply string
 }
 
 // SMTPExchange is everything the relay saw in one MAIL..DATA transaction.
@@ -180,7 +185,11 @@ func (s *FakeSMTPServer) handle(conn net.Conn) {
 		case "RCPT":
 			ex.Rcpts = append(ex.Rcpts, cmd)
 			if s.opts.Reject != nil && s.opts.Reject(cmd) {
-				_, _ = fmt.Fprint(conn, "550 5.1.1 No such user\r\n")
+				reply := s.opts.RejectReply
+				if reply == "" {
+					reply = "550 5.1.1 No such user"
+				}
+				_, _ = fmt.Fprintf(conn, "%s\r\n", reply)
 				continue
 			}
 			_, _ = fmt.Fprint(conn, "250 2.1.5 Ok\r\n")

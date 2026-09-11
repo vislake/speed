@@ -433,8 +433,87 @@ func TestSend_VendorBusinessRefusal_SurfacesCodeAndMessage(t *testing.T) {
 	}
 }
 
+// TestSend_NumberVerdictRefusals_CarryThePermanentSentinel proves the
+// refusals that are Aliyun's verdict on the phone number itself -- the
+// invalid-number and blacklist-control codes -- come back wrapping
+// pkgcore.ErrTransportPermanent, the signal a delivery caller stops
+// retrying on: no retry can change the number's own standing, and
+// go/notification answers the marked failure by bouncing the contact.
+func TestSend_NumberVerdictRefusals_CarryThePermanentSentinel(t *testing.T) {
+	t.Parallel()
+
+	refusals := []struct{ name, code string }{
+		{"an invalid number", "isv.MOBILE_NUMBER_ILLEGAL"},
+		{"a blacklist-controlled number", "isv.BLACK_KEY_CONTROL_LIMIT"},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rt := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"Code":"` + tt.code + `","Message":"refused","RequestId":"REQ-REFUSED"}`)),
+					Header:     make(http.Header),
+				}, nil
+			})
+
+			s := fixedSender(t, rt, testConfig())
+			err := s.Send(context.Background(), testSMS())
+			if err == nil {
+				t.Fatalf("Send() error = nil, want the %s refusal", tt.code)
+			}
+			if !errors.Is(err, pkgcore.ErrTransportPermanent) {
+				t.Errorf("Send() error = %v, want errors.Is(err, pkgcore.ErrTransportPermanent) for %s", err, tt.code)
+			}
+			if !strings.Contains(err.Error(), tt.code) {
+				t.Errorf("Send() error = %v, want the vendor code %s to stay reachable as the cause", err, tt.code)
+			}
+		})
+	}
+}
+
+// TestSend_NonNumberRefusals_AreNotMarkedPermanent pins the other side of
+// the classification: refusals that are the platform's, the operator's or
+// the message's -- a per-number frequency limit included, which is
+// temporary, and an unapproved template, which is configuration -- must
+// travel unwrapped, so a caller acting on the sentinel as the number's own
+// verdict never bounces a healthy number over one of them.
+func TestSend_NonNumberRefusals_AreNotMarkedPermanent(t *testing.T) {
+	t.Parallel()
+
+	refusals := []struct{ name, code string }{
+		{"a per-number frequency limit", "isv.BUSINESS_LIMIT_CONTROL"},
+		{"an unapproved template", "isv.SMS_TEMPLATE_ILLEGAL"},
+		{"an empty account", "isv.AMOUNT_NOT_ENOUGH"},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rt := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"Code":"` + tt.code + `","Message":"refused","RequestId":"REQ-REFUSED"}`)),
+					Header:     make(http.Header),
+				}, nil
+			})
+
+			s := fixedSender(t, rt, testConfig())
+			err := s.Send(context.Background(), testSMS())
+			if err == nil {
+				t.Fatalf("Send() error = nil, want the %s refusal", tt.code)
+			}
+			if errors.Is(err, pkgcore.ErrTransportPermanent) {
+				t.Errorf("Send() error = %v, want %s NOT marked with pkgcore.ErrTransportPermanent", err, tt.code)
+			}
+		})
+	}
+}
+
 // TestSend_HTTPErrorStatus_ReturnsError proves a non-2xx gateway answer
-// surfaces as an error.
+// surfaces as an error, unwrapped by the permanent signal: a gateway
+// outage says nothing about the destination.
 func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -447,8 +526,12 @@ func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(t, rt, testConfig())
-	if err := s.Send(context.Background(), testSMS()); err == nil {
+	err := s.Send(context.Background(), testSMS())
+	if err == nil {
 		t.Fatalf("Send() error = nil, want an error for a 503 gateway response")
+	}
+	if errors.Is(err, pkgcore.ErrTransportPermanent) {
+		t.Errorf("Send() error = %v, want a 503 gateway answer NOT marked with pkgcore.ErrTransportPermanent", err)
 	}
 }
 

@@ -88,7 +88,10 @@ type SMS struct {
 // its flow (go/authn answers a failed code delivery indistinguishably from a
 // request for an unregistered number, and go/notification settles the
 // attempt as failed and marks the contact bounced on a permanent transport
-// error).
+// error). A failure that is the destination's own verdict on the number --
+// the carrier refusing this number permanently (an invalid number, a
+// blacklisted one) -- must be wrapped with ErrTransportPermanent; every
+// other failure travels unwrapped, per that sentinel's own boundary.
 //
 // Unlike the four assembly-resolved seams (EventBus, KVStore, Mailer and
 // ObjectStore), SMSSender deliberately has no registry, preset or capability

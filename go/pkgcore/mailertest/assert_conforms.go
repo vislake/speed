@@ -6,11 +6,19 @@
 // implementation — built-in (pkgcore.NewConsoleMailer, pkgcore.NewSMTPMailer)
 // or host-supplied through the mailer value's configuration block — must pass, so drift between
 // implementations is caught here once instead of pairwise.
+//
+// One clause of the contract is asserted separately, by AssertPermanentFailure:
+// a Send the destination permanently refused must wrap the failure with
+// pkgcore.ErrTransportPermanent. It cannot be checked inside AssertConforms,
+// because provoking a real refusal takes a backend scripted to produce one,
+// which the generic factory cannot be; each implementation drives the helper
+// from its own scripted backend instead.
 package mailertest
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -126,4 +134,32 @@ func AssertConforms(t *testing.T, factory func() pkgcore.Mailer) {
 			t.Errorf("Send() error = %v, want nil for a valid message carrying a ReplyTo", err)
 		}
 	})
+}
+
+// AssertPermanentFailure verifies the sentinel clause of the Mailer
+// contract: err, the error a Mailer.Send returned for a message the backend
+// permanently refused at the destination (an SMTP relay's 5xx answer to
+// RCPT, say), must wrap pkgcore.ErrTransportPermanent -- the signal callers
+// split terminal refusals from retryable failures by (see that sentinel's
+// doc comment for the destination's-verdict boundary). Callers drive it
+// from an implementation's own scripted backend -- pkgcore's SMTP mailer
+// from unittest/mailer_conformance_test.go's rejecting fake relay -- and
+// may assert together with it that the refusal's cause survived, so a
+// wrapper that dropped the transport's own error fails the same suite.
+func AssertPermanentFailure(t *testing.T, err error) {
+	t.Helper()
+	if checkErr := checkPermanentFailure(err); checkErr != nil {
+		t.Errorf("Send() error = %v, want one wrapping pkgcore.ErrTransportPermanent: %v", err, checkErr)
+	}
+}
+
+// checkPermanentFailure is AssertPermanentFailure's verdict as an error, so
+// this package's own tests can pin both directions (the kvstoretest
+// check* pattern: a deliberate failure cannot be observed on the *testing.T
+// that drives it).
+func checkPermanentFailure(err error) error {
+	if !errors.Is(err, pkgcore.ErrTransportPermanent) {
+		return fmt.Errorf("error does not wrap pkgcore.ErrTransportPermanent: %w", err)
+	}
+	return nil
 }

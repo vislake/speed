@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"mime"
 	"mime/multipart"
@@ -137,6 +138,13 @@ func (m *smtpMailer) tlsConfig() *tls.Config {
 // before the next one is sent. Failures at any step abort the transaction and
 // close the connection.
 //
+// A relay that answers RCPT with a 5xx reply code has given its verdict on
+// the recipient address itself, and Send wraps that failure with
+// ErrTransportPermanent so the caller's terminal-versus-retry split can see
+// it (see markPermanentRecipientRefusal). Every other failure -- a 4xx
+// temporary refusal, a connection, TLS or AUTH failure, a 5xx to any other
+// command -- returns unwrapped.
+//
 // ctx is honoured throughout: a cancelled context fails the Send, whether the
 // cancellation lands before the dial or mid-transaction -- closing the
 // connection is what interrupts a relay that stopped answering -- and a
@@ -226,7 +234,7 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	}
 	for _, recipient := range mail.To {
 		if rcptErr := client.Rcpt(recipient); rcptErr != nil {
-			return rcptErr
+			return markPermanentRecipientRefusal(rcptErr)
 		}
 	}
 
@@ -245,6 +253,27 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	// so the mailer only reports success once the relay has accepted the
 	// message. The deferred Close covers every path that fails before this.
 	return client.Quit()
+}
+
+// markPermanentRecipientRefusal wraps a relay's answer to RCPT with
+// ErrTransportPermanent when the answer is a 5xx reply code: that reply is
+// the relay's verdict on the recipient address itself (550 no such user, 553
+// mailbox name not allowed, 551 user not local, ...), which no retry can
+// change, and it is the one SMTP failure attributable to the destination --
+// the failure the recipient's own contact record is answered with. The
+// reply's text routinely echoes the address it rejected and stays reachable
+// through Unwrap, so a caller that records the failure keeps storing its own
+// bounded classification rather than the relay's words. A 4xx reply (a
+// temporary refusal, the relay asking for a retry) and every non-protocol
+// failure travel unwrapped: they are the relay's, the connection's or our
+// own problem, and a consumer acting on the sentinel as the destination's
+// verdict must not see them marked.
+func markPermanentRecipientRefusal(err error) error {
+	var reply *textproto.Error
+	if errors.As(err, &reply) && reply.Code >= 500 && reply.Code <= 599 {
+		return fmt.Errorf("%w: %w", ErrTransportPermanent, err)
+	}
+	return err
 }
 
 // dial opens the TCP connection to the relay, wrapping it in TLS first when

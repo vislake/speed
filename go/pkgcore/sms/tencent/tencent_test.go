@@ -483,7 +483,8 @@ func TestSend_StatusRowRefusal_ReturnsError(t *testing.T) {
 
 // TestSend_HTTPErrorStatus_ReturnsError proves a non-2xx gateway answer
 // surfaces as an error even when its envelope carries no Error (the
-// transport-failure shape).
+// transport-failure shape), unwrapped by the permanent signal: a gateway
+// outage says nothing about the destination number.
 func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -496,8 +497,103 @@ func TestSend_HTTPErrorStatus_ReturnsError(t *testing.T) {
 	})
 
 	s := fixedSender(t, rt, testConfig())
-	if err := s.Send(context.Background(), testSMS()); err == nil {
+	err := s.Send(context.Background(), testSMS())
+	if err == nil {
 		t.Fatalf("Send() error = nil, want an error for a 503 gateway response")
+	}
+	if errors.Is(err, pkgcore.ErrTransportPermanent) {
+		t.Errorf("Send() error = %v, want a 503 gateway answer NOT marked with pkgcore.ErrTransportPermanent", err)
+	}
+}
+
+// TestSend_NumberVerdictRefusals_CarryThePermanentSentinel proves the
+// refusals that are Tencent's verdict on the phone number itself -- the
+// blacklist, unparsable-number and bad-format codes -- come back wrapping
+// pkgcore.ErrTransportPermanent, whichever of the two places the verdict
+// rides in: a per-number send-status row (the shape the gateway uses for a
+// number-level refusal) or the envelope's own Error. No retry can change
+// the number's standing, and go/notification answers the marked failure by
+// bouncing the contact.
+func TestSend_NumberVerdictRefusals_CarryThePermanentSentinel(t *testing.T) {
+	t.Parallel()
+
+	refusals := []struct {
+		name    string
+		code    string
+		envelop bool // the refusal rides in the envelope's Error, not a status row
+	}{
+		{"a blacklisted number, status row", "FailedOperation.PhoneNumberInBlacklist", false},
+		{"an unparsable number, status row", "FailedOperation.PhoneNumberParseFail", false},
+		{"a bad-format number, envelope", "InvalidParameterValue.IncorrectPhoneNumber", true},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := `{"Response":{"SendStatusSet":[{"Code":"` + tt.code + `","Message":"refused"}],"RequestId":"REQ-REFUSED"}}`
+			if tt.envelop {
+				body = `{"Response":{"Error":{"Code":"` + tt.code + `","Message":"refused"},"RequestId":"REQ-REFUSED"}}`
+			}
+			rt := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			})
+
+			s := fixedSender(t, rt, testConfig())
+			err := s.Send(context.Background(), testSMS())
+			if err == nil {
+				t.Fatalf("Send() error = nil, want the %s refusal", tt.code)
+			}
+			if !errors.Is(err, pkgcore.ErrTransportPermanent) {
+				t.Errorf("Send() error = %v, want errors.Is(err, pkgcore.ErrTransportPermanent) for %s", err, tt.code)
+			}
+			if !strings.Contains(err.Error(), tt.code) {
+				t.Errorf("Send() error = %v, want the vendor code %s to stay reachable as the cause", err, tt.code)
+			}
+		})
+	}
+}
+
+// TestSend_NonNumberRefusals_AreNotMarkedPermanent pins the other side of
+// the classification: refusals that are the platform's, the operator's or
+// the message's -- the per-number frequency caps included, which are
+// temporary -- must travel unwrapped, so a caller acting on the sentinel as
+// the number's own verdict never bounces a healthy number over one of them.
+func TestSend_NonNumberRefusals_AreNotMarkedPermanent(t *testing.T) {
+	t.Parallel()
+
+	refusals := []struct {
+		name string
+		body string
+	}{
+		{"a per-number daily cap", `{"Response":{"SendStatusSet":[{"Code":"LimitExceeded.PhoneNumberDailyLimit","Message":"daily limit"}],"RequestId":"REQ-REFUSED"}}`},
+		{"a template-parameter mismatch", `{"Response":{"SendStatusSet":[{"Code":"FailedOperation.TemplateParamSetNotMatchApprovedTemplate","Message":"template params do not match"}],"RequestId":"REQ-REFUSED"}}`},
+		{"a signature failure", `{"Response":{"Error":{"Code":"AuthFailure.SignatureFailure","Message":"The provided credentials could not be validated"},"RequestId":"REQ-REFUSED"}}`},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rt := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Header:     make(http.Header),
+				}, nil
+			})
+
+			s := fixedSender(t, rt, testConfig())
+			err := s.Send(context.Background(), testSMS())
+			if err == nil {
+				t.Fatalf("Send() error = nil, want the refusal")
+			}
+			if errors.Is(err, pkgcore.ErrTransportPermanent) {
+				t.Errorf("Send() error = %v, want the refusal NOT marked with pkgcore.ErrTransportPermanent", err)
+			}
+		})
 	}
 }
 

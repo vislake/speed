@@ -307,8 +307,11 @@ func TestSMTPMailer_RefusesAuthOverAPlaintextConnection(t *testing.T) {
 }
 
 // TestSMTPMailer_Send_FailsWhenTheRelayRejectsARecipient pins the failure
-// path of an RCPT 550: the send fails, and the relay never saw a DATA, so no
-// exchange is recorded.
+// path of an RCPT 550: the send fails, the failure carries
+// ErrTransportPermanent -- the relay's 5xx reply is its verdict on the
+// recipient address, the one SMTP failure a caller may treat as terminal
+// for the destination -- and the relay never saw a DATA, so no exchange is
+// recorded.
 func TestSMTPMailer_Send_FailsWhenTheRelayRejectsARecipient(t *testing.T) {
 	t.Parallel()
 
@@ -325,11 +328,47 @@ func TestSMTPMailer_Send_FailsWhenTheRelayRejectsARecipient(t *testing.T) {
 	if err == nil {
 		t.Fatal("Send() error = nil, want the relay's 550 to fail the send")
 	}
+	if !errors.Is(err, ErrTransportPermanent) {
+		t.Errorf("Send() error = %v, want errors.Is(err, ErrTransportPermanent): a 550 reply is the relay's verdict on the recipient", err)
+	}
+	if !strings.Contains(err.Error(), "550") {
+		t.Errorf("Send() error = %v, want the relay's reply to stay reachable as the cause", err)
+	}
 	if !strings.Contains(err.Error(), "send mail via smtp") {
 		t.Errorf("Send() error = %v, want it to carry the relay address context", err)
 	}
 	if exchanges := server.Take(); len(exchanges) != 0 {
 		t.Errorf("relay recorded %d exchanges, want none: the message must not be sent when a recipient is refused", len(exchanges))
+	}
+}
+
+// TestSMTPMailer_Send_TemporaryRecipientRefusalIsNotMarkedPermanent pins the
+// boundary of the permanent marking at the wire: a 4xx reply to RCPT is the
+// relay asking for a retry, not the destination's verdict, so Send must
+// return it unmarked. Marking it would have a caller retrying a mailbox
+// that is merely full answered as a terminal refusal -- the
+// over-classification the marking deliberately excludes.
+func TestSMTPMailer_Send_TemporaryRecipientRefusalIsNotMarkedPermanent(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{
+		Reject:      func(string) bool { return true },
+		RejectReply: "452 4.2.2 Mailbox full",
+	})
+	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
+
+	err := mailer.Send(context.Background(), Mail{
+		From: "ops@example.com", To: []string{"ada@example.com"},
+		Subject: "retry later", Text: "the mailbox is full",
+	})
+	if err == nil {
+		t.Fatal("Send() error = nil, want the relay's 452 to fail the send")
+	}
+	if errors.Is(err, ErrTransportPermanent) {
+		t.Errorf("Send() error = %v, want a transient 4xx refusal NOT marked with ErrTransportPermanent", err)
+	}
+	if !strings.Contains(err.Error(), "452") {
+		t.Errorf("Send() error = %v, want the relay's reply text", err)
 	}
 }
 
@@ -496,7 +535,10 @@ func TestSMTPMailer_Send_CarriesADisplayNameAddressForm(t *testing.T) {
 }
 
 // TestSMTPMailer_Send_ReportsDialFailures pins the error a valid send gets
-// when the relay is unreachable: a wrapped error naming the relay address.
+// when the relay is unreachable: a wrapped error naming the relay address,
+// and deliberately NOT one carrying ErrTransportPermanent -- an unreachable
+// relay says nothing about the destination, so the marking must stay off a
+// connection failure.
 func TestSMTPMailer_Send_ReportsDialFailures(t *testing.T) {
 	t.Parallel()
 
@@ -524,6 +566,9 @@ func TestSMTPMailer_Send_ReportsDialFailures(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), deadAddr) || !strings.Contains(err.Error(), "send mail via smtp") {
 		t.Errorf("Send() error = %v, want it to wrap the relay address %q", err, deadAddr)
+	}
+	if errors.Is(err, ErrTransportPermanent) {
+		t.Errorf("Send() error = %v, want a refused dial NOT marked with ErrTransportPermanent", err)
 	}
 }
 

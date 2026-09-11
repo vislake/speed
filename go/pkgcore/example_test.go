@@ -317,6 +317,28 @@ func ExampleMail_replyTo() {
 	// true
 }
 
+// ExampleErrTransportPermanent shows the one classification a delivery
+// caller reads out of a transport failure: a cause wrapping the sentinel is
+// the destination's own permanent refusal -- terminal, never retried --
+// while a transient failure travels unwrapped and stays retryable. The
+// transports themselves wrap it (an SMTP relay's 5xx answer to RCPT, a
+// carrier's invalid-number verdict); a caller only ever matches it with
+// errors.Is, and go/notification answers the marked failure by marking its
+// external contact bounced.
+func ExampleErrTransportPermanent() {
+	// What a transport returns for a permanently refused destination.
+	refused := fmt.Errorf("smtp: %w: 550 5.1.1 No such user", pkgcore.ErrTransportPermanent)
+	fmt.Println(errors.Is(refused, pkgcore.ErrTransportPermanent))
+
+	// What it returns for a transient failure: no sentinel, retryable.
+	transient := errors.New("smtp: 421 4.3.2 service not available")
+	fmt.Println(errors.Is(transient, pkgcore.ErrTransportPermanent))
+
+	// Output:
+	// true
+	// false
+}
+
 // ExampleNewConsoleSMSSender shows the zero-external-dependency SMS
 // transport: it prints every message to the writer it was given as one
 // record per send, instead of delivering it -- the standalone deployment
