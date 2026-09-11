@@ -44,6 +44,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/sharing"
 )
@@ -60,7 +63,7 @@ import (
 func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "share-journey")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "share-journey")
 
 	// The case with the patient photo and the completed simulation,
 	// exactly as the smile journey makes them: upload the before
@@ -68,7 +71,7 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 	// read the output object id the comparison view renders.
 	jpeg := jpegWithExif(t)
 	photo := uploadPhotoAs(t, srv, token, base64.StdEncoding.EncodeToString(jpeg))
-	opened := createCaseAs(t, srv, token, "", caseCreateBody{
+	opened := testutil.CreateCaseAs(t, srv, token, "", testutil.CaseCreateBody{
 		PatientName:    "Share journey patient",
 		PatientRef:     "SHJ-001",
 		PhotoObjectIDs: []string{photo.ObjectID},
@@ -242,8 +245,8 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 // envelope, which is exactly why the patient page renders one human
 // message for a link that no longer works whatever the reason.
 func TestShareJourney_ExpiredShareRefusesHonestly(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "expiry-journey")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "expiry-journey")
 
 	content := sharingTestJPEG(t)
 	completed := uploadAndComplete(t, srv, acmeToken, content, sha256Hex(content))

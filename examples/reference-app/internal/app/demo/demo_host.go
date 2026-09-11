@@ -62,8 +62,8 @@ var DemoHostTenants = map[string]pkgcore.TenantID{
 //     go/authn/service.go's nil-or-unseeded MembershipReader answer refuses
 //     rather than allows, and the org rows are that answer now).
 //   - Tests grant membership explicitly after registering an account
-//     through the real HTTP surface (registerAndAuthenticate in
-//     flowtests/server_test.go, flowtests/authn_e2e_test.go), keeping a reference to the same
+//     through the real HTTP surface (RegisterAndAuthenticate in
+//     internal/apptest, flowtests/authn_e2e_test.go), keeping a reference to the same
 //     store BuildServer itself wires.
 
 // DemoOrgUserHeader is the header the demo identity closure

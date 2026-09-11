@@ -43,6 +43,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -100,7 +102,7 @@ type webhookDeliveriesResponse struct {
 // webhookCRUDRequest issues method against path (already the full
 // "/api/v1/integration/webhooks..." route) on srv as the acting user, in the
 // tenant the given bearer token resolves -- the identical shape
-// apikeyRequest, storageRequest and notesRequestAs all use. A non-empty user
+// apikeyRequest, storageRequest and testutil.NotesRequestAs all use. A non-empty user
 // additionally sends X-Demo-User-Id (DemoNotesCreatorUserID, this app's one
 // shared creator-attribution identity): integration_createWebhookSubscription
 // attributes the new subscription's CreatedBy through
@@ -267,7 +269,7 @@ func decodeWebhookDeliveries(t *testing.T, resp *http.Response, wantStatus int, 
 func TestBuildServer_WebhookPermissionGate_EnforcesTheWebhookPermissions(t *testing.T) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	srv, cfg, _ := buildWebhookFlowTestServer(t, client)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "webhook-gate")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "webhook-gate")
 
 	// The reader may neither read nor manage: both directions of the
 	// integration:webhook:read / integration:webhook:manage gate are closed,
@@ -330,7 +332,7 @@ func TestBuildServer_WebhookPermissionGate_EnforcesTheWebhookPermissions(t *test
 func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testing.T) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	srv, cfg, _ := buildWebhookFlowTestServer(t, client)
-	ownerToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "webhook-crud")
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "webhook-crud")
 
 	// Create: every response field of the spec's
 	// IntegrationCreatedWebhookSubscription schema, with the secret shown
@@ -516,7 +518,7 @@ func TestBuildServer_WebhookCRUD_DeliveriesList_RecentDeliveredRow(t *testing.T)
 	srv, cfg, mailer := buildWebhookFlowTestServer(t, client)
 
 	const tenant = pkgcore.TenantID("tenant-acme")
-	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "webhook-deliveries")
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "webhook-deliveries")
 	sub := createWebhookSubscription(t, srv, ownerToken, receiver.URL, []string{"org.member.joined"})
 
 	triggerOrgMemberJoined(t, srv, cfg, mailer, tenant, "Webhook Deliveries", "webhook-deliveries-member@example.com")

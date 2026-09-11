@@ -30,6 +30,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
@@ -77,8 +80,8 @@ type testStorageListResponse struct {
 
 // storageRequest issues method against path on srv as the acting user,
 // in the tenant the given bearer token resolves. It follows
-// server_test.go's notesRequestAs shape: the token signs a real account
-// into the tenant (registerAndAuthenticate), and the demo user header
+// server_test.go's testutil.NotesRequestAs shape: the token signs a real account
+// into the tenant (apptest.RegisterAndAuthenticate), and the demo user header
 // then names which seeded demo grant the rbac gate decides the request
 // against (internal/app/demo/demo_subject.go's SeedDemoGrants). body may be any reader
 // (JSON for the metadata endpoints, raw bytes for the content endpoint);
@@ -335,11 +338,11 @@ func uploadAndComplete(t *testing.T, srv *httptest.Server, token string, content
 //  5. list (metadata only -- no fan-out), and delete, after which the id
 //     answers 404 like one that never existed.
 func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
 	// against (internal/app/demo/demo_subject.go's SeedDemoGrants).
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-flow")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-flow")
 
 	jpegBytes := jpegWithExif(t)
 	if !bytes.Contains(jpegBytes, exifSignature) {
@@ -475,27 +478,27 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 // ways, while the owner passes. The gate answers with rbac's structured
 // code, asserted on the code rather than on the status alone.
 func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded grant the gate decides the request against.
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-gate")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-gate")
 
 	// The reader may neither declare an upload nor list objects: both
 	// directions of the storage:write / storage:read gate are closed.
 	resp := storageRequest(t, srv, http.MethodPost, "/api/v1/storage/objects",
 		acmeToken, demo.DemoReaderUserID, "application/json",
 		bytes.NewReader([]byte(`{"declaredSize":10,"declaredType":"text/plain"}`)))
-	assertPermissionDenied(t, resp, "POST /api/v1/storage/objects as the read-only demo user")
+	testutil.AssertPermissionDenied(t, resp, "POST /api/v1/storage/objects as the read-only demo user")
 
 	resp = storageRequest(t, srv, http.MethodGet, "/api/v1/storage/objects",
 		acmeToken, demo.DemoReaderUserID, "", nil)
-	assertPermissionDenied(t, resp, "GET /api/v1/storage/objects as the read-only demo user")
+	testutil.AssertPermissionDenied(t, resp, "GET /api/v1/storage/objects as the read-only demo user")
 
 	// A user with no grant at all is refused too.
 	resp = storageRequest(t, srv, http.MethodPost, "/api/v1/storage/objects",
 		acmeToken, "nobody", "application/json",
 		bytes.NewReader([]byte(`{"declaredSize":10,"declaredType":"text/plain"}`)))
-	assertPermissionDenied(t, resp, "POST as an ungranted user")
+	testutil.AssertPermissionDenied(t, resp, "POST as an ungranted user")
 
 	// A request with a resolvable tenant and no identity is refused as
 	// well. (This example's gate cannot tell anonymous from
@@ -505,7 +508,7 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 	resp = storageRequest(t, srv, http.MethodPost, "/api/v1/storage/objects",
 		acmeToken, "", "application/json",
 		bytes.NewReader([]byte(`{"declaredSize":10,"declaredType":"text/plain"}`)))
-	assertPermissionDenied(t, resp, "POST with no demo user header")
+	testutil.AssertPermissionDenied(t, resp, "POST with no demo user header")
 
 	// The owner, by contrast, walks straight through the gate: the 201
 	// proves the refusal above was the permission decision, not the
@@ -525,13 +528,13 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 // in BOTH tenants, so the refusal cannot be the authorization layer's:
 // the same user, through the gate, is told the object does not exist.
 func TestBuildServer_StorageIsolation_CrossTenantObjectInvisible(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// DemoOwnerUserID holds the owner role in BOTH demo tenants
 	// (SeedDemoGrants seeds every configured tenant), so a refusal cannot
 	// be the gate's: the tenant each request acts in comes from its bearer
 	// token, never from a Host header or any caller-supplied field.
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-iso-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "stg-iso-globex")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-iso-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "stg-iso-globex")
 
 	jpegBytes := jpegWithExif(t)
 	acmeObject := uploadAndComplete(t, srv, acmeToken, jpegBytes, "")
@@ -596,8 +599,8 @@ func decodeList(t *testing.T, resp *http.Response, what string) testStorageListR
 // conflict code -- and the refusal advances nothing, so the object stays
 // uploading (and stays invisible on the read surface) afterwards.
 func TestBuildServer_StorageComplete_ChecksumMismatchConflicts(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-cksum")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-cksum")
 
 	jpegBytes := jpegWithExif(t)
 	// Declare the checksum of different bytes -- same length, so nothing

@@ -49,6 +49,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/authn"
@@ -146,9 +149,9 @@ func (s *githubStub) provider() authn.SocialProvider {
 func buildAuthnE2EServer(t *testing.T, mutate ...func(*app.ServerConfig)) (*httptest.Server, app.ServerConfig, *bytes.Buffer, *githubStub) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	// This test signs its demo account into tenant-e2e, a tenant of its
-	// own that testConfig's shared DemoHostTenants map (acme/globex) does
+	// own that apptest.ServerConfig's shared DemoHostTenants map (acme/globex) does
 	// not name. Replace the map -- never mutate the shared one -- so
 	// SeedDemoGrants (internal/app/demo/demo_subject.go) seeds tenant-e2e with the built-in
 	// roles and the demo grants at boot, exactly as it does for the two
@@ -265,7 +268,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 		ID string `json:"id"`
 	}
 	registerResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/register", "",
-		map[string]string{"email": e2eEmail, "phone": e2ePhone, "password": testPassword},
+		map[string]string{"email": e2eEmail, "phone": e2ePhone, "password": testutil.TestPassword},
 		&registered)
 	if registerResp.StatusCode != http.StatusCreated {
 		t.Fatalf("register status = %d, want %d", registerResp.StatusCode, http.StatusCreated)
@@ -281,7 +284,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 	// ---- (1) Password sign-in ----
 	var passwordPair tokenPairResponse
 	passwordResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/password", "",
-		map[string]string{"identifier": e2eEmail, "password": testPassword, "tenant_id": "tenant-e2e", "device": "e2e-password"},
+		map[string]string{"identifier": e2eEmail, "password": testutil.TestPassword, "tenant_id": "tenant-e2e", "device": "e2e-password"},
 		&passwordPair)
 	if passwordResp.StatusCode != http.StatusOK {
 		t.Fatalf("password login status = %d, want %d", passwordResp.StatusCode, http.StatusOK)
@@ -539,7 +542,7 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 		ID string `json:"id"`
 	}
 	registerResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/register", "",
-		map[string]string{"email": e2eEmail, "phone": e2ePhone, "password": testPassword},
+		map[string]string{"email": e2eEmail, "phone": e2ePhone, "password": testutil.TestPassword},
 		&registered)
 	if registerResp.StatusCode != http.StatusCreated {
 		t.Fatalf("register status = %d, want %d", registerResp.StatusCode, http.StatusCreated)
@@ -554,7 +557,7 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 	// before any password work (go/authn/service.go's channelEnabled), so
 	// the correct credentials below are exactly what must NOT be honored.
 	passwordResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/password", "",
-		map[string]string{"identifier": e2eEmail, "password": testPassword, "tenant_id": "tenant-e2e", "device": "e2e-password"},
+		map[string]string{"identifier": e2eEmail, "password": testutil.TestPassword, "tenant_id": "tenant-e2e", "device": "e2e-password"},
 		nil)
 	defer passwordResp.Body.Close()
 	if passwordResp.StatusCode != http.StatusForbidden {
@@ -736,7 +739,7 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 			ID string `json:"id"`
 		}
 		resp := e2eDo(t, client, http.MethodPost, srv.URL+"/api/v1/authn/register", registerHeaders,
-			map[string]string{"email": email, "password": testPassword}, &registered)
+			map[string]string{"email": email, "password": testutil.TestPassword}, &registered)
 		if resp.StatusCode != http.StatusCreated {
 			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("register status = %d, want %d; body = %s", resp.StatusCode, http.StatusCreated, body)
@@ -745,7 +748,7 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 
 		var pair tokenPairResponse
 		loginResp := e2eDo(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/password", loginHeaders,
-			map[string]string{"identifier": email, "password": testPassword, "tenant_id": "tenant-e2e", "device": "clientip"}, &pair)
+			map[string]string{"identifier": email, "password": testutil.TestPassword, "tenant_id": "tenant-e2e", "device": "clientip"}, &pair)
 		if loginResp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(loginResp.Body)
 			t.Fatalf("login status = %d, want %d; body = %s", loginResp.StatusCode, http.StatusOK, body)

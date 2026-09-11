@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -90,18 +93,18 @@ func clinicNameAs(t *testing.T, srv *httptest.Server, token string) (name string
 // the browser renders comes from this route, and a raw tenant id is
 // never what it answers.
 func TestSelfServiceSignup_ClinicIsIdentifiedByTheNameItsRegistrationGave(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	const clinicName = "Northside Dental"
 	const email = "named-clinic-founder@example.com"
-	userID := registerFreshAccountNamed(t, srv, email, selfServicePassword, clinicName)
+	userID := registerFreshAccountNamed(t, srv, email, testutil.SelfServicePassword, clinicName)
 	wantTenant := pkgcore.TenantID("tenant-" + userID)
 
 	// The browser-shaped sign-in lands in the clinic, and the clinic's
 	// own bearer token answers the tenant-identity route with the name
 	// the registration gave -- the recognisable identity the frame and
 	// the work area render, never the derived tenant id.
-	status, code, token, tenant := browserSignIn(t, srv, email, selfServicePassword)
+	status, code, token, tenant := testutil.BrowserSignIn(t, srv, email, testutil.SelfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("browser-shaped sign-in: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}

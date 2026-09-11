@@ -39,6 +39,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/admin"
@@ -67,14 +69,14 @@ func createClinicNote(t *testing.T, srv *httptest.Server, token, text string) st
 	if err != nil {
 		t.Fatalf("marshal note body: %v", err)
 	}
-	resp := notesRequestAs(t, srv, http.MethodPost, token, "", bytes.NewReader(body))
+	resp := testutil.NotesRequestAs(t, srv, http.MethodPost, token, "", bytes.NewReader(body))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST /api/v1/notes as the clinic owner: status = %d, want %d; body = %s",
 			resp.StatusCode, http.StatusCreated, raw)
 	}
-	var created testNote
+	var created testutil.TestNote
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create-note response: %v", err)
 	}
@@ -225,15 +227,15 @@ func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegiste
 	boot1 := buildPeriodicFlowServer(t, boot1Cfg)
 
 	// The clinic comes from the real self-service flow, never from any
-	// configuration: registerFreshAccount goes through authn's real
+	// configuration: testutil.RegisterFreshAccount goes through authn's real
 	// register route, and the provisioning its user-created event fires
 	// synchronously creates the clinic. The tenant id derivation is
 	// spelled out here rather than reached through the production helper
 	// so this leg keeps compiling (and failing with a clean assertion)
 	// against the wiring this regression is measured on.
-	userID := registerFreshAccount(t, boot1.srv, periodicClinicEmail, testPassword)
+	userID := testutil.RegisterFreshAccount(t, boot1.srv, periodicClinicEmail, testutil.TestPassword)
 	clinic := pkgcore.TenantID("tenant-" + userID)
-	status, code, token, signedInTenant := browserSignIn(t, boot1.srv, periodicClinicEmail, testPassword)
+	status, code, token, signedInTenant := testutil.BrowserSignIn(t, boot1.srv, periodicClinicEmail, testutil.TestPassword)
 	if status != http.StatusOK {
 		t.Fatalf("sign-in of the freshly registered clinic owner: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -338,7 +340,7 @@ func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegiste
 	// A fresh sign-in for boot 2's HTTP probes: the same account lands in
 	// the same clinic across the restart (the org membership row
 	// survives, the property self_service_test.go's restart leg pins).
-	status, code, token, signedInTenant = browserSignIn(t, boot2.srv, periodicClinicEmail, testPassword)
+	status, code, token, signedInTenant = testutil.BrowserSignIn(t, boot2.srv, periodicClinicEmail, testutil.TestPassword)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two sign-in of the clinic owner: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)

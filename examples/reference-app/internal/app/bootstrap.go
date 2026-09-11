@@ -407,9 +407,9 @@ type hostConfig struct {
 	// enabled. Empty -- the default -- keeps every demo journey and every test
 	// driving demo actors through the headers, which is deliberate: flipping
 	// the default would break them at once (cmd/server/demo_subject_test.go,
-	// the notesRequestAs-family helpers in flowtests/server_test.go and
-	// cmd/server/test_support_test.go, and the flowtests suite that drives a
-	// demo actor through a header). An operator deploying this reference app
+	// the notesRequestAs-family helpers in internal/testutil and their
+	// callers, and the flowtests suite that drives a demo actor through a
+	// header). An operator deploying this reference app
 	// somewhere a real, non-demo user might reach it is the one case this
 	// variable exists for: setting it closes the hole with no code change. See
 	// DEPLOY.md's own section on these headers for the operator-facing version

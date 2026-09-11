@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
@@ -26,7 +28,7 @@ import (
 
 // TestConfigFromEnv_Defaults verifies ConfigFromEnv's zero-environment
 // defaults. Every other test in this file drives BuildServer directly
-// through testConfig(t), bypassing ConfigFromEnv (and its loader-driven
+// through apptest.ServerConfig(t), bypassing ConfigFromEnv (and its loader-driven
 // bootstrap) entirely, so ConfigFromEnv itself is covered.
 //
 // testutil.ClearBootstrapEnv clears every variable ConfigFromEnv reads,
@@ -632,9 +634,9 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "root-key-proof")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "root-key-proof")
 	if token == "" {
-		t.Fatal("registerAndAuthenticate returned an empty access token")
+		t.Fatal("apptest.RegisterAndAuthenticate returned an empty access token")
 	}
 }
 

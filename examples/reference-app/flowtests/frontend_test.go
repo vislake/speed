@@ -26,6 +26,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -83,7 +85,7 @@ func writeFrontendFixture(t *testing.T) string {
 // the recorder.
 func serveFrontendRequest(t *testing.T, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.WebDistDir = writeFrontendFixture(t)
 	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
@@ -212,7 +214,7 @@ func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 // unintercepted server does -- the frontend changes nothing unless an
 // operator (or a test) configures a dist directory.
 func TestFrontend_Disabled_BehaviorsByteIdentical(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -270,7 +272,7 @@ func TestFrontend_Head_AnswersHeadersOnly(t *testing.T) {
 // or a 404) or falls through, but the response never carries a file the
 // dist does not hold.
 func TestFrontend_PathTraversal_StaysInsideTheDist(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	dir := writeFrontendFixture(t)
 	// A canary file outside the dist directory: no response below may
 	// ever contain its bytes.
@@ -325,7 +327,7 @@ func TestFrontend_PathTraversal_StaysInsideTheDist(t *testing.T) {
 // request closes the suite as the control: the same handler still serves
 // the dist's genuine file when the path is a legitimate one.
 func TestFrontend_PathTraversal_NoEscapeShapeNamesOrReadsOutsideTheDist(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	dir := writeFrontendFixture(t)
 	// A canary file outside the dist directory (the fixture's parent): any
 	// join that escaped the configured directory would land on exactly this

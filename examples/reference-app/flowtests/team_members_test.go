@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -43,7 +46,7 @@ import (
 //
 // The answers are decoded by field name rather than through any
 // generated type -- the same "assert on the wire shape" posture
-// server_test.go's testNote takes -- because this host route belongs to
+// server_test.go's testutil.TestNote takes -- because this host route belongs to
 // no module fragment: its shape is hand-kept in step with src/team-api.ts
 // and the demo server the web suites ride. The decode targets are the
 // route's own wire types (internal/app/team_members.go's TeamMemberRow and
@@ -54,13 +57,13 @@ import (
 // buildSeededTeamTestServer composes BuildServer's real output with the
 // demo-user seed switched on AND a capturingMailer standing in for the
 // console mailer, so a test can both act as the seeded demo accounts
-// (bearer tokens from demoLogin) and pull an invitation token out of the
+// (bearer tokens from testutil.DemoLogin) and pull an invitation token out of the
 // mail org actually sent (capturingMailer, org_flow_test.go).
 func buildSeededTeamTestServer(t *testing.T) (*httptest.Server, *capturingMailer) {
 	t.Helper()
 
-	cfg := testConfig(t)
-	cfg.DemoUsersPassword = demoSeedPassword
+	cfg := apptest.ServerConfig(t)
+	cfg.DemoUsersPassword = testutil.DemoSeedPassword
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
@@ -121,7 +124,7 @@ func rosterRequest(t *testing.T, srv *httptest.Server, token string) (int, app.T
 // returns its bearer token, failing the test on a refused sign-in.
 func signInAsDemo(t *testing.T, srv *httptest.Server, email string, tenant pkgcore.TenantID) string {
 	t.Helper()
-	status, code, token := demoLogin(t, srv, email, demoSeedPassword, tenant)
+	status, code, token := testutil.DemoLogin(t, srv, email, testutil.DemoSeedPassword, tenant)
 	if status != http.StatusOK || code != "" {
 		t.Fatalf("sign in as %s into %q: status %d code %q, want 200", email, tenant, status, code)
 	}
@@ -246,7 +249,7 @@ func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName
 	const inviteeDisplayName = "Lin Chen"
 	registerBody, err := json.Marshal(map[string]string{
 		"email":        inviteeEmail,
-		"password":     testPassword,
+		"password":     testutil.TestPassword,
 		"display_name": inviteeDisplayName,
 	})
 	if err != nil {

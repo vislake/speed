@@ -46,6 +46,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	"github.com/vislake/speed/go/billing"
@@ -193,7 +195,7 @@ func TestBillingHttpSurface_SmilesimConsumptionReadsBackOverRoutes(t *testing.T)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "billing-http-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "billing-http-owner")
 
 	// The demo seed at boot granted tenant-acme DemoSimulationCreditGrant
 	// credits -- the balance the route must report before anything is
@@ -295,8 +297,8 @@ func TestBillingHttpSurface_TenantBoundaryHoldsOverRoutes(t *testing.T) {
 
 	const acme pkgcore.TenantID = "tenant-acme"
 	const globex pkgcore.TenantID = "tenant-globex"
-	acmeToken := registerAndAuthenticate(t, srv, cfg, acme, "billing-boundary-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, globex, "billing-boundary-globex")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, acme, "billing-boundary-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, globex, "billing-boundary-globex")
 
 	// Both demo tenants were seeded at boot with the same grant -- the
 	// identical starting number that makes the later divergence meaningful.
@@ -378,7 +380,7 @@ func TestBillingHttpSurface_RefundIsALedgerRowNotASilentChange(t *testing.T) {
 	srv, cfg := buildSmileSimTestServer(t, newFakeOpenAIImageServer(t))
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "billing-refund-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "billing-refund-owner")
 
 	// Reserve 10 credits service-side through a real CreditService call
 	// on a second connection, under the tenant's own context -- the shape
@@ -454,7 +456,7 @@ func TestBillingHttpSurface_RefusalsAreMappedCodesNotRawErrors(t *testing.T) {
 	srv, cfg := buildSmileSimTestServer(t, newFakeOpenAIImageServer(t))
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "billing-refusals-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "billing-refusals-owner")
 
 	params := assertBillingError(t, billingRequest(t, srv, http.MethodGet, billingTransactionsPath+"?limit=0", token, demo.DemoOwnerUserID),
 		http.StatusBadRequest, "billing.invalid_limit", "transactions with limit=0")

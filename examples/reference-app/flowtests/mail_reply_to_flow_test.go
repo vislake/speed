@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
@@ -35,7 +38,7 @@ const assemblyReplyTo = "support@reference-app.example"
 // sender it went out from.
 func TestMailReplyTo_OrgInvitation_CarriesTheAssemblyReplyTo(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "reply-to-org")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "reply-to-org")
 
 	var root orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
@@ -67,12 +70,12 @@ func TestMailReplyTo_OrgInvitation_CarriesTheAssemblyReplyTo(t *testing.T) {
 // captured message carries the assembly-configured Reply-To.
 func TestMailReplyTo_NotificationContactCode_CarriesTheAssemblyReplyTo(t *testing.T) {
 	srv, cfg, mailer, _ := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "reply-to-notif")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "reply-to-notif")
 	subject := demo.DemoNotesCreatorUserID
 
 	const contactEmail = "reply-to-contact@example.com"
 	var contact notifContact
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
 		map[string]string{"channel": "email", "address": contactEmail}, http.StatusCreated, &contact)
 	if contact.Status != "pending" {
 		t.Fatalf("created contact = %+v, want a pending email contact", contact)

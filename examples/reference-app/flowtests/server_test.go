@@ -1,31 +1,24 @@
 package flowtests
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
-	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 )
-
-// testPassword is the demo password every account registerAndAuthenticate
-// creates uses. It exists as a named constant, not a repeated literal,
-// purely so every test in this file that registers a demo account agrees on
-// what "a perfectly fine passphrase" means -- go/authn's own password
-// policy default (go/authn/password.go) accepts it.
-const testPassword = "a perfectly fine passphrase"
 
 // DemoNotesCreatorUserID is declared in internal/app/demo/demo_subject.go, next to the other
 // demo identity constants, because the running server's own glue reads it
@@ -35,152 +28,9 @@ const testPassword = "a perfectly fine passphrase"
 // subscription will dispatch to. See internal/app/demo/demo_subject.go's comment there for
 // what the id means.
 
-// testConfig returns a ServerConfig backed by a fresh, per-test temp-file
-// SQLite database, so tests never share state and never touch a real file
-// outside t.TempDir(). Memberships is always a fresh, empty
-// signInMemberships -- tests that need an account to actually reach a
-// tenant grant it explicitly via registerAndAuthenticate below, keeping
-// the same reference BuildServer itself wires (and attaches to org) so a
-// test's grant is visible to the running server.
-//
-// The six platform key materials need no field here: every boot resolves them
-// from the declaring components' declarations on the loader chain, with
-// app.BootstrapDevDefaults as the documented development defaults -- the
-// engine's platform cipher, the org, notification and authn blind indexers,
-// and the authn PII and pki local-key ciphers are all built from that
-// material, and a missing one fails the boot before the first request. The
-// environment resolution (each key's own variable, or APP_ROOT_KEY's
-// derivation) runs on the same chain, on ConfigFromEnv's path and the
-// assembly's alike.
-func testConfig(t *testing.T) app.ServerConfig {
-	t.Helper()
-	return app.ServerConfig{
-		DeploymentMode: pkgcore.DeploymentModeStandalone,
-		Port:           "0",
-		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
-		HostTenants:    demo.DemoHostTenants,
-		Memberships:    app.NewSignInMemberships(),
-	}
-}
-
-// buildTestServer wires up BuildServer's real output behind an
-// httptest.Server, so tests exercise the exact composed handler main.go
-// itself serves -- the authn+tenancy middleware chain, the notes Module's
-// real handler, and a real (if temp-file) SQLite database -- not a mock of
-// any of them. It returns the ServerConfig alongside the server so a
-// caller can reach cfg.Memberships to grant a demo account tenant
-// membership after registering it (registerAndAuthenticate does this), and
-// BuildServer's wired *compliance.Module -- the one reach a test has into
-// the retention/erasure/export services, which compliance_flow_test.go
-// drives (every other flow test in this package is HTTP-driven and discards
-// it, exactly as BuildServer's own doc comment describes main.go doing).
-func buildTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *compliance.Module) {
-	t.Helper()
-
-	cfg := testConfig(t)
-	handler, cleanup, complianceModule, err := app.BuildServer(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("BuildServer: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := cleanup(); err != nil {
-			t.Errorf("cleanup: %v", err)
-		}
-	})
-
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	return srv, cfg, complianceModule
-}
-
-// registerAndAuthenticate registers a fresh demo account through authn's
-// real HTTP surface (POST /api/v1/authn/register), grants it membership in
-// tenant via cfg.Memberships (the seam BuildServer itself wires authn's
-// MembershipReader to -- see internal/app/sign_in_memberships.go's own doc comment:
-// org's rows answer customer-tenant questions first, and the grant this
-// helper records is the in-process test shortcut that answers when org has
-// no row for the pair), signs it in with a tenant_id request naming
-// tenant, and returns the resulting bearer access token.
-//
-// That token is now the ONLY thing that selects a tenant for a protected
-// route in this app: with authn.Middleware running ahead of
-// tenancy.Middleware(authn.NewPrincipalResolver()), Host plays no part in
-// resolving the notes API's tenant at all (see internal/app/server.go's middleware-chain
-// doc comment) -- every test in this file varies the token it authenticates with, never Host, to reach a
-// different tenant.
-func registerAndAuthenticate(t *testing.T, srv *httptest.Server, cfg app.ServerConfig, tenant pkgcore.TenantID, emailLocalPart string) string {
-	t.Helper()
-
-	email := emailLocalPart + "@example.com"
-	registerBody, err := json.Marshal(map[string]string{"email": email, "password": testPassword})
-	if err != nil {
-		t.Fatalf("marshal register body: %v", err)
-	}
-	registerResp, err := srv.Client().Post(srv.URL+"/api/v1/authn/register", "application/json", bytes.NewReader(registerBody))
-	if err != nil {
-		t.Fatalf("register %s: %v", email, err)
-	}
-	defer registerResp.Body.Close()
-	if registerResp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(registerResp.Body)
-		t.Fatalf("register %s status = %d, want %d; body = %s", email, registerResp.StatusCode, http.StatusCreated, body)
-	}
-	var user struct {
-		ID string `json:"id"`
-	}
-	if decodeErr := json.NewDecoder(registerResp.Body).Decode(&user); decodeErr != nil {
-		t.Fatalf("decode register response for %s: %v", email, decodeErr)
-	}
-	if user.ID == "" {
-		t.Fatalf("register %s: response carried no id", email)
-	}
-
-	if cfg.Memberships == nil {
-		t.Fatal("registerAndAuthenticate: cfg.Memberships is nil -- testConfig always sets it, was a different app.ServerConfig passed?")
-	}
-	cfg.Memberships.Grant(user.ID, tenant)
-
-	loginBody, err := json.Marshal(map[string]string{
-		"identifier": email,
-		"password":   testPassword,
-		"tenant_id":  string(tenant),
-	})
-	if err != nil {
-		t.Fatalf("marshal login body: %v", err)
-	}
-	loginResp, err := srv.Client().Post(srv.URL+"/api/v1/authn/login/password", "application/json", bytes.NewReader(loginBody))
-	if err != nil {
-		t.Fatalf("login %s: %v", email, err)
-	}
-	defer loginResp.Body.Close()
-	if loginResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(loginResp.Body)
-		t.Fatalf("login %s status = %d, want %d; body = %s", email, loginResp.StatusCode, http.StatusOK, body)
-	}
-	var pair struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.NewDecoder(loginResp.Body).Decode(&pair); err != nil {
-		t.Fatalf("decode login response for %s: %v", email, err)
-	}
-	if pair.AccessToken == "" {
-		t.Fatalf("login %s: response carried no access_token", email)
-	}
-	return pair.AccessToken
-}
-
-type testNote struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
-}
-
-type testListNotesResponse struct {
-	Notes []testNote `json:"notes"`
-}
-
 // createNoteAs POSTs a note with the given text to srv, authenticated as
 // token -- the bearer access token is the ONLY thing that selects the
-// tenant a note is created under (registerAndAuthenticate's own doc
+// tenant a note is created under (apptest.RegisterAndAuthenticate's own doc
 // comment explains why Host does not) -- and returns the created note's id,
 // for a caller that needs to act on that exact note afterward (consult_flow_test.go's
 // suggestion requests, keyed on note_id).
@@ -223,7 +73,7 @@ func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) string
 			resp.StatusCode, http.StatusCreated, respBody)
 	}
 
-	var created testNote
+	var created testutil.TestNote
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create-note response: %v", err)
 	}
@@ -234,7 +84,7 @@ func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) string
 }
 
 // listNotesAs GETs the notes visible to the tenant token authenticates for.
-func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
+func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testutil.TestNote {
 	t.Helper()
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notes", nil)
@@ -256,7 +106,7 @@ func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 			resp.StatusCode, http.StatusOK, respBody)
 	}
 
-	var out testListNotesResponse
+	var out testutil.TestListNotesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -271,7 +121,7 @@ func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 // dbkit.Repository[Note] stack this app actually serves, not a mocked
 // shortcut at any layer. The tenant comes from each account's own access
 // token, never from a request header the caller controls -- see
-// registerAndAuthenticate's own doc comment.
+// apptest.RegisterAndAuthenticate's own doc comment.
 //
 // Scope boundary: this only exercises Create and List, the only two
 // operations notes' HTTP API exposes. List's isolation comes from the SQL
@@ -287,10 +137,10 @@ func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 // FindByID/Update/Delete's isolation guarantees. The two tests are
 // complementary, not redundant: neither can substitute for the other.
 func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-isolation")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-isolation")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-isolation")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-isolation")
 
 	createNoteAs(t, srv, acmeToken, "acme secret 1")
 	createNoteAs(t, srv, acmeToken, "acme secret 2")
@@ -320,71 +170,6 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 	}
 }
 
-// notesRequestAs issues method against /api/v1/notes with the given bearer
-// token (empty means no Authorization header at all) and acting user,
-// returning the raw response for the caller to assert on. An empty user
-// sends no demo user header at all, which is how a request with a
-// resolvable tenant (the token) but no identity is expressed.
-//
-// A non-empty user additionally sends X-Demo-User-Id (DemoNotesCreatorUserID):
-// notes' create handler attributes the note through its own SubjectResolver
-// (DemoNotesSubjectResolver in internal/app/server.go), which reads that header first and
-// falls back to the verified Principal when no demo header is present -- so
-// the requests that carry a demo user carry the creator header the demo
-// flows were built around, while a token-only request (demo_users_test.go,
-// the seeded accounts acting as real users) is attributed through the
-// Principal instead.
-func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user string, body io.Reader) *http.Response {
-	t.Helper()
-
-	req, err := http.NewRequest(method, srv.URL+"/api/v1/notes", body)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if user != "" {
-		req.Header.Set(demo.DemoUserHeader, user)
-		req.Header.Set(demo.DemoOrgUserHeader, demo.DemoNotesCreatorUserID)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("%s /api/v1/notes (user=%q): %v", method, user, err)
-	}
-	return resp
-}
-
-// assertPermissionDenied reads resp and requires it to be rbac's 403 with
-// the structured code the client resolves against the module's locale
-// files -- not merely "some 4xx", which tenancy's own fail-closed 403 would
-// also satisfy.
-func assertPermissionDenied(t *testing.T, resp *http.Response, what string) {
-	t.Helper()
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("%s: read body: %v", what, err)
-	}
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("%s: status = %d, want %d; body = %s", what, resp.StatusCode, http.StatusForbidden, body)
-	}
-	var decoded struct {
-		Code string `json:"code"`
-	}
-	if err = json.Unmarshal(body, &decoded); err != nil {
-		t.Fatalf("%s: decoding %s: %v", what, body, err)
-	}
-	if decoded.Code != "rbac.permission_denied" {
-		t.Fatalf("%s: error code = %q, want %q; body = %s", what, decoded.Code, "rbac.permission_denied", body)
-	}
-}
-
 // TestBuildServer_PermissionGate_EnforcesTheNotesPermissions is the
 // reference app doing its job as rbac's mandatory first consumer: a real
 // route, really gated, with the decision made by the real Service over a
@@ -401,14 +186,14 @@ func assertPermissionDenied(t *testing.T, resp *http.Response, what string) {
 //   - an unknown user is authenticated as far as this demo goes and holds
 //     no grant at all, so it is refused both ways.
 func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
 	// against (internal/app/demo/demo_subject.go's SeedDemoGrants).
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-owner")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-owner")
 
 	// The owner may write.
-	resp := notesRequestAs(t, srv, http.MethodPost, acmeToken, demo.DemoOwnerUserID,
+	resp := testutil.NotesRequestAs(t, srv, http.MethodPost, acmeToken, demo.DemoOwnerUserID,
 		strings.NewReader(`{"text":"owner note"}`))
 	func() {
 		defer resp.Body.Close()
@@ -419,7 +204,7 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 	}()
 
 	// The reader may list...
-	resp = notesRequestAs(t, srv, http.MethodGet, acmeToken, demo.DemoReaderUserID, nil)
+	resp = testutil.NotesRequestAs(t, srv, http.MethodGet, acmeToken, demo.DemoReaderUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -429,16 +214,16 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 	}()
 
 	// ...and may not create. This is the whole point of the gate.
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeToken, demo.DemoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodPost, acmeToken, demo.DemoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
 		"POST as the read-only demo user")
 
 	// A user with no grant at all is refused in both directions.
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, acmeToken, "nobody", nil),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodGet, acmeToken, "nobody", nil),
 		"GET as an ungranted user")
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeToken, "nobody", strings.NewReader(`{"text":"nope"}`)),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodPost, acmeToken, "nobody", strings.NewReader(`{"text":"nope"}`)),
 		"POST as an ungranted user")
 }
 
@@ -448,16 +233,16 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 // fail-closed 403, which is why the assertion is on rbac's code rather
 // than on the status alone.
 func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// The token resolves the tenant; no demo user header means no Subject
 	// for the rbac gate to decide for.
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-nosubject")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-nosubject")
 
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, acmeToken, "", nil),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodGet, acmeToken, "", nil),
 		"GET with no demo user header")
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeToken, "", strings.NewReader(`{"text":"anon"}`)),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodPost, acmeToken, "", strings.NewReader(`{"text":"anon"}`)),
 		"POST with no demo user header")
 }
 
@@ -473,11 +258,11 @@ func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
 // made in comes from the bearer token, never from anything the caller
 // sent -- the header only names WHO is acting.
 func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "pg-globex")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "pg-globex")
 
-	resp := notesRequestAs(t, srv, http.MethodGet, acmeToken, demo.DemoSingleTenantUserID, nil)
+	resp := testutil.NotesRequestAs(t, srv, http.MethodGet, acmeToken, demo.DemoSingleTenantUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -487,13 +272,13 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 		}
 	}()
 
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, globexToken, demo.DemoSingleTenantUserID, nil),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodGet, globexToken, demo.DemoSingleTenantUserID, nil),
 		"GET as the same user id in the tenant that never granted it")
 
 	// And the refusal is genuinely about the tenant rather than the user
 	// being unknown: the SAME tenant grants the same role to demo-reader.
-	resp = notesRequestAs(t, srv, http.MethodGet, globexToken, demo.DemoReaderUserID, nil)
+	resp = testutil.NotesRequestAs(t, srv, http.MethodGet, globexToken, demo.DemoReaderUserID, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -580,7 +365,7 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 // nothing the first one might have planted, proving there is no shared
 // bucket left at all.
 func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	// Step 1: GET with no Authorization header must not succeed against an
 	// implicit shared tenant.
@@ -651,10 +436,10 @@ func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
 // go/tenancy/resolver.go's Resolver doc comment for the same rule stated
 // as a hard requirement on every implementation.
 func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-forgery-target")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-forgery-attacker")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-forgery-target")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-forgery-attacker")
 
 	createNoteAs(t, srv, acmeToken, "ACME-SECRET-forgery-target")
 
@@ -673,7 +458,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("GET with forged X-Tenant-ID header: %v", err)
 	}
 	defer resp.Body.Close()
-	var headerAttempt testListNotesResponse
+	var headerAttempt testutil.TestListNotesResponse
 	if err = json.NewDecoder(resp.Body).Decode(&headerAttempt); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -695,7 +480,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("GET with forged tenant_id query parameter: %v", err)
 	}
 	defer resp2.Body.Close()
-	var queryAttempt testListNotesResponse
+	var queryAttempt testutil.TestListNotesResponse
 	if err = json.NewDecoder(resp2.Body).Decode(&queryAttempt); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -757,7 +542,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 // TestHandler_Create_ValidText_RecordsAuditEvent already covers that
 // narrower unit-level claim).
 func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -771,7 +556,7 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	const tenantID = "tenant-acme"
-	acmeToken := registerAndAuthenticate(t, srv, cfg, tenantID, "audit-creator")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "audit-creator")
 
 	createNoteAs(t, srv, acmeToken, "buy milk")
 	notes := listNotesAs(t, srv, acmeToken)

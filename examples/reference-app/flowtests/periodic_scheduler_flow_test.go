@@ -114,6 +114,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -151,19 +153,19 @@ import (
 // single shared constant keeps both legs honest.
 const periodicFlowTickInterval = time.Second
 
-// buildPeriodicTestServer is buildTestServer with a tuning hook: it starts
-// from the same testConfig(buildTestServer uses), lets the caller adjust
+// buildPeriodicTestServer is apptest.BuildServer with a tuning hook: it starts
+// from the same apptest.ServerConfig(apptest.BuildServer uses), lets the caller adjust
 // the ServerConfig (the scheduler flow tests inject the
 // periodicFlowTickInterval cadence here -- the test-override field
 // BuildServer reads, exactly like the Mailer and DisableQueueWorker fields
 // other tests tune), and then builds the exact composed server
-// buildTestServer builds,
-// periodic-task scheduler included. The *compliance.Module buildTestServer
+// apptest.BuildServer builds,
+// periodic-task scheduler included. The *compliance.Module apptest.BuildServer
 // returns is discarded, like every HTTP-driven flow test does.
 func buildPeriodicTestServer(t *testing.T, tune func(cfg *app.ServerConfig)) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	if tune != nil {
 		tune(&cfg)
 	}
@@ -183,7 +185,7 @@ func buildPeriodicTestServer(t *testing.T, tune func(cfg *app.ServerConfig)) (*h
 }
 
 // periodicSweepTestConfig returns a ServerConfig for the two-boot sweep
-// test: testConfig's per-test temp files are replaced with fixed paths the
+// test: apptest.ServerConfig's per-test temp files are replaced with fixed paths the
 // test itself owns (one t.TempDir each), so both boots of the sweep test
 // share one SQLite database file and one object-store directory. cfg is
 // returned by value; each boot copies it and tunes the one field that boot
@@ -194,7 +196,7 @@ func buildPeriodicTestServer(t *testing.T, tune func(cfg *app.ServerConfig)) (*h
 // across the restart the test simulates.
 func periodicSweepTestConfig(t *testing.T) app.ServerConfig {
 	t.Helper()
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.SQLitePath = filepath.Join(t.TempDir(), "periodic-sweep.db")
 	cfg.ObjectStoreRoot = filepath.Join(t.TempDir(), "objectstore")
 	return cfg
@@ -449,7 +451,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	boot1Cfg := cfg
 	boot1Cfg.DisableQueueWorker = true
 	boot1 := buildPeriodicFlowServer(t, boot1Cfg)
-	boot1Token := registerAndAuthenticate(t, boot1.srv, cfg, "tenant-acme", "periodic-sweep-boot-1")
+	boot1Token := apptest.RegisterAndAuthenticate(t, boot1.srv, cfg, "tenant-acme", "periodic-sweep-boot-1")
 
 	// The expiring object. RFC 3339 carries whole seconds, so a deadline
 	// declared three seconds out lands 2-3s after the create request --
@@ -548,7 +550,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	boot2Cfg := cfg
 	boot2Cfg.PeriodicTaskInterval = periodicFlowTickInterval
 	boot2 := buildPeriodicFlowServer(t, boot2Cfg)
-	boot2Token := registerAndAuthenticate(t, boot2.srv, cfg, "tenant-acme", "periodic-sweep-boot-2")
+	boot2Token := apptest.RegisterAndAuthenticate(t, boot2.srv, cfg, "tenant-acme", "periodic-sweep-boot-2")
 
 	// The second-connection observer: BuildServer hands out neither its
 	// *gorm.DB nor a module service, so a second dbkit.Open connection to
@@ -707,7 +709,7 @@ func TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNot
 	boot1Cfg := cfg
 	boot1Cfg.DisableQueueWorker = true
 	boot1 := buildPeriodicFlowServer(t, boot1Cfg)
-	boot1Token := registerAndAuthenticate(t, boot1.srv, cfg, "tenant-acme", "periodic-retention-boot-1")
+	boot1Token := apptest.RegisterAndAuthenticate(t, boot1.srv, cfg, "tenant-acme", "periodic-retention-boot-1")
 
 	// The note to expire: created through the real notes HTTP surface, then
 	// soft-deleted with deleted_at backdated 45 days -- past the 30-day

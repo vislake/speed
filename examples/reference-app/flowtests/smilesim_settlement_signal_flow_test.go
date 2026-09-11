@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
@@ -44,7 +46,7 @@ func TestSmileSimulation_TerminalSignalSettlesWithoutAnyPoll(t *testing.T) {
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "smilesim-signal-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "smilesim-signal-owner")
 
 	before := creditBalanceFor(t, cfg, tenantID)
 	if before.Available < smilesim.CreditsPerSimulation {
@@ -97,7 +99,7 @@ func TestSmileSimulation_CompletionNotifiesWithoutAnyPoll(t *testing.T) {
 	// cfg.SMSOutput can be set to a capturing buffer before the one
 	// BuildServer call -- the console SMS sender this app wires reads
 	// cfg.SMSOutput exactly once, at construction time.
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-signal-notify"
 	sms := &lockedBuffer{}
@@ -120,7 +122,7 @@ func TestSmileSimulation_CompletionNotifiesWithoutAnyPoll(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-signal-notify-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-signal-notify-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")

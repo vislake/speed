@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -56,7 +58,7 @@ import (
 // TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded proves for the
 // mechanism itself.
 func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)

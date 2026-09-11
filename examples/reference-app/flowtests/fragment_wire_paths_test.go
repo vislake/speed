@@ -1,5 +1,9 @@
 package flowtests
 
+import (
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+)
+
 // fragment_wire_paths_test.go holds the wire paths of the reference
 // app's own spec-fragment surfaces (cases and smile-simulation) as
 // test-local constants: the
@@ -24,20 +28,19 @@ const (
 	// smileJobPathPrefix+"{jobID}" polls the job.
 	smileJobPathPrefix = "/api/v1/smile-simulation/jobs/"
 
-	// casesPath is the cases fragment's list-and-create route
+	// testutil.CasesPath is the cases fragment's list-and-create route
 	// (operationIds cases_listCases and cases_createCase).
-	casesPath = "/api/v1/cases"
 
 	// caseDetailPathPrefix is the fixed prefix of the cases fragment's
 	// detail route (operationId cases_getCase): GET
 	// caseDetailPathPrefix+"{caseId}" reads one case.
-	caseDetailPathPrefix = casesPath + "/"
+	caseDetailPathPrefix = testutil.CasesPath + "/"
 
 	// casesPhotosUploadPath is the cases fragment's photo-upload route
 	// (operationId cases_uploadPhoto):
 	// POST a {content_base64} body, and the 201 answer carries the
 	// completed photo object's id.
-	casesPhotosUploadPath = casesPath + "/photos/upload"
+	casesPhotosUploadPath = testutil.CasesPath + "/photos/upload"
 )
 
 // casePhotoContentPath builds the cases fragment's photo-content route
@@ -45,7 +48,7 @@ const (
 // casePhotoContentPath(caseId, photoObjectID) serves one attached
 // photo's bytes.
 func casePhotoContentPath(caseID, photoObjectID string) string {
-	return casesPath + "/" + caseID + "/photos/" + photoObjectID + "/content"
+	return testutil.CasesPath + "/" + caseID + "/photos/" + photoObjectID + "/content"
 }
 
 // smileSimulationContentPath builds the smile-simulation fragment's

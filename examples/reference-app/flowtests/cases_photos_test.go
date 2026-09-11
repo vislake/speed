@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -36,7 +39,7 @@ func uploadPhotoAs(t *testing.T, srv *httptest.Server, token string, contentBase
 	if err != nil {
 		t.Fatalf("marshal upload body: %v", err)
 	}
-	resp := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, token, "", bytes.NewReader(body))
+	resp := testutil.CasesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, token, "", bytes.NewReader(body))
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
@@ -62,7 +65,7 @@ func photoContentAs(t *testing.T, srv *httptest.Server, token, caseID, photoObje
 } {
 	t.Helper()
 	path := casePhotoContentPath(caseID, photoObjectID)
-	resp := casesRequestAs(t, srv, http.MethodGet, path, token, "", nil)
+	resp := testutil.CasesRequestAs(t, srv, http.MethodGet, path, token, "", nil)
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -88,8 +91,8 @@ func photoContentAs(t *testing.T, srv *httptest.Server, token, caseID, photoObje
 // pipeline finalized, which is also what the browser's blob URL would
 // render).
 func TestCasesPhotos_UploadThenContentOnCase_Journey(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos")
 
 	jpegBytes := jpegWithExif(t)
 	if !bytes.Contains(jpegBytes, exifSignature) {
@@ -97,7 +100,7 @@ func TestCasesPhotos_UploadThenContentOnCase_Journey(t *testing.T) {
 	}
 	uploaded := uploadPhotoAs(t, srv, acmeToken, base64.StdEncoding.EncodeToString(jpegBytes))
 
-	created := createCaseAs(t, srv, acmeToken, "", caseCreateBody{
+	created := testutil.CreateCaseAs(t, srv, acmeToken, "", testutil.CaseCreateBody{
 		PatientName:    "Photo Journey Patient",
 		PhotoObjectIDs: []string{uploaded.ObjectID},
 	})
@@ -144,16 +147,16 @@ func TestCasesPhotos_UploadThenContentOnCase_Journey(t *testing.T) {
 // leaves anything behind (the refusing tenant can still upload and
 // attach afterwards).
 func TestCasesPhotos_UploadRefusals(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-refusals")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-refusals")
 
 	// An absent/blank content_base64 is a malformed request.
-	empty := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
+	empty := testutil.CasesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
 		bytes.NewReader([]byte(`{"content_base64":"   "}`)))
 	assertCasesError(t, empty, http.StatusBadRequest, "cases.photo_content_required", "upload with blank content")
 
 	// Not base64 at all.
-	junk := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
+	junk := testutil.CasesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
 		bytes.NewReader([]byte(`{"content_base64":"!!!not-base64!!!"}`)))
 	assertCasesError(t, junk, http.StatusBadRequest, "cases.photo_content_invalid", "upload with undecodable content")
 
@@ -161,14 +164,14 @@ func TestCasesPhotos_UploadRefusals(t *testing.T) {
 	// probe refuses them, and the refusal surfaces as the surface's own
 	// coded rejection (never a storage.* code leaking through a cases
 	// route).
-	notAnImage := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
+	notAnImage := testutil.CasesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
 		bytes.NewReader([]byte(`{"content_base64":"`+base64.StdEncoding.EncodeToString([]byte("hello, not an image"))+`"}`)))
 	assertCasesError(t, notAnImage, http.StatusBadRequest, "cases.photo_rejected", "upload content the probe refuses")
 
 	// The refused attempts left nothing blocking: the same tenant can
 	// still upload a real photo and attach it to a case.
 	uploaded := uploadPhotoAs(t, srv, acmeToken, base64.StdEncoding.EncodeToString(jpegWithExif(t)))
-	_ = createCaseAs(t, srv, acmeToken, "", caseCreateBody{
+	_ = testutil.CreateCaseAs(t, srv, acmeToken, "", testutil.CaseCreateBody{
 		PatientName:    "After the refusals",
 		PhotoObjectIDs: []string{uploaded.ObjectID},
 	})
@@ -180,30 +183,30 @@ func TestCasesPhotos_UploadRefusals(t *testing.T) {
 // refusal -- and the photo-not-found answer is the same whether the
 // object id never existed or was never attached here.
 func TestCasesPhotos_ContentReadRefusals(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-content-refusals")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "cases-photos-content-foreign")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-content-refusals")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "cases-photos-content-foreign")
 
 	uploaded := uploadPhotoAs(t, srv, acmeToken, base64.StdEncoding.EncodeToString(jpegWithExif(t)))
-	created := createCaseAs(t, srv, acmeToken, "", caseCreateBody{
+	created := testutil.CreateCaseAs(t, srv, acmeToken, "", testutil.CaseCreateBody{
 		PatientName:    "Content Refusal Patient",
 		PhotoObjectIDs: []string{uploaded.ObjectID},
 	})
 
 	// An unknown case id answers the case's own not-found.
-	unknownCase := casesRequestAs(t, srv, http.MethodGet, casePhotoContentPath("no-such-case", uploaded.ObjectID), acmeToken, "", nil)
+	unknownCase := testutil.CasesRequestAs(t, srv, http.MethodGet, casePhotoContentPath("no-such-case", uploaded.ObjectID), acmeToken, "", nil)
 	assertCasesError(t, unknownCase, http.StatusNotFound, "cases.not_found", "content of an unknown case")
 
 	// A real storage object the case does not carry answers photo-not-
 	// found, indistinguishable from an object id that never existed.
 	stray := uploadPhotoAs(t, srv, acmeToken, base64.StdEncoding.EncodeToString(jpegWithExif(t)))
-	notAttached := casesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, stray.ObjectID), acmeToken, "", nil)
+	notAttached := testutil.CasesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, stray.ObjectID), acmeToken, "", nil)
 	assertCasesError(t, notAttached, http.StatusNotFound, "cases.photo_not_found", "content of an un-attached photo")
 
 	// Another tenant's view of the same case answers the case's own
 	// not-found before any storage read: no cross-tenant probe of whether
 	// an object exists behind a case.
-	foreign := casesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, uploaded.ObjectID), globexToken, "", nil)
+	foreign := testutil.CasesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, uploaded.ObjectID), globexToken, "", nil)
 	assertCasesError(t, foreign, http.StatusNotFound, "cases.not_found", "content of another tenant's case")
 }
 
@@ -212,11 +215,11 @@ func TestCasesPhotos_ContentReadRefusals(t *testing.T) {
 // is refused with the coded too-large answer before the storage protocol
 // runs -- the route never stores a photo the serve path could not answer.
 func TestCasesPhotos_UploadOversize_Refused(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-oversize")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-photos-oversize")
 
 	oversize := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'x'}, app.MaxPhotoBytes+1))
-	resp := casesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
+	resp := testutil.CasesRequestAs(t, srv, http.MethodPost, casesPhotosUploadPath, acmeToken, "",
 		strings.NewReader(`{"content_base64":"`+oversize+`"}`))
 	assertCasesError(t, resp, http.StatusBadRequest, "cases.photo_content_too_large", "upload beyond the photo byte bound")
 }

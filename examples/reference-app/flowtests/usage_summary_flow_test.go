@@ -49,6 +49,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
@@ -157,7 +159,7 @@ func TestUsageSummary_D9Endpoint_RealRecordedUsage(t *testing.T) {
 	// gateway chain (credential, routing, entitlement gate) worked, and
 	// the fake server's recorded usage totals are the exact quantity this
 	// test later expects to find folded into the metering summary.
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "usage-summary-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "usage-summary-owner")
 	const noteText = "Patient reports occasional sharp pain when consuming cold beverages."
 	noteID := createNoteAs(t, srv, token, noteText)
 	resp := consultSuggestRequest(t, srv, token, noteID)

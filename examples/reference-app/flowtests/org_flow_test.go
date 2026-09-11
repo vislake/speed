@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -83,19 +85,19 @@ func tokenFromMail(t *testing.T, mail pkgcore.Mail) string {
 }
 
 // buildOrgTestServer wires BuildServer's real output exactly like
-// buildTestServer (server_test.go), except with a capturingMailer standing in
+// apptest.BuildServer (server_test.go), except with a capturingMailer standing in
 // for the deployment mode's default console mailer: org's invitation flow
 // needs to observe the sent message to recover the token that never appears
 // on any HTTP response (see capturingMailer's own doc comment above).
 //
 // It returns the ServerConfig alongside the server and mailer, for the same
-// reason buildTestServer does: org's flow test authenticates its callers as
-// real authn users, and registerAndAuthenticate reaches cfg.Memberships to
+// reason apptest.BuildServer does: org's flow test authenticates its callers as
+// real authn users, and apptest.RegisterAndAuthenticate reaches cfg.Memberships to
 // grant each one membership in the tenant its token must select.
 func buildOrgTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *capturingMailer) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
@@ -117,7 +119,7 @@ func buildOrgTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *capt
 // orgNode is the subset of org's OrgNode response this test reads, decoded
 // by field name rather than by importing go/org/api's generated types --
 // the same "assert on the wire shape, not the generator's Go types" posture
-// server_test.go's testNote/testListNotesResponse already take for notes.
+// server_test.go's testutil.TestNote/testutil.TestListNotesResponse already take for notes.
 type orgNode struct {
 	ID       string `json:"id"`
 	ParentID string `json:"parentId"`
@@ -162,7 +164,7 @@ type orgListMembersResponse struct {
 // in every configured tenant -- org's
 // route is gated per operation on its own declared permissions like every
 // other module's, and this
-// helper's callers register throwaway accounts through registerAndAuthenticate
+// helper's callers register throwaway accounts through apptest.RegisterAndAuthenticate
 // that hold no rbac grant of their own. Riding on the pre-seeded owner
 // identity here is a SETUP choice -- which demo identity rbac evaluates the
 // request for -- not a weakening of the gate itself: a caller who does NOT
@@ -249,7 +251,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	srv, cfg, mailer := buildOrgTestServer(t)
 
 	// The whole flow runs in one tenant, tenant-acme. The
-	// bearer token registerAndAuthenticate returns is what selects that
+	// bearer token apptest.RegisterAndAuthenticate returns is what selects that
 	// tenant for the INVITER: org's routes sit behind the authn+tenancy
 	// middleware chain like every other route this app protects, and Host
 	// never resolves a tenant for them (see internal/app/server.go's middleware-chain
@@ -267,7 +269,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	const inviteeUserID = "user-new-hire-1"
 	const inviteeEmail = "new-hire@example.com"
 
-	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-owner")
+	inviterToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "org-owner")
 
 	// Step 1: create the tenant's root -- the DSO's top-level group. No
 	// subject header: org_createNode never resolves a caller identity (only
@@ -404,7 +406,7 @@ func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t
 	// same shape TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly
 	// uses. The capturingMailer stands in for the console mailer exactly as
 	// buildOrgTestServer wires it, so the sent invitation can be observed.
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 	mailer := &capturingMailer{}
@@ -427,7 +429,7 @@ func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t
 	}
 
 	const tenant = pkgcore.TenantID("tenant-acme")
-	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "browser-shaped-owner")
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "browser-shaped-owner")
 
 	// The registered account's own user id, read from its own /me answer --
 	// the identity the bearer token proves.

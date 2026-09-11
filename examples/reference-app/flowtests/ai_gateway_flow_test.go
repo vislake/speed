@@ -45,6 +45,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
@@ -116,14 +119,14 @@ func assertAIGatewayCredentialAnswer(t *testing.T, resp *http.Response, what, pr
 // module.go's doc comment on the two write permissions for why they are
 // deliberately distinct.
 func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
 	// against (internal/app/demo/demo_subject.go's SeedDemoGrants). No AIGateway* config keys
 	// are set, so BuildServer writes no platform credential at boot -- the
 	// gate decides every request before the handler's own validation ever
 	// runs, which is exactly what this test isolates.
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-gate-owner")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-gate-owner")
 
 	credentialPath := demo.AiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatible
 	tenantPath := credentialPath + "/tenant"
@@ -148,7 +151,7 @@ func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
 	// error, proving the refusal is authorization, not validation.
 	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, platformPath, acmeToken,
 		demo.DemoAIGatewayTenantWriterUserID, `{"apiKey":"sk-must-not-land","baseUrl":"https://platform.invalid/v1"}`)
-	assertPermissionDenied(t, resp, "platform-wide write as the tenant-writer actor")
+	testutil.AssertPermissionDenied(t, resp, "platform-wide write as the tenant-writer actor")
 
 	// The owner (BuiltinRoleOwner carries every declared permission) is not
 	// refused the platform-wide write.
@@ -182,7 +185,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t
 	fakeTenant := newFakeOpenAICompatibleServer(t, tenantReply)
 
 	srv, cfg := buildConsultTestServer(t, fakePlatform)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-byok-owner")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-byok-owner")
 	const noteText = "Patient reports persistent discomfort under the new crown."
 	noteID := createNoteAs(t, srv, acmeToken, noteText)
 
@@ -313,7 +316,7 @@ func TestAIGatewayCredential_TenantBYOKWrite_InternalImageBaseURLRefusedBySSRFGu
 	fakeTenant := newFakeOpenAIImageServer(t)
 
 	srv, cfg := buildSmileSimTestServer(t, fakePlatform)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-img-byok-owner")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-img-byok-owner")
 
 	// Leg one: the boot-time image platform credential serves the first job.
 	photo := uploadAndComplete(t, srv, acmeToken, jpegWithExif(t), "")

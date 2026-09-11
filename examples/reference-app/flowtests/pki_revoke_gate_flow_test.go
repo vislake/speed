@@ -36,6 +36,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -54,9 +57,9 @@ type pkiGateErrorBody struct {
 // TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission is
 // the composed-stack proof described in this file's header.
 func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.DemoUsersPassword = demoSeedPassword
-	cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
+	cfg := apptest.ServerConfig(t)
+	cfg.DemoUsersPassword = testutil.DemoSeedPassword
+	cfg.DemoPlatformStaffPassword = testutil.DemoPlatformStaffSeedPassword
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -75,11 +78,11 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	// relies on), so the key this test revokes is the app's real boot key,
 	// never a hand-seeded row. The owner's sign-in provides the tenant
 	// bearer token the negative leg rides on.
-	status, code, staffToken := demoLogin(t, srv, demo.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, staffToken := testutil.DemoLogin(t, srv, demo.DemoPlatformStaffEmail, testutil.DemoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("platform-staff login: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	status, code, ownerToken := demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := testutil.DemoLogin(t, srv, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("demo-owner login: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}

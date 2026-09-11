@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
@@ -36,7 +39,7 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "reference-app-self-service-no-ledger.db")
 
 	boot := func() (*httptest.Server, func() error) {
-		cfg := testConfig(t)
+		cfg := apptest.ServerConfig(t)
 		cfg.SQLitePath = dbPath
 		handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 		if err != nil {
@@ -48,8 +51,8 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 	// Boot one: register a clinic owner and prove the clinic sign-in
 	// works, exactly like the restart test in self_service_test.go.
 	srv1, cleanup1 := boot()
-	registerFreshAccount(t, srv1, selfServiceFreshEmail, selfServicePassword)
-	status, code, _, tenant := browserSignIn(t, srv1, selfServiceFreshEmail, selfServicePassword)
+	testutil.RegisterFreshAccount(t, srv1, testutil.SelfServiceFreshEmail, testutil.SelfServicePassword)
+	status, code, _, tenant := testutil.BrowserSignIn(t, srv1, testutil.SelfServiceFreshEmail, testutil.SelfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("boot-one sign-in of the freshly registered account: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -88,7 +91,7 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 			t.Errorf("boot-two cleanup: %v", err)
 		}
 	}()
-	status, code, _, tenant = browserSignIn(t, srv2, selfServiceFreshEmail, selfServicePassword)
+	status, code, _, tenant = testutil.BrowserSignIn(t, srv2, testutil.SelfServiceFreshEmail, testutil.SelfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two sign-in of the clinic owner with the host ledger wiped: status = %d, code = %q, want %d "+
 			"(the clinic tenant must resolve from org's own memberships table, not from host bookkeeping)",

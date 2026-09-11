@@ -13,7 +13,7 @@ package flowtests
 // module's own fixed default when no tenant row overrides it.
 //
 // This file reaches these Service-level operations directly rather than
-// through the composed HTTP stack buildTestServer wires (the precedent
+// through the composed HTTP stack apptest.BuildServer wires (the precedent
 // sharing_flow_test.go's secondSharingService set), because what is
 // under test is the reader wiring itself: the SAME
 // ShareExpiryReader/compliance.NewConfigReader combinations production

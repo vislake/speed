@@ -30,7 +30,7 @@ package flowtests
 //
 // The assertions are deliberately wire-shaped (decode by JSON field name,
 // never by importing go/notification/api's generated types), the same
-// posture server_test.go's testNote and org_flow_test.go's orgNode take.
+// posture server_test.go's testutil.TestNote and org_flow_test.go's orgNode take.
 // Captured messages are the only assertions on what went out: mails are
 // read back from org_flow_test.go's capturingMailer and SMS from the
 // locked buffer injected through cfg.SMSOutput (internal/app/server.go defaults the
@@ -40,8 +40,6 @@ package flowtests
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -50,6 +48,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
@@ -66,18 +67,18 @@ import (
 var notifCodePattern = regexp.MustCompile(`\b\d{6}\b`)
 
 // buildNotifTestServer is notification_flow_test.go's server builder: the
-// same composed handler buildTestServer wires (server_test.go), with the
+// same composed handler apptest.BuildServer wires (server_test.go), with the
 // two transports this suite must observe pointed at test doubles --
 // cfg.Mailer at a capturingMailer (the org flow test's double, defined in
 // org_flow_test.go) and cfg.SMSOutput at a locked buffer (this file's
 // double, below) -- so every message the module sends lands somewhere the
 // test can read back instead of the console. cfg is returned alongside so
-// the caller can reach cfg.Memberships the way registerAndAuthenticate
+// the caller can reach cfg.Memberships the way apptest.RegisterAndAuthenticate
 // expects.
 func buildNotifTestServer(t *testing.T) (*httptest.Server, app.ServerConfig, *capturingMailer, *lockedBuffer) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 	sms := &lockedBuffer{}
@@ -187,71 +188,7 @@ type (
 	notifListTypes struct {
 		Items []notifType `json:"items"`
 	}
-	notifErrorBody struct {
-		Code *string `json:"code"`
-	}
 )
-
-// notifRequest issues method against srv.URL+path with a bearer token, the
-// acting subject (the X-Demo-User-Id header DemoOrgSubjectResolverFor reads;
-// empty omits it) and an optional JSON body, and requires the response to
-// carry wantStatus, decoding it into out (nil to skip decoding, for empty
-// responses like the 204s and the demo route's 202). The envelope of every
-// refusal decodes into a notifErrorBody through the same out slot.
-func notifRequest(t *testing.T, srv *httptest.Server, method, path, token, subjectUserID string, body any, wantStatus int, out any) {
-	t.Helper()
-
-	var reader io.Reader
-	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			t.Fatalf("marshal request body: %v", err)
-		}
-		reader = bytes.NewReader(encoded)
-	}
-
-	req, err := http.NewRequest(method, srv.URL+path, reader)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if subjectUserID != "" {
-		req.Header.Set(demo.DemoOrgUserHeader, subjectUserID)
-	}
-
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != wantStatus {
-		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("%s %s status = %d, want %d; body = %s", method, path, resp.StatusCode, wantStatus, respBody)
-	}
-	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			t.Fatalf("decode %s %s response: %v", method, path, err)
-		}
-	}
-}
-
-// notifError issues a request whose response must carry the given error
-// status, and returns the decoded envelope so the caller can pin the code.
-func notifError(t *testing.T, srv *httptest.Server, method, path, token, subjectUserID string, body any, wantStatus int) notifErrorBody {
-	t.Helper()
-	var env notifErrorBody
-	notifRequest(t, srv, method, path, token, subjectUserID, body, wantStatus, &env)
-	if env.Code == nil {
-		t.Fatalf("%s %s: error response carried no code", method, path)
-	}
-	return env
-}
 
 // eventually polls cond until it reports true or timeout passes, failing
 // the test on timeout with what describing the waited-for condition. It
@@ -299,7 +236,7 @@ func mailsTo(mailer *capturingMailer, address string) []pkgcore.Mail {
 }
 
 // noteIDByText finds the note whose text is text in a listNotesAs answer.
-func noteIDByText(t *testing.T, notes []testNote, text string) string {
+func noteIDByText(t *testing.T, notes []testutil.TestNote, text string) string {
 	t.Helper()
 	for _, note := range notes {
 		if note.Text == text {
@@ -341,7 +278,7 @@ func equalStrings(got, want []string) bool {
 // leg lives in the external-contact test below).
 func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	srv, cfg, mailer, _ := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "notif-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "notif-owner")
 	subject := demo.DemoNotesCreatorUserID
 	const noteTypeKey = "notes.note.created"
 
@@ -357,7 +294,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	var msg1 notifMessage
 	eventually(t, 12*time.Second, "the note-created inbox message", func() bool {
 		var out notifMessages
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &out)
+		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &out)
 		if len(out.Items) != 1 {
 			return false
 		}
@@ -388,18 +325,18 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// (twice -- the second call is the idempotent replay), after which the
 	// unread count is zero and the row carries its read time.
 	var unread notifUnreadCount
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
 	if unread.Count != 1 {
 		t.Fatalf("unread count after note 1 = %d, want 1", unread.Count)
 	}
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/messages/"+msg1.ID+"/read", token, subject, nil, http.StatusNoContent, nil)
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/messages/"+msg1.ID+"/read", token, subject, nil, http.StatusNoContent, nil)
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/messages/"+msg1.ID+"/read", token, subject, nil, http.StatusNoContent, nil)
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/messages/"+msg1.ID+"/read", token, subject, nil, http.StatusNoContent, nil)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
 	if unread.Count != 0 {
 		t.Fatalf("unread count after marking read = %d, want 0", unread.Count)
 	}
 	var out notifMessages
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &out)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &out)
 	msg1, _ = messageByNoteID(t, out.Items, note1ID)
 	if msg1.ReadAt == nil {
 		t.Errorf("read message read_at = nil, want the read timestamp")
@@ -408,7 +345,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// Switch the email channel off for the notes type. The preference
 	// answer reports the reduced effective set immediately.
 	var pref notifPreference
-	notifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/"+noteTypeKey+"/email", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/"+noteTypeKey+"/email", token, subject,
 		map[string]bool{"enabled": false}, http.StatusOK, &pref)
 	if !equalStrings(pref.Channels, []string{"in_app", "sms"}) {
 		t.Fatalf("channels after email opt-out = %v, want [in_app sms]", pref.Channels)
@@ -421,7 +358,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	note2ID := noteIDByText(t, listNotesAs(t, srv, token), note2Text)
 	eventually(t, 12*time.Second, "the second note's inbox message", func() bool {
 		var listed notifMessages
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &listed)
+		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &listed)
 		if len(listed.Items) != 2 {
 			return false
 		}
@@ -433,16 +370,16 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	})
 
 	// The second note's row is the one unread message; read-all clears it.
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
 	if unread.Count != 1 {
 		t.Fatalf("unread count after note 2 = %d, want 1", unread.Count)
 	}
 	var readAll notifReadAll
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/messages/read-all", token, subject, nil, http.StatusOK, &readAll)
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/messages/read-all", token, subject, nil, http.StatusOK, &readAll)
 	if readAll.ReadCount != 1 {
 		t.Fatalf("read-all read_count = %d, want 1", readAll.ReadCount)
 	}
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages/unread-count", token, subject, nil, http.StatusOK, &unread)
 	if unread.Count != 0 {
 		t.Fatalf("unread count after read-all = %d, want 0", unread.Count)
 	}
@@ -451,18 +388,18 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// Unsubscribable, so the empty set is a legal answer -- and a delivery
 	// over no channels writes nothing and sends nothing: the third note
 	// leaves the inbox at two rows and the mailer at one message.
-	notifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/"+noteTypeKey+"/in_app", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/"+noteTypeKey+"/in_app", token, subject,
 		map[string]bool{"enabled": false}, http.StatusOK, &pref)
 	if !equalStrings(pref.Channels, []string{"sms"}) {
 		t.Fatalf("channels after in_app opt-out = %v, want [sms]", pref.Channels)
 	}
-	notifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/"+noteTypeKey+"/sms", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/"+noteTypeKey+"/sms", token, subject,
 		map[string]bool{"enabled": false}, http.StatusOK, &pref)
 	if len(pref.Channels) != 0 {
 		t.Fatalf("channels after full opt-out = %v, want none", pref.Channels)
 	}
 	var prefs notifListPreferences
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/preferences", token, subject, nil, http.StatusOK, &prefs)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/preferences", token, subject, nil, http.StatusOK, &prefs)
 	for _, row := range prefs.Items {
 		if row.TypeKey == noteTypeKey && len(row.Channels) != 0 {
 			t.Fatalf("stored preference for %s = %v, want the empty opt-out", noteTypeKey, row.Channels)
@@ -473,7 +410,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	createNoteAs(t, srv, token, note3Text)
 	never(t, 4*time.Second, "a delivery after the full opt-out", func() bool {
 		var listed notifMessages
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &listed)
+		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, subject, nil, http.StatusOK, &listed)
 		if len(listed.Items) != 2 {
 			return true
 		}
@@ -491,7 +428,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// completion notification internal/app/demo/demo_notification.go's own
 	// EventSimulationCompleted subscription dispatches).
 	var types notifListTypes
-	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/types", token, subject, nil, http.StatusOK, &types)
+	testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/types", token, subject, nil, http.StatusOK, &types)
 	byKey := make(map[string]notifType, len(types.Items))
 	for _, item := range types.Items {
 		byKey[item.TypeKey] = item
@@ -520,7 +457,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// acting subject (no X-Demo-User-Id) is refused 401 by the module's
 	// per-operation check -- the reason DemoRouteRules declares this path
 	// public rather than gating it at the router.
-	env := notifError(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusUnauthorized)
+	env := testutil.NotifError(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusUnauthorized)
 	if *env.Code != "notification.subject_unresolved" {
 		t.Errorf("subject-less message list code = %q, want notification.subject_unresolved", *env.Code)
 	}
@@ -538,7 +475,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 // and is only re-read for its code here.
 func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	srv, cfg, mailer, sms := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "notif-clinic")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "notif-clinic")
 	subject := demo.DemoNotesCreatorUserID
 	const contactEmail = "flow-patient@example.com"
 
@@ -546,7 +483,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	// verification code arrives over its channel before the create even
 	// answers (the module's synchronous exception).
 	var contact notifContact
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
 		map[string]string{"channel": "email", "address": contactEmail}, http.StatusCreated, &contact)
 	if contact.Status != "pending" || contact.Channel != "email" || contact.ID == "" {
 		t.Fatalf("created contact = %+v, want a pending email contact with an id", contact)
@@ -566,14 +503,14 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	// with bounded backoff and dead-letters, and across the whole horizon
 	// no message goes out. The window covers the full retry schedule (the
 	// fourth attempt lands ~7s in) with margin for a slow worker.
-	notifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
 		map[string]string{"contact_id": contact.ID}, http.StatusAccepted, nil)
 	never(t, 15*time.Second, "a patient reminder to an unverified contact", func() bool {
 		return len(mailsTo(mailer, contactEmail)) != 1
 	})
 
 	// Double opt-in, half two: the code verifies the contact.
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
 		map[string]string{"code": code}, http.StatusOK, &contact)
 	if contact.Status != "verified" {
 		t.Fatalf("verified contact status = %q, want verified", contact.Status)
@@ -583,7 +520,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	// contact's channel, rendered from the demo type's copy -- which
 	// carries no code-shaped digits, the wire-level difference between
 	// the reminder and the verification message that preceded it.
-	notifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
 		map[string]string{"contact_id": contact.ID}, http.StatusAccepted, nil)
 	eventually(t, 10*time.Second, "the patient reminder email", func() bool {
 		mails := mailsTo(mailer, contactEmail)
@@ -599,9 +536,9 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	// The demo type is not Unsubscribable: closing its second channel is
 	// refused, where the notes type's full opt-out above was accepted --
 	// the contract difference this app exists to demonstrate end to end.
-	notifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/demo.patient_reminder/email", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPut, "/api/v1/notifications/preferences/demo.patient_reminder/email", token, subject,
 		map[string]bool{"enabled": false}, http.StatusOK, nil)
-	env := notifError(t, srv, http.MethodPut, "/api/v1/notifications/preferences/demo.patient_reminder/sms", token, subject,
+	env := testutil.NotifError(t, srv, http.MethodPut, "/api/v1/notifications/preferences/demo.patient_reminder/sms", token, subject,
 		map[string]bool{"enabled": false}, http.StatusBadRequest)
 	if *env.Code != "notification.preference_optout_not_allowed" {
 		t.Errorf("closing the demo type's last channel code = %q, want notification.preference_optout_not_allowed", *env.Code)
@@ -611,7 +548,7 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 	// console sender's output and receives the reminder's sms copy the
 	// same way the email contact received its mail.
 	const contactPhone = "+8613800138000"
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
 		map[string]string{"channel": "sms", "address": contactPhone}, http.StatusCreated, &contact)
 	if contact.Status != "pending" || contact.Channel != "sms" {
 		t.Fatalf("created sms contact = %+v, want a pending sms contact", contact)
@@ -625,12 +562,12 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 		smsCode = notifCodePattern.FindString(lines[0])
 		return smsCode != ""
 	})
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
 		map[string]string{"code": smsCode}, http.StatusOK, &contact)
 	if contact.Status != "verified" {
 		t.Fatalf("verified sms contact status = %q, want verified", contact.Status)
 	}
-	notifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/demo/patient-message", token, subject,
 		map[string]string{"contact_id": contact.ID}, http.StatusAccepted, nil)
 	eventually(t, 10*time.Second, "the patient reminder SMS", func() bool {
 		lines := smsLinesTo(sms, contactPhone)
@@ -651,12 +588,12 @@ func TestNotificationFlow_ExternalContactDoubleOptIn_EndToEnd(t *testing.T) {
 // not the code's.
 func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 	srv, cfg, mailer, _ := buildNotifTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "notif-ratelimit")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, demo.DemoSingleTenantID, "notif-ratelimit")
 	subject := demo.DemoNotesCreatorUserID
 	const contactEmail = "rate-patient@example.com"
 
 	var contact notifContact
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts", token, subject,
 		map[string]string{"channel": "email", "address": contactEmail}, http.StatusCreated, &contact)
 
 	var code string
@@ -676,7 +613,7 @@ func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 	last := code[len(code)-1]
 	wrong := code[:len(code)-1] + string(byte('0'+(last-'0'+1)%10))
 	for i := 0; i < 10; i++ {
-		env := notifError(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
+		env := testutil.NotifError(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
 			map[string]string{"code": wrong}, http.StatusBadRequest)
 		if *env.Code != "notification.contact_code_invalid" {
 			t.Fatalf("wrong-code attempt %d code = %q, want notification.contact_code_invalid", i+1, *env.Code)
@@ -686,7 +623,7 @@ func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 	// The eleventh attempt is the correct code -- and the budget check
 	// refuses it before the code is ever compared: brute force fails
 	// closed.
-	env := notifError(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
+	env := testutil.NotifError(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
 		map[string]string{"code": code}, http.StatusTooManyRequests)
 	if *env.Code != "notification.contact_rate_limited" {
 		t.Fatalf("eleventh-attempt code = %q, want notification.contact_rate_limited", *env.Code)
@@ -695,7 +632,7 @@ func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 	// The budget is the address's, not the code instance's: a resend
 	// issues a fresh code, and verifying with it is still refused, because
 	// the address has no guesses left within the code-lifetime window.
-	notifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/resend", token, subject, nil, http.StatusNoContent, nil)
+	testutil.NotifRequest(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/resend", token, subject, nil, http.StatusNoContent, nil)
 	eventually(t, 5*time.Second, "the resent verification-code email", func() bool {
 		mails := mailsTo(mailer, contactEmail)
 		if len(mails) != 2 {
@@ -703,7 +640,7 @@ func TestNotificationFlow_VerifyCodeRateLimit_FailsClosed(t *testing.T) {
 		}
 		return notifCodePattern.FindString(mails[1].Text) != ""
 	})
-	env = notifError(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
+	env = testutil.NotifError(t, srv, http.MethodPost, "/api/v1/notifications/contacts/"+contact.ID+"/verify", token, subject,
 		map[string]string{"code": notifCodePattern.FindString(mailsTo(mailer, contactEmail)[1].Text)}, http.StatusTooManyRequests)
 	if *env.Code != "notification.contact_rate_limited" {
 		t.Fatalf("fresh-code verify after exhaustion code = %q, want notification.contact_rate_limited", *env.Code)

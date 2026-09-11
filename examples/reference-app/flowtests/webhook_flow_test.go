@@ -58,6 +58,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -197,7 +199,7 @@ const webhookBasePath = "/api/v1/integration/webhooks"
 func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Server, app.ServerConfig, *capturingMailer) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 	cfg.WebhookURLValidator = func(context.Context, string) error { return nil }
@@ -295,8 +297,8 @@ func triggerOrgMemberJoined(t *testing.T, srv *httptest.Server, cfg app.ServerCo
 	// the mailbox name is spelled without one, while the display names and
 	// demo-user ids below keep the human-readable prefix.
 	mailbox := strings.ReplaceAll(namePrefix, " ", "-")
-	inviterToken := registerAndAuthenticate(t, srv, cfg, tenant, mailbox+"-inviter")
-	inviteeToken := registerAndAuthenticate(t, srv, cfg, tenant, mailbox+"-invitee")
+	inviterToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, mailbox+"-inviter")
+	inviteeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, mailbox+"-invitee")
 
 	var root orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
@@ -328,7 +330,7 @@ func TestWebhookFlow_RealSignedDelivery_EndToEnd(t *testing.T) {
 	srv, cfg, mailer := buildWebhookFlowTestServer(t, client)
 
 	const tenant = pkgcore.TenantID("tenant-acme")
-	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "webhook-owner-ok")
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "webhook-owner-ok")
 	sub := createWebhookSubscription(t, srv, ownerToken, receiver.URL, []string{"org.member.joined"})
 
 	membership := triggerOrgMemberJoined(t, srv, cfg, mailer, tenant, "Webhook Success", "webhook-member-ok@example.com")
@@ -394,7 +396,7 @@ func TestWebhookFlow_ReceiverNonSuccess_RetriesThenDeadLetters(t *testing.T) {
 	srv, cfg, mailer := buildWebhookFlowTestServer(t, client)
 
 	const tenant = pkgcore.TenantID("tenant-globex")
-	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "webhook-owner-dl")
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "webhook-owner-dl")
 	sub := createWebhookSubscription(t, srv, ownerToken, receiver.URL, []string{"org.member.joined"})
 
 	triggerOrgMemberJoined(t, srv, cfg, mailer, tenant, "Webhook DeadLetter", "webhook-member-dl@example.com")

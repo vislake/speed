@@ -3,7 +3,7 @@ package flowtests
 // notes_delete_restore_flow_test.go drives the notes module's HTTP
 // delete/restore operations -- the pair the module's fragment, handler and
 // generated interface carry together -- through the reference app's real
-// composed stack (buildTestServer's output: authn, tenancy, the rbac route
+// composed stack (apptest.BuildServer's output: authn, tenancy, the rbac route
 // gate and a real SQLite database). The repository-level mark-delete
 // lifecycle was already proven (internal/notes/repository_test.go); what
 // these tests pin is the HTTP surface on top of it: the uniform 404
@@ -22,12 +22,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
 // noteMutationRequestAs issues method against a per-note path under
 // /api/v1/notes with the given bearer token and acting demo user --
-// notesRequestAs's (server_test.go) per-item twin, kept local because that
+// testutil.NotesRequestAs's (server_test.go) per-item twin, kept local because that
 // helper is hard-wired to the collection path.
 func noteMutationRequestAs(t *testing.T, srv *httptest.Server, method, token, notePath, user string) *http.Response {
 	t.Helper()
@@ -83,9 +86,9 @@ func assertNoteNotFound(t *testing.T, resp *http.Response, what string) {
 // answer the SAME uniform notes.note_not_found 404, so no caller can tell
 // which case it hit.
 func TestNotesDeleteRestore_HTTPLifecycle(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-restore-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "delete-restore-globex")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-restore-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "delete-restore-globex")
 
 	const noteText = "a note that will be deleted and restored"
 	noteID := createNoteAs(t, srv, acmeToken, noteText)
@@ -159,15 +162,15 @@ func TestNotesDeleteRestore_HTTPLifecycle(t *testing.T) {
 // method to the write permission, so the item-level delete needs no
 // gate-table change to be protected.
 func TestNotesDelete_RbacGate_AnswersForTheNewVerb(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	ownerToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-gate-owner")
-	readerToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-gate-reader")
+	srv, cfg, _ := apptest.BuildServer(t)
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-gate-owner")
+	readerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "delete-gate-reader")
 
 	noteID := createNoteAs(t, srv, ownerToken, "gate-probe note")
 	resp := noteMutationRequestAs(t, srv, http.MethodDelete, readerToken, "/"+noteID, demo.DemoReaderUserID)
-	assertPermissionDenied(t, resp, "demo-reader's delete of a note (notes:write missing)")
+	testutil.AssertPermissionDenied(t, resp, "demo-reader's delete of a note (notes:write missing)")
 
 	// The same reader's restore is refused identically.
 	resp = noteMutationRequestAs(t, srv, http.MethodPost, readerToken, "/"+noteID+"/restore", demo.DemoReaderUserID)
-	assertPermissionDenied(t, resp, "demo-reader's restore of a note (notes:write missing)")
+	testutil.AssertPermissionDenied(t, resp, "demo-reader's restore of a note (notes:write missing)")
 }

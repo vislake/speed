@@ -10,6 +10,9 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
@@ -44,7 +47,7 @@ import (
 // link against the deployment's public origin -- never a configured demo
 // tenant's branded host, and never a 500.
 func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 	// The clinic population has no branded host in cfg.HostTenants, so its
@@ -72,11 +75,11 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 	// its own clinic tenant with an org tree root, a membership of it and
 	// the built-in owner role, synchronously with the 201.
 	const ownerEmail = "clinic-owner@example.com"
-	ownerUserID := registerFreshAccount(t, srv, ownerEmail, selfServicePassword)
+	ownerUserID := testutil.RegisterFreshAccount(t, srv, ownerEmail, testutil.SelfServicePassword)
 	wantTenant := app.ClinicTenantOf(ownerUserID)
 
 	// The browser-shaped sign-in lands in the account's own clinic.
-	status, code, token, tenant := browserSignIn(t, srv, ownerEmail, selfServicePassword)
+	status, code, token, tenant := testutil.BrowserSignIn(t, srv, ownerEmail, testutil.SelfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("browser-shaped sign-in of the clinic owner: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)

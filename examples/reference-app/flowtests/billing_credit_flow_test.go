@@ -41,6 +41,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -196,7 +198,7 @@ func TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents(t *testing
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-audit-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "credit-audit-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -267,7 +269,7 @@ func TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents(t *testing
 func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T) {
 	imgServer := newAlwaysFailingImageServer(t)
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-refund-audit-key"
 	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
@@ -283,7 +285,7 @@ func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T)
 	t.Cleanup(srv.Close)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-refund-audit-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "credit-refund-audit-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -345,7 +347,7 @@ func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T)
 // attribution every audited boot-time demo write carries, which is what
 // lets the trail answer who granted a tenant's starting balance.
 func TestDemoSeedCreditGrant_AttributedToTheSeedActor(t *testing.T) {
-	_, cfg, _ := buildTestServer(t)
+	_, cfg, _ := apptest.BuildServer(t)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
 	events := auditEventsForTenant(t, cfg, tenantID)
@@ -406,7 +408,7 @@ func TestSmileSimulation_SufficientCredits_DebitsBalance(t *testing.T) {
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-sufficient-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "credit-sufficient-owner")
 
 	before := creditBalanceFor(t, cfg, tenantID)
 	if before.Available < smilesim.CreditsPerSimulation {
@@ -476,7 +478,7 @@ func TestSmileSimulation_InsufficientCredits_RefusedBeforeAIGatewayCall(t *testi
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-insufficient-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "credit-insufficient-owner")
 
 	seeded := creditBalanceFor(t, cfg, tenantID)
 	if seeded.Available < smilesim.CreditsPerSimulation {
@@ -545,7 +547,7 @@ func TestSmileSimulation_InsufficientCredits_RefusedBeforeAIGatewayCall(t *testi
 func TestSmileSimulation_FailedGeneration_RefundsReservation(t *testing.T) {
 	imgServer := newAlwaysFailingImageServer(t)
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-fail-key"
 	handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
@@ -561,7 +563,7 @@ func TestSmileSimulation_FailedGeneration_RefundsReservation(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-failure-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "credit-failure-owner")
 
 	before := creditBalanceFor(t, cfg, tenantID)
 	if before.Available < smilesim.CreditsPerSimulation {

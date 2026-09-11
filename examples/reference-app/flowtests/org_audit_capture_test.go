@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -277,7 +279,7 @@ func TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentit
 // serializer-redacted the same way and asserted here as the control.
 func TestOrgAuditCapture_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
-	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-invite-audit-owner")
+	inviterToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-invite-audit-owner")
 
 	// Invite into a freshly created node of the tenant's tree (created
 	// through the real route, exactly as org_flow_test's own invite leg

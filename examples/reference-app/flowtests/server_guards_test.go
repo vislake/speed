@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
@@ -24,7 +26,7 @@ import (
 // pre-auth endpoints must keep answering with no identity whatsoever, or a
 // login page could never render its own brand.
 func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
 		t.Run(path, func(t *testing.T) {
@@ -55,7 +57,7 @@ func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
 // so a liveness probe never depends on tenant-specific resolution
 // succeeding, an authenticated caller, or any particular Host at all.
 func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -195,7 +197,7 @@ func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 // verification that found this gap relied on, in isolation from whatever
 // obs.Init state this process happens to be in, by calling obs.Init itself.
 func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -349,7 +351,7 @@ const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 // TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed below
 // is what proves that validation on its own.
 func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
@@ -386,7 +388,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 // unreachable 127.0.0.1:6379 address is never contacted by either seam,
 // and this test needs no Docker.
 func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 	cfg.RedisAddr = "127.0.0.1:6379"
 	cfg.SMSGatewayURL = fakeSMSGatewayURL
@@ -424,7 +426,7 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 // succeeds on a transport no replica pool reads. Nothing here dials
 // anything, so this test needs no Docker and touches no network.
 func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 
 	_, _, _, err := app.BuildServer(context.Background(), cfg)
@@ -462,7 +464,7 @@ func TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel(t *tes
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	defer slog.SetDefault(previous)
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.SMTPHost = "smtp.example.test"
 	cfg.SMTPPort = 587
 	cfg.SMTPUsername = "mailer@example.test"

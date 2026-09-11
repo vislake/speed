@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -138,13 +141,13 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 	// cfg.OnRBACReady (BuildServer, mirroring
 	// TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly below)
-	// replaces buildTestServer here so this test asserts the rbac DECISION
+	// replaces apptest.BuildServer here so this test asserts the rbac DECISION
 	// directly rather than only the HTTP status the coarse gate produces
 	// from it -- a wrong allowance or a wrong refusal originates in the
 	// decision layer, and pinning the decision here makes the failure name
 	// that layer instead of leaving the HTTP/route-table plumbing
 	// downstream of a correct decision to be re-diagnosed.
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 
@@ -164,7 +167,7 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 		t.Fatal("cfg.OnRBACReady was never called by app.BuildServer")
 	}
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-caller")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-caller")
 
 	// The rbac-level assertion the HTTP cases below are supposed to be a
 	// consequence of: demo-reader holds notes:read alone (SeedDemoGrants'
@@ -257,8 +260,8 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 // identity and stays open for another, never a blunt admin-only wall over
 // the whole mount.
 func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-owner")
+	srv, cfg, _ := apptest.BuildServer(t)
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-owner")
 
 	var root, child orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
@@ -305,7 +308,7 @@ func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
 // contract, so this test would fail before EITHER the router gate or
 // its SubtreeResolver wiring landed.
 func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 
@@ -326,7 +329,7 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 	}
 
 	const tenant = pkgcore.TenantID("tenant-acme")
-	token := registerAndAuthenticate(t, srv, cfg, tenant, "subtree-scope-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "subtree-scope-owner")
 
 	// root -> {nodeA, nodeB}, as demo-owner (tenant-wide, seeded at boot).
 	var root, nodeA, nodeB orgNode
@@ -426,7 +429,7 @@ func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 // at all -- a tenant-wide grant answers enforceOrgNodeScope before any
 // target is computed (see that function's own doc comment).
 func TestOrgRouteGuards_SubtreeGrant_MovesWithinItsSubtreeOnly(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	var rbacService *rbac.Service
 	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
 
@@ -447,7 +450,7 @@ func TestOrgRouteGuards_SubtreeGrant_MovesWithinItsSubtreeOnly(t *testing.T) {
 	}
 
 	const tenant = pkgcore.TenantID("tenant-acme")
-	token := registerAndAuthenticate(t, srv, cfg, tenant, "subtree-move-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "subtree-move-owner")
 
 	// root -> {A -> {A1, A2}, B}, as demo-owner (tenant-wide, seeded at boot).
 	var root, nodeA, nodeB, nodeA1, nodeA2 orgNode
@@ -541,7 +544,7 @@ func TestOrgRouteGuards_SubtreeGrant_MovesWithinItsSubtreeOnly(t *testing.T) {
 // latter case is the handler's own not-found to answer (see
 // enforceOrgNodeScope's own doc comment).
 func TestOrgRouteGuards_SubtreeGrant_InvitesAndRemovesItsOwnSubtreeMember(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 	var rbacService *rbac.Service
@@ -564,7 +567,7 @@ func TestOrgRouteGuards_SubtreeGrant_InvitesAndRemovesItsOwnSubtreeMember(t *tes
 	}
 
 	const tenant = pkgcore.TenantID("tenant-acme")
-	token := registerAndAuthenticate(t, srv, cfg, tenant, "subtree-invite-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "subtree-invite-owner")
 
 	// root -> {A, B}, as demo-owner (tenant-wide, seeded at boot).
 	var root, nodeA, nodeB orgNode
@@ -622,7 +625,7 @@ func TestOrgRouteGuards_SubtreeGrant_InvitesAndRemovesItsOwnSubtreeMember(t *tes
 		t.Fatalf("invitation = %+v, want status \"pending\" on node %q", invitation, nodeA.ID)
 	}
 
-	inviteeUserID := registerFreshAccount(t, srv, inviteeEmail, testPassword)
+	inviteeUserID := testutil.RegisterFreshAccount(t, srv, inviteeEmail, testutil.TestPassword)
 	acceptToken := tokenFromMail(t, mailer.last(t))
 	var membership orgMembership
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", "", inviteeUserID,
@@ -645,7 +648,7 @@ func TestOrgRouteGuards_SubtreeGrant_InvitesAndRemovesItsOwnSubtreeMember(t *tes
 	if secondInvitation.Status != "pending" || secondInvitation.NodeID != nodeA.ID {
 		t.Fatalf("second invitation = %+v, want status \"pending\" on node %q", secondInvitation, nodeA.ID)
 	}
-	secondInviteeUserID := registerFreshAccount(t, srv, secondInviteeEmail, testPassword)
+	secondInviteeUserID := testutil.RegisterFreshAccount(t, srv, secondInviteeEmail, testutil.TestPassword)
 	secondAcceptToken := tokenFromMail(t, mailer.last(t))
 	var secondMembership orgMembership
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", "", secondInviteeUserID,

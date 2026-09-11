@@ -25,6 +25,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
@@ -66,7 +68,7 @@ type testListAPIKeysResponse struct {
 // apikeyRequest issues method against path (already the full
 // "/api/v1/integration/apikeys..." route) on srv as the acting user, in the
 // tenant the given bearer token resolves -- the identical shape
-// storageRequest and notesRequestAs both use. A non-empty user additionally
+// storageRequest and testutil.NotesRequestAs both use. A non-empty user additionally
 // sends X-Demo-User-Id (DemoNotesCreatorUserID, this app's one shared
 // creator-attribution identity): integration_createAPIKey attributes the
 // new key's CreatedBy through integration.SubjectResolver
@@ -151,12 +153,12 @@ const apikeyBasePath = "/api/v1/integration/apikeys"
 // could not hide a real regression), rotate (the predecessor is revoked and
 // the replacement works and differs) and revoke.
 func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the rbac gate decides the request
 	// against (internal/app/demo/demo_subject.go's SeedDemoGrants) -- the owner role carries
 	// every permission any module declared, integration:apikey:* included.
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-flow")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-flow")
 
 	// Create with an empty body: every field of the request schema is
 	// optional, and no host-wired PermissionLister is needed for a key
@@ -381,8 +383,8 @@ func decodeListAPIKeys(t *testing.T, resp *http.Response, wantStatus int, what s
 // generic gate silently passing everything through: a router bug that
 // let every request past would make this test the one that fails.
 func TestBuildServer_APIKeyPermissionGate_EnforcesTheAPIKeyPermissions(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-gate")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-gate")
 
 	// The reader may neither list nor create: both directions of the
 	// integration:apikey:read / integration:apikey:manage gate are closed.

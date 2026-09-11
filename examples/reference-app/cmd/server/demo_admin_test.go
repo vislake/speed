@@ -15,6 +15,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -30,9 +33,9 @@ import (
 // APP_DEMO_USERS_PASSWORD value would unlock every demo user AND the
 // platform administrator at once.
 func TestDemoPlatformStaff_NotSeededWithTheDemoUsersPassword(t *testing.T) {
-	srv, _ := buildSeededUsersTestServer(t, demoSeedPassword)
+	srv, _ := buildSeededUsersTestServer(t, testutil.DemoSeedPassword)
 
-	status, code, _ := demoLogin(t, srv, demo.DemoPlatformStaffEmail, demoSeedPassword, rbac.SystemDomain)
+	status, code, _ := testutil.DemoLogin(t, srv, demo.DemoPlatformStaffEmail, testutil.DemoSeedPassword, rbac.SystemDomain)
 	if status == http.StatusOK {
 		t.Fatalf("the demo platform-staff account signed in with the ordinary demo users password (status 200, code %q) "+
 			"-- the platform administrator must never be seeded from APP_DEMO_USERS_PASSWORD; it needs its own credential source",
@@ -47,9 +50,9 @@ func TestDemoPlatformStaff_NotSeededWithTheDemoUsersPassword(t *testing.T) {
 // The demo users' password never opens the platform administrator, and the
 // staff account's own passphrase is what does.
 func TestDemoPlatformStaff_SeededFromItsOwnVariableOnly(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.DemoUsersPassword = demoSeedPassword
-	cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
+	cfg := apptest.ServerConfig(t)
+	cfg.DemoUsersPassword = testutil.DemoSeedPassword
+	cfg.DemoPlatformStaffPassword = testutil.DemoPlatformStaffSeedPassword
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -63,7 +66,7 @@ func TestDemoPlatformStaff_SeededFromItsOwnVariableOnly(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// The staff account signs in with its OWN variable's passphrase...
-	status, code, _ := demoLogin(t, srv, demo.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, _ := testutil.DemoLogin(t, srv, demo.DemoPlatformStaffEmail, testutil.DemoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("platform-staff login with its own password variable's value: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -71,7 +74,7 @@ func TestDemoPlatformStaff_SeededFromItsOwnVariableOnly(t *testing.T) {
 
 	// ...and NEVER with the demo users' passphrase, even though that
 	// variable is set on the same boot.
-	status, code, _ = demoLogin(t, srv, demo.DemoPlatformStaffEmail, demoSeedPassword, rbac.SystemDomain)
+	status, code, _ = testutil.DemoLogin(t, srv, demo.DemoPlatformStaffEmail, testutil.DemoSeedPassword, rbac.SystemDomain)
 	if status == http.StatusOK {
 		t.Fatalf("the demo platform-staff account signed in with the demo users password (status 200, code %q) "+
 			"-- the two credential sources must stay distinct even when both are set", code)
@@ -79,7 +82,7 @@ func TestDemoPlatformStaff_SeededFromItsOwnVariableOnly(t *testing.T) {
 
 	// The ordinary demo accounts are untouched by the split: the owner still
 	// signs in with the demo users' passphrase.
-	status, code, _ = demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, _ = testutil.DemoLogin(t, srv, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("demo-owner login with the demo users password: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)

@@ -6,19 +6,21 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
 // This file drives the case domain routes
 // (internal/app/cases.go) through the real composed HTTP stack
-// buildTestServer builds -- the authn+tenancy middleware chain, the real
+// apptest.BuildServer builds -- the authn+tenancy middleware chain, the real
 // registration/sign-in surface, and a real temp-file SQLite database whose
 // cases tables the boot's own EnsureSchema created -- not a mock of any of
-// it. The tenant comes from the bearer token alone (registerAndAuthenticate's
+// it. The tenant comes from the bearer token alone (apptest.RegisterAndAuthenticate's
 // own doc comment explains why Host plays no part); where a request needs
 // a creator (the create route only -- the clinic-wide list reads no
 // creator), the attribution comes from the X-Demo-User-Id header
@@ -26,103 +28,14 @@ import (
 // handler uses), or from the verified Principal when no header rides
 // along.
 
-// caseCreateBody is the wire body this file's helpers send to POST
-// /api/v1/cases.
-type caseCreateBody struct {
-	PatientName    string   `json:"patient_name"`
-	PatientRef     string   `json:"patient_ref"`
-	PhotoObjectIDs []string `json:"photo_object_ids"`
-}
-
-// testCase is the response shape a case's create/list/detail answers
-// share (the spec fragment's CasesCase, encoded by toCasesCase in
-// internal/app/cases.go), decoded enough for this file's assertions.
-type testCase struct {
-	ID            string `json:"id"`
-	PatientName   string `json:"patient_name"`
-	PatientRef    string `json:"patient_ref"`
-	CreatorUserID string `json:"creator_user_id"`
-	Photos        []struct {
-		ObjectID string `json:"object_id"`
-	} `json:"photos"`
-}
-
 // testCaseError is the {code, params} envelope every refusal answers.
 type testCaseError struct {
 	Code string `json:"code"`
 }
 
-// casesRequestAs issues method against path (a full path under the case
-// surface, e.g. /api/v1/cases) with the given bearer token (empty means no
-// Authorization header at all) and creator (empty means no X-Demo-User-Id
-// header, which is how a request attributed through the verified Principal
-// is expressed), returning the raw response.
-func casesRequestAs(t *testing.T, srv *httptest.Server, method, path, token, creator string, body io.Reader) *http.Response {
-	t.Helper()
-
-	req, err := http.NewRequest(method, srv.URL+path, body)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if creator != "" {
-		req.Header.Set(demo.DemoOrgUserHeader, creator)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("%s %s (creator=%q): %v", method, path, creator, err)
-	}
-	return resp
-}
-
-// createCaseAs POSTs a case body to srv authenticated as token and
-// attributed to creator, asserting the 201 and returning the decoded case
-// (photos included). t.Fatal on any deviation -- this is the happy-path
-// helper every journey leg builds on.
-func createCaseAs(t *testing.T, srv *httptest.Server, token, creator string, body caseCreateBody) testCase {
-	t.Helper()
-
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal case body: %v", err)
-	}
-	resp := casesRequestAs(t, srv, http.MethodPost, casesPath, token, creator, bytes.NewReader(raw))
-	defer resp.Body.Close()
-
-	decoded, respBody := decodeCasesResponse(t, resp)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST %s (creator=%q) status = %d, want %d; body = %s",
-			casesPath, creator, resp.StatusCode, http.StatusCreated, respBody)
-	}
-	return decoded
-}
-
-// decodeCasesResponse decodes resp's JSON body into a testCase and also
-// returns the raw body bytes for failure messages.
-func decodeCasesResponse(t *testing.T, resp *http.Response) (testCase, string) {
-	t.Helper()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	var decoded testCase
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			t.Fatalf("decoding %s: %v", body, err)
-		}
-	}
-	return decoded, string(body)
-}
-
 // assertCasesError reads resp and requires the structured code it answers
 // (never merely "some 4xx/5xx"), the same envelope shape
-// assertPermissionDenied asserts against for the rbac gate.
+// testutil.AssertPermissionDenied asserts against for the rbac gate.
 func assertCasesError(t *testing.T, resp *http.Response, wantStatus int, wantCode, what string) {
 	t.Helper()
 	defer resp.Body.Close()
@@ -149,10 +62,10 @@ func assertCasesError(t *testing.T, resp *http.Response, wantStatus int, wantCod
 // detail back with the photos in attachment order -- the exact queries
 // the case web UI will make.
 func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-journey")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-journey")
 
-	created := createCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, caseCreateBody{
+	created := testutil.CreateCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, testutil.CaseCreateBody{
 		PatientName:    "Anna Meyer",
 		PatientRef:     "CH-1001",
 		PhotoObjectIDs: []string{"photo-front-acme", "photo-smile-acme"},
@@ -170,13 +83,13 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 		t.Fatalf("create answer photos = %+v, want both in request order", created.Photos)
 	}
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, demo.DemoNotesCreatorUserID, nil)
+	listResp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, acmeToken, demo.DemoNotesCreatorUserID, nil)
 	defer listResp.Body.Close()
 	if listResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s status = %d, want 200", casesPath, listResp.StatusCode)
+		t.Fatalf("GET %s status = %d, want 200", testutil.CasesPath, listResp.StatusCode)
 	}
 	var list struct {
-		Cases []testCase `json:"cases"`
+		Cases []testutil.TestCase `json:"cases"`
 	}
 	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 		t.Fatalf("decode list response: %v", err)
@@ -185,9 +98,9 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 		t.Fatalf("list = %+v, want exactly the created case", list.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, acmeToken, demo.DemoNotesCreatorUserID, nil)
+	detailResp := testutil.CasesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, acmeToken, demo.DemoNotesCreatorUserID, nil)
 	defer detailResp.Body.Close()
-	detail, raw := decodeCasesResponse(t, detailResp)
+	detail, raw := testutil.DecodeCasesResponse(t, detailResp)
 	if detailResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET detail status = %d, want 200; body = %s", detailResp.StatusCode, raw)
 	}
@@ -200,7 +113,7 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 
 	// A missing id is the coded not-found, indistinguishable from another
 	// tenant's id (pinned over HTTP by the cross-tenant leg below).
-	missingResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+"no-such-case", acmeToken, demo.DemoNotesCreatorUserID, nil)
+	missingResp := testutil.CasesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+"no-such-case", acmeToken, demo.DemoNotesCreatorUserID, nil)
 	assertCasesError(t, missingResp, http.StatusNotFound, "cases.not_found", "GET detail of an unknown case")
 }
 
@@ -210,18 +123,18 @@ func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 // same coded not-found an unknown id answers, never "exists but not
 // yours".
 func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-acme-owner")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "cases-globex-owner")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-acme-owner")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "cases-globex-owner")
 
-	created := createCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, caseCreateBody{
+	created := testutil.CreateCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, testutil.CaseCreateBody{
 		PatientName: "Acme Private",
 	})
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, globexToken, demo.DemoNotesCreatorUserID, nil)
+	listResp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, globexToken, demo.DemoNotesCreatorUserID, nil)
 	defer listResp.Body.Close()
 	var list struct {
-		Cases []testCase `json:"cases"`
+		Cases []testutil.TestCase `json:"cases"`
 	}
 	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 		t.Fatalf("decode list response: %v", err)
@@ -230,7 +143,7 @@ func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
 		t.Fatalf("globex list = %+v, want empty (acme's case must be invisible)", list.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, globexToken, demo.DemoNotesCreatorUserID, nil)
+	detailResp := testutil.CasesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, globexToken, demo.DemoNotesCreatorUserID, nil)
 	assertCasesError(t, detailResp, http.StatusNotFound, "cases.not_found", "GET detail of another tenant's case")
 }
 
@@ -241,11 +154,11 @@ func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
 // request carries (the header is an attribution seam for create, never a
 // list key).
 func TestCasesFlow_ListIsClinicWide(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-two-creators")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-two-creators")
 
-	_ = createCaseAs(t, srv, acmeToken, "user-creator-1", caseCreateBody{PatientName: "Creator One's Case"})
-	_ = createCaseAs(t, srv, acmeToken, "user-creator-2", caseCreateBody{PatientName: "Creator Two's Case"})
+	_ = testutil.CreateCaseAs(t, srv, acmeToken, "user-creator-1", testutil.CaseCreateBody{PatientName: "Creator One's Case"})
+	_ = testutil.CreateCaseAs(t, srv, acmeToken, "user-creator-2", testutil.CaseCreateBody{PatientName: "Creator Two's Case"})
 
 	for _, tc := range []struct {
 		creator   string
@@ -255,9 +168,9 @@ func TestCasesFlow_ListIsClinicWide(t *testing.T) {
 		{creator: "user-creator-1", wantNames: []string{"Creator Two's Case", "Creator One's Case"}, wantCount: 2},
 		{creator: "user-creator-2", wantNames: []string{"Creator Two's Case", "Creator One's Case"}, wantCount: 2},
 	} {
-		listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, tc.creator, nil)
+		listResp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, acmeToken, tc.creator, nil)
 		var list struct {
-			Cases []testCase `json:"cases"`
+			Cases []testutil.TestCase `json:"cases"`
 		}
 		if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 			listResp.Body.Close()
@@ -284,10 +197,10 @@ func TestCasesFlow_ListIsClinicWide(t *testing.T) {
 // so a header-attributed colleague's read of the same tenant answers the
 // same rows.
 func TestCasesFlow_PrincipalAttribution(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-principal")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-principal")
 
-	created := createCaseAs(t, srv, acmeToken, "", caseCreateBody{PatientName: "Principal's Case"})
+	created := testutil.CreateCaseAs(t, srv, acmeToken, "", testutil.CaseCreateBody{PatientName: "Principal's Case"})
 	if created.CreatorUserID == "" || created.CreatorUserID == demo.DemoNotesCreatorUserID {
 		t.Fatalf("CreatorUserID = %q, want the account's own principal user id, distinct from the demo creator", created.CreatorUserID)
 	}
@@ -299,9 +212,9 @@ func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 		{what: "headerless read", creator: ""},
 		{what: "demo-creator header read", creator: demo.DemoNotesCreatorUserID},
 	} {
-		listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, tc.creator, nil)
+		listResp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, acmeToken, tc.creator, nil)
 		var list struct {
-			Cases []testCase `json:"cases"`
+			Cases []testutil.TestCase `json:"cases"`
 		}
 		if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 			listResp.Body.Close()
@@ -319,28 +232,28 @@ func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 // object ids within one request, and the conflict a reused photo object
 // answers.
 func TestCasesFlow_ValidationAndConflicts_OverHTTP(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-conflicts")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-conflicts")
 
 	// An empty patient name is refused before anything is inserted.
-	emptyName := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demo.DemoNotesCreatorUserID,
+	emptyName := testutil.CasesRequestAs(t, srv, http.MethodPost, testutil.CasesPath, acmeToken, demo.DemoNotesCreatorUserID,
 		bytes.NewReader([]byte(`{"patient_name":"   "}`)))
 	assertCasesError(t, emptyName, http.StatusBadRequest, "cases.patient_name_required", "create with an empty patient name")
 
 	// The same object twice in one request is a client bug, refused
 	// outright.
-	dupBody := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demo.DemoNotesCreatorUserID,
+	dupBody := testutil.CasesRequestAs(t, srv, http.MethodPost, testutil.CasesPath, acmeToken, demo.DemoNotesCreatorUserID,
 		bytes.NewReader([]byte(`{"patient_name":"Dup","photo_object_ids":["photo-a","photo-a"]}`)))
 	assertCasesError(t, dupBody, http.StatusBadRequest, "cases.duplicate_photo_object", "create with a duplicated photo")
 
-	_ = createCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, caseCreateBody{
+	_ = testutil.CreateCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, testutil.CaseCreateBody{
 		PatientName:    "First Owner",
 		PhotoObjectIDs: []string{"photo-a"},
 	})
 
 	// Reusing an attached photo for a second case is the coded conflict
 	// the sequential double-create answers.
-	reuse := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demo.DemoNotesCreatorUserID,
+	reuse := testutil.CasesRequestAs(t, srv, http.MethodPost, testutil.CasesPath, acmeToken, demo.DemoNotesCreatorUserID,
 		bytes.NewReader([]byte(`{"patient_name":"Second Owner","photo_object_ids":["photo-a"]}`)))
 	assertCasesError(t, reuse, http.StatusConflict, "cases.photo_already_attached", "create reusing an attached photo")
 }
@@ -349,12 +262,12 @@ func TestCasesFlow_ValidationAndConflicts_OverHTTP(t *testing.T) {
 // default for the new surface: a request with no valid token at all is
 // refused before any handler runs.
 func TestCasesFlow_Anonymous_Refused(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
-	resp := casesRequestAs(t, srv, http.MethodGet, casesPath, "", "", nil)
+	resp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, "", "", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("anonymous GET %s status = %d, want 403 (tenancy's fail-closed default)", casesPath, resp.StatusCode)
+		t.Fatalf("anonymous GET %s status = %d, want 403 (tenancy's fail-closed default)", testutil.CasesPath, resp.StatusCode)
 	}
 }
 
@@ -372,8 +285,8 @@ func TestCasesFlow_Anonymous_Refused(t *testing.T) {
 // catalogued invalid-request-body code rather than a successful case
 // creation: an unbounded decoder would accept the whole body.
 func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-oversized")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-oversized")
 
 	// One byte over the bound -- casesMaxRequestBodyBytes's value, 1<<16,
 	// written as a literal so this test also compiles against a handler that
@@ -385,12 +298,12 @@ func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	body.WriteString(strings.Repeat(" ", (1<<16)+1))
 	body.WriteString(`{"patient_name":"Anna Meyer"}`)
 
-	resp := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demo.DemoNotesCreatorUserID, strings.NewReader(body.String()))
+	resp := testutil.CasesRequestAs(t, srv, http.MethodPost, testutil.CasesPath, acmeToken, demo.DemoNotesCreatorUserID, strings.NewReader(body.String()))
 	assertCasesError(t, resp, http.StatusBadRequest, "cases.invalid_request_body", "create with an oversized body")
 
 	// Nothing was created: the same creator can still create a case
 	// afterwards.
-	_ = createCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, caseCreateBody{
+	_ = testutil.CreateCaseAs(t, srv, acmeToken, demo.DemoNotesCreatorUserID, testutil.CaseCreateBody{
 		PatientName: "After the refused oversized body",
 	})
 }
@@ -402,19 +315,19 @@ func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 // tenant -- never the caller's own cases only, which would leave the
 // colleague's read empty (one patient, two charts).
 func TestCasesFlow_ColleagueSeesColleaguesCase(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	aliceToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-alice")
-	bobToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-bob")
+	srv, cfg, _ := apptest.BuildServer(t)
+	aliceToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-alice")
+	bobToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-bob")
 
-	created := createCaseAs(t, srv, aliceToken, "", caseCreateBody{PatientName: "Colleague Patient"})
+	created := testutil.CreateCaseAs(t, srv, aliceToken, "", testutil.CaseCreateBody{PatientName: "Colleague Patient"})
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, bobToken, "", nil)
+	listResp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, bobToken, "", nil)
 	defer listResp.Body.Close()
 	if listResp.StatusCode != http.StatusOK {
-		t.Fatalf("bob's GET %s status = %d, want 200", casesPath, listResp.StatusCode)
+		t.Fatalf("bob's GET %s status = %d, want 200", testutil.CasesPath, listResp.StatusCode)
 	}
 	var list struct {
-		Cases []testCase `json:"cases"`
+		Cases []testutil.TestCase `json:"cases"`
 	}
 	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 		t.Fatalf("decode bob's list response: %v", err)
@@ -436,16 +349,16 @@ func TestCasesFlow_ColleagueSeesColleaguesCase(t *testing.T) {
 // case through the cases fragment, and the photo's bytes come back
 // through the content op.
 func TestCasesFlow_BlockA_ClinicJourney(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	aliceToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "blocka-alice")
-	bobToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "blocka-bob")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "blocka-globex")
+	srv, cfg, _ := apptest.BuildServer(t)
+	aliceToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "blocka-alice")
+	bobToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "blocka-bob")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "blocka-globex")
 
 	// Alice uploads a real patient photo and creates the case with it in
 	// one submission's worth of calls -- the pre-upload-then-create shape
 	// the one-page web flow performs.
 	photo := uploadPhotoAs(t, srv, aliceToken, base64.StdEncoding.EncodeToString(jpegWithExif(t)))
-	created := createCaseAs(t, srv, aliceToken, "", caseCreateBody{
+	created := testutil.CreateCaseAs(t, srv, aliceToken, "", testutil.CaseCreateBody{
 		PatientName:    "Block A Patient",
 		PhotoObjectIDs: []string{photo.ObjectID},
 	})
@@ -455,15 +368,15 @@ func TestCasesFlow_BlockA_ClinicJourney(t *testing.T) {
 
 	// Alice sees the case on the list and reads the photo's bytes on the
 	// case -- the photo is visible.
-	listAs := func(t *testing.T, token, what string) []testCase {
+	listAs := func(t *testing.T, token, what string) []testutil.TestCase {
 		t.Helper()
-		resp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, "", nil)
+		resp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, token, "", nil)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s: GET %s status = %d, want 200", what, casesPath, resp.StatusCode)
+			t.Fatalf("%s: GET %s status = %d, want 200", what, testutil.CasesPath, resp.StatusCode)
 		}
 		var list struct {
-			Cases []testCase `json:"cases"`
+			Cases []testutil.TestCase `json:"cases"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 			t.Fatalf("%s: decode list response: %v", what, err)
@@ -503,6 +416,6 @@ func TestCasesFlow_BlockA_ClinicJourney(t *testing.T) {
 	if len(globexList) != 0 {
 		t.Fatalf("globex's list = %+v, want empty (acme's case must stay invisible)", globexList)
 	}
-	foreign := casesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, photo.ObjectID), globexToken, "", nil)
+	foreign := testutil.CasesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, photo.ObjectID), globexToken, "", nil)
 	assertCasesError(t, foreign, http.StatusNotFound, "cases.not_found", "another tenant's view of the case's photo")
 }

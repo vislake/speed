@@ -61,6 +61,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
@@ -178,7 +180,7 @@ func TestConsultSuggest_SeededSubscriptionPasses_ReachesChatProvider(t *testing.
 	aiServer := newFakeOpenAICompatibleServer(t, wantSuggestion)
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "ent-chat-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "ent-chat-owner")
 
 	const noteText = "Patient reports a dark spot on an upper incisor."
 	noteID := createNoteAs(t, srv, token, noteText)
@@ -221,7 +223,7 @@ func TestConsultSuggest_CanceledSubscription_RefusedAtEntitlementGate(t *testing
 	aiServer := newFakeOpenAICompatibleServer(t, "unused")
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "ent-chat-refused-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "ent-chat-refused-owner")
 
 	// A note the request would otherwise summarize successfully -- the
 	// refusal below must be about the lapsed subscription, never about a
@@ -248,7 +250,7 @@ func TestSmileSimulation_SeededSubscriptionPasses_ReachesImageProvider(t *testin
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "ent-image-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "ent-image-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -281,7 +283,7 @@ func TestSmileSimulation_CanceledSubscription_RefusedAtEntitlementGate(t *testin
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
 	const tenantID pkgcore.TenantID = "tenant-acme"
-	token := registerAndAuthenticate(t, srv, cfg, tenantID, "ent-image-refused-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "ent-image-refused-owner")
 
 	before := creditBalanceFor(t, cfg, tenantID)
 	if before.Available < smilesim.CreditsPerSimulation {

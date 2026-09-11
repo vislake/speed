@@ -26,6 +26,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -89,8 +91,8 @@ func decodeWhoami(t *testing.T, resp *http.Response, wantStatus int, what string
 // rotate it, use the OLD raw key value again (refused), use the NEW key
 // (succeeds), revoke it, use it again (refused).
 func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-authn-flow")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-authn-flow")
 
 	// Create with an empty body, through the ordinary session-authenticated
 	// CRUD surface apikey_flow_test.go's own helpers drive -- the identical
@@ -196,8 +198,8 @@ func TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_
 	app.IntegrationWhoamiLimits.Key = ratelimit.Limit{}
 	defer func() { app.IntegrationWhoamiLimits = originalLimits }()
 
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-auth-flood")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-auth-flood")
 
 	// Create a real key through the ordinary session-authenticated CRUD
 	// surface, the identical shape the rotate/revoke flow above uses.

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
@@ -46,9 +48,9 @@ import (
 // poll interval's milliseconds, which the real database makes
 // effectively impossible; the assertions hold under every interleaving.)
 func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t *testing.T) {
-	srv, cfg, complianceModule := buildTestServer(t)
+	srv, cfg, complianceModule := apptest.BuildServer(t)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-race")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-race")
 	db := openSecondDB(t, cfg)
 
 	// total notes per direction: large enough that the orchestrator's

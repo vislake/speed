@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -44,7 +47,7 @@ func withTestPrincipal(r *http.Request, userID, tenantID string) *http.Request {
 func buildSeededUsersTestServerWithHeaderSwitch(t *testing.T, password string, disableDemoUserHeader bool) *httptest.Server {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.DemoUsersPassword = password
 	cfg.DisableDemoUserHeader = disableDemoUserHeader
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
@@ -105,9 +108,9 @@ func postNoteWithDemoHeader(t *testing.T, srv *httptest.Server, bearerToken, dem
 // alone -- the header is not read at all -- and rbac refuses it.
 func TestDemoUserHeader_KillSwitch_ClosesThePrivilegeEscalationHole(t *testing.T) {
 	t.Run("switch at its default: the header still escalates (the confirmed bug, unchanged)", func(t *testing.T) {
-		srv := buildSeededUsersTestServerWithHeaderSwitch(t, demoSeedPassword, false)
+		srv := buildSeededUsersTestServerWithHeaderSwitch(t, testutil.DemoSeedPassword, false)
 
-		status, code, readerToken := demoLogin(t, srv, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+		status, code, readerToken := testutil.DemoLogin(t, srv, demo.DemoReaderEmail, testutil.DemoSeedPassword, "tenant-acme")
 		if status != http.StatusOK {
 			t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 		}
@@ -124,20 +127,20 @@ func TestDemoUserHeader_KillSwitch_ClosesThePrivilegeEscalationHole(t *testing.T
 	})
 
 	t.Run("switch enabled: the header is ignored, the reader's own grant decides, and the write is refused", func(t *testing.T) {
-		srv := buildSeededUsersTestServerWithHeaderSwitch(t, demoSeedPassword, true)
+		srv := buildSeededUsersTestServerWithHeaderSwitch(t, testutil.DemoSeedPassword, true)
 
-		status, code, readerToken := demoLogin(t, srv, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+		status, code, readerToken := testutil.DemoLogin(t, srv, demo.DemoReaderEmail, testutil.DemoSeedPassword, "tenant-acme")
 		if status != http.StatusOK {
 			t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 		}
 
 		resp := postNoteWithDemoHeader(t, srv, readerToken, demo.DemoOwnerUserID, "escalation attempt, switch enabled")
-		assertPermissionDenied(t, resp, "POST as the reader with X-Demo-User: demo-owner, switch enabled")
+		testutil.AssertPermissionDenied(t, resp, "POST as the reader with X-Demo-User: demo-owner, switch enabled")
 
 		// The reader's OWN permission (read) must still work unaffected --
 		// the switch turns the HEADER off, not the Principal fallback path
 		// demo_users_test.go's own tests already pin.
-		getResp := notesRequestAs(t, srv, http.MethodGet, readerToken, "", nil)
+		getResp := testutil.NotesRequestAs(t, srv, http.MethodGet, readerToken, "", nil)
 		defer getResp.Body.Close()
 		if getResp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(getResp.Body)
@@ -207,7 +210,7 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 //     principal-resolved result.
 func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T) {
 	t.Run("cases surface: switch on, a foreign X-Demo-User-Id cannot hijack attribution or the clinic list", func(t *testing.T) {
-		cfg := testConfig(t)
+		cfg := apptest.ServerConfig(t)
 		cfg.DisableDemoUserHeader = true
 		handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 		if err != nil {
@@ -221,11 +224,11 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		srv := httptest.NewServer(handler)
 		t.Cleanup(srv.Close)
 
-		token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-cases-owner")
+		token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-cases-owner")
 
 		// A case created with NO header is attributed to the verified
 		// Principal -- the caller's own user id.
-		created := createCaseAs(t, srv, token, "", caseCreateBody{PatientName: "kill switch case"})
+		created := testutil.CreateCaseAs(t, srv, token, "", testutil.CaseCreateBody{PatientName: "kill switch case"})
 		if created.CreatorUserID == "" {
 			t.Fatal("created case carries no creator_user_id")
 		}
@@ -236,7 +239,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		// creator of a case nor key any list. (The header alone
 		// was honored, and the caller's own case vanished from its own
 		// "my cases" answer under a foreign id.)
-		createdWithForeignHeader := createCaseAs(t, srv, token, demo.DemoNotesCreatorUserID, caseCreateBody{PatientName: "kill switch case two"})
+		createdWithForeignHeader := testutil.CreateCaseAs(t, srv, token, demo.DemoNotesCreatorUserID, testutil.CaseCreateBody{PatientName: "kill switch case two"})
 		if createdWithForeignHeader.CreatorUserID != created.CreatorUserID {
 			t.Fatalf("create under a foreign X-Demo-User-Id was attributed to %q, want the caller's own %q -- the attribution header must not be read when the kill switch is on",
 				createdWithForeignHeader.CreatorUserID, created.CreatorUserID)
@@ -245,15 +248,15 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		// The clinic-wide list, whatever header rides along, answers the
 		// tenant's rows -- both principal-created cases -- never a list
 		// keyed to a header the switch has made inert.
-		resp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, demo.DemoNotesCreatorUserID, nil)
+		resp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, token, demo.DemoNotesCreatorUserID, nil)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("GET %s with a foreign X-Demo-User-Id, switch on: status = %d, want %d; body = %s",
-				casesPath, resp.StatusCode, http.StatusOK, body)
+				testutil.CasesPath, resp.StatusCode, http.StatusOK, body)
 		}
 		var list struct {
-			Cases []testCase `json:"cases"`
+			Cases []testutil.TestCase `json:"cases"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 			t.Fatalf("decode cases list: %v", err)
@@ -270,7 +273,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 	})
 
 	t.Run("notification inbox: switch on, the verified Principal resolves with no demo header at all", func(t *testing.T) {
-		cfg := testConfig(t)
+		cfg := apptest.ServerConfig(t)
 		cfg.DisableDemoUserHeader = true
 		handler, cleanup, _, err := app.BuildServer(t.Context(), cfg)
 		if err != nil {
@@ -284,7 +287,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		srv := httptest.NewServer(handler)
 		t.Cleanup(srv.Close)
 
-		token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-notif-owner")
+		token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-notif-owner")
 
 		// A request with a verified token and NO demo header must be
 		// resolved from the Principal -- with the switch on the header-only
@@ -296,7 +299,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 				ID string `json:"id"`
 			} `json:"messages"`
 		}
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusOK, &inbox)
+		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusOK, &inbox)
 		if len(inbox.Messages) != 0 {
 			t.Fatalf("fresh inbox = %d messages, want 0", len(inbox.Messages))
 		}
@@ -308,7 +311,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 				ID string `json:"id"`
 			} `json:"messages"`
 		}
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, demo.DemoNotesCreatorUserID, nil, http.StatusOK, &spoofed)
+		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, demo.DemoNotesCreatorUserID, nil, http.StatusOK, &spoofed)
 		if len(spoofed.Messages) != 0 {
 			t.Fatalf("inbox under a foreign X-Demo-User-Id = %d messages, want the principal's empty 0", len(spoofed.Messages))
 		}
@@ -319,11 +322,11 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		// notification surface keeps refusing a header-less request with its
 		// per-operation subject_unresolved -- the pinned
 		// behavior the switch must not have touched.
-		srv, cfg, _ := buildTestServer(t)
+		srv, cfg, _ := apptest.BuildServer(t)
 
-		token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-default-owner")
+		token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-default-owner")
 
-		env := notifError(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusUnauthorized)
+		env := testutil.NotifError(t, srv, http.MethodGet, "/api/v1/notifications/messages", token, "", nil, http.StatusUnauthorized)
 		if env.Code == nil || *env.Code != "notification.subject_unresolved" {
 			t.Fatalf("header-less notification request, switch at its default: code = %v, want %q",
 				env.Code, "notification.subject_unresolved")

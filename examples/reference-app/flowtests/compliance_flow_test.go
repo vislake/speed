@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -71,10 +74,10 @@ const complianceOtherCreatorUserID = "user-creator-2"
 // over real notes rows, matching the erasure test's own cross-tenant
 // non-erasability proof below.
 func TestComplianceRetentionSweep_NotesParticipant_ReapsExpiredOnly(t *testing.T) {
-	srv, cfg, complianceModule := buildTestServer(t)
+	srv, cfg, complianceModule := apptest.BuildServer(t)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-sweep-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "compliance-sweep-globex")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-sweep-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "compliance-sweep-globex")
 
 	acmeExpiredID := createNoteAs(t, srv, acmeToken, "acme note past its retention window")
 	acmeLiveID := createNoteAs(t, srv, acmeToken, "acme note still inside its retention window")
@@ -124,10 +127,10 @@ func TestComplianceRetentionSweep_NotesParticipant_ReapsExpiredOnly(t *testing.T
 // Re-running the same Erase then converges with (0, nil) instead of
 // failing, the documented recovery path for a partial erasure.
 func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testing.T) {
-	srv, cfg, complianceModule := buildTestServer(t)
+	srv, cfg, complianceModule := apptest.BuildServer(t)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-erase-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "compliance-erase-globex")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-erase-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "compliance-erase-globex")
 
 	creatorLiveID := createNoteAs(t, srv, acmeToken, "creator-one acme note, live")
 	creatorDeletedID := createNoteAs(t, srv, acmeToken, "creator-one acme note, soft-deleted minutes ago")
@@ -205,9 +208,9 @@ func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testi
 // it), and the Delivery carries a share id, a one-time token and an
 // expiry, proving the sharing-backed delivery wiring holds end to end.
 func TestComplianceExport_NotesParticipant_ExportsLiveNotesOnly(t *testing.T) {
-	srv, cfg, complianceModule := buildTestServer(t)
+	srv, cfg, complianceModule := apptest.BuildServer(t)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-export-acme")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "compliance-export-acme")
 
 	liveID := createNoteAs(t, srv, acmeToken, "live note content a subject would export")
 	deletedID := createNoteAs(t, srv, acmeToken, "soft-deleted note content, invisible to an export")
@@ -367,7 +370,7 @@ func createNoteAsByCreator(t *testing.T, srv *httptest.Server, token, creatorID,
 			resp.StatusCode, http.StatusCreated, respBody)
 	}
 
-	var created testNote
+	var created testutil.TestNote
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create-note response: %v", err)
 	}

@@ -34,6 +34,8 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/authn"
 )
@@ -45,7 +47,7 @@ type oidcErrEnvelope struct {
 }
 
 // TestAuthnEnterpriseOIDCLoginStart_ReachesAuthnNotTenancy drives the real
-// composed stack (buildTestServer's output -- the exact handler main.go
+// composed stack (apptest.BuildServer's output -- the exact handler main.go
 // serves) through the enterprise channel's login-start request, anonymous
 // exactly as the first step of a sign-in is, and asserts the answer is
 // authn's own. tenancy.Middleware's fail-closed default would refuse the
@@ -53,7 +55,7 @@ type oidcErrEnvelope struct {
 // literal -- with 403 tenancy.tenant_unresolved before authn's Handler
 // ever ran.
 func TestAuthnEnterpriseOIDCLoginStart_ReachesAuthnNotTenancy(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	// The enterprise channel's provider value is the synthetic
 	// "oidc:<tenant>" name (authn.ProviderOIDCPrefix + a tenant id) that no
@@ -85,7 +87,7 @@ func TestAuthnEnterpriseOIDCLoginStart_ReachesAuthnNotTenancy(t *testing.T) {
 // for its own surface -- rather than tenancy's fail-closed 403
 // tenancy.tenant_unresolved.
 func TestAuthnProtectedOperation_AnonymousAnsweredByAuthn(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 
 	resp := authnJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/authn/me", "", nil, nil)
 	defer resp.Body.Close()

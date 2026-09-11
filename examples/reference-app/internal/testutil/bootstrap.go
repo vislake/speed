@@ -1,7 +1,8 @@
 // Package testutil carries test-support helpers shared by more than one of
-// this app's test packages -- the command's own suites under cmd/server and
-// the app-level ones under flowtests -- so the two sides cannot drift apart.
-// It is test-only: nothing in this app's executable code may import it.
+// this app's test packages -- the command's own suites under cmd/server,
+// the app-level ones under flowtests and the boot fixtures under
+// internal/apptest -- so the sides cannot drift apart. It is test-only:
+// nothing in this app's executable code may import it.
 package testutil
 
 import (

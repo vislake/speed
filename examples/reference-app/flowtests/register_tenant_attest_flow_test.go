@@ -9,6 +9,9 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -48,17 +51,17 @@ import (
 // it its own clinic (the browser-shaped sign-in lands in the
 // deterministic ClinicTenantOf tenant).
 func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 
 	const freshEmail = "p1-authn-fresh@example.com"
 	const freshPassword = "the fresh account's own passphrase"
 
 	// The caller: a real, signed-in member of tenant-acme, standing in for
 	// any legitimate tenant member -- an account that genuinely holds a
-	// tenant-acme bearer (registerAndAuthenticate drives the real register
+	// tenant-acme bearer (apptest.RegisterAndAuthenticate drives the real register
 	// and login routes and grants the tenant membership the sign-in
 	// verifies).
-	callerToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-authn-caller")
+	callerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-authn-caller")
 
 	// tenant-acme's org root is created BEFORE the register, through org's
 	// real HTTP surface -- the state a real tenant already has, which is
@@ -134,7 +137,7 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	// refusal is the unified 401 authn.invalid_credentials answer a wrong
 	// password also gets (the answer is deliberately unified: the specific
 	// reason lives in the login history, never the response).
-	status, code, _ := demoLogin(t, srv, freshEmail, freshPassword, "tenant-acme")
+	status, code, _ := testutil.DemoLogin(t, srv, freshEmail, freshPassword, "tenant-acme")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("sign-in of the freshly registered account into tenant-acme: status = %d, code = %q, want 401 %q "+
 			"(the account must hold no membership in the registering caller's tenant)",
@@ -147,7 +150,7 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	// the deterministic tenant derived from its own user id, never
 	// tenant-acme.
 	clinic := pkgcore.TenantID("tenant-" + freshID)
-	status, code, freshToken, tenant := browserSignIn(t, srv, freshEmail, freshPassword)
+	status, code, freshToken, tenant := testutil.BrowserSignIn(t, srv, freshEmail, freshPassword)
 	if status != http.StatusOK {
 		t.Fatalf("browser-shaped sign-in of the freshly registered account: status = %d, code = %q, want %d "+
 			"(registration must provision the clinic its account can sign into)",
@@ -166,5 +169,5 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	// (leg 2's) must record the no-membership refusal rather than a bad
 	// password, so the leg-2 401 stays evidence of "no seat in
 	// tenant-acme" instead of a credential failure proving nothing.
-	assertNoMembershipRefusal(t, srv, freshToken, "sign-in of the freshly registered account into tenant-acme")
+	testutil.AssertNoMembershipRefusal(t, srv, freshToken, "sign-in of the freshly registered account into tenant-acme")
 }

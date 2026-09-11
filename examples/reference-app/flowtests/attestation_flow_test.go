@@ -53,6 +53,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -69,13 +72,13 @@ import (
 func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildAttestationTestServer(t, imgServer)
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "x509-attestation")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "x509-attestation")
 
 	// A patient photo and a completed simulation over it, exactly as the
 	// smile-journey flow test makes them.
 	jpeg := jpegWithExif(t)
 	photo := uploadPhotoAs(t, srv, token, base64.StdEncoding.EncodeToString(jpeg))
-	createCaseAs(t, srv, token, "", caseCreateBody{
+	testutil.CreateCaseAs(t, srv, token, "", testutil.CaseCreateBody{
 		PatientName:    "X.509 journey patient",
 		PatientRef:     "X509-001",
 		PhotoObjectIDs: []string{photo.ObjectID},
@@ -313,7 +316,7 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 // restart.
 func TestX509Attestation_ChainAndAttestationsSurviveARestart(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-key"
 	objectRoot := t.TempDir()
@@ -328,11 +331,11 @@ func TestX509Attestation_ChainAndAttestationsSurviveARestart(t *testing.T) {
 		t.Fatalf("BuildServer (first boot): %v", err)
 	}
 	firstSrv := httptest.NewServer(handler)
-	token := registerAndAuthenticate(t, firstSrv, cfg, "tenant-acme", "x509-restart")
+	token := apptest.RegisterAndAuthenticate(t, firstSrv, cfg, "tenant-acme", "x509-restart")
 
 	jpeg := jpegWithExif(t)
 	photo := uploadPhotoAs(t, firstSrv, token, base64.StdEncoding.EncodeToString(jpeg))
-	createCaseAs(t, firstSrv, token, "", caseCreateBody{
+	testutil.CreateCaseAs(t, firstSrv, token, "", testutil.CaseCreateBody{
 		PatientName:    "restart patient",
 		PatientRef:     "RST-001",
 		PhotoObjectIDs: []string{photo.ObjectID},
@@ -415,7 +418,7 @@ func TestX509Attestation_ChainAndAttestationsSurviveARestart(t *testing.T) {
 // directory (the tamper leg needs to reach the stored bytes).
 func buildAttestationTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-key"
 	cfg.ObjectStoreRoot = t.TempDir()

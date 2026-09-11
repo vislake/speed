@@ -37,6 +37,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -92,7 +95,7 @@ type (
 // adminRequest issues method against srv.URL+path, authenticated as token,
 // with extraHeaders applied after the standard ones (X-Admin-Impersonation
 // in particular -- there is no dedicated subjectUserID parameter here the
-// way orgRequest/notifRequest have, because every admin operation resolves
+// way orgRequest/testutil.NotifRequest have, because every admin operation resolves
 // its caller from the verified Principal alone, never a demo header).
 func adminRequest(t *testing.T, srv *httptest.Server, method, path, token string, body any, wantStatus int, out any, extraHeaders map[string]string) {
 	t.Helper()
@@ -150,13 +153,13 @@ func adminRequest(t *testing.T, srv *httptest.Server, method, path, token string
 func buildAdminTestServer(t *testing.T, opts ...func(*app.ServerConfig)) (*httptest.Server, app.ServerConfig, *capturingMailer) {
 	t.Helper()
 
-	cfg := testConfig(t)
-	cfg.DemoUsersPassword = demoSeedPassword
+	cfg := apptest.ServerConfig(t)
+	cfg.DemoUsersPassword = testutil.DemoSeedPassword
 	// The platform-staff account is seeded from its OWN variable, never the
 	// demo users' one (internal/app/demo/demo_admin.go's demoPlatformStaffPasswordEnv), so a
 	// suite that signs it in sets its own field -- and signs it in with its
 	// own passphrase below.
-	cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
+	cfg.DemoPlatformStaffPassword = testutil.DemoPlatformStaffSeedPassword
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 	for _, opt := range opts {
@@ -179,7 +182,7 @@ func buildAdminTestServer(t *testing.T, opts ...func(*app.ServerConfig)) (*httpt
 }
 
 // platformStaffToken signs the seeded demo platform-staff account in, with
-// the account's OWN passphrase (demoPlatformStaffSeedPassword -- the
+// the account's OWN passphrase (testutil.DemoPlatformStaffSeedPassword -- the
 // platform-staff seed reads its own variable, never the demo users' one,
 // per internal/app/demo/demo_admin.go; signing it in with the demo users' passphrase must
 // never work). Its only membership is rbac.SystemDomain
@@ -188,7 +191,7 @@ func buildAdminTestServer(t *testing.T, opts ...func(*app.ServerConfig)) (*httpt
 // test readable regardless.
 func platformStaffToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
-	status, code, token := demoLogin(t, srv, demo.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, token := testutil.DemoLogin(t, srv, demo.DemoPlatformStaffEmail, testutil.DemoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK || token == "" {
 		t.Fatalf("platform-staff login status = %d code = %q, want 200 with a token", status, code)
 	}
@@ -241,8 +244,8 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	// the membership composition) both depend on.
 	const inviterUserID = "user-admin-flow-owner"
 	const targetEmail = "admin-flow-target@example.com"
-	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-owner")
-	targetToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-target")
+	inviterToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-owner")
+	targetToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-target")
 
 	// tenant-acme is DemoSingleTenantID -- the one tenant DemoHostTenants
 	// configures -- so buildAdminTestServer's own demo seed (SeedDemoUsers'
@@ -381,7 +384,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	// creator resolver fall back to the substituted Principal
 	// (ImpersonationMiddleware's own doc comment).
 	impersonationHeaders := map[string]string{"X-Admin-Impersonation": grant.ID}
-	var created testNote
+	var created testutil.TestNote
 	adminRequest(t, srv, http.MethodPost, "/api/v1/notes", staffToken,
 		map[string]string{"text": "a note created while impersonating"},
 		http.StatusCreated, &created, impersonationHeaders)
@@ -422,13 +425,13 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	// landed in the TARGET's own inbox -- read back as the target
 	// themselves (their own real token and their own real user id header),
 	// never through the impersonation session.
-	targetLoginStatus, targetLoginCode, targetToken := demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	targetLoginStatus, targetLoginCode, targetToken := testutil.DemoLogin(t, srv, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if targetLoginStatus != http.StatusOK || targetToken == "" {
 		t.Fatalf("login as the impersonation target failed: status=%d code=%q", targetLoginStatus, targetLoginCode)
 	}
 	eventually(t, 5*time.Second, "the impersonation-started inbox message", func() bool {
 		var inbox notifMessages
-		notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", targetToken, targetID, nil, http.StatusOK, &inbox)
+		testutil.NotifRequest(t, srv, http.MethodGet, "/api/v1/notifications/messages", targetToken, targetID, nil, http.StatusOK, &inbox)
 		for _, msg := range inbox.Items {
 			if msg.TypeKey == "admin.impersonation_started" {
 				return true
@@ -460,7 +463,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	// assertion is the end-to-end confirmation that ending a grant through
 	// the real HTTP surface genuinely disables it, not a re-proof of the
 	// fallback mechanism itself.
-	var afterEnd testListNotesResponse
+	var afterEnd testutil.TestListNotesResponse
 	listReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notes", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -504,7 +507,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 func TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole(t *testing.T) {
 	srv, _, _ := buildAdminTestServer(t)
 
-	status, code, ownerToken := demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := testutil.DemoLogin(t, srv, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK || ownerToken == "" {
 		t.Fatalf("demo-owner login status = %d code = %q, want 200 with a token", status, code)
 	}
@@ -648,7 +651,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	})
 	staffToken := platformStaffToken(t, srv)
 
-	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "suspend-flow-owner")
+	ownerToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenant, "suspend-flow-owner")
 
 	// The tenant's root node is what lazily registers "tenant-suspend-flow"
 	// in admin's own tenant ledger (org.node.created -> TenantService.
@@ -790,7 +793,7 @@ type (
 // carrying exactly permissions -- the write half of the pair bindAdminRole
 // completes -- the HTTP-shape reachability proof
 // TestAdminFlow_..._ReachableForPlatformStaff below drives, since
-// registerAndAuthenticate itself grants no rbac role at all
+// apptest.RegisterAndAuthenticate itself grants no rbac role at all
 // (server_test.go's own doc comment). These helpers never name
 // rbac.SystemDomain: admin's role-management surface refuses the system
 // pseudo-tenant with admin.roles_system_domain_forbidden (go/admin/role.go's
@@ -913,8 +916,8 @@ func TestAdminFlow_AuditExport_RequiresExportPermission(t *testing.T) {
 	}
 	staffToken := platformStaffToken(t, srv)
 
-	readOnlyToken := registerAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-read-only-probe")
-	exportToken := registerAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-export-probe")
+	readOnlyToken := apptest.RegisterAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-read-only-probe")
+	exportToken := apptest.RegisterAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-export-probe")
 	readOnlyID := searchUserID(t, srv, staffToken, "flow-audit-read-only-probe@example.com")
 	exportID := searchUserID(t, srv, staffToken, "flow-audit-export-probe@example.com")
 

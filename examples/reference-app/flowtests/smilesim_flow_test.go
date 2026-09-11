@@ -86,6 +86,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
@@ -211,7 +213,7 @@ func newFakeOpenAIImageServer(t *testing.T) *fakeOpenAIImageServer {
 func buildSmileSimTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-key"
 
@@ -392,7 +394,7 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-owner")
 
 	// Upload and complete a patient photo through storage's own real HTTP
 	// surface -- the same helper storage_flow_test.go's own suite uses.
@@ -493,7 +495,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	// cfg.SMSOutput can be set to a capturing buffer before the one
 	// BuildServer call -- the console SMS sender this app wires reads
 	// cfg.SMSOutput exactly once, at construction time.
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-notify-key"
 	sms := &lockedBuffer{}
@@ -518,7 +520,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-notify-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-notify-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -604,7 +606,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-notify-twice-key"
 	sms := &lockedBuffer{}
@@ -623,7 +625,7 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-notify-twice-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-notify-twice-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -716,7 +718,7 @@ func TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex(t 
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-params-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-params-owner")
 
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -853,7 +855,7 @@ func TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-invalid-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-invalid-owner")
 
 	invalidBodies := []struct {
 		name     string
@@ -919,7 +921,7 @@ func TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors(t *testing.T) {
 func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-xtenant-key"
 	sms := &lockedBuffer{}
@@ -939,7 +941,7 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 	t.Cleanup(srv.Close)
 
 	// The caller: an ordinary member of tenant-acme.
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-xtenant-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-xtenant-owner")
 
 	// A real, completed photo, so that in the bug state (the request being
 	// accepted) the enqueued job genuinely succeeds and the completion

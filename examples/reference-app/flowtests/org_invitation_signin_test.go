@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
@@ -98,11 +101,11 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// boot composes a server against the shared dbPath with its own fresh
 	// mailer and membership store (the honest image of a restart), without
 	// any test cleanup: the caller closes and cleans up each boot
-	// explicitly, in order. cfg comes back too: registerAndAuthenticate
+	// explicitly, in order. cfg comes back too: apptest.RegisterAndAuthenticate
 	// reaches the membership store through it, exactly as every other flow
 	// test in this package does.
 	boot := func() (*httptest.Server, app.ServerConfig, *capturingMailer, func() error) {
-		cfg := testConfig(t)
+		cfg := apptest.ServerConfig(t)
 		cfg.SQLitePath = dbPath
 		mailer := &capturingMailer{}
 		cfg.Mailer = mailer
@@ -124,7 +127,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// is about (registering an inviter needs SOME membership to even obtain
 	// a bearer token that resolves a tenant). What must NEVER go through
 	// the shortcut is the INVITEE, below.
-	inviterToken := registerAndAuthenticate(t, srv1, cfg1, "tenant-acme", "restart-invite-flow-owner")
+	inviterToken := apptest.RegisterAndAuthenticate(t, srv1, cfg1, "tenant-acme", "restart-invite-flow-owner")
 
 	var root orgNode
 	orgRequest(t, srv1, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
@@ -143,7 +146,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// -- the account is real and the password right, and the clinic bearer
 	// is what the login-history read after the control below needs
 	// (history is the one place a refusal's real reason survives).
-	status, code, inviteeClinicToken, _ := browserSignIn(t, srv1, inviteeEmail, inviteePassword)
+	status, code, inviteeClinicToken, _ := testutil.BrowserSignIn(t, srv1, inviteeEmail, inviteePassword)
 	if status != http.StatusOK {
 		t.Fatalf("sign-in of the freshly registered invitee into its own clinic: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -162,7 +165,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// proven from both sides: the clinic sign-in above, and the same
 	// credentials answering 200 below, once the acceptance creates the
 	// membership.
-	status, code, _ = demoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
+	status, code, _ = testutil.DemoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("pre-invitation login: status = %d, code = %q, want 401 %q", status, code, "authn.invalid_credentials")
 	}
@@ -172,7 +175,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// refusal it is (the clinic sign-in just above proved the password;
 	// history proves the tenant-acme refusal was the missing membership,
 	// the exact pre-state this control exists to establish).
-	assertNoMembershipRefusal(t, srv1, inviteeClinicToken, "the pre-invitation sign-in of the real invitee into tenant-acme")
+	testutil.AssertNoMembershipRefusal(t, srv1, inviteeClinicToken, "the pre-invitation sign-in of the real invitee into tenant-acme")
 
 	// Invite the real invitee's email into the new root node, through
 	// org's real HTTP invite route, and recover the token from the mail
@@ -211,7 +214,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	}
 
 	// The really-invited user can now sign in -- in the accepting process.
-	status, code, _ = demoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
+	status, code, _ = testutil.DemoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("post-accept login in the accepting process: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -239,7 +242,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// row is real and persistent; an in-process roster would be empty on
 	// boot two, and this login would be refused forever with the uniform
 	// 401 authn.invalid_credentials every failed sign-in answers.
-	status, code, _ = demoLogin(t, srv2, inviteeEmail, inviteePassword, "tenant-acme")
+	status, code, _ = testutil.DemoLogin(t, srv2, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("post-restart login as the invited user: status = %d, code = %q, want %d "+
 			"(a real accepted org invitation must grant sign-in to every process booted against its database)",

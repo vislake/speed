@@ -53,6 +53,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
@@ -131,8 +134,8 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 
 	// The browser journey: register, then the browser-shaped sign-in that
 	// lands the principal in the registration's own clinic.
-	userID := registerFreshAccount(t, srv, selfServiceEntitlementSimulateEmail, selfServicePassword)
-	status, code, token, tenant := browserSignIn(t, srv, selfServiceEntitlementSimulateEmail, selfServicePassword)
+	userID := testutil.RegisterFreshAccount(t, srv, selfServiceEntitlementSimulateEmail, testutil.SelfServicePassword)
+	status, code, token, tenant := testutil.BrowserSignIn(t, srv, selfServiceEntitlementSimulateEmail, testutil.SelfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("sign-in of the freshly registered clinic owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
@@ -223,9 +226,9 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 // balance of exactly zero -- the numbers this test's assertions name in
 // their failure output.
 func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 
-	userID := registerFreshAccount(t, srv, selfServiceEntitlementRowEmail, selfServicePassword)
+	userID := testutil.RegisterFreshAccount(t, srv, selfServiceEntitlementRowEmail, testutil.SelfServicePassword)
 	clinic := app.ClinicTenantOf(userID)
 
 	// The subscription half of regression (b): the Active demo
@@ -254,7 +257,7 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 // halves the same way a missing membership strands its sign-in.
 //
 // The shape mirrors TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists
-// exactly (the same failOnceProvisioning hook armed through
+// exactly (the same testutil.FailOnceProvisioning hook armed through
 // cfg.FailSelfServiceProvision before BuildServer), then goes one step
 // further: once the retry's org work is visible, the subscription and the
 // seeded balance must follow from the SAME retried provision -- polled
@@ -264,9 +267,9 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 // skipped the subscription and credit steps would leave the balance poll
 // below timing out on a permanent zero.
 func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo(t *testing.T) {
-	inject := &failOnceProvisioning{}
-	cfg := testConfig(t)
-	cfg.FailSelfServiceProvision = inject.fail
+	inject := &testutil.FailOnceProvisioning{}
+	cfg := apptest.ServerConfig(t)
+	cfg.FailSelfServiceProvision = inject.Fail
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -279,8 +282,8 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 		}
 	}()
 
-	userID := registerFreshAccount(t, srv, selfServiceEntitlementRetryEmail, selfServicePassword)
-	if !inject.observed() {
+	userID := testutil.RegisterFreshAccount(t, srv, selfServiceEntitlementRetryEmail, testutil.SelfServicePassword)
+	if !inject.Observed() {
 		t.Fatal("the synchronous provisioning attempt never consumed the injected failure, so nothing here exercises the retry")
 	}
 	clinic := app.ClinicTenantOf(userID)
@@ -289,7 +292,7 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 	// record of a provisioning attempt that ran to (near) completion, and
 	// after the failed synchronous attempt the completing attempt can
 	// only be the retry job's.
-	waitForClinicMembership(t, cfg.SQLitePath, clinic, userID)
+	testutil.WaitForClinicMembership(t, cfg.SQLitePath, clinic, userID)
 
 	// The SAME retried provision must then land the billing half: the
 	// credit grant is provision's last step, so a non-zero balance means
@@ -327,7 +330,7 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 // given tenant: its job is the demo tenants' seeded state, not which
 // internal path produced it.
 func TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance(t *testing.T) {
-	_, cfg, _ := buildTestServer(t)
+	_, cfg, _ := apptest.BuildServer(t)
 
 	checked := make(map[pkgcore.TenantID]struct{}, len(cfg.HostTenants))
 	for _, tenantID := range cfg.HostTenants {

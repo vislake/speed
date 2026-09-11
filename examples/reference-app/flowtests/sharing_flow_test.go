@@ -4,7 +4,7 @@ package flowtests
 // covering both HTTP surfaces the module ships: the public,
 // unauthenticated access route and the owner-facing create/list/
 // get/revoke/access-log routes. Every operation drives the real composed
-// stack buildTestServer wires (internal/app/server.go's tenancy allowlist,
+// stack apptest.BuildServer wires (internal/app/server.go's tenancy allowlist,
 // internal/app/demo/demo_subject.go's public declaration for the access route and its
 // sharingPermissionFor gate for the owner-facing ones, sharing.Handler, a
 // real SQLite database), the same two-layer standard every other module's
@@ -23,6 +23,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/go/sharing"
@@ -69,7 +72,7 @@ func sharingAccessRequest(t *testing.T, srv *httptest.Server, token, password st
 
 // The wire shapes this file decodes, by field name rather than by importing
 // go/sharing/api's generated types -- the same "assert on the wire shape,
-// not the generator's Go types" posture server_test.go's testNote and
+// not the generator's Go types" posture server_test.go's testutil.TestNote and
 // org_flow_test.go's orgNode already take for their own modules.
 type testSharingShare struct {
 	ID                string `json:"id"`
@@ -128,9 +131,9 @@ func decodeSharingBody(t *testing.T, resp *http.Response, wantStatus int, what s
 // identical shape go/sharing's own example_test.go proves at the Service
 // level, proven here end to end through real HTTP.
 func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	srv, cfg, _ := apptest.BuildServer(t)
 	const tenantID = "tenant-acme"
-	acmeToken := registerAndAuthenticate(t, srv, cfg, tenantID, "sharing-flow")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, tenantID, "sharing-flow")
 
 	content := sharingTestJPEG(t)
 	completed := uploadAndComplete(t, srv, acmeToken, content, sha256Hex(content))
@@ -255,7 +258,7 @@ func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 // this route's own handler ever ran, on any path not on its allowlist --
 // and answers a real refusal rather than the tenant-unresolved error.
 func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
-	srv, _, _ := buildTestServer(t)
+	srv, _, _ := apptest.BuildServer(t)
 	resp := sharingAccessRequest(t, srv, "a-token-nobody-ever-issued", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
@@ -285,18 +288,18 @@ func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
 // gate (TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd's
 // demo-owner) may reach far enough to observe a real 404 for an unknown id.
 func TestBuildServer_SharingPermissionGate_EnforcesTheSharingPermissions(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "sharing-gate")
+	srv, cfg, _ := apptest.BuildServer(t)
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "sharing-gate")
 
 	resp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
 		acmeToken, demo.DemoReaderUserID, "application/json", bytes.NewReader([]byte(`{"resourceRef":"ref-1"}`)))
-	assertPermissionDenied(t, resp, "POST "+sharing.PathShares+" as the read-only demo user")
+	testutil.AssertPermissionDenied(t, resp, "POST "+sharing.PathShares+" as the read-only demo user")
 
 	resp = storageRequest(t, srv, http.MethodGet, sharing.PathShares,
 		acmeToken, demo.DemoReaderUserID, "", nil)
-	assertPermissionDenied(t, resp, "GET "+sharing.PathShares+" as the read-only demo user")
+	testutil.AssertPermissionDenied(t, resp, "GET "+sharing.PathShares+" as the read-only demo user")
 
 	resp = storageRequest(t, srv, http.MethodPost, sharing.PathShares+"/share-does-not-exist/revoke",
 		acmeToken, demo.DemoReaderUserID, "", nil)
-	assertPermissionDenied(t, resp, "POST "+sharing.PathShares+"/{shareId}/revoke as the read-only demo user")
+	testutil.AssertPermissionDenied(t, resp, "POST "+sharing.PathShares+"/{shareId}/revoke as the read-only demo user")
 }

@@ -3,7 +3,7 @@ package flowtests
 // fragment_surface_flow_test.go drives the case-domain fragment
 // (internal/cases/api) and
 // the smile-simulation fragment (internal/smilesim/api) -- through the
-// real composed HTTP stack buildTestServer builds, in exactly the
+// real composed HTTP stack apptest.BuildServer builds, in exactly the
 // composition the case web UI will call: create a case naming an uploaded
 // photo (cases fragment), run one async smile simulation over that photo
 // (smilesim fragment's enqueue operation), observe it to success through
@@ -27,6 +27,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 )
 
@@ -39,7 +42,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "fragment-surface")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "fragment-surface")
 
 	// A patient photo, uploaded and completed through storage's own real
 	// HTTP surface -- the case's photo attachments reference such
@@ -55,7 +58,7 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	// read it back from the clinic-wide list (cases_listCases) and from
 	// the detail route (cases_getCase) -- the three cases operations the
 	// case web UI will call.
-	created := createCaseAs(t, srv, token, demo.DemoOwnerUserID, caseCreateBody{
+	created := testutil.CreateCaseAs(t, srv, token, demo.DemoOwnerUserID, testutil.CaseCreateBody{
 		PatientName:    "Fragment Journey Patient",
 		PatientRef:     "JRN-001",
 		PhotoObjectIDs: []string{completedPhoto.ID},
@@ -67,17 +70,17 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 		t.Fatalf("created case photos = %+v, want exactly the uploaded photo %q", created.Photos, completedPhoto.ID)
 	}
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, demo.DemoOwnerUserID, nil)
+	listResp := testutil.CasesRequestAs(t, srv, http.MethodGet, testutil.CasesPath, token, demo.DemoOwnerUserID, nil)
 	listBody, err := io.ReadAll(listResp.Body)
 	listResp.Body.Close()
 	if err != nil {
 		t.Fatalf("read cases list body: %v", err)
 	}
 	if listResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s status = %d, want %d; body = %s", casesPath, listResp.StatusCode, http.StatusOK, listBody)
+		t.Fatalf("GET %s status = %d, want %d; body = %s", testutil.CasesPath, listResp.StatusCode, http.StatusOK, listBody)
 	}
 	var listOut struct {
-		Cases []testCase `json:"cases"`
+		Cases []testutil.TestCase `json:"cases"`
 	}
 	if err = json.Unmarshal(listBody, &listOut); err != nil {
 		t.Fatalf("decode cases list: %v", err)
@@ -93,9 +96,9 @@ func TestFragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 		t.Fatalf("created case %q missing from the caller's case list: %+v", created.ID, listOut.Cases)
 	}
 
-	detailResp := casesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, token, demo.DemoOwnerUserID, nil)
+	detailResp := testutil.CasesRequestAs(t, srv, http.MethodGet, caseDetailPathPrefix+created.ID, token, demo.DemoOwnerUserID, nil)
 	defer detailResp.Body.Close()
-	detail, detailBody := decodeCasesResponse(t, detailResp)
+	detail, detailBody := testutil.DecodeCasesResponse(t, detailResp)
 	if detailResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s status = %d, want %d; body = %s", caseDetailPathPrefix+created.ID, detailResp.StatusCode, http.StatusOK, detailBody)
 	}

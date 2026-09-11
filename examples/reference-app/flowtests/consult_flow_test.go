@@ -29,6 +29,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 )
 
@@ -81,12 +83,12 @@ func newFakeOpenAICompatibleServer(t *testing.T, reply string) *fakeOpenAICompat
 // buildConsultTestServer wires up BuildServer's real output behind an
 // httptest.Server, with the ai-gateway platform credential pointed at
 // aiServer -- the same test-only-override pattern cfg.Mailer/cfg.SMSOutput
-// already establish (server_test.go's buildTestServer, notification_flow_test.go's
+// already establish (server_test.go's apptest.BuildServer, notification_flow_test.go's
 // buildNotifTestServer).
 func buildConsultTestServer(t *testing.T, aiServer *fakeOpenAICompatibleServer) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.AIGatewayBaseURL = aiServer.URL
 	cfg.AIGatewayAPIKey = "sk-test-consult-key"
 
@@ -142,7 +144,7 @@ func TestConsultSuggest_ReturnsGatewaySuggestion(t *testing.T) {
 	aiServer := newFakeOpenAICompatibleServer(t, wantSuggestion)
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner")
 	const noteText = "Patient reports mild sensitivity after a whitening session."
 	noteID := createNoteAs(t, srv, token, noteText)
 
@@ -191,7 +193,7 @@ func TestConsultSuggest_UnknownNoteID_Refused(t *testing.T) {
 	aiServer := newFakeOpenAICompatibleServer(t, "unused")
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-2")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-2")
 
 	resp := consultSuggestRequest(t, srv, token, "does-not-exist")
 	defer resp.Body.Close()
@@ -213,7 +215,7 @@ func TestConsultSuggest_MalformedBody_Refused(t *testing.T) {
 	aiServer := newFakeOpenAICompatibleServer(t, "unused")
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-malformed")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-malformed")
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+app.ConsultSuggestPath, bytes.NewReader([]byte("not json")))
 	if err != nil {
@@ -261,7 +263,7 @@ func TestConsultSuggest_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T
 	aiServer := newFakeOpenAICompatibleServer(t, "unused")
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-oversized")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-oversized")
 
 	var body strings.Builder
 	body.WriteString(strings.Repeat(" ", (1<<16)+1))
@@ -304,7 +306,7 @@ func TestConsultSuggest_EmptyNoteID_Refused(t *testing.T) {
 	aiServer := newFakeOpenAICompatibleServer(t, "unused")
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-empty")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-owner-empty")
 
 	resp := consultSuggestRequest(t, srv, token, "")
 	defer resp.Body.Close()
@@ -335,10 +337,10 @@ func TestConsultSuggest_NoteFromAnotherTenant_Refused(t *testing.T) {
 	aiServer := newFakeOpenAICompatibleServer(t, "unused")
 	srv, cfg := buildConsultTestServer(t, aiServer)
 
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-acme-owner")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "consult-acme-owner")
 	noteID := createNoteAs(t, srv, acmeToken, "Acme-only clinical note.")
 
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "consult-globex-owner")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "consult-globex-owner")
 	resp := consultSuggestRequest(t, srv, globexToken, noteID)
 	defer resp.Body.Close()
 

@@ -30,6 +30,9 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 )
 
 // TestSmileJourney_CasePhotoThroughSimulationToComparison is the
@@ -42,13 +45,13 @@ import (
 func TestSmileJourney_CasePhotoThroughSimulationToComparison(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smile-journey")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "smile-journey")
 
 	// The case with the patient photo, exactly as the one-step cases
 	// surface creates it: upload first (the photo travels base64 in
 	// JSON), then create the case naming the uploaded object.
 	photo := uploadPhotoAs(t, srv, token, base64.StdEncoding.EncodeToString(jpegWithExif(t)))
-	opened := createCaseAs(t, srv, token, "", caseCreateBody{
+	opened := testutil.CreateCaseAs(t, srv, token, "", testutil.CaseCreateBody{
 		PatientName:    "Journey patient",
 		PatientRef:     "JRN-001",
 		PhotoObjectIDs: []string{photo.ObjectID},
@@ -197,8 +200,8 @@ func TestSmileJourney_CasePhotoThroughSimulationToComparison(t *testing.T) {
 func TestSmileJourney_SimulationContentRefusals(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "content-acme")
-	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "content-globex")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "content-acme")
+	globexToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-globex", "content-globex")
 
 	// A completed simulation under acme, so there IS an output to
 	// protect and a cross-tenant question to ask about it.

@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/config"
@@ -71,7 +73,7 @@ type configSeed struct {
 func buildSeededTestServer(t *testing.T, seeds ...configSeed) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -385,7 +387,7 @@ func TestPublicConfigEndpoints_Head_Returns200WithoutBody(t *testing.T) {
 //     is the case an unauthenticated caller can never reach.
 func TestPublicConfigEndpoints_NonGetMethod_FailsClosed(t *testing.T) {
 	srv, cfg := buildSeededTestServer(t)
-	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "config-method-check")
+	token := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "config-method-check")
 
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
 		req, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)

@@ -12,13 +12,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil"
+
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 
 	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/authn/demoseed"
-	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -40,35 +42,20 @@ import (
 // grant, never in an in-process roster that dies with the boot that
 // granted them.
 
-// demoSeedPassword is what the tests below seed demo accounts with. It must
-// satisfy go/authn's password policy (length-based) -- which is exactly the
-// point: registration runs through the real register route, so a password
-// the policy refused would fail the boot the same way it fails a browser.
-const demoSeedPassword = "demo users seed passphrase"
-
-// demoPlatformStaffSeedPassword is the test passphrase the suites that seed
-// the demo platform-staff account (internal/app/demo/demo_admin.go's SeedDemoPlatformStaff)
-// set its OWN config field to -- deliberately a DIFFERENT value from
-// demoSeedPassword, mirroring the runtime split between
-// APP_DEMO_USERS_PASSWORD and APP_DEMO_PLATFORM_STAFF_PASSWORD
-// (internal/app/demo/demo_admin.go). It must satisfy go/authn's password policy for the same
-// registration-through-the-real-route reason demoSeedPassword documents.
-const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
-
 // demoSeedDomain is the email domain the demo accounts are declared on
 // (internal/app/demo/demo_users.go's own demoSeedDomain, unexported), restated
 // here for the seeder this file drives directly.
 const demoSeedDomain = "example.com"
 
 // buildSeededUsersTestServer composes BuildServer's real output the way
-// buildTestServer does, with the demo-user seed switched on: the boot runs
-// SeedDemoUsers, which the plain testConfig's empty password never does.
+// apptest.BuildServer does, with the demo-user seed switched on: the boot runs
+// SeedDemoUsers, which the plain apptest.ServerConfig's empty password never does.
 // (flowtests/config_public_endpoint_gates_test.go's own buildSeededTestServer seeds config values
 // instead; the two names keep the two different seeds apart.)
 func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server, app.ServerConfig) {
 	t.Helper()
 
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	cfg.DemoUsersPassword = password
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
@@ -85,102 +72,6 @@ func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server
 	return srv, cfg
 }
 
-// demoLogin signs the account identified by email into tenant through
-// authn's real login/password surface and returns the answer: the HTTP
-// status, the error code (empty on a 200) and, on success, the bearer
-// access token. Callers assert on exactly the combination they expect; a
-// 200 that carries no access_token fails the test here, before any caller
-// could mistake a token-less success for a sign-in.
-func demoLogin(t *testing.T, srv *httptest.Server, email, password string, tenant pkgcore.TenantID) (statusCode int, code, accessToken string) {
-	t.Helper()
-
-	body, err := json.Marshal(map[string]string{
-		"identifier": email,
-		"password":   password,
-		"tenant_id":  string(tenant),
-	})
-	if err != nil {
-		t.Fatalf("login %s: marshal body: %v", email, err)
-	}
-	resp, err := srv.Client().Post(srv.URL+"/api/v1/authn/login/password", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("login %s: %v", email, err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("login %s: read body: %v", email, err)
-	}
-	var answer struct {
-		AccessToken string `json:"access_token"`
-		Code        string `json:"code"`
-	}
-	if err := json.Unmarshal(raw, &answer); err != nil {
-		t.Fatalf("login %s: decoding %s: %v", email, raw, err)
-	}
-	if resp.StatusCode == http.StatusOK && answer.AccessToken == "" {
-		t.Fatalf("login %s: status 200 but no access_token; body = %s", email, raw)
-	}
-	return resp.StatusCode, answer.Code, answer.AccessToken
-}
-
-// assertNoMembershipRefusal reads the account accessToken authenticates
-// its login history through authn's real login-history endpoint and
-// asserts that the account's newest FAILED attempt was recorded with
-// FailureReasonNoMembership. The unified-401 controls call this right
-// after the refusal they pin: that 401 is byte-identical to a wrong
-// password's, so a control asserting only the status could not tell "the
-// password verified and the account holds no membership in the asked-for
-// tenant" from "the test's own credentials broke" -- a defect regression
-// answering 401 for another reason would leave the control green. The
-// login history is the one place the real reason survives: the login
-// response itself never names it, and the history endpoint exists
-// exactly to read it back (a wrong password records
-// FailureReasonBadPassword, an unknown account FailureReasonUnknownUser,
-// and only a membership-less refusal of a verified credential records
-// FailureReasonNoMembership).
-func assertNoMembershipRefusal(t *testing.T, srv *httptest.Server, accessToken, what string) {
-	t.Helper()
-
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/authn/login-history", nil)
-	if err != nil {
-		t.Fatalf("%s: build login-history request: %v", what, err)
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("%s: read login history: %v", what, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		t.Fatalf("%s: login history status = %d, want %d; body = %s", what, resp.StatusCode, http.StatusOK, raw)
-	}
-	var history struct {
-		Attempts []struct {
-			Result        string `json:"result"`
-			FailureReason string `json:"failure_reason"`
-		} `json:"attempts"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&history); err != nil {
-		t.Fatalf("%s: decode login history: %v", what, err)
-	}
-	const wantReason = authn.FailureReasonNoMembership
-	for _, attempt := range history.Attempts {
-		if attempt.Result != authn.LoginResultFailure {
-			continue
-		}
-		if attempt.FailureReason != string(wantReason) {
-			t.Fatalf("%s: the refusal's history row records %q, want %q -- the 401 was not the no-membership "+
-				"answer (a wrong password would record %q)",
-				what, attempt.FailureReason, wantReason, authn.FailureReasonBadPassword)
-		}
-		return
-	}
-	t.Fatalf("%s: the account's login history holds no failed attempt; attempts = %+v", what, history.Attempts)
-}
-
 // TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal signs the
 // seeded accounts in and drives the notes gate with NO demo header at all:
 // the tenant comes from the access token's claim, the acting user from the
@@ -192,14 +83,14 @@ func assertNoMembershipRefusal(t *testing.T, srv *httptest.Server, accessToken, 
 // a (tenant, user) pair -- signed in for a tenant it holds no membership
 // in, it is refused before any route exists.
 func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T) {
-	srv, _ := buildSeededUsersTestServer(t, demoSeedPassword)
+	srv, _ := buildSeededUsersTestServer(t, testutil.DemoSeedPassword)
 
 	// The seeded owner may write and read.
-	status, code, ownerToken := demoLogin(t, srv, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := testutil.DemoLogin(t, srv, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	resp := notesRequestAs(t, srv, http.MethodPost, ownerToken, "", strings.NewReader(`{"text":"seeded owner note"}`))
+	resp := testutil.NotesRequestAs(t, srv, http.MethodPost, ownerToken, "", strings.NewReader(`{"text":"seeded owner note"}`))
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
@@ -207,7 +98,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 			t.Fatalf("POST as the seeded owner: status = %d, want %d; body = %s", resp.StatusCode, http.StatusCreated, body)
 		}
 	}()
-	resp = notesRequestAs(t, srv, http.MethodGet, ownerToken, "", nil)
+	resp = testutil.NotesRequestAs(t, srv, http.MethodGet, ownerToken, "", nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -217,11 +108,11 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	}()
 
 	// The seeded reader may list notes...
-	status, code, readerToken := demoLogin(t, srv, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+	status, code, readerToken := testutil.DemoLogin(t, srv, demo.DemoReaderEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	resp = notesRequestAs(t, srv, http.MethodGet, readerToken, "", nil)
+	resp = testutil.NotesRequestAs(t, srv, http.MethodGet, readerToken, "", nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -232,8 +123,8 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 
 	// ...and may not create one: the same gate, decided against the
 	// notes:read-only grant the seed made under the reader's real user id.
-	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, readerToken, "", strings.NewReader(`{"text":"reader note"}`)),
+	testutil.AssertPermissionDenied(t,
+		testutil.NotesRequestAs(t, srv, http.MethodPost, readerToken, "", strings.NewReader(`{"text":"reader note"}`)),
 		"POST as the seeded reader")
 
 	// The acme-only account signs into its own tenant fine -- its
@@ -241,7 +132,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// proves the credentials the globex control refuses below are right
 	// and yields the bearer the login-history read after the control needs
 	// (history is the one place a refusal's real reason survives).
-	status, code, acmeOnlyToken := demoLogin(t, srv, demo.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-acme")
+	status, code, acmeOnlyToken := testutil.DemoLogin(t, srv, demo.DemoAcmeOnlyEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("login as the seeded acme-only account in its own tenant: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
@@ -255,7 +146,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// not disclose that to an anonymous caller (the answer was deliberately
 	// unified: the specific reason is recorded in the login history, never
 	// the response).
-	status, code, _ = demoLogin(t, srv, demo.DemoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
+	status, code, _ = testutil.DemoLogin(t, srv, demo.DemoAcmeOnlyEmail, testutil.DemoSeedPassword, "tenant-globex")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 401 %q",
 			status, code, "authn.invalid_credentials")
@@ -266,7 +157,7 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// refusal it is (the sign-in into tenant-acme just above proved the
 	// password; history proves the globex refusal was the missing
 	// membership).
-	assertNoMembershipRefusal(t, srv, acmeOnlyToken, "login as the acme-only account in tenant-globex")
+	testutil.AssertNoMembershipRefusal(t, srv, acmeOnlyToken, "login as the acme-only account in tenant-globex")
 }
 
 // TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive pins what a
@@ -304,10 +195,10 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 	// account is seeded from APP_DEMO_PLATFORM_STAFF_PASSWORD alone, never
 	// from the demo users' variable -- internal/app/demo/demo_admin.go).
 	boot := func() (*httptest.Server, func() error) {
-		cfg := testConfig(t)
+		cfg := apptest.ServerConfig(t)
 		cfg.SQLitePath = dbPath
-		cfg.DemoUsersPassword = demoSeedPassword
-		cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
+		cfg.DemoUsersPassword = testutil.DemoSeedPassword
+		cfg.DemoPlatformStaffPassword = testutil.DemoPlatformStaffSeedPassword
 		handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("BuildServer: %v", err)
@@ -317,11 +208,11 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 
 	// Boot one seeds every demo account and proves the seed works.
 	srv1, cleanup1 := boot()
-	status, code, ownerToken := demoLogin(t, srv1, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken := testutil.DemoLogin(t, srv1, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-one login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
-	resp := notesRequestAs(t, srv1, http.MethodGet, ownerToken, "", nil)
+	resp := testutil.NotesRequestAs(t, srv1, http.MethodGet, ownerToken, "", nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -350,13 +241,13 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		}
 	}()
 
-	status, code, ownerToken2 := demoLogin(t, srv2, demo.DemoOwnerEmail, demoSeedPassword, "tenant-acme")
+	status, code, ownerToken2 := testutil.DemoLogin(t, srv2, demo.DemoOwnerEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the seeded owner: status = %d, code = %q, want %d "+
 			"(a demo account's org membership row must survive a restart)",
 			status, code, http.StatusOK)
 	}
-	resp = notesRequestAs(t, srv2, http.MethodGet, ownerToken2, "", nil)
+	resp = testutil.NotesRequestAs(t, srv2, http.MethodGet, ownerToken2, "", nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -365,12 +256,12 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		}
 	}()
 
-	status, code, _ = demoLogin(t, srv2, demo.DemoReaderEmail, demoSeedPassword, "tenant-acme")
+	status, code, _ = testutil.DemoLogin(t, srv2, demo.DemoReaderEmail, testutil.DemoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
 
-	status, code, _ = demoLogin(t, srv2, demo.DemoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
+	status, code, _ = testutil.DemoLogin(t, srv2, demo.DemoPlatformStaffEmail, testutil.DemoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the platform-staff account: status = %d, code = %q, want %d "+
 			"(the staff account's SystemDomain membership must survive a restart)",
@@ -392,7 +283,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 // itself and asserts the refusal is named as the rate limit -- and that an
 // ordinary policy refusal (the control) never carries that name.
 func TestDemoUsers_Seeder_RateLimitAnswerNamedDistinctly(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := apptest.ServerConfig(t)
 	handler, cleanup, _, err := app.BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
@@ -451,7 +342,7 @@ func TestDemoUsers_Seeder_RateLimitAnswerNamedDistinctly(t *testing.T) {
 	// Exhaust the register budget: 9 more in-process registrations on top
 	// of the debited policy attempt reach the 10-per-hour limit.
 	for i := 0; i < 9; i++ {
-		if status := postRegister("budget-"+strconv.Itoa(i)+"@example.com", demoSeedPassword); status != http.StatusCreated {
+		if status := postRegister("budget-"+strconv.Itoa(i)+"@example.com", testutil.DemoSeedPassword); status != http.StatusCreated {
 			t.Fatalf("register %d status = %d, want 201", i, status)
 		}
 	}
@@ -459,7 +350,7 @@ func TestDemoUsers_Seeder_RateLimitAnswerNamedDistinctly(t *testing.T) {
 	// The 11th register POST (10 already debited) must answer 429, and
 	// the seeder must name the answer as the public register rate
 	// limit with its remedy, not as the generic fatal refusal.
-	_, _, rateErr := seeder.Register(ctx, "rate-limited@example.com", demoSeedPassword)
+	_, _, rateErr := seeder.Register(ctx, "rate-limited@example.com", testutil.DemoSeedPassword)
 	if rateErr == nil {
 		t.Fatal("Register with an exhausted register budget: want error, got nil")
 	}

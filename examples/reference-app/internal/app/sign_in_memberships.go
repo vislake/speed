@@ -60,7 +60,7 @@ import (
 // registers and grants (demo/demo_admin.go) -- and that seed re-asserts the
 // grant on every boot, so the staff account's sign-in survives a restart
 // like everyone else's. Everything else ever granted here is test-only
-// shortcut (flowtests/server_test.go's registerAndAuthenticate and friends),
+// shortcut (internal/apptest's RegisterAndAuthenticate and friends),
 // which is also what makes a customer-tenant entry in this roster mean: a
 // test rig has declared "this account may act in this tenant" without going
 // through org, and authn honors it only because org itself has no row for
@@ -76,7 +76,8 @@ type signInMemberships struct {
 
 	// org is the module service customer-tenant questions are asked of.
 	// Nil until BuildServer calls attach -- a signInMemberships built
-	// before that (testConfig's constructor) simply answers from granted
+	// before that (internal/apptest's ServerConfig constructor) simply
+	// answers from granted
 	// alone, which is fine because BuildServer always attaches before any
 	// request can reach authn.
 	org *org.MemberService

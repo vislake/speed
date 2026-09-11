@@ -34,7 +34,7 @@ package flowtests
 //
 //   - The boot key is created by the REAL bootstrap path: this app's authn
 //     Signer calls pki.Service.EnsurePurpose lazily on its first token
-//     issue, so the test's own registerAndAuthenticate sign-in is what
+//     issue, so the test's own apptest.RegisterAndAuthenticate sign-in is what
 //     creates the purpose's first active key, synchronously, through the
 //     real wire. Before that sign-in the purpose has no key at all -- the
 //     test asserts that first, so the "boot" key's identity is never
@@ -90,6 +90,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/examples/reference-app/internal/apptest"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
@@ -195,7 +197,7 @@ func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T
 	// first key synchronously -- active, one year of validity, a retiring
 	// overlap of the app's access-token TTL. This token is signed by that
 	// boot key.
-	bootToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "periodic-pki")
+	bootToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "periodic-pki")
 	boot := activeSigningKey(t, keys, purpose)
 	if boot == nil {
 		t.Fatalf("after the first sign-in purpose %q still has no active signing key -- authn never bootstrapped it", purpose)
@@ -238,7 +240,7 @@ func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T
 	// only after authn.Middleware verified the bearer signature, so two
 	// 200s are the composed proof that the rotation left this app's real
 	// consumer fully served.
-	postRotationToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "periodic-pki-post-rotation")
+	postRotationToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "periodic-pki-post-rotation")
 	client := srv.Client()
 	for name, token := range map[string]string{
 		"successor-signed (post-rotation sign-in)": postRotationToken,
