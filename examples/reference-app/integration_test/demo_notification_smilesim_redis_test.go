@@ -96,8 +96,8 @@ import (
 const (
 	smilesimDemoRecipientUserID = "user-smilesim-recipient-1"
 	smilesimDemoRecipientPhone  = "+8613800138099"
-	// smilesimSMSLinePrefix is go/notification's console SMS sender's own
-	// wire format (go/notification/sms.go: "SMS to %s: %s\n"), which the
+	// smilesimSMSLinePrefix is pkgcore's console SMS sender's own
+	// wire format (go/pkgcore/sms_console.go: "SMS to %s: %s\n"), which the
 	// child's default stdout-backed sender (cfg.SMSOutput unset) writes to
 	// its own process stdout -- the signal this test polls for.
 	smilesimSMSLinePrefix = "SMS to " + smilesimDemoRecipientPhone + ":"

@@ -112,7 +112,7 @@ func (m *capturingMailer) snapshot() []pkgcore.Mail {
 }
 
 // lockedBuffer is an io.Writer that keeps every write, for observing the
-// console SMS sender's output (go/notification/sms.go writes one
+// console SMS sender's output (go/pkgcore/sms_console.go writes one
 // "SMS to <address>: <text>" line per message). The lock exists for the
 // same reason snapshot() does: verification-code SMS are sent
 // synchronously from a handler goroutine, delivery SMS from a queue
