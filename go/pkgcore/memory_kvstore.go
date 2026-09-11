@@ -8,6 +8,35 @@ import (
 	"time"
 )
 
+const (
+	// kvNoExpiry is the boundary for the ttl argument of Set: any ttl at or below
+	// it stores the key without an expiry.
+	kvNoExpiry time.Duration = 0
+
+	// kvFloatFormat is the strconv verb used to encode numeric values. 'g' keeps
+	// small numbers readable and falls back to exponent notation only when the
+	// decimal form would be unwieldy.
+	kvFloatFormat = 'g'
+
+	// kvFloatPrecisionShortest asks strconv for the shortest representation that
+	// parses back to the exact same float64, so repeated increments never lose
+	// precision to formatting.
+	kvFloatPrecisionShortest = -1
+
+	// kvFloatBitSize is the width of the numeric values IncrByFloat handles.
+	kvFloatBitSize = 64
+
+	// kvSweepInterval is how many write operations the in-memory store lets
+	// pass between amortized sweeps: every interval-th write reclaims every
+	// expired entry in one pass. A rate-limit window key embeds its window,
+	// so once a window passes nothing ever touches its key again -- without a
+	// reclamation that runs on its own, such keys would occupy the map for
+	// the rest of the process. One O(entries) pass per interval keeps the
+	// amortized cost at O(1) per write while bounding the map to live
+	// entries plus whatever expired during the last interval.
+	kvSweepInterval = 1024
+)
+
 // kvEntry is one value held by memoryKVStore together with its optional
 // expiry.
 type kvEntry struct {
