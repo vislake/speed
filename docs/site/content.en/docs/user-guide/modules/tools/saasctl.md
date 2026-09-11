@@ -155,15 +155,17 @@ differ in two files only — the go.mod require set and `server.go`'s
 wiring; `config.go` is shared verbatim — and two tokens,
 `__APP_NAME__` (the module path) and `__SPEED_ROOT__` (the checkout
 path), are substituted at materialisation. The host-neutral
-composition itself (the assembly engine — configuration load, database
-open and migration, kernel bootstrap, the HTTP face and the
-serve/shutdown lifecycle — plus the liveness endpoints, the pre-auth
-allowlist set, the route-mount rule and the fixed middleware chain)
-lives once, in the platform module
+composition itself (the assembly engine — the configuration load, the
+composition plan and the seven-stage component drive — plus authn's
+mount path, the serve timeouts, the pre-auth allowlist set and the fixed
+middleware chain; the liveness endpoints are `go/observability`'s and
+the route-mount rule `pkgcore`'s) lives once, in the platform module
 `github.com/vislake/speed/go/app`, imported by every generated project
-and the reference app alike and served through the engine's `Run`; a
-repository gate keeps either host from re-declaring it or re-growing
-the assembly calls the engine owns.
+and the reference app alike — each host's own `server.go` registers its
+components on a `pkgcore.ComponentRegistry`, drives them through the
+engine's `Assemble` and serves through its own listener. A repository
+gate keeps either host from re-declaring it or re-growing the assembly
+steps the engine owns.
 
 The boot defaults: standalone mode, SQLite `app.db`, port 8080.
 `/healthz` and `/api/v1/config/public` answer 200 and registering answers

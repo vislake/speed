@@ -132,12 +132,15 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 为所有者的第一个任务。不同组合只差两个文件——go.mod 的 require
 集合与 `server.go` 的接线;`config.go` 逐字共享——并在生成时替换
 两个 token:`__APP_NAME__`(module path)与 `__SPEED_ROOT__`
-(checkout 路径)。宿主中性的组装本身(装配引擎:配置装载、数据库
-打开与迁移、内核引导、HTTP 面与启动/优雅停机生命周期;以及存活探针
-端点、预认证允许列表、路由挂载规则与固定中间件链)只有
-一份,位于平台模块 `github.com/vislake/speed/go/app`,每个生成项目
-与参考应用一样直接 import 并经由引擎的 `Run` 启动;仓库有一道门
-禁止任一宿主自行重新声明这套内核或重抛出引擎掌管的装配调用。
+(checkout 路径)。宿主中性的组装本身(装配引擎:配置装载、组合配置
+解析与七阶段组件驱动;以及 authn 的挂载路径、服务超时、预认证允许
+列表与固定中间件链——存活探针端点归 `go/observability`、路由挂载
+规则归 `pkgcore`)只有一份,位于平台模块
+`github.com/vislake/speed/go/app`,每个生成项目与参考应用一样直接
+import——各宿主自己的 `server.go` 把组件注册到
+`pkgcore.ComponentRegistry`,经引擎的 `Assemble` 驱动,并由宿主自己
+的监听器对外服务;仓库有一道门禁止任一宿主自行重新声明这套内核或
+重抛出引擎掌管的装配步骤。
 
 启动默认值:standalone 形态、SQLite `app.db`、端口 8080。
 `/healthz` 与 `/api/v1/config/public` 应答 200,注册应答 201;但骨架
