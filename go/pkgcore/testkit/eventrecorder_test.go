@@ -35,7 +35,7 @@ func TestEventRecorder_CountsAndFirstOverRecordedEvents(t *testing.T) {
 	if !ok || first.Type != "notes.created" {
 		t.Fatalf("First(notes.created) = (%v, %v), want the earliest created event", first, ok)
 	}
-	if _, ok := r.First("notes.restored"); ok {
+	if _, found := r.First("notes.restored"); found {
 		t.Fatal("First(notes.restored) reported an event for a type that was never recorded")
 	}
 	match, ok := r.FirstMatch(func(evt pkgcore.Event) bool { return evt.TenantID == "tenant-bright" })

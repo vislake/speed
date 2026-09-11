@@ -2,8 +2,9 @@ package org
 
 import (
 	"context"
-	"github.com/vislake/speed/go/pkgcore/testkit"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // rbacShapedScope is a LOCAL restatement of the Scope interface, declared
