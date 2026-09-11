@@ -28,14 +28,15 @@ import (
 // way to reach them at all.
 const DemoPlatformStaffEmail = "demo-platform-staff@example.com"
 
-// AdminRoutePath mirrors notesRoutePath's own situation: admin keeps its
-// mount-point constant unexported, so this app names it again here to
-// keep DemoRouteRules in step with it.
-const AdminRoutePath = "/api/v1/admin"
+// AdminRoutePath is admin's own mount point, and it is the module's own
+// exported constant rather than a second spelling this app keeps in step:
+// the constant's home is go/admin (admin.APIPath), and both the route
+// table below and the chain's admin-prefix split read it from there.
+const AdminRoutePath = admin.APIPath
 
 // The admin sub-paths adminPermissionFor tells apart. admin mounts
-// its whole surface as one Handler under AdminRoutePath (mountModuleRoutes
-// wraps the WHOLE subtree in one guard), so distinguishing which
+// its whole surface as one Handler under AdminRoutePath (the chain wraps
+// the WHOLE subtree in one guard), so distinguishing which
 // permission a specific request needs is this app's own job, done by
 // inspecting the request's own path and method -- never a header, a query
 // parameter or a body field, for the same reason DemoPermissionFor's own

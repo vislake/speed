@@ -37,28 +37,30 @@ package app
 // pre-auth endpoints), and the two probe endpoints are the only non-API
 // paths the server owns.
 //
-// withFrontend wraps the OUTSIDE of authn.Middleware's own output in
-// BuildServer (see the call site's own comment), so the requests the
-// frontend answers never meet tenant resolution -- GET / answers 200 to a
-// caller with no tenant, exactly what a deployed sign-in page needs --
-// while the API requests that do reach the chain pass through unchanged.
+// webSPASpec declares the frontend directory as the engine's SPA spec: the
+// engine wraps the whole composed handler (authn.Middleware's output
+// included) in the shared SPA file server, so the requests the frontend
+// answers never meet tenant resolution -- GET / answers 200 to a caller
+// with no tenant, exactly what a deployed sign-in page needs -- while the
+// API requests that do reach the chain pass through unchanged.
 
 import (
-	"net/http"
-
+	speedapp "github.com/vislake/speed/go/app"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore/spa"
 )
 
-// withFrontend wraps next -- BuildServer's fully composed API handler,
-// authn.Middleware's output included -- with the shared SPA file server
-// configured for this app's surface: /api and everything nested below it,
-// plus the two probe endpoints, always reach next, and every other GET/HEAD
-// request is served from dir (see the package doc comment above).
-func withFrontend(dir string, next http.Handler) http.Handler {
-	return spa.New(dir, next,
-		spa.WithServerPrefix("/api"),
-		spa.WithServerPath(obs.HealthzPath),
-		spa.WithServerPath(obs.MetricsPath),
-	)
+// webSPASpec returns the engine's SPA declaration for dir, configured for
+// this app's surface: /api and everything nested below it, plus the two
+// probe endpoints, always reach the composed handler, and every other
+// GET/HEAD request is served from dir (see the package doc comment above).
+func webSPASpec(dir string) *speedapp.SPASpec {
+	return &speedapp.SPASpec{
+		Dir: dir,
+		Options: []spa.Option{
+			spa.WithServerPrefix("/api"),
+			spa.WithServerPath(obs.HealthzPath),
+			spa.WithServerPath(obs.MetricsPath),
+		},
+	}
 }

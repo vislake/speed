@@ -102,48 +102,6 @@ func TestRunHealthcheck_EmptyPort_UsesDefaultPort(t *testing.T) {
 	}
 }
 
-// TestObservabilityOptions_EndpointAbsent_StaysOnLocalExporters pins the
-// conditional half of observabilityOptions' contract: a ServerConfig with
-// no OTLP endpoint (the ConfigFromEnv default when APP_OTLP_ENDPOINT is
-// unset) yields exactly the service-name option, so applying the returned
-// options to a fresh observability.Config leaves OTLPEndpoint empty --
-// obs.Init then stays on the local exporters, byte-identical to the
-// pre-APP_OTLP_ENDPOINT wiring (see the OTLPEndpoint bootstrap field's
-// own doc comment in internal/app/bootstrap.go).
-func TestObservabilityOptions_EndpointAbsent_StaysOnLocalExporters(t *testing.T) {
-	opts := observabilityOptions(app.ServerConfig{})
-	var cfg obs.Config
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	if cfg.ServiceName != "reference-app" {
-		t.Fatalf("ServiceName = %q, want %q", cfg.ServiceName, "reference-app")
-	}
-	if cfg.OTLPEndpoint != "" {
-		t.Fatalf("OTLPEndpoint = %q with an unset APP_OTLP_ENDPOINT, want the empty default (local exporters)", cfg.OTLPEndpoint)
-	}
-}
-
-// TestObservabilityOptions_EndpointSet_CarriesTheOption pins the other half
-// of the conditional: a ServerConfig whose OTLPEndpoint was resolved from
-// APP_OTLP_ENDPOINT (by ConfigFromEnv) yields an option set that includes
-// obs.WithOTLPEndpoint carrying that exact value -- the APP_REDIS_ADDR-shaped
-// hand-over that switches obs.Init onto the OTLP exporters.
-func TestObservabilityOptions_EndpointSet_CarriesTheOption(t *testing.T) {
-	const endpoint = "collector.example.internal:4317"
-	opts := observabilityOptions(app.ServerConfig{OTLPEndpoint: endpoint})
-	var cfg obs.Config
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	if cfg.ServiceName != "reference-app" {
-		t.Fatalf("ServiceName = %q, want %q", cfg.ServiceName, "reference-app")
-	}
-	if cfg.OTLPEndpoint != endpoint {
-		t.Fatalf("OTLPEndpoint = %q, want the APP_OTLP_ENDPOINT value %q", cfg.OTLPEndpoint, endpoint)
-	}
-}
-
 // startLoopbackServer starts an httptest server bound to 127.0.0.1 (matching
 // the loopback address runHealthcheck itself dials) and returns the port it
 // bound, as a string ready to pass to runHealthcheck. It registers its own

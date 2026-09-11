@@ -45,6 +45,14 @@ import (
 // loader's WithRootKeyEnv exactly as spelled, not through this prefix.
 const envPrefix = "APP_"
 
+// rootKeyEnv names the variable holding the 32-byte root secret the six key
+// materials derive from when no individual key variable is set. It is
+// pinned by name rather than derived from envPrefix (the loader reads it
+// through WithRootKeyEnv, outside the prefix's spelling rules), and it is
+// shared with the engine's loader options so both passes read the one
+// variable.
+const rootKeyEnv = "APP_ROOT_KEY"
+
 // hostConfig is the loader target carrying this app's whole bootstrap surface,
 // one field per variable. Every field pins its variable's exact name with the
 // env tag option, so the names are read as spelled here whatever the loader's
@@ -621,7 +629,7 @@ func loadHostConfig() (hostConfig, error) {
 	hc := hostConfigDefaults()
 	err := config.New(
 		config.WithEnvPrefix(envPrefix),
-		config.WithRootKeyEnv("APP_ROOT_KEY"),
+		config.WithRootKeyEnv(rootKeyEnv),
 		config.WithKeyDerivation(dbkit.DeriveBootstrapKey),
 	).Load(&hc)
 	return hc, err

@@ -160,10 +160,10 @@ const (
 
 // notesRoutePath is where the notes module mounts its route. This example
 // needs the literal because the module keeps its own path unexported --
-// and it does not need to keep the two in sync by hand: mountModuleRoutes
-// refuses to start when a module mounts a path DemoRouteRules does not
-// name, so a path change here surfaces as a startup failure naming the new
-// path, never as a silently ungated route.
+// and it does not need to keep the two in sync by hand: the chain refuses
+// to start when a module mounts a path DemoRouteRules does not name, so a
+// path change here surfaces as a startup failure naming the new path,
+// never as a silently ungated route.
 const notesRoutePath = "/api/v1/notes"
 
 // orgRoutePath is where the org module mounts its routes -- the same
@@ -219,8 +219,8 @@ const BillingRoutePath = "/api/v1/billing"
 // rbac.RouteRule for every path a module mounts, declaring whether the
 // route is public or which permission gates it, which subject resolver the
 // check evaluates, and (for org alone) the layer that narrows inside the
-// gate. mountModuleRoutes hands it to rbac.GuardRoutes and mounts what
-// comes back.
+// gate. composeFace hands it to rbac.GuardRoutes through chain.Standard,
+// which mounts what comes back.
 //
 // The table is exact in both directions: a mounted path it does not name
 // fails the server build, and so does an entry no module mounted. That
@@ -236,9 +236,10 @@ const BillingRoutePath = "/api/v1/billing"
 // them at once. The two entries that deliberately deviate are pki's and
 // admin's, each for its own domain reason stated on its own entry.
 //
-// az and orgDeps are the same instances mountModuleRoutes passes to
-// rbac.GuardRoutes and BuildServer wired into the org module; the org
-// entry's Layer closure needs them (see orgNodeScopeLayer).
+// az and orgDeps are the same instances composeFace passes to
+// rbac.GuardRoutes through chain.Standard, and the same org module wiring
+// BuildServer composed; the org entry's Layer closure needs them (see
+// orgNodeScopeLayer).
 func DemoRouteRules(az rbac.Authorizer, orgDeps OrgRouteGuardDeps, demoHeaderDisabled bool) []rbac.RouteRule {
 	demo := DemoSubjectResolverFor(demoHeaderDisabled)
 	return []rbac.RouteRule{
@@ -521,7 +522,7 @@ func pkiSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subjec
 // lookup is: the path is what routed the request to this gate in the first
 // place, never a value a caller supplies independently of it. A Go 1.22
 // ServeMux hands a mounted handler the FULL request path
-// (mountModuleRoutes registers exactly the module's own mount, so
+// (pkgcore.MountRoutes registers exactly the module's own mount, so
 // r.URL.Path always carries the sub-path remainder), which is the same
 // precedent sharingPermissionFor's "/revoke" suffix check and
 // aiGatewayPermissionFor's "/platform" suffix check already establish.
