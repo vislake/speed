@@ -17,7 +17,7 @@ import (
 // instance twice, the faithful two-instance model of a one-replica
 // deployment (see the package doc comment). The caps argument carries the
 // in-memory store's honest declaration — pkgcore registers "kv.memory"
-// with no capability bits (its own kv_builtins.go), so the
+// with no capability bits (its own kv_memory.go), so the
 // suite runs the single-instance checks only.
 func TestAssertConforms_MemoryKVStore(t *testing.T) {
 	t.Parallel()

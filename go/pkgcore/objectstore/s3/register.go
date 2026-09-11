@@ -6,7 +6,7 @@ package s3
 // registers "objectstore.s3" on pkgcore's shared ObjectStoreRegistry, the
 // name pkgcore.PresetDistributed already names for the "objectstore" seam.
 // The registration lives here, beside the implementation it adapts, rather
-// than in pkgcore's own objectstore_builtins.go: if the implementation
+// than in pkgcore's own objectstore_registry.go: if the implementation
 // sat in its own package while the registration stayed behind,
 // PresetDistributed would point at a name nothing could resolve.
 //

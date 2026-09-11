@@ -47,7 +47,7 @@ flowchart TD
 
 ## 设计:实现像 `database/sql` 驱动一样注册
 
-每个基础设施接口有 N 套实现,N ≥ 1——从不是固定的两套。一个二进制包含哪些实现由应用组装者决定,打包方式追随 Go 按包解析依赖的特性:每套实现住在自己的子包里,经自己的 `init()` 向包级 `SeamRegistry` 注册(`kv.redis`、`eventbus.postgres`、`objectstore.s3`……);进程内内置实现由根包的 seam 内置注册文件登记(`kv.memory`、`eventbus.memory`、`mailer.console`、`mailer.smtp`、`objectstore.local`)。宿主想用指向某分布式实现的 preset 组装,就必须 import 对应子包——空白导入足矣——否则 `Bootstrap` 报 `ErrUnknownImplementation` 并点名 seam 与实现:这是 `database/sql` 式交易中被接受的代价,编译期错误变成启动期错误,而报错信息会指名"缺的那行 import"。
+每个基础设施接口有 N 套实现,N ≥ 1——从不是固定的两套。一个二进制包含哪些实现由应用组装者决定,打包方式追随 Go 按包解析依赖的特性:每套实现住在自己的子包里,经自己的 `init()` 向包级 `SeamRegistry` 注册(`kv.redis`、`eventbus.postgres`、`objectstore.s3`……);进程内内置实现由根包的 seam 注册文件登记(`kv.memory`、`eventbus.memory`、`mailer.console`、`mailer.smtp`、`objectstore.local`)。宿主想用指向某分布式实现的 preset 组装,就必须 import 对应子包——空白导入足矣——否则 `Bootstrap` 报 `ErrUnknownImplementation` 并点名 seam 与实现:这是 `database/sql` 式交易中被接受的代价,编译期错误变成启动期错误,而报错信息会指名"缺的那行 import"。
 
 捆绑全部内置实现不是"有得有失"的取舍,因为它没换来任何东西:跑任意组装这个属性在分包之后依然可得——想要它的应用把实现全部 import 进来,代价一分不少;分包只是把这个属性从强制变成可选。这也是为什么新实现是子包、从不是新模块——模块是按领域内聚划分的发布单元,锁步下每多一个模块就要多一份 `go.work` 条目、CI 矩阵行与版本标签,而子包这些全都不需要。
 

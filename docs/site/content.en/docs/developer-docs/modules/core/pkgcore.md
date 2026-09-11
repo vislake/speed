@@ -133,7 +133,7 @@ assembler's decision, and the packaging follows Go's per-package
 dependency resolution: each implementation lives in its own subpackage
 and self-registers from its own `init()` onto the package-level
 `SeamRegistry` (`kv.redis`, `eventbus.postgres`, `objectstore.s3`,
-…), the in-process built-ins registering from the seam built-in files
+…), the in-process built-ins registering from the seam registration files
 in the root package (`kv.memory`, `eventbus.memory`, `mailer.console`,
 `mailer.smtp`, `objectstore.local`). A host that wants a preset
 composition naming a distributed implementation must import that

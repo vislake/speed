@@ -6,7 +6,7 @@ package redis
 // "kv.redis" on pkgcore's shared KVStoreRegistry, the name
 // pkgcore.PresetDistributed already names for the "kv" seam. The
 // registration lives here, beside the implementation it adapts, rather than
-// in pkgcore's own kv_builtins.go: if the implementation sat in
+// in pkgcore's own kv_memory.go: if the implementation sat in
 // its own package while the registration stayed behind, PresetDistributed
 // would point at a name nothing could resolve.
 //

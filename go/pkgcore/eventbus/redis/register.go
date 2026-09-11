@@ -6,7 +6,7 @@ package redis
 // registers "eventbus.redis" on pkgcore's shared EventBusRegistry, the name
 // pkgcore.PresetDistributed already names for the "eventbus" seam. The
 // registration lives here, beside the implementation it adapts, rather than
-// in pkgcore's own eventbus_builtins.go: if the implementation sat in
+// in pkgcore's own eventbus_memory.go: if the implementation sat in
 // its own package while the registration stayed behind, PresetDistributed
 // would point at a name nothing could resolve.
 //

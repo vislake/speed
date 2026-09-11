@@ -137,7 +137,7 @@ func newTestStorageObjectServiceWithStore(t *testing.T, store pkgcore.ObjectStor
 		t.Fatalf("apply storage migrations: %v", err)
 	}
 	// capabilities 0: the identical value pkgcore's own "objectstore.local"
-	// builtin registers (objectstore_builtins.go) -- irrelevant here
+	// builtin registers (objectstore_registry.go) -- irrelevant here
 	// regardless, since these tests never set WithDeploymentMode and a
 	// single-process deployment excludes no implementation.
 	if _, err := pkgcore.NewKernel(pkgcore.WithObjectStore(store, 0)).Bootstrap(context.Background(), storageModule); err != nil {

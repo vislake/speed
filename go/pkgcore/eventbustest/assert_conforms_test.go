@@ -18,7 +18,7 @@ import (
 // instance twice, the faithful two-instance model of a one-replica
 // deployment (see the package doc comment). The caps argument carries the
 // in-memory bus's honest declaration — pkgcore registers "eventbus.memory"
-// with no capability bits (its own eventbus_builtins.go), so the
+// with no capability bits (its own eventbus_memory.go), so the
 // suite runs the single-instance checks only.
 func TestAssertConforms_MemoryEventBus(t *testing.T) {
 	t.Parallel()
