@@ -424,8 +424,8 @@ func ExampleScheduler() {
 	// The handler and the schedule are one declaration turn: the seats
 	// accept writes only while the assembly's Init stage runs.
 	err = componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
-		if err := r.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
-			return err
+		if handleErr := r.Jobs.Handle(sweeps.Type(), sweeps); handleErr != nil {
+			return handleErr
 		}
 		return r.Schedules.Add(pkgcore.PeriodicTask{
 			Type:      sweeps.Type(),
