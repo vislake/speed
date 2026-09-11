@@ -39,6 +39,12 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
     test's "--- FAIL: TestName" line, which go test prints to stdout,
     stays readable from CI even when stderr is empty, and an oversized
     stream keeps only its tail with the truncation named.
+  * captured_streams_report's failure extract -- the whole-stream
+    "--- FAIL: " / "panic: " / "fatal error: " lines are pulled ahead
+    of the bounded tail, in source order, exact duplicates collapsed,
+    capped at STREAM_FAILURE_LINE_LIMIT with the true match count in
+    the header, so a long clean tail cannot truncate the failing test's
+    name away; a stream with no failure line contributes only its tail.
   * short_toolchain -- the go version line's short form.
   * The gating rule's fail direction -- the mechanism must not go soft
     on the decline it exists to catch -- is proven against the real
@@ -559,6 +565,115 @@ class MeasurementFailureDiagnostic(unittest.TestCase):
         message = self._fail_with("", "")
         self.assertIn("stdout (empty)", message)
         self.assertIn("stderr (empty)", message)
+
+
+class StreamFailureExtraction(unittest.TestCase):
+    """captured_streams_report's whole-stream failure extract: the
+    lines that name why a run went red -- the go test per-test
+    "--- FAIL: TestName" verdict and the "panic: " / "fatal error: "
+    crash lines -- are pulled from the whole stream ahead of the
+    bounded tail, so a long clean tail cannot truncate the failing
+    test's name away. Extraction keeps source order, collapses exact
+    duplicates, caps at STREAM_FAILURE_LINE_LIMIT with the true match
+    count in the header, and a stream with no failure line contributes
+    only its tail (the tail keeping its own role)."""
+
+    # One clean package-verdict line; enough of them push anything
+    # before them beyond STREAM_TAIL_LIMIT characters from the end.
+    CLEAN_LINE = "ok  \texample.com/widgets/alpha\t0.05s\n"
+
+    def _long_clean_tail(self):
+        return self.CLEAN_LINE * 100
+
+    def test_fail_line_beyond_the_tail_still_names_the_test(self):
+        # A run whose "--- FAIL: TestName" verdict prints far from the
+        # stream's end, with clean package output after it, must still
+        # name the test: the retained tail alone does not carry it.
+        fail_line = "--- FAIL: TestRace (0.31s)"
+        stdout = (
+            "=== RUN   TestRace\n%s\n%sFAIL\n"
+            % (fail_line, self._long_clean_tail())
+        )
+        # Fixture invariant: the verdict line really sits outside the
+        # retained window, so the extract is the only thing that can
+        # carry it into the report.
+        self.assertGreater(
+            len(stdout) - stdout.index(fail_line), m.STREAM_TAIL_LIMIT
+        )
+        self.assertNotIn(fail_line, stdout[-m.STREAM_TAIL_LIMIT:])
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing 1 of 1):\n" + fail_line, report
+        )
+
+    def test_panic_and_fatal_error_lines_are_extracted(self):
+        # A test-binary crash may print no "--- FAIL: " verdict at all
+        # (a runtime fault outside test accounting), so the crash's own
+        # opening lines are extracted too.
+        stdout = (
+            "=== RUN   TestCrash\n"
+            "panic: nil map write\n"
+            "fatal error: all goroutines are asleep - deadlock!\n"
+            + self._long_clean_tail()
+        )
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing 2 of 2):\n"
+            "panic: nil map write\n"
+            "fatal error: all goroutines are asleep - deadlock!",
+            report,
+        )
+
+    def test_exact_duplicates_collapse_keeping_source_order(self):
+        stdout = (
+            "--- FAIL: TestAlpha (0.00s)\n"
+            "--- FAIL: TestBeta (0.00s)\n"
+            "--- FAIL: TestAlpha (0.00s)\n"
+            + self._long_clean_tail()
+        )
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn("stdout failure lines (showing 2 of 2):", report)
+        self.assertEqual(report.count("--- FAIL: TestAlpha (0.00s)"), 1)
+        self.assertEqual(report.count("--- FAIL: TestBeta (0.00s)"), 1)
+        self.assertLess(report.index("TestAlpha"), report.index("TestBeta"))
+
+    def test_extract_is_capped_with_the_true_count_in_the_header(self):
+        # A pathological run (one "panic:" line per test in a crash
+        # loop) cannot fill the report: the extract stops at
+        # STREAM_FAILURE_LINE_LIMIT, and the header's true match count
+        # keeps the cap from hiding the failure set's size.
+        fail_lines = [
+            "--- FAIL: Test%03d (0.00s)" % i
+            for i in range(m.STREAM_FAILURE_LINE_LIMIT + 5)
+        ]
+        stdout = "\n".join(fail_lines) + "\n" + self._long_clean_tail()
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing %d of %d):"
+            % (m.STREAM_FAILURE_LINE_LIMIT, len(fail_lines)),
+            report,
+        )
+        self.assertIn(fail_lines[0], report)
+        self.assertIn(fail_lines[m.STREAM_FAILURE_LINE_LIMIT - 1], report)
+        self.assertNotIn(fail_lines[m.STREAM_FAILURE_LINE_LIMIT], report)
+        self.assertNotIn(fail_lines[-1], report)
+
+    def test_stream_without_failure_lines_renders_only_its_labeled_tail(self):
+        # No failure line: no extract section, the report is the
+        # labeled tail alone, byte for byte.
+        stdout = (
+            "=== RUN   TestWidget\n"
+            "--- PASS: TestWidget (0.00s)\n"
+            "PASS\n"
+        )
+        self.assertEqual(
+            m.captured_streams_report(stdout, ""),
+            "stdout (%d chars):\n"
+            "=== RUN   TestWidget\n"
+            "--- PASS: TestWidget (0.00s)\n"
+            "PASS\n"
+            "stderr (empty)" % len(stdout),
+        )
 
 
 class Toolchain(unittest.TestCase):

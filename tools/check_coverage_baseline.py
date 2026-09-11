@@ -252,10 +252,27 @@ DIAGNOSTIC_LIMIT = 30
 # A failing go test run prints the failing test's own output -- the
 # "--- FAIL: TestName" line and the test's log -- to STDOUT, keeping
 # stderr for go's own tooling errors, so the failure message must carry
-# both streams or the failing test is invisible from CI. The tail is
-# what is kept: a run's verdict lines print at its end. Bounded so a
-# huge log cannot bury the CI output.
+# both streams or the failing test is invisible from CI. The tail keeps
+# a run's closing verdict lines, which print at its end; the
+# failure-line extract beside it (below) is what covers a failure line
+# a long stream pushes past this window. Bounded so a huge log cannot
+# bury the CI output.
 STREAM_TAIL_LIMIT = 2000
+
+# The line prefixes a captured stream's failure extract matches
+# (captured_streams_report): "--- FAIL: " is the go test per-test
+# verdict line -- the one that names a failing test -- while "panic: "
+# and "fatal error: " open a test-binary crash report. The extract
+# scans the whole stream, so a match beyond the retained tail still
+# reaches the report.
+STREAM_FAILURE_PREFIXES = ("--- FAIL: ", "panic: ", "fatal error: ")
+
+# The cap on extracted failure lines per captured stream
+# (captured_streams_report): a pathological run (one "panic:" line per
+# test in a crash loop) could otherwise fill the failure message with
+# matches. The extract's header names the true match count, so the cap
+# hides volume, never the failure set's size.
+STREAM_FAILURE_LINE_LIMIT = 40
 
 # The profile format line for one function block:
 #   go/pkgcore/kernel.go:12.17,18.2 3 2
@@ -496,24 +513,56 @@ class ModuleMeasurement:
     profile_text: str
 
 
+def failure_lines_from_stream(text: str) -> list[str]:
+    """The stream's failure lines, in source order, exact duplicates
+    collapsed: every line starting with STREAM_FAILURE_PREFIXES -- the
+    go test per-test "--- FAIL: TestName" verdict and the "panic: " /
+    "fatal error: " lines opening a test-binary crash report. Scanning
+    the whole stream is what lets captured_streams_report keep the
+    failure line when a long clean tail pushes it past the retained
+    window."""
+    seen: set[str] = set()
+    extracted = []
+    for line in text.splitlines():
+        if line.startswith(STREAM_FAILURE_PREFIXES) and line not in seen:
+            seen.add(line)
+            extracted.append(line)
+    return extracted
+
+
 def captured_streams_report(stdout: str, stderr: str) -> str:
-    """The labeled, bounded stdout/stderr tails for
+    """The labeled, bounded failure extract and tails for
     measure_module_coverage's failure message.
 
     `go test` prints a failing test's own output -- the "--- FAIL:
     TestName" line and the test's log -- to stdout, keeping stderr for
     go's own tooling errors; a message built from stderr alone left a
     red test run's failure body empty and the failing test unnameable
-    from CI. Each stream is labeled with its own name and what was
-    retained: the last STREAM_TAIL_LIMIT characters (a run's verdict
-    lines print at its end), "empty" for a stream that captured
-    nothing -- so which stream carried the failure, and how much of it
-    a truncated view shows, is readable from the message alone."""
+    from CI. Each stream contributes up to two labeled parts: first its
+    failure lines extracted from the whole stream
+    (failure_lines_from_stream, capped at STREAM_FAILURE_LINE_LIMIT
+    with the true match count in the header), then the last
+    STREAM_TAIL_LIMIT characters of the stream itself (a run's verdict
+    lines print at its end). The extract is what guarantees the failure
+    line survives truncation -- go test prints the verdict line at the
+    point the test failed, so a long run's clean tail can push it
+    beyond the tail window -- and the tail keeps showing how the run
+    ended. A stream that captured nothing shows as "empty", and one
+    with no failure line contributes only its tail -- so which stream
+    carried the failure, and how much of it a truncated view shows, is
+    readable from the message alone."""
     lines = []
     for name, text in (("stdout", stdout), ("stderr", stderr)):
         if text.strip() == "":
             lines.append("%s (empty)" % name)
             continue
+        failures = failure_lines_from_stream(text)
+        if failures:
+            shown = failures[:STREAM_FAILURE_LINE_LIMIT]
+            lines.append(
+                "%s failure lines (showing %d of %d):\n%s"
+                % (name, len(shown), len(failures), "\n".join(shown))
+            )
         tail = text[-STREAM_TAIL_LIMIT:]
         if len(tail) < len(text):
             label = "%s (last %d of %d chars)" % (name, len(tail), len(text))
