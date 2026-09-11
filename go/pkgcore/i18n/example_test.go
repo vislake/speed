@@ -55,9 +55,9 @@ func ExampleBuilder() {
 
 // ExampleNegotiate shows how a request-serving caller answers a client's
 // Accept-Language header against the languages its catalog supports: the
-// first acceptable tag wins, a miss reports ok=false so the caller can
-// apply its own fallback tier (here the platform default), and the
-// negotiated value is what a Catalog.Lookup call renders in.
+// highest weighted acceptable tag wins, a miss reports ok=false so the
+// caller can apply its own fallback tier (here the platform default), and
+// the negotiated value is what a Catalog.Lookup call renders in.
 func ExampleNegotiate() {
 	supported := []string{i18n.LocaleZHCN, i18n.LocaleENUS}
 
@@ -67,11 +67,17 @@ func ExampleNegotiate() {
 	}
 	fmt.Println(locale)
 
+	// Quality weights rank the parts: a part with a higher weight -- or with
+	// no q at all, the default weight of one -- answers over a lower one.
+	locale, _ = i18n.Negotiate("zh-CN;q=0.8, en-US", supported)
+	fmt.Println(locale)
+
 	// A header nothing supports reports the miss instead of guessing.
 	locale, ok = i18n.Negotiate("fr-FR", supported)
 	fmt.Println(locale, ok)
 
 	// Output:
+	// en-US
 	// en-US
 	//  false
 }

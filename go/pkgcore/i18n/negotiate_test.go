@@ -9,9 +9,9 @@ import (
 // TestNegotiate_Table drives the negotiation rules Negotiate's doc comment
 // promises over the supported pairs the catalog actually ships: exact and
 // language-prefix matches, case-insensitive tags, zero weights in every
-// spelling the qvalue grammar allows, and header-order preference among
-// non-zero weights. A miss answers ("", false) -- Negotiate has no default
-// of its own.
+// spelling the qvalue grammar allows, and descending-weight preference among
+// non-zero weights with ties in written order. A miss answers ("", false) --
+// Negotiate has no default of its own.
 func TestNegotiate_Table(t *testing.T) {
 	supported := []string{LocaleENUS, LocaleZHCN}
 	for _, tc := range []struct {
@@ -27,21 +27,28 @@ func TestNegotiate_Table(t *testing.T) {
 		{"lowercase tag with weight", "en-us;q=0.9", "en-US", true},
 		{"prefix match answers the supported spelling", "zh", "zh-CN", true},
 		{"second part matches", "fr-FR, zh-CN", "zh-CN", true},
-		{"non-zero weights keep header order", "en-US;q=0.7, zh-CN;q=1", "en-US", true},
+		{"higher weight wins over written order", "en-US;q=0.7, zh-CN;q=1", "zh-CN", true},
 		{"zero weight then a weighted match", "fr-FR;q=0.9, en-US;q=0.0, zh-CN;q=0.5", "zh-CN", true},
+		{"zero weight drops the written-first match", "zh-CN;q=0, en-US;q=0.5", "en-US", true},
 		{"decimal zero weight skipped", "en;q=0.0, fr-FR", "", false},
 		{"uppercase zero weight skipped", "en;Q=0, fr-FR", "", false},
 		{"trailing decimal zero on the only match", "en-US;q=0.0", "", false},
 		{"spaces around the weight", "en-US; q = 0.0", "", false},
 		{"default when nothing is acceptable", "en;q=0, fr-FR;q=0.0", "", false},
+		{"absent weight defaults to one", "en-US, zh-CN;q=0.5", "en-US", true},
+		{"absent weight outranks a lower weighted written-first part", "en-US;q=0.5, zh-CN", "zh-CN", true},
+		{"equal weights keep written order", "en-US;q=0.4, zh-CN;q=0.4", "en-US", true},
+		{"NaN weight drops the part", "en-US;q=NaN, zh-CN;q=0.5", "zh-CN", true},
+		{"unparseable weight leaves the default one", "en-US;q=abc, zh-CN;q=0.5", "en-US", true},
 		{"empty header", "", "", false},
 		{"blank header", "   ", "", false},
 		{"unsupported language only", "fr-FR", "", false},
 		{"unsupported language with a lookalike prefix", "enx-XX", "", false},
 		{"extension subtag does not match its parent", "en-US-x-private", "", false},
 		{"wildcard is not a language", "*", "", false},
+		{"wildcard with a weight is not a language", "*;q=0.5", "", false},
 		{"empty parts skipped", " , en-GB ,, en-US", "en-US", true},
-		{"weight on the first accepted part", "zh-CN;q=0.1,fr;q=1", "zh-CN", true},
+		{"supported part answers despite a higher unsupported weight", "zh-CN;q=0.1,fr;q=1", "zh-CN", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := Negotiate(tc.header, supported)
@@ -73,10 +80,10 @@ func TestNegotiate_SupportedSetShapes(t *testing.T) {
 	}
 }
 
-// TestNegotiate_PrefersHeaderOrderOverSupportedOrder pins that a header
-// naming several supported languages answers the one it lists first, no
-// matter how the supported set is ordered.
-func TestNegotiate_PrefersHeaderOrderOverSupportedOrder(t *testing.T) {
+// TestNegotiate_EqualWeightsKeepWrittenOrder pins that a header naming
+// several supported languages at the same weight answers the one it lists
+// first, no matter how the supported set is ordered.
+func TestNegotiate_EqualWeightsKeepWrittenOrder(t *testing.T) {
 	for _, supported := range [][]string{
 		{LocaleENUS, LocaleZHCN},
 		{LocaleZHCN, LocaleENUS},

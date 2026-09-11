@@ -14,7 +14,7 @@
 
 交互式 API 响应不协商：返回结构化码 + 参数，由前端翻译。前端界面语言协商链独立于上述后端链（URL 参数 / 手动槽 → profile → `navigator.languages` → `en-US`）。
 
-**实施精确化（`@speed/i18n` `createI18n`）**：前端链第三级读的是客户端 `navigator.languages` 这个浏览器 API，是纯前端解析；`Accept-Language` 是前后端之间的传递通道——api-client 把该链的当前解析结果作为请求头发出（`ClientOptions.languageProvider`，每次 attempt 读取）。后端唯一的请求头协商实现是 `pkgcore/i18n.Negotiate`（RFC 4647 语义：精确 + 语言前缀匹配、大小写不敏感、`q=0` 跳过；由 notification 的私有 `negotiateLocale` 迁移而来），它同时服务"请求者即收件人"与"回落请求者语言"两档（类型目录、org 邀请、authn SMS 复用同一原语）。收件人可确认时一律用收件人存储值；`Negotiate` 自身不持有默认——各调用方在自己的链上决定下一档，任何链的终档都是平台默认。
+**实施精确化（`@speed/i18n` `createI18n`）**：前端链第三级读的是客户端 `navigator.languages` 这个浏览器 API，是纯前端解析；`Accept-Language` 是前后端之间的传递通道——api-client 把该链的当前解析结果作为请求头发出（`ClientOptions.languageProvider`，每次 attempt 读取）。后端唯一的请求头协商实现是 `pkgcore/i18n.Negotiate`（RFC 4647 语义：精确 + 语言前缀匹配、大小写不敏感、`q=0` 跳过、其余按 q 降序取且并列保持书写序；由 notification 的私有 `negotiateLocale` 迁移而来），它同时服务"请求者即收件人"与"回落请求者语言"两档（类型目录、org 邀请、authn SMS 复用同一原语）。收件人可确认时一律用收件人存储值；`Negotiate` 自身不持有默认——各调用方在自己的链上决定下一档，任何链的终档都是平台默认。
 
 **后端**
 - 新增 `pkgcore/i18n` 子包，选 `nicksnyder/go-i18n`（支持复数形式与嵌套消息，生态成熟）。
