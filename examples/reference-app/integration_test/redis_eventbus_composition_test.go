@@ -81,7 +81,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -101,43 +100,6 @@ import (
 	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
-// eventRecorder accumulates what one bus instance's handlers saw, for
-// later count and content assertions. Handlers run on different goroutines
-// (the local publish path and the reader goroutine both invoke them), so
-// every access goes through the mutex. Copied from pkgcore's integration
-// tier, where it carries the same shape.
-type eventRecorder struct {
-	mu   sync.Mutex
-	evts []pkgcore.Event
-}
-
-func (r *eventRecorder) handler() func(context.Context, pkgcore.Event) error {
-	return func(_ context.Context, evt pkgcore.Event) error {
-		r.mu.Lock()
-		r.evts = append(r.evts, evt)
-		r.mu.Unlock()
-		return nil
-	}
-}
-
-func (r *eventRecorder) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.evts)
-}
-
-func (r *eventRecorder) at(i int) pkgcore.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.evts[i]
-}
-
-func (r *eventRecorder) clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.evts = nil
-}
-
 // warmUp proves that receiver's consumer group on the eventType stream
 // exists and its reader goroutine is actually consuming, by publishing
 // marker events from publisher until one of them reaches receiver.
@@ -149,7 +111,7 @@ func (r *eventRecorder) clear() {
 // already appended drain out, so clearing the recorder afterwards leaves
 // counts that only the test's own events move. Copied from
 // go/pkgcore/eventbus/redis's own integration tier.
-func warmUp(t *testing.T, publisher *eventbusredis.EventBus, receiver *eventRecorder, eventType string) {
+func warmUp(t *testing.T, publisher *eventbusredis.EventBus, receiver *testkit.EventRecorder, eventType string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for seq := 1; ; seq++ {
@@ -160,10 +122,10 @@ func warmUp(t *testing.T, publisher *eventbusredis.EventBus, receiver *eventReco
 		}); err != nil {
 			t.Fatalf("warm-up publish %d: %v", seq, err)
 		}
-		for waited := 0; receiver.count() == 0 && waited < 500; waited += 25 {
+		for waited := 0; receiver.Total() == 0 && waited < 500; waited += 25 {
 			time.Sleep(25 * time.Millisecond)
 		}
-		if receiver.count() > 0 {
+		if receiver.Total() > 0 {
 			time.Sleep(600 * time.Millisecond) // one full read block: drain stragglers
 			return
 		}
@@ -311,10 +273,10 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	t.Cleanup(observer.Close)
 	warmer := eventbusredis.NewEventBus(client)
 	t.Cleanup(warmer.Close)
-	recorder := &eventRecorder{}
-	observer.Subscribe(audit.EventRecorded, recorder.handler())
+	recorder := testkit.NewEventRecorder()
+	observer.Subscribe(audit.EventRecorded, recorder.Handler())
 	warmUp(t, warmer, recorder, audit.EventRecorded)
-	recorder.clear()
+	recorder.Clear()
 
 	// Build the real binary and run it as a subprocess.
 	tmp := t.TempDir()
@@ -437,7 +399,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// so the exactly-one assertion below can only be satisfied by the
 	// note-create event this test itself drives.
 	time.Sleep(600 * time.Millisecond)
-	recorder.clear()
+	recorder.Clear()
 
 	// Create one note through the child's real HTTP stack, authenticated
 	// the way every protected request to this app must be: a dev-seeded
@@ -494,12 +456,12 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// observer's reader picks entries up within one 500ms read block, so
 	// the five-second eventually window is ample.
 	testkit.EventuallyWithin(t, 5*time.Second, "the audit.event.recorded event to reach the observer over Redis", func() bool {
-		return recorder.count() == 1
+		return recorder.Total() == 1
 	})
-	if n := recorder.count(); n != 1 {
+	if n := recorder.Total(); n != 1 {
 		t.Fatalf("observer recorded %d audit events, want exactly 1", n)
 	}
-	evt := recorder.at(0)
+	evt := recorder.At(0)
 	if evt.Type != audit.EventRecorded {
 		t.Fatalf("observer event Type = %q, want %q", evt.Type, audit.EventRecorded)
 	}

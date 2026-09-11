@@ -65,8 +65,8 @@ func TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart(t *te
 	t.Cleanup(publisher.Close)
 
 	warm := eventbuspostgres.NewEventBus(pool, replicaID)
-	warmSpy := &eventSpy{}
-	warm.Subscribe(eventType, warmSpy.handler())
+	warmSpy := testkit.NewEventRecorder()
+	warm.Subscribe(eventType, warmSpy.Handler())
 	warmUp(t, ctx, publisher, eventType, warmSpy)
 	testkit.Eventually(t, "warm's cursor to reach the live end of the outbox before it closes", func() bool {
 		var caughtUp bool
@@ -113,17 +113,17 @@ func TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart(t *te
 	// genuine restart.
 	reconnected := eventbuspostgres.NewEventBus(pool, replicaID)
 	t.Cleanup(reconnected.Close)
-	spy := &eventSpy{}
-	reconnected.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	reconnected.Subscribe(eventType, spy.Handler())
 
 	testkit.Eventually(t, "the catch-up scan to deliver every event committed before the server restart", func() bool {
-		return spy.count() >= missedDuringDowntime
+		return spy.Total() >= missedDuringDowntime
 	})
-	if got := spy.count(); got != missedDuringDowntime {
+	if got := spy.Total(); got != missedDuringDowntime {
 		t.Fatalf("reconnected replica received %d events, want exactly %d (no duplicate, no loss)", got, missedDuringDowntime)
 	}
 	for i := 1; i <= missedDuringDowntime; i++ {
-		if _, ok := spy.first(func(evt pkgcore.Event) bool {
+		if _, ok := spy.FirstMatch(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == float64(i)
 		}); !ok {

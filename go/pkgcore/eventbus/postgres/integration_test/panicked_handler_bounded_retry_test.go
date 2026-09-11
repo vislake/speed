@@ -65,11 +65,9 @@ func panicOn(t *testing.T, bus *eventbuspostgres.EventBus, eventType string, tar
 
 // spyCountSeq returns how many events of the given payload sequence the spy
 // has received.
-func spyCountSeq(spy *eventSpy, seq float64) int {
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
+func spyCountSeq(spy *testkit.EventRecorder, seq float64) int {
 	n := 0
-	for _, evt := range spy.events {
+	for _, evt := range spy.Events() {
 		if s, ok := sequenceOf(evt); ok && s == seq {
 			n++
 		}
@@ -124,9 +122,9 @@ func TestEventBus_PanickingRemoteHandler_LaterSameTypeRowsStillReachHealthyHandl
 	t.Cleanup(subscriber.Close)
 	t.Cleanup(publisher.Close)
 
-	spy := &eventSpy{}
+	spy := testkit.NewEventRecorder()
 	panicOn(t, subscriber, eventType, 100, &attempts) // registered first, like the redis twin test
-	subscriber.Subscribe(eventType, spy.handler())
+	subscriber.Subscribe(eventType, spy.Handler())
 
 	warmUp(t, ctx, publisher, eventType, spy)
 
@@ -177,9 +175,9 @@ func TestEventBus_PanickingRemoteHandler_HealthySiblingDoesNotRerun(t *testing.T
 	t.Cleanup(subscriber.Close)
 	t.Cleanup(publisher.Close)
 
-	spy := &eventSpy{}
+	spy := testkit.NewEventRecorder()
 	panicOn(t, subscriber, eventType, 100, &attempts) // panicking sibling, registered first
-	subscriber.Subscribe(eventType, spy.handler())    // the healthy sibling
+	subscriber.Subscribe(eventType, spy.Handler())    // the healthy sibling
 
 	// Warm up WITHOUT the panicking handler in the delivery path: warm-up
 	// rows pass straight through panicOn (their sequence is -1), so the
@@ -230,8 +228,8 @@ func TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal(t *testi
 	t.Cleanup(publisher.Close)
 
 	panicOn(t, subscriber, eventType, 100, &attempts)
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 	warmUp(t, ctx, publisher, eventType, spy)
 
 	// Capture every panic and terminal log line this test's own row
@@ -288,8 +286,8 @@ func TestEventBus_NoPanickingHandler_ControlDeliveryExactlyOnce(t *testing.T) {
 	t.Cleanup(subscriber.Close)
 	t.Cleanup(publisher.Close)
 
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 	warmUp(t, ctx, publisher, eventType, spy)
 
 	for _, seq := range []float64{100, 200, 201} {

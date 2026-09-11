@@ -142,7 +142,7 @@ func TestService_EnsureBuiltinRoles_IsIdempotentAndSilentOnASecondRun(t *testing
 		t.Fatalf("second EnsureBuiltinRoles: %v", err)
 	}
 
-	if got := len(rec.events); got != 0 {
+	if got := len(rec.Events()); got != 0 {
 		t.Fatalf("a no-op reconciliation published %d events, want 0", got)
 	}
 	roles, err := svc.roles.List(ctx)
@@ -236,7 +236,7 @@ func TestService_EnsureBuiltinRoles_WidensOwnerWhenTheCatalogGrows(t *testing.T)
 	}
 	// Owner and admin both widened, member did not, so exactly two
 	// announcements went out.
-	if got := len(rec.ofType(EventRoleChanged)); got != 2 {
+	if got := len(rec.OfType(EventRoleChanged)); got != 2 {
 		t.Fatalf("published %d role-changed events, want 2 (owner and admin)", got)
 	}
 }

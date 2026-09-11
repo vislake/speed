@@ -28,6 +28,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestEventBus_PanickingLocalHandler_ContainedSiblingsRunRowMarked pins the
@@ -61,15 +62,15 @@ func TestEventBus_PanickingLocalHandler_ContainedSiblingsRunRowMarked(t *testing
 		errCalls.Add(1)
 		return errSibling
 	})
-	spy := &eventSpy{}
-	bus.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	bus.Subscribe(eventType, spy.Handler())
 
 	for seq := 1; seq <= 2; seq++ {
 		if err := bus.Publish(ctx, pkgcore.Event{Type: eventType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: map[string]any{"sequence": float64(seq)}}); err == nil {
 			t.Fatalf("Publish(%d) error = nil, want the erroring sibling's error (handler errors must still surface past a contained panic)", seq)
 		}
 	}
-	if got := spy.count(); got != 2 {
+	if got := spy.Total(); got != 2 {
 		t.Fatalf("healthy sibling received %d events, want 2 (it must still run after the panicking handler)", got)
 	}
 	if got := panickedCalls.Load(); got != 2 {
@@ -87,7 +88,7 @@ func TestEventBus_PanickingLocalHandler_ContainedSiblingsRunRowMarked(t *testing
 	// nothing was left unmarked for it to retry. Any redelivery would
 	// drive all three counters past 2 within the flat window.
 	settled := assertEventuallyFlat(t, "the local delivery counters to settle at 2 (no catch-up redelivery of the marked rows)", 2, func() int64 {
-		return int64(spy.count()) + panickedCalls.Load() + errCalls.Load()
+		return int64(spy.Total()) + panickedCalls.Load() + errCalls.Load()
 	})
 	if settled != 6 {
 		t.Fatalf("delivery counters settled at %d, want 6 (2 publishes x 3 handlers): a redelivery re-ran one of the marked rows", settled)

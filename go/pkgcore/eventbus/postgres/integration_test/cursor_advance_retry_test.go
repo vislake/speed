@@ -89,8 +89,8 @@ func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvanc
 	sub := eventbuspostgres.NewEventBus(pool, "cursor-advance-retry-subscriber")
 	t.Cleanup(sub.Close)
 
-	spy := &eventSpy{}
-	sub.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	sub.Subscribe(eventType, spy.Handler())
 
 	var sabotaged atomic.Bool
 	sub.Subscribe(eventType, func(handlerCtx context.Context, evt pkgcore.Event) error {
@@ -129,7 +129,7 @@ func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvanc
 	// wait for the first delivery before deciding whether a second one
 	// ever follows.
 	testkit.Eventually(t, "the subscriber's first delivery of the poisoned event", func() bool {
-		_, ok := spy.first(func(evt pkgcore.Event) bool {
+		_, ok := spy.FirstMatch(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == poisonSequence
 		})
@@ -144,13 +144,11 @@ func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvanc
 	time.Sleep(5 * time.Second)
 
 	poisonCount := 0
-	spy.mu.Lock()
-	for _, evt := range spy.events {
+	for _, evt := range spy.Events() {
 		if seq, ok := sequenceOf(evt); ok && seq == poisonSequence {
 			poisonCount++
 		}
 	}
-	spy.mu.Unlock()
 
 	if poisonCount != 1 {
 		t.Fatalf("poisoned event delivered %d times, want exactly 1 (a connection loss landing between the handler running and the cursor advance must not redeliver it)", poisonCount)
@@ -167,7 +165,7 @@ func TestEventBus_CursorAdvanceRetry_ConnectionLossBetweenHandlerAndCursorAdvanc
 		t.Fatalf("Publish() of the follow-up event error = %v, want nil", err)
 	}
 	testkit.Eventually(t, "the follow-up event to be delivered", func() bool {
-		_, ok := spy.first(func(evt pkgcore.Event) bool {
+		_, ok := spy.FirstMatch(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == followUpSequence
 		})

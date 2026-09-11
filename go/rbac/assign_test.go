@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,45 +12,14 @@ import (
 	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
-// eventRecorder collects the events a Service publishes, so a test can
-// assert on the announcement as well as on the row. The in-memory bus
-// delivers synchronously inside the publishing call, and in the
-// synchronous tests that is the only caller -- but the queue-backed reap
-// tests in reap_jobs_test.go publish from the queue's worker goroutine
-// while the test goroutine polls the recorder, so the slice is guarded
-// rather than trusting the caller count.
-type eventRecorder struct {
-	mu     sync.Mutex
-	events []pkgcore.Event
-}
-
-func (r *eventRecorder) record(_ context.Context, evt pkgcore.Event) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.events = append(r.events, evt)
-	return nil
-}
-
-func (r *eventRecorder) ofType(eventType string) []pkgcore.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []pkgcore.Event
-	for _, evt := range r.events {
-		if evt.Type == eventType {
-			out = append(out, evt)
-		}
-	}
-	return out
-}
-
 // recordEvents subscribes a recorder to every event this module publishes,
 // on the registry's own bus value -- an observation of the finished
 // assembly, not a declaration, so it needs no Init window.
-func recordEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
-	rec := &eventRecorder{}
+func recordEvents(reg *pkgcore.ComponentRegistry) *testkit.EventRecorder {
+	rec := testkit.NewEventRecorder()
 	bus := reg.EventBus()
 	for _, eventType := range []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleBindingRestored, EventRoleChanged} {
-		bus.Subscribe(eventType, rec.record)
+		bus.Subscribe(eventType, rec.Record)
 	}
 	return rec
 }
@@ -93,7 +61,7 @@ func TestService_DefineRole_CreatesTheRoleAndItsPermissions(t *testing.T) {
 		t.Fatalf("stored permissions = %v, want [notes:read notes:write]", got)
 	}
 
-	published := rec.ofType(EventRoleChanged)
+	published := rec.OfType(EventRoleChanged)
 	if len(published) != 1 {
 		t.Fatalf("published %d role-changed events, want 1", len(published))
 	}
@@ -229,7 +197,7 @@ func TestService_AssignRole_CreatesTheBindingAndAnnouncesIt(t *testing.T) {
 		t.Fatalf("binding node = %q, want node-7", bindings[0].NodeID)
 	}
 
-	published := rec.ofType(EventRoleBindingAssigned)
+	published := rec.OfType(EventRoleBindingAssigned)
 	if len(published) != 1 {
 		t.Fatalf("published %d assigned events, want 1", len(published))
 	}
@@ -258,7 +226,7 @@ func TestService_AssignRole_WithNoActingSubject_LeavesTheActorEmpty(t *testing.T
 	if err := svc.AssignRole(ctx, Subject{TenantID: "tenant-a", UserID: "user-1"}, "reader", Scope{}); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
-	payload := rec.ofType(EventRoleBindingAssigned)[0].Payload.(RoleBindingChangedEvent)
+	payload := rec.OfType(EventRoleBindingAssigned)[0].Payload.(RoleBindingChangedEvent)
 	if payload.ActorUserID != "" {
 		t.Fatalf("actor = %q, want empty when no acting subject was on the context", payload.ActorUserID)
 	}
@@ -291,7 +259,7 @@ func TestService_AssignRole_IsIdempotent(t *testing.T) {
 	}
 	// And the repeats are silent on the bus: a no-op must not make every
 	// replica flush its cache.
-	if got := len(rec.ofType(EventRoleBindingAssigned)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingAssigned)); got != 1 {
 		t.Fatalf("published %d assigned events, want 1", got)
 	}
 }
@@ -413,7 +381,7 @@ func TestService_RevokeRole_RemovesTheBindingAndAnnouncesIt(t *testing.T) {
 	if len(bindings) != 0 {
 		t.Fatalf("%d bindings survived the revoke", len(bindings))
 	}
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 1 {
 		t.Fatalf("published %d revoked events, want 1", got)
 	}
 }
@@ -594,7 +562,7 @@ func TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt(t *testing.T) {
 		t.Fatalf("restored bindings = %+v, want exactly one at node-7", bindings)
 	}
 
-	published := rec.ofType(EventRoleBindingRestored)
+	published := rec.OfType(EventRoleBindingRestored)
 	if len(published) != 1 {
 		t.Fatalf("published %d restored events, want 1", len(published))
 	}
@@ -650,7 +618,7 @@ func TestService_RestoreRole_AlreadyLiveAtThisScope_IsANoOp(t *testing.T) {
 		t.Fatalf("RestoreRole while a live binding already occupies the scope: %v", restoreErr)
 	}
 
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("published %d restored events for a no-op, want 0", got)
 	}
 	after, err := svc.bindings.Find(ctx, sub.UserID, live.RoleID, "")

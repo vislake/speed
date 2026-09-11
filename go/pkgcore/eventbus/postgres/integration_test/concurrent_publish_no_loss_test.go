@@ -59,11 +59,9 @@ import (
 // warmUp republishes (see its own doc comment), so an assertion can check a
 // whole batch of published sequences at once: every expected sequence
 // present exactly once means no event was lost and none was duplicated.
-func receivedSequenceCounts(spy *eventSpy) map[float64]int {
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
+func receivedSequenceCounts(spy *testkit.EventRecorder) map[float64]int {
 	counts := make(map[float64]int)
-	for _, evt := range spy.events {
+	for _, evt := range spy.Events() {
 		if seq, ok := sequenceOf(evt); ok && seq != -1 {
 			counts[seq]++
 		}
@@ -109,8 +107,8 @@ func TestEventBus_LaggingPoller_LocalPublishMustNotSkipUnseenRemoteRows(t *testi
 	subscriber := eventbuspostgres.NewEventBus(pool, "lagging-poller-subscriber")
 	closeBusWithin(t, subscriber)
 
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 
 	blockEntered := make(chan struct{})
 	releaseBlockedHandler := make(chan struct{})
@@ -234,8 +232,8 @@ func TestEventBus_ConcurrentMultiReplicaPublish_NoEventLostNoDuplicate(t *testin
 	subscriber := eventbuspostgres.NewEventBus(pool, "concurrent-multi-writer-subscriber")
 	closeBusWithin(t, subscriber)
 
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 	warmUp(t, ctx, publisher, eventType, spy)
 
 	var nextSeq atomic.Int64

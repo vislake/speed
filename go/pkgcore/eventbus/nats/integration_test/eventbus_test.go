@@ -27,7 +27,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -47,54 +46,6 @@ type invoicePaid struct {
 	Amount float64 `json:"amount"`
 }
 
-// eventRecorder accumulates what one bus instance's handlers saw, for later
-// count and content assertions. Handlers run on different goroutines -- the
-// local publish path and this type's own JetStream consumer both invoke
-// them -- so every access goes through the mutex.
-type eventRecorder struct {
-	mu   sync.Mutex
-	evts []pkgcore.Event
-}
-
-func (r *eventRecorder) handler() func(context.Context, pkgcore.Event) error {
-	return func(_ context.Context, evt pkgcore.Event) error {
-		r.mu.Lock()
-		r.evts = append(r.evts, evt)
-		r.mu.Unlock()
-		return nil
-	}
-}
-
-func (r *eventRecorder) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.evts)
-}
-
-func (r *eventRecorder) countByTenant(tenant pkgcore.TenantID) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := 0
-	for _, evt := range r.evts {
-		if evt.TenantID == tenant {
-			n++
-		}
-	}
-	return n
-}
-
-func (r *eventRecorder) at(i int) pkgcore.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.evts[i]
-}
-
-func (r *eventRecorder) clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.evts = nil
-}
-
 // warmUp proves that receiver's durable consumer on the eventType stream
 // exists and is actually consuming, by publishing marker events from
 // publisher until one of them reaches receiver. Subscribe starts the reader
@@ -104,7 +55,7 @@ func (r *eventRecorder) clear() {
 // it. Once receiver reports a marker, a short extra wait lets any other
 // marker already in flight drain out, so clearing both recorders afterwards
 // leaves counts that only the test's own events move.
-func warmUp(t *testing.T, publisher *eventbusnats.EventBus, receiver *eventRecorder, eventType string) {
+func warmUp(t *testing.T, publisher *eventbusnats.EventBus, receiver *testkit.EventRecorder, eventType string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for seq := 1; ; seq++ {
@@ -115,10 +66,10 @@ func warmUp(t *testing.T, publisher *eventbusnats.EventBus, receiver *eventRecor
 		}); err != nil {
 			t.Fatalf("warm-up publish %d: %v", seq, err)
 		}
-		for waited := 0; receiver.count() == 0 && waited < 500; waited += 25 {
+		for waited := 0; receiver.Total() == 0 && waited < 500; waited += 25 {
 			time.Sleep(25 * time.Millisecond)
 		}
-		if receiver.count() > 0 {
+		if receiver.Total() > 0 {
 			time.Sleep(300 * time.Millisecond) // drain any stragglers already in flight
 			return
 		}
@@ -235,14 +186,14 @@ func TestEventBus_FanOutDeliversToEveryReplica(t *testing.T) {
 	t.Cleanup(busPublisher.Close)
 
 	const eventType = "smilesim.job.completed"
-	recA, recB := &eventRecorder{}, &eventRecorder{}
-	busA.Subscribe(eventType, recA.handler())
-	busB.Subscribe(eventType, recB.handler())
+	recA, recB := testkit.NewEventRecorder(), testkit.NewEventRecorder()
+	busA.Subscribe(eventType, recA.Handler())
+	busB.Subscribe(eventType, recB.Handler())
 
 	warmUp(t, busPublisher, recA, eventType)
 	warmUp(t, busPublisher, recB, eventType)
-	recA.clear()
-	recB.clear()
+	recA.Clear()
+	recB.Clear()
 
 	want := invoicePaid{ID: "job-42", Amount: 42}
 	if err := busPublisher.Publish(ctx, pkgcore.Event{
@@ -254,18 +205,18 @@ func TestEventBus_FanOutDeliversToEveryReplica(t *testing.T) {
 	// BOTH replicas' handlers must fire: this is the fan-out assertion. A
 	// load-balanced (shared consumer group) delivery would have exactly one
 	// of these two waits time out.
-	testkit.EventuallyWithin(t, 5*time.Second, "replica A's handler to run", func() bool { return recA.count() == 1 })
-	testkit.EventuallyWithin(t, 5*time.Second, "replica B's handler to run", func() bool { return recB.count() == 1 })
-	requireRemoteInvoice(t, recA.at(0), "job-42", 42, pkgcore.TenantID("tenant-acme"))
-	requireRemoteInvoice(t, recB.at(0), "job-42", 42, pkgcore.TenantID("tenant-acme"))
+	testkit.EventuallyWithin(t, 5*time.Second, "replica A's handler to run", func() bool { return recA.Total() == 1 })
+	testkit.EventuallyWithin(t, 5*time.Second, "replica B's handler to run", func() bool { return recB.Total() == 1 })
+	requireRemoteInvoice(t, recA.At(0), "job-42", 42, pkgcore.TenantID("tenant-acme"))
+	requireRemoteInvoice(t, recB.At(0), "job-42", 42, pkgcore.TenantID("tenant-acme"))
 
 	// And no duplicate delivery to either replica: wait out more than one
 	// retry interval past the first delivery.
 	time.Sleep(700 * time.Millisecond)
-	if got := recA.count(); got != 1 {
+	if got := recA.Total(); got != 1 {
 		t.Errorf("replica A's handler ran %d times, want exactly 1", got)
 	}
-	if got := recB.count(); got != 1 {
+	if got := recB.Total(); got != 1 {
 		t.Errorf("replica B's handler ran %d times, want exactly 1", got)
 	}
 }
@@ -286,15 +237,15 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 		busB.Close()
 	})
 
-	recA, recB := &eventRecorder{}, &eventRecorder{}
+	recA, recB := testkit.NewEventRecorder(), testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busA.Subscribe(paidType, recA.handler())
-	busB.Subscribe(paidType, recB.handler())
+	busA.Subscribe(paidType, recA.Handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	warmUp(t, busA, recB, paidType)
 	warmUp(t, busB, recA, paidType)
-	recA.clear()
-	recB.clear()
+	recA.Clear()
+	recB.Clear()
 
 	first := invoicePaid{ID: "inv-1042", Amount: 1042.5}
 	if err := busA.Publish(ctx, pkgcore.Event{
@@ -303,10 +254,10 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 		t.Fatalf("busA.Publish() error = %v, want nil", err)
 	}
 
-	if got := recA.count(); got != 1 {
+	if got := recA.Total(); got != 1 {
 		t.Fatalf("local handler ran %d times, want exactly 1", got)
 	}
-	local := recA.at(0)
+	local := recA.At(0)
 	if local.TenantID != pkgcore.TenantID("tenant-acme") {
 		t.Errorf("local event tenant = %q, want %q", local.TenantID, "tenant-acme")
 	}
@@ -319,9 +270,9 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 	}
 
 	testkit.EventuallyWithin(t, 5*time.Second, "the remote handler on bus B to run once", func() bool {
-		return recB.count() == 1
+		return recB.Total() == 1
 	})
-	requireRemoteInvoice(t, recB.at(0), "inv-1042", 1042.5, pkgcore.TenantID("tenant-acme"))
+	requireRemoteInvoice(t, recB.At(0), "inv-1042", 1042.5, pkgcore.TenantID("tenant-acme"))
 
 	second := invoicePaid{ID: "inv-9", Amount: 9}
 	if err := busB.Publish(ctx, pkgcore.Event{
@@ -329,19 +280,19 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("busB.Publish() error = %v, want nil", err)
 	}
-	if got := recB.count(); got != 2 {
+	if got := recB.Total(); got != 2 {
 		t.Errorf("local handler on bus B ran %d times, want exactly 2", got)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the remote handler on bus A to run twice", func() bool {
-		return recA.count() == 2
+		return recA.Total() == 2
 	})
-	requireRemoteInvoice(t, recA.at(1), "inv-9", 9, pkgcore.TenantID("tenant-beta"))
+	requireRemoteInvoice(t, recA.At(1), "inv-9", 9, pkgcore.TenantID("tenant-beta"))
 
 	time.Sleep(700 * time.Millisecond)
-	if got := recA.count(); got != 2 {
+	if got := recA.Total(); got != 2 {
 		t.Errorf("bus A handler ran %d times in total, want exactly 2: an event was delivered twice", got)
 	}
-	if got := recB.count(); got != 2 {
+	if got := recB.Total(); got != 2 {
 		t.Errorf("bus B handler ran %d times in total, want exactly 2: an event was delivered twice", got)
 	}
 }
@@ -359,16 +310,16 @@ func TestEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 		busB.Close()
 	})
 
-	recA, recB := &eventRecorder{}, &eventRecorder{}
+	recA, recB := testkit.NewEventRecorder(), testkit.NewEventRecorder()
 	const teamCreated = "team.created"
 	const planChanged = "plan.changed"
-	busA.Subscribe(teamCreated, recA.handler())
-	busB.Subscribe(planChanged, recB.handler())
+	busA.Subscribe(teamCreated, recA.Handler())
+	busB.Subscribe(planChanged, recB.Handler())
 
 	warmUp(t, busB, recA, teamCreated)
 	warmUp(t, busA, recB, planChanged)
-	recA.clear()
-	recB.clear()
+	recA.Clear()
+	recB.Clear()
 
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: planChanged, TenantID: pkgcore.TenantID("tenant-acme"), Payload: map[string]any{"plan": "pro"},
@@ -382,24 +333,24 @@ func TestEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 	}
 
 	testkit.EventuallyWithin(t, 5*time.Second, "the plan.changed handler on bus B to run", func() bool {
-		return recB.count() == 1
+		return recB.Total() == 1
 	})
-	if got := recB.at(0).Type; got != planChanged {
+	if got := recB.At(0).Type; got != planChanged {
 		t.Errorf("bus B handler received type %q, want %q", got, planChanged)
 	}
 
-	if got := recA.count(); got != 1 {
+	if got := recA.Total(); got != 1 {
 		t.Errorf("bus A handler ran %d times, want exactly 1 (its own team.created)", got)
 	}
-	if got := recA.at(0).Type; got != teamCreated {
+	if got := recA.At(0).Type; got != teamCreated {
 		t.Errorf("bus A handler received type %q, want %q", got, teamCreated)
 	}
 
 	time.Sleep(700 * time.Millisecond)
-	if got := recA.count(); got != 1 {
+	if got := recA.Total(); got != 1 {
 		t.Errorf("bus A handler ran %d times in total, want exactly 1: a plan.changed event crossed into it", got)
 	}
-	if got := recB.count(); got != 1 {
+	if got := recB.Total(); got != 1 {
 		t.Errorf("bus B handler ran %d times in total, want exactly 1: a team.created event crossed into it", got)
 	}
 }
@@ -418,25 +369,25 @@ func TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
 		busB.Close()
 	})
 
-	recA, recB := &eventRecorder{}, &eventRecorder{}
+	recA, recB := testkit.NewEventRecorder(), testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busA.Subscribe(paidType, recA.handler())
-	busB.Subscribe(paidType, recB.handler())
+	busA.Subscribe(paidType, recA.Handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	warmUp(t, busA, recB, paidType)
-	recA.clear()
-	recB.clear()
+	recA.Clear()
+	recB.Clear()
 
 	err := busA.Publish(ctx, pkgcore.Event{Type: paidType, Payload: make(chan int)})
 	if err == nil || !strings.Contains(err.Error(), "not JSON-serializable") {
 		t.Fatalf("Publish(chan int) error = %v, want a not-JSON-serializable failure", err)
 	}
-	if got := recA.count(); got != 0 {
+	if got := recA.Total(); got != 0 {
 		t.Errorf("local handler ran %d times for the failed publish, want 0", got)
 	}
 
 	time.Sleep(750 * time.Millisecond)
-	if got := recB.count(); got != 0 {
+	if got := recB.Total(); got != 0 {
 		t.Errorf("remote handler ran %d times for the failed publish, want 0: an entry reached the stream", got)
 	}
 
@@ -446,7 +397,7 @@ func TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
 		t.Fatalf("Publish() after the failed one error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the recovery event to reach bus B", func() bool {
-		return recB.count() == 1
+		return recB.Total() == 1
 	})
 }
 
@@ -465,15 +416,15 @@ func TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
 		busB.Close()
 	})
 
-	recB := &eventRecorder{}
+	recB := testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
 	busB.Subscribe(paidType, func(context.Context, pkgcore.Event) error {
 		panic("remote handler bug")
 	})
-	busB.Subscribe(paidType, recB.handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	warmUp(t, busA, recB, paidType)
-	recB.clear()
+	recB.Clear()
 
 	for seq := 1; seq <= 2; seq++ {
 		if err := busA.Publish(ctx, pkgcore.Event{
@@ -484,7 +435,7 @@ func TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
 		}
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the healthy handler on bus B to run for both events", func() bool {
-		return recB.count() == 2
+		return recB.Total() == 2
 	})
 }
 
@@ -502,12 +453,12 @@ func TestEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 		busB.Close()
 	})
 
-	recB := &eventRecorder{}
+	recB := testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busB.Subscribe(paidType, recB.handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	warmUp(t, busA, recB, paidType)
-	recB.clear()
+	recB.Clear()
 
 	busB.Close()
 
@@ -523,7 +474,7 @@ func TestEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 	}
 
 	time.Sleep(1200 * time.Millisecond)
-	if got := recB.count(); got != 0 {
+	if got := recB.Total(); got != 0 {
 		t.Errorf("handler on the closed bus ran %d times, want 0: delivery continued after Close", got)
 	}
 }
@@ -542,9 +493,9 @@ func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 		busB.Close()
 	})
 
-	recA, recB := &eventRecorder{}, &eventRecorder{}
+	recA, recB := testkit.NewEventRecorder(), testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busA.Subscribe(paidType, recA.handler())
+	busA.Subscribe(paidType, recA.Handler())
 
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: paidType, TenantID: pkgcore.TenantID("tenant-early"),
@@ -553,10 +504,10 @@ func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 		t.Fatalf("Publish(early) error = %v, want nil", err)
 	}
 
-	busB.Subscribe(paidType, recB.handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	deadline := time.Now().Add(10 * time.Second)
-	for seq := 1; recB.count() == 0; seq++ {
+	for seq := 1; recB.Total() == 0; seq++ {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting for bus B to consume its first event")
 		}
@@ -567,7 +518,7 @@ func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	if got := recB.countByTenant(pkgcore.TenantID("tenant-early")); got != 0 {
+	if got := recB.CountByTenant(pkgcore.TenantID("tenant-early")); got != 0 {
 		t.Fatalf("late subscriber received the pre-subscription event %d times, want 0 (no catch-up)", got)
 	}
 
@@ -577,14 +528,14 @@ func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 		t.Fatalf("Publish(live) error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the live event to reach the late subscriber", func() bool {
-		return recB.countByTenant(pkgcore.TenantID("tenant-live")) == 1
+		return recB.CountByTenant(pkgcore.TenantID("tenant-live")) == 1
 	})
 
 	time.Sleep(700 * time.Millisecond)
-	if got := recB.countByTenant(pkgcore.TenantID("tenant-early")); got != 0 {
+	if got := recB.CountByTenant(pkgcore.TenantID("tenant-early")); got != 0 {
 		t.Errorf("late subscriber received the pre-subscription event %d times, want 0 (no catch-up)", got)
 	}
-	if got := recB.countByTenant(pkgcore.TenantID("tenant-live")); got != 1 {
+	if got := recB.CountByTenant(pkgcore.TenantID("tenant-live")); got != 1 {
 		t.Errorf("late subscriber received the live event %d times, want exactly 1", got)
 	}
 }
@@ -605,12 +556,12 @@ func TestEventBus_ReaderRecoversFromALostConsumer(t *testing.T) {
 		busB.Close()
 	})
 
-	recB := &eventRecorder{}
+	recB := testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busB.Subscribe(paidType, recB.handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	warmUp(t, busA, recB, paidType)
-	recB.clear()
+	recB.Clear()
 
 	js, err := jetstream.New(connA)
 	if err != nil {
@@ -626,7 +577,7 @@ func TestEventBus_ReaderRecoversFromALostConsumer(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
-	for seq := 1; recB.count() == 0; seq++ {
+	for seq := 1; recB.Total() == 0; seq++ {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out: no event reached the reader after its consumer was deleted -- the reader wedged")
 		}
@@ -639,14 +590,14 @@ func TestEventBus_ReaderRecoversFromALostConsumer(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 
-	recB.clear()
+	recB.Clear()
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-after", Amount: 1},
 	}); err != nil {
 		t.Fatalf("Publish(after recovery) error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the recovered reader to keep delivering", func() bool {
-		return recB.count() == 1
+		return recB.Total() == 1
 	})
 }
 
@@ -665,9 +616,9 @@ func TestEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
 		busB.Close()
 	})
 
-	recB := &eventRecorder{}
+	recB := testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busB.Subscribe(paidType, recB.handler())
+	busB.Subscribe(paidType, recB.Handler())
 	warmUp(t, busA, recB, paidType)
 
 	busB.Close()
@@ -700,10 +651,10 @@ func TestEventBus_Close_SparesAPeerConsumer(t *testing.T) {
 		busC.Close()
 	})
 
-	recB, recC := &eventRecorder{}, &eventRecorder{}
+	recB, recC := testkit.NewEventRecorder(), testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
-	busB.Subscribe(paidType, recB.handler())
-	busC.Subscribe(paidType, recC.handler())
+	busB.Subscribe(paidType, recB.Handler())
+	busC.Subscribe(paidType, recC.Handler())
 	warmUp(t, busA, recB, paidType)
 	warmUp(t, busA, recC, paidType)
 
@@ -719,14 +670,14 @@ func TestEventBus_Close_SparesAPeerConsumer(t *testing.T) {
 		t.Fatalf("stream %q carries %d consumers after one of two readers closed, want exactly 1 (bus C's)", streamName, len(names))
 	}
 
-	recC.clear()
+	recC.Clear()
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-peer", Amount: 3},
 	}); err != nil {
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the surviving reader on bus C to deliver after bus B closed", func() bool {
-		return recC.count() == 1
+		return recC.Total() == 1
 	})
 }
 

@@ -54,15 +54,15 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	t.Cleanup(busB.Close)
 
 	const eventType = "eventbus_nats_test.survives-restart"
-	rec := &eventRecorder{}
-	busB.Subscribe(eventType, rec.handler())
+	rec := testkit.NewEventRecorder()
+	busB.Subscribe(eventType, rec.Handler())
 
 	// Warm up: proves busB's durable consumer exists on the stream and is
 	// actually consuming (see warmUp's own doc comment for why a single
 	// publish-and-wait would not), so the counted event below is delivered
 	// before the restart.
 	warmUp(t, busA, rec, eventType)
-	rec.clear()
+	rec.Clear()
 
 	// Commit the event whose survival the restart must not disturb. Its
 	// delivery to the receiver is asserted first, so the state captured
@@ -75,7 +75,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the pre-restart event", func() bool {
-		return rec.count() == 1
+		return rec.Total() == 1
 	})
 
 	// Capture the committed server-side state the declaration promises will
@@ -160,7 +160,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	testkit.EventuallyWithin(t, 5*time.Second, "the publisher connection to reconnect to the restarted server", func() bool {
 		return connA.Status() == natslib.CONNECTED
 	})
-	rec.clear()
+	rec.Clear()
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type:     eventType,
 		TenantID: pkgcore.TenantID("tenant-restart"),
@@ -169,6 +169,6 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 		t.Fatalf("Publish() after the restart error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the post-restart event", func() bool {
-		return rec.count() == 1
+		return rec.Total() == 1
 	})
 }

@@ -42,18 +42,18 @@ func TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup(t *testing.T
 
 	const panickedType = "invoice.panicked"
 	var attempts atomic.Int64
-	recB := &eventRecorder{}
+	recB := testkit.NewEventRecorder()
 	busB.Subscribe(panickedType, func(context.Context, pkgcore.Event) error {
 		attempts.Add(1)
 		panic("remote handler bug")
 	})
-	busB.Subscribe(panickedType, recB.handler())
+	busB.Subscribe(panickedType, recB.Handler())
 
 	// Reader readiness: publish until the recorder has seen a delivery (the
 	// panicking handler runs first and recovers, the healthy one still gets
 	// the event).
 	deadline := time.Now().Add(5 * time.Second)
-	for seq := 1; recB.count() == 0; seq++ {
+	for seq := 1; recB.Total() == 0; seq++ {
 		if err := busA.Publish(ctx, pkgcore.Event{Type: panickedType, TenantID: pkgcore.TenantID("warmup"), Payload: map[string]any{"seq": seq}}); err != nil {
 			t.Fatalf("warm-up publish %d: %v", seq, err)
 		}
@@ -63,7 +63,7 @@ func TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup(t *testing.T
 		time.Sleep(100 * time.Millisecond)
 	}
 	time.Sleep(600 * time.Millisecond) // one full read block: let the warm-up settle
-	recB.clear()
+	recB.Clear()
 	warmupPending := pendingAcrossGroups(t, ctx, client, streamKey(panickedType))
 	if warmupPending == 0 {
 		t.Fatalf("warm-up panicked entry was acknowledged, want it pending: the panic-ack regression is already visible")
@@ -78,7 +78,7 @@ func TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup(t *testing.T
 	}
 
 	testkit.EventuallyWithin(t, 5*time.Second, "the healthy handler to run for all three events", func() bool {
-		return recB.count() == 3
+		return recB.Total() == 3
 	})
 
 	testkit.EventuallyWithin(t, 5*time.Second, "all four panicked entries to sit pending in the group", func() bool {

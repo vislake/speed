@@ -7,42 +7,22 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // newTestServiceWithClock returns a Service like newTestService, but with a
 // controllable clock (svc.now) and a real in-memory EventBus wired directly
 // (bypassing Module.Register/attachBus, which this file's tests do not
 // need) so tests can assert on published events.
-func newTestServiceWithClock(t *testing.T) (*Service, *eventRecorder) {
+func newTestServiceWithClock(t *testing.T) (*Service, *testkit.EventRecorder) {
 	t.Helper()
 	svc := newTestService(t)
-	rec := newEventRecorder()
+	rec := testkit.NewEventRecorder()
 	svc.bus = pkgcore.NewMemoryEventBus()
-	svc.bus.Subscribe(EventSigningKeyStaged, rec.record)
-	svc.bus.Subscribe(EventSigningKeyActivated, rec.record)
-	svc.bus.Subscribe(EventSigningKeyRetired, rec.record)
+	svc.bus.Subscribe(EventSigningKeyStaged, rec.Record)
+	svc.bus.Subscribe(EventSigningKeyActivated, rec.Record)
+	svc.bus.Subscribe(EventSigningKeyRetired, rec.Record)
 	return svc, rec
-}
-
-// eventRecorder collects every SigningKeyLifecycleEvent a subscribed
-// Service publishes, in order.
-type eventRecorder struct {
-	events []pkgcore.Event
-}
-
-func newEventRecorder() *eventRecorder { return &eventRecorder{} }
-
-func (r *eventRecorder) record(_ context.Context, evt pkgcore.Event) error {
-	r.events = append(r.events, evt)
-	return nil
-}
-
-func (r *eventRecorder) typesOf() []string {
-	types := make([]string, len(r.events))
-	for i, evt := range r.events {
-		types[i] = evt.Type
-	}
-	return types
 }
 
 // --- PromoteDuePending ------------------------------------------------------
@@ -70,8 +50,8 @@ func TestService_PromoteDuePending_WaitsForThePropagationWindow(t *testing.T) {
 	if len(promoted) != 0 {
 		t.Errorf("PromoteDuePending promoted %v before the propagation window elapsed, want none", promoted)
 	}
-	if len(rec.events) != 0 {
-		t.Errorf("PromoteDuePending published %d event(s) before promoting anything", len(rec.events))
+	if len(rec.Events()) != 0 {
+		t.Errorf("PromoteDuePending published %d event(s) before promoting anything", len(rec.Events()))
 	}
 
 	got, err := svc.signingKeys.FindByID(ctx, "kid-pending")
@@ -132,7 +112,7 @@ func TestService_PromoteDuePending_PromotesPastTheWindow_AndDemotesThePrevious(t
 		t.Errorf("kid-previous = %+v, want SigningKeyStatusRetiring with RetiringAt set", demoted)
 	}
 
-	if got := rec.typesOf(); len(got) != 1 || got[0] != EventSigningKeyActivated {
+	if got := rec.Types(); len(got) != 1 || got[0] != EventSigningKeyActivated {
 		t.Errorf("published events = %v, want exactly one EventSigningKeyActivated", got)
 	}
 }
@@ -190,8 +170,8 @@ func TestService_RetireDueRetiring_WaitsForTheOverlapPeriod(t *testing.T) {
 	if len(retired) != 0 {
 		t.Errorf("RetireDueRetiring retired %v before the overlap period elapsed, want none", retired)
 	}
-	if len(rec.events) != 0 {
-		t.Errorf("RetireDueRetiring published %d event(s) before retiring anything", len(rec.events))
+	if len(rec.Events()) != 0 {
+		t.Errorf("RetireDueRetiring published %d event(s) before retiring anything", len(rec.Events()))
 	}
 }
 
@@ -227,7 +207,7 @@ func TestService_RetireDueRetiring_RetiresPastTheOverlapPeriod(t *testing.T) {
 	if got.Status != SigningKeyStatusRetired || got.RetiredAt == nil {
 		t.Errorf("kid-retiring = %+v, want SigningKeyStatusRetired with RetiredAt set", got)
 	}
-	if got := rec.typesOf(); len(got) != 1 || got[0] != EventSigningKeyRetired {
+	if got := rec.Types(); len(got) != 1 || got[0] != EventSigningKeyRetired {
 		t.Errorf("published events = %v, want exactly one EventSigningKeyRetired", got)
 	}
 }
@@ -298,7 +278,7 @@ func TestService_StageDueRotations_StagesAheadOfExpiry(t *testing.T) {
 	if newKey.RetiringOverlap != active.RetiringOverlap {
 		t.Errorf("staged key RetiringOverlap = %v, want %v (carried forward from the active key)", newKey.RetiringOverlap, active.RetiringOverlap)
 	}
-	if got := rec.typesOf(); len(got) != 1 || got[0] != EventSigningKeyStaged {
+	if got := rec.Types(); len(got) != 1 || got[0] != EventSigningKeyStaged {
 		t.Errorf("published events = %v, want exactly one EventSigningKeyStaged", got)
 	}
 }
@@ -329,8 +309,8 @@ func TestService_StageDueRotations_SkipsAPurposeAlreadyStaged(t *testing.T) {
 	if len(staged) != 0 {
 		t.Errorf("StageDueRotations staged %v for a purpose already carrying a pending key, want none", staged)
 	}
-	if len(rec.events) != 0 {
-		t.Errorf("StageDueRotations published %d event(s), want none", len(rec.events))
+	if len(rec.Events()) != 0 {
+		t.Errorf("StageDueRotations published %d event(s), want none", len(rec.Events()))
 	}
 }
 
@@ -475,8 +455,8 @@ func TestService_PromoteNow_PropagationWindowNotElapsed(t *testing.T) {
 	if _, err := svc.PromoteNow(ctx, "authn.access_token", time.Hour); !apperr.HasCode(err, ErrPropagationWindowNotElapsed.Code) {
 		t.Errorf("PromoteNow(window not elapsed) error = %v, want ErrPropagationWindowNotElapsed", err)
 	}
-	if len(rec.events) != 0 {
-		t.Errorf("PromoteNow published %d event(s) despite refusing to promote", len(rec.events))
+	if len(rec.Events()) != 0 {
+		t.Errorf("PromoteNow published %d event(s) despite refusing to promote", len(rec.Events()))
 	}
 
 	got, err := svc.signingKeys.FindByID(ctx, "kid-pending")
@@ -538,7 +518,7 @@ func TestService_PromoteNow_PromotesPastTheWindow_AndDemotesThePrevious(t *testi
 	if demoted.Status != SigningKeyStatusRetiring {
 		t.Errorf("kid-previous status = %q, want %q", demoted.Status, SigningKeyStatusRetiring)
 	}
-	if got := rec.typesOf(); len(got) != 1 || got[0] != EventSigningKeyActivated {
+	if got := rec.Types(); len(got) != 1 || got[0] != EventSigningKeyActivated {
 		t.Errorf("published events = %v, want exactly one EventSigningKeyActivated", got)
 	}
 

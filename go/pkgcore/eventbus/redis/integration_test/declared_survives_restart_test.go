@@ -53,15 +53,15 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	t.Cleanup(publisher.Close)
 	t.Cleanup(receiver.Close)
 
-	rec := &eventRecorder{}
-	receiver.Subscribe(eventType, rec.handler())
+	rec := testkit.NewEventRecorder()
+	receiver.Subscribe(eventType, rec.Handler())
 
 	// Warm up: proves the receiver's consumer group exists on the stream and
 	// its reader is live (see warmUp's own doc comment for why a single
 	// publish-and-wait would not), so the counted event below is delivered
 	// and the group's cursor advanced before the restart.
 	warmUp(t, publisher, rec, eventType)
-	rec.clear()
+	rec.Clear()
 
 	// Commit the event whose survival the restart must not disturb. Its
 	// delivery to the receiver is asserted first, so the state captured
@@ -74,7 +74,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the pre-restart event", func() bool {
-		return rec.count() == 1
+		return rec.Total() == 1
 	})
 
 	// Capture the committed server-side state the declaration promises will
@@ -142,7 +142,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	// And the live bus must resume ordinary operation across the restart:
 	// its reader survived the server's downtime (go-redis redials the fixed
 	// advertised address on its own) and delivers a post-restart publish.
-	rec.clear()
+	rec.Clear()
 	if err := publisher.Publish(ctx, pkgcore.Event{
 		Type:     eventType,
 		TenantID: pkgcore.TenantID("tenant-restart"),
@@ -151,6 +151,6 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 		t.Fatalf("Publish() after the restart error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the receiver to deliver the post-restart event", func() bool {
-		return rec.count() == 1
+		return rec.Total() == 1
 	})
 }

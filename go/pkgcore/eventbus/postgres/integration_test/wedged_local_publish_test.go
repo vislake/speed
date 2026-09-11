@@ -136,8 +136,8 @@ func TestEventBus_WedgedLocalPublish_SameTypeRowsStillDelivered(t *testing.T) {
 	subscriber := eventbuspostgres.NewEventBus(pool, "wedged-same-type-subscriber")
 	closeBusWithin(t, subscriber)
 
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 
 	wedgeCtx, cancelWedge := context.WithCancel(ctx)
 	defer cancelWedge()
@@ -227,8 +227,8 @@ func TestEventBus_WedgedLocalPublish_NoRowStillOwedDeliveryIsPurged(t *testing.T
 	subscriber := eventbuspostgres.NewEventBus(pool, "wedged-purge-subscriber")
 	closeBusWithin(t, subscriber)
 
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 
 	wedgeCtx, cancelWedge := context.WithCancel(ctx)
 	defer cancelWedge()
@@ -329,11 +329,11 @@ func TestEventBus_WedgedLocalPublish_FirstScanStillCreatesTheCursorRow(t *testin
 	// as a clock: the warm spy's delivery of the phase marker below proves
 	// the listener was awake at that moment, and its next wake is at least
 	// one listenBlock away.
-	warmSpy := &eventSpy{}
-	subscriber.Subscribe(warmType, warmSpy.handler())
+	warmSpy := testkit.NewEventRecorder()
+	subscriber.Subscribe(warmType, warmSpy.Handler())
 	warmUp(t, ctx, publisher, warmType, warmSpy)
 
-	markersBeforePhase := warmSpy.count()
+	markersBeforePhase := warmSpy.Total()
 	if err := publisher.Publish(ctx, pkgcore.Event{
 		Type:    warmType,
 		Payload: map[string]any{"sequence": phaseMarker},
@@ -341,15 +341,15 @@ func TestEventBus_WedgedLocalPublish_FirstScanStillCreatesTheCursorRow(t *testin
 		t.Fatalf("Publish() of the phase marker error = %v, want nil", err)
 	}
 	testkit.Eventually(t, "the phase marker to be delivered (pinning the listener's most recent wake)", func() bool {
-		return warmSpy.count() > markersBeforePhase
+		return warmSpy.Total() > markersBeforePhase
 	})
 
 	// Now the wedge, on the Type whose cursor row must still be created.
 	// Subscribe and the wedging publish run back-to-back here, within the
 	// listener's current listenBlock wait, so no wake can scan eventType
 	// before the wedge row's own NOTIFY does.
-	spy := &eventSpy{}
-	subscriber.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	subscriber.Subscribe(eventType, spy.Handler())
 
 	wedgeCtx, cancelWedge := context.WithCancel(ctx)
 	defer cancelWedge()
@@ -380,7 +380,7 @@ func TestEventBus_WedgedLocalPublish_FirstScanStillCreatesTheCursorRow(t *testin
 	// Wait out the catch-up poller's window, then assert the wedged row was
 	// delivered exactly once, by its own local path.
 	time.Sleep(reentrantQuiescePeriod)
-	if got := spy.count(); got != 1 {
+	if got := spy.Total(); got != 1 {
 		t.Errorf("the wedged row's handler ran %d times, want exactly 1", got)
 	}
 }

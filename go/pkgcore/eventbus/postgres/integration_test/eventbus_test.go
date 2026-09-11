@@ -5,7 +5,6 @@ package postgres_test
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -23,42 +22,6 @@ import (
 // than assume a delivery landed the instant Publish returned.
 const convergenceDeadline = 10 * time.Second
 
-// eventSpy records every Event a bus delivers to it, mirroring
-// go/notification/integration_test/redis_leg_test.go's identical helper.
-type eventSpy struct {
-	mu     sync.Mutex
-	events []pkgcore.Event
-}
-
-func (s *eventSpy) handler() pkgcore.EventHandler {
-	return func(_ context.Context, evt pkgcore.Event) error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.events = append(s.events, evt)
-		return nil
-	}
-}
-
-func (s *eventSpy) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.events)
-}
-
-// first returns the earliest received event match reports true for,
-// mirroring go/notification/integration_test/redis_leg_test.go's identical
-// helper.
-func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, evt := range s.events {
-		if match(evt) {
-			return evt, true
-		}
-	}
-	return pkgcore.Event{}, false
-}
-
 // warmUp republishes a marker event of eventType through publisher until
 // spy has demonstrably received at least one event, mirroring
 // go/notification/integration_test/redis_leg_test.go's identical helper and
@@ -73,7 +36,7 @@ func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
 // is demonstrably delivered is the accepted, precedented way every
 // multi-replica integration test in this codebase works around it, not a
 // workaround specific to this package.
-func warmUp(t *testing.T, ctx context.Context, publisher pkgcore.EventBus, eventType string, spy *eventSpy) {
+func warmUp(t *testing.T, ctx context.Context, publisher pkgcore.EventBus, eventType string, spy *testkit.EventRecorder) {
 	t.Helper()
 	deadline := time.Now().Add(convergenceDeadline)
 	for published := 1; ; published++ {
@@ -83,7 +46,7 @@ func warmUp(t *testing.T, ctx context.Context, publisher pkgcore.EventBus, event
 		}); err != nil {
 			t.Fatalf("warm-up publish: %v", err)
 		}
-		if spy.count() >= 1 {
+		if spy.Total() >= 1 {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -168,10 +131,10 @@ func TestEventBus_FanOut_BothReplicasReceiveEveryEvent(t *testing.T) {
 	t.Cleanup(replicaA.Close)
 	t.Cleanup(replicaB.Close)
 
-	spyA := &eventSpy{}
-	spyB := &eventSpy{}
-	replicaA.Subscribe(eventType, spyA.handler())
-	replicaB.Subscribe(eventType, spyB.handler())
+	spyA := testkit.NewEventRecorder()
+	spyB := testkit.NewEventRecorder()
+	replicaA.Subscribe(eventType, spyA.Handler())
+	replicaB.Subscribe(eventType, spyB.Handler())
 
 	// Warm both listeners past the first-Subscribe/live-end race (see
 	// warmUp's own doc comment) before the real assertion: replicaA's own
@@ -192,7 +155,7 @@ func TestEventBus_FanOut_BothReplicasReceiveEveryEvent(t *testing.T) {
 
 	// replicaA is the publisher: its own subscriber ran synchronously
 	// inside Publish, so it must already have the event.
-	if _, ok := spyA.first(func(evt pkgcore.Event) bool {
+	if _, ok := spyA.FirstMatch(func(evt pkgcore.Event) bool {
 		seq, ok := sequenceOf(evt)
 		return ok && seq == realSequence
 	}); !ok {
@@ -203,7 +166,7 @@ func TestEventBus_FanOut_BothReplicasReceiveEveryEvent(t *testing.T) {
 	// that, its own periodic catch-up scan) -- this is the cross-replica
 	// leg the fan-out claim actually rests on.
 	testkit.Eventually(t, "the second replica to receive the published event", func() bool {
-		_, ok := spyB.first(func(evt pkgcore.Event) bool {
+		_, ok := spyB.FirstMatch(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == realSequence
 		})
@@ -259,8 +222,8 @@ func TestEventBus_CatchUp_MissedNotifyIsDeliveredAfterReconnect(t *testing.T) {
 	t.Cleanup(publisher.Close)
 
 	warm := eventbuspostgres.NewEventBus(pool, replicaID)
-	warmSpy := &eventSpy{}
-	warm.Subscribe(eventType, warmSpy.handler())
+	warmSpy := testkit.NewEventRecorder()
+	warm.Subscribe(eventType, warmSpy.Handler())
 	warmUp(t, ctx, publisher, eventType, warmSpy)
 
 	// warmUp returned as soon as the spy received a marker, which can leave
@@ -311,17 +274,17 @@ func TestEventBus_CatchUp_MissedNotifyIsDeliveredAfterReconnect(t *testing.T) {
 	// fresh live-end start, is what this instance resumed from.
 	reconnected := eventbuspostgres.NewEventBus(pool, replicaID)
 	t.Cleanup(reconnected.Close)
-	spy := &eventSpy{}
-	reconnected.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	reconnected.Subscribe(eventType, spy.Handler())
 
 	testkit.Eventually(t, "the catch-up scan to deliver every event missed during the downtime window", func() bool {
-		return spy.count() >= missedDuringDowntime
+		return spy.Total() >= missedDuringDowntime
 	})
-	if got := spy.count(); got != missedDuringDowntime {
+	if got := spy.Total(); got != missedDuringDowntime {
 		t.Fatalf("reconnected replica received %d events, want exactly %d (no duplicate, no loss)", got, missedDuringDowntime)
 	}
 	for i := 1; i <= missedDuringDowntime; i++ {
-		if _, ok := spy.first(func(evt pkgcore.Event) bool {
+		if _, ok := spy.FirstMatch(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == float64(i)
 		}); !ok {
@@ -348,8 +311,8 @@ func TestEventBus_CatchUp_ReconnectMidStream_DeliversWhatArrivedWhileDisconnecte
 
 	bus := eventbuspostgres.NewEventBus(pool, replicaID)
 	t.Cleanup(bus.Close)
-	spy := &eventSpy{}
-	bus.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	bus.Subscribe(eventType, spy.Handler())
 
 	warmupPublisher := eventbuspostgres.NewEventBus(pool, "midstream-publisher")
 	t.Cleanup(warmupPublisher.Close)
@@ -377,7 +340,7 @@ func TestEventBus_CatchUp_ReconnectMidStream_DeliversWhatArrivedWhileDisconnecte
 	}
 
 	testkit.Eventually(t, "the reconnecting listener's catch-up scan to deliver the event published while disconnected", func() bool {
-		_, ok := spy.first(func(evt pkgcore.Event) bool {
+		_, ok := spy.FirstMatch(func(evt pkgcore.Event) bool {
 			seq, ok := sequenceOf(evt)
 			return ok && seq == realSequence
 		})

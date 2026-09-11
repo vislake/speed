@@ -228,12 +228,12 @@ func TestService_MemberRemovalReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *tes
 	// announce -- is what makes the Can and row assertions below
 	// unconditional.
 	testkit.Eventually(t, "both reaped bindings to announce their revocation", func() bool {
-		return len(rec.ofType(EventRoleBindingRevoked)) == 2
+		return len(rec.OfType(EventRoleBindingRevoked)) == 2
 	})
 	if ok, err := svc.Can(context.Background(), removed, "read", "notes"); err != nil || ok {
 		t.Fatalf("Can after the queued reap = %v, %v; want false", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per reaped binding)", got, EventRoleBindingRevoked)
 	}
 
@@ -293,9 +293,9 @@ func TestService_NodeDeletionReap_EnqueuesAReapTaskThatTheWorkerExecutes(t *test
 	// Same announcement-ordering wait as test 1: each revoked-binding
 	// event fires after its row's mark-delete commit.
 	testkit.Eventually(t, "both reaped bindings to announce their revocation", func() bool {
-		return len(rec.ofType(EventRoleBindingRevoked)) == 2
+		return len(rec.OfType(EventRoleBindingRevoked)) == 2
 	})
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per reaped binding)", got, EventRoleBindingRevoked)
 	}
 	// The binding at the surviving node is untouched.
@@ -510,7 +510,7 @@ func TestService_OnMemberRemoved_EnqueueFailure_FallsBackToTheSynchronousReap(t 
 	if rows := liveBindings(t, svc, removed.TenantID, removed.UserID); len(rows) != 0 {
 		t.Fatalf("the removal's reap did not fall back: %d live bindings remain after the enqueue failure, want 0", len(rows))
 	}
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (the synchronous fallback revokes one binding at a time)", got, EventRoleBindingRevoked)
 	}
 	if ok, _ := svc.Can(context.Background(), removed, "read", "notes"); ok {
@@ -547,7 +547,7 @@ func TestService_OnNodeDeleted_EnqueueFailure_FallsBackToTheSynchronousReap(t *t
 	if rows := liveBindings(t, svc, "tenant-a", "user-1"); len(rows) != 0 {
 		t.Fatalf("the deletion's reap did not fall back: %d live bindings remain after the enqueue failure, want 0", len(rows))
 	}
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (the synchronous fallback revokes one binding at a time)", got, EventRoleBindingRevoked)
 	}
 }

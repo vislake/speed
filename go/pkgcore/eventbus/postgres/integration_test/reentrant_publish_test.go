@@ -94,8 +94,8 @@ func TestEventBus_HandlerMayPublishReentrantly_LocalDeliveryPath(t *testing.T) {
 	bus := eventbuspostgres.NewEventBus(pool, "reentrant-local-replica")
 	closeBusWithin(t, bus)
 
-	rootSpy := &eventSpy{}
-	bus.Subscribe(reentrantOrgRootEvent, rootSpy.handler())
+	rootSpy := testkit.NewEventRecorder()
+	bus.Subscribe(reentrantOrgRootEvent, rootSpy.Handler())
 	bus.Subscribe(reentrantUserCreatedEvent, func(ctx context.Context, _ pkgcore.Event) error {
 		// The nested publish: Publish runs this handler while holding
 		// deliverMu, and this call takes deliverMu again on the same
@@ -124,7 +124,7 @@ func TestEventBus_HandlerMayPublishReentrantly_LocalDeliveryPath(t *testing.T) {
 	// must never be redelivered by the poller, which is the double-delivery
 	// hazard the fix's in-flight gate exists to rule out.
 	time.Sleep(reentrantQuiescePeriod)
-	if got := rootSpy.count(); got != 1 {
+	if got := rootSpy.Total(); got != 1 {
 		t.Errorf("nested handler invoked %d times, want exactly 1 (no duplicate from the catch-up path)", got)
 	}
 }
@@ -149,8 +149,8 @@ func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T)
 	subscriber := eventbuspostgres.NewEventBus(pool, "reentrant-subscriber")
 	closeBusWithin(t, subscriber)
 
-	rootSpy := &eventSpy{}
-	subscriber.Subscribe(reentrantOrgRootEvent, rootSpy.handler())
+	rootSpy := testkit.NewEventRecorder()
+	subscriber.Subscribe(reentrantOrgRootEvent, rootSpy.Handler())
 
 	// warmUp's markers (sequence -1) must not trigger the re-entrant
 	// publish: they exist only to prove the subscriber's listener is
@@ -159,8 +159,8 @@ func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T)
 	// assertion below. warmSpy records the markers so warmUp can observe
 	// them; the handler after it ignores them and reacts only to real
 	// events.
-	warmSpy := &eventSpy{}
-	subscriber.Subscribe(reentrantUserCreatedEvent, warmSpy.handler())
+	warmSpy := testkit.NewEventRecorder()
+	subscriber.Subscribe(reentrantUserCreatedEvent, warmSpy.Handler())
 	subscriber.Subscribe(reentrantUserCreatedEvent, func(ctx context.Context, evt pkgcore.Event) error {
 		if seq, ok := sequenceOf(evt); ok && seq == -1 {
 			return nil // warm-up marker (see warmUp's own doc comment)
@@ -182,7 +182,7 @@ func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T)
 	// listener goroutine, so rootSpy reaches 1 as soon as the handler above
 	// runs -- the delivery the handler's re-entrant publish must achieve.
 	testkit.Eventually(t, "the listener-path handler's re-entrant publish to be delivered", func() bool {
-		return rootSpy.count() >= 1
+		return rootSpy.Total() >= 1
 	})
 
 	// Wait out the catch-up poller's window, then assert exactly once: the
@@ -190,7 +190,7 @@ func TestEventBus_HandlerMayPublishReentrantly_ListenerCatchUpPath(t *testing.T)
 	// own poller -- the double-delivery hazard the in-flight gate rules
 	// out.
 	time.Sleep(reentrantQuiescePeriod)
-	if got := rootSpy.count(); got != 1 {
+	if got := rootSpy.Total(); got != 1 {
 		t.Errorf("nested handler invoked %d times, want exactly 1 (no duplicate from the catch-up path)", got)
 	}
 }

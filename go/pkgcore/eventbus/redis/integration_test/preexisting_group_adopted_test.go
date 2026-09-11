@@ -91,13 +91,13 @@ func TestEventBus_ReaderAdoptsAPreexistingGroup(t *testing.T) {
 		busB.Close()
 	})
 
-	recB := &eventRecorder{}
+	recB := testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
 
 	// The lost response, simulated: the group bus B's reader is about to
 	// create already exists when the reader starts.
 	precreateReaderGroup(t, ctx, client, busB, paidType)
-	busB.Subscribe(paidType, recB.handler())
+	busB.Subscribe(paidType, recB.Handler())
 
 	// bus B is the only subscriber, so every event bus A publishes must reach
 	// recB through bus B's reader. A reader wedged on BUSYGROUP delivers none
@@ -106,7 +106,7 @@ func TestEventBus_ReaderAdoptsAPreexistingGroup(t *testing.T) {
 	// live end from the pre-creation), so the loop below succeeds within a
 	// second or two.
 	deadline := time.Now().Add(5 * time.Second)
-	for seq := 1; recB.count() == 0; seq++ {
+	for seq := 1; recB.Total() == 0; seq++ {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out: no event reached a reader whose consumer group pre-existed its start -- the reader wedged retrying BUSYGROUP instead of adopting the group")
 		}
@@ -121,14 +121,14 @@ func TestEventBus_ReaderAdoptsAPreexistingGroup(t *testing.T) {
 
 	// The reader stayed healthy past the adoption rather than delivering a
 	// single straggler: one more counted event reaches it.
-	recB.clear()
+	recB.Clear()
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-after-adoption", Amount: 2},
 	}); err != nil {
 		t.Fatalf("Publish(after adoption) error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the adopting reader to keep delivering", func() bool {
-		return recB.count() == 1
+		return recB.Total() == 1
 	})
 }
 
@@ -152,21 +152,21 @@ func TestEventBus_AdoptedGroupCoexistsWithLaterReaders(t *testing.T) {
 		busC.Close()
 	})
 
-	recB, recC := &eventRecorder{}, &eventRecorder{}
+	recB, recC := testkit.NewEventRecorder(), testkit.NewEventRecorder()
 	const paidType = "invoice.paid"
 
 	// bus B's group pre-exists and will be adopted; bus C's does not and will
 	// be created fresh.
 	precreateReaderGroup(t, ctx, client, busB, paidType)
-	busB.Subscribe(paidType, recB.handler())
-	busC.Subscribe(paidType, recC.handler())
+	busB.Subscribe(paidType, recB.Handler())
+	busC.Subscribe(paidType, recC.Handler())
 
 	// Markers from bus A must reach both readers before any counted event is
 	// published: bus C's group is created asynchronously after its Subscribe,
 	// and a marker published before that creation is history for bus C. A
 	// reader wedged on BUSYGROUP never counts a marker and fails the deadline.
 	deadline := time.Now().Add(5 * time.Second)
-	for seq := 1; recB.count() == 0 || recC.count() == 0; seq++ {
+	for seq := 1; recB.Total() == 0 || recC.Total() == 0; seq++ {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out: no marker reached both readers -- the reader with the pre-existing group wedged on BUSYGROUP")
 		}
@@ -181,15 +181,15 @@ func TestEventBus_AdoptedGroupCoexistsWithLaterReaders(t *testing.T) {
 
 	// One counted event reaches each reader exactly once, through its own
 	// group: an adopted group delivers no differently from a created one.
-	recB.clear()
-	recC.clear()
+	recB.Clear()
+	recC.Clear()
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-counted", Amount: 3},
 	}); err != nil {
 		t.Fatalf("Publish(counted) error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "both readers to deliver the counted event exactly once each", func() bool {
-		return recB.count() == 1 && recC.count() == 1
+		return recB.Total() == 1 && recC.Total() == 1
 	})
 
 	// The adopting instance's Close destroys the group it adopted -- the
@@ -204,13 +204,13 @@ func TestEventBus_AdoptedGroupCoexistsWithLaterReaders(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("XInfoGroups reports %d groups after the adopting reader closed, want bus C's single one", len(groups))
 	}
-	recC.clear()
+	recC.Clear()
 	if err := busA.Publish(ctx, pkgcore.Event{
 		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-spared", Amount: 4},
 	}); err != nil {
 		t.Fatalf("Publish(spared) error = %v, want nil", err)
 	}
 	testkit.EventuallyWithin(t, 5*time.Second, "the spared reader to keep delivering", func() bool {
-		return recC.count() == 1
+		return recC.Total() == 1
 	})
 }

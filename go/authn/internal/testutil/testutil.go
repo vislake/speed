@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // serializerName mirrors authn.SerializerName. It is duplicated rather than
@@ -252,59 +253,12 @@ func NewPostgresDB(t *testing.T) *gorm.DB {
 
 // EventRecorder collects the domain events published on a bus, so a test can
 // assert that a security-relevant fact was announced rather than only that a
-// row changed. It is safe for concurrent use, which the refresh-rotation race
-// tests need.
-type EventRecorder struct {
-	mu     sync.Mutex
-	events []pkgcore.Event
-}
+// row changed. It is pkgcore/testkit's concurrency-safe recorder, aliased so
+// the name this package's many authn callers already use stays stable.
+type EventRecorder = testkit.EventRecorder
 
 // NewEventRecorder returns an empty recorder.
-func NewEventRecorder() *EventRecorder {
-	return &EventRecorder{}
-}
-
-// Subscribe installs the recorder on bus for each of types.
-func (r *EventRecorder) Subscribe(bus pkgcore.EventBus, types ...string) {
-	for _, eventType := range types {
-		bus.Subscribe(eventType, func(_ context.Context, evt pkgcore.Event) error {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			r.events = append(r.events, evt)
-			return nil
-		})
-	}
-}
-
-// Events returns a snapshot of everything recorded so far.
-func (r *EventRecorder) Events() []pkgcore.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]pkgcore.Event, len(r.events))
-	copy(out, r.events)
-	return out
-}
-
-// Count reports how many events of eventType were recorded.
-func (r *EventRecorder) Count(eventType string) int {
-	n := 0
-	for _, evt := range r.Events() {
-		if evt.Type == eventType {
-			n++
-		}
-	}
-	return n
-}
-
-// First returns the first recorded event of eventType.
-func (r *EventRecorder) First(eventType string) (pkgcore.Event, bool) {
-	for _, evt := range r.Events() {
-		if evt.Type == eventType {
-			return evt, true
-		}
-	}
-	return pkgcore.Event{}, false
-}
+func NewEventRecorder() *EventRecorder { return testkit.NewEventRecorder() }
 
 // ErrKVUnavailable is what FailingKVStore returns from every operation.
 var ErrKVUnavailable = errors.New("testutil: the key-value store is unreachable")

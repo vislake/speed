@@ -110,11 +110,9 @@ func sequenceOf(evt pkgcore.Event) (float64, bool) {
 
 // spyCountSeq returns how many events of the given payload sequence the spy
 // has received.
-func spyCountSeq(spy *eventRecorder, seq float64) int {
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
+func spyCountSeq(spy *testkit.EventRecorder, seq float64) int {
 	n := 0
-	for _, evt := range spy.evts {
+	for _, evt := range spy.Events() {
 		if s, ok := sequenceOf(evt); ok && s == seq {
 			n++
 		}
@@ -196,12 +194,12 @@ func TestEventBus_PanickingRemoteHandler_LaterSameTypeMessagesStillReachHealthyH
 
 	const eventType = "invoice.panicked"
 	var attempts atomic.Int64
-	spy := &eventRecorder{}
+	spy := testkit.NewEventRecorder()
 	panicOn(t, busB, eventType, 100, &attempts) // registered first, like the redis twin test
-	busB.Subscribe(eventType, spy.handler())
+	busB.Subscribe(eventType, spy.Handler())
 
 	warmUp(t, busA, spy, eventType)
-	spy.clear()
+	spy.Clear()
 
 	js, err := jetstream.New(connA)
 	if err != nil {
@@ -261,16 +259,16 @@ func TestEventBus_PanickingRemoteHandler_HealthySiblingDoesNotRerun(t *testing.T
 
 	const eventType = "invoice.panicked"
 	var attempts atomic.Int64
-	spy := &eventRecorder{}
+	spy := testkit.NewEventRecorder()
 	panicOn(t, busB, eventType, 100, &attempts) // panicking sibling, registered first
-	busB.Subscribe(eventType, spy.handler())    // the healthy sibling
+	busB.Subscribe(eventType, spy.Handler())    // the healthy sibling
 
 	// Warm up WITHOUT a panicking message in play: warm-up markers pass
 	// straight through panicOn (their payload carries no sequence marker),
 	// so the first message this replica ever panics on is exactly the one
 	// published below.
 	warmUp(t, busA, spy, eventType)
-	spy.clear()
+	spy.Clear()
 
 	js, err := jetstream.New(connA)
 	if err != nil {
@@ -325,11 +323,11 @@ func TestEventBus_PanickingRemoteHandler_BoundedRetryThenLoggedTerminal(t *testi
 
 	const eventType = "invoice.panicked"
 	var attempts atomic.Int64
-	spy := &eventRecorder{}
+	spy := testkit.NewEventRecorder()
 	panicOn(t, busB, eventType, 100, &attempts)
-	busB.Subscribe(eventType, spy.handler())
+	busB.Subscribe(eventType, spy.Handler())
 	warmUp(t, busA, spy, eventType)
-	spy.clear()
+	spy.Clear()
 
 	js, err := jetstream.New(connA)
 	if err != nil {
@@ -415,10 +413,10 @@ func TestEventBus_NoPanickingHandler_ControlDeliveryExactlyOnce(t *testing.T) {
 	})
 
 	const eventType = "invoice.control"
-	spy := &eventRecorder{}
-	busB.Subscribe(eventType, spy.handler())
+	spy := testkit.NewEventRecorder()
+	busB.Subscribe(eventType, spy.Handler())
 	warmUp(t, busA, spy, eventType)
-	spy.clear()
+	spy.Clear()
 
 	for _, seq := range []float64{100, 200, 201} {
 		if err := busA.Publish(ctx, pkgcore.Event{

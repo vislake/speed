@@ -26,6 +26,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusnats "github.com/vislake/speed/go/pkgcore/eventbus/nats"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestEventBus_PanickingLocalHandler_ContainedSiblingsRun pins the
@@ -53,15 +54,15 @@ func TestEventBus_PanickingLocalHandler_ContainedSiblingsRun(t *testing.T) {
 		errCalls.Add(1)
 		return errSibling
 	})
-	sibling := &eventRecorder{}
-	bus.Subscribe(eventType, sibling.handler())
+	sibling := testkit.NewEventRecorder()
+	bus.Subscribe(eventType, sibling.Handler())
 
 	for seq := 1; seq <= 2; seq++ {
 		if err := bus.Publish(ctx, pkgcore.Event{Type: eventType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: map[string]any{"seq": seq}}); err == nil {
 			t.Fatalf("Publish(%d) error = nil, want the erroring sibling's error (handler errors must still surface past a contained panic)", seq)
 		}
 	}
-	if got := sibling.count(); got != 2 {
+	if got := sibling.Total(); got != 2 {
 		t.Fatalf("healthy sibling received %d events, want 2 (it must still run after the panicking handler)", got)
 	}
 	if got := panickedCalls.Load(); got != 2 {

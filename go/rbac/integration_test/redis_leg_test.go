@@ -32,7 +32,6 @@ package rbac_test
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -67,40 +66,6 @@ func replicas(t *testing.T, ctx context.Context) (writer, peer *rbac.Service, wr
 	return attachRBACService(t, db, writerBus), attachRBACService(t, db, peerBus), writerBus, peerBus
 }
 
-// eventSpy records every Event a bus delivers to it, so a test can assert
-// on the wire shape the remote side actually receives.
-type eventSpy struct {
-	mu     sync.Mutex
-	events []pkgcore.Event
-}
-
-func (s *eventSpy) handler() pkgcore.EventHandler {
-	return func(_ context.Context, evt pkgcore.Event) error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.events = append(s.events, evt)
-		return nil
-	}
-}
-
-func (s *eventSpy) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.events)
-}
-
-// first returns the earliest received event match reports true for.
-func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, evt := range s.events {
-		if match(evt) {
-			return evt, true
-		}
-	}
-	return pkgcore.Event{}, false
-}
-
 // warmUp loops marker publishes on bus until spy has received one.
 //
 // A reader's consumer group is created at the stream's live end, so an
@@ -109,7 +74,7 @@ func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
 // creation is scheduling luck. The marker is therefore republished until
 // one is demonstrably delivered, mirroring go/config's and go/pkgcore's
 // tiers. It names a tenant no test reads, so it invalidates nothing real.
-func warmUp(t *testing.T, bus pkgcore.EventBus, spy *eventSpy) {
+func warmUp(t *testing.T, bus pkgcore.EventBus, spy *testkit.EventRecorder) {
 	t.Helper()
 	deadline := time.Now().Add(convergenceDeadline)
 	for published := 1; ; published++ {
@@ -120,7 +85,7 @@ func warmUp(t *testing.T, bus pkgcore.EventBus, spy *eventSpy) {
 		}); err != nil {
 			t.Fatalf("warm-up publish: %v", err)
 		}
-		if spy.count() >= 1 {
+		if spy.Total() >= 1 {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -152,8 +117,8 @@ func TestRedisBus_RevokeOnOneReplica_ConvergesTheOther(t *testing.T) {
 	ctx := context.Background()
 	writer, peer, writerBus, peerBus := replicas(t, ctx)
 
-	spy := &eventSpy{}
-	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
+	spy := testkit.NewEventRecorder()
+	peerBus.Subscribe(rbac.EventRoleChanged, spy.Handler())
 	warmUp(t, writerBus, spy)
 
 	tenantCtx := testkit.TenantCtx("tenant-a")
@@ -196,8 +161,8 @@ func TestRedisBus_RestoreOnOneReplica_ConvergesTheOther(t *testing.T) {
 	ctx := context.Background()
 	writer, peer, writerBus, peerBus := replicas(t, ctx)
 
-	spy := &eventSpy{}
-	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
+	spy := testkit.NewEventRecorder()
+	peerBus.Subscribe(rbac.EventRoleChanged, spy.Handler())
 	warmUp(t, writerBus, spy)
 
 	tenantCtx := testkit.TenantCtx("tenant-a")
@@ -237,8 +202,8 @@ func TestRedisBus_AssignOnOneReplica_ConvergesTheOther(t *testing.T) {
 	ctx := context.Background()
 	writer, peer, writerBus, peerBus := replicas(t, ctx)
 
-	spy := &eventSpy{}
-	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
+	spy := testkit.NewEventRecorder()
+	peerBus.Subscribe(rbac.EventRoleChanged, spy.Handler())
 	warmUp(t, writerBus, spy)
 
 	tenantCtx := testkit.TenantCtx("tenant-a")
@@ -277,8 +242,8 @@ func TestRedisBus_RolePermissionChange_ConvergesTheOther(t *testing.T) {
 	ctx := context.Background()
 	writer, peer, writerBus, peerBus := replicas(t, ctx)
 
-	spy := &eventSpy{}
-	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
+	spy := testkit.NewEventRecorder()
+	peerBus.Subscribe(rbac.EventRoleChanged, spy.Handler())
 	warmUp(t, writerBus, spy)
 
 	tenantCtx := testkit.TenantCtx("tenant-a")
@@ -323,10 +288,10 @@ func TestRedisBus_RemoteEvent_ArrivesAsAJSONMap(t *testing.T) {
 	ctx := context.Background()
 	writer, _, writerBus, peerBus := replicas(t, ctx)
 
-	spy := &eventSpy{}
-	peerBus.Subscribe(rbac.EventRoleBindingAssigned, spy.handler())
-	warmUpSpy := &eventSpy{}
-	peerBus.Subscribe(rbac.EventRoleChanged, warmUpSpy.handler())
+	spy := testkit.NewEventRecorder()
+	peerBus.Subscribe(rbac.EventRoleBindingAssigned, spy.Handler())
+	warmUpSpy := testkit.NewEventRecorder()
+	peerBus.Subscribe(rbac.EventRoleChanged, warmUpSpy.Handler())
 	warmUp(t, writerBus, warmUpSpy)
 
 	tenantCtx := testkit.TenantCtx("tenant-a")
@@ -348,7 +313,7 @@ func TestRedisBus_RemoteEvent_ArrivesAsAJSONMap(t *testing.T) {
 	}
 	var received pkgcore.Event
 	testkit.Eventually(t, "the assignment event to reach the peer bus", func() bool {
-		evt, ok := spy.first(isAssignment)
+		evt, ok := spy.FirstMatch(isAssignment)
 		received = evt
 		return ok
 	})

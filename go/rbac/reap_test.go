@@ -100,7 +100,7 @@ func TestService_OnMemberRemoved_ReapsTheRemovedMembersBindingsAndSparesEveryone
 	// one EventRoleBindingRevoked per binding, each naming the tenant and
 	// user the event named and the exact scope the binding was revoked at,
 	// so replicas converge and the audit trail records what was withdrawn.
-	revoked := rec.ofType(EventRoleBindingRevoked)
+	revoked := rec.OfType(EventRoleBindingRevoked)
 	if len(revoked) != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per reaped binding)", len(revoked), EventRoleBindingRevoked)
 	}
@@ -186,10 +186,10 @@ func TestService_OnMemberRemoved_RestoreInterleavingKeepsTheReapSoftAndIdempoten
 		t.Fatalf("second restore: %v", err)
 	}
 
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (the manual revoke predates the recorder; the two reaps)", got, EventRoleBindingRevoked)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per restore)", got, EventRoleBindingRestored)
 	}
 }
@@ -240,7 +240,7 @@ func TestService_OnMemberRemoved_ForeignPayloadsAreDroppedWithoutError(t *testin
 	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
 		t.Fatalf("a dropped payload reaped a live binding: Can = %v, %v", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 0 {
 		t.Fatalf("dropped payloads published %d revoke events", got)
 	}
 
@@ -335,7 +335,7 @@ func TestService_OnMemberRemoved_OneFailedReapDoesNotAbortTheRest(t *testing.T) 
 	if err != nil || ok {
 		t.Fatalf("the binding whose role resolved was not reaped: Can = %v, %v", ok, err)
 	}
-	revoked := rec.ofType(EventRoleBindingRevoked)
+	revoked := rec.OfType(EventRoleBindingRevoked)
 	if len(revoked) != 1 {
 		t.Fatalf("got %d %s events, want 1 (only the resolvable binding)", len(revoked), EventRoleBindingRevoked)
 	}
@@ -500,7 +500,7 @@ func TestService_OnNodeDeleted_CascadeReap_NoPerBindingReReads(t *testing.T) {
 
 	// The reap must still withdraw every binding -- the batching changes the
 	// cost shape, never the outcome.
-	revoked := rec.ofType(EventRoleBindingRevoked)
+	revoked := rec.OfType(EventRoleBindingRevoked)
 	if len(revoked) != 4 {
 		t.Fatalf("got %d %s events, want 4 (one per reaped binding)", len(revoked), EventRoleBindingRevoked)
 	}
@@ -571,7 +571,7 @@ func TestService_OnNodeDeleted_ReapsBindingsScopedToDeletedNodesAndSparesEveryon
 		t.Fatalf("the identical node id in another tenant was reaped: Can = %v, %v", ok, err)
 	}
 
-	revoked := rec.ofType(EventRoleBindingRevoked)
+	revoked := rec.OfType(EventRoleBindingRevoked)
 	if len(revoked) != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per binding scoped to the deleted node)", len(revoked), EventRoleBindingRevoked)
 	}
@@ -632,7 +632,7 @@ func TestService_OnNodeDeleted_CascadeReapsEveryBindingInOnePass(t *testing.T) {
 		t.Fatalf("other still holds notes:write after the cascade reap: %v, %v", ok, err)
 	}
 
-	revoked := rec.ofType(EventRoleBindingRevoked)
+	revoked := rec.OfType(EventRoleBindingRevoked)
 	if len(revoked) != 3 {
 		t.Fatalf("got %d %s events, want 3 (one per binding across the cascaded nodes)", len(revoked), EventRoleBindingRevoked)
 	}
@@ -689,7 +689,7 @@ func TestService_OnNodeDeleted_ForeignPayloadsAreDroppedWithoutError(t *testing.
 	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
 		t.Fatalf("a dropped payload reaped a live binding: Can = %v, %v", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRevoked)); got != 0 {
 		t.Fatalf("dropped payloads published %d revoke events", got)
 	}
 
@@ -790,7 +790,7 @@ func TestService_OnNodeDeleted_OneFailedReapDoesNotAbortTheRest(t *testing.T) {
 	if len(rows) != 1 || rows[0].NodeID != "node-doomed" {
 		t.Fatalf("remaining bindings = %+v, want exactly the unresolvable one at node-doomed", rows)
 	}
-	revoked := rec.ofType(EventRoleBindingRevoked)
+	revoked := rec.OfType(EventRoleBindingRevoked)
 	if len(revoked) != 1 {
 		t.Fatalf("got %d %s events, want 1 (only the resolvable binding)", len(revoked), EventRoleBindingRevoked)
 	}
@@ -932,7 +932,7 @@ func TestService_OnMemberRestored_ReinstatesTheReapedBindingsAndSparesEveryoneEl
 	// path: one EventRoleBindingRestored per grant, each naming the tenant
 	// and user the event named and the exact scope the binding was revoked
 	// at, so replicas converge and the audit trail records what came back.
-	restoredEvts := rec.ofType(EventRoleBindingRestored)
+	restoredEvts := rec.OfType(EventRoleBindingRestored)
 	if len(restoredEvts) != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per re-instated grant)", len(restoredEvts), EventRoleBindingRestored)
 	}
@@ -1003,7 +1003,7 @@ func TestService_OnMemberRestored_RedeliveryRestoresNothingTwice(t *testing.T) {
 	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
 		t.Fatalf("Can after the restore = %v, %v; want the grant back", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 1 {
 		t.Fatalf("two deliveries of one restore event produced %d %s events, want 1", got, EventRoleBindingRestored)
 	}
 }
@@ -1039,7 +1039,7 @@ func TestService_OnMemberRestored_DeliberateRevocationPredatingTheRemoval_StaysR
 	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || ok {
 		t.Fatalf("Can after the restore = %v, %v; want false (the deliberate revocation must survive the member restore)", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("got %d %s events, want 0 (nothing the removal reaped exists to restore)", got, EventRoleBindingRestored)
 	}
 	rows, err := svc.bindings.RevokedByUser(ctx, sub.UserID)
@@ -1105,7 +1105,7 @@ func TestService_OnMemberRestored_ForeignPayloadsAreDroppedWithoutError(t *testi
 	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || ok {
 		t.Fatalf("a dropped payload restored a revoked binding: Can = %v, %v", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("dropped payloads published %d restore events", got)
 	}
 
@@ -1211,7 +1211,7 @@ func TestService_OnMemberRestored_OneFailedRestoreDoesNotAbortTheRest(t *testing
 	if err != nil || !ok {
 		t.Fatalf("the binding whose role resolved was not re-instated: Can = %v, %v", ok, err)
 	}
-	restored := rec.ofType(EventRoleBindingRestored)
+	restored := rec.OfType(EventRoleBindingRestored)
 	if len(restored) != 1 {
 		t.Fatalf("got %d %s events, want 1 (only the resolvable binding)", len(restored), EventRoleBindingRestored)
 	}
@@ -1308,7 +1308,7 @@ func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTh
 	if ok, err := svc.Can(context.Background(), member, "read", "notes"); err != nil || ok {
 		t.Fatalf("the binding on the still-deleted node went live with the member restore: Can = %v, %v; want false while the node is gone", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("the member restore published %d %s events, want 0 (the node is still deleted)", got, EventRoleBindingRestored)
 	}
 	rows, err := svc.bindings.RevokedByUser(ctx, member.UserID)
@@ -1333,7 +1333,7 @@ func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTh
 	if ok, canErr := svc.Can(context.Background(), member, "read", "notes"); canErr != nil || !ok {
 		t.Fatalf("the binding was not re-instated by the node's own restore: Can = %v, %v", ok, canErr)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 1 {
 		t.Fatalf("got %d %s events, want exactly 1 (the node restore, not the member restore)", got, EventRoleBindingRestored)
 	}
 	rows, err = svc.bindings.RevokedByUser(ctx, member.UserID)
@@ -1381,7 +1381,7 @@ func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTh
 	if ok, err := svc.Can(context.Background(), member, "read", "notes"); err != nil || ok {
 		t.Fatalf("the binding on the still-deleted node went live with the member restore: Can = %v, %v; want false while the node is gone", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("the member restore published %d %s events, want 0 (the node is still deleted)", got, EventRoleBindingRestored)
 	}
 	rows, err := svc.bindings.RevokedByUser(ctx, member.UserID)
@@ -1402,7 +1402,7 @@ func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTh
 	if ok, canErr := svc.Can(context.Background(), member, "read", "notes"); canErr != nil || !ok {
 		t.Fatalf("the binding was not re-instated by the node's own restore: Can = %v, %v", ok, canErr)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 1 {
 		t.Fatalf("got %d %s events, want exactly 1 (the node restore, not the member restore)", got, EventRoleBindingRestored)
 	}
 }
@@ -1535,7 +1535,7 @@ func TestService_OnNodeRestored_ReinstatesBindingsScopedToTheRestoredNodeAndSpar
 	// the restored node, each naming the tenant and the restored node. The
 	// probes below come AFTER these assertions on purpose -- probing a live
 	// binding revokes and restores it, which would pollute the count.
-	restoredEvts := rec.ofType(EventRoleBindingRestored)
+	restoredEvts := rec.OfType(EventRoleBindingRestored)
 	if len(restoredEvts) != 2 {
 		t.Fatalf("got %d %s events, want 2 (one per distinct grant at the restored node)", len(restoredEvts), EventRoleBindingRestored)
 	}
@@ -1551,7 +1551,7 @@ func TestService_OnNodeRestored_ReinstatesBindingsScopedToTheRestoredNodeAndSpar
 
 	// Redelivery of the same event re-instates nothing twice.
 	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-restored"})
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 2 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 2 {
 		t.Fatalf("a redelivered node-restored event produced %d %s events, want 2 (no re-restore)", got, EventRoleBindingRestored)
 	}
 
@@ -1651,7 +1651,7 @@ func TestService_OnNodeRestored_ForeignPayloadsAreDroppedWithoutError(t *testing
 	if ok, err := roleBindingLiveAt(context.Background(), svc, sub, "reader", Scope{NodeID: "node-1"}); err != nil || ok {
 		t.Fatalf("a dropped payload restored a revoked binding: live = %v, %v", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("dropped payloads published %d restore events", got)
 	}
 
@@ -1781,7 +1781,7 @@ func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t 
 	if len(rows) != 1 || rows[0].UserID != removed.UserID {
 		t.Fatalf("revoked rows at the restored node = %+v, want exactly the removed member's row", rows)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 1 {
 		t.Fatalf("got %d %s events, want 1 (only the kept member's grant)", got, EventRoleBindingRestored)
 	}
 }
@@ -1821,7 +1821,7 @@ func TestService_OnNodeRestored_MemberRemovedBeforeTheNodeDeleted_IsNotReinstate
 	if len(rows) != 1 || rows[0].NodeID != "node-1" {
 		t.Fatalf("revoked rows of the removed member = %+v, want exactly the node-1 row", rows)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 0 {
 		t.Fatalf("got %d %s events, want 0 (the node restore had nothing of its own to re-instate)", got, EventRoleBindingRestored)
 	}
 }
@@ -1855,7 +1855,7 @@ func TestService_OnNodeRestored_ReinstatesOnlyRowsTheNodeDeletionItselfReaped(t 
 
 	// The count assertion comes BEFORE the live probes: probing a live
 	// binding revokes and restores it, which would pollute the recorder.
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+	if got := len(rec.OfType(EventRoleBindingRestored)); got != 1 {
 		t.Fatalf("got %d %s events, want 1 (only the reaped binding)", got, EventRoleBindingRestored)
 	}
 	if ok, err := roleBindingLiveAt(context.Background(), svc, reaped, "reader", Scope{NodeID: "node-1"}); err != nil || !ok {

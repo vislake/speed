@@ -26,17 +26,17 @@ import (
 // Init window. The in-memory bus delivers synchronously inside the emitting
 // write, so when the write returns, the recorder holds every row it
 // produced.
-func recordAuditEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
-	rec := &eventRecorder{}
-	reg.EventBus().Subscribe(audit.EventRecorded, rec.record)
+func recordAuditEvents(reg *pkgcore.ComponentRegistry) *testkit.EventRecorder {
+	rec := testkit.NewEventRecorder()
+	reg.EventBus().Subscribe(audit.EventRecorded, rec.Record)
 	return rec
 }
 
 // recordedAuditRows extracts the RecordedEvent payloads of every recorded
 // EventRecorded, so a test can assert on the audit row shape.
-func recordedAuditRows(rec *eventRecorder) []audit.RecordedEvent {
+func recordedAuditRows(rec *testkit.EventRecorder) []audit.RecordedEvent {
 	var rows []audit.RecordedEvent
-	for _, evt := range rec.ofType(audit.EventRecorded) {
+	for _, evt := range rec.OfType(audit.EventRecorded) {
 		payload, ok := evt.Payload.(audit.RecordedEvent)
 		if !ok {
 			continue
@@ -57,7 +57,7 @@ func operatorCtx(operatorID string, tenant pkgcore.TenantID) context.Context {
 
 // assertSingleAuditRow asserts rec holds exactly one audit row, that it
 // describes an action on roleKey under tenant, and returns it.
-func assertSingleAuditRow(t *testing.T, rec *eventRecorder, action, tenant, roleKey string) audit.RecordedEvent {
+func assertSingleAuditRow(t *testing.T, rec *testkit.EventRecorder, action, tenant, roleKey string) audit.RecordedEvent {
 	t.Helper()
 	rows := recordedAuditRows(rec)
 	if len(rows) != 1 {

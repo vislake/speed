@@ -10,13 +10,14 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // --- Service.RevokeSigningKey ------------------------------------------------
 
 func TestService_RevokeSigningKey_TransitionsToRevoked(t *testing.T) {
 	svc, rec := newTestServiceWithClock(t)
-	svc.bus.Subscribe(EventSigningKeyRevoked, rec.record)
+	svc.bus.Subscribe(EventSigningKeyRevoked, rec.Record)
 	ctx := context.Background()
 
 	if err := svc.EnsurePurpose(ctx, "authn.access_token", AlgorithmEd25519, 15*time.Minute); err != nil {
@@ -53,19 +54,19 @@ func TestService_RevokeSigningKey_TransitionsToRevoked(t *testing.T) {
 	// which the preceding EnsurePurpose call already fired once -- count only
 	// the revoked-type events this call itself is responsible for.
 	revokedCount := 0
-	for _, evt := range rec.events {
+	for _, evt := range rec.Events() {
 		if evt.Type == EventSigningKeyRevoked {
 			revokedCount++
 		}
 	}
 	if revokedCount != 1 {
-		t.Errorf("published events = %v, want exactly one EventSigningKeyRevoked", rec.typesOf())
+		t.Errorf("published events = %v, want exactly one EventSigningKeyRevoked", rec.Types())
 	}
 }
 
 func TestService_RevokeSigningKey_IsIdempotent(t *testing.T) {
 	svc, rec := newTestServiceWithClock(t)
-	svc.bus.Subscribe(EventSigningKeyRevoked, rec.record)
+	svc.bus.Subscribe(EventSigningKeyRevoked, rec.Record)
 	ctx := context.Background()
 
 	if err := svc.EnsurePurpose(ctx, "authn.access_token", AlgorithmEd25519, 15*time.Minute); err != nil {
@@ -87,7 +88,7 @@ func TestService_RevokeSigningKey_IsIdempotent(t *testing.T) {
 		t.Errorf("RevokeSigningKey(already revoked) changed = true, want false")
 	}
 	revokedCount := 0
-	for _, evt := range rec.events {
+	for _, evt := range rec.Events() {
 		if evt.Type == EventSigningKeyRevoked {
 			revokedCount++
 		}
@@ -191,8 +192,8 @@ func TestCAService_RevokeCertificate_TransitionsToRevoked(t *testing.T) {
 		t.Error("RevokedAt is nil, want set")
 	}
 
-	if len(rec.events) != 1 || rec.events[0].Type != EventCertificateRevoked {
-		t.Errorf("published events = %v, want exactly one EventCertificateRevoked", rec.typesOf())
+	if len(rec.Events()) != 1 || rec.Events()[0].Type != EventCertificateRevoked {
+		t.Errorf("published events = %v, want exactly one EventCertificateRevoked", rec.Types())
 	}
 }
 
@@ -226,8 +227,8 @@ func TestCAService_RevokeCertificate_IsIdempotent(t *testing.T) {
 	if len(revocations) != 1 {
 		t.Errorf("revocation ledger has %d rows after two revoke calls, want exactly 1", len(revocations))
 	}
-	if len(rec.events) != 1 {
-		t.Errorf("published %d EventCertificateRevoked across two sequential revoke calls, want exactly 1 (an idempotent re-revoke publishes nothing)", len(rec.events))
+	if len(rec.Events()) != 1 {
+		t.Errorf("published %d EventCertificateRevoked across two sequential revoke calls, want exactly 1 (an idempotent re-revoke publishes nothing)", len(rec.Events()))
 	}
 	if revocations[0].RevocationReason != "first" {
 		t.Errorf("ledger row RevocationReason = %q after an idempotent second call, want the first call's reason %q unchanged", revocations[0].RevocationReason, "first")
@@ -417,8 +418,8 @@ func TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner(t *
 			t.Fatalf("trial %d: revocation ledger has %d rows after %d concurrent revoke calls, want exactly 1", trial, len(revocations), goroutines)
 		}
 
-		if len(rec.events) != 1 {
-			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.events))
+		if len(rec.Events()) != 1 {
+			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.Events()))
 		}
 	}
 }
@@ -517,12 +518,12 @@ func TestCAService_RevokeCertificate_ConcurrentDifferentReasons_CertificateAndLe
 			t.Fatalf("trial %d: certificate row and ledger row disagree about the time: certificate = %v, ledger = %v", trial, *got.RevokedAt, rev.RevokedAt)
 		}
 
-		if len(rec.events) != 1 {
-			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.events))
+		if len(rec.Events()) != 1 {
+			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.Events()))
 		}
-		evt, ok := rec.events[0].Payload.(CertificateRevokedEvent)
+		evt, ok := rec.Events()[0].Payload.(CertificateRevokedEvent)
 		if !ok {
-			t.Fatalf("trial %d: event payload = %T, want CertificateRevokedEvent", trial, rec.events[0].Payload)
+			t.Fatalf("trial %d: event payload = %T, want CertificateRevokedEvent", trial, rec.Events()[0].Payload)
 		}
 		if evt.RevocationReason != got.RevocationReason {
 			t.Fatalf("trial %d: event payload and certificate row disagree about the reason: certificate = %q, event = %q", trial, got.RevocationReason, evt.RevocationReason)
@@ -583,8 +584,8 @@ func TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConv
 	}
 	// Row-then-event: a revoke that never recorded its ledger row must not
 	// have published the event that announces the row.
-	if len(rec.events) != 0 {
-		t.Fatalf("failed revoke published %d EventCertificateRevoked, want 0 (the event follows the ledger row, which never landed)", len(rec.events))
+	if len(rec.Events()) != 0 {
+		t.Fatalf("failed revoke published %d EventCertificateRevoked, want 0 (the event follows the ledger row, which never landed)", len(rec.Events()))
 	}
 
 	if err = db.Exec(`DROP TRIGGER trg_block_revocation_ledger_insert`).Error; err != nil {
@@ -610,8 +611,8 @@ func TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConv
 		t.Errorf("ledger row RevocationReason = %q, want the first call's reason %q -- the reconstructed row must match the certificate row, not the retry's argument", revocations[0].RevocationReason, "first")
 	}
 
-	if len(rec.events) != 1 {
-		t.Fatalf("published %d EventCertificateRevoked after the failed revoke and its retry, want exactly 1 (fired once, by the retry that inserted the missing row)", len(rec.events))
+	if len(rec.Events()) != 1 {
+		t.Fatalf("published %d EventCertificateRevoked after the failed revoke and its retry, want exactly 1 (fired once, by the retry that inserted the missing row)", len(rec.Events()))
 	}
 }
 
@@ -621,12 +622,12 @@ func TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConv
 // but with a real in-memory EventBus wired directly and a recorder already
 // subscribed to EventCertificateRevoked -- mirroring
 // newTestServiceWithClock's identical shape for Service.
-func newTestCAServiceWithBus(t *testing.T) (*CAService, *eventRecorder) {
+func newTestCAServiceWithBus(t *testing.T) (*CAService, *testkit.EventRecorder) {
 	t.Helper()
 	ca := newTestCAService(t)
-	rec := newEventRecorder()
+	rec := testkit.NewEventRecorder()
 	ca.bus = pkgcore.NewMemoryEventBus()
-	ca.bus.Subscribe(EventCertificateRevoked, rec.record)
+	ca.bus.Subscribe(EventCertificateRevoked, rec.Record)
 	return ca, rec
 }
 

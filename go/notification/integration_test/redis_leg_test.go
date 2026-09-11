@@ -43,7 +43,6 @@ import (
 	"context"
 	"io"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -67,40 +66,6 @@ import (
 // than assume the delivery landed with the publish.
 const convergenceDeadline = 10 * time.Second
 
-// eventSpy records every Event a bus delivers to it, so a test can assert
-// on the wire shape the remote side actually receives.
-type eventSpy struct {
-	mu     sync.Mutex
-	events []pkgcore.Event
-}
-
-func (s *eventSpy) handler() pkgcore.EventHandler {
-	return func(_ context.Context, evt pkgcore.Event) error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.events = append(s.events, evt)
-		return nil
-	}
-}
-
-func (s *eventSpy) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.events)
-}
-
-// first returns the earliest received event match reports true for.
-func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, evt := range s.events {
-		if match(evt) {
-			return evt, true
-		}
-	}
-	return pkgcore.Event{}, false
-}
-
 // warmUp loops marker publishes on bus until spy has received one.
 //
 // A reader's consumer group is created at the stream's live end, so an
@@ -113,7 +78,7 @@ func (s *eventSpy) first(match func(pkgcore.Event) bool) (pkgcore.Event, bool) {
 // reads, and its payload is a well-formed InboxCreatedPayload so the
 // writer replica's own Hub -- subscribed to the same type -- handles it
 // exactly as it handles a real announcement.
-func warmUp(t *testing.T, bus pkgcore.EventBus, spy *eventSpy) {
+func warmUp(t *testing.T, bus pkgcore.EventBus, spy *testkit.EventRecorder) {
 	t.Helper()
 	deadline := time.Now().Add(convergenceDeadline)
 	for published := 1; ; published++ {
@@ -129,7 +94,7 @@ func warmUp(t *testing.T, bus pkgcore.EventBus, spy *eventSpy) {
 		}); err != nil {
 			t.Fatalf("warm-up publish: %v", err)
 		}
-		if spy.count() >= 1 {
+		if spy.Total() >= 1 {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -217,8 +182,8 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 	// The spy rides the peer's bus alongside the peer module's own
 	// subscription (its Hub, attached during Register), which is exactly
 	// the observer position a second replica's machinery occupies.
-	spy := &eventSpy{}
-	peerBus.Subscribe(notification.EventInboxCreated, spy.handler())
+	spy := testkit.NewEventRecorder()
+	peerBus.Subscribe(notification.EventInboxCreated, spy.Handler())
 
 	// The writer replica boots with the clinic fixture module, whose
 	// Register declares the appointment-reminder type and whose locale
@@ -267,7 +232,7 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 
 	var received pkgcore.Event
 	testkit.Eventually(t, "the inbox-created event to reach the peer bus", func() bool {
-		evt, ok := spy.first(func(evt pkgcore.Event) bool {
+		evt, ok := spy.FirstMatch(func(evt pkgcore.Event) bool {
 			return evt.Type == notification.EventInboxCreated && evt.TenantID == pkgcore.TenantID(tenant)
 		})
 		received = evt
