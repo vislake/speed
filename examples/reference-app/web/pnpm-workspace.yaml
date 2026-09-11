@@ -23,16 +23,12 @@
 # lockfile gate; the key below disables the redundant per-run install gate
 # instead of moving the scripts' working directory out of the package.
 #
-# (A short-lived intermediate fix moved this same setting into a plain
-# `.npmrc` instead, on the theory that a workspace manifest cannot carry the
-# key at all. That theory was wrong, and the intermediate fix did not work:
-# a project `.npmrc` in a leaf directory that is not itself a pnpm workspace
-# root is not merged into pnpm's config resolution, so verifyDepsBeforeRun
-# kept resolving to "install" and the exact ERR_PNPM_WORKSPACE_PKG_NOT_FOUND
-# failure this file exists to prevent still reproduced. Restoring the key
-# here, spelled correctly this time, is the fix that is actually verified to
-# work, including from a genuinely clean environment with no masking
-# global/user pnpm config.)
+# The key has to be spelled `verifyDepsBeforeRun` and to live in this
+# workspace manifest rather than a leaf `.npmrc`: a project `.npmrc` in a
+# directory that is not itself a pnpm workspace root is not merged into
+# pnpm's config resolution, so verifyDepsBeforeRun resolves to "install"
+# there and the exact ERR_PNPM_WORKSPACE_PKG_NOT_FOUND failure this file
+# exists to prevent reproduces.
 #
 # Only this one key is declared here on purpose: the file exists solely to
 # carry the setting for standalone runs, and web/ stays the single real
