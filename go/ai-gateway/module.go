@@ -195,4 +195,3 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	reg.RoutesSeat().Mount(apiPath, m.handler)
 	return nil
 }
-
