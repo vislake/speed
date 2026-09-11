@@ -311,16 +311,18 @@ core-journey block A):
     Failed to load resource: WebKit encountered an internal error
 
 What happens after the crash differs between the two, and it is worth
-knowing both before reading either red: in `dacefb65`'s ipad run the
-loss then reloads the page (vite's "[vite] server connection lost.
-Polling for restart..." followed by a document load), the reload
-discards the in-memory session, and the wait reports the crash through
-`expectWhileSignedIn`. In `1dc8204e`'s webkit run the page reconnects
-about a second later, no reload lands, and the journey instead dies on
-the state the crash killed: the case-create submit never re-enables and
-a bare click burns the whole test budget. Before the guards above
-existed, this arrived as exactly that: a timeout naming neither the
-crash nor the upload.
+knowing both before reading either red: in `dacefb65`'s ipad run no
+reload lands: the page's requests stop being answered (the
+failed-resource line names the case-list request), the crashed document
+stays up, and the wait reports the crash through `expectWhileSignedIn`.
+In `1dc8204e`'s webkit run the loss reloads the page -- vite's "[vite]
+server connection lost. Polling for restart..." is followed about 30 ms
+later by a document load, the first ping having succeeded -- the reload
+discards the in-memory session, and the journey dies at the click: the
+case-create submit never re-enables (the crash killed the upload it was
+waiting on) and the reload then detaches it, so the bare click burns
+the whole test budget. Before the guards above existed, this arrived as
+exactly that: a timeout naming neither the crash nor the upload.
 
 What is on record about the crash, and what is not:
 
