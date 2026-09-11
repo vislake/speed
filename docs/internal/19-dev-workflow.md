@@ -134,6 +134,31 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 - **oasdiff 破坏性变更闸门**：不存在。破坏性变更检测需要发布基线才有比较对象——v0.0.1 作废，但其发布提交 `fbaaaf98` 之树仍提供完整基线（main 的祖先；Go module proxy 只解析 21 个模块中的 17 个）；闸门的缺席是如实披露的机制决策，而非以假闸门占位。
 - **浏览器自动化**：驱动服务器所服务页面的 html-runner/e2e 没有实现。在那之前，该宿主在测试 harness 下编译、类型检查与渲染（dev-server 页面本身可运行），这是整条 browser story 的边界。
 
+## 文件拆分与移动的引用清扫
+
+拆分或移动文件（拆包、改名、换目录）会同时打断仓库里一批不以 import 关系表达的引用：闸门里硬编码的路径、工作流的触发集合与步骤引用、allowlist 与禁调表、清单文件、Dockerfile 的 `COPY` 列表——这些引用不会自动跟随，只会在下一次 CI 运行时逐层暴露。因此每一轮拆分/移动都必须做一次全仓引用清扫（旧文件名一轮、旧符号名一轮），并把逐条处置作为该轮的验收项。
+
+**旧文件名**——对每个被移动、改名或拆走内容的路径逐一核对下列面（先做一次仓库根全仓 `grep -rn` 兜底，再逐面确认）：
+
+- **`tools/**`**：按路径引用文件的 checker 与 generator——硬编码的输入路径（如 `check_env_example_consistency.py` 的声明点常量、`check_host_composition.py` 的命名 allowlist 条目）与随附清单（`api_fragments.json`、`migration_parity_exceptions.json`、`coverage-baselines.json`、`dependency-licenses.json` 的 `used_by`）。
+- **`.github/workflows/**`**：两处都要查——触发器的 `paths:` 集合（目录与文件逐行枚举），与步骤体的脚本引用（`run: python3 tools/...` 及其参数、头部注释里的成员枚举行）。
+- **`tools/semgrep_rules/**`**：每条规则的 `paths.exclude` allowlist——旧路径留在名单里成为死条目，新路径漏配则在规则应豁免处直接报红。
+- **根 `.golangci.yml`**：depguard 等规则的 `files:` glob 与允许/禁止的导入路径。
+- **`examples/reference-app/Dockerfile` 与根 `.dockerignore`**：`COPY` 列表必须与 go.work 的 `use` 集合同构（workspace 成员目录缺一即构建失败）；`.dockerignore` 的排除规则核对是否仍对准真实路径。
+- **`tools/README.md`**：每个脚本的专节与「Running in CI and locally」清单。
+- **文档锚点**：`docs/internal/**`、`docs/site/**`、各 `AGENTS.md` 与 README、`.claude/skills/**` 中引用旧路径的行。
+
+**旧符号名**——对被改名或抽取的标识符，在禁/允名单位置 grep：
+
+- `tools/semgrep_rules/*.yml` 的匹配模式与 `paths.exclude`，及其 `testdata/` 的 `positive.go` / `negative.go` 夹具——夹具与真实代码一起老化会让规则静默失效：`semgrep_fixture_check.py` 只证明规则会触发在自家夹具上，不证明夹具仍像真实代码。
+- `tools/check_host_composition.py` 的禁调符号表与「文件 + 符号」命名 allowlist。
+- `.golangci.yml` 的导入路径 deny/allow。
+- `tools/semgrep_fixture_check.py` 活性核对涉及的环境变量名。
+
+**生成物重新生成，不手改**：凡嵌入路径或「文件:行号」的生成物，改完跑生成器并过 `--check` 复核——错误码索引页（`python3 tools/gen_error_code_index.py`，其行含构造点 `文件:行号`，配套 `check_error_code_index_coverage.py`）。
+
+**验收**：逐条列出两轮 grep 的每个命中及处置（已更新 / 核实不受影响），并反向核对新路径、新符号已在应出现的位置补齐——拆分出的新文件最常漏在 allowlist、`COPY` 列表与触发集合之外；只写「已清扫」不列条目不算通过。
+
 ## CODEOWNERS
 
 地基模块（`pkgcore`、`dbkit`、`tenancy`）与发布流水线设专属 owner，改动需其批准。这几处的错误会波及所有下游模块与已交付项目，值得多一道关卡。
