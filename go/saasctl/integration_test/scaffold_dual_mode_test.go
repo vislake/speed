@@ -18,15 +18,15 @@
 // (once per deployment mode) against all five legal selections would run
 // five real `go mod tidy` network round-trips and five container-backed
 // boots in one CI job -- a multiplying cost for a property (the general
-// infrastructure-seam wiring in cmd/server/config.go and the per-selection
-// kernelOptions block in each server.go) that is IDENTICAL prose across
-// every selection, copied deliberately so the bootstrap contract never
-// changes with the selection (config.go's own OrgIndexKey field doc comment
-// states this precedent already). This file proves it once, against
-// authn+org+rbac -- the richest selection, the one whose server.go also
-// exercises authn's "SMS sender" seam's three-way conditional-injection
-// switch (config.go's SMSGatewayURL field doc comment) that a selection with
-// no authn module cannot touch at all. The other four selections'
+// infrastructure-seam selection in cmd/server/config.go and the
+// per-selection composition() block in each server.go) that is IDENTICAL
+// prose across every selection, copied deliberately so the bootstrap
+// contract never changes with the selection (config.go's own OrgIndexKey
+// field doc comment states this precedent already). This file proves it
+// once, against authn+org+rbac -- the richest selection, the one whose
+// server.go also exercises authn's "SMS sender" seam's conditional
+// selection (config.go's SMSGatewayURL field doc comment) that a selection
+// with no authn module cannot touch at all. The other four selections'
 // materialization is pinned byte-for-byte on every PR by this SAME
 // module's offline unit suite (internal/new's golden byte-identity tests
 // -- deliberately a pin of the materializer against the committed assets
@@ -35,7 +35,7 @@
 //
 // # What this does NOT prove
 //
-// This proves ONE process satisfies Kernel.Bootstrap's capability
+// This proves ONE process satisfies the component assembly's capability
 // validation under the distributed deployment mode and answers real HTTP
 // requests over real Redis/RustFS/SMTP -- the identical "one binary, real
 // infrastructure, distributed topology" property
