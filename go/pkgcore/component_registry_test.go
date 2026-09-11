@@ -838,3 +838,90 @@ func TestAssetsCollectsOnlyCarriersInPlanOrder(t *testing.T) {
 		t.Errorf("Assets()[0] = %+v, want all three assets carried", assets[0])
 	}
 }
+
+func TestConstructProductSatisfiesProvides(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a product matching no declaration fails the construction", func(t *testing.T) {
+		log := &stageLog{}
+		good1 := recordingComponent(log, "provgood1", "", &compTokenA{}, nil)
+		good2 := recordingComponent(log, "provgood2", "", &compTokenB{}, nil)
+		mismatched := recordingComponent(log, "provbad", "", &compTokenB{}, func(c *Component) {
+			c.Provides = []any{(*compTokenA)(nil)}
+		})
+
+		reg := newTestRegistry(t, good1, good2, mismatched)
+		reg.Put(testComposition(
+			configEntry{key: "provgood1", value: nil},
+			configEntry{key: "provgood2", value: nil},
+			configEntry{key: "provbad", value: nil},
+		))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{
+			"(stage construct)",
+			`component "provbad"`,
+			"the product *pkgcore.compTokenB matches none of the component's Provides declarations (pkgcore.compTokenA)",
+			"rolled back: provgood2, provgood1",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+
+		// The two components constructed before the failure are closed
+		// exactly once, in reverse construction order; the failing
+		// component never became a constructed member, so its Close does
+		// not run.
+		var closes []string
+		for _, e := range log.all() {
+			if strings.HasSuffix(e, ".close") {
+				closes = append(closes, e)
+			}
+		}
+		if want := []string{"provgood2.close", "provgood1.close"}; !reflect.DeepEqual(closes, want) {
+			t.Errorf("close order = %v, want %v", closes, want)
+		}
+		if got := log.count("provbad.close"); got != 0 {
+			t.Errorf("the failing component closed %d times, want 0: it was never constructed", got)
+		}
+	})
+
+	t.Run("matching products construct", func(t *testing.T) {
+		direct := recordingComponent(&stageLog{}, "provdirect", "", &compTokenA{}, func(c *Component) {
+			c.Provides = []any{(*compTokenA)(nil)}
+		})
+		viaInterface := recordingComponent(&stageLog{}, "proviface", "", compSpreadImpl{}, func(c *Component) {
+			c.Provides = []any{(*compSpreader)(nil)}
+		})
+
+		reg := newTestRegistry(t, direct, viaInterface)
+		reg.Put(testComposition(
+			configEntry{key: "provdirect", value: nil},
+			configEntry{key: "proviface", value: nil},
+		))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+	})
+
+	t.Run("no Provides declarations accept any product", func(t *testing.T) {
+		reg := newTestRegistry(t, plainComponent("provnone", &compTokenB{}))
+		reg.Put(testComposition(configEntry{key: "provnone", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+	})
+}
