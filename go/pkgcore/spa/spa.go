@@ -113,10 +113,13 @@ type Option func(*Handler)
 
 // WithServerPath declares one exact request path the wrapped handler owns:
 // requests for it always pass through to the wrapped handler, never served
-// from the frontend directory. Declare every exact path the composed server
-// mounts outside a declared prefix (a host's liveness and metrics endpoints,
-// typically) -- a path the frontend intercepts by mistake would answer from
-// disk, or 404, instead of reaching its handler.
+// from the frontend directory. The declaration covers the path's
+// trailing-slash spelling too ("/metrics/" for "/metrics"): the two name the
+// same endpoint, so both spellings reach the handler. Declare every exact
+// path the composed server mounts outside a declared prefix (a host's
+// liveness and metrics endpoints, typically) -- a path the frontend
+// intercepts by mistake would answer from disk, or 404, instead of reaching
+// its handler.
 func WithServerPath(p string) Option {
 	return func(h *Handler) { h.serverPaths = append(h.serverPaths, p) }
 }
@@ -246,11 +249,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // serverOwned reports whether p is a path the wrapped handler owns and the
-// frontend must never intercept: an exact match on a declared server path, or
-// a prefix match at a "/" boundary on a declared server prefix.
+// frontend must never intercept: an exact match on a declared server path
+// ignoring trailing slashes -- "/metrics/" and "/metrics" name the same
+// endpoint, exactly as cleanRel serves both from the same cleaned name, so
+// answering only the slashless spelling would hand the other to the
+// frontend -- or a prefix match at a "/" boundary on a declared server
+// prefix.
 func (h *Handler) serverOwned(p string) bool {
 	for _, exact := range h.serverPaths {
-		if p == exact {
+		if strings.TrimRight(p, "/") == strings.TrimRight(exact, "/") {
 			return true
 		}
 	}

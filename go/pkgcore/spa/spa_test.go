@@ -215,6 +215,40 @@ func TestNew_ServerPath_ExactMatchOnly(t *testing.T) {
 	}
 }
 
+// TestNew_ServerPath_TrailingSlashSpellingPassesThrough pins the exact path
+// declaration's trailing-slash handling: "/healthz/" and "/healthz" name
+// the same endpoint -- cleanRel serves both from the same cleaned name --
+// so both spellings must reach the wrapped handler, never the frontend's
+// index fallback. The declaration's boundary is still exact (a deeper
+// segment is not covered), and the slash normalization runs in both
+// directions: a declaration written with the trailing slash ("/metrics/")
+// covers the slashless request symmetrically.
+func TestNew_ServerPath_TrailingSlashSpellingPassesThrough(t *testing.T) {
+	next := &nextStub{}
+	h := New(writeFrontendFixture(t, t.TempDir(), "serverpath-trailing"), next, WithServerPath("/healthz"))
+
+	rec := do(t, h, http.MethodGet, "/healthz/")
+	if rec.Code != http.StatusTeapot || rec.Body.String() != "wrapped handler" {
+		t.Fatalf("GET /healthz/ reached the frontend (status %d, body %q), want the wrapped handler", rec.Code, rec.Body)
+	}
+
+	// Not a subtree declaration: a deeper segment under the declared path
+	// still belongs to the frontend (the fixture holds no such file, so the
+	// index fallback answers).
+	rec = do(t, h, http.MethodGet, "/healthz/sub")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("GET /healthz/sub status = %d, body = %q, want the frontend's index fallback", rec.Code, rec.Body)
+	}
+
+	// The symmetric spelling: a declaration written with the trailing
+	// slash covers the slashless request too.
+	slashDeclared := New(writeFrontendFixture(t, t.TempDir(), "serverpath-metrics"), &nextStub{}, WithServerPath("/metrics/"))
+	rec = do(t, slashDeclared, http.MethodGet, "/metrics")
+	if rec.Code != http.StatusTeapot || rec.Body.String() != "wrapped handler" {
+		t.Fatalf("GET /metrics under a trailing-slash declaration reached the frontend (status %d, body %q), want the wrapped handler", rec.Code, rec.Body)
+	}
+}
+
 // TestNew_ServerPrefix_WholeSegmentBoundary pins WithServerPrefix's boundary:
 // the prefix itself and everything nested below it pass through, while a path
 // that merely shares the leading characters is still the frontend's.
