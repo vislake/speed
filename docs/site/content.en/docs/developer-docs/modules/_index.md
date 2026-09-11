@@ -46,6 +46,10 @@ The module space is grouped the way the user guide groups it:
   never what they may do.
 - **capabilities** — metering, billing, sharing and the outward-facing
   surfaces built on them.
+- **app** — the assembly layer above every other group: `go/app`, the
+  one module with no business domain, holding the loader, the
+  seven-stage component drive, the fixed middleware chain and the
+  no-import seam bridges, so no host re-writes the shared boot.
 - **tools** — the developer- and operator-facing tooling.
 
 ## The Source convention

@@ -1,6 +1,6 @@
 ---
 title: identity 组模块
-weight: 0
+weight: 3
 description: "你的用户是谁、能做什么——authn、rbac 与 org:认证、授权,以及让授权有边界的组织树。"
 bookCollapseSection: true
 ---

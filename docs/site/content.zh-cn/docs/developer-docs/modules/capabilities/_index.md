@@ -1,6 +1,6 @@
 ---
 title: 能力模块组设计
-weight: 0
+weight: 4
 description: "依赖图顶层五个能力模块——billing、ai-gateway、sharing、compliance、admin——的设计页:每个模块为什么长成这样,以及贯穿全组的共同设计主线。"
 bookCollapseSection: true
 ---

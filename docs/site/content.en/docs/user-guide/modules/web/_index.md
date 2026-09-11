@@ -1,6 +1,6 @@
 ---
 title: Web packages
-weight: 0
+weight: 7
 description: "The frontend face of a speed-based product — the twelve @speed npm packages in layers: tokens, i18n, ui-kit and layout-kit at the foundation, api-client and api-sdk for HTTP, the auth-core/auth-ui/account-ui/tenancy-ui session family, product-shell for assembly and billing-ui for billing reads."
 bookCollapseSection: true
 ---

@@ -1,6 +1,6 @@
 ---
 title: web 组包
-weight: 0
+weight: 7
 description: "speed 产品的前端面——十二个 @speed npm 包按层排布:tokens、i18n、ui-kit、layout-kit 打底,api-client 与 api-sdk 负责 HTTP,auth-core/auth-ui/account-ui/tenancy-ui 组成会话族,product-shell 负责组装,billing-ui 负责账单读取。"
 bookCollapseSection: true
 ---

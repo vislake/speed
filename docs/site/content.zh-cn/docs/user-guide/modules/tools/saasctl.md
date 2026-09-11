@@ -136,7 +136,7 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 解析与七阶段组件驱动;以及 authn 的挂载路径、服务超时、预认证允许
 列表与固定中间件链——存活探针端点归 `go/observability`、路由挂载
 规则归 `pkgcore`)只有一份,位于平台模块
-`github.com/vislake/speed/go/app`,每个生成项目与参考应用一样直接
+[`github.com/vislake/speed/go/app`](/zh-cn/docs/user-guide/modules/app/),每个生成项目与参考应用一样直接
 import——各宿主自己的 `server.go` 把组件注册到
 `pkgcore.ComponentRegistry`,经引擎的 `Assemble` 驱动,并由宿主自己
 的监听器对外服务;仓库有一道门禁止任一宿主自行重新声明这套内核或

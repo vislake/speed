@@ -1,6 +1,6 @@
 ---
 title: Tools
-weight: 0
+weight: 6
 description: "The group at the end of the module design section: saasctl, the consumer-facing CLI — the one deliverable that never composes into a running kernel, and why it ships anyway."
 bookCollapseSection: true
 ---

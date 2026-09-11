@@ -1,6 +1,6 @@
 ---
 title: Tools
-weight: 0
+weight: 6
 description: "The developer-facing group: saasctl, the consumer CLI that materialises a starter project, rewrites its module requires onto one release version, applies the modules' SQL migrations and previews its bootstrap configuration."
 bookCollapseSection: true
 ---

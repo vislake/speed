@@ -160,7 +160,7 @@ composition plan and the seven-stage component drive — plus authn's
 mount path, the serve timeouts, the pre-auth allowlist set and the fixed
 middleware chain; the liveness endpoints are `go/observability`'s and
 the route-mount rule `pkgcore`'s) lives once, in the platform module
-`github.com/vislake/speed/go/app`, imported by every generated project
+[`github.com/vislake/speed/go/app`](/docs/user-guide/modules/app/), imported by every generated project
 and the reference app alike — each host's own `server.go` registers its
 components on a `pkgcore.ComponentRegistry`, drives them through the
 engine's `Assemble` and serves through its own listener. A repository

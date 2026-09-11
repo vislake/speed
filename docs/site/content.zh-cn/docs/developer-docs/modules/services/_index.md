@@ -1,6 +1,6 @@
 ---
 title: Platform services
-weight: 0
+weight: 2
 description: "services 组设计导览:storage、notification、pki、integration、metering 五个能力模块——产品为媒体、消息、密钥材料、对外 API 与用量计量而组装的面,以及与 core 底座的分界。"
 bookCollapseSection: true
 ---

@@ -31,6 +31,9 @@ speed 不是一个你直接运行的应用,而是你可以拉进自己产品、�
 - **capabilities**——依赖图顶层的产品能力模块:`metering`、
   `billing`、`sharing`、`integration`、`ai-gateway`、`compliance`、
   `admin`。
+- **app**——依赖图顶层的装配层:[app](./app/),唯一没有业务域的
+  模块——装载器、七阶段组件驱动与固定中间件链,每个宿主都经它
+  组装。
 - **tools**——面向开发者的工具:`saasctl`。
 - **web**——`@speed` npm 包(tokens、i18n、ui-kit、api-client、
   api-sdk、layout-kit、auth-core、auth-ui、tenancy-ui、
