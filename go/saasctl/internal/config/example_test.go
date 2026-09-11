@@ -11,7 +11,7 @@ import (
 // arguments and no environment: the default go.mod path resolves to the
 // temp directory the example moves into, the app name derives from the
 // go.mod's module path, and every variable falls back to the generated
-// app's own default. The five key rows render as [redacted] with their
+// app's own default. The six key rows render as [redacted] with their
 // development-default provenance.
 func ExampleRun() {
 	dir, err := os.MkdirTemp("", "config-example")

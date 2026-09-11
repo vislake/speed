@@ -108,6 +108,8 @@ The bootstrap variables:
   APP_S3_SECRET_KEY       S3 secret key
   APP_S3_REGION           S3 region (optional)
   APP_S3_USE_SSL          whether the S3 endpoint speaks TLS (optional bool)
+  APP_S3_BUCKET_LOOKUP    S3 addressing style: auto, path or virtual_host
+                          (optional)
   APP_SMTP_HOST           SMTP host (with port below, required together)
   APP_SMTP_PORT           SMTP port
   APP_SMTP_USERNAME       SMTP AUTH username (optional)
@@ -223,20 +225,35 @@ func print(modPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	effectiveDBPath := cfg.EffectiveDBPath(modPath)
+	var b strings.Builder
+	for _, r := range printRows(cfg, cfg.EffectiveDBPath(modPath)) {
+		fmt.Fprintf(&b, "%-16s %-12s %s\n", r.label, valueColumn(r.env, r.value), r.source)
+	}
+	return b.String(), nil
+}
 
-	// One row per bootstrap variable, in the order the generated app's own
-	// config.go resolves them (deployment mode, port, database path, the
-	// six key materials, then the infrastructure addresses and the OTLP
-	// endpoint). Every row names
-	// its environment variable, so the renderer below can decide its value
-	// column against redactedEnv -- the per-line choices are this table.
-	rows := []struct {
-		label  string
-		env    string
-		value  string
-		source string
-	}{
+// printRow is one rendered row of config print's output: the label, the
+// bootstrap variable the row reports (the key valueColumn looks up in
+// redactedEnv), and the rendered value and source columns.
+type printRow struct {
+	label  string
+	env    string
+	value  string
+	source string
+}
+
+// printRows builds print's one-row-per-bootstrap-variable table, in the
+// order the generated app's own config.go resolves the variables
+// (deployment mode, port, database path, the six key materials, then the
+// infrastructure addresses and the OTLP endpoint). Every row names its
+// environment variable, so the render loop can decide its value column
+// against redactedEnv -- the per-line choices are this table; the usage
+// text's variable table spells the same rows out, and
+// TestPrintUsageVariableTableListsTheRenderedRows holds the two together.
+// effectiveDBPath is the sqlite path row's value column input, detailed
+// in print's own doc comment.
+func printRows(cfg appconfig.Config, effectiveDBPath string) []printRow {
+	return []printRow{
 		{
 			"deployment mode", appconfig.DeploymentModeEnv, string(cfg.DeploymentMode),
 			provenance(appconfig.DeploymentModeEnv, cfg.DeploymentModeFromEnv,
@@ -344,12 +361,6 @@ func print(modPath string) (string, error) {
 			provenance(appconfig.SMSGatewayURLEnv, cfg.SMSGatewayURLFromEnv, unsetSMS),
 		},
 	}
-
-	var b strings.Builder
-	for _, r := range rows {
-		fmt.Fprintf(&b, "%-16s %-12s %s\n", r.label, valueColumn(r.env, r.value), r.source)
-	}
-	return b.String(), nil
 }
 
 // valueColumn renders one row's value column: redactedMarker when
@@ -400,10 +411,9 @@ func smtpPortValue(cfg appconfig.Config) string {
 
 // provenance describes where one resolved value came from: the variable
 // that carried it (fromEnv), or the exact text describing what it fell
-// back to when unset -- a scalar default for the five original bootstrap
-// variables, or which seam stays on its Preset default for an
-// infrastructure variable. The unset text is never empty and never
-// renders a secret's bytes.
+// back to when unset -- a built-in default, or which seam stays on its
+// Preset default for an infrastructure variable. The unset text is never
+// empty and never renders a secret's bytes.
 func provenance(envName string, fromEnv bool, unsetText string) string {
 	if fromEnv {
 		return fmt.Sprintf("from %s", envName)

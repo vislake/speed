@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,10 +15,10 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the full twenty-two variables appconfig resolves,
+// bootstrap reads -- the full twenty-three variables appconfig resolves,
 // exported for the tests and examples that must clear or restore them all.
-// The list mirrors the one internal/db's migrate tests carry, each
-// package's copy sitting next to the code that uses it.
+// Each package that clears the surface carries its own copy next to the
+// code that uses it.
 var bootstrapEnvKeys = []string{
 	appconfig.DeploymentModeEnv,
 	appconfig.PortEnv,
@@ -27,6 +28,7 @@ var bootstrapEnvKeys = []string{
 	appconfig.AuthnBlindIndexKeyEnv,
 	appconfig.AuthnPIICipherKeyEnv,
 	appconfig.PKILocalKeyCipherKeyEnv,
+	appconfig.NotificationIndexKeyEnv,
 	appconfig.RedisAddrEnv,
 	appconfig.OTLPEndpointEnv,
 	appconfig.S3EndpointEnv,
@@ -79,13 +81,13 @@ func fixture(t *testing.T, name string) string {
 // TestPrintResolvesAndRendersTheDocumentedDefaults: with an empty
 // environment, print renders what the generated app boots on with no
 // environment at all -- the standalone deployment mode, port 8080, the
-// fixed app.db path, the five development key byte sequences (the two
-// original key materials plus the three authn/pki ones), and every
-// infrastructure seam left on its Preset default -- one line per value,
-// each sourced line naming the default (or the seam) it fell back to. The
-// five key rows and the S3 secret key / SMTP password / SMS gateway URL
-// rows show only the [redacted] marker in the value column. The
-// sqlite path row's value column shows the EFFECTIVE file -- the
+// fixed app.db path, the six development key byte sequences (the two
+// original key materials plus the four authn/pki/notification ones), and
+// every infrastructure seam left on its Preset default -- one line per
+// value, each sourced line naming the default (or the seam) it fell back
+// to. The six key rows and the S3 secret key / SMTP password / SMS
+// gateway URL rows show only the [redacted] marker in the value column.
+// The sqlite path row's value column shows the EFFECTIVE file -- the
 // relative app.db default anchored to the fixture go.mod's directory
 // (testdata/, the directory the app is documented to run from) -- while
 // its source column keeps the raw
@@ -379,6 +381,52 @@ func TestPrintRedactedEnvParagraphEnumeratesTheList(t *testing.T) {
 	}
 	if len(named) != len(redactedEnv) {
 		t.Errorf("the usage paragraph names %d variables, redactedEnv (print.go) holds %d", len(named), len(redactedEnv))
+	}
+}
+
+// envNameInVariableTable matches one variable name at the start of a line
+// in the usage text's variable table: two spaces of indent, the name, and
+// the whitespace before its description.
+var envNameInVariableTable = regexp.MustCompile(`(?m)^  ([A-Z][A-Z0-9_]*) `)
+
+// TestPrintUsageVariableTableListsTheRenderedRows pins the print usage
+// text's bootstrap-variable table against the rows print actually
+// renders -- same names, same order, nothing on either side unaccounted
+// for. The table is the operator's read of the surface and printRows is
+// the command's behavior, so the two are one list in two spellings;
+// nothing else compares them, and a name added, dropped or reordered on
+// either side must fail here rather than leave the help text describing a
+// surface the command no longer prints.
+func TestPrintUsageVariableTableListsTheRenderedRows(t *testing.T) {
+	const (
+		tableOpening = "The bootstrap variables:"
+		tableClosing = "The six key variables"
+	)
+	start := strings.Index(printUsage, tableOpening)
+	if start < 0 {
+		t.Fatalf("printUsage no longer opens the variable table with %q", tableOpening)
+	}
+	rest := printUsage[start+len(tableOpening):]
+	end := strings.Index(rest, tableClosing)
+	if end < 0 {
+		t.Fatalf("printUsage's variable table never reaches %q", tableClosing)
+	}
+	var listed []string
+	for _, match := range envNameInVariableTable.FindAllStringSubmatch(rest[:end], -1) {
+		listed = append(listed, match[1])
+	}
+
+	cfg, err := appconfig.Load("cli-app", func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatalf("load the all-defaults bootstrap environment: %v", err)
+	}
+	var rendered []string
+	for _, row := range printRows(cfg, cfg.EffectiveDBPath(defaultModPath)) {
+		rendered = append(rendered, row.env)
+	}
+
+	if !slices.Equal(listed, rendered) {
+		t.Errorf("the usage table lists %v, print renders %v", listed, rendered)
 	}
 }
 

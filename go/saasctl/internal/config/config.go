@@ -2,13 +2,14 @@
 // bootstrap configuration of the consumer projects saasctl generates and
 // upgrades. This build wires the group's print subcommand, which renders
 // how a project's bootstrap configuration resolves -- the deployment mode,
-// the port, the SQLite database path, the five key variables and the full
-// infrastructure surface (the Redis address, the S3 group, the SMTP pair
-// and the SMS gateway URL) -- together with each value's provenance:
+// the port, the SQLite database path, the six key variables and the full
+// infrastructure surface (the Redis address, the OTLP endpoint, the S3
+// group, the SMTP pair and the SMS gateway URL) -- together with each
+// value's provenance:
 // whether it came from the environment, and if not, which default (or
 // which seam) it fell back to. Print refuses exactly when the generated
 // app's own bootstrap would refuse to boot, on the same incomplete S3
-// group or SMTP pair. The secret variables among them -- the five key
+// group or SMTP pair. The secret variables among them -- the six key
 // materials and the three infrastructure credentials -- render as
 // [redacted] whatever the environment holds: which variables are secrets
 // is the single redactedEnv declaration in print.go (its members named,
