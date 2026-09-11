@@ -11,6 +11,7 @@
 - `go/pkgcore/bootstrap_material.go` 的 `BootstrapMaterial`：已经是通用的、按键路径（或按 `BootstrapKeyPurpose` 推导的 purpose）寻址的解析结果容器，不关心值从哪来。本文改动的输出目标不变，改的只是"值从哪来"这一段。
 - 五个声明模块（`go/authn`、`go/config`、`go/pki`、`go/org`、`go/notification`）的 `component.go`/`module.go` 里的 `bootstrapKeyDecls` 已经是完整声明，本文不要求它们做任何改动。
 - reference-app 现状（已核实）：`examples/reference-app/internal/app/server.go` 的 `ServerConfig`（108-121 行）以 `speedapp.PlatformConfig`（tag `config:"-"`）内嵌；`internal/app/bootstrap.go` 的 `hostConfig`（311-321 行）以未打 skip tag 的同类型内嵌，527 行 `loader.Load(&hc.PlatformConfig)` 实际加载，475 行 `DevPlatformConfig()` 给出开发期默认值，820 行 `config.Verify(&hc.PlatformConfig, []string{key.Key})` 做绑定校验，553/667/693 行做字段搬运与 `ConfigSpec{Platform: ...}` 传参。reference-app 自身**没有**重复声明这六个字段——六枚密钥完全经由内嵌 `PlatformConfig` 引入，是本文要删除的引擎镜像的唯一消费形态。
+- saasctl 生成骨架现状（已核实，纳入范围）：`go/saasctl/internal/template/project/cmd/server/config.go` 第 192 行同样内嵌 `speedapp.PlatformConfig`（`config:"-"`），323-328 行以 `speedapp.PlatformConfig{...}`/`speedapp.PlatformConfigKeyMaterial{Cipher_Key: devConfigKey}` 字面量给开发期默认值，357 行 `loader.Load(&hc.PlatformConfig)`；五个 `selection/*/server.go` 变体（`none`、`authn`、`authn+org`、`authn+rbac`、`authn+org+rbac`）里至少 `authn` 变体（132/161/169/207 行）直接引用 `b.hostConfig.PlatformConfig.Authn.PII_Cipher_Key` 等字段构造 cipher/`authn.WithBlindIndexKey`；`go/saasctl/internal/appconfig/appconfig.go` 的 twin 对账面提到 `PlatformConfig` 声明的键路径（用于生成骨架的 env 名一致性核对，不是字段引用，需要在实施时确认它是否需要跟着改，还是只是描述性注释）。**结论：模板侧同样是本文范围**，§5 的删除清单同样适用于这五个 `server.go` 变体与 `cmd/server/config.go` 模板；金标 `go.mod.txt`/物化-tidy-构建验收链需要随之重新走一遍（参照 26 号文 §9.7 的验收方式）。configrefgen（`tools/configrefgen`）按 26 号文 D2b 已经改为读描述符而非字面 struct，本文改动预期对它免疫，但实施时仍需以树为准跑一次 `--check` 复核，不能只凭历史记录假设。
 
 ## 2 边界重申：不推翻 26 号文 §3.2
 
@@ -40,7 +41,7 @@
 - `go/app/loader.go` 的 `resolveBootstrapMaterial`/`lookupDeclaredKey` 改为直接调用 §3.1/§3.2 的新入口取值，不再做"在 Host/Platform 结构体上找字段"这一步。`LoadSpec.Platform` 字段随之失去存在理由（六枚平台密钥不再需要任何宿主/引擎结构体字段）。
 - `go/app/config.go` 删除：`PlatformConfig`、`PlatformAuthnKeyMaterial`、`PlatformConfigKeyMaterial`、`PlatformNotificationKeyMaterial`、`PlatformOrgKeyMaterial`、`PlatformPKIKeyMaterial`、`platformKeyPaths`、`platformCipherKeyPath`、`verifyBinding`；`ConfigSpec.Platform` 字段删除，`loadConfiguration` 相应简化（不再单独 `Load` Platform target，不再跑 `pkgconfig.Verify(spec.Platform, platformKeyPaths)`）。
 - 引擎构建平台 cipher（消费 `config.cipher_key`，即原 `platformCipherKeyPath` 消费点）的逻辑，改为从新解析出的 `BootstrapMaterial` 按键路径查询取值，而不是从 `PlatformConfig.Config.Cipher_Key` 字段取值。
-- **`DevPlatformConfig()` 的落点**：原本承载"六枚密钥的开发期默认值"这一文档性角色（26 号文 §3.2 说明 Default 是文档性字符串，不是 Go 值）。新机制下没有结构体字段可以预置默认值；若确有必要保留一个"未配置根密钥、未显式给值时的开发期便利默认"，应作为 §3.1 新入口的一个显式可选扩展点（例如声明列表的一个可选 `DevDefault []byte` 字段，或者干脆不提供——留给零根密钥时该字段解析为零值/未解析，由消费方（cipher 构建）自行决定是否接受空值），具体取舍留给实施轮，但不能悄悄消失而不记录决定。
+- **`DevPlatformConfig()` 的落点（已裁定，不留给实施轮）**：CLAUDE.md 的 `task dev`/`go run ./cmd/server` 零外部依赖启动纪律，以及多条 flowtests 对六密钥开发默认值的依赖，要求这条便利路径必须存续，不能因为结构体消失就悄悄丢掉。**裁定：Option A——开发期默认值不进 `BootstrapKey`/模块声明**，继续保持声明层零 Go 类型信息（与 26 号文 §3.2 的边界逐字自洽，不重开"声明层要不要放 Go 默认"这个已经裁定过的问题）。零配置开发启动改由**装配器（引擎或宿主）侧的非声明性 dev-default 表**承担：一个按声明键路径寻址的 `map[string][]byte`（或等价形状），作为 §3.1 新入口里"声明默认值"这一优先级层的实际提供者——它占据的正是今天 `PlatformConfig` 字段被 `DevPlatformConfig()` 预填之后，在五源链里充当"struct 默认值"（最低优先级，低于根密钥派生）这个位置，只是载体从"预填的结构体字段"换成"装配器传入的表"，优先级语义逐字不变。这个表由**想要零配置开发体验的装配方**提供（reference-app 自己的 dev 引导路径、saasctl 生成骨架各自的 `Dev*` 常量），不是模块，也不是 `go/pkgcore/config` 包本身内置——`go/pkgcore/config` 只提供"接受一个可选 dev-default 表"这个机制位，不预置任何值。`DevPlatformConfig()`/`Dev*` 常量本身作为 Go 值继续存在，只是从"预填一个结构体"改成"构造这张表"，函数改名与迁移细节留给实施轮，但形态（表、最低优先级、非声明字段）不再是开放问题。
 
 ### 3.4 env 变量拼写不变
 
@@ -70,8 +71,8 @@
 |---|---|
 | 新入口被误用到"宿主定制键"场景 | 必须在 godoc 与本文写清使用边界：只用于没有独立宿主定制意愿的声明键（即今天 `PlatformConfig` 覆盖的场景），不是 host 自有 bootstrap 结构体的替代品——29 个 reference-app 宿主键继续走 26 号文机制 |
 | 新入口与 `describe()`/`walk()` 反射路径共享多少内部实现 | 实现层面的选择；约束是语义必须与反射路径逐条一致，不允许出现第二套优先级/校验规则 |
-| `DevPlatformConfig()` 开发期默认值的落点 | 见 §3.3；不能悄悄丢弃，需要在实施 PR 里显式记录取舍 |
-| `PlatformConfig` 删除影响的下游 | reference-app 是仓内唯一已知消费者（§1 已核实）；若 saasctl 生成骨架或其他仓外消费者引用了该类型，需要在实施轮开工前用 grep 复核一遍 |
+| 零配置开发启动的存续 | 已裁定（§3.3 Option A：装配器侧非声明性 dev-default 表，最低优先级，逐字复刻今天"预填结构体字段"的语义）；实施验收项：`task dev`/`go run ./cmd/server` 零外部依赖起、既有依赖六密钥开发默认值的 flowtests 全绿 |
+| `PlatformConfig` 删除影响的下游 | reference-app 与 saasctl 生成骨架（五个 `selection/*/server.go` 变体 + `cmd/server/config.go`）是仓内已核实的消费者（§1）；configrefgen 预期免疫（26 号文 D2b 已改读描述符），仍需实施时以树为准跑 `--check` 复核，不能只凭历史记录假设 |
 
 ## 8 与 26/29 号文的关系
 
