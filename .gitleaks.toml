@@ -81,14 +81,14 @@ paths = [
 ]
 
 [[allowlists]]
-description = "saasctl config-loading test fixture keys: go/saasctl/internal/appconfig/appconfig_test.go's configKeyHex/orgIndexKeyHex and go/saasctl/internal/config/print_test.go's copies of the same values are deliberately patterned, non-random hex literals (a strictly ascending run \"000102...1e1f\" and a strictly descending run \"ffe0f1...ddee\") used only to prove that appconfig.Load parses APP_CONFIG_KEY/APP_ORG_INDEX_KEY from the environment and that saasctl config print never renders their bytes -- print_test.go's own TestPrintNeverRendersTheKeyBytes asserts the opposite property gitleaks is checking for, that these values are exactly what must never reach real output"
+description = "saasctl config-loading test fixture keys: go/saasctl/internal/appconfig/appconfig_test.go's configKeyHex/orgIndexKeyHex and go/saasctl/internal/config/print_test.go's copies of the same values are deliberately patterned, non-random hex literals (a strictly ascending run \"000102...1e1f\" and a strictly descending run \"ffe0f1...ddee\") used only to prove that appconfig.Load parses APP_CONFIG__CIPHER_KEY/APP_ORG__INVITATION_EMAIL_INDEX_KEY from the environment and that saasctl config print never renders their bytes -- print_test.go's own TestPrintNeverRendersTheKeyBytes asserts the opposite property gitleaks is checking for, that these values are exactly what must never reach real output"
 paths = [
   "go/saasctl/internal/appconfig/appconfig_test.go",
   "go/saasctl/internal/config/print_test.go",
 ]
 
 [[allowlists]]
-description = "examples/reference-app/.env.example: a template file whose entire purpose is showing the shape of a real environment variable without a real value -- every flagged line is the literal placeholder string REPLACE_WITH_64_HEX_CHARS (APP_CONFIG_KEY, APP_ORG_INDEX_KEY, APP_NOTIFICATION_INDEX_KEY), and the file's own header comment already tells a reader to generate a real key with `openssl rand -hex 32` rather than use what is checked in here"
+description = "examples/reference-app/.env.example: a template file whose entire purpose is showing the shape of a real environment variable without a real value -- every flagged line is the literal placeholder string REPLACE_WITH_64_HEX_CHARS on a key variable: APP_ROOT_KEY in the file as it stands (the six key-material variables below it are empty assignments, resolved from it by derivation when it is set), and the key variables' earlier flat spellings in the commits the full-history scan still visits (SPEED_CONFIG_KEY/SPEED_ORG_INDEX_KEY/SPEED_NOTIFICATION_INDEX_KEY before the APP_ prefix, then APP_CONFIG_KEY/APP_ORG_INDEX_KEY/APP_NOTIFICATION_INDEX_KEY) -- and the file's own header comment already tells a reader to generate a real key with `openssl rand -hex 32` rather than use what is checked in here"
 paths = [
   "examples/reference-app/.env.example",
 ]
