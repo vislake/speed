@@ -17,10 +17,11 @@ What it scaffolds is the canonical stub shape of a Go module under go/
 (three files, nothing more):
 
   go/<name>/go.mod     "module github.com/vislake/speed/go/<name>" plus a
-                       bare "go 1.23" directive. A module with real
-                       dependencies carries its own go directive and
-                       require/replace blocks instead -- those lines
-                       appear with the first dependency, not in the stub.
+                       go directive derived from the workspace's go.work.
+                       A module with real dependencies carries its own
+                       directive and require/replace blocks instead --
+                       those lines appear with the first dependency, not
+                       in the stub.
   go/<name>/doc.go     The one-line English package doc form every module
                        uses ("// Package sharing provides public share links
                        with expiry and access tracking."). The Go package
@@ -121,11 +122,37 @@ import sys
 # (go.mod files under go/ all read "module github.com/vislake/speed/go/X").
 MODULE_PATH_PREFIX = "github.com/vislake/speed/go"
 
-# The go directive of the scaffolded go.mod ("go 1.23"). A module with
-# real dependencies carries its own go directive plus require/replace
-# blocks instead; those lines are added with the first dependency, not
-# by the stub.
-GO_VERSION_LINE = "go 1.23"
+# The scaffolded go.mod's go directive derives from the repository's own
+# go.work: the workspace's language version, rendered in the module
+# convention (major.minor, patch zero -- the patch component of the
+# workspace directive is the toolchain floor pinned in .mise.toml, and
+# every shipped module's go.mod declares the two-component language
+# version). A module with real dependencies carries its own go directive
+# plus require/replace blocks instead; those lines are added with the
+# first dependency, not by the stub.
+GO_WORK_FILE = "go.work"
+GO_WORK_GO_DIRECTIVE = re.compile(r"^go\s+(\d+)\.(\d+)(?:\.\d+)?\s*$", re.MULTILINE)
+
+
+def read_go_language_version(repo_root: str) -> str | None:
+    """The go directive a scaffolded module declares, derived from the
+    repository's go.work at repo_root: "<major>.<minor>.0".
+
+    The workspace file is the membership authority for every module this
+    script scaffolds, so a checkout whose go.work is missing or carries
+    no parseable go directive is a broken source tree, not a default to
+    invent: the caller turns None into a hard error."""
+    try:
+        with open(
+            os.path.join(repo_root, GO_WORK_FILE), encoding="utf-8"
+        ) as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    match = GO_WORK_GO_DIRECTIVE.search(text)
+    if not match:
+        return None
+    return f"{match.group(1)}.{match.group(2)}.0"
 
 # Every Go module in the repository lives under go/ at the repo root.
 GO_DIR_NAME = "go"
@@ -133,6 +160,13 @@ GO_DIR_NAME = "go"
 # Marker file that identifies the repository root during --target-dir
 # detection (the root is a go.work workspace, not a module).
 REPO_MARKER_FILE = "go.work"
+
+# The repository this script ships in (tools/ is its directory), the
+# anchor for facts that describe the repository's own conventions rather
+# than the target directory -- the scaffolded go.mod's go directive is
+# the workspace's (read_go_language_version), and the conventions travel
+# with the script, not with a sandbox --target-dir.
+SCRIPT_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # docs/internal/ design docs are numbered "NN-name.md"; the AGENTS.md stub
 # line points at one.
@@ -213,12 +247,22 @@ def read_app_module_path(target_dir: str) -> str | None:
     return None
 
 
-def build_plan(module_name: str, description: str, design_doc: str) -> list[tuple[str, str]]:
-    """Return [(module-relative path, content)] for the Go stub's files."""
+def build_plan(
+    module_name: str,
+    description: str,
+    design_doc: str,
+    go_language_version: str,
+) -> list[tuple[str, str]]:
+    """Return [(module-relative path, content)] for the Go stub's files.
+    go_language_version is the go.work-derived language version (see
+    read_go_language_version)."""
     pkg = package_name_for(module_name)
     files: list[tuple[str, str]] = []
 
-    go_mod = f"module {MODULE_PATH_PREFIX}/{module_name}\n\n{GO_VERSION_LINE}\n"
+    go_mod = (
+        f"module {MODULE_PATH_PREFIX}/{module_name}\n\n"
+        f"go {go_language_version}\n"
+    )
     files.append(("go.mod", go_mod))
 
     doc_go = (
@@ -425,7 +469,7 @@ APP_DOC_GO = """// Package __NAME__ __DESCRIPTION__.
 // (locales/, zh-CN and en-US), its API fragment (api/openapi.yaml) and
 // its HTTP surface (handler.go, implementing the fragment's generated
 // ServerInterface). It registers its route, permissions, event and
-// audit action through pkgcore.Module's Register (module.go).
+// audit action through the module contract's Register method (module.go).
 package __PKG__
 """
 
@@ -522,34 +566,31 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // run) and Handler implements the generated ServerInterface.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
-// Register implements pkgcore.Module. Per the interface's own contract it
-// must not perform I/O; it only declares. Notification types, config
-// items and feature flags a module grows later register through the same
-// *pkgcore.Registry (the reference app's notes module demonstrates each
-// shape).
-func (m *Module) Register(reg *pkgcore.Registry) error {
-	if err := reg.AuditActions.Add(AuditActionCreate); err != nil {
+// Register implements the module contract: the declaration body the
+// assembly's registry drives. Per the registry's own rules it must not
+// perform I/O; it only declares. Notification types, config items and
+// feature flags a module grows later register through the same seats
+// (the reference app's notes module demonstrates each shape).
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
+	if err := reg.AuditActionsSeat().Add(AuditActionCreate); err != nil {
 		return err
 	}
 
-	// reg.AuditActions is handed to NewHandler so the create path can
-	// call audit.Emit against the exact registrar AuditActionCreate was
+	// The audit seat is handed to NewHandler so the create path can call
+	// audit.Emit against the exact registrar AuditActionCreate was
 	// declared on (Emit validates the action string against it).
-	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActions)
-	reg.Routes.Mount(apiPath, m.handler)
+	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActionsSeat())
+	reg.RoutesSeat().Mount(apiPath, m.handler)
 
-	if err := reg.Permissions.Add(PermissionRead, PermissionWrite); err != nil {
+	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite); err != nil {
 		return err
 	}
-	return reg.Events.Publishes(pkgcore.EventDecl{
+	return reg.EventsSeat().Publishes(pkgcore.EventDecl{
 		Type:        Event__ENTITY__Created,
 		PayloadType: "__PKG__.__ENTITY__CreatedPayload",
 		Description: "Published whenever a __ENTITY_KEY__ is created for a tenant.",
 	})
 }
-
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)
 """
 
 APP_MODEL_GO = """package __PKG__
@@ -1457,7 +1498,18 @@ def main(argv: list[str] | None = None) -> int:
         checklist = app_registration_checklist(args.name, target_dir)
     elif go_stub:
         scaffold_rel = os.path.join(GO_DIR_NAME, args.name)
-        plan = build_plan(args.name, args.description, args.design_doc)
+        language_version = read_go_language_version(SCRIPT_REPO_ROOT)
+        if language_version is None:
+            print(f"error: no go directive readable from "
+                  f"{os.path.join(SCRIPT_REPO_ROOT, GO_WORK_FILE)} -- the "
+                  "scaffolded module's go.mod derives its go directive "
+                  "from the workspace's, and a checkout without one is "
+                  "broken; restore go.work, or run the script from the "
+                  "repository it scaffolds for", file=sys.stderr)
+            return 2
+        plan = build_plan(
+            args.name, args.description, args.design_doc, language_version
+        )
         checklist = registration_checklist(args.name, args.design_doc)
     else:
         scaffold_rel = os.path.join(

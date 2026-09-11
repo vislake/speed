@@ -7,10 +7,15 @@ directly:
     python3 tools/test_new_module.py
 
 The Go plan's content is pinned by the script's own --dry-run and by
-every scaffolded module's compile in CI, so this suite pins the parts
-that are cheap to pin in-process: the Go plan's three-file shape (the
-existing contract, regression-guarded here), the npm plan's seven-file
-skeleton (the new category), the JSON well-formedness of its
+the scaffold compile gate in fast-check's repo-checks job, which
+materializes both categories for real: the go-category stub builds in a
+throwaway directory, and the app-category skeleton is scaffolded into
+the reference app, code-generated with the pinned oapi-codegen, built
+and smoke-tested (the step reads the generator's own pinned command).
+This suite therefore pins the parts that are cheap to pin in-process:
+the Go plan's three-file shape and its go.work-derived go directive
+(the existing contract, regression-guarded here), the npm plan's
+seven-file skeleton (the new category), the JSON well-formedness of its
 package.json, and the shared name validation's two category rules.
 
 The npm plan's CI-greenness (pnpm lint/typecheck/test/build from the
@@ -37,7 +42,7 @@ DESIGN = "docs/internal/07-platform-services.md"
 
 class GoPlanTests(unittest.TestCase):
     def test_go_plan_is_the_three_file_stub(self):
-        plan = m.build_plan("sharing", "public share links.", DESIGN)
+        plan = m.build_plan("sharing", "public share links.", DESIGN, "1.26.0")
         self.assertEqual(
             [rel for rel, _ in plan],
             ["go.mod", "doc.go", "AGENTS.md"],
@@ -45,10 +50,40 @@ class GoPlanTests(unittest.TestCase):
         contents = dict(plan)
         self.assertEqual(
             contents["go.mod"],
-            "module github.com/vislake/speed/go/sharing\n\ngo 1.23\n",
+            "module github.com/vislake/speed/go/sharing\n\ngo 1.26.0\n",
         )
         self.assertIn("package sharing\n", contents["doc.go"])
         self.assertIn(f"See {DESIGN} for the design.", contents["AGENTS.md"])
+
+
+class GoLanguageVersionTests(unittest.TestCase):
+    def test_version_reads_the_workspace_directive_with_patch_zero(self):
+        # The scaffolded module's go directive is the workspace's language
+        # version in the module convention: the go.work patch component is
+        # the toolchain floor, not a module-level fact.
+        with tempfile.TemporaryDirectory() as td:
+            pathlib.Path(td, "go.work").write_text(
+                "go 1.31.5\n\nuse (\n\t./go/alpha\n)\n", encoding="utf-8"
+            )
+            self.assertEqual(m.read_go_language_version(td), "1.31.0")
+
+    def test_version_accepts_a_two_component_workspace_directive(self):
+        with tempfile.TemporaryDirectory() as td:
+            pathlib.Path(td, "go.work").write_text("go 1.27\n", encoding="utf-8")
+            self.assertEqual(m.read_go_language_version(td), "1.27.0")
+
+    def test_missing_workspace_yields_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(m.read_go_language_version(td))
+
+    def test_real_repository_version_matches_every_module_convention(self):
+        # The pin against drift: what the script would stamp into a new
+        # go.mod is exactly what every shipped module's go.mod declares
+        # (major.minor.0, from this repository's own go.work).
+        version = m.read_go_language_version(m.SCRIPT_REPO_ROOT)
+        self.assertIsNotNone(version)
+        go_mod = pathlib.Path(m.SCRIPT_REPO_ROOT, "go", "authn", "go.mod")
+        self.assertIn(f"\ngo {version}\n", go_mod.read_text(encoding="utf-8"))
 
 
 class NpmPlanTests(unittest.TestCase):

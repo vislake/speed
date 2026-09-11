@@ -473,6 +473,39 @@ jobs:
             echo "(go.work.sum / go.mod / go.sum), see Taskfile setup."
             exit 1
           fi
+      # Scaffold compile gate (the generator behind task new:module): the
+      # generator's output is only real if it builds, and nothing else in
+      # CI compiles a scaffolded module -- a template that stops
+      # compiling (the shape that shipped a call into a retired assembly
+      # API) otherwise reaches the next consumer unchanged. Both
+      # categories are materialized and compiled: the go-category stub
+      # into a throwaway directory outside the workspace (its three
+      # files must build standalone), and the app-category skeleton into
+      # this checkout's reference app, where the module cannot compile
+      # until its api package is generated -- so the step runs the
+      # generator's own pinned oapi-codegen command (read from the
+      # script, never retyped here), builds the module and runs its
+      # smoke test. The scaffold is removed before the step ends.
+      - name: Scaffolded module skeletons compile (new:module probe)
+        run: |
+          set -euo pipefail
+          sandbox="$(mktemp -d)"
+          python3 tools/new_module.py scaffold-probe \
+            --description 'Compile probe for the scaffolded Go stub.' \
+            --design-doc docs/internal/00-scaffold-probe.md \
+            --target-dir "$sandbox"
+          ( cd "$sandbox/go/scaffold-probe" && go build ./... )
+          probe=examples/reference-app/internal/scaffold-probe
+          trap 'rm -rf "$probe"' EXIT
+          python3 tools/new_module.py scaffold-probe --category app \
+            --description 'Compile probe for the scaffolded app module.' \
+            --target-dir examples/reference-app
+          # The checklist's first command verbatim: the generator's own
+          # pinned oapi-codegen invocation (config and spec included),
+          # word-split intentionally.
+          gen="$(python3 -c 'import sys; sys.path.insert(0, "tools"); import new_module; print(new_module.APP_API_GENERATOR)')"
+          ( cd "$probe/api" && $gen )
+          ( cd examples/reference-app && go build ./internal/scaffold-probe/... && go test ./internal/scaffold-probe/... )
       # The eslint rules' own unit tests (web/eslint-rules/) live outside
       # every package, so no npm-package-ci leg picks them up; they run
       # here, once per PR, against the same frozen-lockfile install and
