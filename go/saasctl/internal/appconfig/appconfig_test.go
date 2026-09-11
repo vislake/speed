@@ -553,7 +553,7 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 		ConfigKeyEnv: true, OrgIndexKeyEnv: true,
 		AuthnBlindIndexKeyEnv: true, AuthnPIICipherKeyEnv: true, PKILocalKeyCipherKeyEnv: true,
 		NotificationIndexKeyEnv: true,
-		RedisAddrEnv: true, OTLPEndpointEnv: true,
+		RedisAddrEnv:            true, OTLPEndpointEnv: true,
 		S3EndpointEnv: true, S3BucketEnv: true, S3AccessKeyEnv: true, S3SecretKeyEnv: true,
 		S3RegionEnv: true, S3UseSSLEnv: true, S3BucketLookupEnv: true,
 		SMTPHostEnv: true, SMTPPortEnv: true, SMTPUsernameEnv: true, SMTPPasswordEnv: true,
