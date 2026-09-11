@@ -1,6 +1,6 @@
 // Package kmsaws is a pki.Signer implementation backed by AWS Key
-// Management Service. It is split out of go/pki's own root package for the
-// same dependency-isolation reason go/pki/signer/vault is: a consumer
+// Management Service. It sits in its own package below go/pki's root for
+// the same dependency-isolation reason go/pki/signer/vault does: a consumer
 // which never wires a KMS-backed signer does not inherit the AWS SDK for
 // Go v2's KMS client and its transitive dependencies (3 indirect modules,
 // measured the same way -- a throwaway module, GOWORK=off go mod tidy,

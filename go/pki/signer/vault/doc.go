@@ -1,6 +1,6 @@
 // Package vault is a pki.Signer implementation backed by HashiCorp Vault's
-// Transit secrets engine. It is split out of go/pki's own root package so
-// that a consumer which never wires a Vault-backed signer does not inherit
+// Transit secrets engine. It sits in its own package below go/pki's root
+// so that a consumer which never wires a Vault-backed signer does not inherit
 // github.com/hashicorp/vault/api and its transitive dependencies (18
 // indirect modules, measured the same way every other seam split in this
 // codebase is measured: a throwaway module, GOWORK=off go mod tidy, count
