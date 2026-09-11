@@ -56,8 +56,8 @@
  * web/scripts/orval-nodenext-fixup.mjs rewrites deterministically after
  * every run; the same script's rewrite now covers every mutator name
  * the per-operation override can emit; and query keys carry no tenant
- * prefix by design -- tenant query-key namespacing is an M1
- * consumer-shell discipline.
+ * prefix by design -- tenant query-key namespacing is a consumer-shell
+ * concern, not the SDK's.
  *
  * Config paths are relative to this file's directory (web/).
  */

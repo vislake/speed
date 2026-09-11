@@ -22,22 +22,20 @@
  * logical expressions (`{ok && 'Save'}`, `{name ?? 'Wait'}` show
  * their literal side exactly as the ternary arms do); each offending
  * branch reports its own literal, while branches through t() or a
- * dynamic template stay the sanctioned path (reference-app-web.md
- * P2-7). The children attribute is the JSXText spelling's own twin:
- * <Button children="Save" /> renders exactly what <Button>Save</Button>
- * renders, so its literal value reports with the same message. Computed
- * expressions (`{t('a.b')}`, `{row.name}`) are the sanctioned path and
- * untouched.
+ * dynamic template stay the sanctioned path. The children attribute
+ * is the JSXText spelling's own twin: <Button children="Save" />
+ * renders exactly what <Button>Save</Button> renders, so its literal
+ * value reports with the same message. Computed expressions
+ * (`{t('a.b')}`, `{row.name}`) are the sanctioned path and untouched.
  *
  * No aria-hidden exemption exists: aria-hidden removes content from
  * the accessibility tree only -- a sighted user still reads text that
  * is merely aria-hidden, so it is user-facing text like any other (and
  * text that matters to sighted users should not be hidden from
  * assistive technology in the first place). Decorative glyphs belong
- * in icons or CSS content, not in exempt text nodes
- * (reference-app-web.md P2-7). Attribute names outside the
- * text-bearing set are not inspected, so non-visible props like
- * `type="email"` stay legal.
+ * in icons or CSS content, not in exempt text nodes. Attribute names
+ * outside the text-bearing set are not inspected, so non-visible
+ * props like `type="email"` stay legal.
  *
  * Hosts own their own literals: the rule runs over package src only
  * (wired in eslint.config.mjs), and test fixtures are excluded there --

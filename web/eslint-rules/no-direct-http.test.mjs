@@ -167,7 +167,7 @@ describe('no-direct-http rule', () => {
           ],
         },
         // Computed member access is the same environment fetch, not a
-        // different call shape (reference-app-web.md P2-6).
+        // different call shape.
         {
           code: 'window["fetch"]("/api");',
           errors: [{ messageId: 'memberFetch' }],
@@ -227,10 +227,10 @@ describe('no-direct-http rule', () => {
     // A reference to window.fetch/globalThis.fetch/self.fetch that is
     // NOT itself a call is still the global fetch leaving the api-client
     // layer -- it exists to be called somewhere, and answering "no
-    // call, no violation" left every alias form (const f =
-    // window.fetch; f(url)) outside the rule (reference-app-web.md
-    // P2-6). Destructuring fetch out of the environment object is the
-    // same capture with a different syntax.
+    // call, no violation" would leave every alias form (const f =
+    // window.fetch; f(url)) outside the rule. Destructuring fetch out
+    // of the environment object is the same capture with a different
+    // syntax.
     runRule(
       [],
       [

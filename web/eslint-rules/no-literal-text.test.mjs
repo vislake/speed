@@ -102,13 +102,12 @@ describe('no-literal-text rule', () => {
   })
 
   it('flags text under aria-hidden: aria-hidden hides from assistive technology only, not from sight', () => {
-    // The former exemption treated any aria-hidden subtree as
-    // presentational. aria-hidden removes content from the accessibility
-    // tree; a sighted user still reads text that is merely aria-hidden
-    // (and a text that matters to sighted users should not be hidden
-    // from assistive technology in the first place), so no exemption is
-    // defensible on aria-hidden alone (reference-app-web.md P2-7).
-    // Decorative glyphs belong in icons or CSS, not as exempt text.
+    // aria-hidden removes content from the accessibility tree only; a
+    // sighted user still reads text that is merely aria-hidden (and
+    // text that matters to sighted users should not be hidden from
+    // assistive technology in the first place), so no exemption is
+    // defensible on aria-hidden alone. Decorative glyphs belong in
+    // icons or CSS, not as exempt text.
     runRule(
       [],
       [
@@ -138,11 +137,10 @@ describe('no-literal-text rule', () => {
 
   it('flags plain-string branches of conditional expressions in children and attributes', () => {
     // A ternary is a computed expression, but a plain-string branch is
-    // still a literal reaching the user (reference-app-web.md P2-7):
-    // {ok ? 'Save' : 'Wait'} renders user-facing text exactly as a bare
-    // <Button>Save</Button> does. Each offending branch reports its own
-    // literal; branches through t() or dynamic templates stay the
-    // sanctioned path.
+    // still a literal reaching the user: {ok ? 'Save' : 'Wait'} renders
+    // user-facing text exactly as a bare <Button>Save</Button> does.
+    // Each offending branch reports its own literal; branches through
+    // t() or dynamic templates stay the sanctioned path.
     runRule(
       [],
       [

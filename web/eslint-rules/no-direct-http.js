@@ -37,14 +37,13 @@
  * than called: taking `window.fetch` out of a call (an alias
  * `const f = window.fetch`, a `.bind`/`.call` capture) or
  * destructuring it out of the environment object (`const { fetch } =
- * window`) is the same hand-written HTTP waiting to happen, and a rule
- * that answered "no call, no violation" left every alias form outside
- * the check (reference-app-web.md P2-6). What stays outside is the
- * residual the check deliberately does not chase: aliasing the
- * environment OBJECT itself (`const win = window; win.fetch(...)`) or
- * the bare global identifier (`const f = fetch`) needs dataflow across
- * bindings, which this rule does not do -- code review owns that
- * residue.
+ * window`) is the same hand-written HTTP waiting to happen, and a
+ * rule that answered "no call, no violation" would leave every alias
+ * form outside the check. What stays outside is the residual the
+ * check deliberately does not chase: aliasing the environment OBJECT
+ * itself (`const win = window; win.fetch(...)`) or the bare global
+ * identifier (`const f = fetch`) needs dataflow across bindings,
+ * which this rule does not do -- code review owns that residue.
  *
  * Scope is applied in eslint.config.mjs over package runtime source,
  * with packages/api-client as the single whitelist; test files and
