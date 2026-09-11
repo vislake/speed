@@ -8,12 +8,23 @@ package app_test
 // documents the middleware composition built on top.
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 
 	"github.com/vislake/speed/go/app"
+
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite,
+	// so this example's DatabaseSpec has a driver to build from. Which
+	// dialect packages a binary carries is the assembling application's
+	// decision, which is why the engine itself imports none.
+	"github.com/vislake/speed/go/dbkit"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -24,6 +35,62 @@ type exampleFailingResolver struct{}
 
 func (exampleFailingResolver) Resolve(*http.Request) (pkgcore.TenantID, error) {
 	return "", errors.New("example: no tenant resolvable")
+}
+
+// ExampleNew assembles a whole application from the engine's option list and
+// serves one request through the composed handler: the host's configuration
+// target (its own key beside the embedded platform key material, skipped by
+// the loader because the engine loads that value as its own target), the
+// database to open and migrate, and one hand-written route mounted beside the
+// module routes. A host that wants the engine to listen and drain as well
+// calls Run with the same options and a WithHTTP address.
+func ExampleNew() {
+	dir, err := os.MkdirTemp("", "app-example")
+	if err != nil {
+		fmt.Println("temp dir:", err)
+		return
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	// The host's configuration target: its own keys, plus the platform key
+	// material embedded and skipped (config:"-") so the six declared key
+	// paths stay unprefixed.
+	type hostConfig struct {
+		app.PlatformConfig `config:"-"`
+		Port               string `config:"env=EXAMPLE_PORT"`
+	}
+	host := hostConfig{Port: "8080"}
+	// The one key material the engine consumes itself: its platform cipher.
+	host.Config.Cipher_Key = make([]byte, 32)
+
+	a, err := app.New(context.Background(),
+		app.WithConfig(
+			app.ConfigSpec{Host: &host, Platform: &host.PlatformConfig},
+			app.ConfigArgs([]string{}),
+		),
+		app.WithDatabase(app.DatabaseSpec{
+			Dialect: dbkit.DialectSQLite,
+			DSN:     filepath.Join(dir, "example.db"),
+		}),
+		app.WithHTTP(app.HTTPSpec{ExtraRoutes: []pkgcore.MountedRoute{{
+			Path: "/api/v1/version",
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, "v1")
+			}),
+		}}}),
+	)
+	if err != nil {
+		fmt.Println("assemble:", err)
+		return
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
+	fmt.Printf("GET /api/v1/version: %d %s\n", rec.Code, rec.Body.String())
+
+	// Output:
+	// GET /api/v1/version: 200 v1
 }
 
 // ExamplePreAuthAllowlist shows the platform's pre-auth surface: the paths
