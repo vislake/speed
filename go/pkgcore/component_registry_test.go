@@ -1,0 +1,840 @@
+package pkgcore
+
+import (
+	"context"
+	"embed"
+	"errors"
+	"fmt"
+	"net/http"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/vislake/speed/go/pkgcore/internal/componentfixtures/locales"
+	"github.com/vislake/speed/go/pkgcore/internal/componentfixtures/migrations"
+)
+
+// stageLog records fixture callback invocations and close counts.
+type stageLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+// record appends one event.
+func (l *stageLog) record(event string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, event)
+}
+
+// all returns the recorded events in order.
+func (l *stageLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.events...)
+}
+
+// count returns how many recorded events equal event.
+func (l *stageLog) count(event string) int {
+	n := 0
+	for _, e := range l.all() {
+		if e == event {
+			n++
+		}
+	}
+	return n
+}
+
+// newTestRegistry returns a registry with the given components registered.
+func newTestRegistry(t *testing.T, components ...Component) *ComponentRegistry {
+	t.Helper()
+	reg := NewComponentRegistry()
+	for _, c := range components {
+		if err := reg.Register(c); err != nil {
+			t.Fatalf("Register(%q) = %v, want nil", c.Name, err)
+		}
+	}
+	return reg
+}
+
+// testComposition builds a composition configuration selecting the given
+// (name, value) pairs in order.
+func testComposition(entries ...configEntry) ComponentConfig {
+	block := ComponentConfig{}
+	for _, e := range entries {
+		block = block.With(e.key, e.value)
+	}
+	return NewComponentConfig(nil).With("components", block)
+}
+
+// assertPanicContains runs fn and fails t when it does not panic with a
+// value whose rendering contains want.
+func assertPanicContains(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("call did not panic, want a panic containing %q", want)
+		}
+		if got := fmt.Sprint(recovered); !strings.Contains(got, want) {
+			t.Errorf("panic %q does not contain %q", got, want)
+		}
+	}()
+	fn()
+}
+
+// recordingComponent returns a component that records every callback in log
+// and produces product from New.
+func recordingComponent(log *stageLog, name, module string, product any, hooks func(*Component)) Component {
+	c := Component{
+		Name:   name,
+		Module: module,
+		Prepare: func(context.Context, *ComponentRegistry) error {
+			log.record(name + ".prepare")
+			return nil
+		},
+		New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+			log.record(name + ".new")
+			return product, nil
+		},
+		Verify: func(context.Context, *ComponentRegistry, any) error {
+			log.record(name + ".verify")
+			return nil
+		},
+		Init: func(context.Context, *ComponentRegistry, any) error {
+			log.record(name + ".init")
+			return nil
+		},
+		Start: func(context.Context, *ComponentRegistry, any) error {
+			log.record(name + ".start")
+			return nil
+		},
+		Stop: func(context.Context, *ComponentRegistry, any) error {
+			log.record(name + ".stop")
+			return nil
+		},
+		Close: func(context.Context, *ComponentRegistry, any) error {
+			log.record(name + ".close")
+			return nil
+		},
+	}
+	if hooks != nil {
+		hooks(&c)
+	}
+	return c
+}
+
+func TestPutGetStructuralMatch(t *testing.T) {
+	reg := NewComponentRegistry()
+
+	// One match: a concrete pointer.
+	reg.Put(&compTokenA{})
+	if v, err := Get[*compTokenA](reg); err != nil || v == nil {
+		t.Fatalf("Get[*compTokenA] = (%v, %v), want the put value", v, err)
+	}
+
+	// Interface target: a put value implementing the interface matches.
+	reg.Put(compSpreadImpl{})
+	if v, err := Get[compSpreader](reg); err != nil || v.spread() != "spread" {
+		t.Fatalf("Get[compSpreader] = (%v, %v), want the implementing value", v, err)
+	}
+
+	// Zero matches: named-missing.
+	_, err := Get[*compTokenB](reg)
+	if !errors.Is(err, ErrMissingRequirement) {
+		t.Fatalf("Get[*compTokenB] = %v, want ErrMissingRequirement", err)
+	}
+	if !strings.Contains(err.Error(), "pkgcore.compTokenB") {
+		t.Errorf("missing error %q does not name the type", err)
+	}
+
+	// Multiple matches: ambiguous, listing the candidates.
+	reg.Put(&compTokenB{})
+	reg.Put(&compTokenB{})
+	_, err = Get[*compTokenB](reg)
+	if !errors.Is(err, ErrAmbiguousProvider) {
+		t.Fatalf("Get for two values = %v, want ErrAmbiguousProvider", err)
+	}
+	if !strings.Contains(err.Error(), "2 put values") || !strings.Contains(err.Error(), "pkgcore.compTokenB") {
+		t.Errorf("ambiguity error %q does not list the values", err)
+	}
+
+	// Put(nil) panics.
+	assertPanicContains(t, "Put requires a non-nil value", func() { reg.Put(nil) })
+}
+
+func TestComponentRegistryRegisterAndIsolation(t *testing.T) {
+	a := Component{Name: "test.isolated.a", New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &compTokenA{}, nil }}
+	reg := newTestRegistry(t, a)
+
+	if err := reg.Register(a); !errors.Is(err, ErrDuplicateComponent) {
+		t.Fatalf("duplicate Register = %v, want ErrDuplicateComponent", err)
+	}
+	if err := reg.Register(Component{Name: ""}); !errors.Is(err, ErrInvalidComponent) {
+		t.Fatalf("Register of a malformed component = %v, want ErrInvalidComponent", err)
+	}
+
+	other := NewComponentRegistry()
+	if _, ok := other.registered(a.Name); ok {
+		t.Errorf("a second registry sees the first registry's local component %q", a.Name)
+	}
+}
+
+func TestSeatsClosedOutsideInit(t *testing.T) {
+	reg := NewComponentRegistry()
+
+	err := reg.Config.Add(ConfigItem{Key: "test.seat.key", Type: "string", Description: "d"})
+	if !errors.Is(err, ErrStageViolation) {
+		t.Fatalf("seat write before Init = %v, want ErrStageViolation", err)
+	}
+	for _, want := range []string{`"Config" seat`, "Init", "current stage is not started"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("seat error %q does not carry %q", err, want)
+		}
+	}
+
+	// Reads before Init see nothing declared.
+	if items := reg.Config.Items(); items != nil {
+		t.Errorf("Config.Items() before Init = %v, want nil", items)
+	}
+	if routes := reg.Routes.Routes(); routes != nil {
+		t.Errorf("Routes.Routes() before Init = %v, want nil", routes)
+	}
+
+	// A write from inside a Construct callback is refused naming the stage
+	// running.
+	var seatErr error
+	log := &stageLog{}
+	writer := recordingComponent(log, "seatwriter", "", &compTokenA{}, func(c *Component) {
+		inner := c.New
+		c.New = func(ctx context.Context, reg *ComponentRegistry, cfg ComponentConfig) (any, error) {
+			seatErr = reg.Config.Add(ConfigItem{Key: "test.seat.key2", Type: "string", Description: "d"})
+			return inner(ctx, reg, cfg)
+		}
+	})
+	reg2 := newTestRegistry(t, writer)
+	reg2.Put(testComposition(configEntry{key: "seatwriter", value: nil}))
+	if err := reg2.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare = %v", err)
+	}
+	if err := reg2.Construct(context.Background()); err != nil {
+		t.Fatalf("Construct = %v", err)
+	}
+	if !errors.Is(seatErr, ErrStageViolation) || !strings.Contains(seatErr.Error(), "current stage is construct") {
+		t.Errorf("seat write during Construct = %v, want ErrStageViolation naming construct", seatErr)
+	}
+
+	// After Init completes the seats are closed again.
+	reg3 := newTestRegistry(t, recordingComponent(&stageLog{}, "seatclosed", "", &compTokenB{}, nil))
+	reg3.Put(testComposition(configEntry{key: "seatclosed", value: nil}))
+	if err := runStages(context.Background(), reg3); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+	if err := reg3.Config.Add(ConfigItem{Key: "test.seat.key3", Type: "string", Description: "d"}); !errors.Is(err, ErrStageViolation) {
+		t.Errorf("seat write after Init = %v, want ErrStageViolation", err)
+	}
+}
+
+// runStages drives Prepare through Start.
+func runStages(ctx context.Context, reg *ComponentRegistry) error {
+	if err := reg.Prepare(ctx); err != nil {
+		return err
+	}
+	if err := reg.Construct(ctx); err != nil {
+		return err
+	}
+	if err := reg.Verify(ctx); err != nil {
+		return err
+	}
+	if err := reg.Init(ctx); err != nil {
+		return err
+	}
+	return reg.Start(ctx)
+}
+
+func TestSeatVoidWritesPanicOutsideInit(t *testing.T) {
+	reg := NewComponentRegistry()
+	assertPanicContains(t, `"Routes" seat`, func() {
+		reg.Routes.Mount("/x", http.NotFoundHandler())
+	})
+	assertPanicContains(t, `"Events" seat`, func() {
+		reg.Events.Subscribe("test.event", func(context.Context, Event) error { return nil })
+	})
+}
+
+func TestSeatsAcceptWritesDuringInit(t *testing.T) {
+	log := &stageLog{}
+	content := recordingComponent(log, "seatcontent", "", &compTokenA{}, func(c *Component) {
+		c.Init = func(ctx context.Context, reg *ComponentRegistry, instance any) error {
+			reg.Routes.Mount("/seatcontent", http.NotFoundHandler())
+			if err := reg.Config.Add(ConfigItem{Key: "seatcontent.item", Type: "string", Description: "d"}); err != nil {
+				return err
+			}
+			if err := reg.Features.Add(FeatureFlag{Key: "seatcontent.flag"}); err != nil {
+				return err
+			}
+			if err := reg.Permissions.Add("seatcontent:read"); err != nil {
+				return err
+			}
+			if err := reg.Jobs.Handle("seatcontent.job", func() {}); err != nil {
+				return err
+			}
+			if err := reg.Notifications.Add(NotificationType{Key: "seatcontent.notif", Group: "seatcontent"}); err != nil {
+				return err
+			}
+			if err := reg.Events.Publishes(EventDecl{Type: "seatcontent.event", PayloadType: "seatcontent.Payload"}); err != nil {
+				return err
+			}
+			if err := reg.AuditActions.Add("seatcontent.audited"); err != nil {
+				return err
+			}
+			if err := reg.Retention.Add(RetentionParticipant{
+				Name:  "seatcontent.retention",
+				Sweep: func(context.Context, TenantID, time.Time) (int, error) { return 0, nil },
+				Erase: func(context.Context, SubjectRef) (int, error) { return 0, nil },
+			}); err != nil {
+				return err
+			}
+			return reg.Schedules.Add(PeriodicTask{
+				Type:      "seatcontent.task",
+				Every:     time.Minute,
+				Scope:     PeriodicScopePerTenant,
+				KeyPrefix: "seatcontent:",
+			})
+		}
+	})
+
+	reg := newTestRegistry(t, content)
+	reg.Put(testComposition(configEntry{key: "seatcontent", value: nil}))
+	if err := runStages(context.Background(), reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	if got := len(reg.Routes.Routes()); got != 1 {
+		t.Errorf("Routes.Routes() = %d entries, want 1", got)
+	}
+	if got := len(reg.Config.Items()); got != 1 {
+		t.Errorf("Config.Items() = %d entries, want 1", got)
+	}
+	if got := len(reg.Features.Flags()); got != 1 {
+		t.Errorf("Features.Flags() = %d entries, want 1", got)
+	}
+	if perms := reg.Permissions.Permissions(); !reflect.DeepEqual(perms, []string{"seatcontent:read"}) {
+		t.Errorf("Permissions() = %v", perms)
+	}
+	if got := reg.Jobs.Handlers(); len(got) != 1 {
+		t.Errorf("Jobs.Handlers() = %v, want 1 entry", got)
+	}
+	if got := len(reg.Notifications.Types()); got != 1 {
+		t.Errorf("Notifications.Types() = %d entries, want 1", got)
+	}
+	if got := len(reg.Events.Published()); got != 1 {
+		t.Errorf("Events.Published() = %d entries, want 1", got)
+	}
+	if actions := reg.AuditActions.Actions(); !reflect.DeepEqual(actions, []string{"seatcontent.audited"}) {
+		t.Errorf("AuditActions() = %v", actions)
+	}
+	if got := len(reg.Retention.Participants()); got != 1 {
+		t.Errorf("Retention.Participants() = %d entries, want 1", got)
+	}
+	if got := len(reg.Schedules.Declarations()); got != 1 {
+		t.Errorf("Schedules.Declarations() = %d entries, want 1", got)
+	}
+}
+
+func TestStageOrderViolations(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t, recordingComponent(&stageLog{}, "stageorder", "", &compTokenA{}, nil))
+	reg.Put(testComposition(configEntry{key: "stageorder", value: nil}))
+
+	if err := reg.Construct(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "requires a completed Prepare stage") {
+		t.Errorf("Construct before Prepare = %v, want ErrStageViolation", err)
+	}
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare = %v", err)
+	}
+	if err := reg.Prepare(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "already ran") {
+		t.Errorf("second Prepare = %v, want ErrStageViolation", err)
+	}
+	if err := reg.Verify(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "requires a completed Construct stage") {
+		t.Errorf("Verify before Construct = %v, want ErrStageViolation", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct = %v", err)
+	}
+	if err := reg.Init(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "requires a completed Verify stage") {
+		t.Errorf("Init before Verify = %v, want ErrStageViolation", err)
+	}
+	if err := reg.Start(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "requires a completed Init stage") {
+		t.Errorf("Start before Init = %v, want ErrStageViolation", err)
+	}
+	if err := reg.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if err := reg.Verify(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("stage after Close = %v, want ErrStageViolation naming the closed assembly", err)
+	}
+}
+
+func TestStageCallOrderGolden(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+
+	// bbb requires aaa's product, and registration order is the reverse of
+	// dependency order, so the golden pins both orders at once.
+	aaa := recordingComponent(log, "aaa", "aaa", &compTokenA{}, func(c *Component) {
+		c.Provides = []any{(*compTokenA)(nil)}
+	})
+	bbb := recordingComponent(log, "bbb", "bbb", &compTokenB{}, func(c *Component) {
+		c.Requires = []Requirement{{Token: (*compTokenA)(nil)}}
+		c.Provides = []any{(*compTokenB)(nil)}
+	})
+
+	reg := newTestRegistry(t, bbb, aaa)
+	reg.Put(testComposition(
+		configEntry{key: "bbb", value: nil},
+		configEntry{key: "aaa", value: nil},
+	))
+
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+	if err := reg.Stop(ctx); err != nil {
+		t.Fatalf("Stop = %v", err)
+	}
+	if err := reg.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+
+	want := []string{
+		"bbb.prepare", "aaa.prepare",
+		"aaa.new", "bbb.new",
+		"aaa.verify", "bbb.verify",
+		"aaa.init", "bbb.init",
+		"aaa.start", "bbb.start",
+		"bbb.stop", "aaa.stop",
+		"bbb.close", "aaa.close",
+	}
+	if got := log.all(); !reflect.DeepEqual(got, want) {
+		t.Errorf("stage call order =\n  %v\nwant\n  %v", got, want)
+	}
+
+	// The plan order is the dependency order.
+	assertPlanOrder(t, reg, []string{"aaa", "bbb"})
+
+	// MemberNames answers in dependency order.
+	if got := MemberNames(reg, "bbb"); !reflect.DeepEqual(got, []string{"bbb"}) {
+		t.Errorf("MemberNames(bbb) = %v", got)
+	}
+}
+
+// assertPlanOrder fails t unless the registry's plan holds exactly names, in
+// order.
+func assertPlanOrder(t *testing.T, reg *ComponentRegistry, names []string) {
+	t.Helper()
+	var got []string
+	for _, p := range reg.plannedComponents() {
+		got = append(got, p.component.Name)
+	}
+	if !reflect.DeepEqual(got, names) {
+		t.Errorf("plan order = %v, want %v", got, names)
+	}
+}
+
+func TestRollbackOnVerifyFailureClosesOnce(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	boom := errors.New("boom")
+
+	aaa := recordingComponent(log, "aaa", "", &compTokenA{}, nil)
+	bbb := recordingComponent(log, "bbb", "", &compTokenB{}, func(c *Component) {
+		c.Verify = func(context.Context, *ComponentRegistry, any) error {
+			log.record("bbb.verify")
+			return boom
+		}
+	})
+
+	reg := newTestRegistry(t, aaa, bbb)
+	reg.Put(testComposition(
+		configEntry{key: "aaa", value: nil},
+		configEntry{key: "bbb", value: nil},
+	))
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare = %v", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct = %v", err)
+	}
+
+	err := reg.Verify(ctx)
+	if !errors.Is(err, ErrComponentFailed) {
+		t.Fatalf("Verify = %v, want ErrComponentFailed", err)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("Verify error %v does not wrap the cause", err)
+	}
+	for _, want := range []string{"(stage verify)", `component "bbb"`, "boom", "rolled back: bbb, aaa"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not carry %q", err, want)
+		}
+	}
+	if got := log.count("aaa.close"); got != 1 {
+		t.Errorf("aaa closed %d times, want exactly once", got)
+	}
+	if got := log.count("bbb.close"); got != 1 {
+		t.Errorf("bbb closed %d times, want exactly once", got)
+	}
+
+	// A host that joins Close into the failure observes the cached,
+	// already-computed result: the callbacks do not run again.
+	if err := reg.Close(ctx); err != nil {
+		t.Errorf("Close after rollback = %v, want the cached nil", err)
+	}
+	if got := log.count("aaa.close") + log.count("bbb.close"); got != 2 {
+		t.Errorf("closes after a second Close = %d, want no more than the first pass", got)
+	}
+}
+
+func TestRollbackOnConstructFailure(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("later component fails, earlier is rolled back", func(t *testing.T) {
+		log := &stageLog{}
+		aaa := recordingComponent(log, "aaa", "", &compTokenA{}, nil)
+		bbb := recordingComponent(log, "bbb", "", &compTokenB{}, func(c *Component) {
+			c.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+				return nil, errors.New("dial tcp: refused")
+			}
+		})
+
+		reg := newTestRegistry(t, aaa, bbb)
+		reg.Put(testComposition(
+			configEntry{key: "aaa", value: nil},
+			configEntry{key: "bbb", value: nil},
+		))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{"(stage construct)", `component "bbb"`, "dial tcp: refused", "rolled back: aaa"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+		if got := log.count("aaa.close"); got != 1 {
+			t.Errorf("aaa closed %d times, want exactly once", got)
+		}
+	})
+
+	t.Run("first component fails, nothing was constructed", func(t *testing.T) {
+		reg := newTestRegistry(t, recordingComponent(&stageLog{}, "firstfail", "", &compTokenA{}, func(c *Component) {
+			c.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+				return nil, errors.New("no product")
+			}
+		}))
+		reg.Put(testComposition(configEntry{key: "firstfail", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) || !strings.Contains(err.Error(), "rolled back: none") {
+			t.Errorf("Construct = %v, want ErrComponentFailed with an empty rollback set", err)
+		}
+	})
+
+	t.Run("New returning nil is refused", func(t *testing.T) {
+		reg := newTestRegistry(t, recordingComponent(&stageLog{}, "nilproduct", "", nil, func(c *Component) {
+			c.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return nil, nil }
+		}))
+		reg.Put(testComposition(configEntry{key: "nilproduct", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) || !strings.Contains(err.Error(), "returned no product") {
+			t.Errorf("Construct = %v, want ErrComponentFailed naming the nil product", err)
+		}
+	})
+}
+
+func TestCloseAggregatesErrorsInReverseOrder(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	errA := errors.New("close a failed")
+	errB := errors.New("close b failed")
+
+	aaa := recordingComponent(log, "aaa", "", &compTokenA{}, func(c *Component) {
+		c.Close = func(context.Context, *ComponentRegistry, any) error {
+			log.record("aaa.close")
+			return errA
+		}
+	})
+	bbb := recordingComponent(log, "bbb", "", &compTokenB{}, func(c *Component) {
+		c.Close = func(context.Context, *ComponentRegistry, any) error {
+			log.record("bbb.close")
+			return errB
+		}
+	})
+
+	reg := newTestRegistry(t, aaa, bbb)
+	reg.Put(testComposition(
+		configEntry{key: "aaa", value: nil},
+		configEntry{key: "bbb", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	err := reg.Close(ctx)
+	if !errors.Is(err, errA) || !errors.Is(err, errB) {
+		t.Fatalf("Close = %v, want both close failures aggregated", err)
+	}
+	order := []string{}
+	for _, e := range log.all() {
+		if strings.HasSuffix(e, ".close") {
+			order = append(order, e)
+		}
+	}
+	if want := []string{"bbb.close", "aaa.close"}; !reflect.DeepEqual(order, want) {
+		t.Errorf("close order = %v, want reverse dependency order %v", order, want)
+	}
+
+	again := reg.Close(ctx)
+	if !errors.Is(again, errA) || !errors.Is(again, errB) {
+		t.Errorf("second Close = %v, want the cached aggregate", again)
+	}
+	if got := log.count("aaa.close") + log.count("bbb.close"); got != 2 {
+		t.Errorf("close callbacks ran %d times, want exactly once each", got)
+	}
+}
+
+func TestStopIgnoresFailuresAndDoesNotClose(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	aaa := recordingComponent(log, "aaa", "", &compTokenA{}, func(c *Component) {
+		c.Stop = func(context.Context, *ComponentRegistry, any) error {
+			log.record("aaa.stop")
+			return errors.New("stop notification failed")
+		}
+	})
+
+	reg := newTestRegistry(t, aaa)
+	reg.Put(testComposition(configEntry{key: "aaa", value: nil}))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+	if err := reg.Stop(ctx); err != nil {
+		t.Fatalf("Stop = %v, want nil: stop failures are ignored", err)
+	}
+	if got := log.count("aaa.close"); got != 0 {
+		t.Errorf("Stop closed %d components, want none", got)
+	}
+	if err := reg.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if got := log.count("aaa.close"); got != 1 {
+		t.Errorf("Close after Stop closed %d times, want exactly once", got)
+	}
+}
+
+// buildProduct is the product of the Build fixture component; its tag proves
+// which configuration New received.
+type buildProduct struct{ tag string }
+
+// buildSchema is the Build fixture component's configuration schema.
+type buildSchema struct {
+	Tag string `json:"tag"`
+}
+
+func TestBuild(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	aaa := Component{
+		Name:         "buildme",
+		Module:       "buildme",
+		ConfigSchema: (*buildSchema)(nil),
+		New: func(_ context.Context, _ *ComponentRegistry, cfg ComponentConfig) (any, error) {
+			log.record("buildme.new")
+			var c buildSchema
+			if err := cfg.Decode(&c); err != nil {
+				return nil, err
+			}
+			return &buildProduct{tag: c.Tag}, nil
+		},
+	}
+	unselected := recordingComponent(log, "buildunselected", "", &compTokenB{}, nil)
+
+	reg := newTestRegistry(t, aaa, unselected)
+	reg.Put(testComposition(
+		configEntry{key: "buildme", value: map[string]any{"tag": "planned"}},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	built, err := Build[*buildProduct](ctx, reg, "buildme", nil)
+	if err != nil {
+		t.Fatalf("Build = (%v, %v), want a product", built, err)
+	}
+	if built.tag != "planned" {
+		t.Errorf("Build(nil override) tag = %q, want the resolved configuration's %q", built.tag, "planned")
+	}
+
+	override := NewComponentConfig(map[string]any{"tag": "override"})
+	built, err = Build[*buildProduct](ctx, reg, "buildme", &override)
+	if err != nil {
+		t.Fatalf("Build with override = (%v, %v), want a product", built, err)
+	}
+	if built.tag != "override" {
+		t.Errorf("Build(override) tag = %q, want %q", built.tag, "override")
+	}
+
+	if _, err := Build[*compTokenB](ctx, reg, "buildunselected", nil); !errors.Is(err, ErrUnknownComponent) || !strings.Contains(err.Error(), "not selected") {
+		t.Errorf("Build of an unselected component = %v, want ErrUnknownComponent", err)
+	}
+	if _, err := Build[*compTokenB](ctx, reg, "never.registered", nil); !errors.Is(err, ErrUnknownComponent) || !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("Build of an unregistered component = %v, want ErrUnknownComponent", err)
+	}
+	if _, err := Build[*compTokenB](ctx, reg, "buildme", nil); err == nil {
+		t.Error("Build into the wrong type succeeded, want an assignability error")
+	}
+}
+
+func TestMemberNames(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	gatewayB := recordingComponent(log, "gateway.b", "gateway", &compTokenA{}, nil)
+	gatewayA := recordingComponent(log, "gateway.a", "gateway", &compTokenB{}, nil)
+	other := recordingComponent(log, "other", "other", &compSpreadImpl{}, nil)
+
+	reg := newTestRegistry(t, gatewayB, gatewayA, other)
+	reg.Put(testComposition(
+		configEntry{key: "gateway.a", value: nil},
+		configEntry{key: "gateway.b", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	if got, want := MemberNames(reg, "gateway"), []string{"gateway.a", "gateway.b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("MemberNames(gateway) = %v, want %v", got, want)
+	}
+	if got := MemberNames(reg, "unselected.module"); len(got) != 0 {
+		t.Errorf("MemberNames of an unselected module = %v, want empty", got)
+	}
+}
+
+func TestInitClosingValidation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("system purposes are registered together", func(t *testing.T) {
+		purposeA := SystemPurpose("test.closing.purpose.a")
+		purposeB := SystemPurpose("test.closing.purpose.b")
+		a := plainComponent("closing.a", &compTokenA{})
+		a.SystemPurposes = []SystemPurpose{purposeA}
+		b := plainComponent("closing.b", &compTokenB{})
+		b.SystemPurposes = []SystemPurpose{purposeB}
+
+		reg := newTestRegistry(t, a, b)
+		reg.Put(testComposition(
+			configEntry{key: "closing.a", value: nil},
+			configEntry{key: "closing.b", value: nil},
+		))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		if !systemPurposeRegistered(purposeA) || !systemPurposeRegistered(purposeB) {
+			t.Error("every selected component's declared system purposes must be registered by Init")
+		}
+	})
+
+	t.Run("duplicate system purposes fail closed", func(t *testing.T) {
+		shared := SystemPurpose("test.closing.purpose.shared")
+		a := plainComponent("closing.dup.a", &compTokenA{})
+		a.SystemPurposes = []SystemPurpose{shared}
+		b := plainComponent("closing.dup.b", &compTokenB{})
+		b.SystemPurposes = []SystemPurpose{shared}
+
+		reg := newTestRegistry(t, a, b)
+		reg.Put(testComposition(
+			configEntry{key: "closing.dup.a", value: nil},
+			configEntry{key: "closing.dup.b", value: nil},
+		))
+		err := runStages(ctx, reg)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Init = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{"(stage init)", "system purpose", "closing.dup.a", "closing.dup.b"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+		if systemPurposeRegistered(shared) {
+			t.Error("a purpose a duplicate declaration named was registered despite the failure")
+		}
+	})
+
+	t.Run("a bootstrap key on the runtime seat fails the assembly", func(t *testing.T) {
+		app := plainComponent("closing.boot", &compTokenA{})
+		app.BootstrapKeys = []BootstrapKey{{Key: "closing.boot.secret", Format: "hexkey"}}
+		seater := plainComponent("closing.seat", &compTokenB{})
+		seater.Init = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			return reg.Config.Add(ConfigItem{Key: "closing.boot.secret", Type: "string", Description: "d"})
+		}
+
+		reg := newTestRegistry(t, app, seater)
+		reg.Put(testComposition(
+			configEntry{key: "closing.boot", value: nil},
+			configEntry{key: "closing.seat", value: nil},
+		))
+		err := runStages(ctx, reg)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Init = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{"(stage init)", "two layers", `"closing.boot"`, `"closing.boot.secret"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+}
+
+func TestAssetsCollectsOnlyCarriersInPlanOrder(t *testing.T) {
+	ctx := context.Background()
+	withAssets := Component{
+		Name:        "locgood",
+		Migrations:  migrations.FS,
+		Locales:     locales.FS,
+		OpenAPISpec: []byte("openapi: 3.0.3\ninfo:\n  title: fixture\n"),
+		New:         func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &compTokenA{}, nil },
+	}
+	withoutAssets := Component{
+		Name: "noassets",
+		New:  func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &compTokenB{}, nil },
+	}
+
+	reg := newTestRegistry(t, withoutAssets, withAssets)
+	reg.Put(testComposition(
+		configEntry{key: "noassets", value: nil},
+		configEntry{key: "locgood", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	assets := Assets(reg)
+	if len(assets) != 1 {
+		t.Fatalf("Assets() = %d entries, want 1 (only the carrier)", len(assets))
+	}
+	if assets[0].Name != "locgood" {
+		t.Errorf("Assets()[0].Name = %q, want locgood", assets[0].Name)
+	}
+	if assets[0].Migrations == (embed.FS{}) || assets[0].Locales == (embed.FS{}) || len(assets[0].OpenAPISpec) == 0 {
+		t.Errorf("Assets()[0] = %+v, want all three assets carried", assets[0])
+	}
+}

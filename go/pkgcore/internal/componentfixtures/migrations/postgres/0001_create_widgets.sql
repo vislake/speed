@@ -1,0 +1,1 @@
+CREATE TABLE widgets (id VARCHAR(64) PRIMARY KEY);
