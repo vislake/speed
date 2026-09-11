@@ -649,11 +649,14 @@ zero-external-dependency console transport, which doubles as this module's
 test double), `pkgcore.NewHTTPSMSSender` (an operator-run JSON gateway, the
 distributed-mode transport the reference app wires), and the three real
 carrier adapters `pkgcore/sms/aliyun`, `pkgcore/sms/tencent` and
-`pkgcore/sms/twilio` (each a host-constructed `NewSender`). The seam has no
-pkgcore registry, preset or capability seat -- `pkgcore.SMSSender`'s own
-doc comment records why: no consumer resolves its SMS transport from the
-kernel, host injection through module options is the whole wiring, and each
-consumer keeps its own wiring-time requirement on the sender. This module's
+`pkgcore/sms/twilio` (each a host-constructed `NewSender`). The seam
+registers two component descriptors of its own -- `sms.console` and
+`sms.http`, each carrying its capability bits -- and a composition that
+selects one resolves the sender through the registry: this module's own
+component descriptor reads it with `pkgcore.Get` into `WithSMSSender`,
+go/authn's descriptor reads it optionally into its own, and each consumer
+keeps its own wiring-time requirement on the sender (`pkgcore.SMSSender`'s
+own doc comment records the seam's shape). This module's
 requirement is the strictest of the two: `Register` refuses to boot without
 a wired sender (`ErrSMSSenderRequired`), where authn's refusal applies only
 under the distributed deployment mode.
