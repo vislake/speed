@@ -284,7 +284,7 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 // apikey_authenticate_flow_test.go.
 func TestBuildServer_APIKeyFlow_CreatorLeftFollowsTheRoster(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
-	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-creator-left")
+	acmeToken := apptest.RegisterAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-creator-left")
 
 	// One root node for the tenant, then two members through org's own
 	// invitation flow: the creator the flag must follow, and a second member
