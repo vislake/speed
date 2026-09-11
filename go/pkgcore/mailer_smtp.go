@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -66,9 +67,9 @@ type SMTPConfig struct {
 	// ReplyTo is the implementation-level default Reply-To address: a Send
 	// whose Mail carries no ReplyTo of its own goes out with this one, and a
 	// Mail.ReplyTo always wins over it. Empty writes no Reply-To header for
-	// a message whose Mail leaves it empty too. A line break in this value is
-	// an unrecoverable wiring error and panics at construction, like every
-	// other unusable value in this config (see NewSMTPMailer).
+	// a message whose Mail leaves it empty too. A control character in this
+	// value is an unrecoverable wiring error and panics at construction, like
+	// every other unusable value in this config (see NewSMTPMailer).
 	ReplyTo string
 
 	// InsecureSkipVerify accepts a relay certificate that does not validate
@@ -93,7 +94,7 @@ type smtpMailer struct {
 // Nothing is dialed here: the relay is contacted on the first Send, so
 // constructing a mailer never blocks and never fails on a relay that is down.
 // An unusable configuration (empty host, out-of-range port, unknown TLSMode,
-// a ReplyTo carrying a line break) panics instead, because it is an
+// a ReplyTo carrying a control character) panics instead, because it is an
 // unrecoverable wiring error at startup.
 func NewSMTPMailer(cfg SMTPConfig) Mailer {
 	if cfg.Host == "" {
@@ -109,6 +110,9 @@ func NewSMTPMailer(cfg SMTPConfig) Mailer {
 	}
 	if strings.ContainsAny(cfg.ReplyTo, "\r\n") {
 		panic("pkgcore: NewSMTPMailer rejects a line break in SMTPConfig.ReplyTo")
+	}
+	if strings.ContainsFunc(cfg.ReplyTo, unicode.IsControl) {
+		panic("pkgcore: NewSMTPMailer rejects a control character in SMTPConfig.ReplyTo")
 	}
 	return &smtpMailer{cfg: cfg}
 }
@@ -151,7 +155,8 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	// The message's own ReplyTo wins over the implementation-level default.
 	// mail is this Send's own copy of the value, so the fallback never writes
 	// back into the caller's Mail, and cfg.ReplyTo needs no re-validation
-	// here: NewSMTPMailer refused a line break in it at construction time.
+	// here: NewSMTPMailer refused a control character in it at construction
+	// time.
 	if mail.ReplyTo == "" {
 		mail.ReplyTo = m.cfg.ReplyTo
 	}
@@ -329,14 +334,14 @@ func (m *smtpMailer) authenticate(client *smtp.Client) error {
 // before the body but the writer's boundary is only settled once.
 //
 // buildMessage trusts mail.From/To/Subject and the optional mail.ReplyTo to
-// already be free of \r\n: its only caller, Send, calls validateMail first
-// and returns on any failure before reaching this function, and fills an
-// empty ReplyTo from SMTPConfig.ReplyTo, which the constructor refused a line
-// break in. The raw interpolation below therefore cannot be used for SMTP
-// header injection. (CodeQL's go/email-injection flags this function; see
-// validateMail's doc comment in mailer_validation.go for the full reasoning --
-// reviewed
-// and confirmed a false positive.)
+// have already passed validateMail: its only caller, Send, calls it first and
+// returns on any failure before reaching this function, and an empty ReplyTo
+// is filled from SMTPConfig.ReplyTo, which the constructor refused a control
+// character in. The addresses are therefore free of control characters and
+// the Subject of line breaks, so the raw interpolation below cannot smuggle a
+// header into the SMTP conversation. (CodeQL's go/email-injection flags this
+// function; see validateMail's doc comment in mailer_validation.go for the
+// full reasoning -- reviewed and confirmed a false positive.)
 func buildMessage(mail Mail) []byte {
 	contentType, body := renderBody(mail)
 
@@ -440,9 +445,9 @@ type smtpComponentConfig struct {
 // there: MultiReplicaSafe (any number of replicas sharing one relay) and
 // Stateless (every Send dials a fresh connection and the struct holds only
 // its config, so a restart drops nothing). Its New funnels through
-// newSMTPMailerFromFields, the same validation the flat seam adapter
-// (mailer_registry.go) uses, so the two configuration channels cannot drift
-// on the required host, the port range or the line-break refusal.
+// newSMTPMailerFromFields, so an unusable resolved value -- an empty host, a
+// port outside the range, a ReplyTo carrying a control character -- comes
+// back as a configuration error rather than the constructor's panic.
 var mailerSMTPComponent = Component{
 	Name:         "mailer.smtp",
 	Module:       "mailer",
@@ -459,7 +464,7 @@ var mailerSMTPComponent = Component{
 			return nil, err
 		}
 		port := c.Port
-		if port == 0 { // unset: the submission port, the seam adapter's own default
+		if port == 0 { // unset: the submission port
 			port = defaultSMTPPort
 		}
 		return newSMTPMailerFromFields(c.Host, port, c.Username, c.Password, c.ReplyTo, tlsMode, c.InsecureSkipVerify)
@@ -468,19 +473,17 @@ var mailerSMTPComponent = Component{
 
 func init() { MustRegister(mailerSMTPComponent) }
 
-// defaultSMTPPort is the submission port both configuration channels default
-// an unset port to: plaintext first, STARTTLS when advertised. It is the
-// same 587 the flat seam adapter uses.
+// defaultSMTPPort is the submission port the "mailer.smtp" component defaults
+// an unset port to: plaintext first, STARTTLS when advertised.
 const defaultSMTPPort = 587
 
 // newSMTPMailerFromFields validates one SMTP mailer's resolved settings and
-// builds the mailer -- the single construction path both configuration
-// channels funnel through: the flat Config adapter (mailer_registry.go) and
-// the "mailer.smtp" component above. Host has no safe default, a port
-// outside 1..65535 is unusable and a line break in replyTo would smuggle a
-// header into the SMTP conversation, so all three are refused here as
-// errors, keeping NewSMTPMailer's own panic for an unusable configuration
-// unreachable through either channel.
+// builds the mailer -- the single construction path the "mailer.smtp"
+// component funnels through. Host has no safe default, a port outside
+// 1..65535 is unusable and a control character in replyTo would travel into
+// the SMTP conversation unchecked, so all three are refused here as errors,
+// keeping NewSMTPMailer's own panic for an unusable configuration unreachable
+// through that channel.
 func newSMTPMailerFromFields(host string, port int, username, password, replyTo string, tlsMode SMTPTLSMode, insecureSkipVerify bool) (Mailer, error) {
 	if host == "" {
 		return nil, fmt.Errorf("pkgcore: mailer.smtp: %w: requires \"host\"", ErrMissingSeamConfig)
@@ -490,6 +493,9 @@ func newSMTPMailerFromFields(host string, port int, username, password, replyTo 
 	}
 	if strings.ContainsAny(replyTo, "\r\n") {
 		return nil, fmt.Errorf("pkgcore: mailer.smtp: invalid \"reply_to\": must not contain a line break")
+	}
+	if strings.ContainsFunc(replyTo, unicode.IsControl) {
+		return nil, fmt.Errorf("pkgcore: mailer.smtp: invalid \"reply_to\": must not contain a control character")
 	}
 
 	return NewSMTPMailer(SMTPConfig{

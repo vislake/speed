@@ -438,6 +438,63 @@ func TestSMTPMailer_Send_RejectsInvalidMailWithoutTouchingTheWire(t *testing.T) 
 	}
 }
 
+// TestSMTPMailer_Send_ControlCharacterAddressesNeverReachTheWire pins the
+// address rule on the wire: a message whose From, a To entry or the ReplyTo
+// carries a control character fails with ErrInvalidMail before anything is
+// dialed, so the relay records no exchange at all. net/smtp's own
+// command-line guard rejects CR and LF only, so without the rule a value like
+// the To entry below would travel verbatim into the RCPT command and the raw
+// DATA headers.
+func TestSMTPMailer_Send_ControlCharacterAddressesNeverReachTheWire(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
+	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
+
+	mail := Mail{
+		From:    "ops@example.com\x0b",
+		To:      []string{"ada@example.com\x7f"},
+		ReplyTo: "ops@example.com\u0085",
+		Subject: "control characters in the addresses",
+		Text:    "body",
+	}
+	err := mailer.Send(context.Background(), mail)
+	exchanges := server.Take()
+	if !errors.Is(err, ErrInvalidMail) {
+		t.Fatalf("Send() error = %v, want ErrInvalidMail before any dial; relay saw %#v", err, exchanges)
+	}
+	if len(exchanges) != 0 {
+		t.Errorf("relay recorded %d exchanges, want none: %#v", len(exchanges), exchanges)
+	}
+}
+
+// TestSMTPMailer_Send_CarriesADisplayNameAddressForm pins the accept side of
+// the address rule on the wire: the name-and-address display form the Mail
+// documentation leaves to the caller passes validation and travels through
+// the transaction as given.
+func TestSMTPMailer_Send_CarriesADisplayNameAddressForm(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
+	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
+
+	err := mailer.Send(context.Background(), Mail{
+		From: "Ada Lovelace <ada@example.com>", To: []string{"Grace Hopper <grace@example.com>"},
+		Subject: "display names", Text: "body",
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v, want nil", err)
+	}
+
+	exchanges := server.Take()
+	if len(exchanges) != 1 {
+		t.Fatalf("relay recorded %d exchanges, want 1", len(exchanges))
+	}
+	if want := "To: Grace Hopper <grace@example.com>\r\n"; !strings.Contains(exchanges[0].Msg, want) {
+		t.Errorf("relay message = %q, want it to carry %q", exchanges[0].Msg, want)
+	}
+}
+
 // TestSMTPMailer_Send_ReportsDialFailures pins the error a valid send gets
 // when the relay is unreachable: a wrapped error naming the relay address.
 func TestSMTPMailer_Send_ReportsDialFailures(t *testing.T) {
@@ -612,6 +669,7 @@ func TestNewSMTPMailer_PanicsOnAnUnusableConfig(t *testing.T) {
 		{"an out-of-range port", SMTPConfig{Host: "smtp.example.com", Port: 65536}, "Port in 1..65535"},
 		{"an unknown TLS mode", SMTPConfig{Host: "smtp.example.com", Port: 25, TLSMode: SMTPTLSMode(99)}, "unknown SMTPTLSMode"},
 		{"a reply-to carrying a line break", SMTPConfig{Host: "smtp.example.com", Port: 25, ReplyTo: "ops@example.com\r\nBcc: sneaky@example.com"}, "line break in SMTPConfig.ReplyTo"},
+		{"a reply-to carrying a control character", SMTPConfig{Host: "smtp.example.com", Port: 25, ReplyTo: "ops@example.com\x0b"}, "control character in SMTPConfig.ReplyTo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -625,6 +683,46 @@ func TestNewSMTPMailer_PanicsOnAnUnusableConfig(t *testing.T) {
 				}
 			}()
 			NewSMTPMailer(tt.cfg)
+		})
+	}
+}
+
+// TestNewSMTPMailerFromFields_RejectsReplyToWithControlCharacters pins the
+// component configuration channel's guard: a reply_to carrying a line break
+// or any other control character comes back as an error, never as a mailer
+// whose Sends would carry that value into the relay's DATA headers.
+func TestNewSMTPMailerFromFields_RejectsReplyToWithControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a plain reply-to passes", func(t *testing.T) {
+		t.Parallel()
+
+		mailer, err := newSMTPMailerFromFields("smtp.example.com", 587, "", "", "ops@example.com", SMTPTLSModeAuto, false)
+		if err != nil {
+			t.Fatalf("newSMTPMailerFromFields() error = %v, want nil", err)
+		}
+		if mailer == nil {
+			t.Fatal("newSMTPMailerFromFields() mailer = nil, want a mailer")
+		}
+	})
+
+	for _, tt := range []struct{ name, replyTo string }{
+		{"a_line_break", "ops@example.com\r\nBcc: sneaky@example.com"},
+		{"a_control_character", "ops@example.com\x0b"},
+	} {
+		t.Run("rejects_"+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mailer, err := newSMTPMailerFromFields("smtp.example.com", 587, "", "", tt.replyTo, SMTPTLSModeAuto, false)
+			if err == nil {
+				t.Fatalf("newSMTPMailerFromFields(reply_to=%q) returned a mailer and no error, want a refusal", tt.replyTo)
+			}
+			if mailer != nil {
+				t.Errorf("newSMTPMailerFromFields returned a mailer alongside error %v, want none", err)
+			}
+			if !strings.Contains(err.Error(), "reply_to") {
+				t.Errorf("error = %v, want it to name the reply_to field", err)
+			}
 		})
 	}
 }
