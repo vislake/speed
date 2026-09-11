@@ -996,15 +996,16 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 	cases := []bootFailureCase{
 		{
 			// Nothing configured at all -- the naive operator mistake.
-			// authn.NewModule's own wiring-time validation runs BEFORE
-			// The assembly's Prepare stage in BuildServer, which walks the
-			// selected components' capabilities in the composition's order,
-			// so THIS is the first thing that fails closed: the in-process
-			// event bus a distributed deployment may not select.
+			// The assembly's Prepare stage walks the selected components'
+			// capabilities in the composition's order and runs before any
+			// component construction, so THIS is the first thing that
+			// fails closed: the in-process event bus a distributed
+			// deployment may not select -- ahead of authn.NewModule's own
+			// wiring-time SMS-sender validation.
 			name:     "nothing configured",
 			extraEnv: nil,
 			wantSubstr: []string{
-				"seam implementation does not satisfy the deployment mode's required capability",
+				"does not satisfy the deployment mode's required capability",
 				"eventbus.memory", "MultiReplicaSafe", "distributed",
 			},
 		},
@@ -1020,17 +1021,19 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			name:     "SMS sender present, every assembly-resolved seam left on its in-process default",
 			extraEnv: []string{"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms"},
 			wantSubstr: []string{
-				// pkgcore.ErrCapabilityUnsatisfied's own Error() text --
-				// checked as this literal string, not the Go identifier,
-				// since that identifier never appears in the wrapped
-				// message a real operator actually sees. Quote characters
-				// are deliberately left out of every substring below: the
-				// child's log line is one JSON-encoded string, so a literal
-				// `"` in the underlying message is escaped to `\"` on the
-				// wire, and checking for the unescaped form here would be
-				// brittle against that encoding rather than testing
-				// anything about the message itself.
-				"seam implementation does not satisfy the deployment mode's required capability",
+				// The stable core of pkgcore.ErrCapabilityUnsatisfied's
+				// own Error() text -- checked as this literal phrase, not
+				// the Go identifier, since that identifier never appears
+				// in the wrapped message a real operator actually sees,
+				// and not the qualifiers the sentinel carries around the
+				// core, which may be reworded at any time. Quote
+				// characters are deliberately left out of every substring
+				// below: the child's log line is one JSON-encoded string,
+				// so a literal `"` in the underlying message is escaped
+				// to `\"` on the wire, and checking for the unescaped
+				// form here would be brittle against that encoding rather
+				// than testing anything about the message itself.
+				"does not satisfy the deployment mode's required capability",
 				"eventbus.memory", "MultiReplicaSafe", "distributed",
 			},
 		},
