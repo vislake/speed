@@ -140,6 +140,17 @@ Advanced: setting one or more of the six individual keys directly, instead of (o
 | `APP_AUTHN__BLIND_INDEX_KEY` | The HMAC key authn indexes `users.email_index`/`phone_index` with, so a user can be found by email or phone without decrypting every row. Must stay identical across restarts (changing it — including by rotating `APP_ROOT_KEY` — makes every already-stored index unfindable until a rebuild) — had no override path before `APP_ROOT_KEY` existed. |
 | `APP_AUTHN__PII_CIPHER_KEY` | The AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets). Had no override path before `APP_ROOT_KEY` existed; deliberately a separate secret from `APP_CONFIG__CIPHER_KEY` and from `APP_PKI__LOCAL_KEY_CIPHER_KEY` — dbkit's key-separation rule applies across modules, not only within one. |
 
+**The six variables above were renamed: the old flat spellings are no longer read.** Each once pinned its own flat, single-underscore spelling; each name is now the loader's derivation from the declared key path — the `APP_` prefix, the path uppercased with its dot spelled as a double underscore. An existing deployment or local `.env` still carrying an old spelling is silently losing that setting: the variable maps onto no field, and the key falls back to its `APP_ROOT_KEY` derivation exactly as an unset one does, or to its documented development default when no root key is set. Re-set it under the new name:
+
+| Old name | New name |
+|---|---|
+| `APP_CONFIG_KEY` | `APP_CONFIG__CIPHER_KEY` |
+| `APP_ORG_INDEX_KEY` | `APP_ORG__INVITATION_EMAIL_INDEX_KEY` |
+| `APP_NOTIFICATION_INDEX_KEY` | `APP_NOTIFICATION__CONTACT_INDEX_KEY` |
+| `APP_PKI_LOCAL_KEY_CIPHER_KEY` | `APP_PKI__LOCAL_KEY_CIPHER_KEY` |
+| `APP_AUTHN_BLIND_INDEX_KEY` | `APP_AUTHN__BLIND_INDEX_KEY` |
+| `APP_AUTHN_PII_CIPHER_KEY` | `APP_AUTHN__PII_CIPHER_KEY` |
+
 Optional, but recommended to set as a secret rather than leave in `[env]` **for a real deployment reachable over the public internet** — `APP_DEMO_USERS_PASSWORD` (gates the boot-time demo-user seed, `internal/app/demo/demo_users.go`). The app's own code and `.env.example` treat this as a non-secret local-demo passphrase, which is true on a laptop nobody else can reach; on a public Fly.io URL, though, whoever knows this value can sign in as `demo-owner@example.com`, a real account holding every permission any module declared. This deployment's `fly.toml` leaves it **unset entirely**, which skips the demo-account seed — the safer default for a fresh public deployment. Set it only if you deliberately want the demo accounts reachable, and set it via `fly secrets set APP_DEMO_USERS_PASSWORD=...`, never `[env]`.
 
 The same holds, under its OWN variable, for the platform-staff demo account: `APP_DEMO_PLATFORM_STAFF_PASSWORD` gates the boot-time seed of `demo-platform-staff@example.com` (`internal/app/demo/demo_admin.go`'s `SeedDemoPlatformStaff`), the rbac.SystemDomain platform administrator holding the built-in owner role there — every permission any module declared, `go/admin`'s `admin:*` permissions included. It is deliberately a separate variable from `APP_DEMO_USERS_PASSWORD`: whoever knows the demo users' passphrase must never also hold the platform administrator's. `fly.toml` leaves it **unset entirely** as well — the same skip-the-seed safer default. If you do set either, set it via `fly secrets set`, never `[env]`, and never set the two to the same value.
