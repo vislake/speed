@@ -36,7 +36,8 @@ import { useState } from 'react'
 import Button from '@mui/material/Button'
 import type { AuthSession } from '@speed/auth-core'
 import { useAuthUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { errorCodeOf } from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 
 export interface SignOutButtonProps {
   /** The session the sign-out drives. */

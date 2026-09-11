@@ -47,7 +47,8 @@ import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
 import type { SocialProvider } from './SocialSignInSection.js'
 import { useAuthUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { errorCodeOf } from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 
 export interface SocialCallbackHandlerProps {
   /** The session that completes the exchange. */

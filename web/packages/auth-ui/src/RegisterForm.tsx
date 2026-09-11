@@ -32,14 +32,18 @@ import AlertTitle from '@mui/material/AlertTitle'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
-import type { SxProps, Theme } from '@mui/material'
 import { useForm } from 'react-hook-form'
 import type { SubmitHandler } from 'react-hook-form'
-import { FormLayout, FormField } from '@speed/ui-kit'
+import {
+  errorCodeOf,
+  FormField,
+  FormLayout,
+  visuallyHiddenSx,
+} from '@speed/ui-kit'
 import type { AuthSession } from '@speed/auth-core'
 import type { AuthnRegisterRequest, AuthnUser } from '@speed/api-sdk'
 import { useAuthUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { InlineError } from './internal/inline-error.js'
 
 export interface RegisterFormProps {
   /** The session the registration drives. */
@@ -50,23 +54,6 @@ export interface RegisterFormProps {
    * renders a success panel in place.
    */
   readonly onRegistered?: (user: AuthnUser) => void
-}
-
-/** The visually-hidden recipe for the success live region while there is
- * nothing to announce (the clip technique, the family's shape -- see
- * product-shell's sr-only region and ui-kit's ConfirmDialog arming
- * region): the region must stay in the accessibility tree to announce,
- * so it is clipped, never display:none -- a hidden region would not be
- * live. */
-const srOnlyRegionSx: SxProps<Theme> = {
-  clip: 'rect(0 0 0 0)',
-  clipPath: 'inset(50%)',
-  height: 1,
-  margin: 0,
-  overflow: 'hidden',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: 1,
 }
 
 interface RegisterFields {
@@ -242,7 +229,7 @@ export function RegisterForm({ session, onRegistered }: RegisterFormProps) {
       <Alert
         severity="success"
         role="status"
-        sx={created !== null ? { width: '100%' } : srOnlyRegionSx}
+        sx={created !== null ? { width: '100%' } : visuallyHiddenSx}
       >
         {created !== null ? (
           <>

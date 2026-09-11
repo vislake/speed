@@ -71,37 +71,24 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
-import type { SxProps, Theme } from '@mui/material'
 import { useForm } from 'react-hook-form'
 import type { SubmitHandler } from 'react-hook-form'
-import { FormLayout, FormField } from '@speed/ui-kit'
+import {
+  errorCodeOf,
+  FormField,
+  FormLayout,
+  visuallyHiddenSx,
+} from '@speed/ui-kit'
 import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
 import { useAuthUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { InlineError } from './internal/inline-error.js'
 
 export interface SMSSignInFormProps {
   /** The session the SMS sign-in drives. */
   readonly session: AuthSession
   /** Fired once after an SMS-code login commits; the host navigates. */
   readonly onSignedIn?: () => void
-}
-
-/** The visually-hidden recipe for the sent-notice live region while
- * there is nothing to announce (the clip technique, the family's shape
- * -- see product-shell's sr-only region and ui-kit's ConfirmDialog
- * arming region): the region must stay in the accessibility tree to
- * announce, so it is clipped, never display:none -- a hidden region
- * would not be live. */
-const srOnlyRegionSx: SxProps<Theme> = {
-  clip: 'rect(0 0 0 0)',
-  clipPath: 'inset(50%)',
-  height: 1,
-  margin: 0,
-  overflow: 'hidden',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: 1,
 }
 
 interface SmsFields {
@@ -280,7 +267,7 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
       <Alert
         severity="info"
         role="status"
-        sx={step === 'code' ? { width: '100%' } : srOnlyRegionSx}
+        sx={step === 'code' ? { width: '100%' } : visuallyHiddenSx}
       >
         {step === 'code'
           ? t('smsSignIn.sentNotice', { phone: sentTo ?? '' })

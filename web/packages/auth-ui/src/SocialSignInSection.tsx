@@ -28,7 +28,8 @@ import Button from '@mui/material/Button'
 import Divider from '@mui/material/Divider'
 import type { AuthSession } from '@speed/auth-core'
 import { useAuthUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { errorCodeOf } from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 
 /** The social sign-in channels the authn spec hosts. */
 export type SocialProvider =

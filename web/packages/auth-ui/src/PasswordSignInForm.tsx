@@ -30,11 +30,11 @@ import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
 import { useForm } from 'react-hook-form'
 import type { SubmitHandler } from 'react-hook-form'
-import { FormLayout, FormField } from '@speed/ui-kit'
+import { errorCodeOf, FormField, FormLayout } from '@speed/ui-kit'
 import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
 import { useAuthUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { InlineError } from './internal/inline-error.js'
 
 export interface PasswordSignInFormProps {
   /** The session the password login drives. */
