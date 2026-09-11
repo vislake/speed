@@ -1,14 +1,21 @@
 // Package app is the reference app's assembly library: the composition and
-// host wiring the application runs on. Everything importable lives here --
-// BuildServer and its route handlers, ServerConfig and ConfigFromEnv's
-// loader-driven bootstrap (bootstrap.go), the host-side route guards, the
-// self-service provisioner, the path constants and write-error helpers the
-// HTTP surfaces share, and the development key defaults (devkeys.go) --
-// while the demonstration layer (the fixed demo identities, the route
-// authorization table and the boot-time demo seeds) lives in the
-// internal/app/demo package beside it, and cmd/server's main.go keeps only
-// the process glue a process needs: signal handling, http.Server
-// start/stop, the healthcheck re-invocation and observabilityOptions.
+// host wiring the application runs on. The application assembles through the
+// config-driven component assembly: this package contributes the host's own
+// components (component.go, host_wiring.go) -- the step components wrapping
+// attach.go's and serve.go's assembly steps, the override components that
+// construct a module with the host's own wiring, and the provider components
+// whose products satisfy the seam tokens the assembled modules declare --
+// and drives them with the engine's Assemble (server.go). Everything
+// importable lives here -- BuildServer and its route handlers, ServerConfig
+// and ConfigFromEnv's loader-driven bootstrap (bootstrap.go), the host-side
+// route guards, the self-service provisioner, the path constants and
+// write-error helpers the HTTP surfaces share, and the development key
+// defaults (devkeys.go) -- while the demonstration layer (the fixed demo
+// identities, the route authorization table and the boot-time demo seeds)
+// lives in the internal/app/demo package beside it, and cmd/server's
+// main.go keeps only the process glue a process needs: signal handling,
+// http.Server start/stop, the healthcheck re-invocation and
+// observabilityOptions.
 //
 // # Why the package exists
 //

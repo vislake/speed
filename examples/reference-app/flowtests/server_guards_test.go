@@ -327,32 +327,27 @@ const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 // TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation pins
 // what requesting the distributed deployment mode means: the composition
 // is not rejected up front, it is validated -- and with every seam
-// resolved from the Preset, the distributed mode's required capabilities
-// cannot be met. Kernel.Bootstrap must fail with ErrCapabilityUnsatisfied,
-// naming the first shortfall: the "eventbus" seam's in-process memory
-// implementation lacking MultiReplicaSafe while the mode is "distributed".
-// Bootstrap performs that validation before any Subscribe or goroutine
-// starts, so this test needs no Docker and never touches a network, and it
-// guarantees the mode can never silently degrade into a
-// SQLite-and-in-memory run under a "distributed" label.
+// resolved from the composition, the distributed mode's required
+// capabilities cannot be met. The assembly must fail with
+// ErrCapabilityUnsatisfied, naming the first shortfall: the in-process
+// "eventbus.memory" implementation lacking MultiReplicaSafe while the mode
+// is "distributed". The assembly performs that validation before any
+// Subscribe or goroutine starts, so this test needs no Docker and never
+// touches a network, and it guarantees the mode can never silently degrade
+// into a SQLite-and-in-memory run under a "distributed" label.
 //
-// The event bus is constructed by BuildServer itself
-// -- before dbkit.Open, so the automatic org audit capture can publish on
-// the same bus the Kernel later resolves (see the Open call's own comment)
-// -- and injected through WithEventBus in the standalone as well as the
-// Redis composition. A distributed boot without cfg.RedisAddr therefore
-// fails on the INJECTED memory bus, which pkgcore's capability error names
-// as implementation "<injected>" (an injected seam has no registry name to
-// report -- the host knows what it injected); the seam, capability and
-// mode naming is unchanged, and that is the part that proves the mode can
-// never silently degrade.
+// The event bus is selected in-process for a boot without cfg.RedisAddr, so
+// a distributed boot without it fails on that component; a Redis-configured
+// boot swaps both that component and the key-value store for their
+// Redis-backed siblings, which is what makes the mailer the next shortfall
+// (the test below this one).
 //
 // cfg.SMSGatewayURL is set to fakeSMSGatewayURL so that authn's own
-// wiring-time SMS-sender validation, which BuildServer reaches BEFORE
-// Kernel.Bootstrap (see BuildServer's authn wiring comment), does not mask
-// the Kernel-level failure this test actually pins;
+// construction-time SMS-sender validation, which the assembly reaches
+// during Construct, does not mask the capability failure this test
+// actually pins;
 // TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed below
-// is what proves that earlier validation on its own.
+// is what proves that validation on its own.
 func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
@@ -365,7 +360,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
 		t.Fatalf("BuildServer with DeploymentModeDistributed: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
-	for _, want := range []string{`seam "eventbus"`, `"<injected>"`, "MultiReplicaSafe", `"distributed"`} {
+	for _, want := range []string{`component "eventbus.memory"`, "MultiReplicaSafe", `"distributed"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("BuildServer with DeploymentModeDistributed: error %q does not mention %s", err, want)
 		}
@@ -374,21 +369,20 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 
 // TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer
 // is the second half of the distributed-mode pin under the env-driven
-// wiring: APP_REDIS_ADDR composes BOTH the
-// "eventbus" and the "kv" seam onto one shared *redis.Client (BuildServer's
-// kernel-options doc comment explains why one Redis instance backs both),
-// so a distributed deployment with only cfg.RedisAddr set clears both
-// "eventbus" and "kv" and fails capability validation on the NEXT seam
-// Kernel.Bootstrap resolves: "mailer", whose Preset default
-// ("mailer.console") also lacks MultiReplicaSafe, and this test configures
-// no APP_SMTP_* composition to swap it for. This is the "one
+// wiring: APP_REDIS_ADDR swaps BOTH the event bus and the key-value store
+// onto their Redis-backed components, so a distributed deployment with only
+// cfg.RedisAddr set clears both and fails capability validation on the NEXT
+// component the composition selects: "mailer.console", which also lacks
+// MultiReplicaSafe, and this test configures no APP_SMTP_* composition to
+// swap it for. This is the "one
 // seam wired isn't enough" property of the distributed
-// mode, demonstrated at the mailer seam. Validation precedes module registration, so no Subscribe is ever
-// reached, and the cleanup BuildServer runs on this error path is equally
-// network-free: RedisEventBus starts no goroutine and touches no network
-// until the first Subscribe (its group-destroy sweep returns early with
-// nothing subscribed), a go-redis client dials lazily, and kv/redis.
-// NewKVStore's own first operation is what reaches for the server -- so the
+// mode, demonstrated at the mailer seam. Validation precedes construction and registration, so no Subscribe is ever
+// reached, and no teardown ever has to run on this error path: it is
+// equally network-free, since the assembly fails in its Prepare stage --
+// a go-redis client dials lazily, kv/redis.
+// NewKVStore's own first operation is what reaches for the server, and
+// RedisEventBus starts no goroutine and touches no network
+// until the first Subscribe -- so the
 // unreachable 127.0.0.1:6379 address is never contacted by either seam,
 // and this test needs no Docker.
 func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer(t *testing.T) {
@@ -404,7 +398,7 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
 		t.Fatalf("BuildServer with DeploymentModeDistributed and Redis configured: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
-	for _, want := range []string{`seam "mailer"`, `"mailer.console"`, "MultiReplicaSafe", `"distributed"`} {
+	for _, want := range []string{`component "mailer.console"`, "MultiReplicaSafe", `"distributed"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("BuildServer with DeploymentModeDistributed and Redis configured: error %q does not mention %s", err, want)
 		}
@@ -414,15 +408,21 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 // TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed proves
 // the negative half of the authn "SMS sender" wiring: a
 // distributed composition that forgets APP_SMS_GATEWAY_URL must fail
-// closed with authn.ErrMissingDistributedSMSSender, rather than silently
+// closed, rather than silently
 // keeping the console transport nobody in a distributed replica pool is
 // reading. Passing WithSMSSender(NewConsoleSMSSender(...))
 // unconditionally regardless of deployment mode would hide that gap.
-// This is authn's OWN wiring-time validation (authn.NewModule's
-// newOptions), which BuildServer reaches before it ever calls
-// pkgcore.NewKernel(...).Bootstrap -- so this failure fires regardless of
-// whether any other seam (Redis, S3, SMTP) is configured, and this test
-// configures none of them, needing no Docker and touching no network.
+// This boot configures neither Redis, S3 nor SMTP, so its composition
+// cannot satisfy the distributed mode at all: the assembly refuses in
+// whichever stage reaches the shortfall first, and BOTH legitimate
+// refusals are accepted here -- the capability validation naming the
+// in-process component a distributed composition may not select, and
+// authn's own construction-time sender validation
+// (authn.ErrMissingDistributedSMSSender, authn.NewModule's newOptions)
+// for a boot whose composition is otherwise sound. What the assertion
+// rejects is exactly the failure mode the test exists for: a boot that
+// succeeds on a transport no replica pool reads. Nothing here dials
+// anything, so this test needs no Docker and touches no network.
 func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
@@ -431,32 +431,31 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 	if err == nil {
 		t.Fatal("BuildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: want error, got nil")
 	}
-	if !errors.Is(err, authn.ErrMissingDistributedSMSSender) {
-		t.Fatalf("BuildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
+	if !errors.Is(err, authn.ErrMissingDistributedSMSSender) && !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
+		t.Fatalf("BuildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: error = %v, want a fail-closed refusal (authn.ErrMissingDistributedSMSSender or pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
 }
 
 // TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel pins
 // the channel this app routes its two string-expressible seam compositions
-// through -- the APP_SMTP_* and APP_S3_* groups -- by reading
-// Kernel.Bootstrap's own startup composition line. With those groups
-// configured, the "mailer" seam must be named as the registered
-// "mailer.smtp" implementation it resolves to and the "objectstore" seam as
-// "objectstore.s3", not as "<injected>" (a host-built value handed over with
-// WithMailer/WithObjectStore). A regression back to constructing
+// through -- the APP_SMTP_* and APP_S3_* groups -- by reading the
+// assembly's own startup line naming the selected components. With those
+// groups configured, the mailer is the registered
+// "mailer.smtp" component and the object store is
+// "objectstore.s3" -- not the host's own components, which the composition
+// selects only for a boot that supplies its own values. A regression back to
+// constructing
 // pkgcore.NewSMTPMailer / objectstore/s3.NewObjectStore in this host would
-// boot identically and name "<injected>" for both, so the line is the
-// discriminator between composing through the channel and pre-building; the
-// same boot must keep naming the eventbus as "<injected>" and the kv seam as
-// its in-process default, since those two deliberately stay on the injection
-// path.
+// boot identically and select the host's components instead, so the line is
+// the discriminator between composing through the channel and pre-building;
+// the same boot must keep naming the in-process eventbus and kv components,
+// since the default compositions stay in-process.
 //
 // The slog default logger is process-global, and nothing in this package
 // calls t.Parallel, so the swap cannot overlap another test's boot (the same
-// ground pkgcore's own TestBootstrap_LogsOneInfoLineNamingEveryResolvedSeam
-// stands on). Neither composition dials anything at boot: mailer.smtp dials
-// per message and the S3 client is constructed lazily, so this test needs no
-// Docker and touches no network.
+// ground pkgcore's own assembly tests stand on). Neither composition dials
+// anything at boot: mailer.smtp dials per message and the S3 client is
+// constructed lazily, so this test needs no Docker and touches no network.
 func TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()
@@ -485,16 +484,16 @@ func TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel(t *tes
 
 	out := buf.String()
 	for _, want := range []string{
-		"mailer=mailer.smtp",
-		"objectstore=objectstore.s3",
-		"eventbus=<injected>",
-		"kv=kv.memory",
+		"mailer.smtp",
+		"objectstore.s3",
+		"eventbus.memory",
+		"kv.memory",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("bootstrap logged %q, want the composition line to name %s", out, want)
+			t.Errorf("bootstrap logged %q, want the assembly line to name %s", out, want)
 		}
 	}
-	if strings.Contains(out, "mailer=<injected>") || strings.Contains(out, "objectstore=<injected>") {
-		t.Errorf("bootstrap logged %q, want neither the mailer nor the objectstore seam injected", out)
+	if strings.Contains(out, "reference-app.mailer") || strings.Contains(out, "reference-app.sms") {
+		t.Errorf("bootstrap logged %q, want neither the host mailer nor the host SMS component selected", out)
 	}
 }

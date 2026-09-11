@@ -155,13 +155,21 @@ HOST_COMPOSITION_PATHS = (
 #     "composition" (only HOST_COMPOSITION_PATHS above);
 #   * allowed -- repo-relative files where the call is the sanctioned,
 #     host-owned shape, each named with its reason:
-#       - jobs.NewStandaloneQueue in the reference app's modules.go and
-#         jobs.Wire in its attach.go: background execution is host-owned by
-#         design -- the host constructs the job queue and its registry
-#         wiring and hands the queue to the engine as the Worker
-#         (app.WithWorker). A NEW file calling either still fires; making
-#         the exemption explicit for one more file is the deliberate act
-#         this list forces.
+#       - jobs.NewStandaloneQueue and jobs.Wire: background execution is
+#         host-owned by design, and the host reaches both through the
+#         "queue.standalone" component's own assembly -- no host file
+#         issues either call, so neither entry carries an allowance (a
+#         host that re-issues one has forked the component).
+#       - dbkit.Open in the reference app's host wiring
+#         (examples/reference-app/internal/app/host_wiring.go): the
+#         database connection IS the host's to open -- the write-capture
+#         scope (dbkit.Options.AuditBus/AuditModels) is a construction
+#         parameter of the connection, so the host's database component
+#         owns the call. Any other host file still fires.
+#       - signal.NotifyContext in the reference app's assembly core
+#         (examples/reference-app/internal/app/server.go): the signal
+#         handling of Run belongs to the host whose listener the process
+#         owns. Any other host file still fires.
 #       - http.NewServeMux in the reference app's application component
 #         (examples/reference-app/internal/app/component.go): the mux that
 #         component's Init composes IS the host's own face -- the platform
@@ -171,7 +179,12 @@ HOST_COMPOSITION_PATHS = (
 HOST_COMPOSITION_CALL_BANS = (
     ("pkgcore.NewKernel", r"(?<![A-Za-z0-9_.])pkgcore\.NewKernel\(", "tree", ()),
     (".Bootstrap(", r"\.Bootstrap\(", "tree", ()),
-    ("dbkit.Open", r"(?<![A-Za-z0-9_.])dbkit\.Open\(", "tree", ()),
+    (
+        "dbkit.Open",
+        r"(?<![A-Za-z0-9_.])dbkit\.Open\(",
+        "tree",
+        ("examples/reference-app/internal/app/host_wiring.go",),
+    ),
     ("dbkit.NewMigrationRegistry", r"(?<![A-Za-z0-9_.])dbkit\.NewMigrationRegistry\(", "tree", ()),
     (
         "http.NewServeMux",
@@ -183,15 +196,20 @@ HOST_COMPOSITION_CALL_BANS = (
         "jobs.NewStandaloneQueue",
         r"(?<![A-Za-z0-9_.])jobs\.NewStandaloneQueue\(",
         "tree",
-        ("examples/reference-app/internal/app/modules.go",),
+        (),
     ),
     (
         "jobs.Wire",
         r"(?<![A-Za-z0-9_.])jobs\.Wire\(",
         "tree",
-        ("examples/reference-app/internal/app/attach.go",),
+        (),
     ),
-    ("signal.NotifyContext", r"(?<![A-Za-z0-9_.])signal\.NotifyContext\(", "tree", ()),
+    (
+        "signal.NotifyContext",
+        r"(?<![A-Za-z0-9_.])signal\.NotifyContext\(",
+        "tree",
+        ("examples/reference-app/internal/app/server.go",),
+    ),
     ("chain.Chain", r"(?<![A-Za-z0-9_.])[A-Za-z0-9_]*chain\.Chain\(", "tree", ()),
     ("obs.Init", r"(?<![A-Za-z0-9_.])obs\.Init\(", "tree", ()),
 )
@@ -202,12 +220,18 @@ HOST_COMPOSITION_CALL_BANS = (
 # above; the finding names the component surface as the remedy. The table
 # retires into the single ban set once the old option surface is gone (see
 # the module docstring's staging paragraph).
+#
+# The reference app's assembly core (internal/app/server.go) is the one
+# allowed caller of pkgcore.NewComponentRegistry: that file is where the host
+# registers its own components and drives the assembly through the engine's
+# Assemble -- the shape this ban exists to force. Any other host file still
+# fires.
 HOST_COMPOSITION_ASSEMBLY_BANS = (
     (
         "pkgcore.NewComponentRegistry",
         r"(?<![A-Za-z0-9_.])pkgcore\.NewComponentRegistry\(",
         "tree",
-        (),
+        ("examples/reference-app/internal/app/server.go",),
     ),
     ("a component-registry Prepare call", r"\.Prepare\(", "composition", ()),
     ("a component-registry Construct call", r"\.Construct\(", "composition", ()),
@@ -313,11 +337,12 @@ def scan(root: pathlib.Path) -> list[str]:
                         findings.append(
                             f"{rel_str}:{line_no}: calls {label}, an "
                             "assembly step the application engine owns "
-                            f"({KERNEL_MODULE}): declare it through the "
-                            "engine's options (WithKernelOptions, "
-                            "WithDatabase, WithPreDB, WithModules, "
-                            "HTTPSpec.Compose, WithHooks) instead of "
-                            "re-issuing the call here"
+                            f"({KERNEL_MODULE}): select the component that "
+                            "owns the step in the composition configuration, "
+                            "or declare it through the engine's options "
+                            "(WithKernelOptions, WithDatabase, WithPreDB, "
+                            "WithModules, HTTPSpec.Compose, WithHooks), "
+                            "instead of re-issuing the call here"
                         )
                 for label, pattern, scope, allowed in assembly_bans:
                     if scope == "composition" and not in_composition:

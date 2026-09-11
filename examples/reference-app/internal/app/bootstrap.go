@@ -27,14 +27,14 @@ package app
 //
 // The struct doubles as the surface's documentation: each field states what its
 // variable configures, its unset fallback, and the refusals a boot enforces.
-// verifyBootstrapBinding then proves at every boot that the targets really bind
-// the bootstrap keys declared on the registry's bootstrap seat, and the keys
-// this app owns besides them. The module components' keys (authn.pii_cipher_key
-// and the rest of PlatformConfig's six) are resolved by the loader over the
-// registered components, which is the check that covers them.
+// The module components' declared keys (authn.pii_cipher_key and the rest of
+// PlatformConfig's six) are resolved by the assembly loader over the
+// registered components, which also proves each declared key binds one of
+// these two targets before anything is constructed; hostBootstrapKeys below
+// keeps this app's own key surface pinned against the target
+// (bootstrap_test.go).
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -803,36 +803,4 @@ var hostBootstrapKeys = []string{
 	"disabledemouserheader",
 	"disablequeueworker",
 	"failselfserviceprovision",
-}
-
-// verifyBootstrapBinding proves the bootstrap targets bind the seat's
-// bootstrap surface: every key declared on the registry's bootstrap seat maps
-// onto a field of the host target or of the embedded platform declaration,
-// and every key this app owns (hostBootstrapKeys) maps onto a field of the
-// host target. The platform modules' declared keys are descriptor data,
-// bound against the same targets by the assembly loader's stage-prepare
-// check before anything is constructed. A field nobody declares and no key
-// reaches is what the targets' own leaf counts pin (bootstrap_test.go), so
-// the two directions together are the strict correspondence between the
-// targets and the surface.
-func verifyBootstrapBinding(reg *pkgcore.Registry) error {
-	hc := hostConfig{}
-	var unbound []error
-	for _, key := range reg.Bootstrap.Keys() {
-		if config.Verify(&hc, []string{key.Key}) == nil {
-			continue
-		}
-		if config.Verify(&hc.PlatformConfig, []string{key.Key}) == nil {
-			continue
-		}
-		unbound = append(unbound, fmt.Errorf("%w: declared bootstrap key %q maps onto no field of the bootstrap target or of the embedded platform declaration",
-			config.ErrInvalidTarget, key.Key))
-	}
-	if len(unbound) > 0 {
-		return fmt.Errorf("reference-app: the bootstrap targets must bind every bootstrap key the composed modules declared: %w", errors.Join(unbound...))
-	}
-	if err := config.Verify(&hc, hostBootstrapKeys); err != nil {
-		return fmt.Errorf("reference-app: the bootstrap target must bind the host's own bootstrap keys: %w", err)
-	}
-	return nil
 }

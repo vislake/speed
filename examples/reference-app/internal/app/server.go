@@ -1,6 +1,6 @@
-// This file is the reference app's assembly core: ServerConfig, the mapping
-// of the resolved configuration onto the application engine's option set,
-// and the host's teardown. It sits in internal/app so the composed server is
+// This file is the reference app's assembly core: ServerConfig, the
+// component assembly the composed server is driven through, and the host's
+// two entry points. It sits in internal/app so the composed server is
 // importable: cmd/server's main.go boots it as the thin process shell, and
 // the assembly-flow suites, which live beside the command in cmd/server,
 // exercise the package through the command's tests. See doc.go for the
@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 
 	"gorm.io/gorm"
 
@@ -28,12 +28,13 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	obs "github.com/vislake/speed/go/observability"
 
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
-	// so the engine's dbkit.Open has a driver to build from -- the reference
-	// app runs its own database in standalone deployment mode's SQLite
-	// dialect regardless of which deployment mode its other infrastructure
-	// seams compose under.
+	// so the host's dbkit.Open call has a driver to build from -- the
+	// reference app runs its own database in standalone deployment mode's
+	// SQLite dialect regardless of which deployment mode its other
+	// infrastructure seams compose under.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/jobs"
@@ -44,29 +45,39 @@ import (
 	// exporters wire a real /metrics scrape endpoint only when a local
 	// metrics reader has been registered (go/observability's own doc
 	// comment on Init and RegisterLocalMetricsReader) -- this is what
-	// obs.MountLiveness's metrics route actually serves once Run has called
-	// obs.Init. Without this import, obs.Init still runs (traces and
-	// metrics both go to stdout), but the metrics route answers 404.
+	// obs.MountLiveness's metrics route actually serves once the
+	// observability component's Prepare has run obs.Init. Without this
+	// import, obs.Init still runs (traces and metrics both go to stdout),
+	// but the metrics route answers 404.
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
 
 	// Blank-imported for its init() side effect: registers the OTLP/gRPC
-	// exporter factory obs.Init consults exactly when a caller supplies a
-	// non-empty WithOTLPEndpoint (go/observability's ErrOTLPExporterNotRegistered
+	// exporter factory obs.Init consults exactly when a non-empty OTLP
+	// endpoint is configured (go/observability's ErrOTLPExporterNotRegistered
 	// names this import as the fix). Without it, an APP_OTLP_ENDPOINT set
-	// in ConfigFromEnv would fail Run's Init with that error instead of
-	// wiring the collector push the variable promises. Registration is
-	// inert while the endpoint stays unset: Init stays on the local
-	// exporters, byte-identical to this import never having existed.
+	// in ConfigFromEnv would fail the observability component's Prepare with
+	// that error instead of wiring the collector push the variable promises.
+	// Registration is inert while the endpoint stays unset: Init stays on
+	// the local exporters, byte-identical to this import never having
+	// existed.
 	_ "github.com/vislake/speed/go/observability/exporter/otlp"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
-	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 
-	// Blank-imported for its init() side effect: registers "objectstore.s3"
-	// on pkgcore's shared ObjectStoreRegistry, the name the preset entry the
-	// APP_S3_* composition overrides points the "objectstore" seam at.
-	// Without this import the entry would fail Bootstrap with
-	// ErrUnknownImplementation -- the database/sql driver trade every
+	// Blank-imported for their init() side effects: each registers its
+	// distributed component ("eventbus.redis", "kv.redis") with pkgcore's
+	// global component registration, and the APP_REDIS_ADDR composition
+	// selects both. Without them a Redis-configured boot would fail the
+	// assembly with ErrUnknownComponent -- the database/sql driver trade
+	// every registered built-in makes.
+	_ "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	_ "github.com/vislake/speed/go/pkgcore/kv/redis"
+
+	// Blank-imported for its init() side effect: registers the
+	// "objectstore.s3" component, the one the APP_S3_* composition
+	// selects for the "objectstore" seam. Without this import a boot with
+	// APP_S3_ENDPOINT set would fail the assembly with
+	// ErrUnknownComponent -- the database/sql driver trade every
 	// registered built-in makes.
 	_ "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/pki"
@@ -476,39 +487,33 @@ type ServerConfig struct {
 	OnConfigReady func(*config.Service)
 }
 
-// serverBuild carries the assembly state the host's hooks hand each other:
-// the resources built before the engine runs (the audit bus and its Redis
-// client), the modules the WithModules callback constructs, the services and
-// stores the attach hooks derive from them, and the background components
-// the worker starts and drains.
+// serverBuild carries the assembly state the host's components hand each
+// other: the resolved configuration, the platform cipher and blind indexers
+// the crypto component prepares, the tenant indexes the host's own steps
+// read, and the runtime values the step bodies read back from the
+// registry's by-type context (bindRegistry).
 type serverBuild struct {
 	cfg ServerConfig
 
 	// hostConfig is the engine's configuration target: the loader target
-	// whose shape the bootstrap-binding verification checks, with the
-	// platform key materials pre-filled from the resolved ServerConfig
-	// (newServerBuild) so the engine's own load keeps them standing when no
-	// key environment supplies material (the loader only writes what a
-	// source actually supplied).
+	// whose shape the module components' declared bootstrap keys bind
+	// against, with the platform key materials pre-filled from the resolved
+	// ServerConfig (newServerBuild) so the loader's own pass keeps them
+	// standing when no key environment supplies material (the loader only
+	// writes what a source actually supplied).
 	hostConfig hostConfig
 
-	// view is the single reading of the assembly's declaration seats and
-	// resolved seam values (assembly.go) the host's steps work from, set by
-	// the PostBootstrap hook once the registry exists.
-	view assemblyView
+	// platformCipher is the cipher the crypto component's Prepare builds
+	// from the config.cipher_key material and its New provides.
+	platformCipher *dbkit.Cipher
 
-	bus             pkgcore.EventBus
-	busCapabilities pkgcore.Capability
-	redisBus        *eventbusredis.EventBus
-	redisClient     *redis.Client
-	db              *gorm.DB
+	db *gorm.DB
 
-	configService             *config.Service
-	rbacService               *rbac.Service
-	standaloneQueue           *jobs.StandaloneQueue
-	meteringModule            *metering.Module
-	smileSimReconcilerStop    func()
-	periodicTaskSchedulerStop func()
+	configService          *config.Service
+	rbacService            *rbac.Service
+	standaloneQueue        jobs.Queue
+	meteringModule         *metering.Module
+	smileSimReconcilerStop func()
 
 	orgIndexer          *dbkit.BlindIndexer
 	contactEmailIndexer *dbkit.BlindIndexer
@@ -538,8 +543,6 @@ type serverBuild struct {
 	authnUserLocales    demo.AuthnUserLocales
 	gatewayEntitlements aigateway.EntitlementsFunc
 	memberships         *signInMemberships
-
-	reg *pkgcore.Registry
 }
 
 // newServerBuild returns the build state one BuildServer or Run call
@@ -554,276 +557,379 @@ func newServerBuild(cfg ServerConfig) *serverBuild {
 	return b
 }
 
-// BuildServer assembles the reference app through the application engine and
+// BuildServer assembles the reference app through the component assembly and
 // returns the composed handler, a close function that tears the process
 // down, and the wired *compliance.Module. It is the one place this app's
 // wiring lives -- main.go's Run and the end-to-end suites (flowtests) all
 // call it, so the two can never drift into testing a different wiring than
 // the one that actually runs.
 //
-// The ServerConfig is mapped onto the engine's option set (options above):
-// the engine loads the configuration targets, builds the platform cipher,
-// runs the encrypted-column registrations, opens and migrates the database,
-// constructs and bootstraps the module set, runs the host's typed attaches
-// and wiring hooks, composes the HTTP face (this app's own protected face
-// through chain.Standard) and starts the background worker -- in the one
-// fixed order every speed application shares.
+// The assembly is the component registry's: the loader resolves the
+// configuration targets and the composition configuration, and the registry
+// walks its seven stages -- Prepare (the bootstrap material, the ciphers and
+// the column registrations), Construct (every component's product), Verify
+// (the assembled migration sets), Init (every declaration, plus the host's
+// assembly steps and the composed HTTP face), and Start. BuildServer's drive
+// starts no listener: the returned handler is served by its caller, which is
+// what lets an httptest.Server front the exact composed chain.
 //
-// The deployment mode itself refuses nothing here: the Kernel the engine
-// bootstraps is what validates the assembled composition against
-// cfg.DeploymentMode, failing startup with pkgcore's own capability error
-// (ErrCapabilityUnsatisfied) when the resolved composition cannot run in
-// the declared mode. Every stateful seam this app knows about -- eventbus,
-// kv, mailer, objectstore, plus authn's own "SMS sender" seam -- can be
-// pointed at a real, MultiReplicaSafe-capable implementation through the
-// environment variables ConfigFromEnv resolves (APP_REDIS_ADDR, the APP_S3_*
-// group, APP_OBJECT_STORE_ROOT, the APP_SMTP_* group, APP_SMS_GATEWAY_URL);
-// every one of them defaults to the standalone Preset's in-process
+// The deployment mode is validated by the assembly itself, against the
+// capabilities every selected component declares: a composition that cannot
+// run in the declared mode fails the Prepare stage with pkgcore's own
+// capability error (ErrCapabilityUnsatisfied). Every stateful seam this app
+// knows about -- eventbus, kv, mailer, objectstore, plus the "sms" seam --
+// is selected from the environment variables ConfigFromEnv resolves
+// (APP_REDIS_ADDR, the APP_S3_* group, APP_OBJECT_STORE_ROOT, the APP_SMTP_*
+// group, APP_SMS_GATEWAY_URL); every one of them defaults to the in-process
 // implementation when unset, so a plain `go run ./cmd/server` needs nothing
 // else running.
 //
 // The compliance module is returned because a caller cannot reach it any
-// other way: it exposes no accessor on the assembled application, and the
+// other way: it exposes no accessor on the composed handler, and the
 // flowtests' retention/erasure/export suites drive its services directly.
 // The caller must call the returned close function once done with the
-// handler; it is idempotent (the engine's Close runs its steps once).
+// handler; it is idempotent (the assembly's Close runs its steps once).
 func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() error, *compliance.Module, error) {
 	b := newServerBuild(cfg)
-	a, err := speedapp.New(ctx, b.options()...)
+	reg, err := b.assemble(ctx, false)
 	if err != nil {
-		// The engine's rollback already tore the process down -- the
-		// background worker's Close included, which owns the audit bus and
-		// its Redis client, the two resources this host builds before New.
+		// The assembly's own rollback already tore the process down --
+		// every constructed component closed in reverse order, exactly
+		// once -- so no host-side teardown is needed here.
 		return nil, nil, nil, err
 	}
-	return a.Handler(), func() error { return a.Close(context.Background()) }, b.complianceModule, nil
+	face, err := pkgcore.Get[*hostFace](reg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reference-app: read the composed HTTP face: %w", err)
+	}
+	complianceModule, err := pkgcore.Get[*compliance.Module](reg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reference-app: read the compliance module: %w", err)
+	}
+	return face.Handler(), func() error { return speedapp.Shutdown(context.Background(), reg) }, complianceModule, nil
 }
 
-// Run assembles the reference app with BuildServer's option set and serves
-// it until the process is signalled. Signal handling, the HTTP serve and the
-// ordered drain are the engine's Run, and observability is initialized from
-// the resolved ServerConfig before assembly (the OTLP endpoint when
-// APP_OTLP_ENDPOINT is set) and shut down last during the drain.
+// Run assembles the reference app with BuildServer's composition and serves
+// it until the process is signalled: the app component's Start binds the
+// listener, the signal-derived context is what the serve waits on, and the
+// two-phase shutdown (the Stop notification, then the drain and release)
+// runs once the context is done.
 func Run(ctx context.Context, cfg ServerConfig) error {
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	b := newServerBuild(cfg)
-	return speedapp.Run(ctx, append(b.options(), b.observabilityOption())...)
-}
-
-// httpSpec declares this app's HTTP face for the engine's stage 7: the
-// protected-face composition (composeFace over the assembly view the
-// PostBootstrap hook captured, which mounts the app's own routes and derives
-// the middleware chain from the registry), the listen address Run binds, and
-// the frontend directory when this boot serves one (cfg.WebDistDir, set by
-// ConfigFromEnv from APP_WEB_DIST -- the Dockerfile ships the dist and sets
-// the variable itself).
-func (b *serverBuild) httpSpec() speedapp.HTTPSpec {
-	spec := speedapp.HTTPSpec{
-		Addr: ":" + b.cfg.Port,
-		Compose: func(mux *http.ServeMux) (http.Handler, error) {
-			return b.composeFace(b.view, mux)
-		},
+	reg, err := b.assemble(ctx, true)
+	if err != nil {
+		return err
 	}
-	if b.cfg.WebDistDir != "" {
-		spec.SPA = webSPASpec(b.cfg.WebDistDir)
+	<-ctx.Done()
+	if err := speedapp.Shutdown(context.WithoutCancel(ctx), reg); err != nil {
+		return err
 	}
-	return spec
-}
-
-// observabilitySpec returns the observability declaration the engine's Run
-// initializes before assembly: the service name every span and metric is
-// tagged with, and the OTLP/gRPC endpoint ConfigFromEnv resolved
-// (APP_OTLP_ENDPOINT). An empty endpoint is carried as-is -- the engine
-// omits an empty option, which leaves go/observability's own local
-// exporters in force, byte-identical to the endpoint never having been
-// configured.
-func observabilitySpec(cfg ServerConfig) speedapp.ObservabilitySpec {
-	return speedapp.ObservabilitySpec{
-		ServiceName:  "reference-app",
-		OTLPEndpoint: cfg.OTLPEndpoint,
-	}
-}
-
-// observabilityOption is the spec as the engine's option.
-func (b *serverBuild) observabilityOption() speedapp.Option {
-	return speedapp.WithObservability(observabilitySpec(b.cfg))
-}
-
-// options maps the resolved ServerConfig onto the engine's option set: the
-// configuration targets and loader options, the database and its
-// write-capture scope, the encrypted-column registrations, the module set,
-// the kernel's seam composition, the HTTP face, the assembly hooks and the
-// background worker. Everything host-specific the engine cannot know is
-// named here; nothing is defaulted on the host's behalf.
-func (b *serverBuild) options() []speedapp.Option {
-	// The audit-capture bus exists before the engine opens the database:
-	// dbkit's write-capture plugin publishes on this very bus, and the
-	// identical instance is injected into the kernel below -- reg.EventBus()
-	// must be the bus the capture plugin publishes on, or org's captured
-	// writes would vanish into a bus audit's subscriptions never see.
-	b.openBus()
-
-	opts := []speedapp.Option{
-		speedapp.WithConfig(
-			speedapp.ConfigSpec{Host: &b.hostConfig, Platform: &b.hostConfig.PlatformConfig},
-			speedapp.ConfigEnvPrefix(envPrefix),
-			speedapp.ConfigRootKeyEnv(rootKeyEnv),
-			speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),
-		),
-		speedapp.WithDatabase(speedapp.DatabaseSpec{
-			Dialect: dbkit.DialectSQLite,
-			DSN:     b.cfg.SQLitePath,
-			// Org's automatic write capture publishes on this bus; the
-			// capture scope is org's own exported declaration and nothing
-			// else (notes.Note stays out: its module records its own trail
-			// through audit.Emit).
-			AuditBus:    b.bus,
-			AuditModels: org.AuditableModels(),
-		}),
-		speedapp.WithPreDB(b.registerEncryptedColumns),
-		speedapp.WithModules(b.constructModules),
-		speedapp.WithKernelOptions(b.kernelOptions()...),
-		speedapp.WithHTTP(b.httpSpec()),
-		speedapp.WithHooks(speedapp.Hooks{
-			// The three hooks are the transition's thin adapters onto the
-			// step bodies the host's components call (component.go): each
-			// captures the assembly view once, in the stage that first has
-			// the registry, and then runs the same body.
-			PostBootstrap: func(ctx context.Context, a *speedapp.Application) error {
-				b.reg = a.Registry()
-				b.view = viewFromModules(b.reg)
-				return b.runPostBootstrap(ctx, b.view)
-			},
-			PostAttach: func(ctx context.Context, _ *speedapp.Application) error {
-				return b.runPostAttach(ctx, b.view)
-			},
-			PreServe: func(ctx context.Context, a *speedapp.Application) error {
-				return b.runPreServe(ctx, b.view, a.Handler())
-			},
-		}),
-		speedapp.WithWorker(&backgroundWorker{b: b}),
-	}
-	if b.cfg.DisableQueueWorker {
-		// The library-level form of this app's DisableQueueWorker switch:
-		// the worker is registered (and still closed by the ordered
-		// shutdown) but the queue's dispatcher and this replica's worker
-		// goroutines never launch, so it can never claim or execute a Job.
-		opts = append(opts, speedapp.WithoutBackgroundWorkers())
-	}
-	return opts
-}
-
-// openBus constructs the event bus this app runs on. With APP_REDIS_ADDR
-// configured it is the real Redis-backed implementation over a go-redis
-// client this host constructs and owns (the same client backs the "kv" seam
-// when kernelOptions composes it -- one Redis instance backing both seams is
-// this app's minimal-footprint choice); unset, it is pkgcore's in-process
-// memory bus, the identical implementation (and identical zero capability
-// declaration) the standalone Preset would otherwise resolve on its own.
-// go-redis is imported here -- and go.mod therefore requires it directly --
-// because the app is the assembly host that eventbus/redis's EventBus
-// contract names as the client's owner.
-func (b *serverBuild) openBus() {
-	if b.cfg.RedisAddr == "" {
-		b.bus = pkgcore.NewMemoryEventBus()
-		return
-	}
-	b.redisClient = redis.NewClient(&redis.Options{Addr: b.cfg.RedisAddr})
-	b.redisBus = eventbusredis.NewEventBus(b.redisClient)
-	b.bus = b.redisBus
-	b.busCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
-}
-
-// backgroundWorker is this host's seat in the engine's lifecycle: Start
-// forwards to startWorker and Close to stopWorker, the same bodies the
-// host's own worker component runs (component.go), so the worker has one
-// implementation whichever drive starts it.
-type backgroundWorker struct{ b *serverBuild }
-
-// Start launches the background worker (startWorker).
-func (w *backgroundWorker) Start(ctx context.Context) error {
-	return w.b.startWorker(ctx, w.b.view)
-}
-
-// startWorker launches the job queue's dispatcher and worker pool, then the
-// periodic-task scheduler over the registry's declared schedules. The
-// tenant universe every per-tenant declaration expands through is the
-// configured host tenants joined with go/admin's tenant ledger
-// (periodic_scheduler.go's periodicTenantUniverse).
-func (b *serverBuild) startWorker(ctx context.Context, view assemblyView) error {
-	if err := b.standaloneQueue.Start(ctx); err != nil {
-		return fmt.Errorf("reference-app: start the job queue: %w", err)
-	}
-	schedulerOpts := []jobs.SchedulerOption{
-		jobs.WithSchedules(view.schedules),
-		jobs.WithTenantLister(newPeriodicTenantUniverse(b.cfg.HostTenants, b.adminModule.Tenants())),
-	}
-	if b.cfg.PeriodicTaskInterval > 0 {
-		schedulerOpts = append(schedulerOpts, jobs.WithInterval(b.cfg.PeriodicTaskInterval))
-	}
-	scheduler := jobs.NewScheduler(b.standaloneQueue, schedulerOpts...)
-	// context.Background(), never ctx, per jobs.Scheduler.Start's own doc
-	// comment: the enqueues must keep running until Close's own scheduler
-	// stop, not be cut short by whatever cancels the assembly context.
-	if err := scheduler.Start(context.Background()); err != nil {
-		return fmt.Errorf("reference-app: start the periodic-task scheduler: %w", err)
-	}
-	b.periodicTaskSchedulerStop = scheduler.Stop
+	obs.FromContext(ctx).Info("server stopped cleanly")
 	return nil
 }
 
-// Close drains the background worker (stopWorker).
-func (w *backgroundWorker) Close(ctx context.Context) error {
-	return w.b.stopWorker(ctx)
-}
+// assemble builds the host's component set over a fresh registry and drives
+// the whole assembly: the host's own components (the step components, the
+// override components and the provider components) register first, the
+// loader resolves the configuration and the composition, and the registry
+// walks Prepare through Start. live tells the drive whether this assembly
+// owns the listener -- true for Run, whose app component binds it, false for
+// BuildServer, whose caller serves the returned handler.
+func (b *serverBuild) assemble(ctx context.Context, live bool) (*pkgcore.ComponentRegistry, error) {
+	// The write-capture scope and the composed face both read runtime state
+	// the host keeps across components: the tenant reverse index and the
+	// sign-in membership store are resolved here, before any component
+	// callback runs.
+	b.hostByTenant = make(map[pkgcore.TenantID]string, len(b.cfg.HostTenants))
+	for host, tenant := range b.cfg.HostTenants {
+		b.hostByTenant[tenant] = host
+	}
+	b.memberships = b.cfg.Memberships
+	if b.memberships == nil {
+		b.memberships = NewSignInMemberships()
+	}
 
-// stopWorker tears the process's shared resources down in the order their
-// dependencies require: the credit-reservation reconciler and the
-// scheduler first (both tick against the queue and the database), then the
-// attached services whose background loops write the database, then the
-// queue the engine registered as the worker (stopping its dispatcher and
-// waiting for in-flight jobs), then metering's pipelines (draining what the
-// recorder buffered into the aggregator), then the event bus (so no remote
-// event can still be delivered to a handler writing a closing database) and
-// the Redis client the host owns. The database itself closes last, in the
-// engine's own order after this step. Every step is attempted even when an
-// earlier one failed; the first error wins.
-func (b *serverBuild) stopWorker(ctx context.Context) error {
-	var firstErr error
-	keepErr := func(err error) {
-		if err != nil && firstErr == nil {
-			firstErr = err
+	reg := pkgcore.NewComponentRegistry()
+	components, err := b.hostComponents(ctx, reg, live)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range components {
+		if err := reg.Register(c); err != nil {
+			return nil, err
 		}
 	}
-	if b.smileSimReconcilerStop != nil {
-		b.smileSimReconcilerStop()
+
+	spec := speedapp.LoadSpec{
+		Host:     &b.hostConfig,
+		Platform: &b.hostConfig.PlatformConfig,
+		Options: []speedapp.ConfigOption{
+			speedapp.ConfigEnvPrefix(envPrefix),
+			speedapp.ConfigRootKeyEnv(rootKeyEnv),
+			speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),
+		},
+		Overrides: &speedapp.CompositionOverrides{Config: b.composition(live)},
 	}
-	if b.periodicTaskSchedulerStop != nil {
-		b.periodicTaskSchedulerStop()
+	if err := speedapp.Assemble(ctx, reg, spec); err != nil {
+		return nil, err
 	}
-	if b.configService != nil {
-		keepErr(b.configService.Close())
+	return reg, nil
+}
+
+// composition returns this host's code-override layer: the composition
+// configuration's highest source, carrying the components this app selects
+// -- every module, the infrastructure implementations the resolved
+// ServerConfig names, and the host's own components -- and deselecting the
+// built-in implementations the host's overrides stand in for.
+func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
+	// The infrastructure implementations lead the block: the mode's
+	// capability validation walks the selection in this order, so the
+	// shortfall a composition that cannot run in the declared mode reports
+	// is the seam implementation that first fails to satisfy it.
+	components := pkgcore.ComponentConfig{}.
+		With("observability", false).
+		With("eventbus.memory", nil).
+		With("kv.memory", nil).
+		With("mailer.console", nil).
+		With("objectstore.local", nil).
+		With("sms.console", nil).
+		With("db.sqlite", false).
+		With(hostComponentPrefix+"db", nil).
+		With("queue.standalone", pkgcore.ComponentConfig{}.
+			With("worker", !b.cfg.DisableQueueWorker).
+			With("schedule_interval", b.cfg.PeriodicTaskInterval)).
+		With("pki", false).
+		With(hostComponentPrefix+"pki", nil).
+		With("signer.local", false).
+		With(hostComponentPrefix+"signer.local", nil).
+		With("authn", false).
+		With(hostComponentPrefix+"authn", nil).
+		With("org", false).
+		With(hostComponentPrefix+"org", nil).
+		With("config", false).
+		With(hostComponentPrefix+"config", nil).
+		With("storage", nil).
+		With("sharing", nil).
+		With("integration", false).
+		With(hostComponentPrefix+"integration", nil).
+		With("demo", nil).
+		With("notification", false).
+		With(hostComponentPrefix+"notification", nil).
+		With("ai-gateway", false).
+		With(hostComponentPrefix+"ai-gateway", nil).
+		With("billing", false).
+		With(hostComponentPrefix+"billing", nil).
+		With("metering", false).
+		With(hostComponentPrefix+"metering", nil).
+		With("compliance", nil).
+		With("audit", false).
+		With(hostComponentPrefix+"audit", nil).
+		With("notes", nil).
+		// config, rbac and admin are host overrides: each declares through
+		// its own Init turn, and the host takes their snapshots (the
+		// configuration schema, the permission catalog, the role service's
+		// authorizer) in the post-bootstrap step, after every module has
+		// declared.
+		With("rbac", false).
+		With(hostComponentPrefix+"rbac", nil).
+		With("admin", false).
+		With(hostComponentPrefix+"admin", nil).
+		With(hostComponentPrefix+"crypto", nil).
+		With(hostComponentPrefix+"tenancy-resolver", nil).
+		With(hostComponentPrefix+"subject-resolvers", nil).
+		With(hostComponentPrefix+"rbac-subtree", nil).
+		With(hostComponentPrefix+"notification-addresses", nil).
+		With(hostComponentPrefix+"notification-locales", nil).
+		With(hostComponentPrefix+"sharing-resources", nil).
+		With(hostComponentPrefix+"sharing-expiry", nil).
+		With(hostComponentPrefix+"integration-permissions", nil).
+		With(hostComponentPrefix+"gateway-entitlements", nil).
+		With(hostComponentPrefix+"gateway-usage", nil).
+		With(hostComponentPrefix+"compliance-sharing", nil).
+		With(hostComponentPrefix+"attestation", nil).
+		With(hostComponentPrefix+"tenant-lister", nil).
+		// The host's own assembly steps come last: they run after every
+		// module's declaration turn (the module components are listed
+		// above), and their plan order is this block's order.
+		With(hostComponentPrefix+"post_bootstrap", nil).
+		With(hostComponentPrefix+"post_attach", nil).
+		With(hostComponentPrefix+"app", nil).
+		With(hostComponentPrefix+"pre_serve", nil).
+		With(hostComponentPrefix+"worker", nil)
+
+	// The infrastructure seams follow the resolved ServerConfig, one
+	// selected implementation per seam: an unset variable leaves that seam
+	// on its in-process default, so a plain `go run ./cmd/server` needs
+	// nothing else running.
+	if b.cfg.RedisAddr != "" {
+		components = components.
+			With("eventbus.memory", false).
+			With("eventbus.redis", pkgcore.ComponentConfig{}.With("addr", b.cfg.RedisAddr)).
+			With("kv.memory", false).
+			With("kv.redis", pkgcore.ComponentConfig{}.With("addr", b.cfg.RedisAddr))
+	} else {
+		components = components.
+			With("eventbus.memory", nil).
+			With("kv.memory", nil)
 	}
-	if b.rbacService != nil {
-		keepErr(b.rbacService.Close())
+	switch {
+	case b.cfg.Mailer != nil:
+		// The host's own in-process capture double stands in for a
+		// registered mailer implementation.
+		components = components.With("mailer.console", false).With(hostComponentPrefix+"mailer", nil)
+	case b.cfg.SMTPHost != "":
+		components = components.With("mailer.console", false).With("mailer.smtp", pkgcore.ComponentConfig{}.
+			With("host", b.cfg.SMTPHost).
+			With("port", b.cfg.SMTPPort).
+			With("username", b.cfg.SMTPUsername).
+			With("password", b.cfg.SMTPPassword).
+			With("reply_to", b.cfg.SMTPReplyTo))
+	default:
+		components = components.With("mailer.console", nil)
 	}
-	if b.standaloneQueue != nil {
-		// Close is idempotent, so a failed assembly that runs before Start
-		// ever ran is safe.
-		keepErr(b.standaloneQueue.Close(ctx))
+	switch {
+	case b.cfg.S3Endpoint != "":
+		components = components.With("objectstore.local", false).With("objectstore.s3", s3ObjectStoreConfig(b.cfg))
+	case b.cfg.ObjectStoreRoot != "":
+		components = components.With("objectstore.local", pkgcore.ComponentConfig{}.With("directory", b.cfg.ObjectStoreRoot))
+	default:
+		components = components.With("objectstore.local", nil)
 	}
-	if b.meteringModule != nil {
-		// Stops both of metering's background pipelines -- the analytics
-		// recorder's flush loop and the dispatcher's outbox poll -- and
-		// delivers whatever the recorder still had buffered into the
-		// aggregator before returning. Safe to call before Start, or more
-		// than once.
-		b.meteringModule.Stop()
+	// The pki timing knobs are the composition's configuration, applied
+	// only when a test injects them: a zero value (what ConfigFromEnv
+	// always leaves them at) keeps pki's own defaults in force.
+	pkiConfig := pkgcore.ComponentConfig{}
+	if b.cfg.PKIPropagationWindow > 0 {
+		pkiConfig = pkiConfig.With("propagation_window", b.cfg.PKIPropagationWindow)
 	}
-	if b.redisBus != nil {
-		b.redisBus.Close()
+	if b.cfg.PKIRenewalLeadTime > 0 {
+		pkiConfig = pkiConfig.With("renewal_lead_time", b.cfg.PKIRenewalLeadTime)
 	}
-	if b.redisClient != nil {
-		keepErr(b.redisClient.Close())
+	if b.cfg.PKIExpiryScanWindow > 0 {
+		pkiConfig = pkiConfig.With("expiry_scan_window", b.cfg.PKIExpiryScanWindow)
 	}
-	return firstErr
+	components = components.With(hostComponentPrefix+"pki", pkiConfig)
+
+	switch {
+	case b.cfg.SMSGatewayURL != "":
+		components = components.With("sms.console", false).With("sms.http", pkgcore.ComponentConfig{}.With("endpoint", b.cfg.SMSGatewayURL))
+	case b.cfg.SMSOutput != nil:
+		components = components.With("sms.console", false).With(hostComponentPrefix+"sms", nil)
+	default:
+		// The console sender's standard output. A distributed deployment
+		// with neither a gateway URL nor a host sender selects it too, and
+		// the authn component refuses the boot on its own construction --
+		// authn's WithDeploymentMode validation is what rejects a
+		// distributed deployment whose SMS transport nobody in a replica
+		// pool reads (ErrMissingDistributedSMSSender), so the refusal names
+		// the module that owns the rule.
+		components = components.With("sms.console", nil)
+	}
+	// The observability component is the host's own: it carries this app's
+	// telemetry configuration and declares the capability its per-process
+	// exporters have (host_wiring.go's observabilityComponent).
+	if live {
+		observability := pkgcore.ComponentConfig{}.With("service_name", "reference-app")
+		if b.cfg.OTLPEndpoint != "" {
+			observability = observability.With("otlp_endpoint", b.cfg.OTLPEndpoint)
+		}
+		components = components.With(hostComponentPrefix+"observability", observability)
+	} else {
+		// BuildServer serves the returned handler in-process; the telemetry
+		// lifecycle belongs to the process that owns the listener.
+		components = components.With(hostComponentPrefix+"observability", false)
+	}
+
+	return pkgcore.ComponentConfig{}.
+		With("deployment", string(b.cfg.DeploymentMode)).
+		With("strict", true).
+		With("components", components)
+}
+
+// bindRegistry reads the assembled products and published runtime services
+// this host's step bodies work from into the build state, so one step body
+// serves the component drive with the values the registry resolved. Every
+// read happens before the step body runs, and a missing value fails the step
+// by name rather than surfacing as a nil dereference inside it.
+func (b *serverBuild) bindRegistry(reg *pkgcore.ComponentRegistry) error {
+	var err error
+	if b.db, err = pkgcore.Get[*gorm.DB](reg); err != nil {
+		return fmt.Errorf("reference-app: read the assembled database: %w", err)
+	}
+	if b.standaloneQueue, err = pkgcore.Get[jobs.Queue](reg); err != nil {
+		return fmt.Errorf("reference-app: read the assembled job queue: %w", err)
+	}
+	if b.configModule, err = pkgcore.Get[*config.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the config module: %w", err)
+	}
+	if b.orgModule, err = pkgcore.Get[*org.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the org module: %w", err)
+	}
+	if b.pkiModule, err = pkgcore.Get[*pki.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the pki module: %w", err)
+	}
+	if b.authnModule, err = pkgcore.Get[*authn.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the authn module: %w", err)
+	}
+	if b.notesModule, err = pkgcore.Get[*notes.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the notes module: %w", err)
+	}
+	if b.auditModule, err = pkgcore.Get[*audit.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the audit module: %w", err)
+	}
+	if b.rbacModule, err = pkgcore.Get[*rbac.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the rbac module: %w", err)
+	}
+	if b.storageModule, err = pkgcore.Get[*storage.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the storage module: %w", err)
+	}
+	if b.sharingModule, err = pkgcore.Get[*sharing.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the sharing module: %w", err)
+	}
+	if b.integrationModule, err = pkgcore.Get[*integration.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the integration module: %w", err)
+	}
+	if b.demoModule, err = pkgcore.Get[*demomodule.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the demo module: %w", err)
+	}
+	if b.notificationModule, err = pkgcore.Get[*notification.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the notification module: %w", err)
+	}
+	if b.aiGatewayModule, err = pkgcore.Get[*aigateway.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the ai-gateway module: %w", err)
+	}
+	if b.billingModule, err = pkgcore.Get[*billing.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the billing module: %w", err)
+	}
+	if b.meteringModule, err = pkgcore.Get[*metering.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the metering module: %w", err)
+	}
+	if b.complianceModule, err = pkgcore.Get[*compliance.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the compliance module: %w", err)
+	}
+	if b.adminModule, err = pkgcore.Get[*admin.Module](reg); err != nil {
+		return fmt.Errorf("reference-app: read the admin module: %w", err)
+	}
+	if b.attestationService, err = pkgcore.Get[*attestation.Service](reg); err != nil {
+		return fmt.Errorf("reference-app: read the attestation service: %w", err)
+	}
+	return nil
+}
+
+// bindRuntimeServices reads the two runtime services the post-bootstrap
+// step publishes (config's schema-bearing service and rbac's
+// catalog-bearing one) into the build state. It runs for every step after
+// the attach step; the attach step itself binds them as it publishes them.
+func (b *serverBuild) bindRuntimeServices(reg *pkgcore.ComponentRegistry) error {
+	var err error
+	if b.configService, err = pkgcore.Get[*config.Service](reg); err != nil {
+		return fmt.Errorf("reference-app: read the config service: %w", err)
+	}
+	if b.rbacService, err = pkgcore.Get[*rbac.Service](reg); err != nil {
+		return fmt.Errorf("reference-app: read the rbac service: %w", err)
+	}
+	return nil
 }

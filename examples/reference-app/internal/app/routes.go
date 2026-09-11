@@ -21,13 +21,11 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
 
-// composeFace is the protected-face composition both drives call (the
-// engine's HTTP component through the transition's Compose callback, and the
-// host's application component in its Init): it mounts this app's
-// hand-written routes on the mux (which already carries the platform
-// liveness routes), then derives the whole middleware chain from the view
-// with chain.Standard -- the route partition and the fixed order live there,
-// not here.
+// composeFace is the protected-face composition the application component
+// runs in its Init: it mounts this app's hand-written routes on the mux
+// (which already carries the platform liveness routes), then derives the
+// whole middleware chain from the view with chain.Standard -- the route
+// partition and the fixed order live there, not here.
 //
 // The hand-written routes are mounted FIRST and directly, exactly as a
 // module's own routes would be once Standard mounts them: every one of them

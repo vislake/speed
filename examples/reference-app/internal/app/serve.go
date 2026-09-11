@@ -13,9 +13,8 @@ import (
 
 // runPreServe runs the pre-serve assembly step: it runs after the HTTP face
 // exists (so the seeds can register through the same composed handler a
-// browser reaches) and before anything listens. The transition's PreServe
-// hook (handed the engine's composed handler) and the host's pre-serve
-// component (handed the app component's face) both call it.
+// browser reaches) and before anything listens. The host's pre-serve
+// component (handed the app component's face) calls it.
 func (b *serverBuild) runPreServe(ctx context.Context, view assemblyView, handler http.Handler) error {
 	// The demo-user seeds run last, once the composed handler exists: they
 	// register the demo accounts through the same register route a browser
@@ -63,7 +62,7 @@ func (b *serverBuild) runPreServe(ctx context.Context, view assemblyView, handle
 	// the failure-injection hook -- nil under the disabled default, armed
 	// either by ConfigFromEnv's own env-driven parse or by a test's
 	// ServerConfig.
-	if wireErr := wireSelfService(ctx, view.catalog, view.events, b.orgModule, b.rbacService, b.authnModule.Service(), b.billingModule.Plans(), b.billingModule.Subscriptions(), b.billingModule.Credits(), b.standaloneQueue, b.cfg.FailSelfServiceProvision); wireErr != nil {
+	if wireErr := wireSelfService(ctx, view.catalog, view.events, b.orgModule, b.rbacService, b.authnModule.Service(), b.billingModule.Plans(), b.billingModule.Subscriptions(), b.billingModule.Credits(), b.standaloneQueue, view.jobs, b.cfg.FailSelfServiceProvision); wireErr != nil {
 		return wireErr
 	}
 	return nil

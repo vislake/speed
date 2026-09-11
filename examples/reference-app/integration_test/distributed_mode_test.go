@@ -997,27 +997,25 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 		{
 			// Nothing configured at all -- the naive operator mistake.
 			// authn.NewModule's own wiring-time validation runs BEFORE
-			// Kernel.Bootstrap in BuildServer (see internal/app/server.go's
-			// authn wiring comment), so THIS is the first thing that fails
-			// closed: no SMS sender for a distributed deployment.
-			name:       "nothing configured",
-			extraEnv:   nil,
-			wantSubstr: []string{"distributed deployment mode requires an explicit SMS sender"},
+			// The assembly's Prepare stage in BuildServer, which walks the
+			// selected components' capabilities in the composition's order,
+			// so THIS is the first thing that fails closed: the in-process
+			// event bus a distributed deployment may not select.
+			name:     "nothing configured",
+			extraEnv: nil,
+			wantSubstr: []string{
+				"seam implementation does not satisfy the deployment mode's required capability",
+				"eventbus.memory", "MultiReplicaSafe", "distributed",
+			},
 		},
 		{
 			// The SMS seam alone satisfied (a fake, never-dialed gateway
-			// URL), Redis/S3/SMTP left on the Preset's in-process
-			// defaults -- Kernel.Bootstrap's OWN capability validation is
-			// what fails, naming the first seam it resolves in its
-			// fixed order: "eventbus". That seam's in-process memory bus
-			// reaches Bootstrap through BuildServer's own injection
-			// (WithEventBus, the pre-built bus; see
-			// flowtests/server_test.go's TestBuildServer_DistributedDeploymentMode_
-			// FailsCapabilityValidation comment), never through the Preset,
-			// so the capability error names it as implementation
-			// "<injected>" -- an injected seam has no registry name to
-			// report. The property is the same either way: an incomplete distributed
-			// composition still fails closed, and it is the seam,
+			// URL), Redis/S3/SMTP left on the in-process defaults -- the
+			// assembly's own capability validation is what fails, naming
+			// the first component the composition selects that cannot run
+			// distributed: the in-process memory event bus. The property is
+			// the same as it always was: an incomplete distributed
+			// composition still fails closed, and it is the component,
 			// capability and mode naming that proves it.
 			name:     "SMS sender present, every kernel seam left on its in-process default",
 			extraEnv: []string{"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms"},
@@ -1033,7 +1031,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 				// brittle against that encoding rather than testing
 				// anything about the message itself.
 				"seam implementation does not satisfy the deployment mode's required capability",
-				"eventbus", "<injected>", "MultiReplicaSafe", "distributed",
+				"eventbus.memory", "MultiReplicaSafe", "distributed",
 			},
 		},
 	}

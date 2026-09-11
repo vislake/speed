@@ -37,15 +37,14 @@ package app
 // pre-auth endpoints), and the two probe endpoints are the only non-API
 // paths the server owns.
 //
-// webSPASpec declares the frontend directory as the engine's SPA spec: the
-// engine wraps the whole composed handler (authn.Middleware's output
-// included) in the shared SPA file server, so the requests the frontend
+// The app component's own composition wraps the face when this boot serves
+// a dist directory: the SPA file server wraps the whole composed handler
+// (authn.Middleware's output included), so the requests the frontend
 // answers never meet tenant resolution -- GET / answers 200 to a caller
 // with no tenant, exactly what a deployed sign-in page needs -- while the
 // API requests that do reach the chain pass through unchanged.
 
 import (
-	speedapp "github.com/vislake/speed/go/app"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore/spa"
 )
@@ -54,21 +53,11 @@ import (
 // with for this app's surface: /api and everything nested below it, plus the
 // two probe endpoints, always reach the composed handler, and every other
 // GET/HEAD request is served from the SPA directory (see the package doc
-// comment above). Both SPA wrappings use them -- the engine's, through
-// webSPASpec, and the app component's own composition (component.go).
+// comment above).
 func hostSPAOptions() []spa.Option {
 	return []spa.Option{
 		spa.WithServerPrefix("/api"),
 		spa.WithServerPath(obs.HealthzPath),
 		spa.WithServerPath(obs.MetricsPath),
-	}
-}
-
-// webSPASpec returns the engine's SPA declaration for dir, carrying the
-// app's own surface options (hostSPAOptions).
-func webSPASpec(dir string) *speedapp.SPASpec {
-	return &speedapp.SPASpec{
-		Dir:     dir,
-		Options: hostSPAOptions(),
 	}
 }

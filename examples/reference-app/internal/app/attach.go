@@ -19,7 +19,6 @@ import (
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
-	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
@@ -122,60 +121,40 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 }
 
 // runPostBootstrap runs the post-bootstrap assembly step: the typed Attach
-// calls and the host steps interleaved with them. The transition's
-// PostBootstrap hook and the host's post-bootstrap component both call it,
-// so the option surface and the component assembly drive one body.
+// calls every module requires exactly once after its declaration turn, the
+// host steps interleaved with them (the channel flags, the seeds, the rbac
+// hand-off), and the platform credentials the gateway's write path needs.
+// The host's post-bootstrap component calls it.
 //
-// The Attach calls follow pkgcore.Kernel.Bootstrap's post-bootstrap contract:
-// each exactly once, after Bootstrap has returned, and each before the first
-// step that consumes its Service -- the registry's declaration seats are only
-// complete once every module registered. This app's sequence interleaves host
-// steps between the attaches (the channel flags, the seeds, the rbac
-// hand-off), which is why it is written out step by step; each step's own
-// comment carries its ordering rationale.
-//
-// The Attach calls, and the binding check before them, need the module
-// Registry the assembly bootstrapped (view.modules): they are the module
-// world's own surface, and they are skipped on a view built from a component
-// registry, where the same Services are component products.
-func (b *serverBuild) runPostBootstrap(ctx context.Context, view assemblyView) error {
-	if view.modules != nil {
-		// The bootstrap binding check: the loader target must bind the keys
-		// the composed modules declared, and every key this app owns
-		// besides. A declared key the target never resolves is a key whose
-		// contract silently binds to nothing.
-		if err := verifyBootstrapBinding(view.modules); err != nil {
-			return err
-		}
-	}
-
+// It runs in the assembly's Init stage, after every module's own Init
+// callback has declared: the components registering only takes the
+// declaration; the three freeze points -- config's schema snapshot, rbac's
+// permission catalog and admin's authorizer -- are taken here, so each
+// covers every module's declarations, which is the order the module
+// Registry always drove. This app's sequence is written out step by step;
+// each step's own comment carries its ordering rationale.
+func (b *serverBuild) runPostBootstrap(ctx context.Context, reg *pkgcore.ComponentRegistry, view assemblyView) error {
 	// The org-backed half of the membership store binds here, only now that
-	// Bootstrap has run: the store's enumeration answer delegates to org's
-	// own cross-tenant query, which org serves only an elevated context --
-	// the grant authn's resolveTenant takes under its own
+	// every module has declared: the store's enumeration answer delegates to
+	// org's own cross-tenant query, which org serves only an elevated
+	// context -- the grant authn's resolveTenant takes under its own
 	// SystemPurposeSignInTenantEnumeration before it calls TenantsOf, and
-	// which authn's Register declared during the Bootstrap above. Nothing
-	// before this point can serve a sign-in: authn answers membership
-	// questions only inside a Login or Refresh call.
+	// which authn's Register declared above. Nothing before this point can
+	// serve a sign-in: authn answers membership questions only inside a
+	// Login or Refresh call.
 	b.memberships.attach(b.orgModule.Members())
 
-	if view.modules != nil {
-		// integration's Attach must run after Bootstrap for the same reason
-		// config's and rbac's do: its Service reads reg.Events.Bus() and
-		// reg.AuditActions, which Bootstrap only finishes wiring once every
-		// module's Register call has returned. Its ordering relative to the
-		// other attaches is not load-bearing. The return value is discarded:
-		// every spec-generated surface the module mounts reads the Service at
-		// call time through Handler's own Register-time forwarding wrapper.
-		if _, attachErr := b.integrationModule.Attach(view.modules); attachErr != nil {
-			return fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
-		}
-		configService, err := b.configModule.Attach(view.modules)
-		if err != nil {
-			return fmt.Errorf("reference-app: attach the config module: %w", err)
-		}
-		b.configService = configService
+	// config's schema snapshot: every module's configuration items and
+	// feature flags are declared by now, so the schema the writes below (and
+	// every later read) validate against is complete. The service is
+	// published for the by-type context, where the app component's face
+	// composition and the later steps read it.
+	configService, err := b.configModule.Attach(reg)
+	if err != nil {
+		return fmt.Errorf("reference-app: attach the config module: %w", err)
 	}
+	reg.Put(configService)
+	b.configService = configService
 
 	// With the config service live, open the sign-in channels this host
 	// actually assembled: authn's social flags default OFF, so a provider
@@ -187,30 +166,28 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, view assemblyView) e
 	// reasoning). OnConfigReady, when non-nil, receives the live service now
 	// that those rows are in place -- the post-Attach seam a test needs to
 	// write further rows through the real Set path.
-	if flagErr := openConfiguredAuthnChannels(ctx, b.configService, b.cfg.SocialProviders); flagErr != nil {
+	if flagErr := openConfiguredAuthnChannels(ctx, configService, b.cfg.SocialProviders); flagErr != nil {
 		return flagErr
 	}
 	if b.cfg.OnConfigReady != nil {
-		b.cfg.OnConfigReady(b.configService)
+		b.cfg.OnConfigReady(configService)
 	}
 
-	// rbac's Attach must also come after Bootstrap, and for a sharper
-	// reason: what it freezes is the snapshot of every permission every
-	// module declared, so a snapshot taken any earlier would be missing
-	// whatever registered after it -- and a permission missing from that
-	// catalog cannot be granted at all.
-	if view.modules != nil {
-		rbacService, err := b.rbacModule.Attach(view.modules)
-		if err != nil {
-			return fmt.Errorf("reference-app: attach the rbac module: %w", err)
-		}
-		b.rbacService = rbacService
+	// rbac's permission catalog snapshot comes after every module's
+	// declaration turn, so it covers the whole permission catalog -- a
+	// permission declared after the snapshot could never be granted at all.
+	rbacService, err := b.rbacModule.Attach(reg)
+	if err != nil {
+		return fmt.Errorf("reference-app: attach the rbac module: %w", err)
 	}
-	if seedErr := demo.SeedDemoGrants(ctx, b.rbacService, b.cfg.HostTenants); seedErr != nil {
+	reg.Put(rbacService)
+	b.rbacService = rbacService
+
+	if seedErr := demo.SeedDemoGrants(ctx, rbacService, b.cfg.HostTenants); seedErr != nil {
 		return seedErr
 	}
 	if b.cfg.OnRBACReady != nil {
-		b.cfg.OnRBACReady(b.rbacService)
+		b.cfg.OnRBACReady(rbacService)
 	}
 
 	// SeedDemoCredits is the demo, NOT-a-real-payment stand-in for a real
@@ -238,7 +215,7 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, view assemblyView) e
 
 	// notes' retention participant is registered here, after Bootstrap --
 	// compliance's Register is what attaches the Retention registrar the
-	// kernel's Retention seat resolves to, so Add before Bootstrap would
+	// assembly's Retention seat resolves to, so Add before Bootstrap would
 	// silently register onto a registrar nothing sweeps with. The
 	// participant is built over the very dbkit.Open *gorm.DB the notes
 	// Module already uses -- share the connection, never a second pool.
@@ -247,20 +224,21 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, view assemblyView) e
 	}
 
 	// admin's role-management surface needs the real *rbac.Service, which
-	// exists only after Bootstrap has returned. This is why go/admin's
-	// RoleService is wired through a distinct, post-Bootstrap
-	// Module.AttachRBAC call rather than a construction-time Option -- see
-	// AttachRBAC's own doc comment for the full reasoning.
-	b.adminModule.AttachRBAC(b.rbacService)
+	// exists only after the attach above. This is why go/admin's RoleService
+	// is wired through a distinct, post-Attach Module.AttachRBAC call rather
+	// than a construction-time Option -- see AttachRBAC's own doc comment
+	// for the full reasoning.
+	b.adminModule.AttachRBAC(rbacService)
 	return nil
 }
 
-// runPostAttach runs the post-attach assembly step. It runs after the typed
-// attaches and before the HTTP face: the stores whose schemas must exist
-// before the first request, the services built over them, the gateway's
-// boot-time credentials, the job queue's wiring onto the registry's declared
-// handlers, and metering's background pipelines. The transition's PostAttach
-// hook and the host's post-attach component both call it.
+// runPostAttach runs the post-attach assembly step. It runs after the
+// post-bootstrap step and before the HTTP face: the stores whose schemas
+// must exist before the first request, the services built over them and the
+// gateway's boot-time credentials. metering's background pipelines are its
+// own component's Start, and the job queue's wiring onto the declared
+// handlers is the queue component's own Start. The host's post-attach
+// component calls it.
 func (b *serverBuild) runPostAttach(ctx context.Context, view assemblyView) error {
 	// The attestation layer's two boot steps run here, after Bootstrap (the
 	// pki migrations the CA chain's pki_authorities rows live in were
@@ -324,34 +302,11 @@ func (b *serverBuild) runPostAttach(ctx context.Context, view assemblyView) erro
 		return err
 	}
 
-	// Wire the queue to the registry's declarations. Only now -- after
-	// Bootstrap -- can the wiring run: the modules' Register calls declared
-	// the handlers on the registry, and jobs.Wire drains that map onto
-	// standaloneQueue, refusing an entry that is not a jobs.Handler rather
-	// than mis-typing it into a worker at job-claim time, and creating the
-	// queue's own tables so an Enqueue needs no Start first. The pool
-	// itself starts with the worker, in the engine's stage 8.
-	if err := jobs.Wire(ctx, b.standaloneQueue, view.jobs); err != nil {
-		return fmt.Errorf("reference-app: wire the job queue: %w", err)
-	}
-
-	// Start meteringModule's background pipelines now that Bootstrap has
-	// returned (Register attached the registry's bus onto its Aggregator,
-	// and Start itself must not run before that -- go/metering/module.go's
-	// own New/Start split). This is what makes the ai-gateway UsageRecorder
-	// wiring real: without the recorder's flush loop running, a recorded
-	// Chat call's event would sit in the analytics buffer forever instead
-	// of folding into the metering_usage_summaries rows admin's dashboard
-	// reads. Unlike the queue, this is not gated on DisableQueueWorker --
-	// that switch governs the jobs.Queue worker only, and metering's own
-	// two loops are independent of it. Start is safe to call with ctx
-	// canceled or after a Stop.
-	b.meteringModule.Start(ctx)
-
-	// The credit-reservation reconciler starts last: its sweep calls
-	// standaloneQueue.Get and the database (through its own reservation
-	// store), so it must start only once jobs.Wire has created the queue's
-	// own tables. context.Background(), never ctx, per StartReconciler's
+	// The credit-reservation reconciler starts last: its sweep calls the
+	// queue's Get and the database (through its own reservation store), so
+	// it must start only once the queue's own tables exist -- which the
+	// queue component's Start created before this assembly's Init-stage
+	// steps ran. context.Background(), never ctx, per StartReconciler's
 	// own doc comment: the sweep must keep running until the worker's stop
 	// call, not be cut short by whatever cancels the assembly context.
 	b.smileSimReconcilerStop = b.smileSimService.StartReconciler(context.Background(), 0)

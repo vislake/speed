@@ -2,10 +2,9 @@ package app
 
 // This file carries the reference app's own components: the application
 // component, which composes and serves the host's HTTP face, and the step
-// components wrapping the assembly steps attach.go, serve.go and server.go
-// implement. A step component's callback calls the very body the transition
-// hooks call, so the option surface and the component assembly drive one
-// implementation and cannot drift into different wiring.
+// components wrapping the assembly steps attach.go and serve.go implement.
+// A step component's callback binds the assembled values its body reads and
+// then runs that body, so a step has one implementation.
 
 import (
 	"context"
@@ -75,7 +74,7 @@ func (f *hostFace) start(ctx context.Context) error {
 	}
 	listener, err := net.Listen("tcp", f.addr)
 	if err != nil {
-		return fmt.Errorf("reference-app: listen on %s: %w", f.addr, err)
+		return fmt.Errorf("reference-app: serve: listen on %s: %w", f.addr, err)
 	}
 	f.server = server
 	f.listener = listener
@@ -174,7 +173,13 @@ func hostFaceOf(instance any) (*hostFace, error) {
 // baseCtx is the context every served request inherits: the host's own
 // assembly context, never a signal-derived one, so a shutdown signal never
 // cancels in-flight requests ahead of the drain.
-func appComponent(b *serverBuild, baseCtx context.Context) pkgcore.Component {
+//
+// live tells the component whether this assembly owns the listener: Start
+// binds and serves it only then. A drive that hands the composed handler to
+// its caller (BuildServer, whose handler an httptest.Server or the caller's
+// own server fronts) composes the very same face with no listener of its
+// own, which is the difference between the two drives and nothing else.
+func appComponent(b *serverBuild, baseCtx context.Context, live bool) pkgcore.Component {
 	return pkgcore.Component{
 		Name:     "reference-app.app",
 		Provides: []any{(*hostFace)(nil)},
@@ -190,9 +195,18 @@ func appComponent(b *serverBuild, baseCtx context.Context) pkgcore.Component {
 			if err != nil {
 				return err
 			}
+			if err := b.bindRegistry(reg); err != nil {
+				return err
+			}
+			if err := b.bindRuntimeServices(reg); err != nil {
+				return err
+			}
 			return b.composeHostFace(view, face)
 		},
 		Start: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
+			if !live {
+				return nil
+			}
 			face, err := hostFaceOf(instance)
 			if err != nil {
 				return err
@@ -245,12 +259,19 @@ func (b *serverBuild) composeHostFace(view assemblyView, face *hostFace) error {
 	return nil
 }
 
-// stepInit returns the Init callback the host's step components share:
-// derive the assembly view from the registry the callback receives and run
-// the step's body over it. One adapter serves every step, so no two steps
-// can drift into different view wiring.
+// stepInit returns the Init callback the host's step components share: bind
+// the assembled values the step bodies read, derive the assembly view from
+// the registry the callback receives, and run the step's body over it. One
+// adapter serves every step, so no two steps can drift into different view
+// wiring.
 func (b *serverBuild) stepInit(run func(ctx context.Context, view assemblyView) error) func(context.Context, *pkgcore.ComponentRegistry, any) error {
 	return func(ctx context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+		if err := b.bindRegistry(reg); err != nil {
+			return err
+		}
+		if err := b.bindRuntimeServices(reg); err != nil {
+			return err
+		}
 		view, err := viewFromComponents(reg)
 		if err != nil {
 			return err
@@ -277,18 +298,34 @@ func (b *serverBuild) stepInitWithFace(run func(ctx context.Context, view assemb
 }
 
 // postBootstrapComponent returns the post-bootstrap step as a component: its
-// Init runs the same runPostBootstrap body the transition's PostBootstrap
-// hook calls.
+// Init binds the assembled values the step reads and runs the
+// runPostBootstrap body, which publishes the two runtime services the later
+// steps bind (bindRuntimeServices).
 func (b *serverBuild) postBootstrapComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name: "reference-app.post_bootstrap",
 		New:  newHostStep,
-		Init: b.stepInit(b.runPostBootstrap),
+		Init: func(ctx context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+			if err := b.bindRegistry(reg); err != nil {
+				return err
+			}
+			view, err := viewFromComponents(reg)
+			if err != nil {
+				return err
+			}
+			// The merged catalog is published into the by-type context
+			// here: rendering a message (org's invitation mail, a
+			// notification template, a verification code) reads it through
+			// the registry, and this step runs before anything a request --
+			// or the demo seeds below -- can render.
+			reg.Put(view.catalog)
+			return b.runPostBootstrap(ctx, reg, view)
+		},
 	}
 }
 
 // postAttachComponent returns the post-attach step as a component: its Init
-// runs the same runPostAttach body the transition's PostAttach hook calls.
+// binds the assembled values the step reads and runs the runPostAttach body.
 func (b *serverBuild) postAttachComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name: "reference-app.post_attach",
@@ -298,8 +335,7 @@ func (b *serverBuild) postAttachComponent() pkgcore.Component {
 }
 
 // preServeComponent returns the pre-serve step as a component: its Init
-// runs the same runPreServe body the transition's PreServe hook calls, over
-// the composed face. The (*hostFace) requirement is what places it after the
+// runs the runPreServe body over the composed face. The (*hostFace) requirement is what places it after the
 // application component in the plan, so the demo seeds it registers run
 // through the composed handler and its subscription lands after them.
 func (b *serverBuild) preServeComponent() pkgcore.Component {
@@ -313,48 +349,47 @@ func (b *serverBuild) preServeComponent() pkgcore.Component {
 	}
 }
 
-// workerComponent returns the background worker as a component: Start
-// launches the queue's dispatcher and the periodic-task scheduler -- a no-op
-// when this replica must never claim a job (the DisableQueueWorker switch),
-// the same skip the engine's WithoutBackgroundWorkers option performs -- and
-// Close drains the process's shared resources in the order their
-// dependencies require, bounded by the shutdown timeout.
-func (b *serverBuild) workerComponent() pkgcore.Component {
-	return pkgcore.Component{
-		Name: "reference-app.worker",
-		New:  newHostStep,
-		Start: b.stepInit(func(ctx context.Context, view assemblyView) error {
-			if b.cfg.DisableQueueWorker {
-				return nil
-			}
-			return b.startWorker(ctx, view)
-		}),
-		Close: func(ctx context.Context, _ *pkgcore.ComponentRegistry, _ any) error {
-			closeCtx, cancel := context.WithTimeout(ctx, speedapp.ShutdownTimeout)
-			defer cancel()
-			return b.stopWorker(closeCtx)
-		},
-	}
-}
-
 // hostComponents returns the host's own components in the registration order
-// the assembly plans by: the post-bootstrap step first (the binding
-// verification it runs reads the module declarations, which the module
-// components' Init callbacks made before it), then the post-attach step, the
-// application component, the pre-serve step -- ordered after the application
-// component by its (*hostFace) requirement, not by registration alone -- and
-// the worker last. Independent components take their plan order from the
-// registration order (the engine's own tie rule), so this order is the plan
-// order; the module components register ahead of every step.
+// the assembly plans by: the override and provider components first (their
+// seams are what the modules' descriptors read while constructing), then the
+// post-bootstrap step (it runs after every module's Init turn has published
+// what it reads), the post-attach step, the application component, the
+// pre-serve step -- ordered after the application component by its
+// (*hostFace) requirement, not by registration alone -- and the worker last.
+// Independent components take their plan order from the registration order
+// (the assembly's own tie rule), so this order is the plan order; the module
+// components' own descriptors are the composition's business, not this
+// list's.
 //
 // baseCtx is the context the application component's served requests inherit
-// (see appComponent's own doc comment).
-func (b *serverBuild) hostComponents(baseCtx context.Context) []pkgcore.Component {
-	return []pkgcore.Component{
+// (see appComponent's own doc comment), and live tells it whether this
+// assembly owns the listener.
+func (b *serverBuild) hostComponents(ctx context.Context, reg *pkgcore.ComponentRegistry, live bool) ([]pkgcore.Component, error) {
+	wiring, err := b.hostWiringComponents(reg)
+	if err != nil {
+		return nil, err
+	}
+	return append(wiring, b.hostStepComponents(ctx, live)...), nil
+}
+
+// hostStepComponents returns the host's assembly-step components alone, in
+// the registration order the assembly plans by (see hostComponents for the
+// ordering rationale).
+func (b *serverBuild) hostStepComponents(baseCtx context.Context, live bool) []pkgcore.Component {
+	components := []pkgcore.Component{
 		b.postBootstrapComponent(),
 		b.postAttachComponent(),
-		appComponent(b, baseCtx),
+		appComponent(b, baseCtx, live),
 		b.preServeComponent(),
 		b.workerComponent(),
 	}
+	// The steps hold no state a second replica would silently split: what
+	// they publish during Init is the assembly's own context, and what they
+	// start runs per replica over the shared database and queue, so a
+	// distributed composition may select them (host_wiring.go's
+	// replicaSafeModule has the full argument).
+	for i := range components {
+		components[i] = replicaSafeModule(components[i])
+	}
+	return components
 }

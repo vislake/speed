@@ -10,7 +10,7 @@ package app
 // go/app's suite pins.
 //
 // The composition-time half of the same correspondence is
-// verifyBootstrapBinding, which runs at every boot against the live registry
+// the assembly loader, which resolves every declared key at every boot
 // and proves every declared key binds the host target or the embedded
 // declaration; this test is the target-side half, so a field added to
 // hostConfig without a key (or a key without a field) fails here even when no
@@ -537,48 +537,6 @@ func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *
 	if cfg.SMTPHost != "smtp.example.test" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.test" || cfg.SMTPPassword != "smtp-password" || cfg.SMTPReplyTo != "support@example.test" {
 		t.Errorf("SMTP target = %s:%d user=%q reply-to=%q, want the complete APP_SMTP_* group carried through for the preset channel",
 			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPReplyTo)
-	}
-}
-
-// TestVerifyBootstrapBinding pins both directions of the boot-time proof: a
-// registry whose declared keys all map onto the host target or the embedded
-// platform declaration passes (the two keys below bind the declaration), a
-// declared key with no matching field fails naming that key, and a host key
-// the target does not bind fails too -- the drift an edit to
-// hostBootstrapKeys without a matching field would introduce.
-func TestVerifyBootstrapBinding(t *testing.T) {
-	registry := func(declared ...string) *pkgcore.Registry {
-		reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-		if len(declared) == 0 {
-			return reg
-		}
-		keys := make([]pkgcore.BootstrapKey, 0, len(declared))
-		for _, key := range declared {
-			keys = append(keys, pkgcore.BootstrapKey{Key: key, Format: "string"})
-		}
-		if err := reg.Bootstrap.Add(keys...); err != nil {
-			t.Fatalf("declare bootstrap keys %v: %v", declared, err)
-		}
-		return reg
-	}
-
-	if err := verifyBootstrapBinding(registry("config.cipher_key", "authn.pii_cipher_key")); err != nil {
-		t.Fatalf("verifyBootstrapBinding with declared keys the target binds: %v", err)
-	}
-
-	if err := verifyBootstrapBinding(registry("config.unbound_key")); err == nil {
-		t.Fatal("verifyBootstrapBinding accepted a declared key the target does not bind")
-	} else if !strings.Contains(err.Error(), "config.unbound_key") {
-		t.Errorf("declared-key refusal does not name the key: %v", err)
-	}
-
-	original := hostBootstrapKeys
-	t.Cleanup(func() { hostBootstrapKeys = original })
-	hostBootstrapKeys = append(append([]string{}, original...), "hostkeywithoutfield")
-	if err := verifyBootstrapBinding(registry("config.cipher_key")); err == nil {
-		t.Fatal("verifyBootstrapBinding accepted a host key the target does not bind")
-	} else if !strings.Contains(err.Error(), "hostkeywithoutfield") {
-		t.Errorf("host-key refusal does not name the key: %v", err)
 	}
 }
 

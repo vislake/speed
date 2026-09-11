@@ -2,11 +2,10 @@ package app
 
 // This file pins the host's own component shapes: the descriptors' declared
 // contracts and the plan order they produce, the message catalog the
-// component world merges its locale resources into, and the application
-// component's listener lifecycle. The step bodies the components share with
-// the transition hooks are exercised end to end by the suites that drive
-// BuildServer, so a step's correctness is pinned once, on the one
-// implementation both drives call.
+// assembly merges its components' locale resources into, and the
+// application component's listener lifecycle. The step bodies are exercised
+// end to end by the suites that drive BuildServer, so a step's correctness
+// is pinned once, on the one implementation both drives run.
 
 import (
 	"context"
@@ -18,11 +17,32 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/admin"
+	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/compliance"
+	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/integration"
+	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/metering"
+	"github.com/vislake/speed/go/notification"
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pki"
+	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/sharing"
+	"github.com/vislake/speed/go/storage"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/testdata/hostcatalog/alpha"
 	"github.com/vislake/speed/examples/reference-app/internal/app/testdata/hostcatalog/beta"
+	"github.com/vislake/speed/examples/reference-app/internal/attestation"
+	demomodule "github.com/vislake/speed/examples/reference-app/internal/demo"
+	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
 
 // hostComponentOrder is the order hostComponents must return, which is the
@@ -35,16 +55,19 @@ var hostComponentOrder = []string{
 	"reference-app.worker",
 }
 
-// registerHostComponents registers the host's components into a fresh
+// registerHostComponents registers the host's step components into a fresh
 // component registry and puts the composition that selects exactly them
 // (strictly, so no globally registered component can be pulled in), which
-// is the fixture every plan-shape test below drives.
+// is the fixture the plan-shape tests below drive. The wiring components
+// are deliberately left out: their requirements name module products this
+// fixture does not select, and their own contracts are pinned separately
+// (host_wiring_test.go).
 func registerHostComponents(t *testing.T) *pkgcore.ComponentRegistry {
 	t.Helper()
 	b := newServerBuild(ServerConfig{Port: "8080"})
 	reg := pkgcore.NewComponentRegistry()
 	selection := pkgcore.ComponentConfig{}
-	for _, c := range b.hostComponents(context.Background()) {
+	for _, c := range b.hostStepComponents(context.Background(), false) {
 		if err := reg.Register(c); err != nil {
 			t.Fatalf("register %q: %v", c.Name, err)
 		}
@@ -90,7 +113,7 @@ func TestHostComponents_PlanInRegistrationOrder(t *testing.T) {
 // component first -- the edge, not the declaration order, decides.
 func TestHostComponents_RequiresTheComposedFace(t *testing.T) {
 	b := newServerBuild(ServerConfig{Port: "8080"})
-	components := b.hostComponents(context.Background())
+	components := b.hostStepComponents(context.Background(), false)
 	byName := make(map[string]pkgcore.Component, len(components))
 	for _, c := range components {
 		byName[c.Name] = c
@@ -149,7 +172,7 @@ func TestHostComponents_RequiresTheComposedFace(t *testing.T) {
 // serving and draining depend on are declared.
 func TestHostComponents_DeclareTheirContracts(t *testing.T) {
 	b := newServerBuild(ServerConfig{Port: "8080"})
-	components := b.hostComponents(context.Background())
+	components := b.hostStepComponents(context.Background(), false)
 	if len(components) != len(hostComponentOrder) {
 		t.Fatalf("hostComponents() returned %d components, want %d", len(components), len(hostComponentOrder))
 	}
@@ -182,14 +205,16 @@ func TestHostComponents_DeclareTheirContracts(t *testing.T) {
 			t.Fatalf("step %q declares no Init callback, so its body would never run", name)
 		}
 	}
-	if worker := byName["reference-app.worker"]; worker.Start == nil || worker.Close == nil {
-		t.Fatalf("the worker component declares %v, want Start and Close", worker)
+	if worker := byName["reference-app.worker"]; worker.Close == nil {
+		t.Fatalf("the worker component declares %v, want its Close", worker)
 	}
 }
 
 // assembledSeams returns a registry carrying the seam values a step's view
-// derivation needs, in the combinations the adapter's failure paths are
-// pinned over.
+// derivation and registry binding need, in the combinations the adapter's
+// failure paths are pinned over. The typed nils are the products binding
+// only reads back -- what the step bodies do with them is the suites' (and
+// the whole-application assembly test's) business.
 func assembledSeams(withBus, withKV bool) *pkgcore.ComponentRegistry {
 	reg := pkgcore.NewComponentRegistry()
 	if withBus {
@@ -197,6 +222,32 @@ func assembledSeams(withBus, withKV bool) *pkgcore.ComponentRegistry {
 	}
 	if withKV {
 		reg.Put(pkgcore.NewMemoryKVStore())
+	}
+	for _, product := range []any{
+		(*gorm.DB)(nil),
+		(*jobs.StandaloneQueue)(nil),
+		(*config.Module)(nil),
+		(*org.Module)(nil),
+		(*pki.Module)(nil),
+		(*authn.Module)(nil),
+		(*notes.Module)(nil),
+		(*audit.Module)(nil),
+		(*rbac.Module)(nil),
+		(*storage.Module)(nil),
+		(*sharing.Module)(nil),
+		(*integration.Module)(nil),
+		(*demomodule.Module)(nil),
+		(*notification.Module)(nil),
+		(*aigateway.Module)(nil),
+		(*billing.Module)(nil),
+		(*metering.Module)(nil),
+		(*compliance.Module)(nil),
+		(*admin.Module)(nil),
+		(*attestation.Service)(nil),
+		(*config.Service)(nil),
+		(*rbac.Service)(nil),
+	} {
+		reg.Put(product)
 	}
 	return reg
 }
@@ -277,7 +328,7 @@ func TestStepInit_DerivesTheViewAndRunsTheBody(t *testing.T) {
 // product check: every lifecycle callback reports an instance that is not
 // the component's own *hostFace by name instead of panicking on it.
 func TestAppComponent_RefusesAForeignInstance(t *testing.T) {
-	component := appComponent(newServerBuild(ServerConfig{}), context.Background())
+	component := appComponent(newServerBuild(ServerConfig{}), context.Background(), true)
 	foreign := &hostStep{}
 	for name, callback := range map[string]func(context.Context, *pkgcore.ComponentRegistry, any) error{
 		"Init":  component.Init,
@@ -291,24 +342,13 @@ func TestAppComponent_RefusesAForeignInstance(t *testing.T) {
 	}
 }
 
-// TestWorkerComponent_SkipsUnderTheDisableSwitch pins the worker
-// component's Start callback as a no-op under DisableQueueWorker -- the
-// library-level WithoutBackgroundWorkers shape, carried by this host's own
-// component instead of an engine option.
-func TestWorkerComponent_SkipsUnderTheDisableSwitch(t *testing.T) {
-	b := newServerBuild(ServerConfig{Port: "8080", DisableQueueWorker: true})
-	if err := b.workerComponent().Start(context.Background(), assembledSeams(true, true), &hostStep{}); err != nil {
-		t.Fatalf("the worker component's Start under DisableQueueWorker: %v", err)
-	}
-}
-
 // TestWorkerComponent_ClosesAnUnstartedBuild pins the worker component's
-// Close callback: its drain runs every step over a build whose resources
-// never started, so an assembly that failed before Start still closes
-// cleanly.
+// Close callback: its steps run over a build whose resources never started
+// -- and over a registry carrying no runtime service to close -- so an
+// assembly that failed before Start still closes cleanly.
 func TestWorkerComponent_ClosesAnUnstartedBuild(t *testing.T) {
 	b := newServerBuild(ServerConfig{})
-	if err := b.workerComponent().Close(context.Background(), nil, &hostStep{}); err != nil {
+	if err := b.workerComponent().Close(context.Background(), pkgcore.NewComponentRegistry(), &hostStep{}); err != nil {
 		t.Fatalf("the worker component's Close over an unstarted build: %v", err)
 	}
 }
@@ -386,12 +426,18 @@ func TestHostCatalog_Refusals(t *testing.T) {
 	})
 
 	t.Run("no assets at all", func(t *testing.T) {
+		// The overridden modules' locale resources merge unconditionally
+		// (they ride no component), so a nil asset list still yields their
+		// languages and ids.
 		catalog, err := hostCatalog(nil)
 		if err != nil {
 			t.Fatalf("hostCatalog(nil): %v", err)
 		}
-		if len(catalog.Locales()) != 0 {
-			t.Fatalf("catalog languages = %v, want an empty catalog", catalog.Locales())
+		if got := catalog.Locales(); !slices.Equal(got, []string{"en-US", "zh-CN"}) {
+			t.Fatalf("catalog languages = %v, want the overridden modules' en-US/zh-CN pair", got)
+		}
+		if _, err := catalog.Lookup(i18n.LocaleENUS, "authn.invalid_credentials", nil); err != nil {
+			t.Fatalf("lookup authn.invalid_credentials: %v, want the overridden module's ids merged", err)
 		}
 	})
 }

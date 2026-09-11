@@ -2,11 +2,8 @@ package app
 
 // This file carries the host's single assembly view: one reading of the
 // declaration seats, the resolved infrastructure seam values and the merged
-// message catalog an assembly produced, whatever registry shape produced
-// them. Two constructors build it -- viewFromModules over the module
-// Registry a Kernel.Bootstrap returns, viewFromComponents over the component
-// assembly's registry -- and every host step is written against the view, so
-// one step body serves both drives.
+// message catalog an assembly produced. Every host step is written against
+// the view, so one step body serves every step component.
 
 import (
 	"embed"
@@ -43,30 +40,6 @@ type assemblyView struct {
 	kv pkgcore.KVStore
 	// catalog is the merged message catalog.
 	catalog *i18n.Catalog
-	// modules is the module Registry the assembly bootstrapped, or nil on a
-	// view built from a component registry. It is the module world's own
-	// surface: the typed Attach calls and the bootstrap-binding
-	// verification read it, and both retire with the module-to-component
-	// bridge.
-	modules *pkgcore.Registry
-}
-
-// viewFromModules returns the view over the module Registry a
-// Kernel.Bootstrap returned: its declaration seats (re-pointed at the
-// component assembly's seats by the bridge, so reads and writes travel the
-// same registrars), its resolved seams and its merged catalog.
-func viewFromModules(modules *pkgcore.Registry) assemblyView {
-	return assemblyView{
-		routes:    modules,
-		retention: modules.Retention,
-		jobs:      modules.Jobs,
-		events:    modules.Events,
-		schedules: modules.Schedules,
-		bus:       modules.EventBus(),
-		kv:        modules.KVStore(),
-		catalog:   modules.Locales(),
-		modules:   modules,
-	}
 }
 
 // viewFromComponents returns the view over a component assembly's registry:
@@ -100,15 +73,18 @@ func viewFromComponents(reg *pkgcore.ComponentRegistry) (assemblyView, error) {
 }
 
 // hostCatalog merges the selected components' locale resources into the
-// message catalog, the same mechanism Kernel.Bootstrap merges a module set's
-// (i18n.Builder over each carrier's own name and locale files). The
-// component's name is its locale id prefix: the builder rejects an asset
-// whose message ids do not start with the name it is registered under, so a
-// component whose embedded resources and name disagree fails here, naming
-// the component rather than rendering a missing id later. Components that
-// carry no locale resources are skipped -- a zero embed.FS contributes
-// nothing, and it is the ordinary shape of a component that renders no
-// message.
+// message catalog, the same mechanism a module set's locales merge under
+// (i18n.Builder over each carrier's own name and locale files), plus the
+// resources of the modules whose descriptors this host overrides
+// (host_wiring.go's overriddenModuleLocales). The component name is the
+// locale id prefix -- the builder rejects an asset whose message ids do not
+// start with the name it is registered under, so an override component
+// cannot carry its module's locales (it carries a host name) and those
+// resources merge here under the module's own name -- and a component whose
+// embedded resources and name disagree fails here, naming the component
+// rather than rendering a missing id later. Components that carry no locale
+// resources are skipped: a zero embed.FS contributes nothing, and it is the
+// ordinary shape of a component that renders no message.
 func hostCatalog(assets []pkgcore.Asset) (*i18n.Catalog, error) {
 	var zeroLocales embed.FS
 	builder := i18n.NewBuilder()
@@ -118,6 +94,11 @@ func hostCatalog(assets []pkgcore.Asset) (*i18n.Catalog, error) {
 		}
 		if err := builder.AddModule(asset.Name, asset.Locales); err != nil {
 			return nil, fmt.Errorf("reference-app: component %q has invalid locale resources: %w", asset.Name, err)
+		}
+	}
+	for _, overridden := range overriddenModuleLocales {
+		if err := builder.AddModule(overridden.name, overridden.fs); err != nil {
+			return nil, fmt.Errorf("reference-app: overridden module %q has invalid locale resources: %w", overridden.name, err)
 		}
 	}
 	return builder.Build(), nil

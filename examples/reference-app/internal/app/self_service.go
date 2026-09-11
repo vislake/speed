@@ -229,7 +229,7 @@ type SelfServiceProvisioner struct {
 	// provisioning attempt's recovery is enqueued on
 	// (scheduleProvisionRetry), and the queue the retry job's handler is
 	// registered on (wireSelfService). Always set by wireSelfService.
-	queue *jobs.StandaloneQueue
+	queue jobs.Queue
 	// failProvision is the failure-injection point
 	// (ServerConfig.FailSelfServiceProvision, consulted at the top of
 	// provision): when non-nil it fails a provisioning attempt it is
@@ -763,7 +763,7 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // memberships, grants and first-tenant resolution all stay as the seed
 // made them), which is the residual cost of the ordering discriminator
 // under a genuinely concurrent multi-replica boot.
-func wireSelfService(ctx context.Context, catalog *i18n.Catalog, events pkgcore.EventRegistrar, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, plans *billing.PlanService, subscriptions *billing.SubscriptionService, credits *billing.CreditService, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
+func wireSelfService(ctx context.Context, catalog *i18n.Catalog, events pkgcore.EventRegistrar, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, plans *billing.PlanService, subscriptions *billing.SubscriptionService, credits *billing.CreditService, queue jobs.Queue, jobHandlers pkgcore.JobHandlerRegistrar, failProvision func(userID string) error) error {
 	provisioner := &SelfServiceProvisioner{
 		orgModule:     orgModule,
 		rbacService:   rbacService,
@@ -776,7 +776,12 @@ func wireSelfService(ctx context.Context, catalog *i18n.Catalog, events pkgcore.
 		FailProvision: failProvision,
 	}
 	events.Subscribe(authn.EventUserCreated, provisioner.onUserCreated)
-	if err := queue.RegisterHandler(&SelfServiceProvisionJobHandler{Provisioner: provisioner}); err != nil {
+	// The retry handler is declared on the assembly's Jobs seat: the queue
+	// component drains that seat into its own handler map when it starts,
+	// so a declaration made here -- during the Init stage, the one stage
+	// the seats accept writes -- is registered before any job can be
+	// claimed.
+	if err := jobHandlers.Handle(SelfServiceProvisionTaskType, &SelfServiceProvisionJobHandler{Provisioner: provisioner}); err != nil {
 		return fmt.Errorf("reference-app: register the clinic provisioning retry handler: %w", err)
 	}
 	return nil

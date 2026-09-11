@@ -351,5 +351,65 @@ class ComponentAssemblyStagedRules(unittest.TestCase):
         self.assertEqual(m.scan(root), [])
 
 
+class AllowedFileRules(unittest.TestCase):
+    """The one-file allowances the reference app's assembly relies on: the
+    assembly core creates the registry and owns the process's signal
+    handling, and the host's database component opens the connection with
+    its write-capture scope. Each stays silent in its own file and fires
+    from any other."""
+
+    ALLOWED_BODIES = {
+        "examples/reference-app/internal/app/server.go": (
+            "package app\n\n"
+            "func assemble(ctx *Context) {\n"
+            "\treg := pkgcore.NewComponentRegistry()\n"
+            "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
+            "\t_ = reg\n"
+            "\t_ = stop\n"
+            "}\n"
+        ),
+        "examples/reference-app/internal/app/host_wiring.go": (
+            "package app\n\n"
+            "func (b *serverBuild) dbComponent() {\n"
+            "\t_ = dbkit.Open(ctx, dbkit.Options{})\n"
+            "}\n"
+        ),
+    }
+
+    def test_the_allowed_files_stay_silent(self):
+        root = make_tree(
+            {
+                path: body
+                for path, body in self.ALLOWED_BODIES.items()
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_the_same_calls_fire_from_another_composition_file(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/serve.go": (
+                    "package app\n\n"
+                    "func assemble(ctx *Context) {\n"
+                    "\treg := pkgcore.NewComponentRegistry()\n"
+                    "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
+                    "\t_ = dbkit.Open(ctx, dbkit.Options{})\n"
+                    "\t_ = reg\n"
+                    "\t_ = stop\n"
+                    "}\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        for label in (
+            "pkgcore.NewComponentRegistry",
+            "signal.NotifyContext",
+            "dbkit.Open",
+        ):
+            self.assertTrue(
+                any(f"calls {label}" in f for f in findings), (label, findings)
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
