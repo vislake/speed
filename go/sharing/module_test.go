@@ -264,4 +264,3 @@ func (neighbourModule) OpenAPISpec() []byte  { return nil }
 func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("neighbour:read")
 }
-
