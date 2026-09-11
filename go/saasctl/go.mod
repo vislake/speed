@@ -10,6 +10,14 @@ go 1.26.0
 // standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// The periodic-window derivation the sibling pki this module consumes now
+// builds on (jobs.ScheduleWindowStart, jobs.SchedulePlatformIdempotencyKey
+// and jobs.NewEmptyPayloadHandler) is not in a released jobs version yet, so
+// this module resolves jobs from the sibling checkout. A replace directive
+// in a dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 // Every module the migrate command and the materialized-host tests
 // construct declares its surface against the Registrar view, which no
 // released version carries yet, so each resolves from the sibling

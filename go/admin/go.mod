@@ -15,6 +15,14 @@ replace github.com/vislake/speed/go/dbkit => ../dbkit
 // module's own standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// The periodic-window derivation the sibling billing and sharing modules
+// this one consumes now build on (jobs.ScheduleWindowStart, the per-scope
+// idempotency-key constructors and jobs.NewEmptyPayloadHandler) is not in a
+// released jobs version yet, so this module resolves jobs from the sibling
+// checkout. A replace directive in a dependency is ignored by consumers, so
+// this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 // Every module this one reads declares its surface against the Registrar
 // view, which no released version carries yet, so each resolves from the
 // sibling checkout. A replace directive in a dependency is ignored by
