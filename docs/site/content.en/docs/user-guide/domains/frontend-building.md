@@ -139,7 +139,6 @@ if (container === null) {
 //    reads is registered exactly once.
 const i18n = createI18n({
   supportedLanguages: ['zh-CN', 'en-US'],
-  defaultLanguage: 'zh-CN',
 })
 registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
 registerNamespace(i18n, LAYOUT_KIT_NAMESPACE, layoutKitResources)

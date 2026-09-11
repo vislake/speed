@@ -258,8 +258,8 @@ allowlist, into the host's protected handler. Authentication precedes
 tenant resolution because it is the only order that verifies a token
 exactly once — the tenant resolver reads the already-verified principal
 out of the context. Permission gating is not a chain element: rbac's
-route-authorization table (`rbac.GuardRoutes`) is applied at mount time,
-above this chain. The
+route-authorization table (`rbac.GuardRoutes`) wraps the mounted
+handlers at the route level, outside this chain. The
 [identity and access domain page](/docs/user-guide/domains/identity-access/)
 walks the chain operationally.
 

@@ -149,8 +149,8 @@ HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` �
 饰器,再过 `tenancy.Middleware(authn.NewPrincipalResolver())` 与预认证
 白名单,进入宿主的受保护处理器。认证必须先于租户解析,因为只有这个
 次序让 token 恰好验证一次——租户解析器从上下文里读已验的 Principal。
-权限门不是链上的一环:rbac 的路由授权表(`rbac.GuardRoutes`)在挂载期
-应用,位于这条链之上。[身份与访问领域页](/zh-cn/docs/user-guide/domains/identity-access/)按操作讲解这条链。
+权限门不是链上的一环:rbac 的路由授权表(`rbac.GuardRoutes`)在路由层
+包裹已挂载的处理器,与这条链平行。[身份与访问领域页](/zh-cn/docs/user-guide/domains/identity-access/)按操作讲解这条链。
 
 ## 多租户:隔离是平台属性
 

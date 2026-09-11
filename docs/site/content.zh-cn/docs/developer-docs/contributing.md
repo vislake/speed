@@ -133,7 +133,7 @@ scope 指明被改动的单元:Go module 或 npm 包名(`pkgcore`、`billing`、
 | `api-contract.yml` | 触碰 API 契约工具链的 PR,及路径匹配的推送 | 从 spec 重新生成后端接口与前端 SDK,对提交产物做一致性闸门,并重建 reference app |
 | `security.yml` | 每一个 PR,加每日定时 | 依赖审计、gitleaks 密钥扫描、CodeQL、许可证扫描 |
 | `scaffold-verify.yml` | 每日定时 | 生成、构建、迁移并启动一个起始项目,两种部署模式各一遍 |
-| `e2e.yml` | 每日定时,手动触发 | 在真实 runner 上跑参考应用的浏览器端到端套件:三个 Playwright 引擎各自的矩阵行,对准刚启动的服务器;推送到 `main` 的触发器要等首次手动运行的绿灯才启用 |
+| `e2e.yml` | 每日定时,手动触发 | 在真实 runner 上跑参考应用的浏览器端到端套件:三个 Playwright 项目(chromium、webkit、iPad)共两个浏览器引擎——iPad 设备档跑在 webkit 上——各占一个矩阵行,对准刚启动的服务器;推送到 `main` 的触发器要等首次手动运行的绿灯才启用 |
 | `docs-site-deploy.yml` | 触碰 `docs/site/**` 的推送,手动触发 | 构建并部署本站 |
 | `release.yml` | 手动触发 | 离线校验 lockstep 发布计划,随后对已验证版本执行真实发布:推送模块 tag 与仓库根 tag,并把 `web/packages` 下每个 `@speed` 包发布到 GitHub Packages registry |
 | `docker-image-ci.yml` | 触碰镜像构建输入路径的推送到 `main`,加手动触发 | 构建容器镜像 |

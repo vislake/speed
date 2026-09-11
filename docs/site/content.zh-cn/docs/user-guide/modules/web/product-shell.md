@@ -123,4 +123,3 @@ attachSession(session) // 宿主的 @speed/auth-core 会话,渲染之前
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 相关包页:[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)(登录家族与默认结束屏)、[tenancy-ui](/zh-cn/docs/user-guide/modules/web/tenancy-ui/)(`userMenu` 切换器)
 - 同组有自己页面的兄弟包:`@speed/layout-kit`(`AppShell` 外框与 `RouteGuard`)、`@speed/auth-core`(会话 hooks)、`@speed/ui-kit`(主题)、`@speed/i18n`(实例与命名空间帮手,本包导出类型所依赖者)、`@speed/api-client`(`./bootstrap` 子路径组装的客户端)与 `@speed/api-sdk`(生成操作与 `./bootstrap` 绑定的 runtime 接缝)
-- 同级包 `@speed/layout-kit`(`AppShell` 外框与 `RouteGuard`)、`@speed/auth-core`(会话 hooks)与 `@speed/ui-kit`(主题)各在本组的页面
