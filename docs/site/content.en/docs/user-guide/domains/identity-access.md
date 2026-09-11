@@ -41,7 +41,7 @@ middleware, and the tenant never comes from a request header.
    your composition configuration selects. Each module's component
    carries its own migrations, and the selected db component applies
    them in the assembly's `Verify` stage; the app's boot-time comments
-   in `examples/reference-app/cmd/server/server.go` walk the exact
+   in `examples/reference-app/internal/app/server.go` walk the exact
    wiring order.
 2. **Give authn its mandatory modules.** `authn.NewModule` validates
    options eagerly: a `KeySource` (pki's `Service` satisfies it) and a
