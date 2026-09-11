@@ -140,13 +140,20 @@ type Component struct {
 	// simply leaves the consumer to run with a zero value.
 	Requires []Requirement
 
-	// Provides declares the product types this component contributes, each
-	// as a typed nil pointer to the contract type -- (*gorm.DB)(nil),
-	// (*pkgcore.Mailer)(nil). The declaration is what lets the assembly
-	// resolve Requirements, detect ambiguity and auto-pull a unique
-	// provider before anything is constructed; a component whose Provides
-	// entries do not match what its New actually returns fails the
-	// construction that puts the product.
+	// Provides declares the token set this component delivers into the
+	// registry by the end of its construction, each as a typed nil pointer
+	// to the contract type -- (*gorm.DB)(nil), (*pkgcore.Mailer)(nil). The
+	// declared set is the full delivery: the product New returns, plus any
+	// value New itself puts (a module handing out a second construction
+	// value, such as a service built in the constructor, declares and puts
+	// it). The declaration is what lets the assembly resolve Requirements,
+	// detect ambiguity and auto-pull a unique provider before anything is
+	// constructed; when the component's construction completes, the
+	// assembly asserts EVERY declared token was delivered -- a declaration
+	// nothing delivered fails the construction, because a declaration is a
+	// promise a plan-time resolution rests on. Services published at Init
+	// are not part of this set (services never resolve token
+	// requirements).
 	Provides []any
 
 	// Capabilities is what this component declares about itself. The

@@ -278,6 +278,25 @@ func (r *ComponentRegistry) Put(v any) {
 	r.values = append(r.values, v)
 }
 
+// valueCount returns how many values the by-type context holds. It brackets
+// a New call so the values that call put itself can be told apart from the
+// values already there.
+func (r *ComponentRegistry) valueCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.values)
+}
+
+// valuesFrom returns a copy of the values put at or after index i.
+func (r *ComponentRegistry) valuesFrom(i int) []any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if i >= len(r.values) {
+		return nil
+	}
+	return append([]any(nil), r.values[i:]...)
+}
+
 // Get returns the value in the by-type context that T addresses: exactly one
 // put value whose type is assignable to T is the answer. No assignment is an
 // error wrapping ErrMissingRequirement naming T; more than one is an error
@@ -378,6 +397,7 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return r.failStage(ctx, stageConstruct, name, err)
 		}
+		before := r.valueCount()
 		instance, err := p.component.New(ctx, r, p.cfg)
 		if err != nil {
 			return r.failStage(ctx, stageConstruct, name, err)
@@ -385,7 +405,11 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 		if instance == nil {
 			return r.failStage(ctx, stageConstruct, name, errors.New("the New callback returned no product"))
 		}
-		if err := productSatisfiesDeclarations(p.component, instance); err != nil {
+		// The values the New callback put itself are, by construction, this
+		// component's own additional deliveries: the stage drives one New at
+		// a time, so everything appended to the by-type context between the
+		// count above and now was put by this call.
+		if err := productDeliversDeclarations(p.component, instance, r.valuesFrom(before)); err != nil {
 			return r.failStage(ctx, stageConstruct, name, err)
 		}
 		r.recordConstructed(p.component, instance)
@@ -852,28 +876,42 @@ func (r *ComponentRegistry) registerSystemPurposes() error {
 	return nil
 }
 
-// productSatisfiesDeclarations reports whether instance -- the product a
-// component's New just returned -- matches at least one of the component's
-// Provides declarations when it declares any. A product matching none of
-// them means the descriptor declared products the component does not
-// produce: every requirement resolution resting on that declaration would
-// fail only later, at Get time, so the construction fails here instead,
-// naming the cause while the component is still on the stack.
-func productSatisfiesDeclarations(c Component, instance any) error {
+// productDeliversDeclarations asserts the delivery promise a component's
+// Provides declarations make: for every declared token, the values this
+// construction delivered -- the product New returned, plus the values New
+// itself put into the by-type context (put carries them) -- must include
+// one that satisfies it. A declaration without a matching delivery means
+// the descriptor promised a product this component never produces: every
+// requirement resolution resting on that declaration would fail only
+// later, at Get time (or be silently mis-served by another component's
+// value), so the construction fails here instead, naming every undelivered
+// declaration while the component is still on the stack.
+func productDeliversDeclarations(c Component, instance any, put []any) error {
 	if len(c.Provides) == 0 {
 		return nil
 	}
 	product := reflect.TypeOf(instance)
+	var undelivered []string
 	for _, declared := range c.Provides {
-		if productMatchesToken(product, reflect.TypeOf(declared)) {
-			return nil
+		token := reflect.TypeOf(declared)
+		if productMatchesToken(product, token) {
+			continue
+		}
+		delivered := false
+		for _, v := range put {
+			if productMatchesToken(reflect.TypeOf(v), token) {
+				delivered = true
+				break
+			}
+		}
+		if !delivered {
+			undelivered = append(undelivered, tokenDisplay(token))
 		}
 	}
-	types := make([]string, 0, len(c.Provides))
-	for _, declared := range c.Provides {
-		types = append(types, tokenDisplay(reflect.TypeOf(declared)))
+	if len(undelivered) == 0 {
+		return nil
 	}
-	return fmt.Errorf("the product %s matches none of the component's Provides declarations (%s)", product, strings.Join(types, ", "))
+	return fmt.Errorf("the construction delivered neither the product %s nor a value put during New for the declared token(s) %s; a Provides declaration promises a construction-time delivery, so a declaration the component cannot deliver must be removed (or the delivering value put inside New)", product, strings.Join(undelivered, ", "))
 }
 
 // Build constructs a selected component by name: the directory-style member

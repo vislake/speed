@@ -894,10 +894,10 @@ func TestAssetsCollectsOnlyCarriersInPlanOrder(t *testing.T) {
 	}
 }
 
-func TestConstructProductSatisfiesProvides(t *testing.T) {
+func TestConstructProductDeliversProvides(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("a product matching no declaration fails the construction", func(t *testing.T) {
+	t.Run("a declared token the construction did not deliver fails", func(t *testing.T) {
 		log := &stageLog{}
 		good1 := recordingComponent(log, "provgood1", "", &compTokenA{}, nil)
 		good2 := recordingComponent(log, "provgood2", "", &compTokenB{}, nil)
@@ -922,7 +922,7 @@ func TestConstructProductSatisfiesProvides(t *testing.T) {
 		for _, want := range []string{
 			"(stage construct)",
 			`component "provbad"`,
-			"the product *pkgcore.compTokenB matches none of the component's Provides declarations (pkgcore.compTokenA)",
+			"the construction delivered neither the product *pkgcore.compTokenB nor a value put during New for the declared token(s) pkgcore.compTokenA",
 			"rolled back: provgood2, provgood1",
 		} {
 			if !strings.Contains(err.Error(), want) {
@@ -945,6 +945,96 @@ func TestConstructProductSatisfiesProvides(t *testing.T) {
 		}
 		if got := log.count("provbad.close"); got != 0 {
 			t.Errorf("the failing component closed %d times, want 0: it was never constructed", got)
+		}
+	})
+
+	t.Run("every declaration is asserted, not just one", func(t *testing.T) {
+		// The product matches the first declaration; the second one nothing
+		// delivered. An at-least-one reading would construct this component
+		// and leave the second declaration as a promise no Get could ever
+		// keep.
+		partial := recordingComponent(&stageLog{}, "provpartial", "", &compTokenA{}, func(c *Component) {
+			c.Provides = []any{(*compTokenA)(nil), (*compTokenB)(nil)}
+		})
+
+		reg := newTestRegistry(t, partial)
+		reg.Put(testComposition(configEntry{key: "provpartial", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{
+			`component "provpartial"`,
+			"pkgcore.compTokenB",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a value put inside New delivers a declaration", func(t *testing.T) {
+		// The multi-value delivery shape: the product is one declared
+		// token, a second construction value is put inside New.
+		multi := Component{
+			Name:     "provmulti",
+			Requires: nil,
+			Provides: []any{(*compTokenA)(nil), (*compTokenB)(nil)},
+			New: func(_ context.Context, reg *ComponentRegistry, _ ComponentConfig) (any, error) {
+				reg.Put(&compTokenB{})
+				return &compTokenA{}, nil
+			},
+		}
+
+		reg := newTestRegistry(t, multi)
+		reg.Put(testComposition(configEntry{key: "provmulti", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+		if _, err := Get[*compTokenB](reg); err != nil {
+			t.Errorf("Get[*compTokenB] after construction = %v, want the value put inside New", err)
+		}
+	})
+
+	t.Run("another component's value does not deliver the declaration", func(t *testing.T) {
+		// A earlier component put a *compTokenB; the later component
+		// declares (*compTokenB)(nil) but delivers nothing itself. The
+		// declaration is still unmet: a promise names this component's own
+		// delivery, not whatever answer a Get might find in the shared
+		// context.
+		earlier := Component{
+			Name: "provother",
+			New: func(_ context.Context, reg *ComponentRegistry, _ ComponentConfig) (any, error) {
+				reg.Put(&compTokenB{})
+				return &compTokenA{}, nil
+			},
+		}
+		declares := recordingComponent(&stageLog{}, "provborrow", "", &compTokenA{}, func(c *Component) {
+			c.Provides = []any{(*compTokenB)(nil)}
+		})
+
+		reg := newTestRegistry(t, earlier, declares)
+		reg.Put(testComposition(
+			configEntry{key: "provother", value: nil},
+			configEntry{key: "provborrow", value: nil},
+		))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		if !strings.Contains(err.Error(), "pkgcore.compTokenB") {
+			t.Errorf("error %q does not name the undelivered declaration", err)
 		}
 	})
 
