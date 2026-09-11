@@ -202,6 +202,28 @@ func TestSigner_DirectMode_Sign_NilResponse_FailsClosed(t *testing.T) {
 	}
 }
 
+// TestSigner_DirectMode_GenerateKey_NilPublicKeyResponse_FailsClosed pins
+// the same fail-closed answer on the direct-sign key-generation path: a
+// GetPublicKey answering (nil, nil) -- an answer a real KMS never produces
+// -- must surface as pki.ErrKeyNotFound, the coded error the vault twin's
+// own readPublicKey answers for the same empty response, never as a nil
+// dereference of the *kms.GetPublicKeyOutput.
+func TestSigner_DirectMode_GenerateKey_NilPublicKeyResponse_FailsClosed(t *testing.T) {
+	fake := &fakeKMSClient{
+		createKey: func(context.Context, *kms.CreateKeyInput, ...func(*kms.Options)) (*kms.CreateKeyOutput, error) {
+			return &kms.CreateKeyOutput{KeyMetadata: &types.KeyMetadata{KeyId: aws.String("key-1234")}}, nil
+		},
+		getPublicKey: func(context.Context, *kms.GetPublicKeyInput, ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
+			return nil, nil
+		},
+	}
+	s := &signer{client: fake, mode: ModeDirectSign}
+	_, _, err := s.GenerateKey(context.Background(), pki.AlgorithmEd25519)
+	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
+		t.Errorf("GenerateKey(nil GetPublicKey response) error = %v, want ErrKeyNotFound (the vault twin's coded answer for the same empty response)", err)
+	}
+}
+
 // TestSigner_DirectMode_Sign_EmptySignature_FailsClosed pins the other half
 // of the same failure-semantics agreement: a Sign that answers with no
 // Signature bytes must fail with a coded error, never (nil, nil) -- an
@@ -334,6 +356,53 @@ func TestSigner_EnvelopeMode_Sign_InvalidKeyRef(t *testing.T) {
 	_, err := s.Sign(context.Background(), "not-valid-base64!!", []byte("x"))
 	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
 		t.Errorf("Sign(invalid keyRef) error = %v, want ErrKeyNotFound", err)
+	}
+}
+
+// TestSigner_EnvelopeMode_Sign_NilDecryptResponse_FailsClosed pins the
+// envelope sign path's fail-closed answer for a Decrypt that answers
+// (nil, nil): pki.ErrKeyNotFound, the coded error the vault twin's own
+// decryptPrivateKey answers for the same empty response, never a nil
+// dereference of the *kms.DecryptOutput.
+func TestSigner_EnvelopeMode_Sign_NilDecryptResponse_FailsClosed(t *testing.T) {
+	fake := &fakeKMSClient{
+		decrypt: func(context.Context, *kms.DecryptInput, ...func(*kms.Options)) (*kms.DecryptOutput, error) {
+			return nil, nil
+		},
+	}
+	s := &signer{client: fake, mode: ModeEnvelope, wrappingKeyID: "wrap-key"}
+	_, err := s.Sign(context.Background(), "AAAA", []byte("x"))
+	if !apperr.HasCode(err, pki.ErrKeyNotFound.Code) {
+		t.Errorf("Sign(nil Decrypt response) error = %v, want ErrKeyNotFound (the vault twin's coded answer for the same empty response)", err)
+	}
+}
+
+// TestSigner_EnvelopeMode_GenerateKey_EmptyEncryptResponse_FailsClosed
+// pins the wrapping path's fail-closed answer for both shapes of an empty
+// Encrypt answer: a nil *kms.EncryptOutput and a response carrying no
+// CiphertextBlob bytes. Either one must return an error, never a keyRef
+// that is the empty string -- a handle nothing can ever decrypt. The
+// vault twin's encrypt answers the same empty response with an error.
+func TestSigner_EnvelopeMode_GenerateKey_EmptyEncryptResponse_FailsClosed(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		out  *kms.EncryptOutput
+	}{
+		{name: "nil response", out: nil},
+		{name: "empty ciphertext", out: &kms.EncryptOutput{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeKMSClient{
+				encrypt: func(context.Context, *kms.EncryptInput, ...func(*kms.Options)) (*kms.EncryptOutput, error) {
+					return tt.out, nil
+				},
+			}
+			s := &signer{client: fake, mode: ModeEnvelope, wrappingKeyID: "wrap-key"}
+			keyRef, _, err := s.GenerateKey(context.Background(), pki.AlgorithmEd25519)
+			if err == nil {
+				t.Fatalf("GenerateKey(%s) = (%q, nil), want an error -- an empty keyRef can never be decrypted", tt.name, keyRef)
+			}
+		})
 	}
 }
 

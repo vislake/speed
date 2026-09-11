@@ -135,6 +135,16 @@ func (s *signer) generateKeyEnvelope(ctx context.Context) (string, crypto.Public
 	if err != nil {
 		return "", nil, fmt.Errorf("pki/signer/kmsaws: encrypt: %w", err)
 	}
+	if out == nil || len(out.CiphertextBlob) == 0 {
+		// A real KMS Encrypt errors on failure, so a nil response or an
+		// empty CiphertextBlob can only come from a misbehaving transport
+		// or stub; answering either as success would return the empty
+		// string as a keyRef -- a handle nothing can decrypt. The vault
+		// twin's encrypt answers the same empty response with an error
+		// too (the failure-semantics agreement signDirect's doc comment
+		// states).
+		return "", nil, fmt.Errorf("pki/signer/kmsaws: encrypt returned no ciphertext")
+	}
 	keyRef := base64.StdEncoding.EncodeToString(out.CiphertextBlob)
 	return keyRef, pub, nil
 }
@@ -216,6 +226,15 @@ func (s *signer) readPublicKey(ctx context.Context, keyID string) (ed25519.Publi
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/kmsaws: get public key for %q: %w", keyID, err)
 	}
+	if out == nil {
+		// A real KMS GetPublicKey errors on failure, so a nil response with
+		// a nil error can only come from a misbehaving transport or stub; it
+		// is answered with pki.ErrKeyNotFound, the same coded error the
+		// vault twin's own readPublicKey answers for its empty response
+		// (the failure-semantics agreement signDirect's doc comment states),
+		// never a nil dereference.
+		return nil, pki.ErrKeyNotFound
+	}
 	pub, err := x509.ParsePKIXPublicKey(out.PublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/kmsaws: parse public key for %q: %w", keyID, err)
@@ -242,6 +261,14 @@ func (s *signer) decryptPrivateKey(ctx context.Context, keyRef string) (ed25519.
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/kmsaws: decrypt: %w", err)
+	}
+	if out == nil {
+		// A real KMS Decrypt errors on failure, so a nil response with a nil
+		// error can only come from a misbehaving transport or stub; it is
+		// answered with pki.ErrKeyNotFound, the same coded error the vault
+		// twin's own decryptPrivateKey answers for its empty response, never
+		// a nil dereference.
+		return nil, pki.ErrKeyNotFound
 	}
 	priv, err := x509.ParsePKCS8PrivateKey(out.Plaintext)
 	if err != nil {
