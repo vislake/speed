@@ -69,12 +69,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import Box from '@mui/material/Box'
-import type { SxProps, Theme } from '@mui/material'
 import { useAuthState } from '@speed/auth-core'
 import { SessionEndedScreen } from '@speed/auth-ui'
 import { useTranslation } from '@speed/i18n'
 import { AppShell } from '@speed/layout-kit'
 import type { AppShellProps } from '@speed/layout-kit'
+import { visuallyHiddenSx } from '@speed/ui-kit'
 import { PRODUCT_SHELL_NAMESPACE } from '../resources.js'
 
 /** The AppShell chrome props the authenticated frame is built from,
@@ -122,21 +122,6 @@ export interface ProductShellProps extends AppShellChromeProps {
  * measured against, so a re-render that leaves it unchanged never moves
  * focus or announces. */
 type Branch = 'frame' | 'ended' | 'signIn'
-
-/** The visually-hidden recipe for the polite live region (the clip
- * technique, the family's shape -- ui-kit's FileUploader hides its
- * input the same way): the region must stay in the accessibility tree
- * to announce, so it is clipped, never display:none. */
-const srOnlyRegionSx: SxProps<Theme> = {
-  clip: 'rect(0 0 0 0)',
-  clipPath: 'inset(50%)',
-  height: 1,
-  margin: 0,
-  overflow: 'hidden',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: 1,
-}
 
 export function ProductShell({
   navItems,
@@ -245,7 +230,7 @@ export function ProductShell({
       // same tabIndex={-1} mechanism AppShell's own main uses.
       <Box ref={branchContainerRef} component="main" tabIndex={-1}>
         {announcementsRegistered && (
-          <Box component="p" role="status" sx={srOnlyRegionSx}>
+          <Box component="p" role="status" sx={visuallyHiddenSx}>
             {announced ? t('announcements.sessionEnded') : ''}
           </Box>
         )}
