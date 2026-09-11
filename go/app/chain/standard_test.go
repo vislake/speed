@@ -359,6 +359,51 @@ func TestStandard_RejectsMissingRequiredPieces(t *testing.T) {
 	})
 }
 
+// TestStandard_FailedCompositionLeavesTheProtectedMuxUntouched pins that a
+// refused composition mounts nothing: the derivation splits and validates the
+// whole partition before it mounts the first route, so an error return leaves
+// the caller's protected mux exactly as it was. Both refusals below fire after
+// the partition split -- an admin prefix matching no route, and a registry with
+// no authn route -- the window in which an eager mounting pass would have left
+// the non-exempt routes behind.
+func TestStandard_FailedCompositionLeavesTheProtectedMuxUntouched(t *testing.T) {
+	cases := []struct {
+		name        string
+		dropAuthn   bool
+		adminPrefix bool
+	}{
+		{name: "admin prefix matches nothing", adminPrefix: true},
+		{name: "no authn route", dropAuthn: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			notes := &countingHandler{}
+			routes := []pkgcore.MountedRoute{
+				{Path: app.AuthnAPIPath, Handler: &countingHandler{}},
+				{Path: "/api/v1/notes", Handler: notes},
+			}
+			if tc.dropAuthn {
+				routes = routes[1:]
+			}
+			reg := testRegistry(t, &routesModule{name: "fixture", routes: routes})
+
+			var opts []Option
+			if tc.adminPrefix {
+				opts = append(opts, WithAdminPrefix("/api/v1/admin"))
+			}
+			protected := http.NewServeMux()
+			if _, err := Standard(reg, newTestVerifier(t), protected, opts...); err == nil {
+				t.Fatal("Standard accepted a composition it must refuse")
+			}
+
+			rec := do(protected, http.MethodGet, "/api/v1/notes", nil)
+			if notes.hits != 0 {
+				t.Fatalf("GET /api/v1/notes on the mux after a refused Standard: status %d, hits %d; the refusal must leave the mux untouched", rec.Code, notes.hits)
+			}
+		})
+	}
+}
+
 // TestStandard_UndeclaredRouteFailsTheGuard pins that the table's
 // exhaustiveness is enforced through the derivation: a mounted route the
 // table does not name refuses the composition rather than being mounted

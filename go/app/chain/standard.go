@@ -34,7 +34,9 @@ type RouteSource interface {
 // application engine prepared, already carrying the platform liveness routes
 // and the host's own routes); Standard mounts the registry's non-exempt
 // routes onto it, so it must be a *http.ServeMux and must not already carry
-// those routes.
+// those routes. The partition is validated in full before the first route is
+// mounted, and a refused composition mounts nothing: Standard's error return
+// leaves protected exactly as it was.
 //
 // The host-supplied half of the composition travels through options: the
 // authorizer and rule table (WithAuthorization -- the business decision of
@@ -79,13 +81,13 @@ func Standard(reg RouteSource, verifier *authn.Verifier, protected *http.ServeMu
 	}
 
 	authnRoutes, rest := authn.ExemptSubtree(routes)
-	var adminRoutes []pkgcore.MountedRoute
+	var adminRoutes, protectedRoutes []pkgcore.MountedRoute
 	for _, route := range rest {
 		if cfg.adminPrefix != "" && routeIsBelow(route.Path, cfg.adminPrefix) {
 			adminRoutes = append(adminRoutes, route)
 			continue
 		}
-		pkgcore.MountRoutes(protected, route)
+		protectedRoutes = append(protectedRoutes, route)
 	}
 	if len(authnRoutes) == 0 {
 		return nil, fmt.Errorf("chain: no mounted route lies at or below authn's mount point; authn's subtree must be mounted ahead of the tenancy chain, and a host composing Standard has an authn module")
@@ -93,6 +95,7 @@ func Standard(reg RouteSource, verifier *authn.Verifier, protected *http.ServeMu
 	if cfg.adminPrefix != "" && len(adminRoutes) == 0 {
 		return nil, fmt.Errorf("chain: the admin prefix %q matches no mounted route; the module mounting that surface must be in the registry's module set", cfg.adminPrefix)
 	}
+	pkgcore.MountRoutes(protected, protectedRoutes...)
 
 	return Chain(Config{
 		Verifier:             verifier,
