@@ -322,7 +322,7 @@ func hostConfigDefaults() hostConfig {
 // the declared defaults table: the loader's lowest-priority source for the
 // declared key materials, keyed by the declared key path each declaring
 // module's component carries. It is handed to the assembly's loader options
-// (the selection's options()), which is the pass that resolves the
+// (the selection's loaderOptions()), which is the pass that resolves the
 // declarations; an entry naming a key no imported module declares is inert,
 // so one table serves every selection -- a composition that imports no authn
 // module simply has nothing to resolve authn.blind_index_key for.
@@ -337,29 +337,17 @@ func bootstrapDevDefaults() map[string][]byte {
 	}
 }
 
-// declaredKeyMaterial reads one declared bootstrap key's material from the
-// assembly's published source, naming the declared key path when the assembly
-// resolved no value for it (a key whose variable was emptied with no table
-// entry to fall back to, or a composition that declares no such key at all).
-func declaredKeyMaterial(material *pkgcore.BootstrapMaterial, keyPath string) ([]byte, error) {
-	value, ok := material.Material(keyPath)
-	if !ok {
-		return nil, fmt.Errorf("__APP_NAME__: the assembly resolved no material for the declared bootstrap key %q", keyPath)
-	}
-	return value, nil
-}
-
 // loadHostConfig resolves the bootstrap surface from the process
 // environment through the loader: flags first, then the environment
 // (PORT and every pinned variable under its exact env tag), no config file,
 // then hostConfigDefaults. The declared key materials resolve in the
 // assembly's own pass, over the module components' declarations and the same
 // process environment, with bootstrapDevDefaults as the table no individual
-// variable overrides -- this pass exists so the option values that depend on
-// the loaded configuration (the database DSN, the listen address, the
-// kernel's seam composition) are resolved before the engine assembles
-// anything, and the engine's own pass re-resolves the identical sources into
-// the identical target, so the two cannot disagree.
+// variable overrides -- this pass exists so the values that depend on the
+// loaded configuration (the database DSN, the listen address, the seam
+// composition) are resolved before the engine assembles anything, and the
+// engine's own pass re-resolves the identical sources into the identical
+// target, so the two cannot disagree.
 func loadHostConfig() (hostConfig, error) {
 	hc := hostConfigDefaults()
 	loader := config.New(config.WithEnvPrefix(envPrefix))
@@ -409,10 +397,11 @@ type serverConfig struct {
 	// field's own doc comment above.
 	RedisAddr string
 
-	// OTLPEndpoint, when non-empty, is handed to the engine's observability
-	// spec (main.go), pushing traces and metrics to it over OTLP -- see the
-	// APP_OTLP_ENDPOINT field's own doc comment above for the default and
-	// the exporter registration the endpoint needs.
+	// OTLPEndpoint, when non-empty, is handed to the observability
+	// component's configuration in server.go, pushing traces and metrics to
+	// it over OTLP -- see the APP_OTLP_ENDPOINT field's own doc comment
+	// above for the default and the exporter registration the endpoint
+	// needs.
 	OTLPEndpoint string
 
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL

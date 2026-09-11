@@ -304,9 +304,10 @@ type Config struct {
 	// comment above.
 	RedisAddr string
 
-	// OTLPEndpoint, when non-empty, is handed to the engine's observability
-	// spec as the OTLP/gRPC endpoint, pushing traces and metrics to it over
-	// OTLP -- see OTLPEndpointEnv's own doc comment above.
+	// OTLPEndpoint, when non-empty, is handed to the observability
+	// component's configuration as the OTLP/gRPC endpoint, pushing traces
+	// and metrics to it over OTLP -- see OTLPEndpointEnv's own doc comment
+	// above.
 	OTLPEndpoint string
 
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL

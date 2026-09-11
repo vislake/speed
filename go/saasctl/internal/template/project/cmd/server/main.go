@@ -3,8 +3,8 @@
 // Package main is the generated project's minimal starter skeleton --
 // exactly the kind of "minimal starter skeleton...freely editable by
 // consumers" a modular-monolith-as-libraries repository's own README
-// describes, not a business module. It never goes through a kernel
-// Registry.Register call itself; its whole job is composing one (see the
+// describes, not a business module. It never registers itself as a
+// component; its whole job is composing the host's component set (see the
 // selection's server.go) and running it.
 package main
 
@@ -20,7 +20,8 @@ import (
 	// APP_OTLP_ENDPOINT is set. Without this import, setting the endpoint
 	// fails that init with an error naming the missing import; a deployment
 	// that removes this import must also stop setting APP_OTLP_ENDPOINT
-	// (and may drop the endpoint from the observability spec in server.go):
+	// (and may drop the endpoint from the observability component's
+	// configuration in server.go):
 	// the two are one wiring, split only because go/observability keeps its
 	// OTLP dependencies -- gRPC and protobuf -- out of the package a
 	// consumer imports for the exporters it does want.
@@ -39,9 +40,11 @@ import (
 
 // main is deliberately thin process-lifecycle glue: it attaches the
 // process's logger and hands the loaded bootstrap configuration to the
-// assembly (the selection's server.go), which serves through the
-// application engine's Run -- signal handling, the HTTP serve and drain,
-// the observability init and the ordered shutdown are all the engine's now
+// selection's own assembly (cmd/server/server.go), whose runServer owns
+// the signal-derived lifecycle: the host's components register, the whole
+// set assembles through the engine's Assemble, the application component
+// serves until the signal, and the assembly then shuts down in two
+// phases through the engine's Shutdown
 // (github.com/vislake/speed/go/app). It has no main_test.go for that
 // reason: the testable seam is the composition in server.go, which the
 // repository's own scaffold integration test boots end to end, and the
@@ -59,9 +62,10 @@ func main() {
 	// FromContext adds automatically once a request is in flight, all land
 	// in the same structured JSON stream.
 	//
-	// This is deliberately a context with no cancellation of its own -- the
-	// engine's Run overlays the shutdown signals on it and keeps it as the
-	// request base context, so a signal never cancels in-flight requests
+	// This is deliberately a context with no cancellation of its own --
+	// runServer derives the signal-carrying lifecycle context from it and
+	// keeps it as the request base context the composed face hands its
+	// listener, so a shutdown signal never cancels in-flight requests
 	// ahead of the graceful drain.
 	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
