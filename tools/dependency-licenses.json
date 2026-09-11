@@ -78,16 +78,6 @@
     },
     {
       "ecosystem": "go",
-      "evidence": "go module cache license file: github.com/knadh/koanf/providers/env/v2@v2.0.1/LICENSE",
-      "license": "MIT",
-      "name": "github.com/knadh/koanf/providers/env/v2",
-      "used_by": [
-        "go/pkgcore"
-      ],
-      "version": "v2.0.1"
-    },
-    {
-      "ecosystem": "go",
       "evidence": "go module cache license file: github.com/knadh/koanf/providers/file@v1.2.1/LICENSE",
       "license": "MIT",
       "name": "github.com/knadh/koanf/providers/file",
@@ -376,6 +366,7 @@
       "used_by": [
         "go/admin",
         "go/ai-gateway",
+        "go/app",
         "go/authn",
         "go/billing",
         "go/compliance",
@@ -520,7 +511,8 @@
       "used_by": [
         "web/packages/account-ui",
         "web/packages/api-sdk",
-        "web/packages/billing-ui"
+        "web/packages/billing-ui",
+        "web/packages/product-shell"
       ],
       "version": "5.102.8"
     },

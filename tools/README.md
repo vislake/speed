@@ -834,8 +834,8 @@ are deterministic: `$GOMODCACHE/<module>@<version>/<file>`).
 
 Execution status, stated honestly: the planted-fixture suite
 (`tools/license_scan_testdata/`, one directory per case with an
-`expected_exit` file) passes 10/10, and the real-tree check passes ("55
-manifest entries match the tree, all licenses within policy" -- 46 go +
+`expected_exit` file) passes 11/11, and the real-tree check passes ("60
+manifest entries match the tree, all licenses within policy" -- 51 go +
 9 npm), both proven locally. Wired into the security pipeline's license
 job (selftest, then the real check) in `.github/workflows/security.yml`.
 
