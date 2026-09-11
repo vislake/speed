@@ -69,7 +69,7 @@
 
 ## 4. C 组：F 本体（内核/模块注册表/preset 机制退役）
 
-**出处**：`4991cc61`（`refactor(pkgcore)!: retire the kernel, module registry and preset mechanisms`）。
+**出处**：`11e9b11a`（`refactor(pkgcore)!: retire the kernel, module registry and preset mechanisms`）。
 
 ### 4.1 删除的类型与符号（pkgcore）
 
@@ -89,34 +89,51 @@
 
 - **面**：`eventbus/{redis,postgres,nats}`、`kv/{redis,postgres,nats,memcached}`、`objectstore/s3` 的 `Registration` 工厂与 `FromAddr`/（s3 除外的）`FromConfig` 一步构造器退役。
 - **替代路径**：各子包构造器（如 `eventbus/redis.NewEventBus`、`kv/redis.NewKVStore`）+ 组件描述符（`component.go`，`init` 里 `pkgcore.MustRegister`）；宿主要自定义组合时按模板写自己的组件。
-- **出处**：`4991cc61` 的同一提交。
+- **出处**：`11e9b11a` 的同一提交。
 
 ### 4.3 声明面换型（模块与 dbkit/saasctl 入参）
 
 - **面**：模块 `Register`/`Attach` 参型 `Registrar` → `*pkgcore.ComponentRegistry`（同 §3.3，F 完成全仓替换）；`dbkit.MigrationRegistry` 与 `saasctl` 的 `migrationSet` 入参面同步换型为携带 `Migrations()` 的结构性类型。
 - **替代路径**：`dbkit.NewMigrationRegistry()` + `Register(module)` 保持不变；迁移集来源面以 `Migrations() embed.FS` 结构约定。
-- **出处**：`4991cc61`。
+- **出处**：`11e9b11a`。
 
-## 5. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
+## 5. 独立行为修正
+
+### 5.1. `i18n.Negotiate` 改按 Accept-Language 的 q 权重排序
+
+- **面**：`pkgcore/i18n.Negotiate`（公开导出函数）的选语言规则由"回答 header 中第一个书写且受支持的语言"改为"按 q 权重降序回答权重最高者"：缺省 q 按语法默认权重 1，权重相同保持书写顺序，`q=0` 的语言即使排在最前也被丢弃。函数签名不变。
+- **消费者影响**：依赖旧"书写顺序优先"语义的调用方行为变化——`en-US;q=0.7, zh-CN;q=1` 与 `en-US;q=0.5, zh-CN` 在旧语义下都回答 en-US，现在都回答 zh-CN；调用方代码无需改动，按旧语义写死的断言需要核对。
+- **替代路径**：无（同签名的行为修正）；继续调用 `i18n.Negotiate` 即得权重语义。
+- **出处**：`02e148c5`（`fix(pkgcore): honor Accept-Language quality weights`）。
+
+### 5.2. `dbkit` 迁移账本改为按组件实现的模块名存键
+
+- **面**：装配 boot 的迁移（`dbkit.ApplyMigrations`）写入 `schema_migrations` 的账本键由承载组件的组件名改为组件实现的模块名（`Asset.Module`），与 `MigrationRegistry.Apply` 的注册键一致；该提交带 `!BREAKING` footer。
+- **消费者影响**：由 boot（而非 `saasctl db migrate`）迁移过的既有库，账本行键是旧组件名（如 `reference-app.pki`、`__APP_NAME__.pki`）：新版本 boot 认不出这些行，会把 DDL 重放到既有表上。升级前删库重建，或按模块名改写账本行（出处提交正文给出 `UPDATE schema_migrations SET module='pki' WHERE module='__APP_NAME__.pki'` 示例，逐模块执行）。
+- **替代路径**：无（库内键修正）；升级动作即删库重建或改写账本行。
+- **出处**：`4c9464e2`（`fix(dbkit)!: key the migration ledger by the module a component implements`）。
+
+## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
 - **登记理由**：它是仓内唯一以"生成物一致性"为门禁的工具（文档检查流水线 `--check` 四产物），其迁移已完成并全绿；消费者无需动作。
-- **出处**：`4991cc61` 内的工具提交。
+- **出处**：`11e9b11a` 内的工具提交。
 
-## 6. E 组：e2e stub 缺口（状态登记）
+## 7. E 组：e2e stub 缺口（状态登记）
 
 - **状态**：e2e CI 腿已由 stub 改为真腿（`.github/workflows/e2e.yml`，含诚实门），原文"e2e 仍是 stub"的表述已清扫。
 - **出处**：e2e 轮提交 `79e677e7`（及同轮 §2.1 的四句表述清扫）。
 - **说明**：本轮只登记状态、不改其文件；若该轮先于本清单落地，此条即为已闭记录。
 
-## 7. 附录：2026-09 以来全部 `!` 提交
+## 8. 附录：2026-09 以来全部 `!` 提交
 
 以下为 `git log --grep '!:'`（2026-09-01 起，含本清单所在收口轮）的完整清单，供 release note 逐条改写使用：
 
 | sha | 一句话 |
 |---|---|
 | `4eefa537` | 三条 integration 腿与三处运行时文案迁到组件面（本轮） |
-| `4991cc61` | 内核/module 注册表/preset 机制退役（F 本体，§4） |
+| `4c9464e2` | dbkit 迁移账本按组件实现的模块名存键（§5.2） |
+| `11e9b11a` | 内核/module 注册表/preset 机制退役（F 本体，§4） |
 | `c02a1ad3` | app 过渡组装面退役（23 符号，§3.2） |
 | `0d378f62` | bootstrap key 声明不再需要宿主镜像结构（§3.5） |
 | `ad99ab2b` | 模块声明面换型为 Registrar view（§3.3） |
@@ -138,7 +155,7 @@
 | `28c5f16d` | jobs.DemoQueue 改名 StandaloneQueue |
 | `1432d1fd` | pkgcore.Profile 改名 DeploymentMode |
 
-## 8. 挂起项
+## 9. 挂起项
 
 - **29 §9 目录式组件收编**：把模块内目录注册表（pki signer、ai-gateway provider、billing gateway）统一收编进组件机制的设想**未落地**，保持开放项登记，不在本清单的破坏面内。
 - **首个可用版本**：`task release:plan` 的离线计划（02 号文）在首个版本发布时以本清单生成 release note；发布后本清单转为历史记录，后续破坏面另起新篇。
