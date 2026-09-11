@@ -138,13 +138,13 @@ func Verify(target any, declared []string) error   // 每个 declared 键必须�
 
 平台模块只声明**平台语义键**,即密钥组七枚中六枚派生键(它们的格式、敏感性、密钥隔离规则是模块的契约,不是宿主的):
 
-| 模块 | 键(点键形,以现有 env 常量注释语义为准) | env 名(不改) |
+| 模块 | 键(点键形) | env 名(loader 从声明键路径派生) |
 |---|---|---|
-| authn | `authn.pii_cipher_key`、`authn.blind_index_key` | `APP_AUTHN_PII_CIPHER_KEY`、`APP_AUTHN_BLIND_INDEX_KEY` |
-| org | `org.*`(邀请邮箱盲索引键) | `APP_ORG_INDEX_KEY` |
-| notification | `notification.*`(联系方式盲索引键) | `APP_NOTIFICATION_INDEX_KEY` |
-| pki | `pki.local_key_cipher_key` | `APP_PKI_LOCAL_KEY_CIPHER_KEY` |
-| config | `config.*`(configs 表敏感值密封主键) | `APP_CONFIG_KEY` |
+| authn | `authn.pii_cipher_key`、`authn.blind_index_key` | `APP_AUTHN__PII_CIPHER_KEY`、`APP_AUTHN__BLIND_INDEX_KEY` |
+| org | `org.invitation_email_index_key`(邀请邮箱盲索引键) | `APP_ORG__INVITATION_EMAIL_INDEX_KEY` |
+| notification | `notification.contact_index_key`(联系方式盲索引键) | `APP_NOTIFICATION__CONTACT_INDEX_KEY` |
+| pki | `pki.local_key_cipher_key` | `APP_PKI__LOCAL_KEY_CIPHER_KEY` |
+| config | `config.cipher_key`(configs 表敏感值密封主键) | `APP_CONFIG__CIPHER_KEY` |
 
 `APP_ROOT_KEY` 是**宿主键**:宿主根变量的命名与"显式单键胜过派生"的优先级应用归宿主;派生链的归属已被 §9.4 取代——原判"目的串、dev default、HKDF 调用属参考应用装配逻辑,不入任何平台模块"作废,最终归属为**席位 + 工具箱**:目的串约定(每个声明键路径一个 `"speed." + keyPath + ".v1"`)随 BootstrapKey 席位落在 `pkgcore`,材料派生由 `dbkit.DeriveKey` 原语承担;dev default 与根变量名仍归宿主。六派生键声明后,"每枚密钥为何单独存在、为何 AES 不当 HMAC 用"这类理由由模块声明承载(参考应用现有常量深注释是文案来源),参考应用侧常量注释在步骤二退役。
 
@@ -366,7 +366,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - **派生值变化**:六枚材料由 `speed.reference-app.*.v1` 派生改为 `speed.*` 派生,字节全部改变——v0.0.1 已作废(21 个模块 tag 已从远端与本地删除,代理缓存不可撤回)、零部署,无既有状态需要迁移;`.env.example`、`DEPLOY.md` 与 zh 站页的机制表述同步改为平台归属。
 - **测试**:`flowtests/server_config_test.go` 的六键期望改平台 API(互异断言保留);新增声明对账测试(boot 后遍历 `reg.Bootstrap.Keys()` 的 hexkey 键,断言每枚派生值==cfg 对应字段,错拼路径字面量必红——已以临时错拼实证);`server_config_equivalence_test.go` 的 oracle 改按平台规则派生(与生产调用点各自拼写,分歧即等价性失败);`internal/app/bootstrap_test.go` 的 `resolveKey` 用例同步。
 - **文档面**:zh 站页 `configuration.md` 改写为平台口径(不含宿主变量名);生成产物机制句进 `bootstrapSecretsNote`(md 与站点 EN 页共享,JSON 无叙述字段不受影响):派生规则、六个 purpose 形状、"显式胜过派生"、"重命名=轮换";`go/dbkit/key_derivation.go` 与 `go/dbkit/AGENTS.md` 的 `APP_ROOT_KEY` 指认改指向席位的 purpose 约定与本原语的组合(纯注释);`go/config/AGENTS.md`(文件表/小节/Rules)、`doc.go`、`example_test.go` 的派生条目全部撤下,`pkgcore` 侧(席位 godoc、可编译 Example、AGENTS.md 条目与错误索引行)配齐。
-- **改名=轮换(2026-09-10 用户裁定)**:六枚冻结目的串中 config 一枚随用户裁定改名——`speed.config.master_key.v1` → `speed.config.cipher_key.v1`,声明键路径随之 `config.master_key` → `config.cipher_key`。理由:密钥管理词汇里 "master" 指派生/解锁其他密钥者(KEK/根),而此枚是直接加密数据的 DEK、不派生任何东西;平台的根是宿主的 Root Key,旧名制造了并不存在的层级。新名与仓内家族同构(`authn.pii_cipher_key`、`pki.local_key_cipher_key`)。**因目的串内嵌键路径,改名即轮换**:该键的派生材料随之改变;v0.0.1 已作废(21 个模块 tag 已从远端与本地删除,代理缓存不可撤回)、零部署,无既有状态需要迁移,故按"改名=轮换"入册,而不是当作一次普通编辑(上列稳定性契约的第一个实例)。涟漪同工落地:`go/config` 声明与 AGENTS、席位 godoc 与冻结表测试、reference-app(字段路径、六个调用点字面量、对账与等价测试面)、示例与生成器机制句、站点页;宿主变量名 `APP_CONFIG_KEY` 属宿主命名(裁定 A),保持不变。
+- **改名=轮换(2026-09-10 用户裁定)**:六枚冻结目的串中 config 一枚随用户裁定改名——`speed.config.master_key.v1` → `speed.config.cipher_key.v1`,声明键路径随之 `config.master_key` → `config.cipher_key`。理由:密钥管理词汇里 "master" 指派生/解锁其他密钥者(KEK/根),而此枚是直接加密数据的 DEK、不派生任何东西;平台的根是宿主的 Root Key,旧名制造了并不存在的层级。新名与仓内家族同构(`authn.pii_cipher_key`、`pki.local_key_cipher_key`)。**因目的串内嵌键路径,改名即轮换**:该键的派生材料随之改变;v0.0.1 已作废(21 个模块 tag 已从远端与本地删除,代理缓存不可撤回)、零部署,无既有状态需要迁移,故按"改名=轮换"入册,而不是当作一次普通编辑(上列稳定性契约的第一个实例)。涟漪同工落地:`go/config` 声明与 AGENTS、席位 godoc 与冻结表测试、reference-app(字段路径、六个调用点字面量、对账与等价测试面)、示例与生成器机制句、站点页;宿主变量名 `APP_CONFIG_KEY` 属宿主命名(裁定 A),该轮保持不变——平台键声明收编进 `app.PlatformConfig` 后,变量名由 loader 从声明键路径派生,该键现读 `APP_CONFIG__CIPHER_KEY`。
 
 ### 9.5 示例迁入 docs/ 与宿主演示块删除(2026-09-10 后续轮)
 
