@@ -75,7 +75,7 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 ## Module documentation (go/ — repository assets, per-module discipline)
 
 - [pkgcore](https://raw.githubusercontent.com/vislake/speed/main/go/pkgcore/AGENTS.md): the
-  dependency floor — Module/Registry/Kernel wiring, implementation registries, the merged i18n
+  dependency floor — the module contract and the component assembly, implementation registries, the merged i18n
   catalog.
 - [dbkit](https://raw.githubusercontent.com/vislake/speed/main/go/dbkit/AGENTS.md): dual-dialect
   `*gorm.DB` wrapper, the mandatory generic Repository[T], migrations, field encryption,
