@@ -48,10 +48,8 @@
 -- stores the empty string unconditionally, since that event payload
 -- carries no request context by design. Read an empty value exactly that
 -- way, never as information about which background process ran --
--- go/dbkit/audit/AGENTS.md's "Column inventory" section and model.go's
--- IP field doc comment carry the standing account. model.go's field
--- comments were updated alongside this one, so all three say the same
--- thing.
+-- go/dbkit/audit/AGENTS.md's "Column inventory" section, model.go's
+-- IP field doc comment and this comment carry the same standing account.
 --
 -- No column here is ever updated or deleted by application code -- see
 -- go/dbkit/audit/repository.go's own doc comment on why Repository
