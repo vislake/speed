@@ -319,35 +319,57 @@ func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) er
 // its own method so RequestSMSCode's body can pad its total duration -- see
 // RequestSMSCode's own doc comment.
 //
-// Every failure reachable only on the registered side of that branch --
-// persisting the code row, rendering the SMS body, handing it to the
-// transport -- is logged and folded into the same success answer the
-// unknown-number side gives. Surfacing any of them instead would turn the
-// response status into a registration oracle for exactly as long as the
-// failure lasts: an unknown number never reaches those steps, so a 5xx only
-// registered numbers can produce discloses the one fact RequestSMSCode's
-// doc comment promises is never disclosed. The failures that do stay errors
-// below -- the lookup itself, and the code draw both branches perform --
-// fire identically for a registered and an unregistered number, so they
-// cannot tell the two apart.
+// Every failure that can fire only once a registered row is in hand is
+// logged and folded into the answer the unknown-number side gives:
+// the row's PII columns failing to decrypt while the lookup reads them
+// back, persisting the code row, rendering the SMS body, handing it to the
+// transport. Surfacing any of them instead would turn the response into a
+// registration oracle for exactly as long as the failure lasts: an unknown
+// number never reaches those steps, so a 5xx only registered numbers can
+// produce discloses the one fact RequestSMSCode's doc comment promises is
+// never disclosed. The decrypt failure is why the lookup's non-miss errors
+// fold too: an unknown number has no row to read back, so the decode step,
+// unlike the SELECT itself, is reachable only on the registered side.
+//
+// What still surfaces as an error is what the two number classes genuinely
+// share: the gates RequestSMSCode runs before this method (same input
+// either way, so identical failures), and the code draw, which every path
+// below reaches exactly once -- the real draw, or the burn that both
+// lookup failures route through -- so a broken entropy source fails both
+// classes identically, whatever their lookups did.
 func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, index string) error {
 	user, err := s.users.FindByPhone(ctx, in.Phone)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return s.burnSMSCodeRequestWork()
+		if !errors.Is(err, ErrNotFound) {
+			// The miss is the ordinary unknown-number answer and logs
+			// nothing; anything else is logged and answered the same way.
+			// Two conditions arrive here as one error: a genuine query
+			// failure, which is symmetric on its own (the unknown side
+			// runs the same SELECT and fails it the same way), and a
+			// registered row whose PII columns no longer decrypt -- a
+			// botched key rotation, a corrupted row -- which is
+			// registered-only, and answering it with 5xx would disclose
+			// an account's existence for as long as the damage lasts.
+			obs.FromContext(ctx).Error("sms verification code user lookup failed", "error", err)
 		}
-		return err
+		// Both error kinds exit through the same burn, which keeps the
+		// "every post-gate path draws exactly one code" invariant intact
+		// even when the lookup failed: an entropy failure answers 5xx
+		// here exactly as it does for a registered number whose lookup
+		// succeeded, so it cannot separate the two classes either.
+		return s.burnSMSCodeRequestWork()
 	}
 
 	code, err := generateNumericCode(smsCodeDigits)
 	if err != nil {
-		// Both branches draw their code with this same call -- the
-		// unknown-number branch burns one in burnSMSCodeRequestWork above
-		// -- so a draw failure fires identically for a registered and an
-		// unregistered number and cannot tell the two apart. It stays a
-		// real error, unlike the registered-only failures below: a broken
-		// entropy source is a host condition the operator should see as
-		// 5xx, and both number classes answer it identically.
+		// Every path through this method reaches the draw exactly once --
+		// this real draw, or the burn the miss and the folded lookup
+		// failures above route through -- so a broken entropy source
+		// fails every path of both number classes alike and cannot tell
+		// the two apart. It stays a real error, unlike the registered-only
+		// failures below: a host condition this broad should reach the
+		// operator as 5xx, and it answers with the same status on either
+		// side.
 		return ErrInternal.WithCause(err)
 	}
 
@@ -424,18 +446,24 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 }
 
 // burnSMSCodeRequestWork performs the same KIND of work the known-number
-// branch of deliverSMSCode does (generate a code, hash it) for a phone
-// number with no account behind it, then discards the result. Doing so is
-// cheap either way and does not meaningfully close the timing gap on its
-// own (RequestSMSCode's own floor does that): it exists so this branch's
-// own CPU cost shape matches the real one, the same "burn the same kind of
-// work" spirit as Service.burnPasswordWork's identical role for Login.
+// branch of deliverSMSCode does (generate a code, hash it) for a request
+// that cannot proceed to the real work -- a phone number with no account
+// behind it, or one whose lookup failed and is answered like a miss --
+// then discards the result. Doing so is cheap either way and does not
+// meaningfully close the timing gap on its own (RequestSMSCode's own floor
+// does that): it exists so every path the request can take pays the same
+// CPU cost shape, the same "burn the same kind of work" spirit as
+// Service.burnPasswordWork's identical role for Login -- and so every
+// post-gate path draws exactly one code, which is what keeps a broken
+// entropy source from separating the two number classes (see
+// deliverSMSCode's own doc comment).
 //
 // It deliberately does NOT persist a VerificationCode row and does NOT call
-// s.sms.Send: this number has no account, so there is nothing to verify a
-// code against and nowhere real to deliver one -- doing either would risk
-// sending to an address that happens to be a real subscriber elsewhere and
-// would leave a stray row with no owner, exactly what this method's own
+// s.sms.Send: neither the miss nor the folded failure persists anything, so
+// a code that was never stored could never verify -- a delivery would only
+// send a code dead on arrival, and persisting or sending here would risk
+// reaching an address that happens to be a real subscriber elsewhere and
+// leaving a stray row with no owner, exactly what this method's own
 // caller's doc comment rules out.
 func (s *Service) burnSMSCodeRequestWork() error {
 	code, err := generateNumericCode(smsCodeDigits)

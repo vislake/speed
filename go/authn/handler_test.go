@@ -610,8 +610,48 @@ func TestHandler_RequestSMSCode_WriteFailure_RegisteredPhoneStillAnswers202(t *t
 	}
 }
 
+// TestHandler_RequestSMSCode_UndecryptablePhoneRow_RegisteredPhoneStillAnswers202
+// pins the response-status layer of the oracle for a row the deployment can
+// no longer decrypt: a registered phone whose PII columns do not open under
+// any held key (a botched key rotation, a corrupted row) must not answer 5xx
+// while an unregistered phone answers 202. The blind index is a keyed hash,
+// not ciphertext, so the lookup still FINDS the row and the failure happens
+// while reading it back -- a step the unknown-number side never reaches:
+// with no row matched, there is nothing to decrypt. The failure is logged
+// server-side and both requests answer 202 with an empty body.
+func TestHandler_RequestSMSCode_UndecryptablePhoneRow_RegisteredPhoneStillAnswers202(t *testing.T) {
+	t.Parallel()
+
+	h, f := newTestHandler(t)
+	f.registerUser(t, "smsdecode@example.com", testTenantA)
+	user := mustSetPhone(t, f, "smsdecode@example.com", "+15550000013")
+	if err := f.svc.Users().Save(t.Context(), user); err != nil {
+		t.Fatalf("save the registered phone: %v", err)
+	}
+	// Break the encrypted column the way a botched key rotation does:
+	// overwrite it with bytes no held key can open, leaving the blind-index
+	// column intact, so the lookup matches the row and fails reading it
+	// back.
+	if err := f.db.Exec("UPDATE users SET phone = ? WHERE id = ?", []byte("no held key can open this"), user.ID).Error; err != nil {
+		t.Fatalf("corrupt the encrypted phone column: %v", err)
+	}
+
+	registered := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{Phone: "+15550000013"}, nil)
+	unknown := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{Phone: "+15559999999"}, nil)
+
+	if registered.Code != http.StatusAccepted {
+		t.Fatalf("registered-phone-with-undecryptable-row status = %d, want %d; body = %s (a status split against the unknown number is a registration oracle)", registered.Code, http.StatusAccepted, registered.Body.String())
+	}
+	if registered.Body.Len() != 0 {
+		t.Errorf("registered-phone response body = %q, want empty (an error envelope would disclose the failure)", registered.Body.String())
+	}
+	if registered.Code != unknown.Code || registered.Body.String() != unknown.Body.String() {
+		t.Errorf("registered-phone answer = (%d, %q); unknown-phone answer = (%d, %q); the two must be indistinguishable", registered.Code, registered.Body.String(), unknown.Code, unknown.Body.String())
+	}
+}
+
 // mustSetPhone attaches phone to the account registered under email and
-// returns the updated row, for the one test above that needs a phone
+// returns the updated row, for the tests above that need a phone
 // number on an otherwise email-registered fixture user.
 func mustSetPhone(t *testing.T, f *serviceFixture, email, phone string) *User {
 	t.Helper()
