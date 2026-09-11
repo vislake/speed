@@ -34,10 +34,10 @@ Independent Go modules, each with its own `go.mod`, developed together through `
 
 **Required:**
 - Module path is `github.com/<org>/speed/go/<module>`.
-- **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`. (A subpackage takes its own directory name: `go/billing/gateway` is package `gateway`.) Lowercase, no separator — do not substitute an underscore or camelCase. Every module generator (including the future `task new:module`) must apply this rule consistently rather than leaving it to individual judgement.
-- Every module carries: `api/openapi.yaml`, `migrations/{postgres,sqlite}/`, `locales/{zh-CN,en-US}.toml`, `docs/`, `AGENTS.md`.
+- **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`. (A subpackage takes its own directory name: `go/billing/gateway` is package `gateway`.) Lowercase, no separator — do not substitute an underscore or camelCase. The scaffolder applies this rule (`tools/new_module.py`, wrapped by `task new:module`) rather than leaving it to individual judgement.
+- The canonical stub is the scaffolder's three files (`go.mod` + `doc.go` + `AGENTS.md`); a module grows the assets of the surfaces it ships: `locales/{zh-CN,en-US}.toml` for every module with text, `migrations/{postgres,sqlite}/` for every schema owner, and `api/openapi.yaml` plus its `oapi-codegen.yaml` for the fragment-shipping modules — the package universe and per-module facts live in each module's own `AGENTS.md`, not in a list here.
 - Public API stays in the module root package; implementation details go under `internal/` so consumers cannot import them.
-- Create new modules with the scaffolder, `python3 tools/new_module.py` — the planned `task new:module` Taskfile wrapper will call it once wired. The script scaffolds the canonical stub and prints a registration checklist — the go.work `use` entry, the CI matrix row, the lockstep release list — the entries hand-rolling a module always misses; it never edits those shared files itself.
+- Create new modules with the scaffolder, `python3 tools/new_module.py` (the `task new:module` Taskfile wrapper calls it, and it derives the stub's go directive from the repository's `go.work`). The script prints a registration checklist — the go.work `use` entry (the module's whole CI and release registration), the coverage-baseline row, the integration-tier rows when the module ships one — the entries hand-rolling a module always misses; it never edits those shared files itself.
 
 **Prohibited:**
 - **DO NOT** let `rbac` depend on `authn`. Authorization only knows `Subject{TenantID, UserID}`; whoever authenticates assembles the Subject and calls authorization.
@@ -48,7 +48,7 @@ Independent Go modules, each with its own `go.mod`, developed together through `
 
 ## 2. Module Wiring
 
-Every module carries the module contract (`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec` plus a `Register` body) and registers routes, config schema, feature flags, permissions, job handlers, notification types, events and audit actions through a single `Register(reg *pkgcore.ComponentRegistry)` call.
+Every module carries the module contract (`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec` plus a `Register` body) and registers routes, config schema, feature flags, permissions, job handlers, notification types, events and audit actions through a single `Register(reg *pkgcore.ComponentRegistry)` call. The illustration below is shape only — **the authority for every seat's methods and for the stage at which a declaration is accepted is `go/pkgcore/component_registry.go` itself, and `examples/reference-app/internal/notes/module.go` is the worked example.**
 
 ```go
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
@@ -56,7 +56,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
     reg.ConfigSeat().Add(configSchema...)
     reg.FeaturesSeat().Add(featureFlags...)
     reg.PermissionsSeat().Add("billing:read", "billing:manage")
-    reg.JobsSeat().Handle(&InvoiceGenerator{svc: m.svc})
+    reg.JobsSeat().Handle("billing.invoice.generate", jobs.NewHandlerFunc("billing.invoice.generate", gen.Handle))
     reg.NotificationsSeat().Add(notificationTypes...)
     reg.EventsSeat().Subscribe("org.member.invited", m.onMemberInvited)
     return nil
@@ -64,7 +64,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 ```
 
 **Prohibited:**
-- **DO NOT** use `init()` for business registration — everything goes through `Register`, wired at compile time with `google/wire`.
+- **DO NOT** use `init()` for business registration — registration goes through `Register`, driven by the component assembly (`go/app` plus the host's `pkgcore.ComponentRegistry`); there is no dependency-injection code generation in this repository.
 - **DO NOT** perform I/O inside `Register` (no DB connections, no outbound calls) — it only declares; actual startup belongs in `Start(ctx)`.
 
 ## 3. Multi-Tenant Isolation (highest priority)
@@ -115,12 +115,13 @@ Before creating a table, decide which domain it belongs to:
 
 ```go
 ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
-    Actor: actor, Purpose: "admin.tenant_search", Ticket: "SUP-1234",
+    Actor: actor, Purpose: admin.SystemPurposeAdminCrossTenant, Ticket: "SUP-1234",
 })
 ```
 
+The purpose is a `pkgcore.SystemPurpose` constant the module owning the flow declares and registers (`go/admin`'s `SystemPurposeAdminCrossTenant` is one; `pkgcore.RegisterSystemPurpose` refuses an empty actor or an unregistered purpose, which is what makes the field an enum rather than free text).
+
 - Callable only from `admin`, `compliance`, `jobs` and `authn` — plus `tenancy`'s audited wrapper `tenancy.WithSystemContext`, which business code should call instead of the raw primitive. The caller whitelist is enforced by code review / CODEOWNERS on `go/pkgcore` and `go/tenancy` plus the doc comments on both functions, NOT by depguard: depguard denies whole import paths per file and cannot single out one symbol (`WithSystemContext`) from the rest of an otherwise-needed package. `pkgcore`'s root package also holds `TenantID`/`WithTenant`/`apperr`, which `go/dbkit` — real code, not on the whitelist — legitimately imports; a draft rule shaped "only the whitelist may import `pkgcore`" flagged 23 of dbkit's pre-existing unrelated imports as collateral damage and was reverted. The full reasoning lives in the `.golangci.yml` depguard comment; making this checkable would mean moving `WithSystemContext` into its own `pkgcore` subpackage (a public API decision, not a lint-config side effect).
-- `Purpose` is an enum, not free text.
 - Keep the scope as narrow as possible — **DO NOT** enable it "conveniently" in middleware.
 - It bypasses tenant filtering only. **It never bypasses RBAC.**
 
@@ -139,7 +140,7 @@ if mode == "standalone" { ... } // deployment-mode branches belong only in kerne
 
 - **DO NOT** branch on the deployment mode inside business logic.
 - **DO NOT** expose capabilities on an interface that only one implementation can satisfy (such as Redis Lua scripting). When atomicity is required, define semantics both sides can honour, like `IncrByFloat` or `CompareAndSwap`.
-- Any new infrastructure dependency **must ship both implementations**. One implementation is not "done".
+- Any new infrastructure dependency **must ship at least one implementation with zero external dependencies** (so it stays usable in a single-process composition and as a test double); every implementation declares its capability bits and passes that seam's contract suite. N implementations (N >= 1) are allowed per seam — two is not a floor; the full rule (and the packaging discipline behind implementation subpackages) lives in `docs/internal/03-deployment-modes.md`.
 
 ## 5. Data Models and Migrations
 
@@ -170,10 +171,10 @@ func (Subscription) GetTenantID() pkgcore.TenantID { return ... } // implements 
 
 **Sensitive fields:**
 ```go
-Phone      string `gorm:"serializer:encrypted"` // Serializer provided by dbkit
+Phone      string `gorm:"serializer:authn_pii"` // a named encrypted serializer the module registers in its component's Init
 PhoneIndex string `gorm:"index"`                // HMAC blind index for equality lookups
 ```
-Encrypted fields cannot be queried directly. Whenever equality lookup is needed, add a blind index column and normalize on write (E.164 for phone numbers, lowercase for emails).
+The serializer name is the module's own: the module registers it with `dbkit.RegisterEncryptedSerializer(name, cipher)` (authn's `authn_pii`, `go/authn/component.go`, is one; `go/dbkit/encryption.go` is the mechanism), so a tag naming an unregistered serializer fails at query time, not at review. Encrypted fields cannot be queried directly. Whenever equality lookup is needed, add a blind index column (`dbkit.NewBlindIndexer`) and normalize on write (E.164 for phone numbers, lowercase for emails).
 
 ## 6. API and Errors
 
@@ -313,9 +314,9 @@ log.Info("subscription activated",
 
 This is a hard convention, not a preference, because it is what makes `go test ./...` fast and `go test -tags=integration ./...` meaningful:
 
-- **What a unit test is, is a tier — not a file mapping.** A unit test is a same-package, no-external-dependency test that a plain unit run executes (the standalone deployment mode's in-memory implementations act as test doubles). Unit tests sit next to the code they test, one file per target — `registry.go` is tested by the one `registry_test.go`, `kv_memory.go` by `kv_memory_test.go`, in the standard Go idiom. A suite that spans sources is not a second file beside them: if it maps to one dominant source it lives in that source's own test file; if it genuinely has **no single target** — a behaviour suite with no dominant source, a repo- or module-shape check (`standalone_build_test.go`, `go_work_use_block_test.go`, `no_cjk_characters_test.go`), a seam-contract driver of the module root's own built-ins — it lives in the module's dedicated unit-test directory `go/<module>/unittest/` (package `unittest`), as an external black-box test against its package, and nothing no-target is scattered in the source package. The Go-forced exceptions stay in the source package, each recorded with its reason in `docs/internal/25`'s per-file inventory: a white-box suite that must reach the package's unexported symbols (`go/observability/factory_vars_test.go`, the jobs store/fault suites, `go/pkgcore/kernel_shutdown_test.go`), a test whose pin depends on what its own test binary does not import (`go/observability/exporter/prometheus/otlp_not_registered_test.go` must never share a binary with any file importing `exporter/otlp`), and migration suites that must sit beside their `go:embed`ed migration set. Never name a file generically (`extra_test.go`, `misc_test.go`).
+- **What a unit test is, is a tier — not a file mapping.** A unit test is a same-package, no-external-dependency test that a plain unit run executes (the standalone deployment mode's in-memory implementations act as test doubles). Unit tests sit next to the code they test, one file per target — `registry.go` is tested by the one `registry_test.go`, `kv_memory.go` by `kv_memory_test.go`, in the standard Go idiom. A suite that spans sources is not a second file beside them: if it maps to one dominant source it lives in that source's own test file; if it genuinely has **no single target** — a behaviour suite with no dominant source, a repo- or module-shape check (`standalone_build_test.go`, `go_work_use_block_test.go`, `no_cjk_characters_test.go`), a seam-contract driver of the module root's own built-ins — it lives in the module's dedicated unit-test directory `go/<module>/unittest/` (package `unittest`), as an external black-box test against its package, and nothing no-target is scattered in the source package. The Go-forced exceptions stay in the source package, each recorded with its reason in `docs/internal/25`'s per-file inventory: a white-box suite that must reach the package's unexported symbols (`go/observability/factory_vars_test.go`, the jobs store/fault suites, `go/pkgcore/component_registry_test.go`), a test whose pin depends on what its own test binary does not import (`go/observability/exporter/prometheus/otlp_not_registered_test.go` must never share a binary with any file importing `exporter/otlp`), and migration suites that must sit beside their `go:embed`ed migration set. Never name a file generically (`extra_test.go`, `misc_test.go`).
 - **Every non-unit test class lives in its own dedicated directory; nothing non-unit is ever mixed into a source directory.** If no existing dedicated directory fits a non-unit test, give it a new purpose-named directory — never a seat beside the code:
-  - real-backend integration goes to a package-level `integration_test/` subdirectory (e.g. `go/dbkit/integration_test/postgres_repository_test.go`), guarded by `//go:build integration`, so a plain `go test ./...` never touches them and CI invokes them explicitly with `-tags=integration`; name each file for what it exercises against a real dependency (`postgres_repository_test.go`, `redis_kvstore_test.go`), not `integration_test.go` alone;
+  - real-backend integration goes to a package-level `integration_test/` subdirectory (e.g. `go/dbkit/integration_test/postgres_repository_rls_test.go`), guarded by `//go:build integration`, so a plain `go test ./...` never touches them and CI invokes them explicitly with `-tags=integration`; name each file for what it exercises against a real dependency (`postgres_repository_rls_test.go`, `redis_leg_test.go`), not `integration_test.go` alone;
   - an application's composed HTTP/assembly flows go to a dedicated app-level test directory, never next to the assembly source they boot;
   - cross-implementation contract suites live in the seam's own support package — the `eventbustest`/`queuetest` model, where the shared `AssertConforms`/`AssertFailsClosed` checks are importable, black-box, from that package and every implementation's driver runs them against the implementation. A subpackage implementation's driver lives in its own subpackage's tier; a driver of the module root's own built-ins is a no-target unit test and lives in the module's `unittest/` directory (`go/pkgcore/unittest/eventbus_conformance_test.go` is the template);
   - migration suites stay beside the migration set they exercise.

@@ -12,7 +12,7 @@ globs:
 
 # speed Commit Message Convention
 
-Follows [Conventional Commits](https://www.conventionalcommits.org/), enforced by commitlint and the pre-commit hook.
+Follows [Conventional Commits](https://www.conventionalcommits.org/); the convention is enforced in review — there is no commitlint config or commit-msg hook in this repository.
 
 **Language**: commit messages are written in **English**, consistent with the repository-wide language rule — everything except `docs/internal/` is English, because this code is delivered to business projects and read by tooling and non-Chinese-speaking collaborators.
 
@@ -28,7 +28,7 @@ Follows [Conventional Commits](https://www.conventionalcommits.org/), enforced b
 
 - **Header** is required and must be a single line.
 - **Keep the header short — aim for 72 characters or less.** This is a guideline, not a hard limit: a header that needs a few more characters to stay clear is better than a truncated one. Do not sacrifice meaning for the count.
-- **Scope is required.** This monorepo holds Go modules (all importable except `saasctl`, a CLI) and npm packages (all importable except `create-saas-app`, a CLI); without a scope there is no way to tell what a commit touched.
+- **Scope is required.** This monorepo holds Go modules and npm packages; without a scope there is no way to tell what a commit touched.
 - **Description** uses the imperative mood, lowercase, no trailing period: "add subdomain tenant resolution", not "added ..." or "adds ...".
 - **Body** explains *why*, not *what* — the diff already shows what changed.
 - **Footer** carries breaking-change notices (`BREAKING CHANGE:`) and issue references (`Closes #123`).
@@ -52,11 +52,11 @@ Follows [Conventional Commits](https://www.conventionalcommits.org/), enforced b
 
 ### Backend Go modules (`go/<scope>/`)
 
-`pkgcore`, `dbkit`, `observability`, `tenancy`, `ratelimit`, `config`, `jobs`, `storage`, `notification`, `authn`, `rbac`, `org`, `metering`, `billing`, `ai-gateway`, `sharing`, `integration`, `compliance`, `admin`, `saasctl`
+The scope of a Go module is its directory name under `go/`. The membership authority is the root `go.work` `use` block -- the same source every CI module set derives from -- so read it rather than a list here, which would go stale; a CLI module (`saasctl`) takes its own name as scope like any other.
 
 ### Frontend npm packages (`web/packages/<scope>/`)
 
-`tokens`, `i18n`, `ui-kit`, `api-client`, `api-sdk`, `auth-core`, `auth-ui`, `tenancy-ui`, `billing-core`, `billing-ui`, `notification-core`, `notification-ui`, `layout-kit`, `product-shell`, `admin-shell`, `create-saas-app`
+Same rule: the scope is the package directory name under `web/packages/`, and `web/pnpm-workspace.yaml` is the membership authority. The reference app's web host is an external workspace member (`examples/reference-app/web`) and commits under the `reference-app` scope.
 
 ### Cross-cutting
 

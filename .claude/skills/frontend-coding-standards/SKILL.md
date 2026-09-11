@@ -33,13 +33,16 @@ This is the single authoritative standard for the frontend. Design rationale liv
 Independent npm packages, each with its own `package.json`, developed together through the `web/` workspace. The dependency graph **only flows bottom-up**:
 
 ```
-tokens / i18n -> ui-kit -> (auth|billing|notification)-core -> *-ui -> layout-kit -> shells
-api-client -> api-sdk -> the core packages
+tokens / i18n -> ui-kit -> layout-kit
+api-client -> api-sdk -> auth-core -> auth-ui / account-ui / billing-ui / tenancy-ui
+the layers above -> product-shell (the composition root)
 ```
+
+The diagram is a coarse ordering, not the edge list: each package's own `package.json` is the authority for its dependencies, and `web/pnpm-workspace.yaml` is the membership authority for the package set — do not consult a copy here.
 
 **Required:**
 - The pure UI layer (`ui-kit`) carries **no business, tenant or permission semantics**. Components are controlled and props-driven so they survive a different auth scheme.
-- Headless packages (`*-core`) expose state and hooks, never UI. UI packages (`*-ui`) consume only the data structures from core.
+- Headless packages expose state and hooks, never UI (`auth-core` is the one shipped today: session, permission and feature-flag hooks); UI packages consume only the data structures from them.
 - `react`, `react-dom`, `@mui/material` and `@emotion/*` are declared as `peerDependencies`. Shipping them as regular dependencies gives consumers duplicate React/MUI instances.
 - Every package carries its own `locales/{zh-CN,en-US}.json` under a namespace named after the package.
 
@@ -68,7 +71,7 @@ const myRequest = (url) => fetch(...)     // a homegrown wrapper is equally wron
 - **DO NOT** edit any file in `@speed/api-sdk` — it is generated and overwritten wholesale on every release.
 - When an endpoint does not fit your need, change the spec, not the frontend. The order is fixed: edit the spec first, regenerate, fix whatever the regenerated interfaces break, then consume — never the reverse.
 
-**Exceptions** (not expressible in OpenAPI, and each must be confined to exactly one place): the in-app-message SSE connection lives in `notification-core`; uploads need no exception — they are server-relayed through spec-described endpoints (`go/storage/api/openapi.yaml`), and ui-kit's `FileUploader` renders the queue the host owns as `rows` props while the upload transport — an api-sdk storage operation once the merged document gains the storage fragment (deferred alongside org's, `go/storage/AGENTS.md`) — is the host's own code.
+**Exceptions** (not expressible in OpenAPI, and each must be confined to exactly one place): none ship in the workspace packages today. Uploads need no exception — they are server-relayed through spec-described endpoints (`go/storage/api/openapi.yaml`, whose operations are in the merged document as `/api/v1/storage/...`), and ui-kit's `FileUploader` renders the queue the host owns as `rows` props while the upload call itself stays the host's own code.
 
 ## 3. Components
 
@@ -123,7 +126,7 @@ After `switchTenant` succeeds, explicitly call `queryClient.removeQueries({ quer
 
 ## 5. Theming and Multi-Brand
 
-Three layers of token overrides: `defaultTokens` (built into the package) -> `projectTokens` (the consuming project, at build time) -> `tenantOverrides` (runtime white-labeling).
+Token overlays merge in layers: the package ships `defaultTokens`, and each later layer passes a `TokensOverride` through `deepMerge` (later overlays win) — the consuming project's overlay, then the runtime tenant overlay for white-labeling. `@speed/tokens` is the authority for the exact names and types (`defaultTokens`, `deepMerge`, `TokensOverride`).
 
 - **DO NOT** read brand-specific values inside components — always go through the theme.
 - **DO NOT** assume light mode only — components must render correctly in light and dark.
@@ -140,23 +143,19 @@ const { t } = useTranslation('auth');
 - New keys must be added to both `zh-CN` and `en-US`; CI verifies the key sets match.
 - Dates, numbers and currency always go through `Intl.DateTimeFormat` / `Intl.NumberFormat`. **DO NOT** format by hand — CNY and USD differ in symbol placement and decimal digits.
 - Error text is resolved from the error code. **DO NOT** display the `message` field returned by the API — it is an English fallback meant for log triage.
-- Layouts must not depend on fixed widths to fit text: English runs 30–50% longer than Chinese. Every component needs Storybook stories in both languages.
+- Layouts must not depend on fixed widths to fit text: English runs 30–50% longer than Chinese — check every component's rendering in both languages.
 
 ## 7. Permissions and Feature Flags
 
 ```tsx
-const canManage = usePermission('billing:manage');
-const billingEnabled = useFeature('billing');
-
-<RequirePermission perm="billing:manage" fallback={null}>
-  <Button>{t('billing.upgrade')}</Button>
-</RequirePermission>
+const canManage = usePermission('billing:manage');   // auth-core
+const billingEnabled = useFeature('billing');        // api-client
 ```
 
 - Permissions arrive as a flat list already computed by the server; the frontend performs set lookup only. **DO NOT** reimplement policy evaluation client-side.
-- Declare menu and route visibility with `requiredPermission` / `requiredFeature` on `NavItem`. **DO NOT** hand-roll conditional menu assembly.
+- Visibility is the host's composition: the host filters its own routes and derives its nav items from the permission hooks (`product-shell`'s gated-journey suite is the worked shape). The presentational layer stays permission-free by design — `layout-kit`'s `AppShellNavItem` carries no permission or feature fields (see §1's pure-UI rule); **DO NOT** push permission semantics into a presentational component.
 - **Frontend permission checks are a UX affordance, not a security boundary** — the server validates independently.
-- `admin-shell` (platform staff) and `product-shell` (tenant users) operate in different permission domains. During impersonation a persistent, highly visible indicator is mandatory.
+- `product-shell` (tenant users) and any future platform-staff shell operate in different permission domains. During impersonation a persistent, highly visible indicator is mandatory.
 
 ## 8. Accessibility
 
@@ -171,7 +170,7 @@ const billingEnabled = useFeature('billing');
 - The single source of truth for backend-related types is `@speed/api-sdk`. **DO NOT** hand-write response types.
 - Strict mode is on. **DO NOT** use `any` (`@typescript-eslint/no-explicit-any` is an error).
 - Use `type` rather than `interface` for component props, avoiding accidental declaration merging.
-- Public packages export complete type declarations; `tsc --noEmit` and `publint` validate the published artifact.
+- Public packages export complete type declarations; each package's own `tsc`/build scripts (the ones the npm-package-ci legs run) validate the published artifact.
 
 ## 10. Forms
 
@@ -202,7 +201,6 @@ console.log('checkout failed for plan ' + planId);
 | Tier | Tooling | Scope |
 |---|---|---|
 | Unit / component | Vitest + Testing Library | hook logic, component behaviour |
-| Visual and docs | Storybook | every public component, in both languages |
 | End-to-end | Playwright | the reference-app journeys |
 
 **File and directory layout — not optional:**
@@ -218,7 +216,7 @@ console.log('checkout failed for plan ' + planId);
 
 ## 13. Language
 
-All code comments, TSDoc, package `README`s and Storybook descriptions are written in **English**. Only `docs/internal/` is in Chinese.
+All code comments, TSDoc and package `README`s are written in **English**. Only `docs/internal/` is in Chinese.
 
 Comments and TSDoc describe the code's **current state only**: no history or change records, no implementation-round or finding references, no internal doc-filename citations as authority, no TODO or future promises, no restating what the code says, no counts that go stale as the code evolves. External normative references (RFC, W3C, language specs) and cross-references to code itself are allowed.
 
@@ -230,7 +228,7 @@ Comments and TSDoc describe the code's **current state only**: no history or cha
 - [ ] No hardcoded colors or pixel values; everything through theme tokens
 - [ ] Query keys are tenant-namespaced
 - [ ] Icon-only buttons have `aria-label`
-- [ ] New public components have bilingual Storybook stories and prop docs
+- [ ] New public components are checked rendering in both languages and carry prop docs
 - [ ] Correct in both light and dark mode
 - [ ] peerDependencies not accidentally moved into dependencies
 - [ ] Bug fix includes a reproducing test
