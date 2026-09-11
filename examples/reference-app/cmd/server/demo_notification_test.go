@@ -11,7 +11,7 @@ package main
 // for why that is not the same as "same process, always safe"), and a
 // handful of genuinely unreadable shapes that must still warn-and-drop.
 //
-// This is the regression: a subscription that type-asserts the naked
+// The regression it guards: a subscription that type-asserts the naked
 // evt.Payload.(smilesim.SimulationCompletedPayload) passes case (1)
 // below and fails case (2) -- the failure this test's "decoded map"
 // cases catch. The Docker-backed integration test in
@@ -165,10 +165,10 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct_Failed(t *testing.T
 // round-tripped a real smilesim.SimulationCompletedPayload through JSON
 // (json.Marshal on the struct's plain, tag-less field names, then
 // json.Unmarshal into interface{} -- exactly deliverRemote's own decode
-// path). Before this probe existed, the subscription's naked type
-// assertion to the concrete struct type failed on exactly this shape,
+// path). A subscription that type-asserts the payload to the concrete
+// struct type fails on exactly this shape,
 // silently dropping the event with only a warning log -- this case is
-// what a type-asserting subscriber could not pass.
+// what a type-asserting subscriber cannot pass.
 func TestSimulationCompletedFieldsFromPayload_DecodedMap(t *testing.T) {
 	decoded := map[string]any{
 		"ImageJobID":      "job-1",

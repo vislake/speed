@@ -23,7 +23,7 @@ import (
 //
 //   - The tenant universe every per-tenant declaration expands through:
 //     periodicTenantUniverse below, the host's configured tenants joined
-//     with go/admin's D3 tenant ledger.
+//     with go/admin's tenant ledger.
 //   - The tick cadence: cfg.PeriodicTaskInterval, defaulting (at zero) to
 //     jobs.DefaultScheduleInterval.
 //
@@ -65,7 +65,7 @@ import (
 //     deployment was told about at boot. Sweeping these never depends on
 //     any discovery mechanism: a configured tenant is swept whether or
 //     not anything else in the platform has recorded it.
-//   - the D3 tenant ledger (go/admin's TenantService, this app's
+//   - the tenant ledger (go/admin's TenantService, this app's
 //     adminModule.Tenants()): the platform's operator-facing record of
 //     which tenants exist, populated two ways -- lazily, from org's real
 //     org.node.created events when a tenant's ROOT node is created
@@ -94,7 +94,7 @@ type periodicTenantUniverse struct {
 	// to one tenant and the sweep is per tenant, not per host (the same
 	// dedupe SeedDemoGrants performs for grants).
 	configured map[string]pkgcore.TenantID
-	// ledger is go/admin's D3 tenant-ledger service
+	// ledger is go/admin's tenant-ledger service
 	// (adminModule.Tenants()). Its ListAllIDs names every ledger row --
 	// "every tenant the platform knows about" -- self-registered clinics
 	// included. Always non-nil in this app's composition: BuildServer
@@ -103,7 +103,7 @@ type periodicTenantUniverse struct {
 }
 
 // newPeriodicTenantUniverse returns the universe over the configured
-// host map and the D3 ledger service.
+// host map and the ledger service.
 func newPeriodicTenantUniverse(configured map[string]pkgcore.TenantID, ledger *admin.TenantService) *periodicTenantUniverse {
 	return &periodicTenantUniverse{configured: configured, ledger: ledger}
 }
@@ -112,7 +112,7 @@ func newPeriodicTenantUniverse(configured map[string]pkgcore.TenantID, ledger *a
 // per-tenant declarations through (jobs.TenantLister -- structurally the
 // same shape go/compliance's own TenantLister declares, so this one value
 // serves both seams): every unique tenant id configured hosts map to,
-// then every tenant id the D3 ledger names, deduplicated into one sweep
+// then every tenant id the ledger names, deduplicated into one sweep
 // set.
 //
 // The ledger read is per-call by design -- a tick enqueues once per

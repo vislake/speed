@@ -706,7 +706,7 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 			// the alternative logged here. The consequence differs -- this
 			// generation is missing from the per-photo index
 			// (ListSimulationsByPhoto/OptionsForJob answer "no record" for
-			// it, so the P3 gallery would not show it) rather than stuck
+			// it, so the simulation gallery would not show it) rather than stuck
 			// Reserved -- and, as above, the cancel-free context rules a
 			// client disconnect out as the cause: the log line records a
 			// genuine failure of the durable store itself (see this
@@ -1036,7 +1036,7 @@ func (s *Service) OptionsForJob(ctx context.Context, jobID jobs.JobID) (Simulati
 }
 
 // ListSimulationsByPhoto returns every simulation generated from
-// photoObjectID under ctx's own tenant -- the P3 gallery's data source --
+// photoObjectID under ctx's own tenant -- the simulation gallery's data source --
 // newest first. Each outcome's Status/OutputObjectID/Error are read LIVE
 // from the job through the same jobs.Queue a client polls (per row, under
 // the job's own rebuilt tenant context, since worker contexts never carry

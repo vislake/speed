@@ -724,11 +724,12 @@ func TestService_Simulate_RefundFailure_RecordsOrphanedReservationForTheSweep(t 
 // refunded by ReconcileOutstandingCredits without any job to poll -- the
 // sweep recognizes the orphanRefundJobIDPrefix, refunds the row's stored
 // credit key directly under CreditService's idempotent-refund contract and
-// removes the row. Before the fix the sweep had no orphan concept at all:
-// a row whose job id is synthetic was looked up on the queue like any
+// removes the row. Without the orphanRefundJobIDPrefix branch a row whose
+// job id is synthetic would be looked up on the queue like any
 // other, so an orphaned reservation could never be settled (a real queue
 // answers "not found", and this file's queue double answers a nil job the
-// sweep then dereferences) and the Reserved credits were unreachable.
+// sweep would then dereference) and the Reserved credits would be
+// unreachable.
 func TestService_ReconcileOutstandingCredits_RefundsOrphanedReservation(t *testing.T) {
 	credits := newTestCreditService(t)
 	grantTestCredits(t, credits)

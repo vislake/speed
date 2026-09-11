@@ -2,8 +2,8 @@
 // cases_uploadPhoto (POST /api/v1/cases/photos/upload) and
 // cases_getPhotoContent (GET /api/v1/cases/{caseId}/photos/
 // {photoObjectID}/content), both implemented on casesHandler alongside
-// the case operations cases.go declares. They are what make the P3
-// web UI's photo story real: a browser page can only reach the backend
+// the case operations cases.go declares. They are what make the app's
+// photo story real: a browser page can only reach the backend
 // through the generated operations over @speed/api-client's JSON-only
 // transport, so the photo bytes travel base64-encoded in JSON in both
 // directions, and the app-side handler is where go/storage's own

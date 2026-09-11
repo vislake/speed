@@ -147,8 +147,9 @@ func TestRepository_AssertIsolated(t *testing.T) {
 // is dbkit's mark-delete mechanism's reference-app consumer proof
 // : Note implements
 // dbkit.SoftDeletable (model.go), and this drives the full lifecycle
-// straight through notes' real, migrated Repository -- promoted unchanged
-// from dbkit.Repository[Note], with no new code in repository.go itself --
+// straight through notes' real, migrated Repository -- whose Delete and
+// Restore come from the embedded dbkit.Repository[Note] base, with
+// repository.go itself declaring no override --
 // exactly as a real caller would use it: create, see it in normal queries,
 // delete (mark-delete), confirm it is hidden from FindByID/List but the raw
 // row is still present, restore, confirm it reappears, delete again,
@@ -216,9 +217,9 @@ func TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughou
 // hard-delete half of dbkit's delete semantics'
 // reference-app consumer proof (the mark-delete half is
 // TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle
-// above): dbkit.Repository[Note].HardDelete -- promoted unchanged from the
-// embedded base, exactly like Delete and Restore, with no new code in this
-// package's repository.go itself -- physically erases a soft-deleted note
+// above): dbkit.Repository[Note].HardDelete -- from the embedded base,
+// exactly like Delete and Restore, with repository.go itself declaring no
+// override -- physically erases a soft-deleted note
 // behind the system-context gate, service-level against notes' real,
 // migrated Repository, exactly as a real caller would use it.
 //

@@ -63,9 +63,9 @@ func buildSeededUsersTestServerWithHeaderSwitch(t *testing.T, password string, d
 }
 
 // postNoteWithDemoHeader signs a real bearer token's request to create a
-// note, additionally carrying X-Demo-User=demoUser -- the shape the audit's
-// failure scenario names: a real, verified-but-unprivileged session that
-// also sends the demo header naming a higher-privileged demo actor.
+// note, additionally carrying X-Demo-User=demoUser -- the
+// privilege-escalation shape: a real, verified-but-unprivileged session
+// that also sends the demo header naming a higher-privileged demo actor.
 func postNoteWithDemoHeader(t *testing.T, srv *httptest.Server, bearerToken, demoUser, text string) *http.Response {
 	t.Helper()
 
@@ -85,21 +85,21 @@ func postNoteWithDemoHeader(t *testing.T, srv *httptest.Server, bearerToken, dem
 }
 
 // TestDemoUserHeader_KillSwitch_ClosesThePrivilegeEscalationHole is the
-// mandatory end-to-end regression: a REAL invited-shaped
+// end-to-end regression: a REAL invited-shaped
 // session (the seeded demo-reader account, signed in through authn's real
 // login route, holding notes:read and nothing else) additionally sends
 // X-Demo-User: demo-owner (rbac's built-in owner role, every permission any
-// module declared) on a POST /api/v1/notes -- the exact escalation the
-// audit's failure scenario describes: a note-reader session that adds the
-// X-Demo-User: demo-owner header thereby gains that tenant's owner-level
+// module declared) on a POST /api/v1/notes -- the escalation the kill
+// switch exists to close: a note-reader session that adds the
+// X-Demo-User: demo-owner header that way gains that tenant's owner-level
 // access to everything.
 //
-// The first subtest is the confirmed bug, reproduced against the real
+// The first subtest pins the default contract against the real
 // composed HTTP stack: with the kill switch left at its default (unset),
-// the demo header still wins over the reader's own verified Principal and
-// the write succeeds as the owner -- unchanged behavior, by design, so
+// the demo header wins over the reader's own verified Principal and
+// the write succeeds as the owner -- by design, so
 // every existing demo journey keeps meaning what it always meant. The
-// second subtest is the fix: with the switch enabled
+// second subtest pins the switch ON: with the switch enabled
 // (cfg.DisableDemoUserHeader = true, what APP_DISABLE_DEMO_USER_HEADER
 // sets), the SAME request is now decided against the reader's own Principal
 // alone -- the header is not read at all -- and rbac refuses it.
@@ -181,17 +181,16 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 }
 
 // TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface is the
-// mandatory regression on the SECOND demo identity
+// regression on the SECOND demo identity
 // header this app reads: DemoOrgUserHeader ("X-Demo-User-Id", internal/app/server.go)
 // names the acting user for every attribution seam DemoOrgSubjectResolverFor
 // and DemoNotesSubjectResolver serve -- notes' create handler, the cases
 // surface, org's caller-scoped invitation endpoints and the notification
-// module's whole surface. Without the switch's extension the kill switch
-// (APP_DISABLE_DEMO_USER_HEADER) only reached DemoUserHeader
-// ("X-Demo-User") in the rbac gate; the X-Demo-User-Id resolvers were wired
-// unconditionally, so with the switch ON a caller could still impersonate
-// any user id on every one of those routes. This test proves the switch now
-// covers the attribution header too, on two surfaces end to end:
+// module's whole surface. The kill switch (APP_DISABLE_DEMO_USER_HEADER)
+// gates those resolvers too, not just DemoUserHeader ("X-Demo-User") in
+// the rbac gate: with the switch ON an X-Demo-User-Id naming any user id
+// is not read, so a caller cannot impersonate on any of those routes. This
+// test proves the coverage, on two surfaces end to end:
 //
 //   - the cases surface (a DemoNotesSubjectResolver surface): with the
 //     switch ON, a create sending X-Demo-User-Id naming a different user

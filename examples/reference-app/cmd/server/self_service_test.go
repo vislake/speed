@@ -147,9 +147,9 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 	// the deterministic tenant derived from the registrant's user id
 	// (internal/app/self_service.go's ClinicTenantOf), never a configured demo tenant.
 	// The derivation is spelled out here rather than reached through the
-	// production helper so this suite keeps compiling (and failing with a
-	// clean assertion) against the pre-self-service code this regression
-	// is measured on.
+	// production helper, so the assertion pins the literal tenant id
+	// derivation ("tenant-" + the registrant's user id) rather than the
+	// helper's own answer.
 	status, code, token, tenant := browserSignIn(t, srv, selfServiceFreshEmail, selfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("browser-shaped sign-in of the freshly registered account: status = %d, code = %q, want %d "+

@@ -299,9 +299,8 @@ func TestService_Create_PhotoObjectIDTrimmedAndBounded(t *testing.T) {
 			CreatorUserID:  "user-1",
 		})
 		// The code literal rather than ErrPhotoObjectIDTooLong.Code: the
-		// error's exported var is itself the fix, so this test must still
-		// compile (and fail) against a service that defines
-		// neither.
+		// wire code is the contract, so this test compiles and fails even
+		// against a service that declares no exported var for it.
 		assertCode(t, err, "cases.photo_object_id_too_long")
 	})
 }
@@ -357,8 +356,8 @@ func TestService_Get_NotFoundIsTenantIndistinguishable(t *testing.T) {
 	}
 }
 
-// TestService_List_ClinicWide pins the block-A list semantic at service
-// level: every case of the tenant is visible to every member of the
+// TestService_List_ClinicWide pins the clinic-wide list semantic at
+// service level: every case of the tenant is visible to every member of the
 // tenant, whatever creator each row carries -- the clinic-wide semantic,
 // never a creator-scoped "my cases" list (a case one colleague opened is
 // visible to another). Only the tenant boundary hides a case: the second

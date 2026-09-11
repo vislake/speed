@@ -73,8 +73,8 @@ func main() {
 	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	if err := run(baseCtx); err != nil {
-		// CodeQL's go/clear-text-logging alert on this line: reviewed and
-		// confirmed a false positive. The traced flow is
+		// CodeQL's go/clear-text-logging alert on this line is a false
+		// positive: the traced flow is
 		// authn/module.go's socialCredentialItems() -> a local anonymous
 		// struct field named "secretKey" (already //nolint:gosec'd at its
 		// declaration) holding a CONFIG-ITEM KEY NAME constant like

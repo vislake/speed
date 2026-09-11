@@ -427,8 +427,7 @@ func TestHandler_Create_InvalidJSON_ReturnsInvalidRequestBodyError(t *testing.T)
 // after the padding is a perfectly legal create-note request, so the ONLY
 // thing that can refuse it is the body bound, and the refusal must
 // surface as the catalogued invalid-request-body code rather than a
-// successful note creation (which is what an unbounded decoder did before
-// the fix).
+// successful note creation.
 func TestHandler_Create_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	h, _ := newTestHandler(t)
 

@@ -132,8 +132,8 @@ func TestService_OnJobTerminal_DeadLetterAndCancelled_RefundReservation(t *testi
 
 // TestService_OnJobTerminal_NoReservationRow_IsANoOp pins the ledger gate:
 // the signal for a job this Service never reserved for -- every job of
-// every other task type this app's queue runs, and a simulation from
-// before this Service's credit wiring was built -- settles nothing and
+// every other task type this app's queue runs, and a simulation created
+// while this Service carried no credit wiring -- settles nothing and
 // reports no error.
 func TestService_OnJobTerminal_NoReservationRow_IsANoOp(t *testing.T) {
 	credits := newTestCreditService(t)

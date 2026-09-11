@@ -129,8 +129,7 @@ func demoLogin(t *testing.T, srv *httptest.Server, email, password string, tenan
 // its login history through authn's real login-history endpoint and
 // asserts that the account's newest FAILED attempt was recorded with
 // FailureReasonNoMembership. The unified-401 controls call this right
-// after the refusal they pin: since the fold of no-membership logins
-// into ErrInvalidCredentials, that 401 is byte-identical to a wrong
+// after the refusal they pin: that 401 is byte-identical to a wrong
 // password's, so a control asserting only the status could not tell "the
 // password verified and the account holds no membership in the asked-for
 // tenant" from "the test's own credentials broke" -- a defect regression

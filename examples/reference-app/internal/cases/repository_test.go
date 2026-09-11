@@ -167,7 +167,7 @@ func TestRepository_CaseRows_SurviveReopen(t *testing.T) {
 // TestRepository_ListByTenant_ScopesAndOrders pins the clinic-wide list
 // query on its two axes: it returns EVERY case of the ctx tenant --
 // whatever creator each row carries, so a colleague's case is as visible
-// as one's own, the block-A property the product's acceptance chain
+// as one's own, the clinic-wide property the product's acceptance chain
 // demands -- newest first, and a case of another tenant stays invisible.
 func TestRepository_ListByTenant_ScopesAndOrders(t *testing.T) {
 	repo := newRepository(t)

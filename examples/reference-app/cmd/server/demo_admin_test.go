@@ -21,7 +21,7 @@ import (
 	"github.com/vislake/speed/go/rbac"
 )
 
-// TestDemoPlatformStaff_NotSeededWithTheDemoUsersPassword is the mandatory
+// TestDemoPlatformStaff_NotSeededWithTheDemoUsersPassword is the
 // regression: a boot with ONLY the demo-users password set
 // -- cfg.DemoUsersPassword filled, exactly what an operator setting
 // APP_DEMO_USERS_PASSWORD alone produces -- must not leave the platform

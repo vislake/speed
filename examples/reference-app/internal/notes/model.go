@@ -104,22 +104,20 @@ type Note struct {
 	// mechanism: repository_test.go's
 	// TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle
 	// drives Create/Delete/Restore/Delete straight through this package's
-	// real, migrated Repository, promoted unchanged from
-	// dbkit.Repository[Note] -- no code in this package's repository.go
-	// itself needed to change for that proof to hold. Notes does not
+	// real, migrated Repository, whose Delete/Restore come from the
+	// embedded dbkit.Repository[Note] base -- repository.go itself
+	// declares no override. Notes does not
 	// expose a delete/restore HTTP endpoint (a named follow-up scope,
 	// not required for this proof), and the hard-delete
 	// half is proved at this same service level
 	// rather than over HTTP: repository_test.go's
 	// TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved drives
-	// dbkit.Repository[Note].HardDelete -- promoted unchanged from the
-	// embedded base, exactly like Delete and Restore, with no code in
-	// this package's repository.go needed -- through this same real,
-	// migrated Repository. No migration change was needed for
-	// it: HardDelete issues the physical DELETE the schema already
-	// permitted, which is also why the 0002 migration's own
+	// dbkit.Repository[Note].HardDelete, from the
+	// embedded base, exactly like Delete and Restore -- through this same real,
+	// migrated Repository. HardDelete issues the physical DELETE the schema
+	// already permits, which is why the 0002 migration's own
 	// doc comment (migrations/{postgres,sqlite}/0002_add_soft_delete.sql)
-	// says it adds nothing for HardDelete.
+	// records that it adds nothing for HardDelete.
 	DeletedAt *time.Time `gorm:"column:deleted_at"`
 	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
