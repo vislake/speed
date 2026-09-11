@@ -26,8 +26,10 @@ unwired reader is a coded error, never a guessed allowance.
 
 The module also ships no HTTP surface — it is a Go-level API business
 modules call in-process — and no `jobs` dependency: its delivery
-loops are in-process goroutine pollers, keeping the module's
-third-party footprint to a single small UUID package.
+loops are in-process goroutine pollers. Its direct dependency set
+stays deliberate: the in-repo floor (pkgcore, dbkit, observability),
+GORM for its data access, the OpenTelemetry metric API its counters
+are built on, and one small UUID package.
 
 ## Two reliability tiers, two call entries
 

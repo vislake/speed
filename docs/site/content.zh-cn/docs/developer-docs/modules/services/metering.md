@@ -22,8 +22,10 @@ description: "go/metering 的设计:两级可靠性的用量计量——fail-ope
 编码化错误,绝不是猜一个额度。
 
 模块也没有 HTTP 面——它是业务模块进程内调用的 Go 级 API——没有
-`jobs` 依赖:它的投递循环是进程内 goroutine 轮询器,第三方足迹
-压到单个小 UUID 包。
+`jobs` 依赖:它的投递循环是进程内 goroutine 轮询器。直接依赖保
+持克制而明确:仓内地基(pkgcore、dbkit、observability)、数据访问
+的 GORM、计数器所基于的 OpenTelemetry 度量 API,以及一个小 UUID
+包。
 
 ## 两级可靠性、两个调用入口
 

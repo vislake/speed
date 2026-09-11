@@ -108,8 +108,8 @@ if _, err := metering.Enqueue(ctx, tx, metering.UsageEvent{
   计——收据仲裁那件事),直到真正的认领步骤出现。
 - `AnalyticsRecorder` 不去重重试的 record,按设计;汇总写由进程级
   互斥锁串行,原子 upsert 关掉跨进程竞态;重试没有退避曲线。
-- 模块的依赖地板刻意很窄——pkgcore、dbkit、observability,加一个
-  第三方包(`google/uuid`)。
+- 模块的依赖地板刻意很窄——pkgcore、dbkit、observability,加 GORM、
+  OpenTelemetry 度量包与 UUID 包(`google/uuid`)。
 
 ### 出处
 

@@ -131,7 +131,8 @@ and the billing-grade ingest.
   upsert closing the cross-process race; retries have no backoff
   curve.
 - The module's own dependency floor is deliberately narrow — pkgcore,
-  dbkit, observability and a single third-party package (`google/uuid`).
+  dbkit and observability, plus GORM, the OpenTelemetry metric packages
+  and the UUID package (`google/uuid`).
 
 ### Source
 
