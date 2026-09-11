@@ -10,9 +10,7 @@ package rbac
 // subscriptions and job handlers, so it can run nowhere else. The *Service
 // is put into the by-type context, where a consumer requires and reads it.
 // The snapshot therefore covers the declarations made before this
-// component's Init turn in plan order, not the full catalog: the design's
-// full-catalog freeze (docs/internal/29 §7, the component's Start callback)
-// is not implemented.
+// component's Init turn in plan order, not the full catalog.
 
 import (
 	"context"
