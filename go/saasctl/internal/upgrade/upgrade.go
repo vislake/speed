@@ -14,11 +14,10 @@
 // over raw bytes. A go.mod is full of places a version string resembles
 // but must not touch (third-party require lines, replace and exclude
 // blocks, comments), and a hand-rolled text rewrite would corrupt a file's
-// formatting and comments
-// the moment the consumer's go.mod had been touched by go mod tidy or any
-// other Go tool. Parse/rewrite/Format round-trips every line the toolchain
-// itself writes; the only bytes that differ afterwards are the version
-// tokens of the speed module requires.
+// formatting and comments once a consumer's go.mod has been through go mod
+// tidy or any other Go tool. Parse/rewrite/Format round-trips every line the
+// toolchain itself writes; the only bytes that differ afterwards are the
+// version tokens of the speed module requires.
 //
 // The rewrite is validated offline before anything is written: the result
 // parses, every speed require carries the target version, the replace

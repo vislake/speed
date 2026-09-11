@@ -387,9 +387,9 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 }
 
 // TestRBACSelectionsAdoptTheRouteTable pins the adoption of the platform's
-// route-authorization mechanism where the skeleton used to leave the gate
-// table to the owner: each rbac-bearing selection must declare its routes
-// through a routeRules table handed to chain.Standard's WithAuthorization
+// route-authorization mechanism: each rbac-bearing selection must declare
+// its routes through a routeRules table handed to chain.Standard's
+// WithAuthorization
 // (rbac.GuardRoutes runs inside Standard's derivation, so a mounted path
 // with no declared decision fails the build), mark the platform's pre-auth
 // surfaces public explicitly, and gate the modules that perform no
@@ -700,7 +700,7 @@ func TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest(t *testing.T
 }
 
 // composedShape selects which generated-server shape the composed handler
-// mirrors: the structural exemption (new) or the fixed allowlist (legacy).
+// mirrors: the structural exemption or the fixed allowlist.
 type composedShape int
 
 const (
@@ -932,7 +932,7 @@ func readEnvVarNamesFromConfigGo(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("read the embedded template config.go: %v", err)
 	}
-	// The declared key materials are no longer embedded in the file: the
+	// The declared key materials are not embedded in the file: the
 	// importing module components declare them, and the file carries the
 	// declared defaults table keyed by those paths. The table's entries are
 	// pinned to the six declared paths, so a derived name below can never

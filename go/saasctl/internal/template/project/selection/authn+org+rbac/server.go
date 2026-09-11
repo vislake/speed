@@ -1030,7 +1030,7 @@ func (b *serverBuild) composeHostFace(reg *pkgcore.ComponentRegistry, face *host
 
 // composeFace is the protected-face composition the application component
 // runs in its Init. It derives the whole middleware chain from the registry
-// with chain.Standard -- the route partition (authn's subtree split out with
+// with chain.Standard -- the route partition (authn's subtree exempted with
 // authn.ExemptSubtree, everything else mounted on the mux) and the fixed
 // middleware order live there, not here -- and supplies the host-specific
 // half: the authorization domain and this project's route table (routeRules
@@ -1069,7 +1069,7 @@ func (b *serverBuild) composeFace(reg *pkgcore.ComponentRegistry, mux *http.Serv
 // rather than left to omission.
 func routeRules() []rbac.RouteRule {
 	return []rbac.RouteRule{
-		// authn's subtree is split out ahead of the gated mux by
+		// authn's subtree is exempted from the gated mux by
 		// chain.Standard (authn.ExemptSubtree), and authn.Handler decides
 		// per operation which of its routes require a Principal; the entry
 		// keeps the table exhaustive over what authn mounts.

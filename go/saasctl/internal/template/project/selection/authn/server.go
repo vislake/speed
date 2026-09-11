@@ -934,7 +934,7 @@ func (b *serverBuild) composeHostFace(reg *pkgcore.ComponentRegistry, face *host
 
 // composeFace is the protected-face composition the application component
 // runs in its Init. It derives the whole middleware chain from the registry
-// with chain.Standard -- the route partition (authn's subtree split out with
+// with chain.Standard -- the route partition (authn's subtree exempted with
 // authn.ExemptSubtree, everything else mounted on the mux), the fixed
 // middleware order and the mounted-route admission live there, not here. No
 // authorization option is passed: none of this composition's modules

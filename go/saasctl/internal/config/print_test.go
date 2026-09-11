@@ -407,7 +407,7 @@ var envNameInVariableTable = regexp.MustCompile(`(?m)^  ([A-Z][A-Z0-9_]*) `)
 // the command's behavior, so the two are one list in two spellings;
 // nothing else compares them, and a name added, dropped or reordered on
 // either side must fail here rather than leave the help text describing a
-// surface the command no longer prints.
+// surface the command does not print.
 func TestPrintUsageVariableTableListsTheRenderedRows(t *testing.T) {
 	const (
 		tableOpening = "The bootstrap variables:"
